@@ -435,6 +435,32 @@ networkPolicy:
     extraFrom: []
   runtime:
     extraFrom: []
+  # admin-api and crm-api admit the components that call them (the gateway, the terminal, the
+  # dashboard, MCP, agent-api, meeting-api and, with the CRM on, crm-api and its outbox for
+  # admin-api; the gateway, MCP, agent-api and admin-api for crm-api). More callers here, as
+  # NetworkPolicy `from` peers. Both apply under defaultDeny.
+  adminApi:
+    extraFrom: []
+  crmApi:
+    extraFrom: []
+  # Where the flows Pods (flows-api, flows-worker, flows-mailbox) may connect
+  # (templates/networkpolicy-flows.yaml): DNS, the gateway's service door, their database, the
+  # credential broker when flows.mail.smtp.passwordRef is set, and the mail hosts. Off, they
+  # share the control-plane egress above.
+  flows:
+    enabled: true
+    # The IMAP/SMTP (and Graph) hosts flows talks to, as CIDRs with their ports, e.g.
+    #   - {cidr: 203.0.113.10/32, ports: [993, 587]}
+    # Empty: the mail ports (25, 143, 465, 587, 993, the configured IMAP/SMTP ports, and 443 when
+    # flows.mail uses Graph) to any address outside workloads.privateCidrs. That is enough for Gmail
+    # and Microsoft 365. A mail server or relay on a private address needs an entry here.
+    mailEgress: []
+    # An external database (postgres.enabled and pgbouncer.enabled both false), as NetworkPolicy
+    # ipBlock entries, e.g. - {cidr: 10.20.0.5/32}; reached on database.port. Empty: any address
+    # on database.port.
+    databaseEgress: []
+    # More NetworkPolicy egress rules for the flows Pods (an in-cluster mail relay, a proxy).
+    extraEgress: []
   workloads:
     # Ranges a workload may not reach except through the rules above: the cluster's Pod and Service
     # networks, nodes and the cloud metadata endpoint all sit in them. Add your cluster's ranges if

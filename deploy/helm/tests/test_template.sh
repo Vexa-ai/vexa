@@ -2188,4 +2188,102 @@ tb "flows dials: set values render as their declared keys in the flows Secret" \
   'grep -qx "  VEXA_FLOWS_MAX_HOPS: \"4\"" <<< "$FDIALS_ON" && grep -qx "  VEXA_MAIL_CAPTURE_SMTP: \"capture.example:2525\"" <<< "$FDIALS_ON" && grep -qx "  VEXA_FLOWS_NUDGES: \"1\"" <<< "$FDIALS_ON" && grep -qx "  VEXA_FLOWS_TIMELINE_KEY: \"tl-key-for-render-only\"" <<< "$FDIALS_ON"'
 tb "flows dials (control): unset dials render no key at all" \
   '! grep -qE "VEXA_(FLOWS_MAX_HOPS|MAIL_CAPTURE_SMTP|FLOWS_NUDGES|FLOWS_TIMELINE_KEY|MAIL_RELAY|GRAPH_CLIENT_SECRET):" <<< "$FDIALS_OFF"'
+# flows egress (car 45): the flows Pods reach DNS, the gateway's service door, their database, the
+# credential broker when the relay password is a reference, and the mail hosts, and nothing else.
+# admin-api and crm-api admit their callers, not every chart Pod.
+fe_check() { python3 -c '
+import sys, yaml
+mode = sys.argv[1]
+docs = [d for d in yaml.safe_load_all(sys.stdin) if d]
+by = {(d["kind"], d["metadata"]["name"]): d for d in docs}
+FLOWS = ["flows-api", "flows-mailbox", "flows-worker"]
+def rules():
+    np = by[("NetworkPolicy", "vexa-vexa-flows-egress")]
+    sel = np["spec"]["podSelector"]
+    assert sel["matchLabels"]["app.kubernetes.io/instance"] == "vexa", sel
+    assert sorted(sel["matchExpressions"][0]["values"]) == FLOWS, sel
+    assert np["spec"]["policyTypes"] == ["Egress"], np["spec"]
+    out = []
+    for r in np["spec"]["egress"]:
+        ports = sorted((p["port"], p.get("protocol", "TCP")) for p in r.get("ports", []))
+        assert ports, ("a flows egress rule with no ports opens every port", r)
+        peers = []
+        for t in r.get("to", []):
+            if "podSelector" in t:
+                peers.append("pod:" + t["podSelector"]["matchLabels"]["app.kubernetes.io/component"])
+            else:
+                peers.append("cidr:" + t["ipBlock"]["cidr"] + ("-private" if t["ipBlock"].get("except") else ""))
+        out.append((tuple(sorted(peers)), tuple(ports)))
+    return sorted(out)
+def cp_excludes_flows():
+    cp = by[("NetworkPolicy", "vexa-vexa-control-plane-egress")]["spec"]["podSelector"]["matchExpressions"][0]
+    return cp["operator"] == "NotIn" and all(f in cp["values"] for f in FLOWS)
+DNS = ((), (("53", "TCP"), ("53", "UDP")))
+def dns(rs):
+    return [((), tuple(sorted((str(p), t) for p, t in r[1]))) for r in rs if r[0] == ()]
+MAILP = ((25, "TCP"), (143, "TCP"), (465, "TCP"), (587, "TCP"), (993, "TCP"))
+if mode == "default":
+    rs = rules()
+    assert dns(rs) == [DNS], rs
+    rest = [r for r in rs if r[0] != ()]
+    want = sorted([(("pod:gateway",), ((8002, "TCP"),)), (("pod:postgres",), ((5432, "TCP"),)),
+                   (("cidr:0.0.0.0/0-private", "cidr:::/0-private"), MAILP)])
+    assert rest == want, rest
+    assert cp_excludes_flows()
+elif mode == "mail":
+    rest = [r for r in rules() if r[0] != ()]
+    assert (("cidr:203.0.113.10/32",), ((587, "TCP"), (993, "TCP"))) in rest, rest
+    assert not any(p[0].startswith("cidr:0.0.0.0/0") for p, _ in rest), rest
+elif mode == "extdb":
+    rest = [r for r in rules() if r[0] != ()]
+    assert (("cidr:10.20.0.5/32",), ((6432, "TCP"),)) in rest, rest
+    assert not any("pod:postgres" in p for p, _ in rest), rest
+elif mode == "extdb-open":
+    rest = [r for r in rules() if r[0] != ()]
+    assert (("cidr:0.0.0.0/0", "cidr:::/0"), ((6432, "TCP"),)) in rest, rest
+elif mode == "broker":
+    rest = [r for r in rules() if r[0] != ()]
+    assert any(p == ("pod:credential-broker",) for p, _ in rest), rest
+    bi = by[("NetworkPolicy", "vexa-vexa-credential-broker")]["spec"]["ingress"][0]["from"]
+    assert any(sorted((f["podSelector"].get("matchExpressions") or [{}])[0].get("values", [])) == FLOWS for f in bi), bi
+elif mode == "off":
+    assert ("NetworkPolicy", "vexa-vexa-flows-egress") not in by, "networkPolicy.flows.enabled=false still renders the flows egress policy"
+    assert not cp_excludes_flows(), "with the flows policy off, control-plane egress must cover the flows Pods"
+elif mode == "ingress":
+    crm = sys.argv[2] == "crm"
+    def frm(name):
+        np = by[("NetworkPolicy", name)]
+        comps = []
+        for r in np["spec"]["ingress"]:
+            for f in r["from"]:
+                ps = f["podSelector"]
+                assert ps["matchLabels"]["app.kubernetes.io/instance"] == "vexa", ps
+                comps += ps["matchExpressions"][0]["values"]
+        return sorted(comps)
+    want = ["agent-api", "dashboard", "gateway", "mcp", "meeting-api", "terminal"] + (["crm-api", "crm-outbox"] if crm else [])
+    assert frm("vexa-vexa-admin-api-ingress") == sorted(want), frm("vexa-vexa-admin-api-ingress")
+    if crm:
+        assert frm("vexa-vexa-crm-api-ingress") == ["admin-api", "agent-api", "gateway", "mcp"], frm("vexa-vexa-crm-api-ingress")
+print("ok")
+' "$@"; }
+FE=(-f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.enabled=true)
+FE_ON="$(helm template vexa "$CHART" -n vexa "${FE[@]}")"
+tb "flows egress: renders by default and allows exactly DNS, the gateway door (8002), postgres (5432) and the mail ports to public addresses; control-plane egress leaves the flows Pods out" 'fe_check default <<< "$FE_ON" >/dev/null'
+tb "flows egress: networkPolicy.flows.mailEgress replaces the public mail fallback with the operator's CIDRs and ports" \
+  'helm template vexa "$CHART" -n vexa "${FE[@]}" --set "networkPolicy.flows.mailEgress[0].cidr=203.0.113.10/32" --set "networkPolicy.flows.mailEgress[0].ports={993,587}" | fe_check mail >/dev/null'
+tb "flows egress: an external database is reached on database.port at networkPolicy.flows.databaseEgress, not the in-chart postgres" \
+  'helm template vexa "$CHART" -n vexa "${FE[@]}" --set postgres.enabled=false --set database.host=db.example.internal --set database.port=6432 --set "networkPolicy.flows.databaseEgress[0].cidr=10.20.0.5/32" | fe_check extdb >/dev/null'
+tb "flows egress: an external database with no CIDR named is reached on database.port only" \
+  'helm template vexa "$CHART" -n vexa "${FE[@]}" --set postgres.enabled=false --set database.host=db.example.internal --set database.port=6432 | fe_check extdb-open >/dev/null'
+tb "flows egress: a relay password by reference adds the credential broker, and the broker admits the flows Pods" \
+  'helm template vexa "$CHART" -n vexa "${FE[@]}" --set flows.mail.smtp.host=relay.example --set flows.mail.smtp.passwordRef=broker:mail/relay | fe_check broker >/dev/null'
+tb "flows egress (control): networkPolicy.flows.enabled=false renders no flows egress policy and control-plane egress covers the flows Pods again" \
+  'helm template vexa "$CHART" -n vexa "${FE[@]}" --set networkPolicy.flows.enabled=false | fe_check off >/dev/null'
+tb "flows egress (control): networkPolicy.enabled=false renders no flows egress policy" \
+  '! grep -q "name: vexa-vexa-flows-egress" <<< "$(helm template vexa "$CHART" -n vexa "${FE[@]}" --set networkPolicy.enabled=false)"'
+tb "admin-api ingress admits its callers (gateway, terminal, dashboard, mcp, agent-api, meeting-api), not every chart Pod" 'fe_check ingress nocrm <<< "$FE_ON" >/dev/null'
+tb "with the CRM on, admin-api also admits crm-api and crm-outbox, and crm-api admits gateway, mcp, agent-api and admin-api only" \
+  'helm template vexa "$CHART" -n vexa "${FE[@]}" "${CRM[@]}" | fe_check ingress crm >/dev/null'
+tb "flows egress: the OpenShift profile still renders with flows on, and carries the flows egress policy" \
+  'helm template vexa "$CHART" -n vexa "${FE[@]}" -f "$CHART/values-openshift.yaml" --set agentApi.workspaces.storageClassName=rwx-class | fe_check default >/dev/null'
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

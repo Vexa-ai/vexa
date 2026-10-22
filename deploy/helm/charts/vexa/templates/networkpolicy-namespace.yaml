@@ -49,18 +49,28 @@ spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
 ---
-{{- /* egress of every chart Pod but the two datastores */}}
-{{- $egressSelectors := list (dict "matchLabels" $sel "matchExpressions" (list (dict "key" "app.kubernetes.io/component" "operator" "NotIn" "values" (list "postgres" "redis")))) (dict "matchLabels" $sel "matchExpressions" (list (dict "key" "app.kubernetes.io/component" "operator" "In" "values" $flows))) }}
-{{- range $i, $podSelector := $egressSelectors }}
+{{- /* egress of every chart Pod but the two datastores, and but the flows Pods while their own
+policy holds them (networkpolicy-flows.yaml): policies add up, so a Pod this one also selected
+would keep every egress it allows */}}
+{{- $notIn := list "postgres" "redis" }}
+{{- if and .Values.flows.enabled (.Values.networkPolicy.flows | default dict).enabled }}
+{{- $notIn = concat $notIn $flows }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "vexa.componentName" (list $ (ternary "control-plane-egress" "flows-egress" (eq $i 0))) }}
+  name: {{ include "vexa.componentName" (list $ "control-plane-egress") }}
   labels:
     {{- include "vexa.labels" $ | nindent 4 }}
 spec:
   podSelector:
-    {{- toYaml $podSelector | nindent 4 }}
+    matchLabels:
+      {{- toYaml $sel | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values:
+          {{- toYaml $notIn | nindent 10 }}
   policyTypes: [Egress]
   egress:
     - ports:
@@ -89,7 +99,6 @@ spec:
     {{- toYaml . | nindent 4 }}
     {{- end }}
 ---
-{{- end }}
 {{- /* the front doors */}}
 {{- range $door := list (dict "c" "gateway" "on" $.Values.gateway.enabled "port" 8000) (dict "c" "terminal" "on" $.Values.terminal.enabled "port" 3000) (dict "c" "dashboard" "on" $.Values.dashboard.enabled "port" 3000) }}
 {{- if $door.on }}
@@ -141,8 +150,14 @@ spec:
                 values: [flows-worker, flows-api, flows-mailbox, signals, terminal]
 ---
 {{- end }}
-{{- /* internal services the chart's own Pods call */}}
-{{- range $svc := list (dict "c" "admin-api" "on" $.Values.adminApi.enabled "port" 8001) (dict "c" "mcp" "on" $.Values.mcp.enabled "port" 8010) (dict "c" "pgbouncer" "on" $.Values.pgbouncer.enabled "port" 5432) (dict "c" "crm-api" "on" (and $.Values.crm $.Values.crm.enabled) "port" 8300) }}
+{{- /* internal services the chart's own Pods call. admin-api and crm-api admit the components that
+call them by name (each one's ADMIN_API_URL / CRM_API_URL in this chart): flows reaches both only
+through the gateway's service door, and no other Pod calls them. */}}
+{{- $crmOn := and $.Values.crm $.Values.crm.enabled }}
+{{- $adminCallers := list "gateway" "terminal" "dashboard" "mcp" "agent-api" "meeting-api" }}
+{{- if $crmOn }}{{ $adminCallers = concat $adminCallers (list "crm-api" "crm-outbox") }}{{ end }}
+{{- $crmCallers := list "gateway" "mcp" "agent-api" "admin-api" }}
+{{- range $svc := list (dict "c" "admin-api" "on" $.Values.adminApi.enabled "port" 8001 "callers" $adminCallers "extra" ($.Values.networkPolicy.adminApi | default dict).extraFrom) (dict "c" "mcp" "on" $.Values.mcp.enabled "port" 8010) (dict "c" "pgbouncer" "on" $.Values.pgbouncer.enabled "port" 5432) (dict "c" "crm-api" "on" $crmOn "port" 8300 "callers" $crmCallers "extra" ($.Values.networkPolicy.crmApi | default dict).extraFrom) }}
 {{- if $svc.on }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -161,7 +176,20 @@ spec:
         - port: {{ $svc.port }}
           protocol: TCP
       from:
+        {{- if $svc.callers }}
+        - podSelector:
+            matchLabels:
+              {{- toYaml $sel | nindent 14 }}
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: {{ $svc.callers | toJson }}
+        {{- with $svc.extra }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- else }}
         {{- toYaml $chartPods | nindent 8 }}
+        {{- end }}
 ---
 {{- end }}
 {{- end }}

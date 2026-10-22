@@ -159,6 +159,15 @@ also set `flows.mail.captureSmtp`. Without it, flows sends diverted mail to `mai
 the chart does not run. Only Compose runs the mailpit inbox (`VEXA_MAILPIT_*`) and the private
 behavior mount (`VEXA_BEHAVIOR_DIR`).
 
+## Network reach on Kubernetes
+
+On Kubernetes the flows Pods may connect only to DNS, the gateway's service door, their database,
+the credential broker (only with `flows.mail.smtp.passwordRef`) and the mail hosts. List your IMAP
+and SMTP servers in `networkPolicy.flows.mailEgress` as CIDRs with their ports. If the list is empty,
+the policy allows the mail ports to public addresses only, so a mail server on a private address is
+unreachable until you list it. See
+[Kubernetes: flows egress](/deployment-kubernetes#flows-egress).
+
 ## Reading the friction sink
 
 `GET /friction/all` (operator key) returns every friction report on the deployment, newest first,

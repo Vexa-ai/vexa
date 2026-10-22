@@ -54,8 +54,10 @@ What the chart allows its own Pods:
 |---|---|---|
 | gateway, terminal, dashboard | anywhere, on their own port | DNS, the chart's Pods, any address outside `controlPlane.egressExcept` |
 | gateway, service door (port 8002, the `<release>-gateway-door` ClusterIP Service, only with `flows.enabled`) | flows-api, flows-worker, flows-mailbox, signals and the terminal (`<release>-gateway-door-ingress`) | as the gateway |
-| admin-api, mcp, pgbouncer | the chart's Pods | same as above |
-| flows-api | the chart's Pods and agent workers | same as above |
+| admin-api | the gateway, terminal, dashboard, MCP, agent-api, meeting-api; with the CRM on, crm-api and crm-outbox | same as above |
+| crm-api | the gateway, MCP, agent-api and admin-api | same as above |
+| mcp, pgbouncer | the chart's Pods | same as above |
+| flows-api, flows-worker, flows-mailbox | flows-api: the chart's Pods and agent workers | DNS, the gateway's service door, their database, the mail hosts (see [Flows egress](#flows-egress)) |
 | agent-api, meeting-api, runtime | their named callers (see the table above) | same as above |
 | credential-broker | agent-api and the terminal; the chart's Pods when `credentialBroker.networkPolicy.enabled` is `false`. Spawned Pods never | same as above |
 | postgres | admin-api, meeting-api, agent-api (the session store), pgbouncer, the flows tier, the migrations Job | nothing |
@@ -74,6 +76,30 @@ The settings, all under `networkPolicy`:
 
 `controlPlane.extraIngress` is rendered only while the default-deny is on. All of these policies need
 a CNI that enforces NetworkPolicy; without one they have no effect.
+
+### Flows egress
+
+With `flows.enabled`, the flows Pods get their own egress policy (`<release>-flows-egress`). It applies
+even with the default-deny off. It allows DNS, the gateway's service door (8002) and the database.
+The database is pgbouncer or the in-chart postgres. For an external database, the policy allows
+`database.port`, at `networkPolicy.flows.databaseEgress` when that is set. When
+`flows.mail.smtp.passwordRef` is set, the policy also allows the credential broker. Mail goes to
+`networkPolicy.flows.mailEgress`:
+
+```yaml
+networkPolicy:
+  flows:
+    mailEgress:
+      - {cidr: 10.0.40.12/32, ports: [993, 587]}   # your IMAP and SMTP hosts
+    databaseEgress:
+      - {cidr: 10.20.0.5/32}                       # an external Postgres
+```
+
+If `mailEgress` is empty, the policy allows the mail ports to any public address. These are 25, 143,
+465, 587 and 993, any IMAP or SMTP port you set, and 443 when flows uses Microsoft Graph. That covers
+Gmail and Microsoft 365. A mail server or relay on a private address needs an entry. To put the flows
+Pods back under the control-plane egress, set `networkPolicy.flows.enabled: false`. More callers of
+admin-api and crm-api go in `networkPolicy.adminApi.extraFrom` and `networkPolicy.crmApi.extraFrom`.
 
 ## Install
 
