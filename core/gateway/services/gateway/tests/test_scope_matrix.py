@@ -94,6 +94,8 @@ CASES = [
      "/transcripts/{platform}/{native_meeting_id}/share"),
     ("POST", "/transcripts/share/accept", "/transcripts/share/accept"),
 
+    ("GET", "/transcription/languages", "/transcription/languages"),
+
     ("GET", "/recordings", "/recordings"),
     ("GET", "/recordings/5", "/recordings/{recording_id}"),
     ("GET", "/recordings/5/master", "/recordings/{recording_id}/master"),

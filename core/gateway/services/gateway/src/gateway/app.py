@@ -916,6 +916,11 @@ def create_app(
     async def transcript(platform: MeetingPlatform, native_meeting_id: str, request: Request):
         return await _forward_meeting(request)
 
+    # The languages a caller's bots can transcribe (transcription-language.v1 LanguageCatalog).
+    @app.get("/transcription/languages")
+    async def transcription_languages(request: Request):
+        return await _forward_meeting(request)
+
     @app.get("/recordings")
     async def list_recordings(request: Request):
         return await _forward_meeting(request)
