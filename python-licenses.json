@@ -2,7 +2,7 @@
   "_comment": "The licence of every Python package a Vexa image installs, keyed name==version (gate:licenses, P17 / ADR-0004). uv.lock carries no licence, so each row is read from PyPI for that exact version by `node scripts/check-python-licenses.mjs --refresh` (license_expression, else the license field, else the licence classifiers joined with AND) and then reviewed here; refresh adds missing rows, drops rows no image installs any more, and never rewrites a row that still ships. Rows corrected by hand from the project's own licence file: requests-unixsocket (PyPI declares none; repository LICENSE is Apache-2.0), uv (dual MIT OR Apache-2.0, per its README), python-dateutil (Apache-2.0 for contributions after 2017-12-01, BSD-3-Clause before, per its LICENSE), numpy (PyPI says only \"BSD License\"; its LICENSE.txt is BSD-3-Clause, and the native libraries its wheels bundle are listed in NOTICE). `installs` records what each Dockerfile `pip install` line resolves to, since those packages are outside any lock.",
   "licenses": {
     "aiohappyeyeballs==2.7.1": "PSF-2.0",
-    "aiohttp==3.14.3": "Apache-2.0 AND MIT",
+    "aiohttp==3.14.5": "Apache-2.0 AND MIT",
     "aiosignal==1.4.0": "Apache-2.0",
     "annotated-doc==0.0.4": "MIT",
     "annotated-doc==0.0.5": "MIT",
@@ -19,8 +19,7 @@
     "botocore==1.43.111": "Apache-2.0",
     "botocore==1.43.114": "Apache-2.0",
     "cachetools==7.1.4": "MIT",
-    "certifi==2026.6.17": "MPL-2.0",
-    "certifi==2026.7.22": "MPL-2.0",
+    "certifi==2026.10.19": "MPL-2.0",
     "cffi==2.0.0": "MIT",
     "cffi==2.1.1": "MIT-0",
     "charset-normalizer==3.4.7": "MIT",
@@ -67,7 +66,7 @@
     "jsonschema==4.26.0": "MIT",
     "markdown-it-py==4.2.0": "MIT",
     "maxminddb==3.1.1": "Apache-2.0",
-    "mcp==1.28.1": "MIT",
+    "mcp==1.30.0": "MIT",
     "mdurl==0.1.2": "MIT",
     "multidict==6.9.1": "Apache-2.0",
     "numpy==1.26.4": "BSD-3-Clause",
@@ -76,7 +75,7 @@
     "opentelemetry-api==1.45.1": "Apache-2.0",
     "packaging==26.2": "Apache-2.0 OR BSD-2-Clause",
     "pg8000==1.31.5": "BSD-3-Clause",
-    "pillow==12.3.0": "MIT-CMU",
+    "pillow==13.0.0": "MIT-CMU",
     "propcache==0.5.2": "Apache-2.0",
     "protobuf==7.35.1": "BSD-3-Clause",
     "pycparser==3.0": "BSD-3-Clause",
@@ -144,7 +143,7 @@
     "websockets==16.0": "BSD-3-Clause",
     "websockets==17.1": "BSD-3-Clause",
     "websockets==17.2": "BSD-3-Clause",
-    "yarl==1.24.2": "Apache-2.0"
+    "yarl==1.25.1": "Apache-2.0"
   },
   "installs": {
     "- :: uv==0.11.33": [
