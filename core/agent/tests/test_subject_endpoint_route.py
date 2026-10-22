@@ -7,10 +7,13 @@ of their own and picks openai-agent. The dispatch used to stamp that endpoint on
 ANTHROPIC_* names, the runtime filled the VEXA_LLM_* names from the deployment, and the harness reads
 VEXA_LLM_* first: the turn ran on the deployment's Qwen with the person's key attached.
 
-These tests run the real chain, offline: ``build_unit_env`` (the dispatch), then the runtime's own
-merge (``runtime_kernel.workload_env``, loaded from its file, so its forward list is the live one),
-then ``OpenAIAgentHarness`` on the resulting worker env, with a mock transport recording what would
-go on the wire. They hold four rules:
+These tests run the real chain, offline: ``build_unit_env`` (the dispatch), the model proxy's
+``confine`` (H5/W1: the route sealed for the proxy, a per-turn token in the worker's env), the
+runtime's own merge (``runtime_kernel.workload_env``, loaded from its file, so its forward list is the
+live one), then ``OpenAIAgentHarness`` on the worker's env, through the proxy, with a mock provider
+recording what reaches the wire (``tests/model_proxy_chain.py``). A route's endpoint and key are read
+where they now live — the route the proxy holds — and every chain checks the worker's own env holds
+no key at all. They hold four rules:
 
 1. a subject endpoint that passed the operator gate is used whole: its URL, its key, the model the
    overlay resolved, its extra_body, whatever the deployment's VEXA_LLM_* say;
@@ -22,17 +25,14 @@ go on the wire. They hold four rules:
 from __future__ import annotations
 
 import importlib.util
-import json
-import os
 import sys
 from pathlib import Path
 
-import httpx
 import pytest
 
 from control_plane.dispatch import build_unit_env, subject_route_env
-from llm.openai_agent import OpenAIAgentHarness
 from shared.config import load_settings
+from tests import model_proxy_chain as chain
 
 REPO = Path(__file__).resolve().parents[3]
 
@@ -63,10 +63,11 @@ def _deployment(*, llm_key: bool) -> tuple[dict, dict]:
     """(agent-api's environment, the runtime's environment) for the app.dev shape. ``llm_key``
     adds the deployment credentials app.dev does not have, so rule 2 is also checked against a
     deployment that has a VEXA_LLM_API_KEY and a gateway token to leak."""
-    agent_api = {"VEXA_LLM_BASE_URL": QWEN, "CLAUDE_CODE_OAUTH_TOKEN": "deployment-oauth"}
     runtime = {"VEXA_RUNNER": "claude-code", "VEXA_AGENT_MODEL": "claude-sonnet-5",
                "VEXA_LLM_BASE_URL": QWEN, "VEXA_LLM_MODEL": "qwen3.8-27b",
                "VEXA_LLM_EXTRA_BODY": QWEN_BODY, "CLAUDE_CODE_OAUTH_TOKEN": "deployment-oauth"}
+    # agent-api is the one reader of the model route (H5/W1): the deployment's dials are its own
+    agent_api = dict(runtime)
     if llm_key:
         for env in (agent_api, runtime):
             env["VEXA_LLM_API_KEY"] = "deployment-llm-key"
@@ -78,7 +79,7 @@ def _deployment(*, llm_key: bool) -> tuple[dict, dict]:
 _MODEL_KEYS = set(RT.WORKER_FORWARD_ENV) | set(subject_route_env("", "", "")) | {
     "VEXA_MODEL_BASE_URL_ALLOW"}
 
-_INV = {"identity": {"subject": "u_2", "launcher": "user:u_2"}, "runner": "claude-code",
+_INV = {"identity": {"subject": "u_2", "launcher": "user:u_2"}, "runner": "openai-agent",
         "workspaces": [{"id": "u_2", "mode": "rw"}], "trigger": "message",
         "start": {"entrypoint": {"inline": "hi"}}}
 
@@ -91,44 +92,35 @@ def _isolate(monkeypatch, env: dict) -> None:
 
 
 def _worker_env(monkeypatch, tmp_path, model_config, *, llm_key=False, backend="process",
-                **settings) -> dict:
-    """What a worker's process environment holds, for the model keys, on ``backend``."""
+                **settings) -> "chain.Worker":
+    """The route a worker's turns run on, as the model proxy holds it — after checking that the
+    worker itself, on ``backend``, holds none of the credentials there are."""
     agent_api, runtime = _deployment(llm_key=llm_key)
     _isolate(monkeypatch, agent_api)
     settings.setdefault("agent_model", "claude-sonnet-5")
     spec = build_unit_env(load_settings(workspaces_dir=str(tmp_path), **settings), _INV,
                           unit_id="unit-1", token="tok", model_config=model_config)
+    return _chain(spec, agent_api, runtime, backend)
+
+
+def _chain(spec, agent_api, runtime, backend="process") -> "chain.Worker":
     if backend == "process":
-        merged = RT.child_environment(spec, forward=RT.WORKER_FORWARD_ENV, parent=runtime)
+        merge = lambda env: RT.child_environment(env, forward=RT.WORKER_FORWARD_ENV, parent=runtime)
     elif backend == "docker":       # docker_backend.start: spawn_env, then the forward list
-        merged = dict(spec)
-        merged.update(RT.forwarded_env(RT.WORKER_FORWARD_ENV, runtime, merged))
+        def merge(env):
+            env = dict(env)
+            env.update(RT.forwarded_env(RT.WORKER_FORWARD_ENV, runtime, env))
+            return env
     else:                           # k8s: the Pod carries the spec env verbatim
-        merged = dict(spec)
-    return {k: v for k, v in merged.items() if k in _MODEL_KEYS}
+        merge = dict
+    return chain.worker(spec, agent_api, merge=merge,
+                        secrets=(*DEPLOYMENT_SECRETS, SUBJECT_KEY))
 
 
-def _turn(monkeypatch, tmp_path, worker: dict) -> list[dict]:
-    """Construct the harness the way the worker does and run one turn; return what went out."""
-    _isolate(monkeypatch, worker)
-    monkeypatch.setenv("VEXA_AGENT_STREAM", "0")
-    monkeypatch.delenv("VEXA_MOUNTS", raising=False)
-    sent: list[dict] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        sent.append({"url": str(request.url), "auth": request.headers.get("Authorization"),
-                     "body": json.loads(request.content)})
-        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant",
-                                                                  "content": "ok"},
-                                                      "finish_reason": "stop"}]})
-
-    harness = OpenAIAgentHarness(transport=httpx.MockTransport(handler))
-    assert harness.preflight() is None
-    # engine.main: the model every turn runs on is VEXA_AGENT_MODEL, passed in as `model`
-    events = list(harness.run_turn(tmp_path, "hi", model=os.environ.get("VEXA_AGENT_MODEL") or None))
-    assert events[-1]["type"] == "done" and events[-1]["ok"] is True, events[-1]
-    assert sent, "the harness sent nothing"
-    return sent
+def _turn(monkeypatch, tmp_path, worker) -> list[dict]:
+    """Construct the harness the way the worker does and run one turn through the model proxy;
+    return what reached the provider."""
+    return chain.turn(monkeypatch, tmp_path, worker, _isolate)
 
 
 _SUBJECT = {"mode": "custom", "runner": "openai-agent", "base_url": ROUTER,
@@ -207,8 +199,7 @@ def test_a_refused_subject_endpoint_leaves_the_deployment_route_and_carries_no_s
                           _INV, unit_id="unit-1", token="tok", friction=reports.append,
                           model_config=dict(_SUBJECT, base_url="https://evil.example.com/v1"))
     assert reports and reports[0]["kind"] == "refusal"
-    worker = {k: v for k, v in RT.child_environment(spec, forward=RT.WORKER_FORWARD_ENV,
-                                                     parent=runtime).items() if k in _MODEL_KEYS}
+    worker = _chain(spec, agent_api, runtime)
     assert SUBJECT_KEY not in worker.values()
     assert worker["VEXA_LLM_BASE_URL"] == QWEN
     for request in _turn(monkeypatch, tmp_path, worker):

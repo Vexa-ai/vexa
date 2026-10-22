@@ -152,7 +152,9 @@ def route_of(env: Mapping[str, str]) -> Route:
     if runner == "openai-agent":
         key = (_v(env, "VEXA_LLM_API_KEY") or _v(env, "ANTHROPIC_AUTH_TOKEN")
                or _v(env, "ANTHROPIC_API_KEY"))
-        model = _v(env, "VEXA_LLM_MODEL") or _v(env, "VEXA_AGENT_MODEL")
+        # the worker hands the harness VEXA_AGENT_MODEL for every turn, and VEXA_LLM_MODEL is the
+        # harness's own fallback when it is handed none (llm/openai_agent.py run_turn)
+        model = _v(env, "VEXA_AGENT_MODEL") or _v(env, "VEXA_LLM_MODEL")
         return Route(base_url=_v(env, "VEXA_LLM_BASE_URL") or _v(env, "ANTHROPIC_BASE_URL"),
                      auth=AUTH_BEARER if key else AUTH_NONE, credential=key,
                      models=(model,) if model else (), max_output_tokens=max_out)

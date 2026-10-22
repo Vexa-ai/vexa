@@ -491,14 +491,16 @@ def test_the_worker_images_turn_hooks_off_and_run_a_supported_node():
 def test_harness_subprocess_env_strips_data_plane_secrets(monkeypatch):
     monkeypatch.setenv("REDIS_URL", "redis://the-shared-bus:6379/0")
     monkeypatch.setenv("VEXA_AGENT_IDENTITY_TOKEN", "minted.bearer.jwt")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-model-cred")   # the subprocess DOES need its model cred
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-model-cred")   # no model key reaches it either (H5/W1)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://model-proxy:8102/llm")
     monkeypatch.setenv("GIT_DIR", "/hook/.git")                # git-discovery scrub still composes
     monkeypatch.setenv("PATH", "/usr/bin")
     env = harness_subprocess_env()
     assert "REDIS_URL" not in env, "REDIS_URL must not reach the model's Bash (cross-tenant redis reach)"
     assert "VEXA_AGENT_IDENTITY_TOKEN" not in env, "the per-dispatch bearer token must not leak in"
     assert "GIT_DIR" not in env, "the git repo-discovery scrub still composes"
-    assert env["ANTHROPIC_API_KEY"] == "sk-model-cred", "model credentials must survive"
+    assert "ANTHROPIC_API_KEY" not in env, "no model key reaches the model's shell (H5/W1)"
+    assert env["ANTHROPIC_BASE_URL"] == "http://model-proxy:8102/llm", "the model route survives"
     assert env["PATH"] == "/usr/bin", "benign vars pass through untouched"
 
 
@@ -526,7 +528,7 @@ def test_exec_subprocess_launches_with_scrubbed_env(monkeypatch):
     list(claude_code._exec_subprocess(["claude", "-p", "hi"], "/tmp"))
     assert "REDIS_URL" not in captured["env"]
     assert "VEXA_AGENT_IDENTITY_TOKEN" not in captured["env"]
-    assert captured["env"]["ANTHROPIC_API_KEY"] == "sk-model-cred"  # model cred still delivered
+    assert "ANTHROPIC_API_KEY" not in captured["env"]   # the turn's proxy token rides instead (H5/W1)
 
 
 # ── run_harness_turn: conformant + free-zone writes both commit ──────────────

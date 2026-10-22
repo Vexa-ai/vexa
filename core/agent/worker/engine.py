@@ -2217,7 +2217,7 @@ class McpAttachment:
             return (model_grant.proxy_toolbelt(), {"Authorization": f"Bearer {token}"}) if token else None
         return _mcp_endpoint(self.base) if self.base else None
 
-    def open(self) -> "str | None":
+    def begin_run(self) -> "str | None":
         """Write this run's attachment (proxy only) and return its path, or None."""
         token = model_grant.current()
         if not (self.proxied and token):
@@ -2237,7 +2237,7 @@ class McpAttachment:
         self._run.reset(handle)
 
     @staticmethod
-    def close(path: "str | None") -> None:
+    def end_run(path: "str | None") -> None:
         if not path:
             return
         from workspaces.shared import workspace_paths as wpaths
@@ -3566,7 +3566,7 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
             if ws_cache is not None:
                 ws_cache.freshen()      # a route may have written a mount since the last turn
             exp = tool_access.token_exp(refresh_delegation.current())
-            run_file = attachment.open()          # this run's MCP attachment (model proxy only)
+            run_file = attachment.begin_run()     # this run's MCP attachment (model proxy only)
             bound = attachment.bind(run_file)
             try:
                 events = fn(*args, **kwargs)      # the harness is handed `attachment.path()` here
@@ -3580,7 +3580,7 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
                 try:
                     yield from counted
                 finally:
-                    attachment.close(run_file)
+                    attachment.end_run(run_file)
             return _then_remove()
         return call
 

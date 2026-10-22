@@ -268,9 +268,10 @@ def test_a_subscription_route_keeps_its_credential_with_the_cli_and_is_never_pro
     env = {"VEXA_RUNNER": "claude-code", "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-SUB",
            "VEXA_MCP_DELEGATION_TOKEN": DELEGATION}
     token = mp.confine(env, url=PROXY, grants=grants, unit="agent-1", cold=True,
-                       toolbelt="http://gateway:8000/mcp", source={"ANTHROPIC_API_KEY": "sk-ant-api03-DEPLOY"})
+                       toolbelt="http://gateway:8000/mcp", source={"OPENAI_API_KEY": "sk-proj-DEPLOY"})
     assert env["VEXA_MODEL_ROUTE"] == mp.ROUTE_SUBSCRIPTION
-    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-SUB" and env["ANTHROPIC_API_KEY"] == ""
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-SUB"
+    assert env["ANTHROPIC_API_KEY"] == env["OPENAI_API_KEY"] == ""
     assert env["ANTHROPIC_BASE_URL"] == ""
     assert "sk-ant-oat01-SUB" not in json.dumps(grants.route(token).as_dict())
     refused = _ask(client, token)
@@ -496,7 +497,7 @@ def test_the_dispatch_seals_the_toolbelt_and_the_worker_attaches_the_proxy(monke
     attachment = engine.McpAttachment(path)
     assert attachment.proxied
     with mg.use("vxm_run_token"):
-        run_file = attachment.open()
+        run_file = attachment.begin_run()
         endpoint = attachment.endpoint()
     for p in (path, run_file):
         text = open(p).read()
@@ -506,6 +507,6 @@ def test_the_dispatch_seals_the_toolbelt_and_the_worker_attaches_the_proxy(monke
     assert json.loads(open(run_file).read())["mcpServers"][engine.VEXA_MCP_SERVER]["headers"][
         "Authorization"] == "Bearer vxm_run_token"
     assert endpoint == (PROXY + mg.MCP_PATH, {"Authorization": "Bearer vxm_run_token"})
-    attachment.close(run_file)
+    attachment.end_run(run_file)
     import os
     assert not os.path.exists(run_file)

@@ -359,7 +359,9 @@ def test_the_qwen_lane_dials_are_declared():
 # 153: the integration line's 141 + WS-S3's 12 (int-next).
 # 154: +1 VEXA_POLICY_LEGACY_READ (the policy store's adoption of pre-0.13.4 records, declared).
 # 155: +1 VEXA_MOUNT_READERS (each mount's readers from the membership store, for the worker's hold).
-EXPECTED_DECLARED_KEYS = 155
+# 159: +4 the model proxy (H5/W1): VEXA_MODEL_PROXY_URL, VEXA_MODEL_PROXY_SECRET, and OPENAI_API_KEY /
+#      CODEX_API_KEY, which agent-api now reads (and seals) in place of the runtime.
+EXPECTED_DECLARED_KEYS = 159
 
 
 def test_connections_keys_are_capabilities_on_real_surfaces():

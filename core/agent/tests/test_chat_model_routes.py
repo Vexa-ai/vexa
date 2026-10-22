@@ -183,7 +183,8 @@ def test_the_next_turn_runs_on_the_pick(stack):
     assert _turn(c, MEMBER).status_code == 200
     env = stack["runtime"].envs[-1]
     assert env["VEXA_RUNNER"] == "openai-agent"
-    assert env["VEXA_LLM_BASE_URL"] == "http://10.0.0.5:8000/v1"
+    # the endpoint is the model proxy's to know (H5/W1): the worker names no provider and holds no key
+    assert "10.0.0.5" not in env["VEXA_LLM_BASE_URL"] and env["VEXA_LLM_API_KEY"] == ""
     assert env["VEXA_AGENT_MODEL"] == "Qwen/Qwen3-32B"
     assert stack["runtime"].spawned[-1].endswith("-g1")          # the fresh unit the pick asked for
 

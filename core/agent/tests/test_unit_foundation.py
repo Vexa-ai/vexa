@@ -192,24 +192,50 @@ def test_internal_meeting_hints_are_stripped_before_the_contract_check():
     assert "VEXA_MEETING_NUMERIC_ID" not in env
     assert "VEXA_TRANSCRIPT_STREAM" not in env
 
-# ── model-auth passthrough: agent-api env → worker spec env (the k8s/helm credential seam) ────
+# ── the deployment's model auth: read by agent-api, sealed for the model proxy (H5/W1) ─────────
 
-def test_dispatcher_worker_env_passes_model_auth_allowlist(monkeypatch):
-    """Every allowlisted model-auth var set on agent-api lands in the worker spec env — this is the
-    ONLY credential path on the k8s/process backends (no bind-mount, no runtime brokering)."""
+_PROXY = "http://model-proxy:8102"
+_PROXY_SECRET = "model-proxy-secret-for-tests-0123456789"
+
+
+def _proxied(**settings):
+    """A dispatcher whose deployment has the model proxy (its URL, its sealing key, Redis), and the
+    route a spawned worker's token reaches."""
+    import fakeredis
+    from control_plane import model_proxy as mp
+    from shared import model_grant as mg
+
+    r = fakeredis.FakeRedis(decode_responses=True)
+    rt = _FakeRuntime()
+    mc = settings.pop("_mc", None)
+    d = dispatch.Dispatcher(load_settings(model_proxy_url=_PROXY, model_proxy_secret=_PROXY_SECRET,
+                                          **settings), rt, _FakeIdentity(), warm_stream=r,
+                            model_config=mc)
+
+    def route():
+        return mp.Grants(r, _PROXY_SECRET).route(rt.spawned[0][2][mg.TOKEN_ENV])
+    return d, rt, route
+
+
+def test_the_deployments_model_auth_is_sealed_for_the_proxy_never_stamped(monkeypatch):
+    """Every allowlisted model-auth var set on agent-api names the route; none lands in the worker
+    spec env — the worker gets the proxy and a turn token on every backend (no bind-mount, no
+    runtime brokering)."""
     for key in dispatch.MODEL_AUTH_ENV_ALLOWLIST:
         monkeypatch.setenv(key, f"val-{key}")
-    rt = _FakeRuntime()
-    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity())
+    d, rt, route = _proxied()
     d.dispatch(VALID_INV)
     _, _profile, env = rt.spawned[0]
-    for key in dispatch.MODEL_AUTH_ENV_ALLOWLIST:
-        assert env[key] == f"val-{key}"
+    for key in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+        assert env[key] == "", key
+    assert env["ANTHROPIC_BASE_URL"] == _PROXY + "/llm"
+    assert (route().base_url, route().credential) == ("val-ANTHROPIC_BASE_URL", "val-ANTHROPIC_AUTH_TOKEN")
 
 
-def test_dispatcher_worker_env_omits_unset_model_auth(monkeypatch):
-    """Unset (or blank) auth stays ABSENT — a creds-less CI stack must boot fine; the worker fails
-    at inference with the existing actionable auth/preflight error, not a poisoned empty var."""
+def test_dispatcher_worker_env_stamps_every_credential_name_empty(monkeypatch):
+    """Unset (or blank) auth is stamped EMPTY, never left absent: a name the dispatch leaves out is
+    one the runtime could fill from its own environment. A creds-less CI stack still boots; the worker
+    fails at inference with the existing actionable auth error."""
     for key in dispatch.MODEL_AUTH_ENV_ALLOWLIST:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "   ")  # blank-only value must be skipped too
@@ -217,7 +243,8 @@ def test_dispatcher_worker_env_omits_unset_model_auth(monkeypatch):
     d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity())
     d.dispatch(VALID_INV)
     _, _profile, env = rt.spawned[0]
-    assert not any(key in env for key in dispatch.MODEL_AUTH_ENV_ALLOWLIST)
+    assert all(env[key] == "" for key in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY",
+                                          "ANTHROPIC_AUTH_TOKEN"))
 
 
 def test_dispatcher_worker_env_forwards_only_the_allowlist(monkeypatch):
@@ -370,55 +397,51 @@ def test_dispatcher_model_config_stamps_reasoning_effort():
     assert "VEXA_AGENT_EFFORT" not in env2
 
 
-def test_dispatcher_model_config_custom_mode_stamps_the_one_call_shape(monkeypatch):
-    """mode:custom points the agent harness at the supplied gateway. Dispatch-stamped keys WIN
-    downstream (the runtime forwards its own env only for keys absent here). The completion
-    pipeline's own dials (VEXA_LLM_PROVIDER and friends) stay gone with it (PRD decision 34); the
-    VEXA_LLM_* names the openai-agent harness reads carry the SAME endpoint and key, so a forwarded
-    deployment value can never stand in for them."""
+def test_dispatcher_model_config_custom_mode_seals_the_one_call_shape(monkeypatch):
+    """mode:custom points the agent harness at the supplied gateway — sealed for the model proxy
+    (H5/W1): the worker's every base-URL name names the proxy and every credential name is empty,
+    and the route the proxy holds is the subject's endpoint and key. The completion pipeline's own
+    dials (VEXA_LLM_PROVIDER and friends) stay gone with it (PRD decision 34)."""
     monkeypatch.setenv("VEXA_MODEL_BASE_URL_ALLOW", "gw.example.com")   # F84: the operator gate
-    rt = _FakeRuntime()
     mc = _FakeModelConfig({"mode": "custom", "base_url": "https://gw.example.com",
                            "api_key": "sk-user", "model": "qwen3"})
-    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity(), model_config=mc)
+    d, rt, route = _proxied(_mc=mc)
     d.dispatch(VALID_INV)
     _, _profile, env = rt.spawned[0]
-    assert env["ANTHROPIC_BASE_URL"] == "https://gw.example.com"
-    assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-user"
+    assert env["ANTHROPIC_BASE_URL"] == _PROXY + "/llm" and env["ANTHROPIC_AUTH_TOKEN"] == ""
     assert env["VEXA_AGENT_MODEL"] == "qwen3"
     assert {k: v for k, v in env.items() if k.startswith("VEXA_LLM_")} == {
-        "VEXA_LLM_BASE_URL": "https://gw.example.com", "VEXA_LLM_API_KEY": "sk-user",
+        "VEXA_LLM_BASE_URL": _PROXY + "/llm", "VEXA_LLM_API_KEY": "",
         "VEXA_LLM_MODEL": "", "VEXA_LLM_EXTRA_BODY": ""}
+    assert (route().base_url, route().credential) == ("https://gw.example.com", "sk-user")
 
 
 def test_dispatcher_model_config_subscription_mode_keeps_deployment_credentials(monkeypatch):
-    """mode:subscription (or unset) never stamps endpoint/credential env — the deployment's
-    brokered credential (mounted subscription / deployment key) stays in charge."""
+    """mode:subscription (or unset) never stamps a subject endpoint or credential — the deployment's
+    subscription stays in charge, read by the claude CLI itself (its file), never the proxy."""
     for key in dispatch.MODEL_AUTH_ENV_ALLOWLIST:  # isolate from the test-runner's own env
         monkeypatch.delenv(key, raising=False)
-    rt = _FakeRuntime()
     mc = _FakeModelConfig({"mode": "subscription", "model": "opus",
                            "base_url": "https://ignored.example.com", "api_key": "sk-ignored"})
-    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity(), model_config=mc)
+    d, rt, route = _proxied(_mc=mc)
     d.dispatch(VALID_INV)
     _, _profile, env = rt.spawned[0]
     assert env["VEXA_AGENT_MODEL"] == "opus"
-    assert "ANTHROPIC_BASE_URL" not in env
+    assert env["ANTHROPIC_BASE_URL"] == "" and env["VEXA_MODEL_ROUTE"] == "subscription"
+    assert "sk-ignored" not in str(env) and route().subscription == "claude"
 
 
 def test_dispatcher_model_config_allowlist_gates_models_not_endpoint(monkeypatch):
     """A non-allowlisted model is DROPPED (deployment default applies) — never an error; the
     custom endpoint itself is not the allowlist's business."""
     monkeypatch.setenv("VEXA_MODEL_BASE_URL_ALLOW", "gw.example.com")   # the ENDPOINT gate is separate
-    settings = load_settings(agent_model="deployment-default", model_allowlist="sonnet,haiku")
-    rt = _FakeRuntime()
     mc = _FakeModelConfig({"mode": "custom", "base_url": "https://gw.example.com",
                            "api_key": "gw-key", "model": "not-allowed"})
-    d = dispatch.Dispatcher(settings, rt, _FakeIdentity(), model_config=mc)
+    d, rt, route = _proxied(agent_model="deployment-default", model_allowlist="sonnet,haiku", _mc=mc)
     d.dispatch(VALID_INV)
     _, _profile, env = rt.spawned[0]
     assert env["VEXA_AGENT_MODEL"] == "deployment-default"   # gated pref falls through
-    assert env["ANTHROPIC_BASE_URL"] == "https://gw.example.com"
+    assert route().base_url == "https://gw.example.com"
 
 
 def test_dispatcher_model_config_failure_dispatches_on_env_defaults():

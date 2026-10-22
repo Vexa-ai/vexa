@@ -9,24 +9,25 @@ catalog by construction, because a catalog route is stamped by the same one writ
 3. one place decides the route: with no catalog, the worker env is byte-identical to what it was.
 
 These run the real chain offline, as `test_subject_endpoint_route` does: `build_unit_env` (the
-dispatch), the runtime's own merge (`runtime_kernel.workload_env`, loaded from its file), then the
-openai-agent harness on the resulting env with a mock transport recording what goes on the wire.
+dispatch), the model proxy's `confine` (H5/W1: the route sealed for the proxy, a per-turn token in
+the worker's env), the runtime's own merge (`runtime_kernel.workload_env`, loaded from its file), then
+the openai-agent harness on the worker's env, through the proxy, with a mock provider recording what
+reaches the wire (`tests/model_proxy_chain.py`). A route's endpoint and key are read where they now
+live — the route the proxy holds — and every chain checks the worker's own env holds no key at all.
 """
 from __future__ import annotations
 
 import importlib.util
 import json
-import os
 import sys
 from pathlib import Path
 
-import httpx
 import pytest
 
 from control_plane.dispatch import build_unit_env, subject_route_env
 from control_plane.model_providers import ModelChoiceFault, UNKNOWN_MODEL, Catalog, parse
-from llm.openai_agent import OpenAIAgentHarness
 from shared.config import load_settings
+from tests import model_proxy_chain as chain
 from tests.model_catalogs import ENV, EXAMPLE
 
 REPO = Path(__file__).resolve().parents[3]
@@ -62,11 +63,9 @@ _INV = {"identity": {"subject": "u_2", "launcher": "user:u_2"}, "runner": "claud
 
 def _deployment() -> tuple[dict, dict]:
     """(agent-api's environment, the runtime's environment): a deployment with every credential
-    there is to leak, and the catalog's own secrets in agent-api's environment."""
-    agent_api = {"VEXA_LLM_BASE_URL": DEPLOYMENT_QWEN, "CLAUDE_CODE_OAUTH_TOKEN": "deployment-oauth",
-                 "ANTHROPIC_AUTH_TOKEN": "deployment-anthropic-token",
-                 "ANTHROPIC_BASE_URL": "https://gateway.deployment.example",
-                 "VEXA_LLM_API_KEY": "deployment-llm-key", **ENV}
+    there is to leak, and the catalog's own secrets in agent-api's environment. agent-api is the one
+    reader of the model route (H5/W1), so the deployment's route dials are in its environment; the
+    runtime's copy of them reaches no worker."""
     runtime = {"VEXA_RUNNER": "claude-code", "VEXA_AGENT_MODEL": "claude-sonnet-5",
                "VEXA_LLM_BASE_URL": DEPLOYMENT_QWEN, "VEXA_LLM_MODEL": "qwen-deployment",
                "VEXA_LLM_API_KEY": "deployment-llm-key",
@@ -75,6 +74,9 @@ def _deployment() -> tuple[dict, dict]:
                "ANTHROPIC_BASE_URL": "https://gateway.deployment.example",
                "ANTHROPIC_DEFAULT_HAIKU_MODEL": "gateway/haiku",
                "VEXA_AGENT_CONTEXT_TOKENS": "24000", "CLAUDE_CODE_OAUTH_TOKEN": "deployment-oauth"}
+    agent_api = {**{k: v for k, v in runtime.items() if k != "VEXA_AGENT_CONTEXT_TOKENS"},
+                 "ANTHROPIC_AUTH_TOKEN": "deployment-anthropic-token",
+                 "ANTHROPIC_BASE_URL": "https://gateway.deployment.example", **ENV}
     return agent_api, runtime
 
 
@@ -96,38 +98,33 @@ def _spec(monkeypatch, tmp_path, *, choice="", model_config=None, catalog=None, 
                           model_choice=choice, admin=admin, effort_choice=effort)
 
 
-def _worker(monkeypatch, tmp_path, backend="process", **kw) -> dict:
+_ALL_SECRETS = (*DEPLOYMENT_SECRETS, OPERATOR_KEY, PERSON_KEY, ENV["VEXA_MODEL_SECRET_ANTHROPIC"])
+
+
+def _worker(monkeypatch, tmp_path, backend="process", **kw) -> "chain.Worker":
+    """The route a worker's turns run on, as the model proxy holds it — after checking that the
+    worker itself, on ``backend``, holds none of the credentials there are."""
     spec = _spec(monkeypatch, tmp_path, **kw)
-    _, runtime = _deployment()
+    agent_api, runtime = _deployment()
     if backend == "process":
-        merged = RT.child_environment(spec, forward=RT.WORKER_FORWARD_ENV, parent=runtime)
+        merge = lambda env: RT.child_environment(env, forward=RT.WORKER_FORWARD_ENV, parent=runtime)
     elif backend == "docker":
-        merged = dict(spec)
-        merged.update(RT.forwarded_env(RT.WORKER_FORWARD_ENV, runtime, merged))
+        def merge(env):
+            env = dict(env)
+            env.update(RT.forwarded_env(RT.WORKER_FORWARD_ENV, runtime, env))
+            return env
     else:                                   # k8s: the Pod carries the spec env verbatim
-        merged = dict(spec)
-    return {k: v for k, v in merged.items() if k in _MODEL_KEYS | set(ENV)}
+        merge = dict
+    # a subscription's OAuth token is the one credential a worker may carry: on the subscription
+    # route, for the claude CLI itself (docs/docs/model-credentials-licensing.mdx)
+    on_sub = chain.route_view(spec, agent_api).get("ANTHROPIC_AUTH_TOKEN", "") == "" and \
+        chain.route_view(spec, agent_api).get("ANTHROPIC_API_KEY", "") == ""
+    secrets = [s for s in _ALL_SECRETS if not (on_sub and s == "deployment-oauth")]
+    return chain.worker(spec, agent_api, merge=merge, secrets=secrets)
 
 
-def _turn(monkeypatch, tmp_path, worker: dict) -> list[dict]:
-    _isolate(monkeypatch, worker)
-    monkeypatch.setenv("VEXA_AGENT_STREAM", "0")
-    monkeypatch.delenv("VEXA_MOUNTS", raising=False)
-    sent: list[dict] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        sent.append({"url": str(request.url), "auth": request.headers.get("Authorization"),
-                     "body": json.loads(request.content)})
-        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant",
-                                                                  "content": "ok"},
-                                                      "finish_reason": "stop"}]})
-
-    harness = OpenAIAgentHarness(transport=httpx.MockTransport(handler))
-    assert harness.preflight() is None
-    events = list(harness.run_turn(tmp_path, "hi", model=os.environ.get("VEXA_AGENT_MODEL") or None))
-    assert events[-1]["type"] == "done" and events[-1]["ok"] is True, events[-1]
-    assert sent
-    return sent
+def _turn(monkeypatch, tmp_path, worker) -> list[dict]:
+    return chain.turn(monkeypatch, tmp_path, worker, _isolate)
 
 
 def _no_foreign_credential(worker: dict, *, allowed: tuple[str, ...] = ()) -> None:
@@ -336,7 +333,8 @@ def test_an_entry_with_no_window_never_erases_the_deployments_budget(monkeypatch
     """An entry that names no window leaves the key to the deployment: the runtime's forwarded
     VEXA_AGENT_CONTEXT_TOKENS reaches the worker, never an empty stamp that wins over it."""
     worker = _worker(monkeypatch, tmp_path, backend, choice="or-sonnet")
-    assert worker["VEXA_AGENT_CONTEXT_TOKENS"] == "24000"        # the deployment's, from _deployment()
+    # the worker's own env, as the runtime merged it: the deployment's dial, from _deployment()
+    assert worker.confined["VEXA_AGENT_CONTEXT_TOKENS"] == "24000"
 
 
 def test_the_route_never_stamps_an_empty_context_budget(monkeypatch, tmp_path):
