@@ -1,6 +1,6 @@
 {
   "core/agent/contracts/blocks.v1": "6202735e827ddf56759a663ee1ca1c5842d54cc0ffae4654f9533f6328615af1",
-  "core/agent/contracts/credential-broker.v1": "54a3a59ba5dca07b7b840cea44c4ec00c6bdaadfb8431df3d9e58033e0152bfa",
+  "core/agent/contracts/credential-broker.v1": "3a3ee05955faaeb33ee51f015475214380d7d3993aeb5bb06bd77763fcf32d6d",
   "core/agent/contracts/desktop.v1": "d2db907949791639f60f199debf8dd7fc1ee721af95e5269c6cf6eab34901d5c",
   "core/agent/contracts/event.v1": "606867a0dffae31f6f29906795b41b969dc833b02d09de28c1f204f60d647ce7",
   "core/agent/contracts/home-card.v1": "eb5b353982143905851fc2b923efcb74de01c57c528add556f2633a71ee5b78f",

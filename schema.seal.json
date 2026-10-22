@@ -233,6 +233,16 @@
       "actor": "TEXT PRIMARY KEY",
       "updated": "REAL NOT NULL",
       "value": "TEXT NOT NULL"
+    },
+    "sensor_grants": {
+      "actor": "TEXT NOT NULL",
+      "connection": "TEXT NOT NULL",
+      "created": "REAL NOT NULL",
+      "expires": "REAL NOT NULL",
+      "id": "TEXT PRIMARY KEY",
+      "issued_via": "TEXT NOT NULL DEFAULT ''",
+      "revoked": "REAL NOT NULL DEFAULT 0",
+      "scope": "TEXT NOT NULL"
     }
   },
   "core/flows/schema.sql": {
