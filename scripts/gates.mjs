@@ -62,10 +62,26 @@ const errText = (e) => {
   return (out ?? "").toString();
 };
 
+// Directories git ignores are build output, not the tree (the terminal build writes
+// clients/terminal/public/mediapipe/ on every run): no per-directory gate walks them, so a gate
+// reads the same in a fresh checkout and after a build. Outside a git checkout nothing is ignored.
+let ignoredDirs;
+function gitIgnoredDirs() {
+  if (!ignoredDirs) {
+    try {
+      const out = execFileSync("git", ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"],
+        { cwd: ROOT, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 << 20 }).toString();
+      ignoredDirs = new Set(out.split("\0").filter((p) => p.endsWith("/")).map((p) => join(ROOT, p.slice(0, -1))));
+    } catch { ignoredDirs = new Set(); }
+  }
+  return ignoredDirs;
+}
+
 function walkDirs(dir = ROOT, acc = []) {
   for (const name of readdirSync(dir)) {
     if (skippable(name)) continue;
     const p = join(dir, name);
+    if (gitIgnoredDirs().has(p)) continue;
     let s; try { s = statSync(p); } catch { continue; }
     if (s.isDirectory()) {
       if (existsSync(join(p, ".gateignore"))) continue;   // vendored subtree — opted out of the per-dir gates (refactor pending)
