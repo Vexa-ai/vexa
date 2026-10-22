@@ -38,7 +38,11 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/user/webhook"
 ```
 
 The secret is masked to its last four characters on read-back — enough to recognize which secret is
-set, never enough to use it.
+set, never enough to use it. The `PUT` response leaves the secret out entirely; `webhook_secret_set`
+on the read-back is how you confirm it was stored.
+
+A bot takes the webhook configuration it starts with: a URL, secret or event change applies to bots
+started after it, and a bot already in a meeting delivers with the configuration it had at start.
 
 <Warning>
 **Delivery works; the delivery *history* does not.** A production walk on 2026-07-19 (v0.12.15)
