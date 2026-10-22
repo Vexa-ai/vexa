@@ -32,7 +32,7 @@ import pytest
 from sqlite_double import SqliteDB
 
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key-friction-body",
-        "INTERNAL_API_SECRET": "test-internal-secret",
+        "VEXA_FLOWS_SERVICE_KEY": "test-flows-service-key-not-a-placeholder",
         "VEXA_FLOWS_DB_URL": "postgresql+pg8000://friction-body:unreachable@127.0.0.1:1/flows"}
 
 

@@ -216,7 +216,7 @@ def test_a_colleague_inside_our_own_domain_needs_the_verdict_too():
 def test_a_mail_turn_is_dispatched_as_a_mail_turn(monkeypatch):
     seen = []
     monkeypatch.setattr(ag, "agent_door", lambda: "http://agent-api.test")
-    monkeypatch.setattr(ag, "require_internal_secret", lambda: "s")
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "s1e-flows-key")
     monkeypatch.setattr(ag, "http", lambda m, u, h, b=None, timeout=20:
                         (seen.append((m, dict(h))) or (200, {"turns": []} if u.endswith("/history")
                                                        else {})))
@@ -224,3 +224,4 @@ def test_a_mail_turn_is_dispatched_as_a_mail_turn(monkeypatch):
     (_m, headers), = [c for c in seen if c[0] == "POST"]
     assert headers["X-Vexa-Flow-Kind"] == "mail"
     assert headers["X-Vexa-Flow-Regime"] == "autonomous"
+    assert headers["X-Vexa-Service-Key"] == "s1e-flows-key" and "X-Internal-Secret" not in headers

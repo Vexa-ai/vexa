@@ -48,13 +48,14 @@ def test_every_commitment_is_grounded_in_the_recorded_call():
 def test_cards_are_offered_as_the_room_principal_and_the_page_cites_them(monkeypatch):
     monkeypatch.setenv("VEXA_FLOWS_CRM_API_URL", "http://crm.test")
     monkeypatch.setenv("VEXA_FLOWS_ADMIN_API_URL", "http://identity.test")
-    monkeypatch.setattr(production._common, "require_internal_secret", lambda: "s", raising=False)
     import flows_steps.common as common
-    monkeypatch.setattr(common, "require_internal_secret", lambda: "s")
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "s5-flows-key")
     calls = []
+    sent_headers = []
 
     def fake_http(method, url, headers, body=None, timeout=20):
         calls.append((method, url, body))
+        sent_headers.append(dict(headers))
         if url.endswith("/internal/principals/workspace"):
             return 200, {"id": 900, "kind": "workspace", "workspace_id": body["workspace_id"]}
         if url.endswith("/internal/cards/offer"):
@@ -64,6 +65,8 @@ def test_cards_are_offered_as_the_room_principal_and_the_page_cites_them(monkeyp
     cited, cards = production.offer_meeting_cards(REPORT, PEOPLE, "3", CALL["workspace"], CALL["meeting_id"],
                                                   CALL["day"], "Venue and sponsor deck")
     (_, _, principal_body), (_, _, offer) = calls
+    # both calls go through the gateway's service door with the flows key, never the internal secret
+    assert sent_headers == [{"X-Vexa-Service-Key": "s5-flows-key"}] * 2
     assert principal_body == {"workspace_id": "ai-tinkerers", "bills_to": 3}
     assert offer["principal"] == "900" and offer["workspace"] == "ai-tinkerers" and offer["on_behalf_of"] == "3"
     assert offer["origin"] == "meeting:153" and offer["session"] == "meet-153"
@@ -81,7 +84,6 @@ def test_no_room_or_no_principal_offers_nothing_and_never_as_the_owner(monkeypat
     monkeypatch.setenv("VEXA_FLOWS_CRM_API_URL", "http://crm.test")
     monkeypatch.setenv("VEXA_FLOWS_ADMIN_API_URL", "http://identity.test")
     import flows_steps.common as common
-    monkeypatch.setattr(common, "require_internal_secret", lambda: "s")
     seen = []
     monkeypatch.setattr(common, "http", lambda m, u, h, b=None, timeout=20: seen.append(u) or (503, {}))
     assert production.offer_meeting_cards(REPORT, PEOPLE, "3", "", 153, CALL["day"]) == (REPORT, [])
@@ -111,7 +113,6 @@ def test_the_drop_writes_a_page_that_cites_the_cards_on_every_desk(monkeypatch):
     reg = _rig(monkeypatch, store)
     monkeypatch.setenv("VEXA_FLOWS_CRM_API_URL", "http://crm.test")
     monkeypatch.setenv("VEXA_FLOWS_ADMIN_API_URL", "http://identity.test")
-    monkeypatch.setattr(common, "require_internal_secret", lambda: "s")
     offers = []
 
     def fake_http(method, url, headers, body=None, timeout=20):

@@ -1,10 +1,11 @@
 """The eval and witness harnesses name a person the way flows itself does.
 
-agent-api believes an `x-user-*` header only from the gateway's signature or from a service
-presenting `X-Internal-Secret` (ADR-0041); a bare `X-User-Id` is a 401. The scripts under `eval/` and
-`witness/` drive a live stack as a real user — chat turns, workspace reads, desk resets — and every
-one of them used to send that bare header. They now build it with `flows_steps.agent.as_person`, the
-same internal-tier headers the production steps send, which refuses to run without the secret.
+agent-api believes an `x-user-*` header only from the gateway's signature or from the internal tier
+(ADR-0041); a bare `X-User-Id` is a 401. Flows reaches the internal tier only through the gateway's
+service door, which admits a call carrying the flows key (`X-Vexa-Service-Key`). The scripts under
+`eval/` and `witness/` drive a live stack as a real user — chat turns, workspace reads, desk resets —
+and every one of them used to send a bare header. They build it with `flows_steps.agent.as_person`,
+the same service-door headers the production steps send, which refuses to run without the key.
 """
 from __future__ import annotations
 
@@ -33,18 +34,20 @@ def test_no_harness_builds_a_bare_identity_header():
 
 
 def test_the_witness_steps_act_for_a_person_over_the_internal_tier(monkeypatch):
-    monkeypatch.setenv("INTERNAL_API_SECRET", "a-test-secret-not-a-placeholder")
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "a-test-key-not-a-placeholder")
+    monkeypatch.setenv("INTERNAL_API_SECRET", "an-internal-secret-flows-must-not-send")
     spec = importlib.util.spec_from_file_location("real_steps", FLOWS / "witness" / "real_steps.py")
     rs = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(rs)
     assert rs.as_person("7") == {"X-User-Id": "7",
-                                 "X-Internal-Secret": "a-test-secret-not-a-placeholder"}
+                                 "X-Vexa-Service-Key": "a-test-key-not-a-placeholder"}
 
 
 def test_without_the_secret_a_harness_refuses_rather_than_sends_a_bare_id(monkeypatch):
     from flows_steps.agent import as_person
 
-    for name in ("INTERNAL_API_SECRET", "VEXA_INTERNAL_SECRET", "VEXA_INTERNAL_API_SECRET"):
-        monkeypatch.delenv(name, raising=False)
-    with pytest.raises(RuntimeError, match="INTERNAL_API_SECRET"):
+    monkeypatch.delenv("VEXA_FLOWS_SERVICE_KEY", raising=False)
+    # an internal-tier secret in the environment is NOT a substitute: flows never reads it
+    monkeypatch.setenv("INTERNAL_API_SECRET", "an-internal-secret-flows-must-not-send")
+    with pytest.raises(RuntimeError, match="VEXA_FLOWS_SERVICE_KEY"):
         as_person("7")

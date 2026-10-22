@@ -41,7 +41,7 @@ def on_change(event_type: str, refs: dict, *, post: Optional[Callable] = None) -
         if post is None:
             from flows_steps import common  # noqa: PLC0415
             code, _ = common.http("POST", f"{common.agent_door()}{PATH}",
-                                  {"X-User-Id": str(refs["uid"]), "X-Internal-Secret": common.require_internal_secret()},
+                                  common.door_headers(refs["uid"]),
                                   body)
         else:
             code = post(str(refs["uid"]), PATH, body)

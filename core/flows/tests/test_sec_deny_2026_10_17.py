@@ -34,7 +34,7 @@ from flows_steps import agent as ag  # noqa: E402
 # Same literals as test_subject_bearer.py / test_health.py: `flows_api` captures them at import and
 # whichever module imports it first wins, so they must agree.
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key",
-        "INTERNAL_API_SECRET": "test-internal-secret",
+        "VEXA_FLOWS_SERVICE_KEY": "test-flows-service-key-not-a-placeholder",
         "VEXA_FLOWS_DB_URL": "postgresql+pg8000://subject-bearer:unreachable@127.0.0.1:1/flows"}
 _saved = {k: os.environ.get(k) for k in _ENV}
 os.environ.update(_ENV)
@@ -125,13 +125,15 @@ def test_known_user_mail_turn_runs_unattended_not_as_the_person(monkeypatch):
         return 200, {}
 
     monkeypatch.setattr(ag, "agent_door", lambda: "http://agent-api.test")
-    monkeypatch.setattr(ag, "require_internal_secret", lambda: "test-internal-secret")
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "sec-deny-flows-key")
     monkeypatch.setattr(ag, "http", fake_http)
     ag.dispatch_turn("5", "main", "[email-reply] ...", flow="email_chat", step="feedback_turn")
     (_, url, headers, _body), = [c for c in seen if c[0] == "POST"]
     assert url.endswith("/api/chat")
     assert headers.get("X-Vexa-Flow-Regime") == "autonomous"
     assert headers.get("X-Vexa-Flow-Regime") != "human"
+    assert headers.get("X-Vexa-Service-Key") == "sec-deny-flows-key" and headers.get("X-User-Id") == "5"
+    assert "X-Internal-Secret" not in headers
 
 
 # ── H8 · a routine is armed by a person, not by the agent that drafted it ───────────────────────

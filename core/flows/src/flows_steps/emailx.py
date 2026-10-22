@@ -30,7 +30,7 @@ def creds(*, login: bool = True) -> tuple[str, str]:
     unrunnable for anybody else, invisible to the config contract, and silently dependent on a
     binary nothing installs. Configuration is delivered by the deployment's own environment
     (P14) — a deployment that has not named these keys is REFUSED, by name, rather than guessed
-    at. The refusal names the KEY and never the value, exactly as `require_admin_key` does.
+    at. The refusal names the KEY and never the value, exactly as `require_service_key` does.
 
     `login=False` is the mail DOUBLE: mailpit takes no credential at all, so the dogfood lane
     names a host and a port and no password, and demanding one there would break the only lane

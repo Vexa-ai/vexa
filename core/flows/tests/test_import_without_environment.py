@@ -112,7 +112,8 @@ def test_an_unconfigured_import_authenticates_nobody():
     done = _python(
         "from flows_integrations import flows_api\n"
         "assert flows_api.API_KEY == '' and flows_api.TIMELINE_KEY == ''\n"
-        "assert flows_api.INTERNAL_SECRET == ''\n"
+        "assert flows_api.DOOR_KEY == ''\n"
+        "assert not flows_api._same_key('', flows_api.DOOR_KEY)\n"
         "assert not flows_api._same_key('', flows_api.API_KEY)\n"
         "assert not flows_api._same_key('changeme', flows_api.API_KEY)\n",
         _bare_env())
@@ -152,14 +153,25 @@ def test_boot_refuses_a_placeholder_operator_key():
     assert "VEXA_FLOWS_API_KEY" in done.stderr
 
 
-def test_boot_refuses_a_deployment_with_no_internal_tier_identity():
-    """`require_internal_secret()` was a module-scope call too, and it moved with the rest — so the
-    key it guards is checked here rather than at the first post-meeting run."""
+def test_boot_refuses_a_deployment_with_no_flows_key():
+    """`require_service_key()` runs inside `boot()`, so the key it guards is checked here rather
+    than at the first post-meeting run — and an internal-tier secret in the environment does not
+    stand in for it, because flows never reads one."""
     env = _configured_env()
-    env.pop("INTERNAL_API_SECRET")
+    env.pop("VEXA_FLOWS_SERVICE_KEY")
+    env["INTERNAL_API_SECRET"] = "a-real-internal-secret-flows-must-ignore"
     done = _python("from flows_integrations import flows_api; flows_api.boot()", env)
     assert done.returncode != 0
-    assert "INTERNAL_API_SECRET" in done.stderr
+    assert "VEXA_FLOWS_SERVICE_KEY" in done.stderr
+    assert "a-real-internal-secret-flows-must-ignore" not in done.stderr
+
+
+def test_a_configured_deployment_boots_without_the_internal_secret_or_admin_key():
+    """The control for the refusal above: the declaration names neither, and the boot succeeds."""
+    env = _configured_env()
+    assert "INTERNAL_API_SECRET" not in env and "VEXA_FLOWS_ADMIN_KEY" not in env
+    done = _python("from flows_integrations import flows_api; flows_api.boot()", env)
+    assert done.returncode == 0, done.stderr
 
 
 def test_boot_refuses_a_deployment_that_cannot_name_its_admin_api_door():

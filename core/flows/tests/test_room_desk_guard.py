@@ -137,17 +137,19 @@ def test_a_reset_it_could_not_perform_refuses_immediately_and_says_why(monkeypat
 
 # ── the step under the step ──────────────────────────────────────────────────────────────────
 def test_reset_desk_asks_the_internal_tier_for_this_subjects_own_desk(monkeypatch):
-    """No slug on the wire, and the internal secret on it: agent-api takes no workspace name for
-    this route, and refuses any caller that cannot present the header."""
+    """No slug on the wire, and the flows key on it: agent-api takes no workspace name for this
+    route, and the gateway's service door forwards it over the internal tier only for the flows
+    key — never with the internal secret, which flows does not hold."""
     calls = []
-    monkeypatch.setattr(ag, "require_internal_secret", lambda: "s3cr3t")
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "s3cr3t")
     monkeypatch.setattr(ag, "http", lambda m, u, h, b=None, **k: (
         calls.append((m, u, h, b)) or (200, {"reset": True, "before": "b", "after": "a"})))
 
     out = ag.reset_desk("175", "abc1234", reason="decision 22")
     method, url, headers, body = calls[0]
     assert method == "POST" and url.endswith("/api/workspace/git/reset")
-    assert headers["X-User-Id"] == "175" and headers["X-Internal-Secret"] == "s3cr3t"
+    assert headers["X-User-Id"] == "175" and headers["X-Vexa-Service-Key"] == "s3cr3t"
+    assert "X-Internal-Secret" not in headers
     assert body == {"sha": "abc1234", "reason": "decision 22"}
     assert "slug" not in body
     assert out["reset"] is True
@@ -156,7 +158,7 @@ def test_reset_desk_asks_the_internal_tier_for_this_subjects_own_desk(monkeypatc
 def test_reset_desk_degrades_to_a_refusal_rather_than_raising(monkeypatch):
     """Its one caller is already inside a failure; a second exception on top of the first would
     replace the reason a human needs with the reason the repair did not work."""
-    monkeypatch.setattr(ag, "require_internal_secret", lambda: "s3cr3t")
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "s3cr3t")
     monkeypatch.setattr(ag, "http", lambda *a, **k: (403, {"detail": "internal-tier capability"}))
     assert ag.reset_desk("175", "abc1234")["reset"] is False
 

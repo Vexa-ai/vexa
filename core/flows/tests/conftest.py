@@ -7,26 +7,20 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 
-#: THE ADMIN IDENTITY, declared the way a deployment declares it — AT IMPORT, beside the doors.
+#: THE FLOWS KEY, declared the way a deployment declares it — AT IMPORT, beside the doors.
 #:
-#: `VEXA_FLOWS_ADMIN_KEY` lost its `changeme` default (R-B11): it opens `ensure_platform_user` and
-#: `user_api_key`, so an unset value REFUSES rather than trying a placeholder. That makes every
-#: offline test that touches a step raise on the refusal instead of on the thing it is testing, so
-#: the suite declares a key, exactly as the lane's start script does.
+#: Every call flows makes into another domain goes through the gateway's service door with this key
+#: (`common.door_headers`), and an unset value REFUSES rather than trying a placeholder. That makes
+#: every offline test that touches a step raise on the refusal instead of on the thing it is
+#: testing, so the suite declares a key, exactly as a deployment does.
 #:
-#: IT WAS AN AUTOUSE FIXTURE, and a fixture runs far too late (F-D20 b): flows-api now validates
-#: its whole `config.v1` declaration at import, and six test modules import it at MODULE SCOPE —
-#: i.e. during collection, before any fixture has run. The refusal was correct and the test process
-#: was the thing misconfigured. Same reasoning, verbatim, as the doors below.
+#: NOT AN AUTOUSE FIXTURE: a fixture runs far too late (F-D20 b) — flows-api validates its whole
+#: `config.v1` declaration at import, and several test modules import it at MODULE SCOPE, during
+#: collection, before any fixture has run.
 #:
-#: `setdefault` semantics on purpose: a run that already exports a real key — the live contract
-#: smoke against a running admin-api — keeps it. The tests that are ABOUT the refusal unset it
-#: themselves with `monkeypatch.delenv`, which is per-test and unaffected.
-os.environ.setdefault("VEXA_FLOWS_ADMIN_KEY", "test-admin-key-not-a-placeholder")
-#: The internal tier, on the same terms: every agent-api call that acts for a person carries it
-#: (gateway-identity.v1 — agent-api believes an unsigned X-User-Id from nothing else), so a step test that
-#: reaches the agent door needs one declared. The refusal tests unset it themselves.
-os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-not-a-placeholder")
+#: `setdefault` semantics on purpose: a run that already exports a real key keeps it. The tests
+#: that are ABOUT the refusal unset it themselves with `monkeypatch.delenv`, which is per-test.
+os.environ.setdefault("VEXA_FLOWS_SERVICE_KEY", "test-flows-service-key-not-a-placeholder")
 
 
 #: The doors, declared for the test process the way a deployment declares them. NOT autouse-set to

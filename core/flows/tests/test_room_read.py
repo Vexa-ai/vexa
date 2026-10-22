@@ -28,7 +28,7 @@ Five properties:
      is a silent loss of the whole feature and looks exactly like a meeting where nobody spoke.
   4. THE CAP is `room_read_max`, default 12 — enforced by agent-api, on resolved desks, once.
   5. THE DISPATCH carries `room_meeting_id` (the ROW id), `room_participants`, `room_participant_names` and
-     `room_read_max`, plus `X-Internal-Secret` — and none of them on any other turn.
+     `room_read_max`, plus the flows key (`X-Vexa-Service-Key`) — and none of them on any other turn.
 """
 from __future__ import annotations
 
@@ -63,9 +63,11 @@ def _rig(monkeypatch, segs, *, status=200):
 
     def fake_http(method, url, headers, body=None, timeout=20):
         calls.append(url)
+        # the transcript is read AS the meeting's owner, named through the service door
+        assert headers == {"X-Vexa-Service-Key": "room-read-flows-key", "X-User-Id": "7"}, headers
         return status, {"segments": segs}
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "room-read-flows-key")
     monkeypatch.setattr(mt, "http", fake_http)
-    monkeypatch.setattr(mt, "user_api_key", lambda uid: "key")
     return calls
 
 
@@ -96,7 +98,6 @@ def test_the_unmatched_keep_the_invites_own_order(monkeypatch):
 
 
 def test_character_count_orders_when_a_producer_gives_no_timings(monkeypatch):
-    monkeypatch.setattr(mt, "user_api_key", lambda uid: "key")
     monkeypatch.setattr(mt, "http", lambda *a, **k: (200, {"segments": [
         {"speaker": "Ben", "text": "short"},
         {"speaker": "Anna Smith", "text": "a very much longer contribution indeed"}]}))
@@ -146,7 +147,6 @@ def test_an_unreadable_transcript_degrades_to_invite_order(monkeypatch):
 
     def boom(*a, **k):
         raise StepError("gateway down")
-    monkeypatch.setattr(mt, "user_api_key", lambda uid: "key")
     monkeypatch.setattr(mt, "http", boom)
     assert mt.room_order("7", 97, ROOM, NAMES) == ROOM
 
@@ -247,11 +247,11 @@ def _chat_post(monkeypatch):
             seen["body"] = dict(body or {})
         return 200, {"turns": []}
     monkeypatch.setattr(agent_mod, "http", fake_http)
-    monkeypatch.setattr(agent_mod, "require_internal_secret", lambda: "s3cr3t")
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "s3cr3t")
     return seen
 
 
-def test_the_room_travels_as_agent_apis_four_fields_plus_the_internal_header(monkeypatch):
+def test_the_room_travels_as_agent_apis_four_fields_plus_the_service_door_header(monkeypatch):
     seen = _chat_post(monkeypatch)
     REAL_DISPATCH_TURN("7", "meet-97", "hi", room={
         "meeting_id": 97, "read": ["anna.smith@bank.test"], "names": NAMES, "read_max": 12})
@@ -267,23 +267,24 @@ def test_the_room_travels_as_agent_apis_four_fields_plus_the_internal_header(mon
         "room_participants": ["anna.smith@bank.test"],   # ADDRESSES — agent-api resolves identity
         "room_participant_names": NAMES,
         "room_read_max": 12}
-    assert seen["headers"]["X-Internal-Secret"] == "s3cr3t"
+    assert seen["headers"]["X-Vexa-Service-Key"] == "s3cr3t"
     assert seen["headers"]["X-User-Id"] == "7"
+    assert "X-Internal-Secret" not in seen["headers"]
 
 
 def test_no_room_means_the_body_and_headers_this_dispatch_always_sent(monkeypatch):
     """Every other turn in the system — onboarding, the email conversation, the re-ask — must not
-    grow a room field. It carries the internal tier like every call flows makes FOR a person
-    (gateway-identity.v1: agent-api believes an unsigned X-User-Id only beside it) and runs unattended;
+    grow a room field. It carries the flows key like every call flows makes FOR a person (the
+    gateway's service door forwards the X-User-Id over the internal tier) and runs unattended;
     a room is the BODY fields, never the header."""
     seen = _chat_post(monkeypatch)
     REAL_DISPATCH_TURN("7", "s", "hello")
     assert seen["body"] == {"prompt": "hello", "session": "s"}
-    assert set(seen["headers"]) == {"X-User-Id", "X-Internal-Secret", "X-Vexa-Flow-Regime"}
+    assert set(seen["headers"]) == {"X-User-Id", "X-Vexa-Service-Key", "X-Vexa-Flow-Regime"}
 
     REAL_DISPATCH_TURN("7", "s", "hello", room={"meeting_id": None, "read": ["a@b.test"]})
     assert seen["body"] == {"prompt": "hello", "session": "s"}
-    assert set(seen["headers"]) == {"X-User-Id", "X-Internal-Secret", "X-Vexa-Flow-Regime"}
+    assert set(seen["headers"]) == {"X-User-Id", "X-Vexa-Service-Key", "X-Vexa-Flow-Regime"}
 
 
 def test_the_room_addresses_the_ROW_not_the_native_id(monkeypatch):

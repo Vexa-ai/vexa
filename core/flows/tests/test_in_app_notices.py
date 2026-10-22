@@ -38,6 +38,7 @@ def wire(monkeypatch):
 
     monkeypatch.setattr(common, "AGENT_API", AGENT)
     monkeypatch.setattr(common, "http", http)
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "s3cret-flows-key-value-0001")
     monkeypatch.setenv("INTERNAL_API_SECRET", "s3cret-internal-tier-value-0001")
     return calls
 
@@ -48,7 +49,9 @@ def test_a_shared_meeting_reaches_the_recipients_bell_with_the_same_link_as_the_
     assert isinstance(out, Done) and ch.sent
     [(method, url, headers, body)] = wire
     assert (method, url) == ("POST", f"{AGENT}/internal/notifications")
-    assert headers["X-Internal-Secret"] == "s3cret-internal-tier-value-0001"
+    assert headers["X-Vexa-Service-Key"] == "s3cret-flows-key-value-0001"
+    assert "X-Internal-Secret" not in headers
+    assert "s3cret-internal-tier-value-0001" not in headers.values()
     assert body["kind"] == "meeting_shared" and body["email"] == "jsmith@example.com"
     assert body["meeting_id"] == "42" and body["title"] == "Weekly sync" and body["actor"] == "7"
     # Open goes where the mail's button goes — a path in the app, never another origin

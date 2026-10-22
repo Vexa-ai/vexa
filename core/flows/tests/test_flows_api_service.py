@@ -45,10 +45,10 @@ import pytest
 # this suite is a deployment whose URL names Postgres and is simply UNREACHABLE — laziness, not a
 # different adapter, is what lets the import succeed.
 _PRIOR_ENV = {k: os.environ.get(k) for k in
-              ("VEXA_FLOWS_API_KEY", "INTERNAL_API_SECRET", "VEXA_FLOWS_DB_URL")}
+              ("VEXA_FLOWS_API_KEY", "VEXA_FLOWS_SERVICE_KEY", "VEXA_FLOWS_DB_URL")}
 
 os.environ.setdefault("VEXA_FLOWS_API_KEY", "test-flows-key")
-os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret")
+os.environ.setdefault("VEXA_FLOWS_SERVICE_KEY", "test-flows-service-key-not-a-placeholder")
 os.environ["VEXA_FLOWS_DB_URL"] = "postgresql+pg8000://health-gate:unreachable@127.0.0.1:1/flows"
 try:
     from flows_integrations import flows_api  # noqa: E402

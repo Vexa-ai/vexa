@@ -21,7 +21,7 @@ import urllib.parse
 
 from flows import Done, StepCtx, StepError
 
-from .common import agent_door, http, require_internal_secret
+from .common import agent_door, door_headers, http
 
 SIGNAL_EVENT = "meeting.signal"
 SIGNAL_FLOW = "meeting_signal"
@@ -132,7 +132,7 @@ def source_id(cleaned: dict) -> str:
 
 
 def _internal() -> dict:
-    return {"X-Internal-Secret": require_internal_secret()}
+    return door_headers()
 
 
 def register(reg) -> None:

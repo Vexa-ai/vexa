@@ -10,7 +10,7 @@ from flows import Block, Done, StepCtx, StepError, Wait
 # of real work, which the loop reports as "unexpected: NameError(...)" against the gateway rather
 # than against this file. Found while adding the prep step, not by a test: nothing exercises
 # dispatch_bot outside a live meeting.
-from .common import http, meetings_door, setting, user_api_key
+from .common import door_headers, http, meetings_door, setting
 
 # THE FIXTURE-TRANSCRIPT INJECTION IS GONE (PRD decision 18d). When a rehearsed meeting completed
 # with no segments, this file used to write seven canned transcript rows into the MEETINGS database
@@ -32,7 +32,7 @@ def meeting_ref(uid: str, url: str) -> str:
     """
     native = url.rstrip("/").rsplit("/", 1)[-1].split("?")[0]
     try:
-        _st, body = http("GET", f"{meetings_door()}/meetings", {"X-API-Key": user_api_key(uid)})
+        _st, body = http("GET", f"{meetings_door()}/meetings", door_headers(uid))
     except StepError:
         return native
     rows = body.get("meetings", []) if isinstance(body, dict) else (body if isinstance(body, list) else [])
@@ -75,7 +75,7 @@ def ensure_meeting_row(uid: str, url: str, title: str | None = None,
         body["scheduled_at"] = datetime.datetime.fromtimestamp(
             float(start_epoch), datetime.timezone.utc).isoformat().replace("+00:00", "Z")
     try:
-        st, row = http("POST", f"{meetings_door()}/meetings", {"X-API-Key": user_api_key(uid)}, body)
+        st, row = http("POST", f"{meetings_door()}/meetings", door_headers(uid), body)
     except StepError:
         return native
     if st in (200, 201) and isinstance(row, dict) and row.get("id") is not None:
@@ -86,7 +86,7 @@ def ensure_meeting_row(uid: str, url: str, title: str | None = None,
 def meeting_row(uid: str, meeting_id, native: str | None = None):
     """This user's meeting row from the gateway, or None. One read, several callers."""
     try:
-        _st, body = http("GET", f"{meetings_door()}/meetings", {"X-API-Key": user_api_key(str(uid))})
+        _st, body = http("GET", f"{meetings_door()}/meetings", door_headers(str(uid)))
     except StepError:
         return None
     rows = body.get("meetings", []) if isinstance(body, dict) else (body if isinstance(body, list) else [])
@@ -161,7 +161,7 @@ def mint_transcript_share(uid: str, meeting_id, email: str,
     a capability and did not get one, and the reason it did not is worth the same noise.
     """
     st, body = http("POST", f"{meetings_door()}/meetings/{meeting_id}/share",
-                    {"X-API-Key": user_api_key(str(uid))},
+                    door_headers(str(uid)),
                     {"mode": "restricted", "allowed_emails": [email],
                      "expires_in_sec": int(expires_in_sec)})
     token = body.get("token") if isinstance(body, dict) else None
@@ -193,7 +193,7 @@ def meeting_start(uid: str, meeting_id, native: str | None = None):
     """
     import datetime
     try:
-        _st, body = http("GET", f"{meetings_door()}/meetings", {"X-API-Key": user_api_key(str(uid))})
+        _st, body = http("GET", f"{meetings_door()}/meetings", door_headers(str(uid)))
     except StepError:
         return None
     rows = body.get("meetings", []) if isinstance(body, dict) else (body if isinstance(body, list) else [])
@@ -239,7 +239,7 @@ def transcript_text(uid: str, meeting_id) -> str | None:
     """
     try:
         _st, body = http("GET", f"{meetings_door()}/transcripts/by-id/{meeting_id}",
-                         {"X-API-Key": user_api_key(str(uid))})
+                         door_headers(str(uid)))
     except StepError:
         return None
     if not isinstance(body, dict) or "segments" not in body:
@@ -262,7 +262,7 @@ def transcript_segment_count(uid: str, meeting_id) -> int | None:
     gateway restart as a person who never tried."""
     try:
         _st, body = http("GET", f"{meetings_door()}/transcripts/by-id/{meeting_id}",
-                         {"X-API-Key": user_api_key(str(uid))})
+                         door_headers(str(uid)))
     except StepError:
         return None
     if not isinstance(body, dict) or "segments" not in body:
@@ -316,7 +316,7 @@ def speaking_seconds(uid: str, meeting_id) -> dict:
     invite's own order stands. It is not a reason to fail a meeting."""
     try:
         _st, body = http("GET", f"{meetings_door()}/transcripts/by-id/{meeting_id}",
-                         {"X-API-Key": user_api_key(str(uid))})
+                         door_headers(str(uid)))
     except StepError:
         return {}
     segs = (body or {}).get("segments") or [] if isinstance(body, dict) else []
@@ -428,10 +428,10 @@ def await_start(ctx: StepCtx):
 
 def dispatch_bot(ctx: StepCtx):
     """Spawn the REAL bot via gateway POST /bots (transcribe per deployment; 409 = adopt the
-    existing meeting). Prior: ensure_user (for the key) · Effect: bot container
+    existing meeting). Prior: ensure_user (the subject) · Effect: bot container
     Result: {meeting_id, native, platform}."""
     uid = ctx.prior["ensure_user"]["uid"]
-    key = user_api_key(uid)
+    hdr = door_headers(uid)
     # transcribe_enabled is NOT passed. It used to be hardcoded False here, against this step's
     # own docstring, which is why a standup recorded audio and captured no words. The platform
     # defaults it to True and resolves TRANSCRIBE_ENABLED per deployment — so naming it here
@@ -447,14 +447,14 @@ def dispatch_bot(ctx: StepCtx):
     # it only when the organizer is a member (`workspace_id`, authorized against the signed
     # memberships); refused, the bot still goes, to the organizer's default, and the reason is kept.
     ws = str(ctx.refs.get("workspace") or ctx.refs.get("workspace_id") or "").strip()
-    st, body = http("POST", f"{meetings_door()}/bots", {"X-API-Key": key},
+    st, body = http("POST", f"{meetings_door()}/bots", hdr,
                     {"meeting_url": ctx.refs["url"], **({"workspace_id": ws} if ws else {})})
     if ws and st in (400, 403, 422):
         ctx.scratch["workspace_refused"] = f"{st}: {_http_detail(body)}"[:200]
-        st, body = http("POST", f"{meetings_door()}/bots", {"X-API-Key": key},
+        st, body = http("POST", f"{meetings_door()}/bots", hdr,
                         {"meeting_url": ctx.refs["url"]})
     if st == 409:
-        st2, existing = http("GET", f"{meetings_door()}/bots", {"X-API-Key": key})
+        st2, existing = http("GET", f"{meetings_door()}/bots", hdr)
         rows = existing if isinstance(existing, list) else existing.get("meetings", [])
         for m in rows:
             if m.get("native_meeting_id") == ctx.refs["url"].rsplit("/", 1)[1]:
@@ -497,10 +497,10 @@ def _status(ctx: StepCtx) -> dict:
     happen (worth counting, and worth giving up on). `unreadable` is the second, and it carries the
     code so an operator reading the reason knows which door said what."""
     d = ctx.prior["dispatch_bot"]
-    key = user_api_key(ctx.prior["ensure_user"]["uid"])
+    hdr = door_headers(ctx.prior["ensure_user"]["uid"])
     try:
         st, body = http("GET", f"{meetings_door()}/transcripts/{d['platform']}/{d['native']}",
-                        {"X-API-Key": key})
+                        hdr)
     except StepError as e:
         return {"status": STATUS_UNREADABLE, "http": None, "detail": str(e)[:200]}
     if st == 200 and isinstance(body, dict):
@@ -523,10 +523,10 @@ def _stop_bot(ctx: StepCtx, d: dict):
     Anything else is counted in the reaction's durable scratch, so the count survives the worker:
     once, the platform may be restarting; `STOP_ATTEMPTS_MAX` times running is a fact about this
     meeting, and the caller escalates."""
-    key = user_api_key(ctx.prior["ensure_user"]["uid"])
+    hdr = door_headers(ctx.prior["ensure_user"]["uid"])
     try:
         st, body = http("DELETE", f"{meetings_door()}/bots/{d['platform']}/{d['native']}",
-                        {"X-API-Key": key})
+                        hdr)
     except StepError as e:
         st, body = None, str(e)[:200]
     try:
@@ -663,10 +663,10 @@ def register_user_steps(reg) -> None:
                            "own. Remake it allowing that, or ask in chat.")
             raise StepError("refused: no bot.request grant on this routine (or the policy no longer "
                             "allows it)", retryable=False)
-        key = user_api_key(uid)
+        hdr = door_headers(uid)
         ws = _slot(flow.param("workspace_id", ""), ctx.refs) or str(
             ctx.refs.get("workspace") or "").strip()
-        st, body = http("POST", f"{meetings_door()}/bots", {"X-API-Key": key},
+        st, body = http("POST", f"{meetings_door()}/bots", hdr,
                         {"meeting_url": url, **({"workspace_id": ws} if ws else {})})
         st = int(st or 0)
         if st == 409:

@@ -103,8 +103,8 @@ import flows_config  # noqa: E402
 import flows_obs  # noqa: E402
 import flows_pages  # noqa: E402 — the page renderer `GET /flows/pages` serves (Vexa-ai/vexa#1639)
 from flows_defs import production  # noqa: E402
-from flows_steps.common import (db_url, internal_secret,  # noqa: E402
-                                require_internal_secret, setting)
+from flows_steps.common import (db_url, require_service_key,  # noqa: E402
+                                service_key, setting)
 from flows_integrations import friction_dedup  # noqa: E402 — the repeat counter POST /friction keeps
 from flows_integrations.subject_auth import (REFUSAL, SHARED_REFUSAL, Caller,  # noqa: E402
                                               IdentityUnavailable, SubjectUnknown, resolve)
@@ -148,13 +148,6 @@ def _forbidden_values(key: str) -> tuple:
 def _require_api_key() -> str:
     """The operator key, or the process refuses to start.
 
-    It used to be `os.environ.get("VEXA_FLOWS_API_KEY", "changeme")`. The variable was never set
-    on the running deployment — `flows-up.sh` exports `VEXA_FLOWS_ADMIN_KEY`, which is the
-    admin-api token under a different name this module never reads — so the live intake accepted
-    `X-Flows-Admin-Key: changeme`, a string printed in this file. The port binds 127.0.0.1, but
-    the control MCP is public and forwards to it with that same key, so the door was open to
-    anyone who could read the source.
-
     A weak default is worse than no default: it makes an unconfigured deployment look configured
     and it fails no test. So there is no default. A deployment that has not set the variable
     stops here, loudly, rather than serving on a known string.
@@ -175,10 +168,8 @@ def _require_api_key() -> str:
 
     It validates the WHOLE declaration, not this key alone, and that is deliberate: `preflight`
     names every missing required-explicit key in ONE message rather than a peel-the-onion restart
-    loop, so it is called FIRST, before anything else this module reads. `VEXA_FLOWS_ADMIN_KEY` is
-    the only key whose absence newly stops the boot, and it was already refused at its first use
-    (`flows_steps.common.require_admin_key`), already exported by every start script, and already
-    asserted by `tests/test_config_contract.py`. flows-api declares no probes, so this does no I/O.
+    loop, so it is called FIRST, before anything else this module reads. flows-api declares no
+    probes, so this does no I/O.
     """
     config_preflight.preflight()
     return (os.environ.get("VEXA_FLOWS_API_KEY") or "").strip()
@@ -188,7 +179,7 @@ def _configured(key: str, value: Optional[str] = None) -> str:
     """A credential AS THE ENVIRONMENT CARRIES IT — never a refusal, and "" for a literal the
     declaration forbids.
 
-    THE READ, not the refusal. `_require_api_key`, `_timeline_key` and `require_internal_secret`
+    THE READ, not the refusal. `_require_api_key`, `_timeline_key` and `require_service_key`
     are the refusals, they are unchanged, and they still run — in `boot()`, which is a different
     moment (see the block below). What this gives the module is a value to hold between import and
     boot, and it is FAIL-CLOSED on a placeholder because `_same_key` refuses an empty expected key:
@@ -266,10 +257,9 @@ def _publish_keys() -> dict:
 # be read — which is a different refusal from the one that was wanted, and it stood between a
 # built candidate and a validated one.
 #
-# `flows_steps.common.require_admin_key` had already written the rule down, four lines above the
-# secret this file was reading at import: *"A FUNCTION, not a constant, on purpose: a constant read
-# at import forces the refusal into module-import time … and the failure is attributed to whoever
-# imported first rather than to the call that needed the key."*
+# The rule: a credential is read by A FUNCTION, not a constant — a constant read at import forces the
+# refusal into module-import time, and the failure is attributed to whoever imported first rather
+# than to the call that needed the key.
 #
 # So: the refusals are the same functions with the same messages in the same order, and they run in
 # `boot()` — the ASGI lifespan runs it before the first request is served, `main()` runs it before
@@ -277,9 +267,10 @@ def _publish_keys() -> dict:
 API_KEY = _configured("VEXA_FLOWS_API_KEY")
 TIMELINE_KEY = _configured("VEXA_FLOWS_TIMELINE_KEY")
 PUBLISH_KEYS = {p: k for p, (env, _e) in PUBLISHERS.items() if (k := _configured(env))}
-# The internal-tier identity, read under whichever name set it (`common.internal_secret`) and
-# refused, like the two above, at boot.
-INTERNAL_SECRET = _configured("INTERNAL_API_SECRET", internal_secret())
+# The flows key — what the gateway's service door stamps on the internal-tier calls it forwards INTO
+# this service (`/to-flows/*`). The internal secret itself never reaches flows. Refused, like the two
+# above, at boot.
+DOOR_KEY = _configured("VEXA_FLOWS_SERVICE_KEY", service_key())
 
 logger = logging.getLogger(__name__)
 
@@ -308,20 +299,20 @@ def boot() -> dict:
       one `_configured` left it with.
     * `flows_config.preflight()` — flows' own rule, which is NOT in the declaration: a deployment
       that cannot NAME a door does not run, because there are no host-port defaults.
-    * `require_internal_secret()` and the DSN — the internal-tier identity, and the database.
+    * `require_service_key()` and the DSN — the flows key, and the database.
 
     IDEMPOTENT, and it has to be: `main()` runs it before binding the port and uvicorn runs the
     lifespan after, so an ordinary boot calls it twice. The validator is pure, flows declares no
     probes so it does no I/O, and the declaration is `lru_cache`d — the second call is a dict
     comparison.
     """
-    global API_KEY, TIMELINE_KEY, PUBLISH_KEYS, INTERNAL_SECRET, db
+    global API_KEY, TIMELINE_KEY, PUBLISH_KEYS, DOOR_KEY, db
     contract_preflight()
     API_KEY = _require_api_key()
     TIMELINE_KEY = _timeline_key()
     PUBLISH_KEYS = _publish_keys()
     flows_config.preflight()          # no door, no boot — see flows_config's DOORS block
-    INTERNAL_SECRET = require_internal_secret()
+    DOOR_KEY = require_service_key()
     if db is None:
         # Only reachable when the DSN arrived between import and boot — `contract_preflight()`
         # above refuses when it is still absent. Safe to compose here and nowhere else: the steps
@@ -569,7 +560,7 @@ def subject_or_operator(x_flows_operator_key: str = Header(default=""),
             "this route needs your Vexa credential (Authorization: Bearer …, or X-API-Key), "
             f"or the operator key in {OPERATOR_HEADER}"))
     try:
-        caller = resolve(token, secret=INTERNAL_SECRET)
+        caller = resolve(token, secret=DOOR_KEY)
     except SubjectUnknown:
         raise HTTPException(status_code=401, detail="that credential does not identify anyone")
     except IdentityUnavailable as e:
@@ -596,9 +587,9 @@ def timeline_reader(x_flows_operator_key: str = Header(default=""),
     THE NARROW KEY IS ITS OWN KIND, not an operator (P20/E1). It used to return
     `Caller(kind="admin")`, and that one line made "a key that can do exactly one thing" a key that
     could do every subject-scoped thing this service has: it read any person's reactions and queue,
-    and — with `meetings=true`, the default — reached `common.user_api_key` and MINTED a gateway
-    token on the named third party's account. `Caller(kind="timeline")` reaches exactly one route,
-    must name its subject like the operator must, and never mints (see `timeline()`).
+    and — with `meetings=true`, the default — read the named third party's meetings.
+    `Caller(kind="timeline")` reaches exactly one route, must name its subject like the operator
+    must, and never reads meetings (see `timeline()`).
     """
     if TIMELINE_KEY and _same_key(_operator_key(x_flows_operator_key, x_flows_admin_key),
                                   TIMELINE_KEY):
@@ -1354,18 +1345,19 @@ def admit_event(ev: EventSubmission, x_actor: str = Header(default=""),
 
 
 @app.post("/events/signal", status_code=202)
-def admit_signal(event: dict = Body(...), x_internal_secret: str = Header(default=""),
+def admit_signal(event: dict = Body(...), x_vexa_service_key: str = Header(default=""),
                  x_vexa_service: str = Header(default="")):
     """A MEETING SIGNAL, from the signals service only (transcript signals, 2026-10-15).
 
     The body is the event.v1 `meeting.signal` the service built (`subject` = the meeting's owner,
     `data` = the buffer, its score and why it woke). It is admitted as one fact, keyed by the
     buffer's segments so a redelivery wakes nobody twice; the company flow `meeting_signal` decides
-    what it does. The caller is the internal tier naming itself `signals`; anyone else — a person,
-    a worker, the operator's key — is refused, because a forged signal would put words in the
-    agent's meeting chat."""
+    what it does. The caller is the internal tier naming itself `signals`, through the gateway's
+    service door (which checks the internal secret and stamps the flows key); anyone else — a
+    person, a worker, the operator's key — is refused, because a forged signal would put words in
+    the agent's meeting chat."""
     from flows_steps import signals as _signals
-    if (not INTERNAL_SECRET or not _same_key(x_internal_secret, INTERNAL_SECRET)
+    if (not DOOR_KEY or not _same_key(x_vexa_service_key, DOOR_KEY)
             or (x_vexa_service or "").strip().lower() != _signals.SIGNALS_SERVICE):
         raise HTTPException(status_code=403, detail={
             "refused": "signals_only", "note": "meeting.signal is posted by the signals service"})
@@ -2103,10 +2095,9 @@ def timeline(subject: str = "", since: str = "", until: str = "", limit: int = 2
         raise HTTPException(status_code=400, detail={
             "not_a_subject": subj,
             "expected": "a platform uid (digits) or an email address"})
-    # THE NARROW KEY NEVER MINTS. `fetch_meetings` reaches `flows_steps.common.user_api_key`, which
-    # asks admin-api for a `["bot","browser","tx"]` gateway token ON THE NAMED SUBJECT'S ACCOUNT —
-    # a write, on a third party, from a credential documented as read-only and one-route. So the
-    # meetings half is dropped for this tier rather than gated: the answer degrades to this
+    # THE NARROW KEY NEVER READS MEETINGS. `fetch_meetings` reads the named subject's meetings
+    # through the service door — a third party's data, from a credential documented as one-route.
+    # So the meetings half is dropped for this tier rather than gated: the answer degrades to this
     # database's own rows, which is the offline shape `meetings=false` already serves and already
     # tests. A person's own credential and the operator key are unchanged.
     want_meetings = bool(meetings) and not caller.is_timeline
@@ -2768,12 +2759,13 @@ def mail_address(caller: Caller = Depends(subject_or_operator)):
 
 
 @app.post("/mail/sign-in")
-def mail_sign_in(body: _SignIn, x_internal_secret: str = Header(default="")):
-    """THE SIGN-IN LINK, through the one outbound path — the terminal's door (internal tier). The
+def mail_sign_in(body: _SignIn, x_vexa_service_key: str = Header(default="")):
+    """THE SIGN-IN LINK, through the one outbound path — the terminal's door (internal tier, through
+    the gateway's service door, which checks the internal secret and stamps the flows key). The
     kind is locked on and never capped here; a failure is the terminal's cue to send its own baked
     mail, so a sign-in never depends on this route."""
     from flows_steps import outbound as _out
-    if not INTERNAL_SECRET or not _same_key(x_internal_secret, INTERNAL_SECRET):
+    if not DOOR_KEY or not _same_key(x_vexa_service_key, DOOR_KEY):
         raise HTTPException(status_code=403, detail="internal tier only")
     if "@" not in body.to or not body.link.startswith(("https://", "http://")):
         raise HTTPException(status_code=422, detail="to and link are required")
@@ -2800,12 +2792,12 @@ _PLATFORM_KINDS = frozenset({"workspace-joined", "workspace-invite", "chat-share
 
 
 @app.post("/mail/send")
-def mail_send(body: _PlatformMail, x_internal_secret: str = Header(default="")):
+def mail_send(body: _PlatformMail, x_vexa_service_key: str = Header(default="")):
     """ONE MAIL OF ONE KIND, for a platform producer on the internal tier — the same outbound path
     every flow step uses: the company's switch, the cap, the template, the audit. A kind that is off
     answers 200 with `sent: false` and why; nothing is an error the producer must handle."""
     from flows_steps import outbound as _out
-    if not INTERNAL_SECRET or not _same_key(x_internal_secret, INTERNAL_SECRET):
+    if not DOOR_KEY or not _same_key(x_vexa_service_key, DOOR_KEY):
         raise HTTPException(status_code=403, detail="internal tier only")
     if body.kind not in _PLATFORM_KINDS:
         raise HTTPException(status_code=422, detail=f"{body.kind} is not sent by a platform producer")

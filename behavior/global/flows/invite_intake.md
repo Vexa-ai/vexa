@@ -25,7 +25,7 @@ Runs when **`invite.received`** happens, in 4 steps. This page is written from t
 Provision the platform user for the organizer (idempotent lookup-or-create).
 
 - **reads:** refs.organizer
-- **effect:** admin-api user (+scoped token minted per later call)
+- **effect:** admin-api user (the subject of later service-door calls)
 - **result:** {uid} — every later step's identity
 - **domains:** reaches no other domain
 
@@ -64,7 +64,7 @@ Read-only, and the same bytes the image runs. It is here because the founder ask
 @reg.step
 def ensure_user(ctx: StepCtx):
     """Provision the platform user for the organizer (idempotent lookup-or-create).
-    Reads: refs.organizer · Effect: admin-api user (+scoped token minted per later call)
+    Reads: refs.organizer · Effect: admin-api user (the subject of later service-door calls)
     Result: {uid} — every later step's identity.
 
     ⚠ IT REFUSES A NON-ADDRESS, and the reason is a real account: on 2026-09-02 this step

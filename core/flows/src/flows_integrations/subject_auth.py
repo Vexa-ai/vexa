@@ -208,7 +208,7 @@ class Caller:
         return {s for s in (self.uid.strip().lower(), self.email.strip().lower()) if s}
 
 
-def _validate(base: str, token: str, secret: str):
+def _validate(base: str, token: str, key: str):
     """The one HTTP hop, alone in a function so a test can replace exactly it.
 
     `flows_steps.common.http` rather than httpx: flows has no httpx at runtime and reaches every
@@ -216,7 +216,8 @@ def _validate(base: str, token: str, secret: str):
     image grows.
     """
     from flows_steps.common import http
-    headers = {"X-Internal-Secret": secret, ACCEPTS_DELEGATION_HEADER: ACCEPTS_DELEGATION_VALUE}
+    from flows_steps.common import SERVICE_KEY_HEADER
+    headers = {SERVICE_KEY_HEADER: key, ACCEPTS_DELEGATION_HEADER: ACCEPTS_DELEGATION_VALUE}
     return http("POST", f"{base}{VALIDATE_PATH}", headers, {"token": token}, timeout=TIMEOUT_S)
 
 
@@ -232,7 +233,8 @@ def resolve(token: str, *, secret: str = "") -> Caller:
     """The person this credential belongs to. Raises :class:`SubjectUnknown` or
     :class:`IdentityUnavailable` — never returns a caller it is not sure about.
 
-    `secret` is the internal-tier credential the CALLER already read at boot — flows-api holds it
+    `secret` is the flows key the CALLER already read at boot (the gateway's service door forwards
+    this one call to identity over the internal tier) — flows-api holds it
     as a module constant precisely so an unconfigured deployment stops at import rather than at the
     first request. Passed in rather than re-read here so there is one read of it in the process,
     and so a missing one is a boot refusal and never a per-request 503.
@@ -241,8 +243,8 @@ def resolve(token: str, *, secret: str = "") -> Caller:
     if not token:
         raise SubjectUnknown("no credential")
     if not secret:
-        from flows_steps.common import require_internal_secret
-        secret = require_internal_secret()
+        from flows_steps.common import require_service_key
+        secret = require_service_key()
     base = flows_config.require("VEXA_FLOWS_ADMIN_API_URL").rstrip("/")
     try:
         code, body = _validate(base, token, secret)
@@ -253,7 +255,7 @@ def resolve(token: str, *, secret: str = "") -> Caller:
     if code == 401:
         raise SubjectUnknown("identity does not recognise this credential")
     if code != 200 or not isinstance(body, dict):
-        # 403 = our internal secret; 503 = identity unconfigured; anything else = not a verdict.
+        # 403 = the door refused our key; 503 = identity unconfigured; else not a verdict.
         raise IdentityUnavailable(f"identity answered {code} to the token check")
     uid = body.get("user_id")
     if uid in (None, ""):

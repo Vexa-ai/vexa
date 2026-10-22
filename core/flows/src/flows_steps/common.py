@@ -145,125 +145,65 @@ _DOORS = {"ADMIN_API": "VEXA_FLOWS_ADMIN_API_URL",
           "UI_URL": "VEXA_UI_URL"}
 
 
-#: The ONE name for the internal-tier secret — the compose/helm secret key, the name admin-api,
-#: gateway, meeting-api and agent-api read. Flows had a THIRD spelling of its own, which is exactly
-#: how the published literal `vexa-internal-secret` came to sit on this file's refusal list and on
-#: nobody else's (F95): one secret with three names has three refusal lists and they drift.
-INTERNAL_SECRET_ENV = "INTERNAL_API_SECRET"
-#: Read when the canonical name is absent, with a deprecation warning. Removed next release.
-INTERNAL_SECRET_ENV_DEPRECATED = ("VEXA_INTERNAL_SECRET", "VEXA_INTERNAL_API_SECRET")
-#: Placeholder literals a stock deploy surface once supplied. Every one of these is PUBLISHED in the
-#: OSS repository, so a deployment holding one is not configured — it is open, wearing a configured
-#: face. Same list as the services' config.v1 `forbidden_values`.
+#: THE FLOWS TIER'S ONE CREDENTIAL. It opens the gateway's service door (`gateway/service_door.py`)
+#: and nothing else: the door forwards the calls on its allow-list to the other domains and refuses
+#: the rest. Flows holds no credential that can act for an arbitrary person on an arbitrary route —
+#: not the internal-tier secret (every `/internal/*` and `/api/*` route of every domain, as any
+#: `X-User-Id`), not the admin key (any person's gateway token, minted on request).
+SERVICE_KEY_ENV = "VEXA_FLOWS_SERVICE_KEY"
+#: The header the door reads the key from — and the header the door's inbound leg (`/to-flows/*`)
+#: stamps on the internal-tier calls it forwards INTO flows-api.
+SERVICE_KEY_HEADER = "X-Vexa-Service-Key"
+#: Placeholder literals a stock deploy surface once supplied for a secret. Every one of these is
+#: PUBLISHED in the OSS repository, so a deployment holding one is not configured — it is open,
+#: wearing a configured face. The internal tier's list (fact placeholder-secrets): the services'
+#: config.v1 `forbidden_values` carry the same values, and so does the flows key's declaration.
 INTERNAL_SECRET_PLACEHOLDERS = ("vexa-internal-secret", "lite-internal-secret", "changeme",
                                 "change-me", "CHANGE-ME", "default", "secret")
-#: ONE REFUSAL LIST, NOT ONE PER CREDENTIAL. The note above is about a secret with three names
-#: having three refusal lists that drift; a second list for a second key is the same defect one
-#: step removed. A placeholder learned here is refused everywhere in this brick at once:
-#: `require_admin_key` reads ADMIN_KEY_PLACEHOLDERS below, which carries every member of this list.
+#: ONE REFUSAL LIST, NOT ONE PER CREDENTIAL: a placeholder learned here is refused everywhere in this
+#: brick at once.
 PLACEHOLDER_SECRETS = INTERNAL_SECRET_PLACEHOLDERS
-#: The admin key's refusal list: the list above (fact placeholder-secrets holds it to the base) plus
-#: every default and example this repository has shipped for the admin key itself — compose's
-#: `dev-admin-token`, the chart's `CHANGE_ME`, the CI, harness and test values, the old docs'
-#: placeholders. admin-api, meeting-api and the config.v1 declaration of VEXA_FLOWS_ADMIN_KEY refuse
-#: the same list (fact admin-token-placeholders).
-ADMIN_KEY_PLACEHOLDERS = ("vexa-internal-secret", "lite-internal-secret", "changeme", "change-me",
-                          "CHANGE-ME", "default", "secret", "dev-admin-token", "CHANGE_ME",
-                          "ci-admin-token", "gate-admin-token", "test-admin-token", "test-admin-token-t3",
-                          "vexa-admin-token", "vexa-admin-token-2024", "token", "strong-random-token",
-                          "your-secret", "your-secret-token", "your-secret-admin-token",
-                          "your-secure-admin-token", "your-admin-token", "your-admin-api-token",
-                          "your_admin_api_token", "your_admin_api_key", "your_admin_api_key_here",
-                          "YOUR_ADMIN_KEY", "YOUR_ADMIN_API_KEY", "YOUR_ADMIN_TOKEN_FROM_DOTENV",
-                          "admin-secret", "admin-key", "test-admin-key")
 
 
-def require_admin_key() -> str:
-    """The ADMIN-API key, or the caller refuses to act.
+def service_key() -> str:
+    """The flows key AS THE ENVIRONMENT CARRIES IT — "" when unset, and never a refusal.
 
-    It used to be `ADMIN_KEY = os.environ.get("VEXA_FLOWS_ADMIN_KEY", "changeme")` — a module
-    constant with a weak default, four lines above `require_internal_secret`, whose docstring says
-    *"a weak default is worse than no default… so there is no default"*. The default was the
-    stronger claim of the two, because this key is not a read credential: it opens
-    `ensure_platform_user`, which mints platform accounts, and `user_api_key`, which mints
-    full-scope gateway tokens for ANY user id the caller names (R-B11).
-
-    A FUNCTION, not a constant, on purpose: a constant read at import forces the refusal into
-    module-import time, where a test that never touches admin-api still pays for it, and where the
-    failure is attributed to whoever imported first rather than to the call that needed the key.
-    """
-    key = (os.environ.get("VEXA_FLOWS_ADMIN_KEY") or "").strip()
-    if not key:
-        raise RuntimeError(
-            "VEXA_FLOWS_ADMIN_KEY is unset — refusing to call admin-api rather than trying a "
-            "placeholder. It mints accounts and full-scope tokens; give it a real value the same "
-            f"way {INTERNAL_SECRET_ENV} gets one, from a mode-600 file the start script exports.")
-    if key in ADMIN_KEY_PLACEHOLDERS:
-        raise RuntimeError(f"VEXA_FLOWS_ADMIN_KEY is the placeholder {key!r} — refusing to use it. "
-                           "That literal is published in this repository, so it authenticates "
-                           "nobody and everybody.")
-    return key
-
-
-def _admin_headers() -> dict:
-    return {"X-Admin-API-Key": require_admin_key()}
-
-
-def internal_secret() -> str:
-    """The internal-tier secret AS THE ENVIRONMENT CARRIES IT, under whichever name set it — "" when
-    nothing did, and never a refusal.
-
-    THE REFUSAL IS `require_internal_secret`'s and stays there. This is the READ, for the one kind
-    of caller that has to resolve the name without refusing on it: a module that must be IMPORTABLE
+    THE REFUSAL IS `require_service_key`'s. This is the READ, for a module that must be IMPORTABLE
     outside a deployment (`flows_integrations.flows_api`, Vexa-ai/vexa#1629 — the release's identity
-    probe imports it inside the image with no environment at all). A second copy of the name
-    resolution in that module would drift the day the legacy spelling is removed, so there is one
-    and this is it.
-    """
-    key = (os.environ.get(INTERNAL_SECRET_ENV) or "").strip()
-    if key:
-        return key
-    for legacy in INTERNAL_SECRET_ENV_DEPRECATED:
-        key = (os.environ.get(legacy) or "").strip()
-        if key:
-            print(f"WARNING: {legacy} is DEPRECATED — rename it to {INTERNAL_SECRET_ENV}, the "
-                  f"one name the whole internal tier uses. Honoured this release, removed next.",
-                  file=sys.stderr)
-            return key
-    return ""
+    probe imports it inside the image with no environment at all)."""
+    return (os.environ.get(SERVICE_KEY_ENV) or "").strip()
 
 
-def require_internal_secret() -> str:
-    """The INTERNAL-TIER secret, or the process refuses to start.
+def require_service_key() -> str:
+    """The flows key, or the process refuses to start.
 
-    agent-api's meeting room (`control_plane/meeting_room.py`, gate 0) opens only for a caller that
-    presents `X-Internal-Secret`. A browser client through the gateway holds no such secret and
-    therefore cannot open a room at all — which is the entire point of the gate, and why flows,
-    which is an internal-tier caller, must hold one.
-
-    Deliberately the SAME REFUSAL as `flows_api._require_api_key`, down to the wording: a weak
-    default makes an unconfigured deployment look configured and fails no test, so there is no
-    default and no fallback. The value lives in a mode-600 file on the deployment host, exported by the
-    lane's start script; it never appears in this repository, in a log, or in an error message —
-    including the ones below, which name the VARIABLE and never the value.
-
-    TWO things changed with F95. The variable is now `INTERNAL_API_SECRET`, the one name every other
-    service uses (the old spellings still work for one release and say so); and the placeholder list
-    carries the literals the deploy surfaces actually shipped, not four generic ones — the refusal
-    that missed `vexa-internal-secret` was a refusal list written from imagination rather than from
-    the compose file it was defending against.
-    """
-    key = internal_secret()
+    No default and no fallback: a weak default makes an unconfigured deployment look configured and
+    fails no test. The value lives in the deployment's secret store; it never appears in this
+    repository, in a log, or in an error message — including the ones below, which name the
+    VARIABLE and never the value."""
+    key = service_key()
     if not key:
         raise RuntimeError(
-            f"{INTERNAL_SECRET_ENV} is unset — flows refuses to start rather than run with no "
-            "internal-tier identity. Mint one into a mode-600 file on the deployment host "
-            "and export it from the lane's start script; never put the value in the repo.")
-    if key in INTERNAL_SECRET_PLACEHOLDERS:
+            f"{SERVICE_KEY_ENV} is unset — flows refuses to start rather than run with no way into "
+            "the other domains. Give flows and the gateway the same generated value; never put it "
+            "in the repo.")
+    if key in PLACEHOLDER_SECRETS:
         raise RuntimeError(
-            f"{INTERNAL_SECRET_ENV} is the placeholder {key!r} — refusing to start. That literal is "
+            f"{SERVICE_KEY_ENV} is the placeholder {key!r} — refusing to start. That literal is "
             "published in this repository, so it authenticates nobody and everybody.")
     return key
+
+
+def door_headers(uid=None) -> dict:
+    """The headers of one call through the service door: the flows key, and the SUBJECT the call
+    acts for when it acts for one. The subject is the only identity fact flows can name — the door
+    drops every other `x-user-*` — and the door decides which routes it may be named on."""
+    h = {SERVICE_KEY_HEADER: require_service_key()}
+    if uid not in (None, ""):
+        h["X-User-Id"] = str(uid)
+    return h
+
+
 
 # Where a person's own terminal lives — resolved through `__getattr__` above, like the other two
 # doors. Same env name the control MCP already reads: one deployment fact, one variable, never two
@@ -313,8 +253,8 @@ def mint_scaffold(kind: str, recipient: str, *, opening: str,
     terminal has an origin — because the mint is the last moment a step can still choose not to send.
 
     `share_token` is minted BY THE CALLER (`flows_steps.meeting.mint_transcript_share`) when the
-    meeting is not the recipient's own: the restricted grant is written as the meeting's OWNER, and
-    the owner's gateway key lives here, not in agent-api. agent-api composes the token into the url
+    meeting is not the recipient's own: the restricted grant is written as the meeting's OWNER, whom
+    flows names as the subject through the service door. agent-api composes the token into the url
     so the link is still built in exactly one place.
     """
     payload = {"who": recipient, "kind": kind, "opening": opening}
@@ -325,7 +265,7 @@ def mint_scaffold(kind: str, recipient: str, *, opening: str,
         if value not in (None, "", [], {}):
             payload[key] = value
     code, body = http("POST", f"{agent_door()}/internal/scaffolds",
-                      {"X-Internal-Secret": require_internal_secret()}, payload)
+                      door_headers(), payload)
     url = body.get("url") if isinstance(body, dict) else None
     if 200 <= int(code or 0) < 300 and url:
         return str(url)
@@ -366,7 +306,7 @@ def notify_in_app(kind: str, *, meeting_id, title: str = "", to: str = "", email
             if value:
                 body[key] = str(value)
         code, _ = http("POST", f"{base.rstrip('/')}/internal/notifications",
-                       {"X-Internal-Secret": require_internal_secret()}, body, timeout=5)
+                       door_headers(), body, timeout=5)
         return 200 <= int(code or 0) < 300
     except Exception:  # noqa: BLE001 — an in-app echo never fails the step that reports it
         return False
@@ -442,8 +382,8 @@ def platform_user_id(email: str) -> str:
     # text — and was interpolated raw into an internal service path, where a `/`, a `?` or a `#`
     # re-points the request at a different route on a service that trusts this caller (R-B14).
     # agent-api's own resolver has always quoted; these two calls did not.
-    code, u = http("GET", f"{_door('VEXA_FLOWS_ADMIN_API_URL')}/admin/users/email/"
-                          f"{_q(email, safe='')}", _admin_headers())
+    code, u = http("GET", f"{_door('VEXA_FLOWS_ADMIN_API_URL')}/internal/users/by-email/"
+                          f"{_q(email, safe='')}", door_headers())
     return str(u["id"]) if code == 200 and isinstance(u, dict) and u.get("id") is not None else ""
 
 
@@ -456,7 +396,7 @@ def ensure_platform_user(email: str) -> str:
     existing = platform_user_id(email)
     if existing:
         return existing
-    _code, u = http("POST", f"{_door('VEXA_FLOWS_ADMIN_API_URL')}/admin/users", _admin_headers(),
+    _code, u = http("POST", f"{_door('VEXA_FLOWS_ADMIN_API_URL')}/internal/users", door_headers(),
                     {"email": email, "name": email.split("@")[0].title()})
     return str(u["id"])
 
@@ -472,7 +412,7 @@ def is_admin_address(email: str) -> bool:
             return False
         code, body = http("GET", f"{_door('VEXA_FLOWS_ADMIN_API_URL')}/internal/users/"
                                  f"{_q(uid, safe='')}/is-admin",
-                          {"X-Internal-Secret": require_internal_secret()})
+                          door_headers())
     except Exception:  # noqa: BLE001 — fail closed
         return False
     return code == 200 and isinstance(body, dict) and (
@@ -491,55 +431,9 @@ def address_for_uid(uid: str) -> str:
     address to mail to — every send in this file, and `mint_scaffold`'s `who` refuses anything
     without an "@" — resolves that address here rather than assuming `refs["organizer"]` exists.
     """
-    code, u = http("GET", f"{_door('VEXA_FLOWS_ADMIN_API_URL')}/admin/users/{_q(str(uid), safe='')}",
-                   _admin_headers())
+    code, u = http("GET", f"{_door('VEXA_FLOWS_ADMIN_API_URL')}/internal/users/"
+                          f"{_q(str(uid), safe='')}/email", door_headers())
     return str(u["email"]) if code == 200 and isinstance(u, dict) and u.get("email") else ""
-
-
-_KEY_CACHE: dict = {}
-
-
-def _key_ttl() -> int:
-    try:
-        return max(int((os.environ.get("VEXA_FLOWS_USER_KEY_TTL_S") or "900").strip()), 60)
-    except (TypeError, ValueError):
-        return 900
-
-
-def user_api_key(uid: str) -> str:
-    """This user's gateway key, or a StepError that says why there isn't one.
-
-    Returning None here was the whole bug: the caller put it straight into an X-API-Key header,
-    urllib died joining it, and the reaction blamed the gateway for a 404 from the admin API. A
-    key that cannot be minted is a fact about the account, and it belongs in the reason.
-
-    IT MINTED A PERMANENT FULL-SCOPE TOKEN ON EVERY CALL, and it is called per gateway read —
-    including once per attendee inside `mint_transcript_share`. One 20-person meeting left about
-    thirty `["bot","browser","tx"]` tokens on the organiser's account and nothing ever deleted one
-    (R-B13). Two changes, and the second is the one that bounds the damage:
-
-      * `expires_in` — admin-api has taken it since the mint endpoint existed. A token that a
-        post-meeting run needs for four minutes does not need to outlive the deployment.
-      * a per-uid cache with the same lifetime — so a run that reads the gateway thirty times
-        mints ONE token, and a restart simply mints another. Process memory, never a file: this
-        is a cache of a credential, not state a step may depend on (the file's stateless law).
-    """
-    ttl = _key_ttl()
-    hit = _KEY_CACHE.get(str(uid))
-    if hit and hit[1] > time.time() + 30:
-        return hit[0]
-    st, tok = http("POST", f"{_door('VEXA_FLOWS_ADMIN_API_URL')}/admin/users/"
-                           f"{_q(str(uid), safe='')}/tokens",
-                   _admin_headers(),
-                   {"scopes": ["bot", "browser", "tx"], "expires_in": ttl})
-    key = tok.get("token") or tok.get("key") if isinstance(tok, dict) else None
-    if not key:
-        from flows import StepError
-        detail = (tok.get("detail") if isinstance(tok, dict) else str(tok))
-        raise StepError(f"no api key for platform user {uid} — admin api said {st}: "
-                        f"{str(detail)[:120]}")
-    _KEY_CACHE[str(uid)] = (key, time.time() + ttl)
-    return key
 
 
 def ws_get(uid: str, path: str, slug: Optional[str] = None) -> tuple[int, object]:
@@ -550,7 +444,7 @@ def ws_get(uid: str, path: str, slug: Optional[str] = None) -> tuple[int, object
     # forges a second query parameter on an internal service (R-B14).
     q = f"&slug={_q(slug, safe='')}" if slug else ""
     return http("GET", f"{agent_door()}/api/workspace/file?path={_q(path, safe='')}{q}",
-                {"X-User-Id": uid, "X-Internal-Secret": require_internal_secret()})
+                door_headers(uid))
 
 
 def ws_file(uid: str, path: str, slug: Optional[str] = None) -> Optional[str]:
@@ -566,7 +460,7 @@ def ws_write(uid: str, path: str, content: str, slug: Optional[str] = None) -> t
     if slug:
         body["slug"] = slug
     return http("PUT", f"{agent_door()}/api/workspace/file",
-                {"X-User-Id": str(uid), "X-Internal-Secret": require_internal_secret()}, body)
+                door_headers(uid), body)
 
 
 # A person's preferences, read from IDENTITY — the one domain flows may depend on.
@@ -641,7 +535,7 @@ def person_settings(uid: str) -> dict:
     # two are handled separately and on purpose: the first propagates as-is (it already carries the
     # method, the url and the cause), the second is named here with the code identity actually gave.
     code, body = http("GET", f"{_door('VEXA_FLOWS_ADMIN_API_URL')}/internal/users/{uid}/settings",
-                      {"X-Internal-Secret": require_internal_secret()})
+                      door_headers())
     if code != 200 or not isinstance(body, dict):
         raise SettingsUnavailable(
             f"identity answered {code} for {uid}'s settings — this reaction does not know what "

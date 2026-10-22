@@ -140,8 +140,8 @@ def test_a_2xx_answer_is_the_ordinary_path(monkeypatch, code):
 
 
 def test_the_room_still_rides_the_same_post(monkeypatch):
-    """The half a stricter dispatch would break: the meeting-room fields and the internal-tier
-    header are unchanged."""
+    """The half a stricter dispatch would break: the meeting-room fields are unchanged, and the post
+    carries the flows key and the subject through the service door — never the internal secret."""
     sent: list = []
 
     def fake_http(method, url, headers, body=None, timeout=20):
@@ -151,12 +151,14 @@ def test_the_room_still_rides_the_same_post(monkeypatch):
         return 200, {"ok": True}
 
     monkeypatch.setattr(ag, "http", fake_http)
-    monkeypatch.setattr(ag, "require_internal_secret", lambda: "internal-tier-secret")
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "flows-service-key-0001")
     ag.dispatch_turn("7", "main", "go",
                      room={"meeting_id": 41, "read": ["a@b.test"],
                            "names": {"a@b.test": "A B"}, "read_max": 12})
     headers, body = sent[0]
-    assert headers["X-Internal-Secret"] == "internal-tier-secret"
+    assert headers["X-Vexa-Service-Key"] == "flows-service-key-0001"
+    assert headers["X-User-Id"] == "7"
+    assert "X-Internal-Secret" not in headers
     assert body["room_meeting_id"] == "41"
     assert body["room_participants"] == ["a@b.test"]
     assert body["room_participant_names"] == {"a@b.test": "A B"}
@@ -213,12 +215,16 @@ def _headers_of_post(monkeypatch):
                                    {"flow": "onboarding", "step": "open_onboarding"}, {}])
 def test_every_turn_flows_dispatches_runs_unattended(monkeypatch, named):
     """Nobody typed a turn flows posts — an email reply, a meeting kick, an onboarding opening — so
-    agent-api must run it in the `autonomous` regime, which it believes only beside the internal
-    tier's secret. Without the regime header the turn ran as though its person were watching."""
+    agent-api must run it in the `autonomous` regime, which it believes only from the internal tier —
+    reached through the gateway's service door with the flows key. Without the regime header the
+    turn ran as though its person were watching."""
     seen = _headers_of_post(monkeypatch)
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "flows-service-key-0001")
     ag.dispatch_turn("7", "main", "go", **named)
     assert seen["headers"]["X-Vexa-Flow-Regime"] == "autonomous"
-    assert seen["headers"]["X-Internal-Secret"], "the regime is believed only from the internal tier"
+    assert seen["headers"]["X-Vexa-Service-Key"] == "flows-service-key-0001", \
+        "the regime is believed only through the service door"
+    assert "X-Internal-Secret" not in seen["headers"]
     assert seen["headers"]["X-User-Id"] == "7"
 
 

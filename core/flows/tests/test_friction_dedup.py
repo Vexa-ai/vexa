@@ -19,7 +19,7 @@ from flows.clock import FakeClock
 from flows_integrations import friction_dedup
 
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key-friction",
-        "INTERNAL_API_SECRET": "test-internal-secret",
+        "VEXA_FLOWS_SERVICE_KEY": "test-flows-service-key-not-a-placeholder",
         "VEXA_FLOWS_DB_URL": "postgresql+pg8000://friction:unreachable@127.0.0.1:1/flows"}
 
 #: 2026-10-10T10:00:00Z — the top of an hour, so `+3599` stays inside it and `+3600` leaves it.

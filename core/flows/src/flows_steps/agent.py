@@ -8,14 +8,14 @@ import urllib.parse
 
 from flows import Done, StepCtx, StepError, Wait
 
-from .common import agent_door, http, require_internal_secret, scaffolded, swallowed, ws_file
+from .common import agent_door, door_headers, http, scaffolded, swallowed, ws_file
 
 
 def as_person(uid) -> dict:
-    """The headers flows sends agent-api to act FOR a person: their id, carried by the internal
-    tier. agent-api believes an asserted X-User-Id only from the gateway's signature or from a
-    service presenting `X-Internal-Secret` (gateway-identity.v1) — flows is the second kind."""
-    return {"X-User-Id": str(uid), "X-Internal-Secret": require_internal_secret()}
+    """The headers flows sends agent-api to act FOR a person: their id, through the gateway's
+    service door. The door forwards it over the internal tier only on the routes its flows
+    allow-list names; anywhere else it is a 403 that never reaches agent-api."""
+    return door_headers(uid)
 
 
 def history(uid: str, session: str) -> list:
@@ -48,11 +48,11 @@ def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None,
                              so the far side never has to guess a person from an email local part.
       ``read_max``        -> ``room_read_max``: the flow's cap, clamped to a server ceiling.
 
-    THE INTERNAL-TIER HEADER RIDES EVERY POST (``as_person``). agent-api believes the X-User-Id
-    only beside it, and refuses a room to any caller that cannot present it. Its value comes from
-    the environment (``INTERNAL_API_SECRET``, a mode-600 file the lane's start script exports) and
-    never from this repository; both entrypoints refuse to start without it, so by the time a turn
-    is dispatched it exists.
+    THE FLOWS KEY RIDES EVERY POST (``as_person``), to the gateway's service door, which forwards
+    this route to agent-api over the internal tier — agent-api believes the X-User-Id only from
+    there, and refuses a room to any caller that cannot present it. Its value comes from the
+    environment (``VEXA_FLOWS_SERVICE_KEY``) and never from this repository; both entrypoints
+    refuse to start without it, so by the time a turn is dispatched it exists.
 
     The room fields are omitted entirely when there is no room, so every other dispatch in this file sends exactly the
     body it has always sent.
@@ -332,7 +332,8 @@ def reset_desk(uid: str, sha: str, reason: str = "") -> dict:
 
     ONLY BACKWARD, and only the caller's own desk — agent-api refuses a sha that is not an ancestor
     of HEAD and takes no workspace name at all, so the worst this can do is remove commits made after
-    the witness. It is gated on `X-Internal-Secret`, the same edge the meeting room opens on.
+    the witness. It is gated on the internal tier (the service door's forward), the same edge the
+    meeting room opens on.
 
     DEGRADES, NEVER RAISES, and the shape says which happened: `{"reset": bool, "detail": str, ...}`.
     A caller that cannot reset must say so in its refusal rather than die with a second failure on

@@ -28,16 +28,14 @@ import pytest
 # for the same reason it is written out there: `flows_api` reads its credentials and composes its
 # database AT IMPORT, so getting it in here means setting environment process-wide, and leaving it
 # set leaks into every other module in the session (`gate:test-isolation`).
-_KEYS = ("VEXA_FLOWS_API_KEY", "VEXA_FLOWS_ADMIN_KEY", "INTERNAL_API_SECRET", "VEXA_FLOWS_DB_URL")
+_KEYS = ("VEXA_FLOWS_API_KEY", "VEXA_FLOWS_SERVICE_KEY", "VEXA_FLOWS_DB_URL")
 _PRIOR_ENV = {k: os.environ.get(k) for k in _KEYS}
 
 os.environ.setdefault("VEXA_FLOWS_API_KEY", "test-flows-key")
 # NEW HERE (F-D20 b), and it is the point of the change: the boot now runs the WHOLE declaration,
 # so a test process that imports the app must name every required-explicit key, exactly as a
-# deployment does. `VEXA_FLOWS_ADMIN_KEY` is otherwise supplied by an autouse fixture, which runs
-# far too late — module import happens at collection.
-os.environ.setdefault("VEXA_FLOWS_ADMIN_KEY", "test-admin-key-not-a-placeholder")
-os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret")
+# deployment does. Module import happens at collection, before any fixture has run.
+os.environ.setdefault("VEXA_FLOWS_SERVICE_KEY", "test-flows-service-key-not-a-placeholder")
 os.environ["VEXA_FLOWS_DB_URL"] = "postgresql+pg8000://key-gate:unreachable@127.0.0.1:1/flows"
 try:
     from flows_integrations import flows_api  # noqa: E402
@@ -58,8 +56,7 @@ def a_configured_deployment(monkeypatch):
     """Everything the declaration calls required-explicit, set — so each test below varies exactly
     one key and the refusal it reads is about that key."""
     monkeypatch.setenv("VEXA_FLOWS_API_KEY", "a-real-operator-key")
-    monkeypatch.setenv("VEXA_FLOWS_ADMIN_KEY", "a-real-admin-key")
-    monkeypatch.setenv("INTERNAL_API_SECRET", "a-real-internal-secret")
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "a-real-flows-service-key")
     monkeypatch.setenv("VEXA_FLOWS_DB_URL",
                        "postgresql+pg8000://x:y@127.0.0.1:1/flows")
     monkeypatch.setenv("VEXA_FLOWS_ADMIN_API_URL", "http://admin-api:8057")

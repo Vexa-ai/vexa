@@ -87,12 +87,13 @@ def test_the_bot_carries_the_invites_workspace_and_falls_back_when_it_is_refused
     calls = []
 
     def http(method, url, headers, body=None, timeout=20):
+        assert headers.get("X-User-Id") == "7" and headers.get("X-Vexa-Service-Key"), headers
+        assert "X-API-Key" not in headers
         calls.append(dict(body or {}))
         if body and body.get("workspace_id") == "ws-nope":
             return 403, {"detail": "not a member"}
         return 201, {"id": 9, "native_meeting_id": "abc-defg-hij", "platform": "google_meet"}
     monkeypatch.setattr(meeting, "http", http)
-    monkeypatch.setattr(meeting, "user_api_key", lambda uid: "k")
 
     class R:
         reaction_id = "r"

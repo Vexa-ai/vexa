@@ -43,7 +43,7 @@ Deliver one agent's message into another agent's chat thread as a queued turn, m
 
 ### `dispatch_bot`
 
-Spawn the REAL bot via gateway POST /bots (transcribe per deployment; 409 = adopt the existing meeting). Prior: ensure_user (for the key) · Effect: bot container Result: \{meeting_id, native, platform\}.
+Spawn the REAL bot via gateway POST /bots (transcribe per deployment; 409 = adopt the existing meeting). Prior: ensure_user (the subject) · Effect: bot container Result: \{meeting_id, native, platform\}.
 
 ### `drive_group`
 
@@ -83,7 +83,7 @@ EMIT meeting.started — the fact the live flow reacts to. Prior: dispatch_bot. 
 
 ### `ensure_user`
 
-Provision the platform user for the organizer (idempotent lookup-or-create). Reads: refs.organizer · Effect: admin-api user (+scoped token minted per later call) Result: \{uid\} — every later step's identity. ⚠ IT REFUSES A NON-ADDRESS, and the reason is a real account: on 2026-09-02 this step created user 131 with the email `20260902t183213z` — an invite's own DTSTAMP, handed to it by an ICS parser that had matched the word "organizer" inside the UID line. The parse is fixed (`mailbox.parse_ics` anchors its property patterns), and this is the second lock, because this step is the LAST place that can tell: everything after it works with a uid and has no way to know the account behind it is a timestamp. A refusal here is not retryable — the refs are frozen at admission, so the same malformed value would arrive on every attempt — and it must be loud: an account minted from a parse artefact is invisible until somebody reads the user table, which is how this one was found.
+Provision the platform user for the organizer (idempotent lookup-or-create). Reads: refs.organizer · Effect: admin-api user (the subject of later service-door calls) Result: \{uid\} — every later step's identity. ⚠ IT REFUSES A NON-ADDRESS, and the reason is a real account: on 2026-09-02 this step created user 131 with the email `20260902t183213z` — an invite's own DTSTAMP, handed to it by an ICS parser that had matched the word "organizer" inside the UID line. The parse is fixed (`mailbox.parse_ics` anchors its property patterns), and this is the second lock, because this step is the LAST place that can tell: everything after it works with a uid and has no way to know the account behind it is a timestamp. A refusal here is not retryable — the refs are frozen at admission, so the same malformed value would arrive on every attempt — and it must be loud: an account minted from a parse artefact is invisible until somebody reads the user table, which is how this one was found.
 
 ### `feedback_turn`
 

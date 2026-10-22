@@ -33,7 +33,7 @@ import flows_config
 # supplies them around the import exactly as `test_health.py` and `test_subject_bearer.py` do —
 # whichever module imports first wins, and these tests read constants back off the LIVE module.
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key-preflight",
-        "INTERNAL_API_SECRET": "test-internal-secret",
+        "VEXA_FLOWS_SERVICE_KEY": "test-flows-service-key-not-a-placeholder",
         "VEXA_FLOWS_DB_URL": "postgresql+pg8000://preflight:unreachable@127.0.0.1:1/flows"}
 _saved = {k: os.environ.get(k) for k in _ENV}
 os.environ.update(_ENV)
@@ -74,42 +74,48 @@ def test_the_environment_this_file_calls_good_actually_passes():
 
 
 def test_the_declaration_forbids_seven_placeholders_on_every_secret_key():
-    """The list this service's code used to re-type as four. The admin key carries those seven and
-    every value this repository shipped for the admin key (below)."""
+    """The list this service's code used to re-type as four. Every required secret — the flows key
+    included — carries the same seven, and none carries a longer per-key list any more: the admin
+    key that had one is no longer a flows credential."""
+    seen = set()
     for entry in _declaration()["keys"]:
         if entry.get("secret") and entry.get("class") == "required-explicit":
-            if entry["key"] == "VEXA_FLOWS_ADMIN_KEY":
-                assert set(entry["forbidden_values"]) == set(PUBLISHED_ADMIN_TOKENS)
-                continue
+            seen.add(entry["key"])
             assert len(entry["forbidden_values"]) == 7, entry["key"]
             assert "vexa-internal-secret" in entry["forbidden_values"]
+    assert "VEXA_FLOWS_SERVICE_KEY" in seen
+    assert "VEXA_FLOWS_ADMIN_KEY" not in seen and "INTERNAL_API_SECRET" not in seen
 
 
-#: Every value this repository has shipped for the admin key, on any surface: compose's .env.example
-#: (dev-admin-token) and its old fallbacks, the chart's values (CHANGE_ME) and test values, CI, the
-#: dashboard harness, the dashboard's placeholders and the old docs' examples. Held here by hand, so a
-#: value dropped from the declaration fails this file rather than booting.
-PUBLISHED_ADMIN_TOKENS = (
-    "vexa-internal-secret", "lite-internal-secret", "changeme", "change-me", "CHANGE-ME", "default",
-    "secret", "dev-admin-token", "CHANGE_ME", "ci-admin-token", "gate-admin-token", "test-admin-token",
-    "test-admin-token-t3", "vexa-admin-token", "vexa-admin-token-2024", "token", "strong-random-token",
-    "your-secret", "your-secret-token", "your-secret-admin-token", "your-secure-admin-token",
-    "your-admin-token", "your-admin-api-token", "your_admin_api_token", "your_admin_api_key",
-    "your_admin_api_key_here", "YOUR_ADMIN_KEY", "YOUR_ADMIN_API_KEY", "YOUR_ADMIN_TOKEN_FROM_DOTENV",
-    "admin-secret", "admin-key", "test-admin-key",
-)
+PUBLISHED_PLACEHOLDERS = ("vexa-internal-secret", "lite-internal-secret", "changeme", "change-me",
+                          "CHANGE-ME", "default", "secret")
 
 
-@pytest.mark.parametrize("published", PUBLISHED_ADMIN_TOKENS)
-def test_an_admin_key_on_a_published_literal_refuses_to_boot(published):
-    """VEXA_FLOWS_ADMIN_KEY is admin-api's admin key under flows' name: it mints platform accounts and
-    full-scope gateway tokens, so any value this repository published for it refuses the boot."""
-    env = _good_env() | {"VEXA_FLOWS_ADMIN_KEY": published}
+@pytest.mark.parametrize("published", PUBLISHED_PLACEHOLDERS)
+def test_a_service_key_on_a_published_literal_refuses_to_boot(published):
+    """VEXA_FLOWS_SERVICE_KEY opens the gateway's service door — flows' one way into the other
+    domains — so any placeholder this repository published for a secret refuses the boot."""
+    env = _good_env() | {"VEXA_FLOWS_SERVICE_KEY": published}
     with pytest.raises(config_preflight.ConfigError) as e:
         config_preflight.preflight(env)
-    assert "VEXA_FLOWS_ADMIN_KEY" in str(e.value)
-    if published not in ("token", "secret", "default"):  # words the refusal's own prose uses
+    assert "VEXA_FLOWS_SERVICE_KEY" in str(e.value)
+    if published not in ("secret", "default"):  # words the refusal's own prose uses
         assert published not in str(e.value), "the refusal echoed the value"
+
+
+def test_an_unset_service_key_refuses_to_boot():
+    env = _good_env()
+    env.pop("VEXA_FLOWS_SERVICE_KEY")
+    with pytest.raises(config_preflight.ConfigError) as e:
+        config_preflight.preflight(env)
+    assert "VEXA_FLOWS_SERVICE_KEY" in str(e.value)
+
+
+def test_a_deployment_without_the_internal_secret_or_admin_key_boots():
+    """Flows holds neither: the good environment names neither, and passes."""
+    env = _good_env()
+    assert "INTERNAL_API_SECRET" not in env and "VEXA_FLOWS_ADMIN_KEY" not in env
+    assert config_preflight.preflight(env)["service"] == "flows-api"
 
 
 @pytest.mark.parametrize("placeholder", ["vexa-internal-secret", "lite-internal-secret",
@@ -149,10 +155,10 @@ def test_a_missing_required_key_names_every_one_that_is_missing_at_once():
     and `flows_config.preflight()`'s door check has only for doors."""
     env = _good_env()
     env.pop("VEXA_FLOWS_DB_URL")
-    env.pop("INTERNAL_API_SECRET")
+    env.pop("VEXA_FLOWS_SERVICE_KEY")
     with pytest.raises(config_preflight.ConfigError) as e:
         config_preflight.preflight(env)
-    assert "VEXA_FLOWS_DB_URL" in str(e.value) and "INTERNAL_API_SECRET" in str(e.value)
+    assert "VEXA_FLOWS_DB_URL" in str(e.value) and "VEXA_FLOWS_SERVICE_KEY" in str(e.value)
 
 
 # ── the call sites: both entrypoints, and the door check kept alongside ─────────────────────────

@@ -74,7 +74,7 @@ class GraphClient:
         self._token = ""
         self._token_exp = 0.0
         # THE REFUSAL NAMES THE KEYS, NEVER THE VALUES — same shape as `emailx.creds` and
-        # `require_admin_key`. The config contract declares these four as one `mailbox_graph`
+        # `require_service_key`. The config contract declares these four as one `mailbox_graph`
         # capability (mode=all), so three-of-four is `misconfigured` at /health as well as a
         # refusal here; it cannot be `required-explicit`, because that would refuse the boot of
         # every deployment that is not on Microsoft. See `src/config.v1.json`.

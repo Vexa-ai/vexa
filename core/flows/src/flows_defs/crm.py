@@ -35,12 +35,12 @@ def build(reg, db):
         base = flows_config.get(CRM_URL_ENV).rstrip('/')
         if not base:
             return NotPresent('crm')
-        from flows_steps.common import http, require_internal_secret
+        from flows_steps.common import door_headers, http
         body = {key: ctx.refs[key] for key in SNAPSHOT_KEYS}
         if ctx.refs.get('members') is not None:
             body['members'] = ctx.refs['members']
         code, answer = http('POST', f'{base}/internal/references',
-                            {'X-Internal-Secret': require_internal_secret()}, body, timeout=20)
+                            door_headers(), body, timeout=20)
         if code == 200 and isinstance(answer, dict):
             return Done({'workspace': body['workspace'], 'commit': body['commit'],
                          'status': answer.get('status'), 'references': answer.get('references')})

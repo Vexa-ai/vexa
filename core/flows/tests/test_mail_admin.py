@@ -148,8 +148,14 @@ def test_the_sign_in_door_is_internal_tier_and_cannot_be_switched_off(world):
     store["POLICIES.md"] = "---\nmail.sign-in: off\n---\n"
     body = {"to": "anna@bank.test", "link": "https://app/redeem?t=x", "minutes": 15}
     assert client.post("/mail/sign-in", json=body).status_code == 403
+    assert flows_api.DOOR_KEY
+    # the old header opens nothing, whatever it carries: flows holds no internal secret to match
+    assert client.post("/mail/sign-in", json=body,
+                       headers={"X-Internal-Secret": flows_api.DOOR_KEY}).status_code == 403
+    assert client.post("/mail/sign-in", json=body,
+                       headers={"X-Vexa-Service-Key": "a-guess"}).status_code == 403
     r = client.post("/mail/sign-in", json=body,
-                    headers={"X-Internal-Secret": flows_api.INTERNAL_SECRET})
+                    headers={"X-Vexa-Service-Key": flows_api.DOOR_KEY})
     assert r.status_code == 200, r.text
     assert ch.sent[-1]["link"] == "https://app/redeem?t=x"
     assert "15 minutes" in ch.sent[-1]["body"]
@@ -161,7 +167,9 @@ def test_a_platform_producer_sends_a_kind_through_the_same_path(world):
             "values": {"joiner": "Anna", "workspace_name": "Collab"},
             "link": "https://app/w/collab"}
     assert client.post("/mail/send", json=body).status_code == 403
-    hdr = {"X-Internal-Secret": flows_api.INTERNAL_SECRET}
+    assert client.post("/mail/send", json=body,
+                       headers={"X-Internal-Secret": flows_api.DOOR_KEY}).status_code == 403
+    hdr = {"X-Vexa-Service-Key": flows_api.DOOR_KEY}
     r = client.post("/mail/send", json=body, headers=hdr)
     assert r.status_code == 200 and r.json()["sent"] is True, r.text
     assert ch.sent[-1]["subject"] == "Anna joined Collab" and ch.sent[-1]["link"] == "https://app/w/collab"
@@ -182,5 +190,5 @@ def test_the_delivery_route_answers_captured_or_delivered(world, monkeypatch):
     who["caller"] = PERSON
     r = client.post("/mail/send", json={"kind": "workspace-joined", "to": "h@bank.com",
                                         "values": {"joiner": "A", "workspace_name": "W"}},
-                    headers={"X-Internal-Secret": flows_api.INTERNAL_SECRET})
+                    headers={"X-Vexa-Service-Key": flows_api.DOOR_KEY})
     assert r.json()["delivery"] == "delivered"

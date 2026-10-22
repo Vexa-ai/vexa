@@ -32,7 +32,7 @@ from flows.registry import SCHEDULE_EVENT  # noqa: E402
 from sqlite_double import SqliteDB  # noqa: E402
 
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key",
-        "INTERNAL_API_SECRET": "test-internal-secret",
+        "VEXA_FLOWS_SERVICE_KEY": "test-flows-service-key-not-a-placeholder",
         "VEXA_FLOWS_DB_URL": "postgresql+pg8000://phase0:unreachable@127.0.0.1:1/flows"}
 _saved = {k: os.environ.get(k) for k in _ENV}
 os.environ.update(_ENV)
@@ -323,6 +323,9 @@ class _Meetings:
         self.calls = []
 
     def __call__(self, method, url, headers, body=None, timeout=20):
+        # meetings is reached through the gateway's service door, naming the subject — no minted key
+        assert headers.get("X-Vexa-Service-Key") and headers.get("X-User-Id"), headers
+        assert "X-API-Key" not in headers
         self.calls.append((method, url, dict(body or {})))
         return 201, {"id": 97, "native_meeting_id": "abc-defg-hij", "platform": "google_meet",
                      "status": "requested"}
@@ -332,7 +335,6 @@ def _bot_flow(monkeypatch, params):
     from flows_steps import common, meeting, routine
     meetings, agent = _Meetings(), _AgentApi({})
     monkeypatch.setattr(meeting, "http", meetings)
-    monkeypatch.setattr(meeting, "user_api_key", lambda uid: "k")
     monkeypatch.setattr(routine, "http", agent)
     monkeypatch.setattr(common, "AGENT_API", "http://agent-api.test")
     db, clock, reg = SqliteDB(), FakeClock(AT + 5), Registry()

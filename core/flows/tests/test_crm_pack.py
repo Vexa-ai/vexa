@@ -32,13 +32,13 @@ def test_references_reach_the_crm_only_where_one_is_deployed(monkeypatch):
     sent = []
     import flows_steps.common as common
     monkeypatch.setenv('VEXA_FLOWS_CRM_API_URL', 'http://crm-api:8300')
-    monkeypatch.setattr(common, 'require_internal_secret', lambda: 'internal')
+    monkeypatch.setenv('VEXA_FLOWS_SERVICE_KEY', 'flows-service-key-crm')
     monkeypatch.setattr(common, 'http', lambda m, url, h, body, timeout=20: sent.append((url, h, body)) or
                         (200, {'status': 'applied', 'references': 1}))
     out = step(SimpleNamespace(refs=SNAP))
     assert isinstance(out, Done) and out.result['references'] == 1
     url, headers, body = sent[0]
-    assert url == 'http://crm-api:8300/internal/references' and headers == {'X-Internal-Secret': 'internal'}
+    assert url == 'http://crm-api:8300/internal/references' and headers == {'X-Vexa-Service-Key': 'flows-service-key-crm'}
     assert 'uid' not in body and body['members'] == SNAP['members']
     monkeypatch.setattr(common, 'http', lambda *a, **k: (503, {}))
     with pytest.raises(StepError):

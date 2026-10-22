@@ -187,7 +187,7 @@ def test_minutes_mail_is_on_by_default():
 # ── 4 · the mail settings, read whole, with no credential in them ───────────────────────────
 
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key-admin-account",
-        "INTERNAL_API_SECRET": "test-internal-secret",
+        "VEXA_FLOWS_SERVICE_KEY": "test-flows-service-key-not-a-placeholder",
         "VEXA_FLOWS_DB_URL": "postgresql+pg8000://admin-account:unreachable@127.0.0.1:1/flows"}
 _OP_KEY: list = []
 

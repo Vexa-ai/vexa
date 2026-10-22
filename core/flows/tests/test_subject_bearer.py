@@ -38,7 +38,7 @@ from sqlite_double import SqliteDB  # noqa: E402
 # (`fa.db.execute(...)`), so `fa.db` is swapped for a real, working `SqliteDB` right after import
 # — laziness proves the app composes with no database; the swap gives the tests one that works.
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key",
-        "INTERNAL_API_SECRET": "test-internal-secret",
+        "VEXA_FLOWS_SERVICE_KEY": "test-flows-service-key-not-a-placeholder",
         "VEXA_FLOWS_DB_URL": "postgresql+pg8000://subject-bearer:unreachable@127.0.0.1:1/flows"}
 _saved = {k: os.environ.get(k) for k in _ENV}
 os.environ.update(_ENV)
@@ -314,10 +314,12 @@ def test_our_own_internal_secret_being_wrong_is_not_the_callers_fault(client, id
 
 def test_the_resolver_is_the_one_the_gateway_asks(client, identity):
     """P23 — one resolver of who the caller is. Not a second lookup of our own: the same
-    `/internal/validate`, over the internal secret, that `gateway/adapters.py` posts to."""
+    `/internal/validate` that `gateway/adapters.py` posts to — reached through the gateway's
+    service door with the flows key, never with an internal secret flows does not hold."""
     client.get("/reactions", headers=bearer("anna-key"))
     base, token, secret = identity.calls[-1]
-    assert token == "anna-key" and secret == "test-internal-secret"
+    assert token == "anna-key" and secret == "test-flows-service-key-not-a-placeholder"
+    assert secret == fa.DOOR_KEY
 
 
 # ── the other two subject-scoped routes ──────────────────────────────────────────────────────────
@@ -550,7 +552,8 @@ def test_every_route_a_person_reaches_is_classified_for_a_worker():
 
 def test_flows_declares_to_identity_that_it_reads_a_delegation(monkeypatch):
     """Identity answers a worker's token only to a resolver that declares it reads `delegation`
-    (identity.v1 AcceptsDelegationHeader). Flows sends it beside its internal secret."""
+    (identity.v1 AcceptsDelegationHeader). Flows sends it beside its flows key, through the
+    gateway's service door."""
     import flows_steps.common as common
     seen = []
     monkeypatch.setattr(common, "http", lambda method, url, headers, body=None, timeout=20:
@@ -560,7 +563,8 @@ def test_flows_declares_to_identity_that_it_reads_a_delegation(monkeypatch):
     assert (method, url, body) == ("POST", "http://admin-api:8001/internal/validate",
                                    {"token": "vxd_tok"})
     assert headers[subject_auth.ACCEPTS_DELEGATION_HEADER] == "1"
-    assert headers["X-Internal-Secret"] == "the-secret"
+    assert headers["X-Vexa-Service-Key"] == "the-secret"
+    assert "X-Internal-Secret" not in headers
 
 
 def test_the_declaration_is_identitys_sealed_header():

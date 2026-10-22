@@ -806,10 +806,10 @@ def cite_cards(report: str, cited: list) -> str:
 
 def _room_principal(workspace: str, bills_to: str) -> str:
     """The room's workspace principal id (identity's internal door, idempotent); "" when unavailable."""
-    from flows_steps.common import http, require_internal_secret
+    from flows_steps.common import door_headers, http
     try:
         code, out = http("POST", f"{_common._door('VEXA_FLOWS_ADMIN_API_URL')}/internal/principals/workspace",
-                         {"X-Internal-Secret": require_internal_secret()},
+                         door_headers(),
                          {"workspace_id": workspace, "bills_to": int(bills_to)}, timeout=10)
     except Exception:  # noqa: BLE001 — no principal, no cards: never the owner's account instead
         return ""
@@ -825,7 +825,7 @@ def offer_meeting_cards(report: str, people: list, owner_uid: str, workspace: st
     With no CRM deployed (`VEXA_FLOWS_CRM_API_URL` unset) nothing is offered. NEVER RAISES: a card
     that was not offered must not cost anyone the meeting's record."""
     import flows_config
-    from flows_steps.common import http, require_internal_secret
+    from flows_steps.common import door_headers, http
     plan = plan_meeting_cards(report, people, owner_uid, day)
     base = flows_config.get("VEXA_FLOWS_CRM_API_URL").rstrip("/")
     if not plan or not base:
@@ -844,7 +844,7 @@ def offer_meeting_cards(report: str, people: list, owner_uid: str, workspace: st
                 "reason": f"Said in {title or 'the meeting'}"[:500],
                 "cards": [{k: v for k, v in c.items() if not k.startswith("_") and v not in (None, "")}
                           | {"about": f"meeting:{meeting_id}"} for c in plan]}
-        code, out = http("POST", f"{base}/internal/cards/offer", {"X-Internal-Secret": require_internal_secret()},
+        code, out = http("POST", f"{base}/internal/cards/offer", door_headers(),
                          body, timeout=20)
         if code != 200 or not isinstance(out, dict):
             logger.warning("meeting %s: crm answered %s to the card offer", meeting_id, code)
@@ -1322,7 +1322,7 @@ def build(reg: Registry, db) -> None:
     @reg.step
     def ensure_user(ctx: StepCtx):
         """Provision the platform user for the organizer (idempotent lookup-or-create).
-        Reads: refs.organizer · Effect: admin-api user (+scoped token minted per later call)
+        Reads: refs.organizer · Effect: admin-api user (the subject of later service-door calls)
         Result: {uid} — every later step's identity.
 
         ⚠ IT REFUSES A NON-ADDRESS, and the reason is a real account: on 2026-09-02 this step

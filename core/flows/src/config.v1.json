@@ -65,52 +65,10 @@
       ]
     },
     {
-      "key": "VEXA_FLOWS_ADMIN_KEY",
-      "class": "required-explicit",
-      "description": "admin-api's admin key, under the name flows reads it by. It opens `ensure_platform_user` and mints gateway tokens, so it is refused the same way as the internal secret rather than defaulting to a literal, plus every default and example this repository has shipped for the admin key (fact admin-token-placeholders).",
-      "secret": true,
-      "targets": [
-        "compose"
-      ],
-      "forbidden_values": [
-        "vexa-internal-secret",
-        "lite-internal-secret",
-        "changeme",
-        "change-me",
-        "CHANGE-ME",
-        "default",
-        "secret",
-        "dev-admin-token",
-        "CHANGE_ME",
-        "ci-admin-token",
-        "gate-admin-token",
-        "test-admin-token",
-        "test-admin-token-t3",
-        "vexa-admin-token",
-        "vexa-admin-token-2024",
-        "token",
-        "strong-random-token",
-        "your-secret",
-        "your-secret-token",
-        "your-secret-admin-token",
-        "your-secure-admin-token",
-        "your-admin-token",
-        "your-admin-api-token",
-        "your_admin_api_token",
-        "your_admin_api_key",
-        "your_admin_api_key_here",
-        "YOUR_ADMIN_KEY",
-        "YOUR_ADMIN_API_KEY",
-        "YOUR_ADMIN_TOKEN_FROM_DOTENV",
-        "admin-secret",
-        "admin-key",
-        "test-admin-key"
-      ]
-    },
-    {
-      "key": "INTERNAL_API_SECRET",
-      "class": "required-explicit",
-      "description": "The internal-tier identity flows presents to the other domains — the ONE name the whole internal tier has used since F95. Read through `common.INTERNAL_SECRET_ENV`, which is why the brick's own declaration test scans `*_ENV` constants and not only literals.",
+      "key": "VEXA_FLOWS_TIMELINE_KEY",
+      "class": "capability",
+      "description": "A read-only key that opens `GET /timeline` for one NAMED subject and nothing else. Unset, only the operator key opens it — the narrower reach, never the wider one. It is its own caller kind (`Caller(kind=\"timeline\")`), never an admin: as an admin it read any person's reactions and queue and minted a gateway token on the named third party's account (E1/P20).",
+      "capability": "timeline_read_key",
       "secret": true,
       "targets": [
         "compose"
@@ -126,10 +84,9 @@
       ]
     },
     {
-      "key": "VEXA_FLOWS_TIMELINE_KEY",
-      "class": "capability",
-      "description": "A read-only key that opens `GET /timeline` for one NAMED subject and nothing else. Unset, only the operator key opens it — the narrower reach, never the wider one. It is its own caller kind (`Caller(kind=\"timeline\")`), never an admin: as an admin it read any person's reactions and queue and minted a gateway token on the named third party's account (E1/P20).",
-      "capability": "timeline_read_key",
+      "key": "VEXA_FLOWS_SERVICE_KEY",
+      "class": "required-explicit",
+      "description": "The flows tier's ONE credential into the other domains (read through `common.SERVICE_KEY_ENV`). It opens the gateway's service door (gateway/service_door.py), which forwards exactly the calls on its flows allow-list — over the internal tier, or to meeting-api with the subject's identity signed by the gateway — and refuses everything else; the door's inbound leg stamps it on the internal-tier calls into flows-api, so flows never sees INTERNAL_API_SECRET either. The gateway holds the same value. Flows holds no internal-tier secret and no admin key: neither can be used from here to mint a token for, or act as, an arbitrary person on an arbitrary route.",
       "secret": true,
       "targets": [
         "compose"
@@ -175,7 +132,7 @@
     {
       "key": "VEXA_FLOWS_ADMIN_API_URL",
       "class": "required-explicit",
-      "description": "identity's admin tier. NO HOST-PORT DEFAULT: `http://localhost:18057` is not 'unconfigured', it is A DIFFERENT DEPLOYMENT'S admin-api on any host running two stacks — found live 2026-09-03. A deployment default may name the SERVICE and lives in the deploy surface, never in code.",
+      "description": "identity, through the gateway's service door: `http://<gateway>:8002/identity`. The door forwards only the identity calls on the flows allow-list (address ↔ id, ensure a person, settings, is-admin, a room's principal, a bearer's validation). NO HOST-PORT DEFAULT: `http://localhost:18057` is not 'unconfigured', it is A DIFFERENT DEPLOYMENT'S service on any host running two stacks — found live 2026-09-03. A deployment default may name the SERVICE and lives in the deploy surface, never in code.",
       "targets": [
         "compose"
       ]
@@ -183,7 +140,7 @@
     {
       "key": "VEXA_FLOWS_GATEWAY_URL",
       "class": "capability",
-      "description": "The meetings domain, reached through the gateway. UNSET MEANS THE MEETINGS DOMAIN IS NOT DEPLOYED (PRD decision 40.7 + decision 5) — a supported shape of deployment, not a misconfiguration, which is exactly what the `capability` class means. `required-explicit` was a refusal to BOOT: preflight named this door and exited before anything about meetings was asked, so flows+identity with no meetings could not start at all. The key still says GATEWAY because flows reaches meetings through the edge today; that hop is ADR-0037's to close and is not this class change.",
+      "description": "The meetings domain, through the gateway's service door: `http://<gateway>:8002/meetings`. The door signs the subject's identity onto each allow-listed call (scopes bot+tx), so meeting-api checks the bot limit and workspace writes as it does for the person's own key. UNSET MEANS THE MEETINGS DOMAIN IS NOT DEPLOYED (PRD decision 40.7 + decision 5) — a supported shape of deployment, not a misconfiguration, which is exactly what the `capability` class means.",
       "capability": "meetings",
       "targets": [
         "compose"
@@ -192,7 +149,7 @@
     {
       "key": "VEXA_FLOWS_AGENT_API_URL",
       "class": "capability",
-      "description": "agent-api's internal tier. UNSET MEANS THE AGENT DOMAIN IS NOT DEPLOYED (PRD 40.7) — a supported product, not a misconfiguration, which is exactly what the `capability` class means. `defaulted` could not express it: a default URL asserts the domain exists and the absence then arrives as a connection error that retries forever.",
+      "description": "agent-api, through the gateway's service door: `http://<gateway>:8002/agent`. The door forwards only the agent calls on the flows allow-list, over the internal tier. UNSET MEANS THE AGENT DOMAIN IS NOT DEPLOYED (PRD 40.7) — a supported product, not a misconfiguration, which is exactly what the `capability` class means.",
       "capability": "agent_domain",
       "targets": [
         "compose"
@@ -201,7 +158,7 @@
     {
       "key": "VEXA_FLOWS_CRM_API_URL",
       "class": "capability",
-      "description": "The optional CRM's base URL (ADR-0047), read by the flows_defs.crm pack to hand workspace.references.changed to crm-api's internal tier. UNSET MEANS NO CRM IS DEPLOYED: the step ends not_present.",
+      "description": "The optional CRM (ADR-0047), through the gateway's service door: `http://<gateway>:8002/crm`. The door forwards only the crm calls on the flows allow-list (workspace references, a meeting's follow-up cards). UNSET MEANS NO CRM IS DEPLOYED: the step ends not_present.",
       "capability": "crm_domain",
       "targets": [
         "compose"
@@ -662,15 +619,6 @@
       ]
     },
     {
-      "key": "VEXA_FLOWS_USER_KEY_TTL_S",
-      "class": "defaulted",
-      "description": "How long a minted gateway token lives AND how long this process reuses it. One 20-person meeting used to leave ~30 permanent full-scope tokens on the organiser's account (R-B13).",
-      "default": "900",
-      "targets": [
-        "compose"
-      ]
-    },
-    {
       "key": "VEXA_TIMELINE_SCAN_ROWS",
       "class": "defaulted",
       "description": "How many reaction rows the timeline projection scans.",
@@ -678,22 +626,6 @@
       "targets": [
         "compose"
       ]
-    },
-    {
-      "key": "VEXA_INTERNAL_SECRET",
-      "class": "capability",
-      "description": "DEPRECATED alias of INTERNAL_API_SECRET (F95) — honoured with a warning for one release, removed next. On no surface BY DESIGN: a surface that plumbed it would keep the second spelling alive. Declared so the removal is a deletion here rather than an archaeology.",
-      "capability": "deprecated_secret_aliases",
-      "secret": true,
-      "targets": []
-    },
-    {
-      "key": "VEXA_INTERNAL_API_SECRET",
-      "class": "capability",
-      "description": "The second DEPRECATED alias of INTERNAL_API_SECRET, on the same terms and the same clock.",
-      "capability": "deprecated_secret_aliases",
-      "secret": true,
-      "targets": []
     },
     {
       "key": "VEXA_FLOWS_DEFS_EXTRA",
@@ -828,11 +760,6 @@
     "jitsi_hosts": {
       "description": "Self-hosted Jitsi origins this deployment recognises as meeting links.",
       "when_unconfigured": "meet.jit.si only."
-    },
-    "deprecated_secret_aliases": {
-      "description": "The two pre-F95 spellings of INTERNAL_API_SECRET, honoured with a warning for one release.",
-      "mode": "any",
-      "when_unconfigured": "The canonical name is the only one read, which is the state this capability exists to arrive at."
     },
     "meetings": {
       "description": "This deployment carries the meetings domain — scheduling a bot into a call and reading back what it recorded (PRD decision 40.7; decision 5 for meetings).",

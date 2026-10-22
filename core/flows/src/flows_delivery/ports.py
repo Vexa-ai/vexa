@@ -76,7 +76,7 @@ class HttpPorts:
         return (s.get("notifications") or {}), str(s.get("timezone") or ""), common.address_for_uid(uid)
 
     def attention(self, uid: str, rows: list[dict]) -> dict:
-        from flows_steps.common import http, require_internal_secret
+        from flows_steps.common import door_headers, http
         out: dict = {}
         cards: dict[str, list[dict]] = {}
         notices: list[dict] = []
@@ -85,7 +85,7 @@ class HttpPorts:
                 cards.setdefault(r.get("org") or "", []).append(r)
             else:
                 notices.append(r)
-        hdr = {"X-Internal-Secret": require_internal_secret()}
+        hdr = door_headers()
         for org, group in cards.items():
             if not self.crm:
                 for r in group:
@@ -143,7 +143,7 @@ class HttpPorts:
                             row, fields)
 
     def _notice(self, to: str, kind: str, row: dict, fields: dict) -> Optional[str]:
-        from flows_steps.common import http, require_internal_secret
+        from flows_steps.common import door_headers, http
         base = self._agent()
         if not base:
             return None
@@ -155,7 +155,7 @@ class HttpPorts:
         body = {k: v for k, v in body.items() if v}
         try:
             code, ans = http("POST", f"{base}/internal/notifications",
-                             {"X-Internal-Secret": require_internal_secret()}, body, timeout=5)
+                             door_headers(), body, timeout=5)
         except Exception:  # noqa: BLE001 — the bell is a publish, never a dependency
             return None
         if 200 <= int(code or 0) < 300 and isinstance(ans, dict):

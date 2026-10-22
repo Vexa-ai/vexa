@@ -32,7 +32,7 @@ from mail_auth_fixture import authed  # noqa: E402
 # The same literals test_subject_bearer.py imports flows_api with: the module captures them as
 # constants at import, and whichever test module imports first wins.
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key",
-        "INTERNAL_API_SECRET": "test-internal-secret",
+        "VEXA_FLOWS_SERVICE_KEY": "test-flows-service-key-not-a-placeholder",
         "VEXA_FLOWS_DB_URL": "postgresql+pg8000://subject-bearer:unreachable@127.0.0.1:1/flows"}
 _saved = {k: os.environ.get(k) for k in _ENV}
 os.environ.update(_ENV)
@@ -178,7 +178,8 @@ def test_lines_carry_no_credential_and_no_address(client, wire, lines):
     _identity(wire, {"regime": "human", "unit": UNIT})
     client.get("/reactions", headers={"Authorization": f"Bearer {SECRET_TOKEN}"})
     dumped = json.dumps(lines)
-    for secret in (SECRET_TOKEN, "test-internal-secret", "anna@vexa.test"):
+    for secret in (SECRET_TOKEN, "test-internal-secret", "test-flows-service-key-not-a-placeholder",
+                   "anna@vexa.test"):
         assert secret not in dumped
 
 
@@ -195,8 +196,9 @@ def test_one_worker_unit_shares_one_trace_across_lines_and_outbound_calls(wire, 
 
     @reg.step
     def two_calls(ctx):
-        common.http("GET", "http://meeting-api.test/meetings", {"X-API-Key": "user-key-secret"})
-        common.http("POST", "http://agent-api.test/api/chat", {"X-Internal-Secret": "s"}, {"m": 1})
+        common.http("GET", "http://meeting-api.test/meetings",
+                    {"X-Vexa-Service-Key": "user-key-secret", "X-User-Id": "126"})
+        common.http("POST", "http://agent-api.test/api/chat", {"X-Vexa-Service-Key": "s"}, {"m": 1})
         return Done({"ok": True})
 
     reg.flow(name="traced", version=1, on=EventType("thing.happened"), steps=[two_calls])
@@ -277,7 +279,7 @@ def _mail(frm="colleague@acme.test", ext="imap-uid-77"):
 
 def test_one_mail_is_one_trace_shared_with_its_vexa_lookups(wire, lines):
     db, clock, reg = _mail_rig()
-    wire.answers["/admin/users/email/"] = (200, {"id": 126})
+    wire.answers["/internal/users/by-email/"] = (200, {"id": 126})
 
     out = mailbox.process(db, reg, clock, "vexa@acme.test", _mail(),
                           lambda e: common.platform_user_id(e) or None, lambda u: True,

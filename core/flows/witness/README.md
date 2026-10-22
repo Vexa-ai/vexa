@@ -17,5 +17,6 @@ The witness proves what the storm cannot: real time passing, a real SMTP convers
 human judging that the artifacts are the ones a user should see.
 
 The live runs (`run_live.py`, `run_product.py`) act for a person at agent-api the way flows does,
-over the internal tier (`flows_steps.agent.as_person`): export the stack's `INTERNAL_API_SECRET`
-first, or they refuse to start.
+through the gateway's service door (`flows_steps.agent.as_person`): export the stack's
+`VEXA_FLOWS_SERVICE_KEY` and point `VEXA_FLOWS_AGENT_API_URL` at the door's `/agent` prefix first, or
+they refuse to start.

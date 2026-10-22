@@ -80,7 +80,7 @@ def test_every_capability_key_names_a_declared_capability():
 def test_the_no_agents_profile_is_configured_not_broken():
     """PRD 40.7 and decision 4 in one assertion. A deployment with no agent domain and no terminal
     adapter must read as two capabilities that are OFF — never as a service that cannot boot."""
-    env = {"VEXA_FLOWS_API_KEY": "k", "VEXA_FLOWS_ADMIN_KEY": "a", "INTERNAL_API_SECRET": "s",
+    env = {"VEXA_FLOWS_API_KEY": "k", "VEXA_FLOWS_SERVICE_KEY": "s",
            "VEXA_FLOWS_ADMIN_API_URL": "http://admin-api:8001",
            "VEXA_FLOWS_GATEWAY_URL": "http://gateway:8000",
            # A DEPLOYMENT, so it names its database: #1483 made the DSN `required-explicit`
@@ -97,9 +97,12 @@ def test_the_boot_refuses_a_deployment_that_named_no_credential_and_no_door():
     with pytest.raises(cp.ConfigError) as refused:
         cp.preflight({})
     said = str(refused.value)
-    for key in ("VEXA_FLOWS_API_KEY", "VEXA_FLOWS_ADMIN_KEY", "INTERNAL_API_SECRET",
-                "VEXA_FLOWS_ADMIN_API_URL"):
+    for key in ("VEXA_FLOWS_API_KEY", "VEXA_FLOWS_SERVICE_KEY", "VEXA_FLOWS_ADMIN_API_URL"):
         assert key in said, f"the refusal does not name {key}"
+    # Flows holds neither the internal-tier secret nor the admin key, so a boot refusal never
+    # names either as a missing key (a description may still mention one in prose).
+    for gone in ("INTERNAL_API_SECRET", "VEXA_FLOWS_ADMIN_KEY"):
+        assert f"{gone} (" not in said, f"the boot still demands {gone}, which flows no longer holds"
     # VEXA_FLOWS_GATEWAY_URL moved into this list (PRD 40.7 + decision 5): the meetings domain is
     # optional, so naming it in a BOOT refusal was the defect — identity is the only door whose
     # absence is a misconfiguration rather than a shape of deployment.
@@ -119,8 +122,8 @@ def test_the_published_placeholders_are_refused_by_name_never_by_value(placehold
     secret with every reader of the source. `flows_steps.common` already refuses these three
     credentials at their use sites; the declaration is where the shared boot validator learns the
     same list, so the two cannot drift apart."""
-    env = {"VEXA_FLOWS_API_KEY": "k", "VEXA_FLOWS_ADMIN_KEY": "a",
-           "INTERNAL_API_SECRET": placeholder,
+    env = {"VEXA_FLOWS_API_KEY": "k",
+           "VEXA_FLOWS_SERVICE_KEY": placeholder,
            "VEXA_FLOWS_ADMIN_API_URL": "http://admin-api:8001",
            "VEXA_FLOWS_GATEWAY_URL": "http://gateway:8000",
            # Named so the MISSING-key refusal cannot fire first and mask the placeholder one
@@ -128,15 +131,16 @@ def test_the_published_placeholders_are_refused_by_name_never_by_value(placehold
            "VEXA_FLOWS_DB_URL": "sqlite://"}
     with pytest.raises(cp.ConfigError) as refused:
         cp.preflight(env)
-    assert "INTERNAL_API_SECRET" in str(refused.value)
+    assert "VEXA_FLOWS_SERVICE_KEY" in str(refused.value)
     assert placeholder not in str(refused.value), "a refusal must never echo the value"
 
 
 def test_the_placeholder_list_is_the_same_list_the_use_sites_refuse():
     from flows_steps import common
+    seen = set()
     for k in _decl()["keys"]:
-        if k["key"] in ("INTERNAL_API_SECRET", "VEXA_FLOWS_API_KEY"):
+        if k["key"] in ("VEXA_FLOWS_SERVICE_KEY", "VEXA_FLOWS_API_KEY"):
+            seen.add(k["key"])
             assert set(k["forbidden_values"]) == set(common.PLACEHOLDER_SECRETS), k["key"]
-        if k["key"] == "VEXA_FLOWS_ADMIN_KEY":
-            assert set(k["forbidden_values"]) == set(common.ADMIN_KEY_PLACEHOLDERS), k["key"]
-            assert set(common.PLACEHOLDER_SECRETS) <= set(common.ADMIN_KEY_PLACEHOLDERS)
+            assert k["class"] == "required-explicit" and k.get("secret") is True, k["key"]
+    assert seen == {"VEXA_FLOWS_SERVICE_KEY", "VEXA_FLOWS_API_KEY"}

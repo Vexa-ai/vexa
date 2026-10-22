@@ -32,27 +32,13 @@ import os
 # None for required-explicit, and for capability keys whose absence IS the off state.
 DECLARED: dict[str, tuple[str, object, str]] = {
     # ── identity and secrets ────────────────────────────────────────────────
-    "INTERNAL_API_SECRET": (
+    "VEXA_FLOWS_SERVICE_KEY": (
         "required-explicit", None,
-        "the internal-tier identity flows presents to agent-api's meeting room — the ONE name the "
-        "whole internal tier uses since F95. No default: a weak default makes an unconfigured "
-        "deployment look configured (common.require_internal_secret). Read through "
-        "`common.INTERNAL_SECRET_ENV`, which is why this table's test also scans `*_ENV` constants "
-        "and not only literals."),
-    "VEXA_INTERNAL_SECRET": (
-        "capability", None,
-        "DEPRECATED alias of INTERNAL_API_SECRET (F95) — honoured with a warning for one release, "
-        "removed next. Declared so the removal is a deletion here rather than an archaeology."),
-    "VEXA_INTERNAL_API_SECRET": (
-        "capability", None,
-        "the second DEPRECATED alias of INTERNAL_API_SECRET (F95) — same terms as the one above. "
-        "One secret with three names is what F95 was; the third name is gone and these two are on "
-        "a clock."),
-    "VEXA_FLOWS_ADMIN_KEY": (
-        "required-explicit", None,
-        "the admin-api key flows uses to resolve and create platform users and to mint gateway "
-        "tokens. It opens `ensure_platform_user` and `user_api_key`, so it is refused the same way "
-        "as the internal secret rather than defaulting to `changeme` (R-B11)."),
+        "the flows tier's ONE credential into the other domains: it opens the gateway's service "
+        "door, which forwards exactly the calls on its flows allow-list and refuses the rest. Flows "
+        "holds no internal-tier secret and no admin key. No default (common.require_service_key); "
+        "read through `common.SERVICE_KEY_ENV`, which is why this table's test also scans `*_ENV` "
+        "constants and not only literals."),
     "VEXA_FLOWS_API_KEY": (
         "required-explicit", None,
         "the operator key that gates `POST /flows` and `POST /events` on flows-api — decision 4's "
@@ -357,23 +343,18 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "defaulted", "12",
         "the global CEILING over a person's attention budget: deliveries outside the Inbox per "
         "local day (D32). The person's rule sets the cap below it; the floor is 1."),
-    "VEXA_FLOWS_USER_KEY_TTL_S": (
-        "defaulted", "900",
-        "how long a minted gateway token lives AND how long this process reuses it. One 20-person "
-        "meeting used to leave ~30 permanent full-scope tokens on the organiser's account (R-B13)."),
     "VEXA_TIMELINE_SCAN_ROWS": ("defaulted", "2000", "how many reaction rows the timeline projection scans."),
 }
 
 
 #: THE CREDENTIALS (P14). A value named here is never logged, never written into a golden, and
 #: never appears in an error message: every refusal below names the KEY, exactly as
-#: `common.require_admin_key` does one file over. It is a SET rather than a fourth class because
+#: `common.require_service_key` does one file over. It is a SET rather than a fourth class because
 #: secrecy is orthogonal to necessity — `VEXA_FLOWS_TIMELINE_KEY` is a capability AND a secret,
 #: `VEXA_MAIL_ADDR` is required and public. The deploy surface feeds each of these from a secret
 #: store; a service that reads a secret store itself is the shape decision 18(c) removed.
 SECRETS = frozenset({
-    "INTERNAL_API_SECRET", "VEXA_INTERNAL_SECRET", "VEXA_INTERNAL_API_SECRET",
-    "VEXA_FLOWS_ADMIN_KEY", "VEXA_FLOWS_API_KEY", "VEXA_FLOWS_TIMELINE_KEY",
+    "VEXA_FLOWS_SERVICE_KEY", "VEXA_FLOWS_API_KEY", "VEXA_FLOWS_TIMELINE_KEY",
     "VEXA_FLOWS_CRM_PUBLISH_KEY",
     "VEXA_MAIL_APP_PASSWORD", "VEXA_MAIL_SMTP_PASSWORD",
 })

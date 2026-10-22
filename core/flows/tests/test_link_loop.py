@@ -25,12 +25,12 @@ from flows import Done, Reaction, Registry, StepCtx, StepError
 
 @pytest.fixture(autouse=True)
 def _person_settings_are_declared(monkeypatch):
-    """THIS TEST PROCESS HAS AN IDENTITY DOMAIN, the way `conftest` gives it an admin key — and for
+    """THIS TEST PROCESS HAS AN IDENTITY DOMAIN, the way `conftest` gives it a flows key — and for
     the same reason, one door along.
 
     `person_settings` used to answer the DEFAULTS on any failure, so every test in this file that
     reached `setting()` without saying so got them from a swallowed exception: there is no identity
-    service here, `require_internal_secret` refuses, and the broad `except` turned that into "this
+    service here, `require_service_key` refuses, and the broad `except` turned that into "this
     person prefers the defaults". 0.12.27 makes an unreachable identity RETRYABLE instead
     (`SettingsUnavailable`), so a test standing on that swallow now fails — correctly. The suite
     declares what a deployment declares. Tests that are ABOUT a preference still set their own;
@@ -476,8 +476,8 @@ def _mint_rig(monkeypatch, status, body):
         calls.append({"method": method, "url": url, "headers": headers, "body": payload})
         return status, body
 
-    monkeypatch.delenv("INTERNAL_API_SECRET", raising=False)
-    monkeypatch.setenv("VEXA_INTERNAL_SECRET", "internal-tier-secret-for-tests")
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "flows-service-key-for-tests")
+    monkeypatch.setenv("INTERNAL_API_SECRET", "internal-tier-secret-flows-must-not-send")
     monkeypatch.setattr(common, "http", fake_http)
     return calls
 
@@ -490,9 +490,10 @@ def test_mint_scaffold_posts_the_record_and_returns_the_url(monkeypatch):
     assert url == "https://app.test/?s=abc"
     call = calls[0]
     assert call["method"] == "POST" and call["url"].endswith("/internal/scaffolds")
-    # THE INTERNAL TIER. A browser client through the gateway holds no such secret and therefore
-    # cannot mint a scaffold for anybody — the same gate the meeting room uses.
-    assert call["headers"]["X-Internal-Secret"] == "internal-tier-secret-for-tests"
+    # THE SERVICE DOOR. A browser client through the gateway holds no flows key and therefore
+    # cannot mint a scaffold for anybody; flows reaches the internal route only through the door,
+    # and never presents the internal secret itself.
+    assert call["headers"] == {"X-Vexa-Service-Key": "flows-service-key-for-tests"}
     assert call["body"] == {"who": "anna@bank.test", "kind": "prep", "opening": "prep",
                             "meeting": "41", "refs": {"title": "Pilot sync"},
                             "provenance": {"flow": "meeting_prep", "minted_by": "7"}}
@@ -529,12 +530,14 @@ def test_mint_returns_the_token_and_asks_by_row_id(monkeypatch):
     import flows_steps.meeting as mt
 
     calls = []
-    monkeypatch.setattr(mt, "user_api_key", lambda uid: "k")
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "flows-service-key-for-tests")
     monkeypatch.setattr(mt, "http", lambda m, url, h, b=None, **kw:
-                        (calls.append((m, url, b)) or (200, {"token": "97.tok", "id": "g1"})))
+                        (calls.append((m, url, h, b)) or (200, {"token": "97.tok", "id": "g1"})))
     assert mt.mint_transcript_share("7", 97, "ben@bank.test") == "97.tok"
-    method, url, body = calls[0]
+    method, url, headers, body = calls[0]
     assert method == "POST" and url.endswith("/meetings/97/share")
+    # the grant is written AS the meeting's owner, named through the service door — no minted key
+    assert headers == {"X-Vexa-Service-Key": "flows-service-key-for-tests", "X-User-Id": "7"}
     assert body["mode"] == "restricted" and body["allowed_emails"] == ["ben@bank.test"]
 
 
@@ -550,7 +553,6 @@ def test_mint_never_swallows_a_non_token_answer(monkeypatch, status, body, retry
     `except Exception` never fired and the mail shipped without a capability."""
     import flows_steps.meeting as mt
 
-    monkeypatch.setattr(mt, "user_api_key", lambda uid: "k")
     monkeypatch.setattr(mt, "http", lambda *a, **k: (status, body))
     with pytest.raises(mt.ShareMintError) as e:
         mt.mint_transcript_share("7", 97, "ben@bank.test")

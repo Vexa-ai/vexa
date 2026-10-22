@@ -20,7 +20,7 @@ from flows_steps import policies
 import flows_obs
 from flows_steps import common
 from flows_worker.unit import SERVICE, instrument, run_unit
-from flows_steps.common import db_url, require_internal_secret
+from flows_steps.common import db_url, require_service_key
 
 POLL_S = 1.0
 SLOW_STEP_S = 8.0
@@ -84,10 +84,10 @@ def retention_pass(db, clock) -> dict:
 
 
 def main() -> int:
-    # Refuse to start without the internal-tier secret, the same refusal flows-api already makes
-    # for the operator key: a worker that starts without it runs every post-meeting turn with no
-    # room and nothing says so until somebody reads a log.
-    require_internal_secret()
+    # Refuse to start without the flows key, the same refusal flows-api already makes for the
+    # operator key: a worker that starts without it reaches no other domain, and nothing says so
+    # until somebody reads a log.
+    require_service_key()
     # …and without a door it cannot name. There are no host-port defaults: `http://localhost:18057`
     # is a DIFFERENT DEPLOYMENT'S admin-api on any host running two stacks, so an unnamed door that
     # falls back to one is worse than a refusal — it works, against the wrong thing. The agent door

@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import time
 from typing import Callable, Optional
+from urllib.parse import quote as _q
 
 from flows_timeline.model import (Event, concerns, event_from_meeting, event_from_receipt,
                                   events_from_reaction, iso, loads, merge, to_epoch)
@@ -321,18 +322,8 @@ def friction_sink(db, *, since: float = 0.0, kind: str = "", subject: str = "", 
 # ── the meetings half ────────────────────────────────────────────────────────────────────────────
 #
 # The meetings table lives in another service's database, so it is reached the way every step
-# reaches it: over HTTP, with the person's own key. The key is CACHED per process — the preamble
-# asks for a timeline on every dispatch (behind its own 60 s cache) and minting a fresh API token
-# per ask would leave a token per person per minute in the identity database forever.
-
-_KEY_CACHE: dict[str, str] = {}
-
-
-def _user_key(uid: str) -> str:
-    if uid not in _KEY_CACHE:
-        from flows_steps.common import user_api_key
-        _KEY_CACHE[uid] = user_api_key(str(uid))
-    return _KEY_CACHE[uid]
+# reaches it: over HTTP, through the gateway's service door, naming the person as the subject. The
+# door signs the person's identity onto the hop; flows holds no token of theirs.
 
 
 def fetch_meetings(uid: str) -> list[dict]:
@@ -348,9 +339,9 @@ def fetch_meetings(uid: str) -> list[dict]:
         # READ whose contract is already "degrade, never empty", an absent domain and an
         # unreachable one produce the same honest answer (no meetings in the window). The
         # distinction that matters is on the WRITE side, where a step must not knock at all.
-        _st, body = http("GET", f"{meetings_door()}/meetings", {"X-API-Key": _user_key(uid)})
+        from flows_steps.common import door_headers
+        _st, body = http("GET", f"{meetings_door()}/meetings", door_headers(uid))
     except Exception:  # noqa: BLE001 — see docstring
-        _KEY_CACHE.pop(uid, None)          # a rejected key is the likeliest cause; re-mint next call
         return []
     if isinstance(body, dict):
         rows = body.get("meetings", [])
@@ -378,15 +369,15 @@ def resolve_identity(subject: str, lookup: Optional[Callable[[str], dict]] = Non
     email = subject.lower() if "@" in subject else ""
     if lookup is None:
         def lookup(path: str) -> dict:
-            from flows_steps.common import ADMIN_API, http, require_admin_key
-            _st, body = http("GET", f"{ADMIN_API}{path}",
-                             {"X-Admin-API-Key": require_admin_key()})
+            from flows_steps.common import ADMIN_API, door_headers, http
+            _st, body = http("GET", f"{ADMIN_API}{path}", door_headers())
             return body if isinstance(body, dict) else {}
     try:
         if uid and not email:
-            email = str((lookup(f"/admin/users/{uid}") or {}).get("email") or "").lower()
+            email = str((lookup(f"/internal/users/{_q(uid, safe='')}/email") or {}).get("email")
+                        or "").lower()
         elif email and not uid:
-            got = (lookup(f"/admin/users/email/{email}") or {}).get("id")
+            got = (lookup(f"/internal/users/by-email/{_q(email, safe='')}") or {}).get("id")
             uid = str(got) if got not in (None, "") else ""
     except Exception:  # noqa: BLE001 — see docstring
         pass

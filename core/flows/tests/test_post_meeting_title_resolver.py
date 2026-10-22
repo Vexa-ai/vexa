@@ -37,12 +37,12 @@ from flows_steps import common
 
 @pytest.fixture(autouse=True)
 def _person_settings_are_declared(monkeypatch):
-    """THIS TEST PROCESS HAS AN IDENTITY DOMAIN, the way `conftest` gives it an admin key — and for
+    """THIS TEST PROCESS HAS AN IDENTITY DOMAIN, the way `conftest` gives it a flows key — and for
     the same reason, one door along.
 
     `person_settings` used to answer the DEFAULTS on any failure, so every test in this file that
     reached `setting()` without saying so got them from a swallowed exception: there is no identity
-    service here, `require_internal_secret` refuses, and the broad `except` turned that into "this
+    service here, `require_service_key` refuses, and the broad `except` turned that into "this
     person prefers the defaults". 0.12.27 makes an unreachable identity RETRYABLE instead
     (`SettingsUnavailable`), so a test standing on that swallow now fails — correctly. The suite
     declares what a deployment declares. Tests that are ABOUT a preference still set their own;

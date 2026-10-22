@@ -21,9 +21,11 @@ URL = "https://meet.google.com/abc-defg-hij"
 
 def test_the_invited_bot_is_spawned_with_the_link_alone(monkeypatch):
     sent = []
-    monkeypatch.setattr(mt, "user_api_key", lambda uid: "k")
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "bot-language-flows-key")
 
     def fake_http(method, url, headers, body=None, timeout=20):
+        # the bot is dispatched AS the invite's owner, named through the service door
+        assert headers == {"X-Vexa-Service-Key": "bot-language-flows-key", "X-User-Id": "7"}, headers
         sent.append((method, url, body))
         return 201, {"id": 41, "native_meeting_id": "abc-defg-hij", "platform": "google_meet"}
 
