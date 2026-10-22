@@ -105,17 +105,17 @@ def build(b: Broker) -> APIRouter:
         now = time.time()
         return {"grants": [sensor_grants.view(r, now) for r in rows]}
 
-    @router.post("/api/sensor-grants/{gid}/revoke")
-    def grant_revoke(request: Request, gid: str):
+    @router.post("/api/sensor-grants/{grant_id}/revoke")
+    def grant_revoke(request: Request, grant_id: str):
         """End one of the person's grants now. Revoking only ever narrows, so a worker with nobody in
         the loop may do it too. Another person's grant id is a 404."""
         who = b.identity(request, {"agent", "human"}, unwatched_ok=True)
-        row = b.sql("SELECT * FROM sensor_grants WHERE id=? AND actor=?", (gid, str(who["actor"])), one=True)
+        row = b.sql("SELECT * FROM sensor_grants WHERE id=? AND actor=?", (grant_id, str(who["actor"])), one=True)
         if not row:
             raise HTTPException(404, "Grant not found")
         if not row["revoked"]:
-            b.sql("UPDATE sensor_grants SET revoked=? WHERE id=?", (time.time(), gid))
-        b.audit(who, row["connection"], "sensor_grant.revoke", "stored", receipt=gid)
-        return sensor_grants.view(b.sql("SELECT * FROM sensor_grants WHERE id=?", (gid,), one=True))
+            b.sql("UPDATE sensor_grants SET revoked=? WHERE id=?", (time.time(), grant_id))
+        b.audit(who, row["connection"], "sensor_grant.revoke", "stored", receipt=grant_id)
+        return sensor_grants.view(b.sql("SELECT * FROM sensor_grants WHERE id=?", (grant_id,), one=True))
 
     return router

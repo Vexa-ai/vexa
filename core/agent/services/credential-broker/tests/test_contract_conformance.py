@@ -27,6 +27,7 @@ MODELS = {
     "AuthorizeRequest": models.AuthorizeBody,
     "BotAccountRequest": models.BotAccountBody,
     "CalendarChangesRequest": models.CalendarChangesBody,
+    "SensorGrantRequest": models.SensorGrantBody,
     "SignalsModelKeyRequest": models.SignalsModelKeyBody,
     "MailCredentialRequest": models.MailCredentialBody,
 }
