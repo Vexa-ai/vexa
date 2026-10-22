@@ -30,7 +30,9 @@ other people read, never a room's workspace principal; the ``rooms`` and ``calls
 policy evaluator (``call.person``, D7: the floor denies a workspace principal, a workspace can deny
 it); and the privacy hold (D6): the ring is a notice to another person, so a session marked with
 private sources is held on the server-composed ring line exactly like any notice, with a confirm
-code. The body carries NO free text: nothing the model writes reaches the other person.
+code. The body carries NO free text: nothing the model writes reaches the other person. And the ring
+limit (``room_ring.check``): a caller who has rung everyone this call would reach too often lately is
+answered 429 ``ring_rate_limited`` with ``Retry-After``, and nothing is started or rung.
 
 DELIBERATE, AND SAID: S4's ``POST /api/rooms/direct`` refuses every delegated caller ("opening a
 conversation is the person's act"). Here the person's own words this turn ARE the act ("Call
@@ -348,6 +350,11 @@ def build(**d) -> APIRouter:
         _decide(request, subject, ws)                       # the room's workspace may deny calls in it
         everyone = [h for h in s.humans(sid) if h != subject]
         ring_to = [str(other["subject"])] if other is not None else everyone
+        try:
+            room_ring.check(subject, ring_to)               # before anything is held, started or rung
+        except room_ring.RingLimited as exc:
+            raise HTTPException(status_code=429, detail=exc.body(),
+                                headers={"Retry-After": str(exc.retry_after)}) from None
         caller_name = _name(subject, request.headers.get("x-user-email") or "")
         # THE PRIVACY HOLD (D6): a ring is a notice to other people. Its words are the server's own,
         # so a session whose private reads were all fingerprinted passes; anything else waits for the

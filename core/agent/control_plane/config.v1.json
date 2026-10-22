@@ -724,6 +724,20 @@
       ]
     },
     {
+      "key": "VEXA_ROOM_RING_PER_PERSON",
+      "class": "defaulted",
+      "default": "3",
+      "description": "ring limit (room_ring): how many times one caller may ring one person in any 10 minutes; a ring over it rings nobody, and call_person answers 429 ring_rate_limited with Retry-After before starting anything",
+      "targets": []
+    },
+    {
+      "key": "VEXA_ROOM_RING_PER_CALLER",
+      "class": "defaulted",
+      "default": "30",
+      "description": "ring limit (room_ring): how many rings one caller may send, to anyone, in any 10 minutes",
+      "targets": []
+    },
+    {
       "key": "VEXA_ROOM_RING_DERIVED_DAYS",
       "class": "defaulted",
       "default": "30",

@@ -325,3 +325,41 @@ def test_call_tester_b_is_an_imperative_and_every_turn_knows_vexa_calls_exist():
     for not_asked in ("join the call", "call the bot", "what call was that?", "don't call bob yet"):
         assert "call_person" not in engine.imperative_preamble(not_asked), not_asked
     assert "call_person" in engine.CALLS_PREAMBLE and "Meet" in engine.CALLS_PREAMBLE
+
+
+# ── the ring limit (gate Low row: no rate limit on rings) ─────────────────────────────────────────
+
+def test_a_caller_who_rang_one_person_too_often_is_refused_before_anything_rings(w, monkeypatch):
+    """call_person re-rings a live call on every call: unbounded, a person (or their prompted agent)
+    rang someone without end. The fourth ring to one person inside the window is a 429 with
+    Retry-After, and nothing is rung or started."""
+    monkeypatch.setenv("VEXA_ROOM_RING_PER_PERSON", "3")
+    for _ in range(3):
+        assert _call(w, {"person": "tester-b"}).status_code == 200
+    assert len(_rings(w, "tester-b")) == 3
+    started = len(w.meetings.calls)
+    r = _call(w, {"person": "tester-b"})
+    assert r.status_code == 429, r.text
+    assert r.json()["detail"]["refused"] == "ring_rate_limited"
+    assert int(r.headers["Retry-After"]) > 0
+    assert len(_rings(w, "tester-b")) == 3 and len(w.meetings.calls) == started
+
+
+def test_rings_under_the_limit_ring_and_another_person_is_counted_apart(w, monkeypatch):
+    """The control: under the limit every call rings, and one person's count does not refuse a call
+    to someone else."""
+    monkeypatch.setenv("VEXA_ROOM_RING_PER_PERSON", "2")
+    assert _call(w, {"person": "tester-b"}).status_code == 200
+    assert _call(w, {"person": "tester-b"}).status_code == 200
+    assert _call(w, {"person": "tester-b"}).status_code == 429
+    r = _call(w, {"person": "tester-a"})
+    assert r.status_code == 200, r.text
+    assert r.json()["rang"] == ["tester-a"] and len(_rings(w, "tester-a")) == 1
+
+
+def test_a_caller_is_limited_across_everyone_they_ring(w, monkeypatch):
+    monkeypatch.setenv("VEXA_ROOM_RING_PER_CALLER", "2")
+    assert _call(w, {"person": "tester-a"}).status_code == 200
+    assert _call(w, {"person": "tester-b"}).status_code == 200
+    r = _call(w, {"person": "dan"})
+    assert r.status_code == 429 and _rings(w, "dan") == []

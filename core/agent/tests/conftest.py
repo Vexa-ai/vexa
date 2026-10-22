@@ -105,6 +105,16 @@ def signed_turn(body: dict) -> dict:
 
 
 @pytest.fixture(autouse=True)
+def _ring_counts_forgotten():
+    """The ring limit counts in-process (``room_ring``): every test starts with nobody rung."""
+    from control_plane import room_ring
+
+    room_ring.reset()
+    yield
+    room_ring.reset()
+
+
+@pytest.fixture(autouse=True)
 def _unit_input_key(monkeypatch):
     monkeypatch.setenv("VEXA_UNIT_IN_KEY", TEST_UNIT_IN_KEY)
 

@@ -139,7 +139,7 @@ never a chat.
   (deterministic id, both owners, a third person refused, never in a list or a mount).
 - `room_switches.py` — "Vexa in this room" and "Transcribe calls" (7hh): either person turns off and
   both turn on in a room of two; owners in a bigger room; a workspace DENY line locks one.
-- `room_ring.py` — a ring: a live frame plus a `call_started` notice that expires.
+- `room_ring.py` — a ring: a live frame plus a `call_started` notice that expires; rate-limited per caller and per caller→person.
 - `rooms_overview.py` — a workspace's rooms as its reader may see them (`GET /api/rooms/list`, tool
   `rooms_list`): people by name, a live call, recurring meeting links. A shared turn sees only its own
   workspace's open rooms, with no meetings.

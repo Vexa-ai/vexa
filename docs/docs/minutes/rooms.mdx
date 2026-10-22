@@ -115,6 +115,7 @@ History and links are unchanged.
 | "Which … do you mean?" after "Call …" | More than one person you share a workspace with matches | Answer with the one you mean |
 | Vexa asks who you mean after "Call …" | Nobody you share a workspace with matches | Name them as People shows them, or give their address to invite them |
 | "Confirm …" before a call rings | This chat read your private data, and the ring is a notice to someone else | Reply with the confirm code to ring them once |
+| "They were rung too many times just now" | You rang that person 3 times (or anyone 30 times) in the last 10 minutes | Wait the seconds it names, then call again |
 
 ## How it works
 
@@ -200,11 +201,19 @@ They are enforced where each effect starts:
 `call_started` notice that expires after 30 minutes. Who counts is `room_membership.ringable`. The
 tuning line for open rooms is `VEXA_ROOM_RING_DERIVED_DAYS` (default 30).
 
+Every ring passes a limit, in `ring` itself: one caller rings one person at most
+`VEXA_ROOM_RING_PER_PERSON` times (default 3) and anyone at most `VEXA_ROOM_RING_PER_CALLER` times
+(default 30) in any 10 minutes. A person over it is not rung and is not in `rang`. `call_person` checks
+first and answers 429 `ring_rate_limited` with `Retry-After`, starting nothing. The count is kept in
+agent-api's process (one replica); a restart forgives at most one window.
+
 ### Configuration
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `VEXA_ROOM_RING_DERIVED_DAYS` | `30` | An open room rings members who opened it within this many days |
+| `VEXA_ROOM_RING_PER_PERSON` | `3` | Rings from one caller to one person in any 10 minutes |
+| `VEXA_ROOM_RING_PER_CALLER` | `30` | Rings from one caller to anyone in any 10 minutes |
 | `VEXA_POLICY_LEGACY_READ` | `1` | While on, a closed room adopts its participant rows once (set to `0` after every instance has started on 0.13.4) |
 
 The one-time shared-chat migration is `POST /internal/rooms/migrate-shared-chats?dry_run=true` on the
