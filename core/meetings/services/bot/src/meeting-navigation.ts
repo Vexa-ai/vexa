@@ -181,7 +181,10 @@ export async function guardMeetingNavigation(context: BrowserContext, policy: Na
     const verdict = navigation
       ? await checkNavigation(url, policy, topLevel, resolver)
       : checkWithoutLookup(url, policy, false);
-    if (verdict.ok) return route.fallback();
+    if (verdict.ok) {
+      if (topLevel) log(`[bot] navigation guard: allowed a navigation to ${url.hostname}`);
+      return route.fallback();
+    }
     refuse(verdict, topLevel, navigation ? 'a navigation' : 'a request');
     return route.abort('blockedbyclient');
   });
@@ -210,6 +213,7 @@ export async function guardMeetingNavigation(context: BrowserContext, policy: Na
               await cdp.send('Fetch.failRequest', { requestId: ev.requestId, errorReason: 'BlockedByClient' });
               return;
             }
+            if (topLevel && target) log(`[bot] navigation guard: allowed a redirect to ${target.hostname}`);
           }
           await cdp.send('Fetch.continueRequest', { requestId: ev.requestId });
         })().catch(() => { /* the page or request may be gone */ });
