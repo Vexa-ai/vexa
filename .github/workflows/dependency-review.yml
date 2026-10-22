@@ -56,6 +56,9 @@ jobs:
           #    terminal's npm project both load the no-image-backend stand-in.
           #  - json-schema 0.4.0 (the dashboard, via @ai-sdk/provider) declares "(AFL-2.1 OR BSD-3-Clause)"
           #    and is taken under BSD-3-Clause; GitHub's detector reads its licence files as AND.
+          #  - robust-predicates 3.0.3 (the terminal, via mermaid > d3 > d3-delaunay > delaunator)
+          #    declares Unlicense (Category A, allowed above); GitHub's detector also reports
+          #    LicenseRef-scancode-public-domain, read from the Unlicense's own public-domain dedication.
           allow-dependencies-licenses: >-
             pkg:pypi/typing-extensions,
             pkg:npm/%40img/sharp-libvips-darwin-arm64,
@@ -72,4 +75,5 @@ jobs:
             pkg:npm/%40img/sharp-win32-arm64,
             pkg:npm/%40img/sharp-win32-ia32,
             pkg:npm/%40img/sharp-win32-x64,
-            pkg:npm/json-schema
+            pkg:npm/json-schema,
+            pkg:npm/robust-predicates

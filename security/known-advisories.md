@@ -44,6 +44,10 @@ Categories A and B (LGPL is Category X there, and in ADR-0004 since 2026-10-10).
   copy (`clients/terminal/no-image-backend`), so neither installs libvips in any stage.
 - **`json-schema`** 0.4.0 (the dashboard, through `@ai-sdk/provider`) declares `(AFL-2.1 OR BSD-3-Clause)`
   and is taken under BSD-3-Clause; GitHub's detector reads its licence files as an AND.
+- **`robust-predicates`** 3.0.3 (the terminal, through `mermaid` → `d3` → `d3-delaunay` → `delaunator`)
+  declares `Unlicense`, which is Category A and on the allow list. GitHub's detector reports
+  `LicenseRef-scancode-public-domain AND Unlicense`, the first term read from the Unlicense's own
+  public-domain dedication.
 
 ## Third-party images (Trivy)
 
