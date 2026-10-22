@@ -57,12 +57,11 @@ WORKSPACE_WORD = "personal workspace"
 # have decided whether to keep anything here, because that is the only moment at which telling them
 # is a choice they still have. Not a disclaimer and not a legal line: three facts.
 #
-# ⚠ THIS CONSTANT IS NOW THE DEFAULT COMPOSITION, NOT THE SENTENCE ITSELF. What `render` fills
-# `{{visibility}}` with is DERIVED from `_global/POLICIES.md` — the three clauses come from
-# `agent_reads_desk`, the two retention rules and `data_statement`, and at the defaults they compose
-# to exactly these words. `test_policies.py` pins that equality, which is a stronger check than the
-# one it replaces: a rule change that would make this sentence untrue now changes the sentence
-# instead of leaving it standing. The literal stays here, spelled as it is, because
+# ⚠ THIS CONSTANT IS THE COMPOSITION WITHOUT A `data_statement`, NOT THE SENTENCE ITSELF. What
+# `render` fills `{{visibility}}` with is `policies.visibility_sentence`: `data_statement` replaces
+# the locality clause, and no other rule changes it, because every other clause states what the
+# software does whatever the rules say. `test_policies.py` pins that equality. The literal stays
+# here, spelled as it is, because
 # `scripts/parity.json`'s `visibility-sentence` fact anchors one of its four sites on this
 # assignment — the ledger is untouched by the derivation.
 VISIBILITY_SENTENCE = ("Vexa runs on this organisation's own servers; what you and your colleagues "

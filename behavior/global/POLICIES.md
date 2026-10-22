@@ -168,13 +168,19 @@ These are the product's, and they hold whatever the front matter says:
 
 **Default `on`.** *(founder decision 21, 2026-09-02.)*
 
-**The sentence it changes.** With it on, attendees are told: *what you and your colleagues keep in
-your workspaces is visible to the company's agents*. With it off, they are told the opposite, and
-the mail says so in the same breath.
+**Declared, not yet enforced.** No access path reads this rule. A post-meeting room mounts no
+other person's personal workspace whatever the answer, and a personal workspace is readable by any
+signed-in member of this instance, and so by any agent working for one, whatever the answer. Off
+is therefore a written commitment, not a switch: say *intended, not yet enforced* when you
+recommend it.
 
-**The effect.** In a post-meeting room, the turn mounts the personal workspaces of the people who were in the
-meeting, read-only, so the report can say what this meeting means for each of them. Off, it mounts
-none of them and writes from the transcript alone.
+**The sentence.** Attendees are told *what you and your colleagues keep in your workspaces is
+visible to the company's agents*, because that is what the software does. The answer here does not
+change it: the mail does not promise a narrower read than the product enforces.
+
+**The intended effect.** In a post-meeting room, the turn would read the personal workspaces of the
+people who were in the meeting, so the report can say what this meeting means for each of them.
+Off, it would write from the transcript alone.
 
 **Adoption.** This is what makes a report worth opening rather than a set of minutes: the difference
 between *"we agreed X"* and *"we agreed X, and you own the migration you wrote up last week"*.
@@ -356,12 +362,17 @@ same workspace instead of somewhere else, and every write is a commit with an au
 
 **Defaults: transcripts `forever`, recordings `0`.**
 
-**The sentence it changes.** The retention clause of the disclosure every attendee reads is composed
-from these two numbers.
+**Declared, not yet enforced.** Nothing deletes a transcript or a recording on a schedule, and
+whether a bot records is the deployment's `RECORDING_ENABLED`, not this rule. A number of days, or
+a recording `0`, is a written commitment: say *intended, not yet enforced* when you recommend it.
 
-**The effect.** `forever` keeps it for as long as the deployment holds it; a number is a count of
-days; `0` means it is not kept at all. Nothing here moves data off this deployment either way —
-locality is not a retention setting.
+**The sentence.** Attendees are told *recordings and transcripts stay here*. The answers here do
+not change it: the mail names no number of days and promises no absent recording until the product
+deletes on schedule.
+
+**The intended effect.** `forever` keeps it for as long as the deployment holds it; a number is a
+count of days; `0` means it is not kept at all. Nothing here moves data off this deployment either
+way — locality is not a retention setting.
 
 **Adoption.** A searchable history is what makes the product worth keeping after the novelty. A
 recording is what a person asks for exactly once, when the transcript missed something.
@@ -949,15 +960,15 @@ product does not yet check.
 
 | rule | read by |
 |---|---|
-| `agent_reads_desk` | the derived disclosure in every post-meeting mail |
+| `agent_reads_desk` | **declared, not yet enforced** — no access path reads it, and the disclosure says what the software does whatever it answers |
 | `report_to_participants` | the attendee fan-out (`email_attendees`) |
 | `external_participants` | whether the fan-out writes to a participant with no account (`email_attendees`) |
 | `attendee_domains` | the line between inside and outside, for the same fan-out |
-| `data_statement` | the provenance line above every minutes mail |
+| `data_statement` | the provenance line above every minutes mail, and the locality clause of the disclosure in every post-meeting mail |
 | `prep_and_invite_mail` | the prep note before a meeting (`emit_prep`) |
 | `minutes_mail` | the minutes mail after a meeting (`email_minutes`, and its group fan-out) |
 | `mail_domains` | the inbound mailbox: which senders and invitation organisers it acts for |
-| `transcript_retention_days`, `recording_retention_days` | the derived disclosure |
+| `transcript_retention_days`, `recording_retention_days` | **declared, not yet enforced** — nothing deletes on a schedule, and the disclosure names no number of days |
 | `bot_joins_on_invite` | the inbound mailbox: off, an invitation is recorded and nothing is created, accepted or joined |
 | `bot_joins_mixed_meetings` | **declared, not yet enforced** — admission would have to read this file before dispatching a bot |
 | `organizer_confirms_join` | **declared, not yet enforced** — and it is `off`, which is today's behaviour, so the line records the gate rather than claiming it |

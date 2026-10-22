@@ -9,9 +9,10 @@ Four claims, in the order they would fail:
   P2  Resolution order: flow param, then the file, then env, then the baked default. An absent or
       empty file changes nothing; a file that exists and cannot be read, or names a profile nobody
       knows, CLOSES every rule that widens who is mailed, joined or read (S03-1).
-  P3  The disclosure is DERIVED. At the defaults it composes, byte for byte, to the sentence the
-      founder wrote (decision 21) and `mailtext.VISIBILITY_SENTENCE` still carries — and it CHANGES
-      when a rule that makes it untrue changes, which is the whole reason it is not a constant.
+  P3  The disclosure claims only what the software backs. It composes, byte for byte, to the
+      sentence the founder wrote (decision 21) and `mailtext.VISIBILITY_SENTENCE` still carries;
+      `data_statement` replaces its locality clause; and the rules nothing enforces
+      (`agent_reads_desk`, the two retention rules) change none of it (S03-2).
   P4  The rules reach the steps: who the follow-up is mailed to, and whether it is sent at all.
   P5  Every block `asks/policies-wizard.md` recommends is one THIS module can read (Vexa-ai/vexa#1627),
       and the clauses the wizard says the attendee sentence is composed from are this module's own.
@@ -228,16 +229,50 @@ def test_at_the_defaults_it_is_the_founders_sentence():
     assert policies.visibility_sentence(policies.resolve(None)) == mailtext.VISIBILITY_SENTENCE
 
 
-def test_turning_the_desk_rule_off_changes_what_attendees_are_told():
+#: Every answer an admin can write to the three rules nothing enforces (S03-2). Desk off; transcripts
+#: and recordings for a number of days; recordings `0`; recordings forever; and the combinations a
+#: profile produces.
+_UNENFORCED_ANSWERS = [
+    "agent_reads_desk: off",
+    "agent_reads_desk: on",
+    "transcript_retention_days: 30",
+    "recording_retention_days: 7",
+    "recording_retention_days: 0",
+    "recording_retention_days: forever",
+    "transcript_retention_days: 30\nrecording_retention_days: 0",
+    "transcript_retention_days: 30\nrecording_retention_days: 7",
+    "transcript_retention_days: forever\nrecording_retention_days: 7",
+    "transcript_retention_days: 1\nrecording_retention_days: forever\nagent_reads_desk: off",
+    "profile: bank",
+    "profile: studio",
+]
+
+
+@pytest.mark.parametrize("rows", _UNENFORCED_ANSWERS)
+def test_a_rule_nothing_enforces_does_not_change_what_attendees_are_told(rows):
+    """S03-2. `agent_reads_desk` is read by no access path (a desk is readable by any signed-in
+    member, agent-api `_read_target`) and nothing deletes a transcript or a recording on a schedule.
+    So under every answer to them the attendee hears exactly the default sentence: no "read only by
+    an agent working for its own person", no "for N days", no "no recording is kept"."""
+    resolved = policies.resolve(f"---\n{rows}\n---\n")
+    assert resolved["problems"] == []
+    said = policies.visibility_sentence(resolved)
+    assert said == mailtext.VISIBILITY_SENTENCE
+    for claim in ("read only by", "days", "no recording"):
+        assert claim not in said, f"{rows!r}: the sentence claims {claim!r}, which nothing enforces"
+
+
+def test_the_clauses_that_stay_are_in_every_sentence():
+    """POSITIVE CONTROL for the test above: the clauses the software backs are still said, and the
+    sentence is not emptied to pass it. The desk clause is backed by agent-api serving any desk to
+    any signed-in member (agent `test_agent_api_authz.py::
+    test_a_colleagues_desk_is_readable_and_never_writable`); the locality and keeping clauses name
+    no rule and no duration."""
     said = policies.visibility_sentence(policies.resolve("---\nagent_reads_desk: off\n---\n"))
-    assert "visible to the company's agents" not in said
-    assert said.startswith(policies.LOCALITY_CLAUSE)
-
-
-def test_retention_shows_up_in_the_sentence():
-    said = policies.visibility_sentence(policies.resolve(
-        "---\ntranscript_retention_days: 30\nrecording_retention_days: 7\n---\n"))
-    assert "30 days" in said and "7 days" in said
+    assert said == (f"{policies.LOCALITY_CLAUSE}; {policies.DESK_VISIBLE_CLAUSE}; "
+                    f"{policies.RETENTION_STAYS_CLAUSE}.")
+    assert "visible to the company's agents" in said
+    assert "recordings and transcripts stay here" in said
 
 
 def test_a_studio_that_keeps_recordings_says_so():
@@ -255,9 +290,15 @@ def test_a_written_data_statement_replaces_the_locality_clause():
 
 def test_the_mail_renderer_fills_visibility_from_the_rules(monkeypatch):
     monkeypatch.setattr(mailtext, "ws_file", lambda *_a, **_k: None)
-    monkeypatch.setattr(policies, "ws_file", lambda *_a, **_k: "---\nagent_reads_desk: off\n---\n")
+    monkeypatch.setattr(policies, "ws_file", lambda *_a, **_k: (
+        "---\nagent_reads_desk: off\ntranscript_retention_days: 30\nrecording_retention_days: 0\n"
+        "data_statement: Everything stays in our Frankfurt rack.\n---\n"))
     _subject, body = mailtext.render("minutes-head", "57", {"title": "T", "when": "now"})
-    assert "read only by an agent working for its own person" in body
+    # the rule the software backs reaches the mail; the ones nothing enforces do not
+    assert "Everything stays in our Frankfurt rack;" in body
+    assert policies.DESK_VISIBLE_CLAUSE in body and policies.RETENTION_STAYS_CLAUSE in body
+    for claim in ("read only by", "30 days", "no recording"):
+        assert claim not in body
 
 
 def test_with_no_policy_file_the_mail_says_what_it_always_said(monkeypatch):
@@ -453,8 +494,11 @@ def test_the_wizards_attendee_sentence_is_composed_from_THIS_modules_clauses():
         pytest.skip(f"no wizard at {WIZARD}")
     said = " ".join(WIZARD.read_text(encoding="utf-8").split())
     for clause in (policies.LOCALITY_CLAUSE, policies.DESK_VISIBLE_CLAUSE,
-                   policies.DESK_PRIVATE_CLAUSE, policies.RETENTION_STAYS_CLAUSE):
+                   policies.RETENTION_STAYS_CLAUSE):
         assert clause in said, f"the wizard would compose a sentence this module does not: {clause!r}"
+    # …and never the clauses that followed a rule nothing enforces (S03-2)
+    for gone in ("read only by an agent working for its own person", "say the two numbers"):
+        assert gone not in said, f"the wizard still composes {gone!r}"
 
 
 def test_the_join_confirmation_rule_defaults_to_what_the_engine_actually_does():

@@ -354,11 +354,12 @@ session into a workspace whose member list names anyone besides the person is re
 the membership store's, read by agent-api and handed to the worker with each turn, never the tree's
 `policy/members.json` mirror)
 (`409 private_sources_to_shared`, with `confirm_code`); at the commit the worker puts that workspace
-back and keeps the change on the person's desk under `.vexa/held-writes/` (git-excluded). The
-person's own chat message `confirm <code>` releases that write once: agent-api takes the code only
-from a chat message the person sent themselves, never from a delegated caller, and the worker writes
-held files back when the turn it runs carries the code. Marks and codes live in agent-api's memory
-(one replica), so a restart forgets them.
+back and hands the change to agent-api, which keeps it encrypted in Redis for 3 days, on no desk and
+no mount. The person's own chat message `confirm <code>` releases that write once: agent-api takes
+the code only from a chat message the person sent themselves, never from a delegated caller, and
+writes the held files itself. Marks (12 hours) and codes (6 hours) live in Redis with those TTLs, so
+a restart, a second replica or a worker's idle exit forgets none of them. When the store cannot be
+read, the write is held.
 
 ### Live lines, meetings and bots in a shared chat
 

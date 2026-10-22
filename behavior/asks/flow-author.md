@@ -77,8 +77,9 @@ restraint:
 
 1. **A flow does not re-decide what a rule already answers.** *"only to our people"*, *"not to
    externals"*, *"keep the recording"* and *"do not mail attendees at all"* are `POLICIES.md`
-   answers — `external_participants`, `attendee_domains`, `report_to_participants`,
-   `recording_retention_days` — and the steps already honour them. Put the step in the flow and say
+   answers — `external_participants`, `attendee_domains`, `report_to_participants` — and the steps
+   already honour them; `recording_retention_days` is declared and not yet enforced, so say that
+   instead of promising it. Put the step in the flow and say
    which rule carries the rest: *"`email_attendees` mails the inside domains only, because
    `external_participants` is off."* A second copy of a rule inside a flow is a rule with two
    answers.

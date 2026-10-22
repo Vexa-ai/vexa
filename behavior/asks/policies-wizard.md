@@ -204,15 +204,14 @@ One message, and it carries exactly four things:
    section also states. Quote the file. Do not paraphrase it into something shorter and warmer.
 3. **The derived attendee sentence** — what every attendee will read in the first mail they ever get
    from this deployment, under these answers. It is DERIVED from the rules, never written: three
-   clauses joined with `; `, and a full stop.
+   clauses joined with `; `, and a full stop. It states only what the software does, so the rules
+   nothing enforces do not change it.
    - where it runs: `data_statement` if they wrote one, otherwise
      *Vexa runs on this organisation's own servers*;
-   - what agents read: `agent_reads_desk` on →
+   - what agents read, whatever `agent_reads_desk` answers:
      *what you and your colleagues keep in your workspaces is visible to the company's agents*;
-     off → *what you and your colleagues keep in your workspaces is read only by an agent working
-     for its own person*;
-   - what is kept: transcripts forever and no recording kept →
-     *recordings and transcripts stay here*; otherwise say the two numbers.
+   - what is kept, whatever the two retention rules answer:
+     *recordings and transcripts stay here*.
 4. **Anything on the block that is declared and not yet enforced**, named, with the words *intended,
    not yet enforced*. It is a `MISSING.md` line, not something to smooth over.
 

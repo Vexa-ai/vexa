@@ -70,7 +70,9 @@ _FOREVER_WORDS = frozenset({FOREVER, "∞", "always", "indefinitely"})
 #: drift. A key here that the file does not carry is a rule nobody can answer; a key in the file
 #: that is not here is a control that silently does nothing.
 DEFAULTS: dict = {
-    # an agent may read its user's desk when its user is a participant (founder decision 21)
+    # an agent may read its user's desk when its user is a participant (founder decision 21).
+    # DECLARED, NOT ENFORCED: a room mounts no other person's desk whatever it says, and a desk is
+    # readable by any signed-in member (agent-api `_read_target`). The disclosure does not follow it.
     "agent_reads_desk": True,
     # the report is delivered to every participant — the measured adoption lever
     "report_to_participants": True,
@@ -88,7 +90,8 @@ DEFAULTS: dict = {
     "bot_joins_mixed_meetings": True,
     # an agent may write pages into a workspace from a meeting when every member was a participant
     "agent_writes_pages": True,
-    # how long the words and the audio are kept
+    # how long the words and the audio are kept. DECLARED, NOT ENFORCED: nothing deletes a
+    # transcript or a recording on a schedule, and the disclosure does not follow them.
     "transcript_retention_days": FOREVER,
     "recording_retention_days": 0,
     # a newcomer to a series reads its earlier reports — the ONE rule that ships off
@@ -540,50 +543,41 @@ def param(ctx, key: str, uid: str = ""):
     return read(uid).get(key, DEFAULTS.get(key))
 
 
-# ── the sentence attendees read, DERIVED ─────────────────────────────────────────────────────────
+# ── the sentence attendees read ──────────────────────────────────────────────────────────────────
 #
-# Three clauses, joined with "; ". At the defaults they compose to exactly the sentence the founder
-# wrote on 2026-09-02 (decision 21) and `test_policies.py` pins that equality against
-# `mailtext.VISIBILITY_SENTENCE` — which stays where it is, spelled the way the parity ledger's
-# `visibility-sentence` fact expects to find it. Nothing in this module edits a pinned site; it
-# composes to the same words and departs from them only where an admin has departed from the
-# defaults.
+# Three clauses, joined with "; ". It composes to exactly the sentence the founder wrote on
+# 2026-09-02 (decision 21), and `test_policies.py` pins that equality against
+# `mailtext.VISIBILITY_SENTENCE`, which stays where it is, spelled the way the parity ledger's
+# `visibility-sentence` fact expects to find it.
+#
+# EVERY CLAUSE IS ONE THE SOFTWARE BACKS, WHATEVER THE RULES SAY. A clause that followed a rule
+# nothing enforces would tell a stranger something the install does not do, so only `data_statement`
+# (a deployment's own words about itself) changes the sentence. `agent_reads_desk` and the two
+# retention rules are declared and not yet enforced (`POLICIES.md` § *Where each rule is read
+# today*), and the sentence does not follow them.
 
 #: Where it runs. Locality is STATED, NOT CHOSEN — it is a fact about the install. A deployment that
 #: wants to say it in its own words writes `data_statement`, which replaces this clause and nothing
 #: else.
 LOCALITY_CLAUSE = "Vexa runs on this organisation's own servers"
 
-#: Who reads what a person keeps. The two answers to `agent_reads_desk`.
+#: Who reads what a person keeps. agent-api serves a desk to any signed-in member of the instance,
+#: and so to any agent working for one (`api._read_target`, founder ruling 2026-09-02; pinned by
+#: agent `test_agent_api_authz.py::test_a_colleagues_desk_is_readable_and_never_writable`). No rule
+#: narrows that read, `agent_reads_desk` included.
 DESK_VISIBLE_CLAUSE = ("what you and your colleagues keep in your workspaces is visible to the "
                        "company's agents")
-DESK_PRIVATE_CLAUSE = ("what you and your colleagues keep in your workspaces is read only by an "
-                       "agent working for its own person")
 
-#: What is kept, at the defaults.
+#: What is kept. Nothing in the install deletes a transcript or a recording on a schedule, so the
+#: clause names no number of days and no absence of a recording.
 RETENTION_STAYS_CLAUSE = "recordings and transcripts stay here"
 
 
-def _retention_clause(transcript, recording) -> str:
-    if transcript == FOREVER and recording in (0, FOREVER):
-        return RETENTION_STAYS_CLAUSE
-    if recording == 0:
-        return f"transcripts stay here for {transcript} days and no recording is kept"
-    if transcript == FOREVER:
-        return f"transcripts stay here and recordings for {recording} days"
-    if recording == FOREVER:
-        return f"transcripts stay here for {transcript} days and recordings stay here"
-    return f"transcripts stay here for {transcript} days and recordings for {recording} days"
-
-
 def visibility_sentence(rules: Optional[dict] = None) -> str:
-    """WHO CAN SEE WHAT, composed from the rules. Three facts, one sentence, no disclaimer.
+    """WHO CAN SEE WHAT. Three facts, one sentence, no disclaimer.
 
     It goes into the mails a person reads before they have decided whether to keep anything here,
     because that is the only moment at which telling them is a choice they still have."""
     p = dict(DEFAULTS) if rules is None else rules
     locality = str(p.get("data_statement") or "").strip().rstrip(".") or LOCALITY_CLAUSE
-    desk = DESK_VISIBLE_CLAUSE if p.get("agent_reads_desk", True) else DESK_PRIVATE_CLAUSE
-    retention = _retention_clause(p.get("transcript_retention_days", FOREVER),
-                                  p.get("recording_retention_days", 0))
-    return f"{locality}; {desk}; {retention}."
+    return f"{locality}; {DESK_VISIBLE_CLAUSE}; {RETENTION_STAYS_CLAUSE}."
