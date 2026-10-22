@@ -345,6 +345,7 @@ server, Gmail as the preset) on [Connect the bot mailbox](/flows/mailbox).
 | `VEXA_FLOWS_API_URL` | — | Where admin-api and meeting-api publish facts to. Empty (the stock default) means they publish nothing. Formerly `FLOWS_API_URL`, honoured for one release. |
 | `VEXA_UI_URL` | — | The link port. Unset, nothing is mailed with a link. |
 | `VEXA_FLOWS_FACT_RETENTION_DAYS` | `90` | Days a captured fact is kept after its run finished. flows-worker then removes the finished reaction (its refs, an inbound mail's body included, its scratch, receipts and signals), quarantined mail and old mail turns, and clears the payload of spent keyed schedules. A run still waiting is never removed. `0` keeps everything. Helm: `flows.factRetentionDays`. See [Operating workflows](/flows/operations#how-long-captured-facts-are-kept). |
+| `VEXA_FLOWS_MAIL_AUTH_MODE` | `mta` | flows-mailbox: whose verdict says a mail's `From:` is authentic. `mta`: the receiving server's `Authentication-Results` (under `VEXA_FLOWS_MAIL_AUTHSERV_ID`). `inapp`: flows verifies the DKIM signature itself, against the key the signing domain publishes in DNS, aligned with the `From:` domain under its DMARC record; no authserv-id is needed. `both`: the server's verdict and the signature. SPF is not checked in-app. The Graph inbox refuses `inapp` and `both`. Helm `flows.mail.authMode`. See [Operating workflows](/flows/operations). |
 
 ### Per-person flow quotas
 

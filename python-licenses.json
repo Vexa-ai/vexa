@@ -1,5 +1,5 @@
 {
-  "_comment": "The licence of every Python package a Vexa image installs, keyed name==version (gate:licenses, P17 / ADR-0004). uv.lock carries no licence, so each row is read from PyPI for that exact version by `node scripts/check-python-licenses.mjs --refresh` (license_expression, else the license field, else the licence classifiers joined with AND) and then reviewed here; refresh adds missing rows, drops rows no image installs any more, and never rewrites a row that still ships. Rows corrected by hand from the project's own licence file: requests-unixsocket (PyPI declares none; repository LICENSE is Apache-2.0), uv (dual MIT OR Apache-2.0, per its README), python-dateutil (Apache-2.0 for contributions after 2017-12-01, BSD-3-Clause before, per its LICENSE), numpy (PyPI says only \"BSD License\"; its LICENSE.txt is BSD-3-Clause, and the native libraries its wheels bundle are listed in NOTICE). `installs` records what each Dockerfile `pip install` line resolves to, since those packages are outside any lock.",
+  "_comment": "The licence of every Python package a Vexa image installs, keyed name==version (gate:licenses, P17 / ADR-0004). uv.lock carries no licence, so each row is read from PyPI for that exact version by `node scripts/check-python-licenses.mjs --refresh` (license_expression, else the license field, else the licence classifiers joined with AND) and then reviewed here; refresh adds missing rows, drops rows no image installs any more, and never rewrites a row that still ships. Rows corrected by hand from the project's own licence file: requests-unixsocket (PyPI declares none; repository LICENSE is Apache-2.0), uv (dual MIT OR Apache-2.0, per its README), python-dateutil (Apache-2.0 for contributions after 2017-12-01, BSD-3-Clause before, per its LICENSE), dkimpy (PyPI says \"BSD-like\" and the DFSG classifier; its LICENSE and every module header are the zlib licence text, so Zlib), numpy (PyPI says only \"BSD License\"; its LICENSE.txt is BSD-3-Clause, and the native libraries its wheels bundle are listed in NOTICE). `installs` records what each Dockerfile `pip install` line resolves to, since those packages are outside any lock.",
   "licenses": {
     "aiohappyeyeballs==2.7.1": "PSF-2.0",
     "aiohttp==3.14.5": "Apache-2.0 AND MIT",
@@ -31,6 +31,8 @@
     "croniter==5.0.1": "MIT",
     "cryptography==50.0.2": "Apache-2.0 OR BSD-3-Clause",
     "ctranslate2==4.8.0": "MIT",
+    "dkimpy==1.1.8": "Zlib",
+    "dnspython==2.9.0": "ISC",
     "fastapi-guard==7.2.2": "MIT",
     "fastapi-mcp==0.4.0": "MIT",
     "fastapi==0.137.2": "MIT",

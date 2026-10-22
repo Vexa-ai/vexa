@@ -82,7 +82,23 @@ mail is quarantined as `unauthenticated_mail`. A mail server that writes no
 other than the Gmail preset, `VEXA_FLOWS_MAIL_AUTHSERV_ID` names whose verdict counts. That id is
 public, so it protects only when the server both writes its own `Authentication-Results` on every
 message it accepts and removes any arriving header that already carries its id; otherwise a sender
-can forge a verdict under it. The turn an
+can forge a verdict under it.
+
+**Or verify the signature in flows (`VEXA_FLOWS_MAIL_AUTH_MODE`).** With `inapp` the mailbox does not
+read `Authentication-Results` at all. It verifies the message's DKIM signature itself, against the
+key the signing domain publishes in DNS, and admits the mail only when a signature verifies, covers
+the whole body (no `l=`), and its `d=` domain aligns with the `From:` domain: relaxed alignment
+(the same domain or a parent or subdomain of it), exact when the domain's DMARC record says
+`adkim=s`. The DMARC record is read from `_dmarc.<From domain>`, then from each parent domain. A
+forged header, a missing or broken signature, an unaligned signer or a failed DNS lookup is
+`unauthenticated_mail`. `inapp` needs no `VEXA_FLOWS_MAIL_AUTHSERV_ID`, so a server that writes no
+verdict is no longer a gap. `both` requires the server's verdict and the signature. SPF is not
+checked in flows: it needs the connecting server's IP, which a mailbox read over IMAP never sees,
+so a domain that signs nothing (SPF only) is unauthenticated under `inapp`. The mailbox needs DNS
+TXT lookups for this. The Microsoft Graph inbox hands flows no message bytes, so it refuses
+`inapp` and `both` at start.
+
+The turn an
 admitted mail starts writes only its reply file and proposes everything else. See
 [Security → Untrusted triggers](/security-compliance#untrusted-triggers-routines-mail-and-room-calls).
 
@@ -106,6 +122,7 @@ the organizer is known.
 |---|---|---|
 | `VEXA_FLOWS_MAIL_DOMAINS` | the mailbox's own domain | who may be provisioned and answered |
 | `VEXA_FLOWS_MAIL_AUTHSERV_ID` | unset (the topmost verdict counts) | the receiving server whose `Authentication-Results` verdict counts, e.g. `mx.google.com`. Required for any IMAP server other than the Gmail preset: without it the mailbox does not start (helm `flows.mail.authservId`) |
+| `VEXA_FLOWS_MAIL_AUTH_MODE` | `mta` | whose verdict counts: `mta` the receiving server's `Authentication-Results`; `inapp` the DKIM signature, verified in flows and aligned with the `From:` domain under its DMARC record (no authserv-id needed); `both` the two together. Graph takes `mta` only (helm `flows.mail.authMode`) |
 | `VEXA_FLOWS_MAIL_QUARANTINE_REPLY` | off | `1` answers a quarantined sender once with a fixed line — no model, no account |
 | `VEXA_FLOWS_MAIL_RATE_PER_SENDER` | `12` | mail-triggered agent turns one sender may cause per window |
 | `VEXA_FLOWS_MAIL_RATE_GLOBAL` | `120` | mail-triggered agent turns the deployment may run per window |

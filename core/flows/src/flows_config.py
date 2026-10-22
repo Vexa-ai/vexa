@@ -269,6 +269,15 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "preset: such a server may write no verdict, leaving the sender's own on top, so the mailbox "
         "refuses to start without it. A mail whose `From:` the domain did not vouch for (no DMARC "
         "pass, no aligned DKIM or SPF pass) is treated as a stranger's (D25)."),
+    "VEXA_FLOWS_MAIL_AUTH_MODE": (
+        "defaulted", "mta",
+        "whose verdict says a `From:` is authentic. `mta`: the receiving server's "
+        "`Authentication-Results` (under `VEXA_FLOWS_MAIL_AUTHSERV_ID` when set). `inapp`: that "
+        "header is ignored; the message's DKIM signature is verified here against the key the "
+        "signing domain publishes in DNS, and must align with the `From:` domain under its DMARC "
+        "record (`adkim`). `both`: the server's verdict AND the signature. SPF is not checked "
+        "in-app (an IMAP reader never sees the connecting IP). `inapp` needs no authserv-id; "
+        "`inapp` and `both` need the message bytes, so the Graph inbox refuses them."),
     "VEXA_FLOWS_MAIL_QUARANTINE_REPLY": (
         "capability", None,
         "`1` answers a quarantined stranger ONCE with a fixed one-line template — no model, no "

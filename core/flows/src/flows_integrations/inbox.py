@@ -74,7 +74,9 @@ class InboundMessage:
 
     `cursor` is the source-native position AFTER this message; the poller persists it once the
     message has been routed (C1). `ext_id` is the source-native id — IMAP UID or mailpit ID —
-    and is only ever a fallback dedup key for a message with no Message-ID."""
+    and is only ever a fallback dedup key for a message with no Message-ID. `raw` is the message
+    exactly as received, which in-app DKIM verification reads (`mail_policy.dkim_dmarc`); empty
+    for a source that hands over no RFC822 bytes (Graph)."""
     cursor: str
     ext_id: str
     message_id: str
@@ -83,6 +85,7 @@ class InboundMessage:
     headers: dict = field(default_factory=dict)
     body: str = ""
     ics: str | None = None
+    raw: bytes = b""
 
 
 def from_rfc822(raw: bytes, *, cursor: str, ext_id: str) -> InboundMessage:
@@ -108,7 +111,7 @@ def from_rfc822(raw: bytes, *, cursor: str, ext_id: str) -> InboundMessage:
         message_id=(msg.get("Message-ID", "") or "").strip(),
         frm=email_mod.utils.parseaddr(msg.get("From", ""))[1].lower(),
         subject=msg.get("Subject", "") or "",
-        headers=_headers(msg), body=body, ics=ics)
+        headers=_headers(msg), body=body, ics=ics, raw=raw)
 
 
 def _headers(msg) -> dict:
@@ -469,6 +472,18 @@ def get_inbox() -> Inbox:
     if kind == "mailpit":
         return MailpitInbox()
     if kind == "graph":
+        # Graph hands over no RFC822 bytes, so there is no signature to verify in-app: refused here
+        # rather than quarantining every sender without a word.
+        from flows_integrations import mail_policy
+        from flows_steps.mail_transport import MailTransportError
+        try:
+            mode = mail_policy.auth_mode()
+        except ValueError as e:
+            raise MailTransportError("config", "graph", "inbox", "-", str(e)) from None
+        if mode != "mta":
+            raise MailTransportError("config", "graph", "inbox", "-",
+                                     f"VEXA_FLOWS_MAIL_AUTH_MODE={mode} needs the message bytes, "
+                                     "which the Graph inbox does not read — use mta with Graph")
         # Imported here, not at module scope: the Graph client refuses to construct without its
         # four keys, and an IMAP deployment must not pay for a source it does not run.
         from flows_integrations.graph_inbox import GraphInbox

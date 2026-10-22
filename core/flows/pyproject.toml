@@ -24,6 +24,11 @@ dependencies = [
     # PUBLIC key (flows_integrations/fact_keys.py; never the engine, which stays stdlib only).
     # Apache-2.0 OR BSD-3-Clause.
     "cryptography>=50.0.1,<51",
+    # In-app DKIM + DMARC for the mailbox (`VEXA_FLOWS_MAIL_AUTH_MODE`, flows_integrations/
+    # mail_policy.py): dkimpy verifies the signature, dnspython fetches the key and the DMARC
+    # record. dkimpy is Zlib, dnspython ISC.
+    "dkimpy>=1.1.8,<2",
+    "dnspython>=2.6,<3",
 ]
 
 [dependency-groups]

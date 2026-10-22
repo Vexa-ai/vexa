@@ -371,7 +371,8 @@ def _unauthenticated(frm: str, why: str) -> tuple[str, dict]:
 
 
 def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
-          known_uid, is_scaffolded, allowed: set | None = None) -> tuple[str, dict] | None:
+          known_uid, is_scaffolded, allowed: set | None = None,
+          raw: bytes = b"") -> tuple[str, dict] | None:
     """The routing DECISION, pure: returns (kind, payload) or None (ignore).
 
       kind ∈ invite | invite_quarantine | thread_reply | known_user_mail | new_sender_mail
@@ -379,7 +380,8 @@ def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
 
     `known_uid(email) -> uid|None` and `is_scaffolded(uid) -> bool` are injected so the routing
     storm can drive every branch with no services; `allowed` is the domain allow-list, likewise
-    injectable, defaulting to `mail_policy.allow_domains(self_addr)`.
+    injectable, defaulting to `mail_policy.allow_domains(self_addr)`. `raw` is the message as
+    received, for in-app DKIM verification (`VEXA_FLOWS_MAIL_AUTH_MODE`).
 
     TWO AUTHORIZATION RULES LIVE HERE, and both were absent (R-B12):
 
@@ -418,7 +420,7 @@ def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
         if _addr(frm) != org:
             return ("quarantine", {"kind": mail_policy.UNAUTHENTICATED_MAIL,
                                    "reason": f"{frm} sent an invite whose organizer is {org}"})
-        authed, auth_why = mail_policy.sender_authenticated(frm, headers)
+        authed, auth_why = mail_policy.sender_authenticated(frm, headers, raw)
         if not authed:
             return _unauthenticated(frm, auth_why)
         acts_for = known_uid(org) is not None or mail_policy.in_allow_list(org, self_addr, allowed)
@@ -435,7 +437,7 @@ def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
     # A `From:` IS NOT A PERSON UNTIL ITS DOMAIN VOUCHES FOR IT (D25, H6). Every branch below that
     # acts for the address — a reply on its thread, a turn in its user's session, an account for a
     # colleague — needs the receiving MTA's DMARC verdict (or an aligned DKIM/SPF pass) first.
-    authed, auth_why = mail_policy.sender_authenticated(frm, headers)
+    authed, auth_why = mail_policy.sender_authenticated(frm, headers, raw)
     hit = db.execute("SELECT subject_uid, session FROM mail_thread WHERE message_id = :m",
                      {"m": ref}) if ref else []
     forged = False
@@ -643,7 +645,7 @@ def handle(db, reg, clock, self_addr: str, msg, known_uid, is_scaffolded,
         rules = _company_rules()
     allowed = mail_policy.allow_domains(self_addr, rules)
     decision = route(db, self_addr, msg.frm, msg.headers, msg.ics, known_uid, is_scaffolded,
-                     allowed=allowed)
+                     allowed=allowed, raw=getattr(msg, "raw", b""))
     if decision is None:
         return None
     kind, payload = decision

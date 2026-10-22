@@ -182,8 +182,15 @@ def imap_settings() -> dict:
     # The sender's verdict is the TOPMOST `Authentication-Results`, which is ours only when our
     # receiving server writes one. Gmail always does; another server (an on-prem Exchange, a plain
     # Postfix) may write none, and then the topmost is whatever the sender put in the message. So
-    # off the Gmail preset the verdict counts only under the authserv-id the operator names.
-    if host != GMAIL_IMAP_HOST and not (flows_config.get("VEXA_FLOWS_MAIL_AUTHSERV_ID") or "").strip():
+    # off the Gmail preset the verdict counts only under the authserv-id the operator names. In
+    # `inapp` mode the header is not read at all (the signature is verified here), so no id is needed.
+    from flows_integrations import mail_policy
+    try:
+        auth_mode = mail_policy.auth_mode()
+    except ValueError as e:
+        raise MailTransportError("config", "imap", host, raw_port or "?", str(e)) from None
+    if host != GMAIL_IMAP_HOST and auth_mode != "inapp" \
+            and not (flows_config.get("VEXA_FLOWS_MAIL_AUTHSERV_ID") or "").strip():
         raise MailTransportError("config", "imap", host, raw_port or "?",
                                  "VEXA_FLOWS_MAIL_AUTHSERV_ID is unset — name the authserv-id this "
                                  "server writes in Authentication-Results")

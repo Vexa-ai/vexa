@@ -558,6 +558,16 @@
       "targets": []
     },
     {
+      "key": "VEXA_FLOWS_MAIL_AUTH_MODE",
+      "class": "defaulted",
+      "description": "Whose verdict says a From: is authentic. `mta` (default): the receiving server's Authentication-Results, under VEXA_FLOWS_MAIL_AUTHSERV_ID when set. `inapp`: that header is ignored; the message's DKIM signature is verified in flows against the key the signing domain publishes in DNS and must align with the From: domain under its DMARC record. `both`: the server's verdict AND the signature. SPF is not checked in-app (IMAP intake never sees the connecting IP). `inapp` needs no authserv-id; the Graph inbox refuses `inapp` and `both` (it reads no message bytes).",
+      "default": "mta",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
       "key": "VEXA_FLOWS_MAIL_QUARANTINE_REPLY",
       "class": "capability",
       "description": "`1` answers a quarantined stranger ONCE with a fixed one-line template. Default off: any automatic reply to an unverified sender is a reflector.",

@@ -210,6 +210,8 @@ deployment has ONE relay and an operator configures it once.
   value: {{ $imap.folder | default "" | toString | quote }}
 - name: VEXA_FLOWS_MAIL_AUTHSERV_ID
   value: {{ $m.authservId | default "" | toString | quote }}
+- name: VEXA_FLOWS_MAIL_AUTH_MODE
+  value: {{ $m.authMode | default "mta" | toString | quote }}
 - name: VEXA_MAIL_SMTP_HOST
   value: {{ $smtp.host | default "" | toString | quote }}
 - name: VEXA_MAIL_SMTP_PORT

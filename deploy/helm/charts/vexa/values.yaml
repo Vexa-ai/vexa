@@ -1367,6 +1367,12 @@ flows:
     # Required whenever imap.host is not the Gmail preset: such a server may write no verdict, which
     # would leave the sender's own on top, so the mailbox refuses to start without it.
     authservId: ""
+    # Whose verdict says a sender is who the From: says. mta: the receiving server's
+    # Authentication-Results (above). inapp: flows verifies the message's DKIM signature itself and
+    # aligns it with the From: domain under its DMARC record; authservId is then not needed. both:
+    # the server's verdict AND the signature. SPF is not checked in-app (IMAP never sees the
+    # connecting IP). The Graph inbox takes mta only. Needs DNS (TXT) from the mailbox pod.
+    authMode: mta
     # SMTP — how the bot sends RSVPs, acknowledgements and minutes. Empty host = the deployment's
     # relay in terminal.mail (one relay for every sender); both empty = Gmail with appPassword.
     # tls: auto (implicit with secure "1", else STARTTLS whenever offered) | tls | starttls

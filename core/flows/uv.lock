@@ -232,6 +232,24 @@ wheels = [
 ]
 
 [[package]]
+name = "dkimpy"
+version = "1.1.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "dnspython" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f0/6f/84e91828186bbfcedd7f9385ef5e0d369632444195c20e08951b7ffe0481/dkimpy-1.1.8.tar.gz", hash = "sha256:b5f60fb47bbf5d8d762f134bcea0c388eba6b498342a682a21f1686545094b77", size = 66979, upload-time = "2024-07-04T22:16:38.321Z" }
+
+[[package]]
+name = "dnspython"
+version = "2.9.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ef/4a/50822184bd67cc6493f0fb6a880749158fcd31ab3fa07409acfd91f9fc85/dnspython-2.9.0.tar.gz", hash = "sha256:b44dc6b18f07a8b1c56676a19fbfdb5209415b046a9cece286baafa87ff3f7f1", size = 423560, upload-time = "2026-10-09T00:07:24.352Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/10/02/cdcc9b7c051786a103c3b09e1003a82fa0c66bcb91ffbdabcfbf7b4163b9/dnspython-2.9.0-py3-none-any.whl", hash = "sha256:9a4aedb833c3c1b49214d04d44d3032ab7a9135f7c1d29a549b4ff78fd82fda9", size = 354822, upload-time = "2026-10-09T00:07:22.622Z" },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.141.1"
 source = { registry = "https://pypi.org/simple" }
@@ -850,6 +868,8 @@ version = "0.12.0"
 source = { virtual = "." }
 dependencies = [
     { name = "cryptography" },
+    { name = "dkimpy" },
+    { name = "dnspython" },
     { name = "fastapi" },
     { name = "pg8000" },
     { name = "pydantic" },
@@ -866,6 +886,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cryptography", specifier = ">=50.0.1,<51" },
+    { name = "dkimpy", specifier = ">=1.1.8,<2" },
+    { name = "dnspython", specifier = ">=2.6,<3" },
     { name = "fastapi", specifier = ">=0.110,<1" },
     { name = "pg8000", specifier = ">=1.31.5,<2" },
     { name = "pydantic", specifier = ">=2,<3" },

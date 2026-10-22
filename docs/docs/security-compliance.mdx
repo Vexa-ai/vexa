@@ -353,8 +353,12 @@ instructions. These turns read, and they **propose**; a person decides.
    the mailbox does not start without it. The id is public, so it protects only when your receiving
    server both writes its own `Authentication-Results` on every message it accepts and removes any
    arriving header that already carries its id. A server that does not would leave a header the
-   sender forged, naming your id, on top. A mail that fails is quarantined like a stranger's
-   (`unauthenticated_mail`).
+   sender forged, naming your id, on top. To stop depending on the server, set
+   `VEXA_FLOWS_MAIL_AUTH_MODE=inapp`: the mailbox then ignores `Authentication-Results` and verifies
+   the DKIM signature itself, aligned with the `From:` domain under its DMARC record (`both`
+   requires the server's verdict as well). SPF is not checked in-app, because a mailbox read over
+   IMAP never sees the sending server's address. A mail that fails is quarantined like a
+   stranger's (`unauthenticated_mail`).
 3. **A turn an email started proposes only.** It runs on its own worker with every workspace
    mounted read-only. It may write one file, the thread's reply `mail_outbox/<session>.md`, which
    flows mails back. Anything else it wants to change, it proposes.

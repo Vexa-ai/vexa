@@ -2286,4 +2286,7 @@ tb "with the CRM on, admin-api also admits crm-api and crm-outbox, and crm-api a
   'helm template vexa "$CHART" -n vexa "${FE[@]}" "${CRM[@]}" | fe_check ingress crm >/dev/null'
 tb "flows egress: the OpenShift profile still renders with flows on, and carries the flows egress policy" \
   'helm template vexa "$CHART" -n vexa "${FE[@]}" -f "$CHART/values-openshift.yaml" --set agentApi.workspaces.storageClassName=rwx-class | fe_check default >/dev/null'
+tb "flows.mail.authMode defaults to mta on the mailbox" 'grep -A1 "name: VEXA_FLOWS_MAIL_AUTH_MODE\$" <<< "$MB" | has -F "value: \"mta\""'
+AUTHMODE_MB="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.address=bot@corp.example --set flows.mail.existingSecret=mail-creds --set flows.mail.authMode=inapp --show-only templates/flows.yaml | awk '/^---/{p=0} /name: vexa-vexa-flows-mailbox$/{p=1} p')"
+tb "flows.mail.authMode=inapp reaches the mailbox as VEXA_FLOWS_MAIL_AUTH_MODE" 'grep -A1 "name: VEXA_FLOWS_MAIL_AUTH_MODE\$" <<< "$AUTHMODE_MB" | has -F "value: \"inapp\""'
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }
