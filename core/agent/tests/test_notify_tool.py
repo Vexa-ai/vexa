@@ -15,6 +15,7 @@ import pytest
 
 from control_plane import notifications as nt
 from control_plane.identity_token import DELEGATION_HEADERS
+from tests.card_press import card, offer, press
 from tests.test_notifications_routes import ALICE, DAVE, JOE, MAIL, _Bus, _h, _ws, env  # noqa: F401
 
 
@@ -51,7 +52,10 @@ def test_to_names_participants_of_the_same_chat_only(env):
     client, store, _, _ = env
     sid = _shared(store)
     w = _worker(ALICE, f"agent-{ALICE}-chat-{sid}")
-    r = client.post("/api/notifications/notify", json={"text": "Draft is ready", "session": sid, "to": [JOE]}, headers=w)
+    offer(store, sid, card("tell-joe", f"Tell {JOE} the draft is ready?"))
+    pressed = press(client, sid, "tell-joe", "Yes", _h(ALICE))
+    r = client.post("/api/notifications/notify", json={"text": "Draft is ready", "session": sid, "to": [JOE],
+                                                       "pressed": pressed}, headers=w)
     assert r.status_code == 200 and r.json()["to"] == [JOE]
     assert [n["kind"] for n in _mine(client, JOE)] == ["agent"]
     r = client.post("/api/notifications/notify", json={"text": "Hi", "session": sid, "to": [DAVE]}, headers=w)
@@ -125,8 +129,11 @@ def test_a_page_link_goes_only_to_people_who_can_read_it(env):
     client, store, _, root = env
     sid = _shared(store)
     w = _worker(ALICE, f"agent-{ALICE}-chat-{sid}")
+    offer(store, sid, card("tell-joe", f"Tell {JOE} the notes changed?"))
+    pressed = press(client, sid, "tell-joe", "Yes", _h(ALICE))
     r = client.post("/api/notifications/notify", json={"text": "Notes updated", "session": sid, "to": [JOE],
-                                                       "link": "page:acme/README.md"}, headers=w)
+                                                       "link": "page:acme/README.md", "pressed": pressed},
+                    headers=w)
     assert r.status_code == 200, r.text
     n = _mine(client, JOE)[0]
     assert n["object"]["kind"] == "page" and n["object"]["url"] == "/w/acme/README.md"

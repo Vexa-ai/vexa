@@ -219,6 +219,11 @@ class WorkspacePublishBody(BaseModel):
     slug: Optional[str] = Field(default=None, description="the workspace to publish (one the caller manages); omitted = their own")
     provider: Optional[str] = Field(default=None, description="the configured git provider to create on, by name (git_providers lists them); omitted = the default")
     host: Optional[str] = None         # earlier spelling of provider: the provider's host name
+    pressed: Optional[str] = Field(
+        default=None, max_length=128, pattern=r"^[^\s\]]{1,128}$",
+        description="the `#<pending>` of the person's pressed answer to the card that offered this "
+                    "(`[answer <card> #<pending>] …`). An agent publishes only on that press: offer a "
+                    "```ask card naming the workspace or the repository first")
 
 
 class WorkspaceRenameBody(BaseModel):

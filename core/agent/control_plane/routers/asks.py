@@ -233,6 +233,69 @@ def pressed_choice(card: dict) -> str:
     return ""
 
 
+#: The refusal every act a card suggests answers when it arrives without the person's press.
+PRESS_REQUIRED = "press_required"
+
+
+def chat_of_unit(store, subject: str, unit: str) -> Optional[str]:
+    """The chat row a worker's unit runs in (``agent-<subject>-chat-<thread>[-g…][-auto]``), or None
+    when the unit is not one of ``subject``'s chats (a room, a routine, no unit)."""
+    prefix = f"agent-{subject}-chat-"
+    if store is None or not str(unit or "").startswith(prefix):
+        return None
+    thread = re.sub(r"(-g[0-9A-Za-z]+)?(-read)?(-auto|-signal)?$", "", unit[len(prefix):])
+    try:
+        from control_plane import session_sync  # noqa: PLC0415
+        row = session_sync.resolve(store, str(subject), thread, create=False)
+    except Exception:  # noqa: BLE001 — an unreadable index binds no chat
+        return None
+    return str(row["id"]) if row else None
+
+
+def aliases(people, principal: str, *also: str) -> set:
+    """Every way a card's face may name ``principal``: the id, the name and address the people
+    directory holds for them (``people``: ``people_directory.mentionable`` rows), and ``also``."""
+    out = {str(principal or "")} | {str(a or "") for a in also}
+    for p in people or []:
+        if str(p.get("subject")) == str(principal):
+            out |= {str(p.get("name") or ""), str(p.get("email") or "")}
+    return {a for a in out if a.strip()}
+
+
+def require_press(store, request, pending: Optional[str], *, subject: str, targets: list,
+                  act: str, session_id: Optional[str] = None,
+                  choices: tuple = ("primary",)) -> None:
+    """AN ACT A CARD SUGGESTS HAPPENS ONLY ON THE PERSON'S PRESS (D13, UI 7g, security gate M1).
+
+    ``pending`` is the ``#<pending>`` of the speaker's answered card; it must be their own, unspent,
+    of THIS chat (``session_id``, else the chat the caller's unit runs in, else the card's own chat),
+    pressed on one of ``choices``, and its face must name every one of ``targets`` (each a set of
+    aliases: one of them on the face is that target named). It is spent here: one press, one act.
+    Raises the one 403 ``press_required`` refusal otherwise. The caller decides who needs a press;
+    the person's own session never does."""
+    s = store
+    sid = session_id
+    if sid is None:
+        from control_plane import identity_token  # noqa: PLC0415
+        sid = chat_of_unit(s, subject, identity_token.session_of(request.headers))
+    if sid is None and s is not None and pending:
+        try:
+            p = s.proposal(pending)
+            sid = str(p["session_id"]) if p else None
+        except Exception:  # noqa: BLE001
+            sid = None
+    card = pressed_card(s, pending or "", subject=str(subject), session_id=sid) if sid else None
+    choice = pressed_choice(card) if card is not None else ""
+    named = card is not None and all(press_names(card, t) for t in targets if t)
+    if card is None or not named or (choice or "chip") not in choices or not s.spend(pending, str(subject)):
+        raise HTTPException(status_code=403, detail={
+            "refused": PRESS_REQUIRED,
+            "instruction": (f"{act} needs the person's press: offer a ```ask card whose question names "
+                            "who it reaches, and call this again with `pressed` set to the #<pending> of "
+                            "their pressed answer. A typed line, another card, or a press already used "
+                            "does nothing.")})
+
+
 def build(**d) -> APIRouter:
     router = APIRouter()
     store = d.get("session_store")

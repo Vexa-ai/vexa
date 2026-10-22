@@ -151,6 +151,11 @@ _REQUEST_ID = Field(pattern=r'^[a-zA-Z0-9-]{8,80}$',
 _CALENDAR_ID = Field(default='primary', min_length=1, max_length=256, pattern=r'^[^\s/?#]+$',
                      description='calendar id; primary is the user\'s own calendar')
 _EVENT_ID = Field(pattern=r'^[a-v0-9_]{5,1024}$', description='an event id from calendar_events')
+_PRESSED = Field(default=None, max_length=128, pattern=r'^[^\s\]]{1,128}$',
+                 description='the `#<pending>` of the person\'s pressed answer to the card that offered this '
+                             '(`[answer <card> #<pending>] …`). An event that reaches other people (attendees, or '
+                             'notify) is made by an agent only on that press: offer a ```ask card naming every '
+                             'attendee first')
 _NOTIFY = Field(default=False, description='ask Google to email attendees; true when the user asked to invite them '
                                             '(policy calendar_notify_attendees, off by default, decides)')
 
@@ -168,6 +173,7 @@ class CalendarEventCreate(BaseModel):
     attendees: list[str] = Field(default_factory=list, max_length=100, description='bare email addresses')
     conference: bool = Field(default=False, description='add a Google Meet link')
     notify: bool = _NOTIFY
+    pressed: str | None = _PRESSED
 
 
 class CalendarEventUpdate(BaseModel):
@@ -185,6 +191,7 @@ class CalendarEventUpdate(BaseModel):
                                         description='the complete new attendee list; omit to keep it')
     conference: bool = Field(default=False, description='add a Google Meet link if the event has none')
     notify: bool = _NOTIFY
+    pressed: str | None = _PRESSED
 
 
 class CalendarEventCancel(BaseModel):
@@ -194,6 +201,7 @@ class CalendarEventCancel(BaseModel):
     calendar_id: str = _CALENDAR_ID
     event_id: str = _EVENT_ID
     notify: bool = _NOTIFY
+    pressed: str | None = _PRESSED
 
 
 _ACTION = Literal['gmail.search', 'gmail.read', 'gmail.thread', 'calendar.events', 'gmail.draft',
@@ -616,7 +624,8 @@ def _with_private_note(response):
                         headers=keep)
 
 
-def build(*, subject_of, wsr=None, settings=None, _global_root=None, _read_target=None, session_store=None, **_):
+def build(*, subject_of, wsr=None, settings=None, _global_root=None, _read_target=None,
+          session_store=None, mindex=None, **_):
     # A TURN OTHER PEOPLE READ (ADR-0048 decision 4) reaches none of this: every route here reads or
     # spends something only its person may see, so the whole router refuses a shared turn's worker.
     router=APIRouter(route_class=_NamedRefusalRoute,
@@ -932,6 +941,14 @@ def build(*, subject_of, wsr=None, settings=None, _global_root=None, _read_targe
         if body.notify and not policy.get('notify_attendees'):
             raise policy_refusal('calendar_notify_attendees', action,
                                  why='agents may not ask Google to email attendees')
+        # AN EVENT THAT REACHES OTHER PEOPLE IS AN ACT A CARD SUGGESTS (M1): the person's watching
+        # agent makes it only on the person's press of a card naming every attendee.
+        own = (request.headers.get('x-user-email') or '').strip().lower()
+        others = [a for a in (getattr(body, 'attendees', None) or []) if a.strip().lower() != own]
+        if (others or body.notify) and ceiling.is_delegated(request) and not is_unwatched(request):
+            from control_plane.routers import asks  # noqa: PLC0415
+            asks.require_press(session_store, request, body.pressed, subject=str(actor),
+                               targets=[{a} for a in others], act='A calendar event with other people')
         try:
             cid=_ready(actor, signed, 'google_calendar', body.connection_id)
         except HTTPException as exc:

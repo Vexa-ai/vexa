@@ -80,6 +80,13 @@ message box. The agent adds a person only on your press of the card that names t
 adds once: a typed "yes", or a line that looks like a pressed answer, adds no one. Sharing a chat
 never gives anyone a workspace.
 
+The same holds for everything else your agent does that reaches other people: a notification to
+others in the chat (`notify` with `to`), a message into another person's conversation
+(`message_agent`), a calendar event with attendees or one that emails them, and publishing a
+workspace. Your agent does each one only on your press of a card that names who it reaches (every
+attendee, for an event), and one press does it once; without it the call is refused with
+`press_required`. From your own app none of these needs a card.
+
 ### Share a routine's chat
 
 A routine's chat (the thread its scheduled runs post into) is shared the same way: mention someone in

@@ -43,6 +43,11 @@ class NotifyBody(BaseModel):
     link: Optional[str] = Field(default=None, max_length=300,
                                 description="what a click opens instead of the chat: `page:<workspace>/<path>` "
                                             "or `meeting:<id>` (a meeting link goes to the owner only)")
+    pressed: Optional[str] = Field(
+        default=None, max_length=128, pattern=r"^[^\s\]]{1,128}$",
+        description="the `#<pending>` of the person's pressed answer to the card that offered this "
+                    "(`[answer <card> #<pending>] …`). An agent notifies other people only on that press: offer a ```ask card "
+                    "naming who it notifies first")
 
 
 class ActBody(BaseModel):
@@ -85,6 +90,7 @@ def build(**d) -> APIRouter:
     store = d.get("session_store")
     _global_root = d.get("_global_root")
     wsr = d.get("wsr")
+    mindex = d.get("mindex")
     invite_doors = d.get("invite_doors") or {}
 
     def _n():
@@ -181,6 +187,17 @@ def build(**d) -> APIRouter:
                     raise _refuse("link_not_readable", 403, "a meeting link goes to the owner only")
                 okind, oid, oname, url = "meeting", m.group(5), "a meeting", None
         regime = (request.headers.get(DELEGATION_HEADERS["regime"]) or "").strip().lower()
+        # A NOTICE TO OTHER PEOPLE IS AN ACT A CARD SUGGESTS (M1): the person's watching agent sends
+        # it only on the person's press of a card naming each of them.
+        others = [r for r in recipients if r != str(subject)]
+        if others and _ceiling.is_delegated(request) and not _ceiling.is_unwatched(request):
+            from control_plane import people_directory  # noqa: PLC0415
+            from control_plane.routers import asks  # noqa: PLC0415
+            people = (people_directory.mentionable(wsr.root, subject, mindex.list)
+                      if wsr is not None and mindex is not None else [])
+            asks.require_press(store, request, body.pressed, subject=str(subject),
+                               targets=[asks.aliases(people, r) for r in others],
+                               act="Notifying other people", session_id=row["id"] if row is not None else None)
         flow = (store.get(row["id"]) or {}).get("flow") if row is not None and store is not None else None
         from control_plane.session_store import read_flow  # noqa: PLC0415
         bound = read_flow(flow)

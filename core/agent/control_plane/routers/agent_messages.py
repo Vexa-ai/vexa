@@ -74,6 +74,11 @@ class AgentMessageBody(BaseModel):
     person: Optional[str] = Field(default=None, max_length=200,
                                   description="whose thread it is, when it is not your own person's "
                                               "(their user id); omit for your own person's threads")
+    pressed: Optional[str] = Field(
+        default=None, max_length=128, pattern=r"^[^\s\]]{1,128}$",
+        description="the `#<pending>` of the person's pressed answer to the card that offered this "
+                    "(`[answer <card> #<pending>] …`). An agent messages another person's agent only on that press: offer a ```ask card "
+                    "naming whose agent it writes to first")
 
 
 def _thread_of(sess, subject: str, session: str, store=None) -> Optional[dict]:
@@ -216,6 +221,15 @@ def build(**d) -> APIRouter:
             path=body.thread, content=body.text, delegated=ceiling.is_delegated(request))
         if held is not None:
             raise HTTPException(status_code=409, detail=held)
+        # A MESSAGE INTO ANOTHER PERSON'S CONVERSATION IS AN ACT A CARD SUGGESTS (M1): the person's
+        # watching agent sends it only on the person's press of a card naming that person.
+        if target != sender and ceiling.is_delegated(request) and not ceiling.is_unwatched(request):
+            from control_plane import people_directory  # noqa: PLC0415
+            from control_plane.routers import asks  # noqa: PLC0415
+            wsr = d.get("wsr")
+            people = people_directory.mentionable(wsr.root, sender, mindex.list) if wsr is not None else []
+            asks.require_press(store, request, body.pressed, subject=str(sender),
+                               targets=[asks.aliases(people, target)], act="Messaging another person's agent")
         routine = mine.get("routine") or None
         chain: list = []
         try:

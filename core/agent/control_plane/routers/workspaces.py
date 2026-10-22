@@ -1968,6 +1968,21 @@ def build(**d) -> APIRouter:
                     "existing repository, tell the person to publish it from the workspace's Publish "
                     "dialog in the UI; do not retry it another way."), reason="publish_from_the_ui")
             private = True
+            # PUBLISHING IS AN ACT A CARD SUGGESTS (M1): the workspace's history leaves the platform
+            # for a git provider, so the person's watching agent does it only on their press of a
+            # card naming the workspace or the repository.
+            if not is_unwatched(request):
+                from control_plane.routers import asks  # noqa: PLC0415
+                title = None
+                if body.slug and d.get("workspace_registry") is not None:
+                    try:
+                        title = (ids_mod.resolve_slug(wsr.root, body.slug,
+                                                      registry=d["workspace_registry"]) or {}).get("name")
+                    except Exception:  # noqa: BLE001 — an unreadable registry names nothing more
+                        title = None
+                names = {str(n) for n in (body.repo_name, body.slug, title) if n}
+                asks.require_press(d.get("session_store"), request, body.pressed, subject=str(subject),
+                                   targets=[names] if names else [], act="Publishing a workspace")
         # slug → any workspace the caller can manage (own parked slot or shared membership, resolved
         # + permission-checked by _manage_dir); omitted keeps the legacy seed target.
         ws_dir = _manage_dir(request, body.slug) if body.slug else None

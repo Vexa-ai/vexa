@@ -86,22 +86,10 @@ def build(**d) -> APIRouter:
         if not is_delegated(request):
             return
         from control_plane.routers import asks  # noqa: PLC0415
-        s = _store()
-        card = asks.pressed_card(s, body.pressed or "", subject=str(subject), session_id=row["id"])
-        names = {principal, (body.email or "").strip().lower(), body.subject or ""}
-        for p in _mentionable(subject) if card is not None else []:
-            if p.get("subject") == principal:
-                names |= {str(p.get("name") or ""), str(p.get("email") or "")}
-        choice = asks.pressed_choice(card) if card is not None else ""
-        if (card is None or not asks.press_names(card, names)
-                or not (choice == "primary" or (choice == "secondary" and fresh))
-                or not s.spend(body.pressed, str(subject))):
-            raise HTTPException(status_code=403, detail={
-                "refused": "press_required",
-                "instruction": "Adding a person needs the person's press: offer a ```ask card whose question names who "
-                               "to add, and call this with `pressed` set to the #<pending> of their "
-                               "pressed answer. A typed line, another card, or a press already used "
-                               "adds no one."})
+        names = asks.aliases(_mentionable(subject), principal, (body.email or "").strip().lower(), body.subject or "")
+        asks.require_press(_store(), request, body.pressed, subject=str(subject), targets=[names],
+                           act="Adding a person", session_id=row["id"],
+                           choices=("primary", "secondary") if fresh else ("primary",))
 
     def _mentionable_view(subject: str) -> list[dict]:
         """THE PICKER'S ANSWER (security review M1, deny test 16, 0.13.4 S4): an undiscoverable member

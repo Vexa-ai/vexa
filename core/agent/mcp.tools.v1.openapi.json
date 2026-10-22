@@ -76,6 +76,20 @@
             "description": "whose thread it is, when it is not your own person's (their user id); omit for your own person's threads",
             "title": "Person"
           },
+          "pressed": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "pattern": "^[^\\s\\]]{1,128}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the `#<pending>` of the person's pressed answer to the card that offered this (`[answer <card> #<pending>] \u2026`). An agent messages another person's agent only on that press: offer a ```ask card naming whose agent it writes to first",
+            "title": "Pressed"
+          },
           "text": {
             "description": "what to tell the other agent; it arrives as a turn in its thread",
             "maxLength": 8000,
@@ -163,6 +177,20 @@
             "title": "Notify",
             "type": "boolean"
           },
+          "pressed": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "pattern": "^[^\\s\\]]{1,128}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the `#<pending>` of the person's pressed answer to the card that offered this (`[answer <card> #<pending>] \u2026`). An event that reaches other people (attendees, or notify) is made by an agent only on that press: offer a ```ask card naming every attendee first",
+            "title": "Pressed"
+          },
           "request_id": {
             "description": "8-80 letters/digits/hyphens, unique per change; reuse it only to retry the same change",
             "pattern": "^[a-zA-Z0-9-]{8,80}$",
@@ -230,6 +258,20 @@
             "description": "ask Google to email attendees; true when the user asked to invite them (policy calendar_notify_attendees, off by default, decides)",
             "title": "Notify",
             "type": "boolean"
+          },
+          "pressed": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "pattern": "^[^\\s\\]]{1,128}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the `#<pending>` of the person's pressed answer to the card that offered this (`[answer <card> #<pending>] \u2026`). An event that reaches other people (attendees, or notify) is made by an agent only on that press: offer a ```ask card naming every attendee first",
+            "title": "Pressed"
           },
           "request_id": {
             "description": "8-80 letters/digits/hyphens, unique per change; reuse it only to retry the same change",
@@ -341,6 +383,20 @@
             "description": "ask Google to email attendees; true when the user asked to invite them (policy calendar_notify_attendees, off by default, decides)",
             "title": "Notify",
             "type": "boolean"
+          },
+          "pressed": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "pattern": "^[^\\s\\]]{1,128}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the `#<pending>` of the person's pressed answer to the card that offered this (`[answer <card> #<pending>] \u2026`). An event that reaches other people (attendees, or notify) is made by an agent only on that press: offer a ```ask card naming every attendee first",
+            "title": "Pressed"
           },
           "request_id": {
             "description": "8-80 letters/digits/hyphens, unique per change; reuse it only to retry the same change",
@@ -1940,6 +1996,20 @@
             "description": "what a click opens instead of the chat: `page:<workspace>/<path>` or `meeting:<id>` (a meeting link goes to the owner only)",
             "title": "Link"
           },
+          "pressed": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "pattern": "^[^\\s\\]]{1,128}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the `#<pending>` of the person's pressed answer to the card that offered this (`[answer <card> #<pending>] \u2026`). An agent notifies other people only on that press: offer a ```ask card naming who it notifies first",
+            "title": "Pressed"
+          },
           "session": {
             "anyOf": [
               {
@@ -3034,6 +3104,20 @@
             ],
             "description": "the owner to create under: a GitHub org, or a GitLab group path (nested allowed: group/subgroup); omitted = the token's own account",
             "title": "Org"
+          },
+          "pressed": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "pattern": "^[^\\s\\]]{1,128}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the `#<pending>` of the person's pressed answer to the card that offered this (`[answer <card> #<pending>] \u2026`). An agent publishes only on that press: offer a ```ask card naming the workspace or the repository first",
+            "title": "Pressed"
           },
           "private": {
             "default": true,

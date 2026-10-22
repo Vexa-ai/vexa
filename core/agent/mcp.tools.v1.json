@@ -190,9 +190,9 @@
         "url",
         "site",
         "use",
-        "reset"
-      ,
-        "propose"],
+        "reset",
+        "propose"
+      ],
       "note": "Give a workspace its image, stored in the workspace (never hot-linked): `site` finds that company's or project's logo, `url` fetches one image, `use=company_logo` takes the bound company's, `svg` is a simple mark you designed. In a shared workspace it answers 202 `proposed` and the owner accepts; in a private one it is set. For a workspace that was just created pass `propose: true`: the person accepts it on the workspace's card. Say which in one line."
     },
     {
@@ -901,7 +901,7 @@
         "private",
         "remote_url"
       ],
-      "note": "Give a vexa-born workspace a repository on one of the deployment's git providers: create it under `org` (a GitHub org or a GitLab group path, nested allowed) and push the full history. Uses the person's saved token for that provider; a token is never an argument. A person-in-the-loop verb: confirm the provider and name with the person first. From a chat the repository is always created private under the person's own account; `org`, `remote_url` and `private: false` apply only to the person's own client, so to publish under an organisation or into an existing repository tell the person to use the workspace's Publish dialog. A chat other people read cannot publish."
+      "note": "Give a vexa-born workspace a repository on one of the deployment's git providers: create it under `org` (a GitHub org or a GitLab group path, nested allowed) and push the full history. Uses the person's saved token for that provider; a token is never an argument. A person-in-the-loop verb: confirm the provider and name with the person first. From a chat the repository is always created private under the person's own account; `org`, `remote_url` and `private: false` apply only to the person's own client, so to publish under an organisation or into an existing repository tell the person to use the workspace's Publish dialog. A chat other people read cannot publish. Publishing from a chat needs the person's press: offer it as a ```ask card naming the workspace or the repository first, and call this with `pressed` = the `#<pending>` of their answer; without it it is refused (403 `press_required`)."
     },
     {
       "name": "open_page",
@@ -1329,7 +1329,7 @@
         "notify",
         "connection_id"
       ],
-      "note": "Creates an event; needs the calendar change permission; attendees are not emailed by default."
+      "note": "Creates an event; needs the calendar change permission; attendees are not emailed by default. An event with attendees, or with notify needs the person's press: offer it as a ```ask card that names every attendee first, and call this with `pressed` = the `#<pending>` of their answer (`[answer <card> #<pending>] \u2026`); without it, on a card that does not name each of them, or a second time on one press, it is refused (403 `press_required`)."
     },
     {
       "name": "calendar_event_update",
@@ -1357,7 +1357,7 @@
         "notify",
         "connection_id"
       ],
-      "note": "Changes an event the user can edit; needs the calendar change permission."
+      "note": "Changes an event the user can edit; needs the calendar change permission. A change with attendees, or with notify needs the person's press: offer it as a ```ask card that names every attendee first, and call this with `pressed` = the `#<pending>` of their answer (`[answer <card> #<pending>] \u2026`); without it, on a card that does not name each of them, or a second time on one press, it is refused (403 `press_required`)."
     },
     {
       "name": "calendar_event_cancel",
@@ -1378,7 +1378,7 @@
         "notify",
         "connection_id"
       ],
-      "note": "Cancels an event the user organizes; needs the calendar change permission."
+      "note": "Cancels an event the user organizes; needs the calendar change permission. A cancellation with notify needs the person's press: offer it as a ```ask card that names the event first, and call this with `pressed` = the `#<pending>` of their answer (`[answer <card> #<pending>] \u2026`); without it, on a card that does not name it, or a second time on one press, it is refused (403 `press_required`)."
     },
     {
       "name": "connection_policy_get",
@@ -1679,7 +1679,7 @@
         "to",
         "link"
       ],
-      "note": "Light up the person's bell (and a toast) when something needs them: an important email, a finished job, a decision waiting. One line naming the act and the object, never pasted content. Pass the current chat `session` so a click opens this chat; `to` only for other people in this chat. A routine's run posts at most one: put everything important in that one line."
+      "note": "Light up the person's bell (and a toast) when something needs them: an important email, a finished job, a decision waiting. One line naming the act and the object, never pasted content. Pass the current chat `session` so a click opens this chat; `to` only for other people in this chat. A routine's run posts at most one: put everything important in that one line. Reaching other people needs the person's press: offer it as a ```ask card that names each person in `to` first, and call this with `pressed` = the `#<pending>` of their answer (`[answer <card> #<pending>] \u2026`); without it, on a card that does not name them, or a second time on one press, it is refused (403 `press_required`)."
     },
     {
       "name": "message_agent",
@@ -1699,7 +1699,7 @@
         "from_thread",
         "person"
       ],
-      "note": "Agents speak to each other (ADR-0046 decision 13): the message is published as `thread.message` and flows queues it as a turn in the target thread, marked as from the sending agent. Asynchronous \u2014 the answer comes back later as a turn in `from_thread`. Who may message whom is `_global/POLICIES.md`; refusals are typed. With no flows deployed the route answers `flows:not_present`."
+      "note": "Agents speak to each other (ADR-0046 decision 13): the message is published as `thread.message` and flows queues it as a turn in the target thread, marked as from the sending agent. Asynchronous \u2014 the answer comes back later as a turn in `from_thread`. Who may message whom is `_global/POLICIES.md`; refusals are typed. With no flows deployed the route answers `flows:not_present`. Writing into another person's conversation needs the person's press: offer it as a ```ask card that names the other person first, and call this with `pressed` = the `#<pending>` of their answer (`[answer <card> #<pending>] \u2026`); without it, on a card that does not name them, or a second time on one press, it is refused (403 `press_required`)."
     },
     {
       "name": "chats_search",

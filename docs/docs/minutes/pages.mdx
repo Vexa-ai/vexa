@@ -326,7 +326,10 @@ and the two changes are merged three ways in memory. A clean merge is written an
 `merged`; a change to the same lines is refused with `409` and the current page; a write from the
 current version, a full rewrite, or a return to an earlier version is taken as written. A page edited
 outside the page routes since its last commit is taken as written. Every writer's commit is
-authored `vexa-terminal`.
+authored `vexa-terminal`. A commit your agent made for you ends with git trailers that say so:
+`On-behalf-of: <your account>`, `Written-by: agent` and `Agent-unit: <its session>`. Your own edits
+carry none, so `git log --format='%(trailers)'` tells your writes from your agent's. This holds for
+writing, removing, restoring and moving a page, entity cards and stored assets.
 
 ### Configuration
 
