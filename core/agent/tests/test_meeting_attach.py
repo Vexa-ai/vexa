@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from control_plane import meeting_attach
+from control_plane import meeting_attach, meeting_listen
 from control_plane.api import create_app
 from control_plane.api_shared import _Sessions
 from control_plane.dispatch import Dispatcher
@@ -266,3 +266,26 @@ def test_the_chats_grounding_reads_the_live_call_it_listens_to_not_its_bound_mee
     client.post("/api/chat", json={"prompt": "what did they just ask?", "session": "pchat-founder"},
                 headers=_as(OWNER))
     assert focused and focused[-1]["meeting_id"] == ROW
+
+
+def test_a_calendar_call_gets_its_page_so_the_agent_can_set_its_rules(tmp_path, monkeypatch):
+    """Live check 22 Oct, meeting 210: a bot sent without a chat had no page, and `meeting_listen`
+    refused «no page yet», so the agent could not add «wake me when pricing comes up». The attachment
+    makes the page, and setting the brief makes it too when nothing has yet."""
+    monkeypatch.setenv("VEXA_FEATURES", "all,transcript_signals")
+    client, sess, *_ = _world(tmp_path)
+    sess.upsert(OWNER, "pchat-founder", touched=True)
+    assert meeting_listen.locate(tmp_path / "ws", OWNER, {"id": int(ROW)}) is None
+    _listen(client)
+    assert meeting_listen.locate(tmp_path / "ws", OWNER, {"id": int(ROW)}) is not None
+    r = client.post("/api/meeting/listen", headers=_as(OWNER),
+                    json={"meeting": ROW, "brief": {"labels": [{"name": "pricing", "question": "Does someone talk about pricing?", "wake": True}]}})
+    assert r.status_code == 200, r.text
+
+
+def test_setting_the_brief_of_a_meeting_with_no_page_makes_the_page(tmp_path, monkeypatch):
+    monkeypatch.setenv("VEXA_FEATURES", "all,transcript_signals")
+    client, *_ = _world(tmp_path, status="completed")
+    r = client.post("/api/meeting/listen", headers=_as(OWNER),
+                    json={"meeting": ROW, "brief": {"focus": "pricing"}})
+    assert r.status_code == 200, r.text

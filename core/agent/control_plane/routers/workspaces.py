@@ -201,6 +201,7 @@ def build(**d) -> APIRouter:
     _global_root = d.get('_global_root')
     sess = d.get('sess')
     attachments = d.get('attachments')
+    _meeting_note_recorder = d.get('_meeting_note_recorder')
 
     def _link_mounts(mounts: list, target) -> list:
         """The mounts a page written into ``target`` may link into by id: only those every reader
@@ -836,6 +837,21 @@ def build(**d) -> APIRouter:
         row = _meeting_owner_lookup(str(subject), str(meeting))
         return row if isinstance(row, dict) else None
 
+    def _meeting_page(subject: str, mrow: dict) -> "dict | None":
+        """The meeting's page on this person's side, minted when it has none — the idempotent act the
+        bot-send performs. A calendar bot is sent from no chat, and its call still needs a page to keep
+        the brief its listener reads."""
+        place = meeting_listen_mod.locate(wsr.root, subject, mrow)
+        if place is not None:
+            return place
+        try:
+            from control_plane import meeting_mint as _mint  # noqa: PLC0415
+            _mint.mint(wsr.root, subject, mrow, record=_meeting_note_recorder)
+        except Exception as exc:  # noqa: BLE001 — no page: the caller says so
+            logger.warning("meeting %s: page not minted (%s)", (mrow or {}).get("id"), type(exc).__name__)
+            return None
+        return meeting_listen_mod.locate(wsr.root, subject, mrow)
+
     @router.post("/api/meeting/listen")
     def meeting_listen(request: Request, body: MeetingListenBody = Body(...)):
         """SET OR REVISE WHAT VEXA LISTENS FOR IN A MEETING — the verb behind `meeting_listen`.
@@ -851,12 +867,11 @@ def build(**d) -> APIRouter:
             raise HTTPException(status_code=404, detail={
                 "refused": "meeting_not_found", "meeting": body.meeting,
                 "said": "No meeting with that id that you can read."})
-        place = meeting_listen_mod.locate(wsr.root, subject, row)
+        place = _meeting_page(subject, row)
         if place is None:
             raise HTTPException(status_code=404, detail={
                 "refused": "no_meeting_page", "meeting": body.meeting,
-                "said": "This meeting has no page yet, so there is nowhere to put the brief. It is "
-                        "created when the bot is sent; ask the person to send it first."})
+                "said": "This meeting's page could not be made, so there is nowhere to put the brief."})
         rel, slug = place["path"], (place["workspace"] or None)
         target = _write_dir(request, subject, rel, slug)
         pol = _signal_policy(subject)
@@ -923,10 +938,12 @@ def build(**d) -> APIRouter:
         if picked is None:
             return None
         try:
-            return attachments.attach(row, owner, picked[0], by=owner, how=picked[1])
+            att = attachments.attach(row, owner, picked[0], by=owner, how=picked[1])
         except Exception:  # noqa: BLE001 — not stored: this wake still goes to the default
             logger.exception("meeting %s: default attachment not stored", row)
             return None
+        _meeting_page(owner, mrow)
+        return att
 
     def _chat_title(subject: str, session: str) -> str:
         try:
