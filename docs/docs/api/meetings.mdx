@@ -87,7 +87,7 @@ A `meeting_url` must be an `https://` link on its platform's hosts: Google Meet 
 `zoomgov.com`, or an organisation's own Zoom front door when the link has Zoom's join shape; Jitsi
 on any deployment. Every address the host resolves to must be public, so a link that points at, or
 resolves to, a loopback, private, CGNAT, link-local or cloud-metadata address is refused with a
-`422` naming the host. A Jitsi server inside your own network joins once the operator lists it in
+`422` naming the host. A host the API cannot resolve is passed to the bot, whose browser resolves it and holds it to the same rule. A Jitsi server inside your own network joins once the operator lists it in
 `VEXA_MEETING_HOST_ALLOW` ([Configuration](/configuration)). The bot's browser holds every
 navigation and redirect to the same rule; a refusal there fails the join with a reason starting
 `meeting_host_refused`.

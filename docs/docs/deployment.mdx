@@ -30,8 +30,9 @@ make bot      # build the meeting bot FROM SOURCE — required before a bot can 
 ```
 
 `make all` seeds `.env` from `.env.example`, mints the secrets the services refuse to boot without
-(`INTERNAL_API_SECRET`, `RUNTIME_API_TOKEN`, `VEXA_FLOWS_API_KEY`, `VEXA_FLOWS_TIMELINE_KEY`,
-`NEXTAUTH_SECRET` — a value you already set is kept),
+(`INTERNAL_API_SECRET`, `RUNTIME_API_TOKEN`, `VEXA_FLOWS_API_KEY`, `VEXA_FLOWS_SERVICE_KEY`,
+`VEXA_FLOWS_TIMELINE_KEY`, `VEXA_MODEL_PROXY_SECRET`, `NEXTAUTH_SECRET` and the rest of the keys
+`deploy/compose/mint-dev-env.sh` names — a value you already set is kept),
 brings the stack up, and **prints an API key plus the
 service URLs** when it's done. The **meeting bot is built from source** (`make bot`), **not pulled** —
 the published `vexaai/vexa-bot:dev` on Docker Hub is the older 0.10 line and is **not compatible** with
