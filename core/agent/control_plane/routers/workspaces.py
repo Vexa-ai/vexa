@@ -25,6 +25,7 @@ from control_plane import page_merge
 from control_plane import publish as publish_mod
 from control_plane import repo_ref
 from control_plane import scaffolds as scaffolds_mod
+from control_plane import meeting_attach as meeting_attach_mod
 from control_plane import meeting_listen as meeting_listen_mod
 from control_plane import signal_scope
 from control_plane import system_mounts
@@ -33,13 +34,14 @@ from control_plane import workspace_credentials as wcreds
 from control_plane import workspace_ids as ids_mod
 from control_plane import workspace_membership as membership_mod
 from control_plane.api_shared import MAX_UPLOAD_BYTES, _upload_filename, logger
+from control_plane.peer_lookups import meeting_access_check
 from control_plane.bodies import (
     ArchiveBody, AssetFetchBody, ClaimVerdictsBody, ClaimsProposeBody, EntityUpsertBody,
     GitTokenBody, SharedActiveBody, SharedAttachBody, WorkspaceActivateBody,
     WorkspaceDeactivateBody, WorkspaceMoveBody, WorkspaceNewBody, WorkspacePublishBody,
     WorkspaceImportBody, WorkspacePullBody, WorkspacePurposeBody, WorkspacePushBody,
     WorkspaceRemoveBody, WorkspaceRenameBody, WorkspaceStatusBody, WorkspaceRestoreBody, WorkspaceSwapBody,
-    WorkspaceWriteBody, MeetingListenBody)
+    WorkspaceWriteBody, MeetingListenBody, MeetingListenHereBody, MeetingOptinsBody)
 from control_plane import ceiling as ceiling_mod
 from control_plane import identity_token, private_taint
 from control_plane import connection_policy
@@ -198,6 +200,7 @@ def build(**d) -> APIRouter:
     _meeting_owner_lookup = d.get('_meeting_owner_lookup')
     _global_root = d.get('_global_root')
     sess = d.get('sess')
+    attachments = d.get('attachments')
 
     def _link_mounts(mounts: list, target) -> list:
         """The mounts a page written into ``target`` may link into by id: only those every reader
@@ -885,14 +888,140 @@ def build(**d) -> APIRouter:
                          f"Listening brief v{version} saved; transcript signals are off for this "
                          "company, so nothing listens yet.")}
 
+    _meeting_access = meeting_access_check(_meeting_owner_lookup, wsr.root) \
+        if _meeting_owner_lookup is not None else (lambda *_a, **_k: None)
+
+    def _held_chat(subject: str, row: str) -> str:
+        """A CALL'S WAKE LANDS IN THE CHAT THAT HOLDS THE CALL (app.dev 2026-10-16, meeting 147): a
+        room or a private chat, wherever it was started — never a hidden session of its own."""
+        _store = d.get("session_store")
+        try:
+            held = _store.call_for_meeting(row) if _store is not None else None
+            if held and _store.can_read(held["session_id"], subject):
+                return str(held["session_id"])
+        except Exception:  # noqa: BLE001 — no call record
+            pass
+        return ""
+
+    def _listening_chat(owner: str, row: str, mrow: dict) -> "dict | None":
+        """The attachment a wake of meeting ``row`` goes to. One that exists is honoured while its
+        person can still read the meeting; a live call with none (a calendar bot, or a person who
+        lost access) is attached to the owner's default chat here, once. None: no chat of a person
+        listens, and the meeting's own chat stays the answer."""
+        if attachments is None:
+            return None
+        owner = str((mrow or {}).get("user_id") or owner)
+        try:
+            att = attachments.get(row)
+        except Exception:  # noqa: BLE001 — an unreadable attachment is no attachment
+            return None
+        if att is not None and (att["subject"] == owner or _meeting_access(att["subject"], row) is not None):
+            return att
+        if not meeting_attach_mod.is_live(mrow):
+            return None
+        picked = attachments.resolve_default(owner, row, held=_held_chat(owner, row))
+        if picked is None:
+            return None
+        try:
+            return attachments.attach(row, owner, picked[0], by=owner, how=picked[1])
+        except Exception:  # noqa: BLE001 — not stored: this wake still goes to the default
+            logger.exception("meeting %s: default attachment not stored", row)
+            return None
+
+    def _chat_title(subject: str, session: str) -> str:
+        try:
+            meta = sess.meta(subject, session) if sess is not None else {}
+        except Exception:  # noqa: BLE001
+            meta = {}
+        return str(meta.get("named_title") or meta.get("title") or session)
+
+    def _attachment_view(subject: str, row: str, att: "dict | None", session: str, owner: str) -> dict:
+        """The attachment as ``subject`` may see it: another person's chat is named as that, never by
+        its title or id."""
+        mine = att is not None and att["subject"] == subject
+        return {"meeting": row, "attached": att is not None,
+                "attached_here": bool(mine and session and att["session"] == session),
+                "mine": mine,
+                "chat": ({"session": att["session"], "title": _chat_title(subject, att["session"])}
+                         if mine else None),
+                "said": (None if att is None or mine else "another person's chat"),
+                "how": att["how"] if att is not None else None,
+                "since": att["since"] if att is not None else None,
+                "speak": bool(att and att["speak"]), "post_chat": bool(att and att["post_chat"]),
+                "owner": owner == subject}
+
+    def _readable_meeting(request: Request, row: str) -> "tuple[str, dict]":
+        subject = str(subject_of(request))
+        if not str(row).isdigit() or len(str(row)) > 20:
+            raise HTTPException(status_code=400, detail="row must be a meeting row id")
+        mrow = _meeting_access(subject, row)
+        if not isinstance(mrow, dict):
+            raise HTTPException(status_code=404, detail={"refused": "meeting_not_found", "meeting": row})
+        return subject, mrow
+
+    # ── THE CHAT A LIVE CALL WAKES (`meeting_attach`, 2026-10-22) ────────────────────────────────
+    @router.get("/api/meeting/{row}/attachment")
+    def meeting_attachment(row: str, request: Request,
+                           session: Annotated[str, Query(max_length=200)] = ""):
+        """Which chat listens to this call, as the caller sees it: `attached_here` for ``session``,
+        the chat's title only when it is the caller's own, and the call's opt-ins. 404 for a meeting
+        the caller cannot read."""
+        subject, mrow = _readable_meeting(request, row)
+        att = attachments.get(row) if attachments is not None else None
+        return _attachment_view(subject, row, att, session, str(mrow.get("user_id") or ""))
+
+    @router.post("/api/meeting/{row}/attachment")
+    def meeting_attach(row: str, request: Request, body: MeetingListenHereBody = Body(...)):
+        """«Слушать здесь»: the caller's chat becomes the one this call wakes, as the caller. Anyone
+        who can read the meeting may; the chat must be the caller's own."""
+        subject, mrow = _readable_meeting(request, row)
+        if attachments is None:
+            raise HTTPException(status_code=503, detail="attachments are not wired on this host")
+        if not _owns_chat(subject, body.session):
+            raise HTTPException(status_code=404, detail={"refused": "chat_not_found", "session": body.session})
+        att = attachments.attach(row, subject, body.session, by=subject, how="chose")
+        return _attachment_view(subject, row, att, body.session, str(mrow.get("user_id") or ""))
+
+    @router.patch("/api/meeting/{row}/attachment")
+    def meeting_attach_optins(row: str, request: Request, body: MeetingOptinsBody = Body(...)):
+        """The call's opt-ins — may Vexa speak in the meeting, may it post in the meeting's chat.
+        The meeting's owner only; 409 while no chat listens to the call."""
+        subject, mrow = _readable_meeting(request, row)
+        owner = str(mrow.get("user_id") or "")
+        if owner != subject:
+            raise HTTPException(status_code=403, detail={
+                "refused": "not_meeting_owner", "said": "only the meeting's owner sets what Vexa may do in it"})
+        att = attachments.set_optins(row, speak=body.speak, post_chat=body.post_chat) \
+            if attachments is not None else None
+        if att is None:
+            raise HTTPException(status_code=409, detail={
+                "refused": "not_attached", "said": "no chat listens to this call yet"})
+        return _attachment_view(subject, row, att, "", owner)
+
+    def _owns_chat(subject: str, session: str) -> bool:
+        try:
+            if sess is not None and sess.has_record(subject, session):
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        _store = d.get("session_store")
+        if _store is None:
+            return False
+        try:
+            from control_plane import session_sync  # noqa: PLC0415
+            return session_sync.resolve(_store, subject, session, create=False) is not None
+        except Exception:  # noqa: BLE001 — a store that cannot answer owns nothing
+            return False
+
     @router.get("/internal/meetings/{row}/listen")
     def meeting_listen_internal(row: str, request: Request,
                                 subject: Annotated[str, Query(min_length=1, max_length=200)]):
         """THE BRIEF, FOR `signals` — internal tier only. The meeting's `listen:` brief (the
         company's default brief when its page has none), its version, where the page is, the chat a
-        signal wakes (`meet-<row>`, or the chat the meeting was started from) and the signal policy.
-        ``subject`` is the meeting's owner; the row is read as them, so a meeting they cannot read
-        is a 404."""
+        signal wakes and whose it is (`chat_session`, `chat_subject`: the meeting's attachment, made
+        here for a live call that has none; `meet-<row>` only for an owner with no chat at all), the
+        call's opt-ins and the signal policy. ``subject`` is the meeting's owner; the row is read as
+        them, so a meeting they cannot read is a 404."""
         if not _internal_caller(request):
             raise HTTPException(status_code=403, detail={
                 "refused": "internal_tier_required",
@@ -906,25 +1035,23 @@ def build(**d) -> APIRouter:
         place = meeting_listen_mod.locate(wsr.root, subject, mrow)
         brief, version = (meeting_listen_mod.read_listen(meeting_listen_mod.page_text(place))
                           if place is not None else (None, 0))
-        try:
-            chat = sess.chat_for(subject, f"meet-{row}") if sess is not None else f"meet-{row}"
-        except Exception:  # noqa: BLE001 — no binding read: the meeting's own chat
-            chat = f"meet-{row}"
-        if chat == f"meet-{row}":
-            # A CALL'S WAKE LANDS IN THE CHAT THAT HOLDS THE CALL (app.dev 2026-10-16, meeting 147):
-            # a room or a private chat, wherever it was started — never a hidden session of its own.
-            _store = d.get("session_store")
+        att = _listening_chat(subject, row, mrow)
+        chat_subject = att["subject"] if att is not None else subject
+        if att is not None:
+            chat = att["session"]
+        else:
             try:
-                held = _store.call_for_meeting(row) if _store is not None else None
-                if held and _store.can_read(held["session_id"], subject):
-                    chat = held["session_id"]
-            except Exception:  # noqa: BLE001 — no call record: the meeting's own chat
-                pass
+                chat = sess.chat_for(subject, f"meet-{row}") if sess is not None else f"meet-{row}"
+            except Exception:  # noqa: BLE001 — no binding read: the meeting's own chat
+                chat = f"meet-{row}"
+            if chat == f"meet-{row}":
+                chat = _held_chat(subject, row) or chat
         return {"brief": brief or meeting_listen_mod.default_brief(pol), "version": version,
                 "default": brief is None,
                 "workspace": place["workspace"] if place is not None else "",
                 "page_path": place["path"] if place is not None else "",
-                "chat_session": chat, "subject": subject,
+                "chat_session": chat, "chat_subject": chat_subject, "subject": subject,
+                "speak": bool(att and att["speak"]), "post_chat": bool(att and att["post_chat"]),
                 "policy": {k: pol[k] for k in ("transcript_signals", "model_signals",
                                                 "signals_wakes_per_meeting",
                                                 "signals_cost_per_meeting_usd")}}

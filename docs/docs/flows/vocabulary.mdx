@@ -159,4 +159,4 @@ RETIRED BY DECISION 29 (2026-09-02). Kept as a no-op, for the reason above. It e
 
 ### `wake_meeting_chat`
 
-Wake the meeting's agent in the meeting's chat with what was just said: ask agent-api which chat the meeting wakes, then post `meeting.signal` with that chat as `target.chat` and the plan; the buffer rides as data, never as instructions. Result: \{chat, queued\}.
+Wake the meeting's agent in the meeting's chat with what was just said: ask agent-api which chat the meeting wakes and whose it is (the call's attachment), then post `meeting.signal` as that person with that chat as `target.chat` and the plan; the buffer rides as data, never as instructions. Result: \{chat, queued\}.

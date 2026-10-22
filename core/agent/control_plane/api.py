@@ -91,6 +91,7 @@ from control_plane import global_layer
 from control_plane import version as version_mod
 from control_plane import system_mounts
 from control_plane import features as features_mod
+from control_plane import meeting_attach as meeting_attach_mod
 from control_plane import scaffolds as scaffolds_mod
 from control_plane import model_endpoint
 from control_plane import chat_intents
@@ -197,6 +198,9 @@ def create_app(
         sess = _Sessions(_redis.from_url(redis_url, decode_responses=True))
     else:
         sess = _Sessions()
+    # THE CHAT A LIVE CALL WAKES (`meeting_attach`): on the session index's own redis client, so a
+    # deployment needs no second store and the tests none at all.
+    attachments = meeting_attach_mod.MeetingAttachments(getattr(sess, "_redis", None), sess)
     live = _LiveMeetings()
     # THE SCAFFOLD STORE (PRD 5.5). Same redis client as the session index and the same in-memory
     # fallback, for the same reasons — see control_plane/scaffolds.py for why it is redis and not
@@ -456,6 +460,7 @@ def create_app(
 
     app.state.dispatcher = dispatcher
     app.state.sessions = sess
+    app.state.meeting_attachments = attachments
     # Reachable for the operator seams that rename a workspace and for the tests that prove a
     # rename moves nothing else.
     app.state.workspace_registry = workspace_registry
@@ -1312,7 +1317,7 @@ def create_app(
         _resolve_room=_resolve_room, _scaffold_is_for=_scaffold_is_for,
         _scaffold_recipient_is=_scaffold_recipient_is, _scaffold_view=_scaffold_view,
         _schedule_source=_schedule_source, _signal_grants=_signal_grants,
-        _workspace_key=_workspace_key, _credential_note=_credential_note, _ws_here=_ws_here,
+        attachments=attachments, _workspace_key=_workspace_key, _credential_note=_credential_note, _ws_here=_ws_here,
         _ws_is_member=_ws_is_member, _ws_sync=_ws_sync, _ws_lookup=_ws_lookup, dispatcher=dispatcher,
         invocations_url=invocations_url, live=live, mindex=mindex,
         redis_url=redis_url, scaffolds=scaffolds, scheduler=scheduler, sess=sess,

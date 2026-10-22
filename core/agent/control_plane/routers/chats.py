@@ -452,6 +452,7 @@ def build(**d) -> APIRouter:
     # The same access decision the live transcript stream makes (routers/meetings.py): a chat may
     # fold a meeting's transcript only when its caller could watch that transcript.
     _meeting_access = meeting_access_check(_meeting_owner_lookup, getattr(wsr, "root", None))
+    attachments = d.get('attachments')
 
     # ── THE TARGET WORKSPACE, BY NAME (Vexa-ai/vexa#1611) ────────────────────────────────────
     #
@@ -750,8 +751,9 @@ def build(**d) -> APIRouter:
             return row
 
     def _with_call_focus(body: ChatBody, subject: str, session: str) -> ChatBody:
-        """The body with the session's live call — or the meeting this chat started (a bot it sent,
-        founder 2026-10-13) — as its meeting focus, when it names no focus of its own."""
+        """The body with the session's live call — else the live meeting this chat listens to (its
+        attachment, `meeting_attach`), else the meeting this chat started (a bot it sent, founder
+        2026-10-13) — as its meeting focus, when it names no focus of its own."""
         focus = body.context.focus if body.context is not None else body.active
         if focus:
             return body
@@ -765,6 +767,14 @@ def build(**d) -> APIRouter:
                 if call:
                     meeting_id = str(call["meeting_id"])
             except Exception:  # noqa: BLE001 — a store that cannot answer grounds nothing extra
+                pass
+        if not meeting_id and attachments is not None:
+            from control_plane import meeting_attach  # noqa: PLC0415
+            try:
+                listened = attachments.attached_row(subject, session)
+                if listened and meeting_attach.is_live(_meeting_access(subject, listened)):
+                    meeting_id = listened
+            except Exception:  # noqa: BLE001 — unreadable: the chat's own meeting below
                 pass
         if not meeting_id:
             try:

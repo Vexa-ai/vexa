@@ -139,8 +139,9 @@ def register(reg) -> None:
     @reg.step(needs=("agent",))
     def wake_meeting_chat(ctx: StepCtx):
         """Wake the meeting's agent in the meeting's chat with what was just said: ask agent-api
-        which chat the meeting wakes, then post `meeting.signal` with that chat as `target.chat`
-        and the plan; the buffer rides as data, never as instructions. Result: {chat, queued}."""
+        which chat the meeting wakes and whose it is (the call's attachment), then post
+        `meeting.signal` as that person with that chat as `target.chat` and the plan; the buffer
+        rides as data, never as instructions. Result: {chat, queued}."""
         if ctx.scratch.get("woken"):
             return Done(ctx.scratch["woken"])
         uid = str(ctx.refs.get("uid") or "")
@@ -160,7 +161,8 @@ def register(reg) -> None:
         if not 200 <= code < 300 or not isinstance(info, dict) or not info.get("chat_session"):
             raise StepError(f"agent-api answered {code} to the meeting's brief read — {str(info)[:200]}",
                             retryable=code == 429 or code >= 500 or code == 0)
-        return _wake(ctx, uid, SIGNAL_EVENT, str(info["chat_session"]), data, where={"meeting_row": row})
+        return _wake(ctx, str(info.get("chat_subject") or uid), SIGNAL_EVENT, str(info["chat_session"]),
+                     data, where={"meeting_row": row})
 
 
 def _wake(ctx: StepCtx, uid: str, name: str, chat: str, data: dict, *, where: dict):

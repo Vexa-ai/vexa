@@ -716,6 +716,19 @@ class ListenBrief(BaseModel):
                                        "does not wake you")
 
 
+class MeetingListenHereBody(BaseModel):
+    """«Слушать здесь»: the caller's chat becomes the one a live call wakes."""
+    model_config = {"extra": "forbid"}
+    session: SessionId = Field(description="the caller's chat that listens to the call from now on")
+
+
+class MeetingOptinsBody(BaseModel):
+    """The call's opt-ins, set by the meeting's owner; a field left out keeps its value."""
+    model_config = {"extra": "forbid"}
+    speak: Optional[bool] = Field(None, description="may a signal turn answer out loud in the meeting")
+    post_chat: Optional[bool] = Field(None, description="may a signal turn post in the meeting's chat")
+
+
 class MeetingListenBody(BaseModel):
     """SET OR REVISE a meeting's listening brief — the body behind `meeting_listen`."""
     model_config = {"extra": "forbid"}

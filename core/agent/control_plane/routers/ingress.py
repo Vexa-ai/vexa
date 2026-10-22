@@ -88,6 +88,7 @@ def build(**d) -> APIRouter:
     wsr = d.get('wsr')
     mindex = d.get('mindex')
     _meeting_owner_lookup = d.get('_meeting_owner_lookup')
+    attachments = d.get('attachments')
 
     def _call_row(subject: str):
         """``meeting_id -> meetings row`` as ``subject`` may read it — how a room's live call is
@@ -448,7 +449,11 @@ def build(**d) -> APIRouter:
                               "rooms is not enabled for this workspace owner's account")
             wake_key, page = f"room:{room_id}", None
         else:
-            mrow = _meeting_owner_lookup(subject, row) if _meeting_owner_lookup is not None else None
+            # THE TRANSCRIPT READ RULE (`meeting_access_check`): the person a call is attached to
+            # may be a member of the meeting's workspace rather than its owner.
+            from control_plane.peer_lookups import meeting_access_check  # noqa: PLC0415
+            mrow = (meeting_access_check(_meeting_owner_lookup, wsr.root if wsr is not None else None)(subject, row)
+                    if _meeting_owner_lookup is not None else None)
             if not isinstance(mrow, dict):
                 raise _refuse(request, 404, "meeting_not_found",
                               "the event's subject cannot read this meeting; nothing is woken")
@@ -532,6 +537,17 @@ def build(**d) -> APIRouter:
             _sit = ""
         if _sit:
             start = units.entrypoint(inline=start["entrypoint"]["inline"] + "\n\n" + _sit)
+        if event["name"] != "room.signal" and attachments is not None:
+            # THE CALL'S OPT-INS (`meeting_attach`), stated to the turn. Read here, from agent-api's
+            # own record — never from what the wake carried.
+            from control_plane import meeting_attach as _ma  # noqa: PLC0415
+            try:
+                _att = attachments.get(row)
+            except Exception:  # noqa: BLE001 — unreadable: nothing opted in
+                _att = None
+            if _att is not None and (_att["subject"], _att["session"]) != (subject, chat):
+                _att = None
+            start = units.entrypoint(inline=start["entrypoint"]["inline"] + "\n\n" + _ma.optins_line(_att))
         if page is not None:
             start = units.entrypoint(inline=start["entrypoint"]["inline"] + note_instruction(page))
         if room_p is not None:

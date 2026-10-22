@@ -137,6 +137,7 @@ def test_the_seed_is_written_once_and_never_overwritten():
 class _AgentApi:
     def __init__(self, chat="pchat-mv9qx0lo", answer=(202, {"queued": True, "trigger": "signal"})):
         self.chat, self.answer = chat, answer
+        self.chat_subject = None
         self.reads: list = []
         self.events: list = []
 
@@ -146,7 +147,8 @@ class _AgentApi:
         assert "X-Internal-Secret" not in headers
         if method == "GET" and "/internal/meetings/" in url and url.split("?")[0].endswith("/listen"):
             self.reads.append(url)
-            return 200, {"chat_session": self.chat, "brief": {}, "version": 3}
+            return 200, {"chat_session": self.chat, "brief": {}, "version": 3,
+                         **({"chat_subject": self.chat_subject} if self.chat_subject else {})}
         if method == "POST" and url.endswith("/events"):
             self.events.append(body)
             return self.answer
@@ -185,6 +187,16 @@ def test_a_signal_wakes_the_meetings_chat_with_the_buffer_as_data(client, agent_
     assert ev["data"]["buffer"][0]["scores"] == {"addressed_to_vexa": 0.97}
     status = fa.db.execute("SELECT status FROM reaction WHERE event_type = 'meeting.signal'")
     assert status and status[0][0] == "done"
+
+
+def test_a_call_attached_to_another_persons_chat_wakes_as_that_person(client, agent_api):
+    # «Слушать здесь» (design 2026-10-22): a reader of the meeting moved the call to their own chat
+    agent_api.chat, agent_api.chat_subject = "pchat-member", "8"
+    client.post("/events/signal", json=_signal(), headers=SERVICE)
+    _run()
+    assert "/listen?subject=7" in agent_api.reads[0]          # the brief is still the owner's
+    (ev,) = agent_api.events
+    assert ev["subject"] == "8" and ev["target"] == {"chat": "pchat-member"}
 
 
 def test_the_company_flows_plan_is_what_the_agent_is_asked(client, agent_api):

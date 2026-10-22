@@ -2488,6 +2488,24 @@
       "path": "/agent/refs/audience",
       "person": true,
       "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/meeting/{row}/attachment",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/meeting/{row}/attachment",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "PATCH",
+      "path": "/agent/meeting/{row}/attachment",
+      "person": true,
+      "shared": "refuse"
     }
   ]
 }
