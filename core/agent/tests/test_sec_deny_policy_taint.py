@@ -267,6 +267,25 @@ def test_agent_page_write_is_attributed_differently_from_the_persons(world):
     assert agent_author != person_author or "on-behalf-of" in agent_body.lower(), entries
 
 
+# ── an ask that names no credential is never a person's session (gate Low: credential default) ──
+
+def test_an_ask_that_names_no_credential_never_passes_a_session_only_rule():
+    from control_plane import policy_decide as pd
+    out = pd.decide(pd.Ask(principal="alice", action="policy.change", workspace="team", role="owner"),
+                    workspace_rules=[])
+    assert out.decision == pd.DENY, out
+    # and a floor that denies keys denies it too (``floor.policy-change-needs-a-session``)
+    assert out.rule.startswith("floor."), out
+
+
+def test_an_ask_that_names_the_session_still_passes():
+    """The control: the owner's own session, named, changes policy."""
+    from control_plane import policy_decide as pd
+    out = pd.decide(pd.Ask(principal="alice", action="policy.change", workspace="team", role="owner",
+                           credential=pd.SESSION), workspace_rules=[])
+    assert out.allowed, out
+
+
 # ── deny test 37 (PRD 0.13.4 D38): a workspace policy line cannot lower a floor ────────────────
 @pytest.mark.parametrize("action", ["guest.join", "nudge.free_text", "card.destructive_first_tap"])
 def test_a_workspace_rule_cannot_lower_a_floor(action):

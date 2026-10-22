@@ -112,7 +112,9 @@ class Ask:
     action: str
     workspace: str = ""
     role: Optional[str] = None
-    credential: str = SESSION
+    #: An ask that does not say which credential it came with is a ``key`` — never a session: a
+    #: rule a person's own session must satisfy is satisfied only by a caller that named it.
+    credential: str = KEY
     principal_kind: str = "person"
     extra: dict = field(default_factory=dict)
 
