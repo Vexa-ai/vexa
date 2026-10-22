@@ -96,12 +96,16 @@ def test_a_derived_jitsi_link_that_resolves_inside_is_refused():
     assert runtime.specs == []
 
 
-def test_an_unresolvable_host_is_refused(monkeypatch):
+def test_an_unresolvable_host_passes_to_the_bot(monkeypatch):
+    """Nothing to reach from meeting-api (a proxied deployment may resolve no public name); the
+    bot's navigation guard checks the host again with its own resolver."""
     monkeypatch.setattr(meeting_host, "resolver", lambda host: [])
     r, runtime = _post({"platform": "jitsi", "native_meeting_id": "room",
                         "meeting_url": "https://nowhere.jitsi.example/room"})
+    assert r.status_code == 201, r.text
+    r, runtime = _post({"platform": "google_meet", "native_meeting_id": "abc-defg-hij",
+                        "meeting_url": "https://nowhere.example/abc-defg-hij"})
     assert r.status_code == 422, r.text
-    assert "does not resolve" in r.json()["detail"]
 
 
 # ── the host belongs to the platform ─────────────────────────────────────────────────────────────

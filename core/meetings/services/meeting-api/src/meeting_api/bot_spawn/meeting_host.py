@@ -13,7 +13,7 @@ spawns one (``POST /bots``, the MCP and agent tools that call it, and the calend
    (``collector.meeting_link``). Those are accepted on any host that resolves publicly, or on a
    host the operator names in ``VEXA_MEETING_HOST_ALLOW``.
 2. **The host reaches the internet, not the deployment.** Every address the host resolves to is
-   checked by the outbound URL guard (``webhooks/ssrf.py``, the vendored outbound-url.v1 rule):
+   checked (a host this service cannot resolve passes here; the bot checks it again at navigation) by the outbound URL guard (``webhooks/ssrf.py``, the vendored outbound-url.v1 rule):
    loopback, private, CGNAT, link-local and cloud metadata, and reserved addresses refuse the URL.
    ``VEXA_MEETING_HOST_ALLOW`` (an ``OperatorAllowance``: exact host names and CIDRs) admits an
    on-prem meeting server inside the operator's network; it never admits loopback or metadata.
@@ -130,7 +130,10 @@ def check_meeting_url(platform: str, url: str, *,
                                    allow=allow or None)
     except ssrf.SSRFError as e:
         if "could not be resolved" in str(e):
-            raise MeetingHostRefused(f"meeting_url refused: '{host}' does not resolve") from None
+            # Nothing to reach from here. A deployment whose egress goes through a proxy may not
+            # resolve public names at all; the bot checks every navigation again with its own
+            # resolver, and a name nothing resolves fails to load there.
+            return []
         raise MeetingHostRefused(
             f"meeting_url refused: '{host}' reaches an internal or private address — an on-prem "
             f"meeting server is admitted only when the operator lists it in {MEETING_HOST_ALLOW_ENV}"
