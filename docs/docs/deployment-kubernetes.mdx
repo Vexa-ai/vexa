@@ -967,6 +967,188 @@ not apply to it — and talks to the gateway's hosted-compat surface. It is **de
 the Terminal covers its remaining flows, the component is deleted, not ported. On Compose the
 same option is `docker compose --profile dashboard up -d` (port 13001).
 
+## Enterprise and OpenShift installs
+
+This section collects what a corporate cluster needs beyond the defaults: the rights the person who
+runs `helm install` must hold, the OpenShift profile, a TLS-inspecting proxy, sign-in through your
+own identity provider, and the settings that change behaviour on upgrade.
+
+### Required permissions
+
+The person or pipeline that runs `helm install` / `helm upgrade` needs, **in the release namespace**:
+
+| API group | Resources | Verbs | Why |
+|---|---|---|---|
+| `""` | `secrets` | `get`, `list`, `create`, `update`, `patch`, `delete` | Helm keeps its release record in Secrets; the chart creates the generated Secrets (gateway identity key, admin token, CRM fact-seal key, database password) and reads them back with `lookup` on every upgrade so they stay the same. |
+| `""` | `configmaps`, `services`, `persistentvolumeclaims`, `serviceaccounts` | `get`, `list`, `create`, `update`, `patch`, `delete` | The public-key ConfigMaps, every Service, the workspace, Redis and broker volumes, and the runtime's ServiceAccount. |
+| `apps` | `deployments`, `statefulsets`, `daemonsets` | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` | Every service; the in-chart Postgres; the bot seccomp installer (only with `runtime.botSandbox.installer.enabled`). |
+| `batch` | `jobs` | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` | The migration and schema Jobs. Helm deletes a hook Job before it runs it again, and an upgrade prunes the previous hashed-name Job. |
+| `rbac.authorization.k8s.io` | `roles`, `rolebindings` | `get`, `list`, `create`, `update`, `patch`, `delete` | The runtime's Role (below), and on an upgrade that rotates a published database password, a short-lived hook Role. |
+| `policy` | `poddisruptionbudgets` | `get`, `list`, `create`, `update`, `patch`, `delete` | The control plane's disruption budgets. |
+| `networking.k8s.io` | `networkpolicies`, `ingresses` | `get`, `list`, `create`, `update`, `patch`, `delete` | With `networkPolicy.enabled` and `ingress.enabled`. |
+| `""` | `pods`, `pods/log` | `get`, `list`, `watch` | `helm install --wait` and `make probe`. |
+
+Kubernetes lets you create a Role only with rights you hold yourself (or with the `escalate` and
+`bind` verbs). So the deployer also needs every right the chart's Roles grant:
+
+- **The runtime's Role** (`<release>-runtime`, bound to its own ServiceAccount): `pods` create,
+  delete, get, list and watch; `pods/log` get; `secrets` create. The runtime spawns one bare Pod per
+  bot and per agent turn, and each Pod's credential env rides its own Secret, which the runtime
+  creates and never reads, lists or deletes.
+- **The password-rotation hook Role**, only on an upgrade that replaces a published or pending
+  in-chart database password: `get`, `patch` on that one Secret, `get` on the Postgres Pod,
+  `create`, `get` on its `pods/exec`, and `get`, `patch` on the Deployments that read the password.
+  Every rule names its objects by `resourceNames`.
+
+Nothing in the chart is cluster-scoped: no ClusterRole, no CRD, no namespace. The bot seccomp
+installer DaemonSet is the one Pod that needs a namespace admitting `hostPath` (Pod Security
+`privileged`); set `runtime.botSandbox.installer.namespace` to a separate namespace for it, or turn
+the installer off and install the profile on the nodes yourself (below).
+
+### OpenShift
+
+Layer the chart's `values-openshift.yaml` over your values:
+
+```bash
+helm upgrade --install vexa <chart> -n vexa \
+  -f <chart>/values-openshift.yaml -f my-values.yaml \
+  --set agentApi.workspaces.storageClassName=<a ReadWriteMany class>
+```
+
+It does four things, each of which a default install gets wrong on a multi-node `restricted-v2`
+cluster:
+
+- The chart delivers no `securityContext`: `restricted-v2` injects the uid, `runAsNonRoot`,
+  `fsGroup`, dropped capabilities and the seccomp profile, and refuses a uid outside the project's
+  range. Do not add `fsGroup` or `runAsUser` yourself.
+- Agent workers keep no added capability.
+- The agent workspace store is `ReadWriteMany`. Every agent worker mounts the same store as
+  agent-api; on `ReadWriteOnce` block storage a worker scheduled on another node waits for the volume
+  and its chat never answers. Name an RWX class, for example CephFS from OpenShift Data Foundation.
+- The hostPath seccomp installer is off. Meeting bots still run under the Localhost profile
+  `vexa/seccomp-userns.json`, which lets Chromium build its sandbox. Install that file on the nodes
+  with a MachineConfig or the Security Profiles Operator (then point
+  `runtime.botSandbox.localhostProfile` at the path it installs), and give the ServiceAccount the bot
+  Pods run as (the namespace's `default`) an SCC like `restricted-v2` whose `seccompProfiles` also
+  lists `localhost/<that path>`. Without both, set `runtime.botSandbox.enabled=false`: bots then run
+  under `runtime/default` and say in their log that their browser runs without its sandbox.
+
+The bundled Postgres image needs a passwd entry for its uid, which `restricted-v2`'s random uid does
+not have. Use an external Postgres (`postgres.enabled: false`, `database.*`); see the chart's
+[known boundaries](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/README.md).
+
+### A TLS-inspecting proxy: your root CA in every Pod
+
+If a proxy inspects outbound HTTPS and re-signs it with your own root CA, every Pod has to trust that
+CA. Otherwise calls to transcription, the model provider, git hosts, OAuth providers and the meeting
+pages the bot opens fail certificate verification. Put the PEM in a ConfigMap or Secret in the
+release namespace and name it:
+
+```bash
+kubectl -n vexa create configmap corp-root-ca --from-file=ca.crt=<your-root-ca.pem>
+helm upgrade --install vexa <chart> ... --set global.extraCA.configMap=corp-root-ca
+```
+
+`global.extraCA.secret` takes a Secret instead, and `global.extraCA.key` names the key (default
+`ca.crt`). Name one, not both: the chart refuses to render with both. Every Vexa Deployment and Job,
+and every meeting-bot and agent-worker Pod the runtime spawns, then:
+
+- mounts the PEM read-only at `/etc/vexa/extra-ca/ca.crt`;
+- runs an init container that writes the image's system bundle plus your PEM into an `emptyDir` at
+  `/etc/vexa/ca-bundle/ca-bundle.crt`. A key with no certificate in it stops the Pod instead of
+  starting it untrusting;
+- points `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO` and
+  `AWS_CA_BUNDLE` at that bundle (Python, `requests`, `httpx`, curl, git, botocore), and
+  `NODE_EXTRA_CA_CERTS` at your PEM (Node);
+- in the bot, imports the PEM into Chromium's NSS store, since Chromium on Linux reads no bundle file.
+
+It needs no root and no writable root filesystem, so it runs under `restricted-v2`. Unset, the chart
+renders exactly as before. `storage.s3.caBundle`, `terminal.oidc.caBundle`, the flows mail CA and a
+git provider's own `caBundle` still apply to their own endpoints, and when `storage.s3.caBundle` is
+set, `AWS_CA_BUNDLE` is left to it. Third-party infra Pods (Postgres, Redis, PgBouncer, LiveKit) make
+no outbound HTTPS and are left as they are.
+
+On OpenShift you can let the cluster supply the bundle: create an empty ConfigMap labelled
+`config.openshift.io/inject-trusted-cabundle: "true"`, and the cluster fills its `ca-bundle.crt` key
+with the cluster's trusted CAs, including the proxy CA from the cluster proxy configuration.
+
+```bash
+oc -n vexa create configmap trusted-ca
+oc -n vexa label configmap trusted-ca config.openshift.io/inject-trusted-cabundle=true
+helm upgrade --install vexa <chart> ... \
+  --set global.extraCA.configMap=trusted-ca --set global.extraCA.key=ca-bundle.crt
+```
+
+A Secret-sourced key that names a model credential or a control-plane secret is refused when the
+runtime starts, because the CA key is mounted into every workload.
+
+### Sign-in and identity
+
+- **An OIDC provider that sends no `email_verified`.** Generic OIDC sign-in requires the ID token to
+  say `email_verified: true`. ADFS, and other directories that issue no such claim, need
+  `terminal.oidc.requireEmailVerified: "0"` (`VEXA_OIDC_REQUIRE_EMAIL_VERIFIED=0`); without it
+  nobody can sign in. Accounts signed in that way never claim or match a CRM Person by email. Any
+  value other than empty, `1` or `0` stops the terminal at start. See
+  [Sign-in with your own identity provider](/sign-in-oidc).
+- **Claims and merges.** A CRM profile is claimed only through its `email:` match identifier.
+  Imported records that have only the `Email` field filled are not claimable until they get that
+  identifier. A CRM merge that would move away a record someone signs in with answers `409`, so a
+  cleanup script merges duplicates *into* the sign-in record. See [CRM](/minutes/crm).
+- **Bot accounts signing in through your identity provider.** The bot's sign-in browser opens only
+  the meeting platforms' own sign-in hosts. Name your provider's host in
+  `credentialBroker.botSigninExtraHosts` (`VEXA_BOT_SIGNIN_EXTRA_HOSTS`), for example
+  `adfs.example.com`. A host that resolves to an internal address is dropped, so check how it
+  resolves from inside the cluster. See [Bot accounts](/minutes/bot-accounts).
+- **Bot accounts in English.** Authenticated Teams and Zoom bot accounts must have their UI language
+  set to English. Otherwise joins fail as `ui_locale_mismatch`. Check this on a tenant whose default
+  language is not English. See [Authenticated bots](/authenticated-bots).
+
+### Secrets the chart generates
+
+With `secrets.existingSecretName`, your own Secret has to carry every key the chart would otherwise
+generate; the `secrets` block of `values.yaml` names each one. Keys an older Secret is likely to
+lack:
+
+- `VEXA_MODEL_PROXY_SECRET`. agent-api seals each turn's model route with it for the model proxy,
+  and no agent worker holds a model-provider key. See
+  [Execution](/architecture/execution#the-model-proxy).
+- `VEXA_MCP_DELEGATION_SECRET`, and the CRM outbox's `VEXA_FLOWS_CRM_PUBLISH_KEY` when the CRM is
+  on (without it the outbox does not start).
+
+Fact producers sign with their own keys. The CRM outbox signs card facts with its own Ed25519
+private key, kept in `<release>-fact-seal-crm-key`, and flows verifies under the public half in
+`<release>-fact-verify-keys`. `VEXA_FACT_SEAL_SECRET` is gone; remove it from your own Secret. With
+`helm template`, set `factSeal.crm.signingKey`, or `factSeal.crm.existingSecret` with
+`factSeal.crm.publicKey` (see [The CRM](#the-crm-optional)).
+
+### Services that need a setting
+
+- **The flows mailbox on an IMAP server other than Gmail.** Set `flows.mail.authservId` to the
+  authserv-id your receiving server or mail gateway writes in `Authentication-Results`. The mailbox
+  does not start without it. On-premises Exchange usually writes no DMARC verdict itself; ask your
+  mail team which authserv-id the gateway in front of it writes. If nothing writes one, set it
+  anyway: every sender is then unauthenticated and mailed invites are quarantined, not acted on.
+  The Microsoft Graph inbox and the Gmail preset need nothing. See [Flows operations](/flows/operations).
+- **Calls.** The terminal's page policy admits only the LiveKit server named in `livekit.url`
+  (`LIVEKIT_URL` on the terminal, set by the chart). A LiveKit or asset origin outside that value is
+  blocked by the browser. See [Calls](#calls-optional).
+
+### What changes on upgrade
+
+- **In-chart databases restart once.** The in-chart Postgres and Redis gained a startup probe, so
+  `helm upgrade` restarts each of them once, with a short outage. Postgres keeps its data. Redis loses
+  its keys, including delegation records, if its persistence is off. Nothing restarts when you use
+  external databases. Tune the first-start budget with `postgres.probes` and `redis.probes`.
+- **Private writes when admin-api is down.** A session that has read private data gets
+  `503 policy_unreadable` on page writes and pushes while admin-api cannot answer who reads the
+  target, and nothing is written. A worker's commit is held for the person's share card. Sessions
+  that read nothing private are unaffected. See [Workspaces](/minutes/workspaces).
+- **Zoom bots turn incoming video off.** Once admitted, a Zoom bot stops incoming video through the
+  meeting's More menu, which saves about a core and a half per call with cameras on. Others in the
+  call see no change, attribution still follows the active speaker, and Vexa records no Zoom video.
+  The step looks for the English menu label (bot accounts are pinned to English, above); if it does
+  not find it, the call keeps video on and the join is unaffected.
+
 ## Honest status
 
 The k8s backend **lifecycle and the workspace mount are implemented** (the workspace store
