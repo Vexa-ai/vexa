@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 
+from . import share_access
 from .ports import ARTIFACT_DELETION_FIELD, deletion_stamp
 
 
@@ -133,7 +134,7 @@ class InMemoryTranscriptStore:
         # why the by-ROW-id read path exists (P0). Tiebreak on the id so the pick is deterministic.
         matches = [
             (mid, m) for mid, m in self._meetings.items()
-            if m["user_id"] == user_id
+            if share_access.owns(m["user_id"], m.get("data"), user_id)
             and m["platform"] == platform
             and m["native_meeting_id"] == native_meeting_id
         ]
@@ -204,7 +205,7 @@ class InMemoryTranscriptStore:
         deletion = data.get("artifact_deletion") or {}
         if deletion and deletion.get("state", "completed") == "completed":
             return None
-        is_owner = m.get("user_id") == user_id
+        is_owner = share_access.owns(m.get("user_id"), m.get("data"), user_id)
         authorized = (
             is_owner
             or user_id in (data.get("transcript_viewers") or [])
@@ -233,7 +234,7 @@ class InMemoryTranscriptStore:
 
         def accessible(m):
             data = m.get("data") if isinstance(m.get("data"), dict) else {}
-            return (m["user_id"] == user_id
+            return (share_access.owns(m["user_id"], m.get("data"), user_id)
                     or user_id in (data.get("transcript_viewers") or [])
                     or data.get("workspace_id") in mws)
         rows = [
@@ -270,7 +271,7 @@ class InMemoryTranscriptStore:
         def _row(mid, m):
             # One ownership decision per row, feeding both `shared` and the projection's viewer tier
             # (mirrors the real store's `_row`).
-            is_owner = m["user_id"] == user_id
+            is_owner = share_access.owns(m["user_id"], m.get("data"), user_id)
             row = {
                 "id": mid,
                 "user_id": m["user_id"],
@@ -370,7 +371,7 @@ class InMemoryTranscriptStore:
         except (TypeError, ValueError):
             return None
         row = self._meetings.get(mid)
-        if row is None or row.get("user_id") != user_id:
+        if row is None or not share_access.owns(row.get("user_id"), row.get("data"), user_id):
             return None
         return self._mint_share_on(mid, mode, allowed_emails, expires_in_sec)
 
@@ -404,7 +405,7 @@ class InMemoryTranscriptStore:
         except (TypeError, ValueError):
             return None
         row = self._meetings.get(mid)
-        if row is None or row.get("user_id") != user_id:
+        if row is None or not share_access.owns(row.get("user_id"), row.get("data"), user_id):
             return None
         data = dict(row["data"])
         result = edit(data, mid, row["user_id"])
@@ -594,7 +595,7 @@ class InMemoryTranscriptStore:
                                      calendar_sources=None):
         """Identity-only stamp on a row in ANY status — mirrors the adapter (live-row adoption)."""
         m = self._meetings.get(meeting_id)
-        if m is None or m["user_id"] != user_id:
+        if m is None or not share_access.owns(m["user_id"], m.get("data"), user_id):
             return None
         data = m["data"]
         if calendar_uid:
@@ -639,7 +640,7 @@ class InMemoryTranscriptStore:
 
         hits = []
         for mid, m in self._meetings.items():
-            if m["user_id"] != user_id:
+            if not share_access.owns(m["user_id"], m.get("data"), user_id):
                 continue          # owner-scoped, fail-closed — mirrors the adapter
             if platform and m["platform"] != platform:
                 continue
@@ -691,7 +692,7 @@ class InMemoryTranscriptStore:
         """Caller-owned annotations on a row in ANY status — mirrors the adapter. No status check:
         nothing written here is read by the dispatch pipeline, so there is no FSM to fight."""
         m = self._meetings.get(meeting_id)
-        if m is None or m["user_id"] != user_id:
+        if m is None or not share_access.owns(m["user_id"], m.get("data"), user_id):
             return None
         data = m["data"]
         # `title` lives in the data blob, NOT as a top-level field — mirrors the adapter and
@@ -728,7 +729,7 @@ class InMemoryTranscriptStore:
 
     async def update_planned_meeting(self, user_id, meeting_id, updates):
         m = self._meetings.get(meeting_id)
-        if m is None or m["user_id"] != user_id:
+        if m is None or not share_access.owns(m["user_id"], m.get("data"), user_id):
             return None
         if m["status"] not in ("idle", "scheduled"):
             return {"error": "conflict"}
@@ -811,7 +812,7 @@ class InMemoryTranscriptStore:
 
     async def delete_planned_meeting(self, user_id, meeting_id):
         m = self._meetings.get(meeting_id)
-        if m is None or m["user_id"] != user_id:
+        if m is None or not share_access.owns(m["user_id"], m.get("data"), user_id):
             return None
         if m["status"] not in ("idle", "scheduled"):
             return False
@@ -822,7 +823,7 @@ class InMemoryTranscriptStore:
         from datetime import datetime, timezone
 
         m = self._meetings.get(meeting_id)
-        if m is None or m["user_id"] != user_id:
+        if m is None or not share_access.owns(m["user_id"], m.get("data"), user_id):
             return None
         if m["status"] not in ("completed", "failed"):
             return {"error": "conflict"}
@@ -845,7 +846,7 @@ class InMemoryTranscriptStore:
 
         from .ports import DELETE_WHEN_ENDED_FIELD
         m = self._meetings.get(meeting_id)
-        if m is None or m["user_id"] != user_id:
+        if m is None or not share_access.owns(m["user_id"], m.get("data"), user_id):
             return None
         if m["status"] in ("completed", "failed"):
             return {"terminal": True}
@@ -858,14 +859,14 @@ class InMemoryTranscriptStore:
     async def delete_when_ended_requested(self, user_id, meeting_id):
         from .ports import DELETE_WHEN_ENDED_FIELD
         m = self._meetings.get(meeting_id)
-        return bool(m is not None and m["user_id"] == user_id
+        return bool(m is not None and share_access.owns(m["user_id"], m.get("data"), user_id)
                     and (m.get("data") or {}).get(DELETE_WHEN_ENDED_FIELD))
 
     async def finalize_completed_artifact_deletion(self, user_id, meeting_id):
         from datetime import datetime, timezone
 
         m = self._meetings.get(meeting_id)
-        if m is None or m["user_id"] != user_id:
+        if m is None or not share_access.owns(m["user_id"], m.get("data"), user_id):
             return None
         if m["status"] not in ("completed", "failed"):
             return False
@@ -951,7 +952,7 @@ class InMemoryTranscriptStore:
         except (TypeError, ValueError):
             return None
         m = self._meetings.get(mid)
-        if m is None or m.get("user_id") != user_id:
+        if m is None or not share_access.owns(m.get("user_id"), m.get("data"), user_id):
             return None  # owner-scoped: not-yours is indistinguishable from not-there
         data = m["data"] if isinstance(m.get("data"), dict) else {}
         prior = data.get("transcript_import")

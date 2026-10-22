@@ -302,8 +302,10 @@ def build_router(
         # nothing and may run no bot (`max_concurrent_bots` 0), so the bot — its row, its concurrency
         # count and its spend — is the account the principal bills to (`x-user-bills-to`, signed by
         # the gateway from identity's `principals` table). The principal and its workspace ride on the
-        # meeting's data; `shared_bot_workspace` below still binds the bot to a workspace in the
-        # room's ceiling, never to the payer's private meetings. identity answers the payer's cap.
+        # meeting's data (`data.room_principal`): the meeting is the ROOM'S, and no personal
+        # credential of the payer's owns it (collector.share_access.owns) — they read it as a member of
+        # its workspace. `shared_bot_workspace` below still binds the bot to a workspace in the room's
+        # ceiling, never to the payer's private meetings. identity answers the payer's cap.
         room_principal = None
         if identity_token.is_workspace_principal(request.headers):
             payer = (request.headers.get(identity_token.DELEGATION_HEADERS["bills_to"]) or "").strip()
@@ -642,6 +644,7 @@ def build_router(
                     call_invocation=prepared_call.invocation if prepared_call else None,
                     call_data=prepared_call.data if prepared_call else None,
                     bot_account=bot_account,
+                    room_principal=room_principal,
                 )
             except Exception:
                 # The room exists before the meeting does; a spawn refused or failed takes it away.

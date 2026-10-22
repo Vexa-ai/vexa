@@ -110,6 +110,12 @@ A room's turn runs as its workspace's own principal, not as the workspace owner'
 5. **The services.** The gateway, agent-api, the MCP edge, crm-api, flows-api and meeting-api read
    a workspace principal as shared even when `shared` is missing. crm-api never reads one as an
    admin.
+6. **A room's bot.** The principal's own account runs no bot, so meeting-api keys the bot's meeting
+   to the payer (row, concurrency count and spend) and records on it that it is the room's
+   (`data.room_principal`). Such a meeting has no personal owner: the payer's own key or session
+   reads it only as a member of the room's workspace, and cannot share it, change who reads it,
+   move it out of the workspace, delete it or find it in their transcript search. Continuing a
+   meeting never reopens the payer's own row for a room, or a room's row for the payer.
 
 ### Shared tokens, at the edge (D3)
 

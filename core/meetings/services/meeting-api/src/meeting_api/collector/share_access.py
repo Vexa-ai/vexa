@@ -27,6 +27,20 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
+#: ``data.room_principal`` — ``{"principal", "principal_workspace"}`` on a meeting a ROOM'S TURN made
+#: (a workspace principal's bot, keyed to the account that pays for it, ``bot_spawn``). Written once,
+#: at spawn, by meeting-api. Such a meeting is the room's: it has NO personal owner. The payer's own
+#: credentials reach it exactly as any member of the room's workspace does (the bound-workspace
+#: branch), never as its owner — no owner tier, no share to mint, no rebinding it out of the room,
+#: no deleting it.
+ROOM_PRINCIPAL = "room_principal"
+
+
+def owns(row_user_id, data, user_id) -> bool:
+    """Is ``user_id`` the row's personal OWNER? The account it is keyed to, unless a room's turn made
+    it (``ROOM_PRINCIPAL``). The SQL stores apply the same rule (``adapters._owned``)."""
+    return row_user_id == user_id and not (isinstance(data, dict) and data.get(ROOM_PRINCIPAL))
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()

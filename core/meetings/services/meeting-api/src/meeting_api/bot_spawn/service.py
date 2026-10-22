@@ -485,6 +485,12 @@ async def request_bot(
     # from meeting-api (sessionRestoreUrl) instead of the userdata store, writes it back to the
     # account, and is serialized per account (`auth_userdata_path` = "bot-account:<id>").
     bot_account: Optional[dict] = None,
+    # A ROOM'S BOT (D2): ``{"principal", "principal_workspace"}`` when a room's turn — a workspace
+    # principal — asked for it. The row is keyed to the account that pays (``user_id``), and this
+    # records that it is the room's: ``data.room_principal`` (collector.share_access.ROOM_PRINCIPAL),
+    # so no personal credential of the payer's is its owner. A continued meeting is reopened only
+    # when it is the same principal's (or, with none, nobody's room meeting).
+    room_principal: Optional[dict] = None,
 ) -> dict:
     """Run the spawn flow and return a MeetingResponse-shaped dict.
 
@@ -655,6 +661,9 @@ async def request_bot(
     if continue_meeting:
         latest = await repo.find_latest(user_id, platform, native_meeting_id)
         latest_data = (latest or {}).get("data") or {}
+        if ((latest_data.get("room_principal") or {}).get("principal")
+                != (room_principal or {}).get("principal")):
+            latest, latest_data = None, {}          # a room's row is not the payer's, nor theirs the room's
         deletion = latest_data.get("artifact_deletion") or {}
         recording_delete = any(
             r.get("deletion_pending") for r in (latest_data.get("recordings") or [])
@@ -810,6 +819,9 @@ async def request_bot(
         # the workspace's from its first row rather than from whenever someone remembered to bind it.
         if workspace_id:
             meeting_data["workspace_id"] = workspace_id
+        if room_principal:
+            meeting_data["room_principal"] = {k: str(room_principal.get(k) or "")
+                                              for k in ("principal", "principal_workspace")}
         # The serialization key for authenticated spawns — find_active_by_userdata matches on it.
         if authenticated and auth_userdata_path:
             meeting_data["auth_userdata_path"] = auth_userdata_path

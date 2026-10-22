@@ -52,6 +52,13 @@ def _decode_claimed(resp) -> "list[tuple[str, dict]]":
     return out
 
 
+def _owned(Meeting, user_id):
+    """The SQL of ``share_access.owns``: keyed to ``user_id`` and not a room's meeting."""
+    from sqlalchemy import and_
+
+    return and_(Meeting.user_id == user_id, Meeting.data[share_access.ROOM_PRINCIPAL].astext.is_(None))
+
+
 def _sha(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()
 
@@ -464,7 +471,7 @@ class SqlAlchemyTranscriptStore:
             stmt = (
                 select(Meeting)
                 .where(
-                    Meeting.user_id == user_id,
+                    _owned(Meeting, user_id),
                     Meeting.platform == platform,
                     Meeting.platform_specific_id == native_meeting_id,
                 )
@@ -504,7 +511,7 @@ class SqlAlchemyTranscriptStore:
             deletion_state = data.get("artifact_deletion") or {}
             if deletion_state and deletion_state.get("state", "completed") == "completed":
                 return None
-            is_owner = meeting.user_id == user_id                                   # (a) owner
+            is_owner = share_access.owns(meeting.user_id, data, user_id)            # (a) owner
             authorized = (
                 is_owner
                 or user_id in (data.get("transcript_viewers") or [])                # (c) transcript-share
@@ -540,7 +547,7 @@ class SqlAlchemyTranscriptStore:
             # the list_view sort, created_at for internal enumeration) with its own top-N
             # ORDER BY/LIMIT; the outer query dedups the merged ids and re-orders.
             access = [
-                Meeting.user_id == user_id,
+                _owned(Meeting, user_id),
                 cast(Meeting.data["transcript_viewers"], JSONB).op("@>")(func.to_jsonb(user_id)),
             ]
             if member_workspaces:
@@ -644,7 +651,7 @@ class SqlAlchemyTranscriptStore:
                 # The ONE ownership decision this row makes. `shared` (the api.v1 field) and the
                 # response projection's viewer tier both read it, so a row can never claim to be the
                 # caller's while being projected as a stranger's, or the reverse.
-                is_owner = m.user_id == user_id
+                is_owner = share_access.owns(m.user_id, m.data, user_id)
                 row = {
                     "id": m.id,
                     "user_id": m.user_id,
@@ -700,7 +707,7 @@ class SqlAlchemyTranscriptStore:
         async with self._session_factory() as db:
             owned = (await db.execute(
                 select(Meeting).where(
-                    Meeting.user_id == user_id,
+                    _owned(Meeting, user_id),
                     Meeting.platform == platform,
                     Meeting.platform_specific_id == native_meeting_id,
                 ).order_by(Meeting.created_at.desc()).limit(1)
@@ -737,7 +744,7 @@ class SqlAlchemyTranscriptStore:
         async with self._session_factory() as db:
             meeting = (await db.execute(
                 select(Meeting).where(
-                    Meeting.user_id == user_id,
+                    _owned(Meeting, user_id),
                     Meeting.platform == platform,
                     Meeting.platform_specific_id == native_meeting_id,
                 ).order_by(Meeting.created_at.desc()).limit(1)
@@ -773,7 +780,7 @@ class SqlAlchemyTranscriptStore:
         async with self._session_factory() as db:
             stmt = (
                 select(Meeting).where(
-                    Meeting.user_id == user_id,
+                    _owned(Meeting, user_id),
                     Meeting.platform == platform,
                     Meeting.platform_specific_id == native_meeting_id,
                 ).order_by(Meeting.created_at.desc()).limit(1).with_for_update()
@@ -824,7 +831,7 @@ class SqlAlchemyTranscriptStore:
 
         return await self._mint_share_on(
             select(Meeting).where(
-                Meeting.user_id == user_id, Meeting.platform == platform,
+                _owned(Meeting, user_id), Meeting.platform == platform,
                 Meeting.platform_specific_id == native_meeting_id,
             ).order_by(Meeting.created_at.desc()).limit(1).with_for_update(),
             mode=mode, allowed_emails=allowed_emails, expires_in_sec=expires_in_sec)
@@ -848,7 +855,7 @@ class SqlAlchemyTranscriptStore:
             return None
         return await self._mint_share_on(
             select(Meeting).where(
-                Meeting.id == mid, Meeting.user_id == user_id,
+                Meeting.id == mid, _owned(Meeting, user_id),
             ).limit(1).with_for_update(),
             mode=mode, allowed_emails=allowed_emails, expires_in_sec=expires_in_sec)
 
@@ -931,7 +938,7 @@ class SqlAlchemyTranscriptStore:
         except (TypeError, ValueError):
             return None
         async with self._session_factory() as db:
-            stmt = select(Meeting).where(Meeting.id == mid, Meeting.user_id == user_id).limit(1)
+            stmt = select(Meeting).where(Meeting.id == mid, _owned(Meeting, user_id)).limit(1)
             meeting = (await db.execute(stmt.with_for_update() if write else stmt)).scalars().first()
             if not meeting:
                 return None
@@ -1061,7 +1068,7 @@ class SqlAlchemyTranscriptStore:
                 text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
             )
             meeting = (await db.execute(
-                select(Meeting).where(Meeting.id == mid, Meeting.user_id == user_id)
+                select(Meeting).where(Meeting.id == mid, _owned(Meeting, user_id))
                 .with_for_update()
             )).scalars().first()
             # Owner-scoped: a row that is not the caller's answers exactly like one that does not
@@ -1176,7 +1183,7 @@ class SqlAlchemyTranscriptStore:
             stmt = (
                 select(Meeting)
                 .where(
-                    Meeting.user_id == user_id,
+                    _owned(Meeting, user_id),
                     Meeting.platform == platform,
                     Meeting.platform_specific_id == native_meeting_id,
                 )
@@ -1218,7 +1225,7 @@ class SqlAlchemyTranscriptStore:
             stmt = (
                 select(Meeting)
                 .where(
-                    Meeting.user_id == user_id,
+                    _owned(Meeting, user_id),
                     Meeting.platform == platform,
                     Meeting.platform_specific_id == native_meeting_id,
                 )
@@ -1330,7 +1337,7 @@ class SqlAlchemyTranscriptStore:
             if native_meeting_id is not None:
                 dup = (await db.execute(
                     select(Meeting.id).where(
-                        Meeting.user_id == user_id,
+                        Meeting.user_id == user_id,      # the active-row index is per account, room rows too
                         Meeting.platform == platform,
                         Meeting.platform_specific_id == native_meeting_id,
                         Meeting.status.notin_(("completed", "failed")),
@@ -1370,7 +1377,7 @@ class SqlAlchemyTranscriptStore:
                 text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
             )
             meeting = (await db.execute(
-                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                select(Meeting).where(Meeting.id == meeting_id, _owned(Meeting, user_id))
                 .with_for_update()
             )).scalars().first()
             if meeting is None:
@@ -1434,7 +1441,7 @@ class SqlAlchemyTranscriptStore:
             FROM transcriptions t
             JOIN meetings m ON m.id = t.meeting_id,
                  websearch_to_tsquery('{cfg}', :q) AS qq
-            WHERE m.user_id = :uid
+            WHERE m.user_id = :uid AND m.data->>'room_principal' IS NULL
               AND to_tsvector('{cfg}', t.text) @@ qq
               -- Explicit casts: asyncpg cannot infer a bind parameter's type when it appears
               -- only in `IS NULL` ("could not determine data type of parameter $3"), so an
@@ -1538,7 +1545,7 @@ class SqlAlchemyTranscriptStore:
                 text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
             )
             meeting = (await db.execute(
-                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                select(Meeting).where(Meeting.id == meeting_id, _owned(Meeting, user_id))
                 .with_for_update()
             )).scalars().first()
             if meeting is None:
@@ -1607,7 +1614,7 @@ class SqlAlchemyTranscriptStore:
                 text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
             )
             meeting = (await db.execute(
-                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                select(Meeting).where(Meeting.id == meeting_id, _owned(Meeting, user_id))
                 .with_for_update()
             )).scalars().first()
             if meeting is None:
@@ -1622,7 +1629,7 @@ class SqlAlchemyTranscriptStore:
                 if new_native is not None:
                     dup = (await db.execute(
                         select(Meeting.id).where(
-                            Meeting.user_id == user_id,
+                            _owned(Meeting, user_id),
                             Meeting.platform == new_platform,
                             Meeting.platform_specific_id == new_native,
                             Meeting.status.notin_(("completed", "failed")),
@@ -1718,7 +1725,7 @@ class SqlAlchemyTranscriptStore:
 
         async with self._session_factory() as db:
             meeting = (await db.execute(
-                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                select(Meeting).where(Meeting.id == meeting_id, _owned(Meeting, user_id))
                 .with_for_update()
             )).scalars().first()
             if meeting is None:
@@ -1739,7 +1746,7 @@ class SqlAlchemyTranscriptStore:
 
         async with self._session_factory() as db:
             meeting = (await db.execute(
-                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                select(Meeting).where(Meeting.id == meeting_id, _owned(Meeting, user_id))
                 .with_for_update()
             )).scalars().first()
             if meeting is None:
@@ -1775,7 +1782,7 @@ class SqlAlchemyTranscriptStore:
 
         async with self._session_factory() as db:
             meeting = (await db.execute(
-                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                select(Meeting).where(Meeting.id == meeting_id, _owned(Meeting, user_id))
                 .with_for_update()
             )).scalars().first()
             if meeting is None:
@@ -1799,7 +1806,7 @@ class SqlAlchemyTranscriptStore:
 
         async with self._session_factory() as db:
             data = (await db.execute(
-                select(Meeting.data).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                select(Meeting.data).where(Meeting.id == meeting_id, _owned(Meeting, user_id))
             )).scalars().first()
             return bool(isinstance(data, dict) and data.get(DELETE_WHEN_ENDED_FIELD))
 
@@ -1813,7 +1820,7 @@ class SqlAlchemyTranscriptStore:
 
         async with self._session_factory() as db:
             meeting = (await db.execute(
-                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                select(Meeting).where(Meeting.id == meeting_id, _owned(Meeting, user_id))
                 .with_for_update()
             )).scalars().first()
             if meeting is None:
