@@ -248,6 +248,20 @@ def test_an_ordinary_name_reaches_the_mail_as_typed(tmp_path):
     assert acts.mail_name("evil.example", "a workspace") == "a workspace"
 
 
+@pytest.mark.parametrize("name", ["St.Louis office", "J.R.R. Tolkien reading group", "Dr. Smith's lab",
+                                  "Mt.Everest expedition", "U.S.Army liaison", "St.Étienne"])
+def test_a_dotted_name_that_is_not_a_domain_reaches_the_mail(tmp_path, name):
+    """An abbreviation's dot (St., Dr., J.R.R.) is not a domain: the name is said as typed."""
+    assert acts.mail_name(name, "a workspace") == name
+    assert _mailed_fact(tmp_path, workspace_name=name)["workspace_name"] == name
+
+
+@pytest.mark.parametrize("name", ["acme.at", "ACME.AT", "Evil.Com", "T.Co", "St.Louis.com", "evil.example",
+                                  "Visit Ev.co today", "news.Example"])
+def test_a_name_that_reads_as_a_domain_is_still_not_said(name):
+    assert acts.mail_name(name, "a workspace") == "a workspace"
+
+
 def test_a_deployment_that_captures_mail_never_says_mailed(tmp_path):
     """LIVE DEFECT (founder, 2026-10-14): the agent said "the invite link was emailed to her" while
     the mail landed in the capture double and she received nothing. The carrier's acceptance is not

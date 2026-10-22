@@ -76,8 +76,14 @@ log = logging.getLogger(__name__)
 #: The private tier, in every spelling ``RESERVED_SLUGS`` holds for it. Refused for everyone.
 #: The longest name an invite mail carries for the workspace or the room.
 MAIL_NAME_MAX = 60
-#: What reads as somewhere to go or someone to write to: a scheme, ``www.``, an address, a domain.
-_LINKISH = re.compile(r"(?i)[a-z][a-z0-9+.\-]*:/|www\.|@|\b[a-z0-9\-]+(?:\.[a-z0-9\-]+)*\.[a-z]{2,}\b")
+#: What reads as somewhere to go or someone to write to: a scheme, ``www.`` or an address.
+_LINKISH = re.compile(r"(?i)[a-z][a-z0-9+.\-]*:/|www\.|@")
+#: A dotted word that may be a domain (``acme.at``, ``evil.example``) …
+_DOTTED = re.compile(r"(?i)\b[a-z0-9\-]+(?:\.[a-z0-9\-]+)*\.[a-z]{2,}\b")
+#: … unless it is written as abbreviations before a capitalised word (``St.Louis``, ``U.S.Army``):
+#: each dotted part one to three letters starting with a capital, the last a capitalised word of four
+#: or more letters, which no short ``T.Co`` or lower-case ``acme.at`` is.
+_ABBREVIATED = re.compile(r"(?:[A-Z][a-z]{0,2}\.)+[A-Z][a-z]{3,}")
 
 
 def mail_name(value, fallback: str = "") -> str:
@@ -91,7 +97,8 @@ def mail_name(value, fallback: str = "") -> str:
     text = " ".join(text.split())
     if len(text) > MAIL_NAME_MAX:
         text = text[:MAIL_NAME_MAX - 1].rstrip() + "…"
-    if not text or _LINKISH.search(text):
+    if not text or _LINKISH.search(text) or any(not _ABBREVIATED.fullmatch(m.group())
+                                                for m in _DOTTED.finditer(text)):
         return fallback
     return text
 

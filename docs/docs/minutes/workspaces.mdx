@@ -141,7 +141,9 @@ The invite email is a fixed template: who invited them, to which workspace or ro
 link. It never carries a message, a page or anything said in a chat. The workspace and room names in
 it are one line of at most 60 characters; a name that contains a web address, an email address or a
 domain is not said (the email uses the workspace's short name, or leaves the room out), so a name
-cannot make the email point anyone somewhere.
+cannot make the email point anyone somewhere. A dot after an abbreviation is not a domain: names
+such as `St.Louis office`, `J.R.R. Tolkien` or `Dr. Smith's lab` are said as typed, while `acme.at`,
+`Evil.Com` or `T.Co` are not.
 
 Changing a role and removing someone work the same way, from **People** or in the chat. A workspace
 always keeps at least one owner.
