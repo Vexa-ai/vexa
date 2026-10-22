@@ -1827,6 +1827,21 @@
             "description": "wake anyway after this many seconds with anything scored (30\u20131800, default 300)",
             "title": "Max Wait S"
           },
+          "rules": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ListenRule"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "what wakes you the moment it is said, with no model: topics, competitor names, a person (at most 20); the list replaces the current one",
+            "title": "Rules"
+          },
           "threshold": {
             "anyOf": [
               {
@@ -1887,6 +1902,41 @@
           "name"
         ],
         "title": "ListenLabel",
+        "type": "object"
+      },
+      "ListenRule": {
+        "additionalProperties": false,
+        "description": "A rule that wakes you at once, with no model: a phrase, a speaker, or a pattern.",
+        "properties": {
+          "kind": {
+            "description": "`keyword`: a word or phrase (case-insensitive, whole words); `person`: a speaker's name; `regex`: a pattern",
+            "enum": [
+              "keyword",
+              "person",
+              "regex"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "value": {
+            "description": "the phrase, name or pattern, e.g. `pricing` or `Acme`",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          },
+          "wake": {
+            "default": true,
+            "description": "true: a matching line wakes you; false: kept but silent",
+            "title": "Wake",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "title": "ListenRule",
         "type": "object"
       },
       "MarkReadBody": {

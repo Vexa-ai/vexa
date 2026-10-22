@@ -937,7 +937,7 @@
         "meeting",
         "brief"
       ],
-      "note": "SET OR REVISE WHAT VEXA LISTENS FOR in a live meeting: the brief a small signal model scores each new line against, which wakes you in the meeting's chat when enough new information has built up. Set it when the bot starts, from the meeting's context (its agenda page, workspace, people, the last meeting), and again whenever the focus shifts; when a signal wakes you, update the meeting page and put what you now know in `known`. `addressed_to_vexa` is always kept. Written to the meeting page's front matter, where the people in the meeting can read it."
+      "note": "SET OR REVISE WHAT VEXA LISTENS FOR in a live meeting: the brief a small signal model scores each new line against, which wakes you in the meeting's chat when enough new information has built up. Set it when the bot starts, from the meeting's context (its agenda page, workspace, people, the last meeting), and again whenever the focus shifts; when a signal wakes you, update the meeting page and put what you now know in `known`. `addressed_to_vexa` is always kept. `brief.rules` wake you the moment they match, with no model: a `keyword` (a topic, a competitor's name), a `person` (a speaker) or a `regex` \u2014 use them for what the person asks you to catch (\"tell me when pricing comes up\"). Written to the meeting page's front matter, where the people in the meeting can read it."
     },
     {
       "name": "workspace_target",

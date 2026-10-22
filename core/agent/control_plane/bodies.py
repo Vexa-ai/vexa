@@ -6,7 +6,7 @@ Moved out of `api_shared.py` unchanged; the class names are the OpenAPI schema n
 """
 from __future__ import annotations
 
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, Field, StringConstraints, field_validator
 
@@ -699,12 +699,26 @@ class ListenLabel(BaseModel):
                        "you; false: it is only highlighted on the transcript")
 
 
+class ListenRule(BaseModel):
+    """A rule that wakes you at once, with no model: a phrase, a speaker, or a pattern."""
+    model_config = {"extra": "forbid"}
+    kind: Literal["keyword", "person", "regex"] = Field(description="`keyword`: a word or phrase "
+                                                        "(case-insensitive, whole words); `person`: a "
+                                                        "speaker's name; `regex`: a pattern")
+    value: str = Field(min_length=1, max_length=200, description="the phrase, name or pattern, e.g. "
+                       "`pricing` or `Acme`")
+    wake: bool = Field(True, description="true: a matching line wakes you; false: kept but silent")
+
+
 class ListenBrief(BaseModel):
     """What to listen for in this meeting. Fields you leave out keep their current value."""
     model_config = {"extra": "forbid"}
     focus: Optional[str] = Field(None, description="one or two sentences: what matters in this meeting")
     labels: Optional[list[ListenLabel]] = Field(None, description="the labels to score; "
                                                 "`addressed_to_vexa` is always kept and always wakes you")
+    rules: Optional[list[ListenRule]] = Field(None, description="what wakes you the moment it is said, "
+                                              "with no model: topics, competitor names, a person (at "
+                                              "most 20); the list replaces the current one")
     known: Optional[str] = Field(None, description="what you already know from this meeting, in a few "
                                  "lines — the model scores what is NEW against it")
     wake_at: Optional[float] = Field(None, description="how much new information wakes you (0.2–10, "

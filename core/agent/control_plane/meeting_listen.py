@@ -49,6 +49,10 @@ LABEL_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 #: wakes and spend; these keep a brief readable and a meeting's wake rhythm sane.
 BOUNDS = {"wake_at": (0.2, 10.0), "max_wait_s": (30, 1800), "threshold": (0.0, 1.0)}
 MAX_LABELS = 12
+#: The rule tier (`meeting_signals.rules`): what wakes the agent at once, with no model call.
+RULE_KINDS = ("keyword", "person", "regex")
+MAX_RULES = 20
+MAX_RULE_VALUE = 200
 MAX_FOCUS = 600
 MAX_QUESTION = 300
 MAX_KNOWN = 4000
@@ -215,7 +219,8 @@ def normalize(brief: dict, *, base: Optional[dict] = None) -> dict:
     brief, else the default). Raises `BriefError` on a shape it will not write."""
     if not isinstance(brief, dict):
         raise BriefError("the brief must be an object")
-    unknown = set(brief) - {"focus", "labels", "known", "wake_at", "max_wait_s", "threshold", "version"}
+    unknown = set(brief) - {"focus", "labels", "rules", "known", "wake_at", "max_wait_s", "threshold",
+                            "version"}
     if unknown:
         raise BriefError(f"unknown brief field(s): {', '.join(sorted(unknown))}")
     base = base if isinstance(base, dict) else DEFAULT_BRIEF
@@ -251,6 +256,52 @@ def normalize(brief: dict, *, base: Optional[dict] = None) -> dict:
         labels.append({"name": ADDRESSED, "question": ADDRESSED_QUESTION, "wake": True})
     if len(labels) > MAX_LABELS:
         raise BriefError(f"at most {MAX_LABELS} labels, {ADDRESSED} included")
+    rules = _rules(brief.get("rules", base.get("rules") or []))
+    return {**_core(focus, labels, known, brief, base), **({"rules": rules} if rules else {})}
+
+
+#: A pattern with a quantified group that itself holds a quantifier (`(a+)+`) — the signals service
+#: refuses it (`meeting_signals.rules`); it is refused here first, where the agent hears why.
+_NESTED_QUANTIFIER = re.compile(r"\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)\s*[+*{]")
+
+
+def _rules(raw) -> list:
+    """The brief's rule tier as it is written: `{kind, value, wake}`, at most `MAX_RULES`."""
+    if not isinstance(raw, list):
+        raise BriefError("rules must be a list")
+    out, seen = [], set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise BriefError("each rule is {kind, value, wake}")
+        extra = set(item) - {"kind", "value", "wake"}
+        if extra:
+            raise BriefError(f"unknown rule field(s): {', '.join(sorted(extra))}")
+        kind = str(item.get("kind") or "")
+        if kind not in RULE_KINDS:
+            raise BriefError(f"rule kind must be one of {', '.join(RULE_KINDS)}")
+        value = _text(item.get("value"), MAX_RULE_VALUE, f"{kind} rule")
+        if not value:
+            raise BriefError(f"{kind} rule: value is empty")
+        if kind == "regex":
+            if _NESTED_QUANTIFIER.search(value):
+                raise BriefError("regex rule: a quantified group holding a quantifier is refused")
+            try:
+                re.compile(value)
+            except re.error as exc:
+                raise BriefError(f"regex rule: {exc}") from None
+        wake = item.get("wake", True)
+        if not isinstance(wake, bool):
+            raise BriefError(f"{kind} rule {value!r}: wake must be true or false")
+        if (kind, value.casefold()) in seen:
+            continue
+        seen.add((kind, value.casefold()))
+        out.append({"kind": kind, "value": value, "wake": wake})
+    if len(out) > MAX_RULES:
+        raise BriefError(f"at most {MAX_RULES} rules")
+    return out
+
+
+def _core(focus, labels, known, brief, base) -> dict:
     return {"focus": focus, "labels": labels, "known": known,
             "wake_at": _bounded(brief.get("wake_at", base.get("wake_at")), "wake_at", DEFAULT_BRIEF["wake_at"]),
             "max_wait_s": _bounded(brief.get("max_wait_s", base.get("max_wait_s")), "max_wait_s",

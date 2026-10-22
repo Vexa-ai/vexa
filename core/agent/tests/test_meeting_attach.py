@@ -289,3 +289,28 @@ def test_setting_the_brief_of_a_meeting_with_no_page_makes_the_page(tmp_path, mo
     r = client.post("/api/meeting/listen", headers=_as(OWNER),
                     json={"meeting": ROW, "brief": {"focus": "pricing"}})
     assert r.status_code == 200, r.text
+
+
+def test_a_rule_the_agent_sets_reaches_the_listener_and_wakes_without_a_model(tmp_path, monkeypatch):
+    """Live check 22 Oct, meeting 214: «wake me when pricing comes up» could only be a label, scored by
+    the signal model, and the model timed out — the pricing line woke nothing. A keyword rule rides the
+    brief to signals, whose rule tier wakes on it with no model call."""
+    monkeypatch.setenv("VEXA_FEATURES", "all,transcript_signals")
+    client, sess, *_ = _world(tmp_path)
+    sess.upsert(OWNER, "pchat-founder", touched=True)
+    _listen(client)
+    r = client.post("/api/meeting/listen", headers=_as(OWNER), json={"meeting": ROW, "brief": {
+        "rules": [{"kind": "keyword", "value": "pricing"}, {"kind": "person", "value": "Alex Speaker"}]}})
+    assert r.status_code == 200, r.text
+    rules = _listen(client)["brief"]["rules"]
+    assert {"kind": "keyword", "value": "pricing", "wake": True} in rules
+    assert len(rules) == 2
+
+
+@pytest.mark.parametrize("rule", [{"kind": "regex", "value": "(a+)+"}, {"kind": "regex", "value": "("},
+                                  {"kind": "topic", "value": "x"}])
+def test_a_rule_signals_would_drop_is_refused_where_the_agent_hears_why(tmp_path, monkeypatch, rule):
+    monkeypatch.setenv("VEXA_FEATURES", "all,transcript_signals")
+    client, *_ = _world(tmp_path)
+    r = client.post("/api/meeting/listen", headers=_as(OWNER), json={"meeting": ROW, "brief": {"rules": [rule]}})
+    assert r.status_code in (400, 422), r.text
