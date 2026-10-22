@@ -42,7 +42,7 @@
       "name": "fedirz/faster-whisper-server",
       "license": "MIT",
       "disposition": "sidecar",
-      "note": "Opt-in local CPU speech-to-text sidecar for Lite (LOCAL_STT, WHISPER_IMAGE in deploy/lite/Makefile). Upstream speaches-ai/speaches (formerly fedirz/faster-whisper-server), MIT, Category A. User-pulled and not redistributed inside any vexaai/* artifact."
+      "note": "Opt-in local CPU speech-to-text sidecar for Lite (LOCAL_STT, WHISPER_IMAGE in deploy/lite/Makefile). Pinned by digest (the last CPU build fedirz published). Upstream continues as speaches-ai/speaches (formerly fedirz/faster-whisper-server), MIT, Category A. User-pulled and not redistributed inside any vexaai/* artifact."
     },
     {
       "name": "livekit/livekit-server",
@@ -84,7 +84,7 @@
       "name": "nginx",
       "license": "BSD-2-Clause",
       "disposition": "sidecar",
-      "note": "The transcription stack's load balancer (deploy/transcription/docker-compose*.yml, nginx:alpine). nginx is BSD-2-Clause, Category A; operator-pulled and not redistributed."
+      "note": "The transcription stack's load balancer (deploy/transcription/docker-compose*.yml, nginx:alpine, pinned by digest). nginx is BSD-2-Clause, Category A; operator-pulled and not redistributed."
     }
   ],
   "bundled": [

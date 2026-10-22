@@ -339,7 +339,7 @@ test("image-licenses RED: an undeclared Dockerfile FROM pin reds", () => {
 // nor CVE-scanned. Each plant below was green before.
 
 test("image-licenses RED: an undeclared image in the transcription compose reds", () => {
-  const r = withEdited("deploy/transcription/docker-compose.yml", "image: nginx:alpine", "image: somevendor/unaudited:1.2",
+  const r = withEdited("deploy/transcription/docker-compose.yml", /image: nginx:alpine\S*/, "image: somevendor/unaudited:1.2",
     () => runGate("image-licenses"));
   assert.equal(r.green, false, "the transcription stack's image was not read");
   assert.match(r.out, /undeclared pinned image "somevendor\/unaudited:1\.2" in deploy\/transcription\/docker-compose\.yml/);

@@ -2182,9 +2182,8 @@ services:
   searxng:
     profiles: ["search"]
     # PINNED BY DIGEST, deliberately: an unmodified third-party artifact we vouch for by its exact
-    # bytes, not by a moving tag. Bump it on purpose, never implicitly. (= searxng/searxng:latest
-    # at SearXNG 2026.9.5-c7f3080aa.)
-    image: ${SEARXNG_IMAGE:-searxng/searxng@sha256:55e1fa15a63ff04e79e213e6aa2837549877b0c6d60757cdb633ae9111cb5fea}
+    # bytes, not by a moving tag. Bump it on purpose, never implicitly.
+    image: ${SEARXNG_IMAGE:-searxng/searxng:2026.9.5-c7f3080aa@sha256:55e1fa15a63ff04e79e213e6aa2837549877b0c6d60757cdb633ae9111cb5fea}
     networks: [vexa, workers]     # MUST match the stack: workers resolve it on `workers`
     ports:
       - "127.0.0.1:${SEARXNG_HOST_PORT:-18481}:8080"

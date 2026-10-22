@@ -73,6 +73,10 @@ make -C deploy/lite up LOCAL_STT=1
 make -C deploy/lite stt-smoke   # synthesizes speech in a container, asserts a transcript comes back
 ```
 
+The sidecar runs `fedirz/faster-whisper-server:latest-cpu`, pinned by digest in `deploy/lite/Makefile`
+(`WHISPER_IMAGE`). That project no longer publishes images, so the pin is its last CPU build; its
+known findings are listed in [`security/known-advisories.md`](https://github.com/Vexa-ai/vexa/blob/main/security/known-advisories.md).
+
 Without a transcription backend, bots join and capture but produce no text — a default
 `POST /bots` answers `503` unless the spawn opts out
 ([capture-only](/how-to/send-a-bot#capture-only-no-stt)).
@@ -146,6 +150,9 @@ State lives in the sidecars' named volumes and survives app-container replacemen
 | Recordings (the `vexa-lite-storage` sidecar, versitygw) | volume `vexa-lite-storagedata` — one plain file per object under `data/vexa/` |
 | The terminal's signing secret (`NEXTAUTH_SECRET`, when `.env` sets none) | volume `vexa-lite-state` at `/var/lib/vexa/state` |
 | Valkey state and `/workspaces` scratch | **in-container, ephemeral** — mount `/var/lib/redis` yourself if you need it kept |
+
+The postgres sidecar runs `postgres:17-alpine`, pinned by digest in `deploy/lite/Makefile` (`PG_IMAGE`):
+the same bytes Compose and the Helm chart run.
 
 The storage sidecar runs `versity/versitygw` (Apache-2.0), pinned by tag and digest in
 `deploy/lite/Makefile`. meeting-api reaches it over S3 at `vexa-lite-storage:9000` with the

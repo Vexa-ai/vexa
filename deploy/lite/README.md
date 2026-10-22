@@ -44,7 +44,9 @@ make -C deploy/lite stt-smoke        # ✓ local STT transcribes (model=whisper-
 
 Override the model or image for more accuracy: `WHISPER_MODEL=Systran/faster-whisper-small.en`, or
 a GPU image via `WHISPER_IMAGE=...`. (The client sends `model=whisper-1`, the OpenAI id;
-faster-whisper-server accepts it and serves `WHISPER_MODEL`.)
+faster-whisper-server accepts it and serves `WHISPER_MODEL`.) The default image is
+`fedirz/faster-whisper-server:latest-cpu`, pinned by digest: that project no longer publishes, and its
+successor, speaches, configures and loads models differently, so it is not a drop-in `WHISPER_IMAGE`.
 
 After it finishes:
 

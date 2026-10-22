@@ -32,7 +32,8 @@ LAST_TAG_FILE  := $(ROOT)/deploy/lite/.last-tag
 # the app reaches them by container name. Override HOST_*_PORT to avoid conflicts on a busy host.
 NETWORK           ?= vexa-lite-net
 PG_CONTAINER      ?= vexa-lite-postgres
-PG_IMAGE          ?= postgres:17-alpine
+# Pinned by digest, the same bytes as deploy/compose and the Helm chart (scripts/infra-image-digest.test.mjs).
+PG_IMAGE          ?= postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
 STORAGE_CONTAINER ?= vexa-lite-storage
 APP_CONTAINER     ?= vexa-lite
 PG_VOLUME         ?= vexa-lite-pgdata
@@ -75,10 +76,12 @@ STORAGE_PUBLISHED := ""|vexa-access-key|vexa-secret-key|minioadmin|changeme|chan
 # bundled faster-whisper CPU server on the tiny model and auto-wires TRANSCRIPTION_SERVICE_URL to
 # it — transcripts work out of the box, slower but real. The client sends model=whisper-1 (the
 # OpenAI id); faster-whisper-server accepts it and serves WHISPER_MODEL. Override for a bigger
-# model (WHISPER_MODEL=Systran/faster-whisper-small.en) or a GPU image.
+# model (WHISPER_MODEL=Systran/faster-whisper-small.en) or a GPU image. The image is pinned by digest
+# (= fedirz/faster-whisper-server:latest-cpu, the last CPU build that project published); upstream
+# now publishes as speaches (ghcr.io/speaches-ai/speaches), which configures and loads models differently.
 LOCAL_STT        ?=
 WHISPER_CONTAINER ?= vexa-lite-whisper
-WHISPER_IMAGE    ?= fedirz/faster-whisper-server:latest-cpu
+WHISPER_IMAGE    ?= fedirz/faster-whisper-server:latest-cpu@sha256:760e5e43d427dc6cfbbc4731934b908b7de9c7e6d5309c6a1f0c8c923a5b6030
 WHISPER_MODEL    ?= Systran/faster-whisper-tiny.en
 HOST_STT_PORT    ?= 8083
 

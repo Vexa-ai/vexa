@@ -76,7 +76,8 @@ function dockerRunImage(command) {
   return null;
 }
 
-// → Map name → { ref, source, refs: Set<ref> }   (ref/source = first sighting; refs = every one)
+// → Map name → { ref, source, refs: Set<ref>, sources: Map<ref, source> }
+//   (ref/source = first sighting; refs = every one; sources = where each ref was first seen)
 export function collectPinnedImages(root = DEFAULT_ROOT) {
   const rel = (p) => p.slice(root.length + 1);
   const files = trackedFiles(root);
@@ -105,8 +106,10 @@ export function collectPinnedImages(root = DEFAULT_ROOT) {
     const name = ref.replace(/@sha256:.*$/, "").replace(/:[^/:]+$/, "");     // strip digest / :tag
     if (!name || (!ref.includes("/") && !ref.includes(":"))) return;         // Docker stage alias / invalid ref
     if (builtHere.has(name)) return;                                         // built in this repository
-    if (!found.has(name)) found.set(name, { ref, source, refs: new Set() });
-    found.get(name).refs.add(ref);
+    if (!found.has(name)) found.set(name, { ref, source, refs: new Set(), sources: new Map() });
+    const entry = found.get(name);
+    entry.refs.add(ref);
+    if (!entry.sources.has(ref)) entry.sources.set(ref, source);
   };
 
   for (const f of deployFiles)

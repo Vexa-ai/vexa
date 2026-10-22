@@ -5,7 +5,8 @@
 # Slower + lower accuracy than GPU; use a smaller MODEL_SIZE (e.g. base/small/medium).
 services:
   transcription-api:
-    image: nginx:alpine
+    # Pinned by digest (= nginx:alpine on 2026-10-22). Bump it on purpose, never implicitly.
+    image: nginx:alpine@sha256:a3554c0d0b48177b1413c26e01f695334428020d9df01243fbae3e11cfd17417
     ports:
       - "${TRANSCRIPTION_LB_PORT:-8083}:80"
     volumes:
