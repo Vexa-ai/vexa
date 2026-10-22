@@ -22,5 +22,7 @@ export { SttGate, parseRetryAfter, bodySaysOverloaded } from './stt-gate.js';
 export type { SttPressure, SttGateConfig } from './stt-gate.js';
 export { isLowConfidenceSegment, confidenceFilterFromEnv, STRICT_MIN_AVG_LOGPROB, STRICT_MIN_AUDIO_SEC } from './confidence.js';
 export type { ConfidenceFilterMode } from './confidence.js';
-export { SsrfError, isBlockedIp, isBlockedHostname, validateUrl, guardedLookup } from './url-guard.js';
+export { SsrfError, isBlockedIp, isBlockedHostname, validateUrl, guardedLookup, literalAddress, resolveHost,
+  isNeverAllowedIp, parseAllowance, allowanceAdmitsHost, allowanceAdmitsIp } from './url-guard.js';
+export type { OperatorAllowance, Resolver } from './url-guard.js';
 export { setLogger } from './log.js';

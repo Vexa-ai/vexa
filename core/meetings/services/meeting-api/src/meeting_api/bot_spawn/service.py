@@ -39,6 +39,7 @@ from ..service_authority import (
 )
 from .auth_session import auth_session_config
 from .invocation import build_invocation, build_workload_spec, mint_meeting_token
+from .meeting_host import TEAMS_HOST_SUFFIXES, allowance_entries, check_meeting_url_async
 from . import transcription_language as tlang
 from .workload_redis import voice_note_stream
 from .ports import (
@@ -150,12 +151,7 @@ _TEAMS_SHORT_ID = re.compile(r"^\d{10,16}$")
 #: ALLOWLIST, not a passthrough. An arbitrary host here is the same SSRF surface
 #: ``_validate_meeting_url`` guards on the URL path, and it would also aim an anonymous join at a
 #: look-alike page. ``teams.microsoft.com`` is the default when the caller names nothing.
-_TEAMS_HOST_SUFFIXES = (
-    "teams.microsoft.com",
-    "teams.live.com",
-    "teams.microsoft.us",
-    "teams.cloud.microsoft",
-)
+_TEAMS_HOST_SUFFIXES = TEAMS_HOST_SUFFIXES
 _TEAMS_DEFAULT_HOST = "teams.microsoft.com"
 
 
@@ -521,7 +517,12 @@ async def request_bot(
     if is_voice_note:
         recording_enabled = False
         voice_note_cap, voice_note_idle = _voice_note_limits()
-    # 1. URL.
+    # 1. URL. A caller-supplied URL is held to the meeting host rule here, on every spawn path
+    #    (POST /bots and the calendar auto-join), before any DB write: its host belongs to the
+    #    platform and resolves to a public or operator-listed address (meeting_host). A refusal is
+    #    MeetingHostRefused (POST /bots → 422). A constructed URL is built on a fixed platform host.
+    if meeting_url and not no_page:
+        await check_meeting_url_async(platform, meeting_url)
     constructed_url = None if no_page else (meeting_url or construct_meeting_url(
         platform, native_meeting_id, teams_base_host=teams_base_host
     ))
@@ -952,6 +953,10 @@ async def request_bot(
         # session-profile.v1's restore route: where a bot-account bot reads its profile before launch.
         session_restore_url=(f"{meeting_api_url}/internal/browser-session/{connection_id}"
                              if bot_account_id else None),
+        # The operator's VEXA_MEETING_HOST_ALLOW entries: the internal meeting hosts the bot's
+        # navigation guard may also reach. Sent only when the operator listed some (an older bot
+        # refuses the field), and never for a bot with no page.
+        meeting_host_allow=(allowance_entries() or None) if not no_page else None,
         # Explicit caller windows win; otherwise omit everyoneLeftTimeout so the bot's
         # silence-window module default applies (the lobby window stays forgiving for
         # human-in-the-loop dashboard joins).

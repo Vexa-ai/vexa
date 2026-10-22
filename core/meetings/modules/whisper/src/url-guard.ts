@@ -149,6 +149,86 @@ export function isBlockedHostname(hostname: string): boolean {
   return !host.includes('.') && literalAddress(host) === null;
 }
 
+/** What no operator allowance can admit: addresses that reach this host or its cloud rather than
+ *  another machine on the corporate network (ssrf.py `_NEVER_ALLOWED_NETWORKS`). */
+const V4_NEVER: Array<[string, number]> = [
+  ['0.0.0.0', 8], ['127.0.0.0', 8], ['169.254.0.0', 16], ['100.100.100.200', 32], ['224.0.0.0', 4], ['240.0.0.0', 4],
+];
+const V6_NEVER: Array<[string, number]> = [['::', 128], ['::1', 128], ['fe80::', 10], ['fd00:ec2::254', 128], ['ff00::', 8]];
+const HOST_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/** True for an address no operator allowance may admit (loopback, link-local and cloud metadata,
+ *  unspecified, multicast, reserved) — read through every IPv4 address it carries. */
+export function isNeverAllowedIp(addr: string | Addr): boolean {
+  const a = typeof addr === 'string' ? literalAddress(addr) : addr;
+  if (!a) return true;
+  if (a.v === 4) return V4_NEVER.some((net) => inNet4(a.n, net));
+  if (embeddedIpv4(a.n).some((v4) => isNeverAllowedIp({ v: 4, n: v4 }))) return true;
+  return V6_NEVER.some((net) => inNet6(a.n, net));
+}
+
+/** Internal hosts and networks an OPERATOR named for one kind of request (ssrf.py
+ *  `OperatorAllowance`): exact host names, and networks as `[base, prefix]` of one family. */
+export interface OperatorAllowance {
+  hosts: ReadonlySet<string>;
+  networks: ReadonlyArray<{ v: 4 | 6; base: string; len: number }>;
+}
+
+/** Parse an operator's entries (exact host names, CIDRs or single addresses) — or throw SsrfError
+ *  naming the bad entry: a wildcard, a URL, a malformed name, `localhost`, a metadata name, or a
+ *  network overlapping what is never allowed. */
+export function parseAllowance(entries: readonly string[] | string, what = 'allowance'): OperatorAllowance {
+  const list = typeof entries === 'string' ? entries.split(/[\s,]+/) : [...entries];
+  const hosts = new Set<string>();
+  const networks: Array<{ v: 4 | 6; base: string; len: number }> = [];
+  for (const raw of list) {
+    const item = (raw || '').trim().toLowerCase().replace(/\.$/, '');
+    if (!item) continue;
+    if (item.includes('/') || item.includes(':') || /^[0-9.]+$/.test(item)) {
+      const [base, lenText] = item.split('/');
+      const a = isIP(base) ? literalAddress(base) : null;
+      const max = a?.v === 6 ? 128 : 32;
+      const len = lenText === undefined ? max : Number(lenText);
+      if (!a || !/^\d+$/.test(lenText ?? String(max)) || len > max) {
+        throw new SsrfError(`${what}: '${raw}' is not an IP network`);
+      }
+      const net = { v: a.v, base, len } as const;
+      const overlaps = (a.v === 4 ? V4_NEVER : V6_NEVER).some(([nb, nl]) => {
+        const shorter = Math.min(nl, len);
+        return a.v === 4
+          ? inNet4(a.n as number, [nb, shorter])
+          : inNet6(a.n as bigint, [nb, shorter]);
+      });
+      if (overlaps) throw new SsrfError(`${what}: '${raw}' overlaps addresses that are never allowed`);
+      networks.push(net);
+      continue;
+    }
+    if (/[*:/@?#\[\]]/.test(item)) throw new SsrfError(`${what}: '${raw}' must be an exact host name or an IP network`);
+    if (BLOCKED_HOSTNAMES.has(item) || item.endsWith('.localhost')) throw new SsrfError(`${what}: '${raw}' is never allowed`);
+    if (item.length > 253 || !item.split('.').every((l) => HOST_LABEL.test(l))) {
+      throw new SsrfError(`${what}: '${raw}' is not a valid host name`);
+    }
+    hosts.add(item);
+  }
+  return { hosts, networks };
+}
+
+/** Whether the allowance names `host` exactly. */
+export function allowanceAdmitsHost(allow: OperatorAllowance | null | undefined, host: string): boolean {
+  return !!allow && allow.hosts.has((host || '').trim().replace(/\.+$/, '').toLowerCase());
+}
+
+/** May a connection to `addr` (reached through `host`, when one was named) go ahead under `allow`? */
+export function allowanceAdmitsIp(allow: OperatorAllowance | null | undefined, addr: string, host = ''): boolean {
+  if (!allow) return false;
+  const a = literalAddress(addr);
+  if (!a || isNeverAllowedIp(a)) return false;
+  if (host && allowanceAdmitsHost(allow, host)) return true;
+  return allow.networks.some((net) => net.v === a.v && (a.v === 4
+    ? inNet4(a.n, [net.base, net.len])
+    : inNet6(a.n, [net.base, net.len])));
+}
+
 export const resolveHost: Resolver = (host) => new Promise((resolve) => {
   dnsLookup(host, { all: true }, (err, addresses) => {
     resolve(err ? [] : [...new Set(addresses.map((a) => a.address.split('%')[0]))]);

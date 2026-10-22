@@ -128,6 +128,19 @@ def _calendar_feed_allow_at_boot(env: "os._Environ | dict | None" = None):
         raise ConfigError(f"meeting-api refuses to boot: {e}") from None
 
 
+def _meeting_host_allow_at_boot(env: "os._Environ | dict | None" = None):
+    """``VEXA_MEETING_HOST_ALLOW``, parsed once at boot. A bad entry — a wildcard, a network
+    overlapping loopback or cloud metadata, a malformed name — refuses the boot naming it."""
+    from .bot_spawn.meeting_host import MEETING_HOST_ALLOW_ENV, meeting_host_allowance
+    from .config_preflight import ConfigError
+
+    env = os.environ if env is None else env
+    try:
+        return meeting_host_allowance(env.get(MEETING_HOST_ALLOW_ENV) or "")
+    except ValueError as e:
+        raise ConfigError(f"meeting-api refuses to boot: {e}") from None
+
+
 def _auto_join_block_at_boot(env: "os._Environ | dict | None" = None):
     """``VEXA_AUTO_JOIN_BLOCK``, parsed once at boot. A bad entry refuses the boot naming it: a
     block list that silently matched nothing would send bots where the operator forbade them."""
@@ -210,6 +223,7 @@ def build_production_app():
     _capture_signal_default_at_boot()  # a typo in the tape switch refuses the boot, never guesses
     _calendar_feed_allow_at_boot()  # a malformed internal-feed allowance refuses the boot
     _auto_join_block_at_boot()  # a malformed auto-join block list refuses the boot
+    _meeting_host_allow_at_boot()  # a malformed meeting-host allowance refuses the boot
     _transcription_language_at_boot()  # a refused default language stops the boot, not the first spawn
     from .compat_switches import warn_at_boot
 

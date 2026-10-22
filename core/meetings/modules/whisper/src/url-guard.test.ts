@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SsrfError, guardedLookup, isBlockedHostname, isBlockedIp, validateUrl } from './url-guard.js';
+import { SsrfError, allowanceAdmitsHost, allowanceAdmitsIp, guardedLookup, isBlockedHostname, isBlockedIp, parseAllowance, validateUrl } from './url-guard.js';
 import { TranscriptionClient, TranscriptionError } from './index.js';
 
 let failed = 0;
@@ -63,6 +63,21 @@ async function run() {
   const out = await own.transcribe(pcm).catch((e) => e);
   check("the deployment's own endpoint is reached", hits === 1 && out?.text === 'x', `hits=${hits} out=${JSON.stringify(out)}`);
   server.close();
+
+  // the operator allowance (ssrf.py OperatorAllowance): exact names and networks, never loopback/metadata
+  const allow = parseAllowance(['jitsi.corp.example', '10.20.0.0/16', 'fd12::/16']);
+  check('allowance admits a listed name resolving privately', allowanceAdmitsIp(allow, '10.99.0.1', 'jitsi.corp.example'));
+  check('allowance admits an address in a listed network', allowanceAdmitsIp(allow, '10.20.3.4') && allowanceAdmitsIp(allow, 'fd12::5'));
+  check('allowance admits nothing else', !allowanceAdmitsIp(allow, '10.30.0.1') && !allowanceAdmitsHost(allow, 'other.corp.example'));
+  check('allowance never admits metadata or loopback, even under a listed name',
+    !allowanceAdmitsIp(allow, '169.254.169.254', 'jitsi.corp.example') && !allowanceAdmitsIp(allow, '127.0.0.1', 'jitsi.corp.example')
+    && !allowanceAdmitsIp(allow, '::ffff:169.254.169.254', 'jitsi.corp.example'));
+  for (const bad of ['*.corp.example', '169.254.0.0/16', '127.0.0.1', '0.0.0.0/0', 'localhost', 'metadata.google.internal',
+    'https://x.example', 'fe80::/10', '10.0.0.0/40', 'bad_name.example']) {
+    let threw = false;
+    try { parseAllowance([bad]); } catch (e) { threw = e instanceof SsrfError; }
+    check(`allowance entry refused: ${bad}`, threw);
+  }
 
   if (failed) { console.log(`\n❌ ${failed} url-guard check(s) failed`); process.exit(1); }
   console.log('✅ url-guard: shared vectors, pinned lookup, customer endpoints refused');

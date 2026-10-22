@@ -48,6 +48,7 @@ import type { RemoteAudioActivityTap } from './aloneness.js';
 import { createTtsPlayback } from './tts-playback.js';
 import { writeBackSession } from './session-writeback.js';
 import { restoreSession } from './session-restore.js';
+import { guardMeetingNavigation, meetingNavigationPolicy, pinMeetingHostArgs, type NavigationGuard } from './meeting-navigation.js';
 
 /** Float32 PCM → base64 of its little-endian bytes — the EXACT codec wire payload, so a stored
  *  captured-signal.v1 frame round-trips through @vexa/capture-codec (encode→decode→same PCM). */
@@ -564,6 +565,8 @@ const BROWSER_UTILS_PATH = process.env.VEXA_BROWSER_UTILS_PATH ?? '/app/browser-
 export interface BrowserSession {
   context: BrowserContext;
   page: Page;
+  /** The meeting navigation guard (meeting-navigation.ts): its first top-level refusal, if any. */
+  navigation: NavigationGuard;
   close(): Promise<void>;
 }
 
@@ -602,6 +605,13 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   const authDomains = inv.authenticated
     ? authenticatedNavigationDomains(AUTH_PLATFORM[inv.platform] ?? null, inv.meetingUrl)
     : null;
+  // Every browser — guest or signed in — navigates only to the meeting platform's hosts and the
+  // meeting's own host, and only to public (or operator-listed) addresses. A meeting on a host of the
+  // organisation's choosing (Jitsi, a Zoom front door) is resolved and checked here, before launch,
+  // and Chromium is pinned to the checked address. A refusal fails the launch with a
+  // `meeting_host_refused` reason (the composition root drives it to a clean terminal failed).
+  const navigationPolicy = meetingNavigationPolicy(inv.platform, inv.meetingUrl ?? null, inv.meetingHostAllow);
+  const pinArgs = await pinMeetingHostArgs(navigationPolicy);
   if (inv.authenticated && (inv.sessionRestoreUrl || inv.userdataS3Path)) {
     // Fail-loud restore: an unreachable/misconfigured store, or a refused/off-contract answer from
     // meeting-api, surfaces as a typed SessionSyncError naming the session-restore step (the
@@ -622,8 +632,9 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   // joins; getJoinBrowserArgs() adds the fake-device / autoplay flags the join lane needs. The
   // join args win on conflict (later wins in Chromium arg parsing).
   const baseArgs = [...getAuthenticatedBrowserArgs(), ...getJoinBrowserArgs()];
-  const args = authDomains ? withSiteIsolation(baseArgs) : baseArgs;
+  const args = [...(authDomains ? withSiteIsolation(baseArgs) : baseArgs), ...pinArgs];
   const { context, page } = await launchPersistentBrowser({ dataDir, args });
+  const navigation = await guardMeetingNavigation(context, navigationPolicy);
 
   // ...and its navigations are held to those domains from before the first one.
   if (inv.authenticated) {
@@ -691,6 +702,7 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   return {
     context,
     page,
+    navigation,
     async close() {
       await context.close().catch(() => { /* best-effort */ });
       // Write-back on clean teardown (#725): Google rotates session cookies during use, so the

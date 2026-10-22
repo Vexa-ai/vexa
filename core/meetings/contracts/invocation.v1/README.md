@@ -65,6 +65,16 @@ minimum bot version above: upgrade bots and meeting-api together. `sessionRestor
 case: a bot that predates it refuses an invocation carrying it, so a deployment sends bot-account
 joins only to bots that know the field.
 
+## Where the browser may go: `meetingHostAllow`
+meeting-api holds a caller's `meetingUrl` to the platform's hosts and to public addresses before it
+spawns a bot, and the bot holds every navigation of its browser to the same rule: a top-level
+navigation or redirect that leaves the platform's hosts (and the meeting's own host), or that resolves
+to a loopback, private, CGNAT, link-local/metadata or reserved address, is aborted before it leaves the
+browser, and the join fails with a `meeting_host_refused` reason. `meetingHostAllow` carries the
+operator's exceptions (meeting-api `VEXA_MEETING_HOST_ALLOW`: exact host names and CIDRs, such as an
+on-prem Jitsi); it is sent only when the operator listed entries, and a bot that predates the field
+refuses an invocation that carries it, so upgrade bots and meeting-api together before setting it.
+
 ## Shape
 `Invocation` (`$defs`): required `platform · meetingUrl · botName · redisUrl`; everything else optional.
 `automaticLeave` defaults the three timeouts. No tenancy fields (deferred, ADR-0003).

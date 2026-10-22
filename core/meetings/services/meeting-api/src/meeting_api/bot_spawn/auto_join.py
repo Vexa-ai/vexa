@@ -54,6 +54,7 @@ from ..service_authority import (
 from .auto_join_block import blocked_reason, parse_block
 from .env_flags import resolve_spawn_flag
 from .ports import MaxBotsExceeded, MeetingStopped, QuotaExceeded, SpawnFailed
+from .meeting_host import MeetingHostRefused
 from .service import DuplicateMeeting, request_bot
 
 # Sweep cadence/window env vocabulary (config.v1: all optional, sane defaults).
@@ -387,6 +388,10 @@ async def auto_join_tick(
             continue
         except SpawnFailed as e:
             await _stamp_error(row, str(e) or "bot workload failed to start")
+            continue
+        except MeetingHostRefused as e:
+            # The link's host is not the platform's, or reaches inside the deployment's network.
+            await _stamp_error(row, str(e))
             continue
         counters["spawned"] += 1
         if data.get("auto_join_error"):

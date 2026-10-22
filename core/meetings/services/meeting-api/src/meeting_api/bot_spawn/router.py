@@ -31,6 +31,7 @@ from ..service_authority import (
     ServiceAuthorityUnavailable,
 )
 from .env_flags import InvalidFlagValue, resolve_spawn_flag
+from .meeting_host import MeetingHostRefused, meeting_host_allowance
 from .ports import (
     AuthSessionBusy,
     AuthSessionNotConfigured,
@@ -168,10 +169,12 @@ def _validate_meeting_url(url: object) -> str:
       * must parse cleanly and use ``https`` (the bot joins real deployments over TLS only),
       * host must be non-empty and not ``localhost``/``*.localhost``,
       * host must not be an IP literal (deployments are hostname-addressed; IP literals are the
-        cheap way to reach loopback/link-local/private ranges — 10.x, 169.254.x, 127.x, …).
+        cheap way to reach loopback/link-local/private ranges — 10.x, 169.254.x, 127.x, …),
+        unless the operator's ``VEXA_MEETING_HOST_ALLOW`` lists its network.
 
-    Static checks only — no DNS resolution on the spawn path (a hostname that RESOLVES to a
-    private IP is contained by network policy around the bot runtime, and slow-fails there)."""
+    These are the static checks. The host rule — the host belongs to the platform, and every
+    address it resolves to is public or operator-listed — runs in ``request_bot``
+    (``meeting_host.check_meeting_url``) once the platform is known, on every spawn path."""
     if not isinstance(url, str) or not url.strip():
         raise HTTPException(status_code=422, detail="meeting_url must be a non-empty string")
     raw = url.strip()
@@ -196,10 +199,12 @@ def _validate_meeting_url(url: object) -> str:
             detail="meeting_url cannot target localhost",
         )
     try:
-        ipaddress.ip_address(host)
+        literal = ipaddress.ip_address(host)
     except ValueError:
         pass  # hostname, not an IP literal — OK
     else:
+        if meeting_host_allowance().admits_ip(literal):
+            return raw
         raise HTTPException(
             status_code=422,
             detail="meeting_url cannot be an IP literal — use the deployment's hostname",
@@ -660,7 +665,7 @@ def build_router(
                     "room bot: meeting=%s keyed to payer=%s for principal=%s workspace=%s",
                     meeting.get("id"), user_id, room_principal["principal"],
                     room_principal["principal_workspace"])
-        except LanguageRefused as e:
+        except (LanguageRefused, MeetingHostRefused) as e:
             raise HTTPException(status_code=422, detail=str(e))
         except TranscriptionNotConfigured as e:
             raise HTTPException(status_code=503, detail=str(e))

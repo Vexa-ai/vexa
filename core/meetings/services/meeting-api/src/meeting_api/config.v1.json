@@ -841,6 +841,13 @@
    "description": "operator allowance for calendar feeds served inside a private network: exact host names and IP networks (CIDR), comma- or space-separated (cal.corp.example, 10.20.0.0/16). The ICS fetch's pinned transport admits an address inside a listed network, or any non-reserved address a listed name resolves to; everything else stays refused by the outbound URL guard (deploy/contracts/outbound-url.v1). Loopback, link-local/cloud metadata, unspecified, multicast and reserved addresses are never admitted, and an entry overlapping them, a wildcard, a URL or a malformed name refuses the boot. Calendar feeds only: customer webhooks never read it. admin-api reads the same key when a feed is saved."
   },
   {
+   "key": "VEXA_MEETING_HOST_ALLOW",
+   "class": "defaulted",
+   "default": "(empty — every meeting host must resolve to a public address)",
+   "targets": ["compose", "helm"],
+   "description": "operator allowance for meeting servers inside a private network (an on-prem Jitsi, a Zoom front door on the corporate network): exact host names and IP networks (CIDR), comma- or space-separated (jitsi.corp.example, 10.20.0.0/16). A bot's meeting_url must be on its platform's hosts (Meet, Teams, Zoom) or, for Jitsi and Zoom front doors, on a host of the organisation's choosing, and every address the host resolves to must be public; a listed name or network is admitted when it resolves privately, and a listed name is accepted as a Jitsi or Zoom host. The bot receives the entries (invocation.v1 meetingHostAllow) and holds every navigation and redirect of its browser to the same rule. Loopback, link-local/cloud metadata, unspecified, multicast and reserved addresses are never admitted, and an entry overlapping them, a wildcard, a URL or a malformed name refuses the boot."
+  },
+  {
    "key": "VEXA_AUTO_JOIN_BLOCK",
    "class": "defaulted",
    "default": "(empty — no deployment-wide block)",

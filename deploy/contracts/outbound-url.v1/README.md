@@ -53,6 +53,8 @@ Where each service applies it:
 | signals (`meeting_signals/ssrf.py`) | the signal model's `base_url` from `_global/POLICIES.md`, on every request | `model.py` |
 | credential broker (`ssrf.py`) | custom-service calls and OAuth exchanges: the host must resolve only to public addresses | `secret_service.py`, `service_oauth.py` |
 | bot (`@vexa/transcribe-whisper` `url-guard.ts`) | the person's own transcription endpoint, on every request (`publicOnly` when the endpoint's owner is the customer) | `transcription-client.ts` |
+| meeting-api (`webhooks/ssrf.py`) | a bot's `meeting_url`: the host must be the platform's (or, for Jitsi and Zoom front doors, the organisation's own) and resolve only to public or operator-listed addresses | `bot_spawn/meeting_host.py` |
+| bot (`url-guard.ts`) | every navigation and redirect of the bot's browser: resolved and checked before Chromium follows it; any request to an internal literal or deployment-only name refused; an organisation's own meeting host pinned in Chromium's resolver | `services/bot/src/meeting-navigation.ts` |
 
 The deployment's own endpoints (its bundled transcription service, its own model gateway) are
 operator configuration and are not held to this rule.
@@ -60,8 +62,10 @@ operator configuration and are not held to this rule.
 **The one operator exception: `OperatorAllowance`.** An operator may name internal hosts and
 networks that ONE kind of fetch may reach: calendar feeds served inside a corporate network
 (`VEXA_CALENDAR_FEED_ALLOW`, read by meeting-api's ICS fetch and admin-api's save check), internal
-git mirrors (`VEXA_GIT_ALLOWED_INTERNAL_HOSTS`, agent-api's repository gate and git connection) and
-an internal signal model (`VEXA_SIGNALS_MODEL_ALLOW`, signals).
+git mirrors (`VEXA_GIT_ALLOWED_INTERNAL_HOSTS`, agent-api's repository gate and git connection), an
+internal signal model (`VEXA_SIGNALS_MODEL_ALLOW`, signals) and meeting servers inside it
+(`VEXA_MEETING_HOST_ALLOW`, read by meeting-api's spawn check and handed to the bot as invocation.v1
+`meetingHostAllow`, where `url-guard.ts` `parseAllowance` applies the same rule).
 `parse_allowance` builds it from deployment configuration and refuses a wildcard, a URL, a malformed
 name, `localhost` and metadata names, and any network overlapping loopback, link-local (cloud
 metadata), unspecified, multicast or reserved addresses. The check never admits those addresses even

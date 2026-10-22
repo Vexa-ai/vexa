@@ -88,6 +88,9 @@ spec:
             # calendar.autoJoinBlock: domains/addresses auto-join never joins, for every account.
             - name: VEXA_AUTO_JOIN_BLOCK
               value: {{ (.Values.calendar | default dict).autoJoinBlock | default "" | quote }}
+            # meetingApi.meetingHostAllow: internal meeting hosts/networks a bot may join.
+            - name: VEXA_MEETING_HOST_ALLOW
+              value: {{ .Values.meetingApi.meetingHostAllow | default "" | quote }}
             - name: INTERNAL_API_SECRET
               valueFrom:
                 secretKeyRef:

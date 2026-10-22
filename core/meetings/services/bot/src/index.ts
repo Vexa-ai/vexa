@@ -37,6 +37,7 @@ import { createCaptureSignalRecorder, startBotLogSidecar, wrapTranscribeWithTap,
 import { uploadSignalTapes } from './signal-upload.js';
 import { describeGaps, mergeDegraded, transcriptGapsReport } from './transcript-gaps.js';
 import { createSttFaultReporter } from './stt-faults.js';
+import { withNavigationRefusal } from './meeting-navigation.js';
 import { launchBrowser, startCaptureBridge, startRecording, restartMixedCapture, createSpeakController, createChatSender, type BrowserSession } from './capture-bridge.js';
 import { createActDispatch } from './act-dispatch.js';
 import { createDeafLaneMonitor, createRemoteAudioActivityTap, deafLaneFault, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
@@ -335,7 +336,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     console.log(`[bot] call: listening in room ${c.room} (cap ${c.maxDurationSec}s)`);
   } else try {
     session = await launchBrowser(inv);                                   // L4 (O6/VM)
-    join = createBrowserJoinDriver(session.page, inv);
+    join = withNavigationRefusal(createBrowserJoinDriver(session.page, inv), session.navigation);
     botPipeline = createBotPipeline(inv, transcript, {
       // When recording, every STT round-trip is teed to <session>.stt.jsonl (the capture/STT/assembly
       // bisect); every settled one also tells the deaf-lane guard the lane is alive.

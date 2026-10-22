@@ -16,11 +16,16 @@ eager-creates the `MeetingSession` keyed by the bot's `connectionId`.
   before anything ships.
 - `MeetingRepo` / `RuntimeClient` ports + `QuotaExceeded` / `MaxBotsExceeded` / `SpawnFailed` /
   `DuplicateMeeting`.
+- `meeting_host` — the meeting host rule for a caller-supplied `meeting_url`: the host is the
+  platform's (or, for Jitsi and Zoom front doors, the organisation's own) and every address it
+  resolves to is public or listed in `VEXA_MEETING_HOST_ALLOW` (`MeetingHostRefused` → 422; the
+  auto-join stamps it). The operator's entries ride to the bot as invocation.v1 `meetingHostAllow`.
 - `adapters.build_production_router(...)` — wire with real SQLAlchemy + the httpx runtime client.
 - `fakes` — `InMemoryMeetingRepo` / `FakeRuntimeClient` (offline drivers).
 
 ## The flow (P2 core + P3 control-plane)
-construct the meeting URL → dedup (409 on a CONCURRENT active prior) → **max-bots pre-check (429)**
+check a caller-supplied meeting URL's host (422 off the platform or resolving inside) → construct
+the meeting URL → dedup (409 on a CONCURRENT active prior) → **max-bots pre-check (429)**
 → mint a per-run service identity → **optional service-authority admission before any row/runtime
 effect (403 deny, 503 unavailable)**
 → **continue_meeting (reuse a TERMINAL prior row)** or insert a fresh `Meeting` row (status

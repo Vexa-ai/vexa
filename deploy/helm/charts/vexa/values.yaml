@@ -566,6 +566,12 @@ meetingApi:
   # it. A value meeting-api refuses stops its boot, naming the fix.
   transcriptionLanguage: ""
   transcriptionAllowedLanguages: []
+  # Meeting servers inside your network a bot may join — an on-prem Jitsi, a Zoom front door on the
+  # corporate network. Exact host names and CIDRs, comma-separated: "jitsi.corp.example, 10.20.0.0/16".
+  # Without an entry a bot's meeting URL must resolve to public addresses, and the bot's browser is
+  # held to the same rule. Loopback, link-local/cloud metadata and reserved ranges are never allowed
+  # (meeting-api refuses to start on such an entry). Rendered as VEXA_MEETING_HOST_ALLOW.
+  meetingHostAllow: ""
   # Optional service-authority.v1 adapter JSON. Empty preserves stock OSS allow-all. A configured
   # authority must use failure_policy=closed and mode=enforce|observe; the secret lives under
   # secrets.serviceAuthoritySecret or the existing Secret key VEXA_SERVICE_AUTHORITY_SECRET.

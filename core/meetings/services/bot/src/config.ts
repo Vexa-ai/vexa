@@ -129,6 +129,9 @@ export interface Invocation {
   sessionWritebackUrl?: string;
   /** where an authenticated bot GETs a saved bot account's session-profile.v1 profile before launch (sent only in authenticated mode) */
   sessionRestoreUrl?: string;
+  /** the operator's meeting-host allowance (meeting-api VEXA_MEETING_HOST_ALLOW): exact host names and
+   *  CIDRs the browser's navigations may also reach when they resolve privately */
+  meetingHostAllow?: string[];
 }
 
 /** Thrown when VEXA_BOT_CONFIG is missing / not JSON / off-contract. The composition root

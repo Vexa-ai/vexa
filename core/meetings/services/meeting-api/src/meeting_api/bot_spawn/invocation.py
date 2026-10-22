@@ -118,6 +118,7 @@ def build_invocation(
     voice_note: Optional[dict] = None,
     call: Optional[dict] = None,
     session_restore_url: Optional[str] = None,
+    meeting_host_allow: Optional[list[str]] = None,
 ) -> dict:
     """Assemble the bot's ``invocation.v1`` Invocation (the parent's ``BOT_CONFIG``).
 
@@ -188,6 +189,10 @@ def build_invocation(
         # A bot-account bot's restore source (session-profile.v1's GET route, this session's uid in
         # the path): it restores its profile from here instead of the userdata store.
         "sessionRestoreUrl": session_restore_url,
+        # The operator's meeting-host allowance (VEXA_MEETING_HOST_ALLOW entries): internal hosts
+        # and networks the bot's navigation guard admits. Absent: every navigation must reach a
+        # public address.
+        "meetingHostAllow": list(meeting_host_allow) if meeting_host_allow else None,
     }
     # `meetingUrl` is required and nullable: a voice note has nothing to join and says so with null.
     invocation = {k: v for k, v in invocation.items() if v is not None or k == "meetingUrl"}

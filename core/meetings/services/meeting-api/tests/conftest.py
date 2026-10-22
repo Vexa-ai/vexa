@@ -28,6 +28,16 @@ def _stt_configured(monkeypatch):
     monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "test-stt-token")
 
 
+@pytest.fixture(autouse=True)
+def _meeting_hosts_resolve_publicly(monkeypatch):
+    """No network: every meeting host resolves to one public address, so a spawn's meeting-host
+    rule (bot_spawn.meeting_host) decides on the host name alone. A test of the DNS half sets its
+    own resolver (``monkeypatch.setattr(meeting_host, "resolver", ...)``)."""
+    from meeting_api.bot_spawn import meeting_host
+
+    monkeypatch.setattr(meeting_host, "resolver", lambda host: ["93.184.215.14"])
+
+
 # --- lifecycle.v1 goldens (the seam) ---------------------------------------------------
 
 def _repo_root() -> Path:

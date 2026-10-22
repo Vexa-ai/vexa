@@ -888,6 +888,8 @@ services:
       # Internal calendar-feed hosts/networks, and the deployment's auto-join block list (see .env.example).
       - VEXA_CALENDAR_FEED_ALLOW=${VEXA_CALENDAR_FEED_ALLOW:-}
       - VEXA_AUTO_JOIN_BLOCK=${VEXA_AUTO_JOIN_BLOCK:-}
+      # Internal meeting hosts/networks a bot may join (an on-prem Jitsi; see .env.example).
+      - VEXA_MEETING_HOST_ALLOW=${VEXA_MEETING_HOST_ALLOW:-}
       # ADMIN_TOKEN is the SAME admin secret admin-api holds (admin-api gets ADMIN_API_TOKEN=${ADMIN_TOKEN}).
       # meeting-api derives the MeetingToken key from it (HMAC-SHA256 under "vexa/meeting-token/v1") and
       # signs (mint) AND verifies (callbacks, uploads, stream entries) with that key, never with the

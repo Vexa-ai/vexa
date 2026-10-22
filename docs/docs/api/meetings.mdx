@@ -81,6 +81,17 @@ A password-protected room is joined by passing the optional `passcode` field. To
 `VEXA_JITSI_HOSTS` env (comma-separated). On Jitsi speaker names come from the conference's own
 dominant-speaker signal.
 
+A `meeting_url` must be an `https://` link on its platform's hosts: Google Meet on
+`meet.google.com`; Teams on `teams.microsoft.com`, `teams.live.com`, `teams.microsoft.us` or
+`teams.cloud.microsoft`; Zoom on `zoom.us` (vanity `<org>.zoom.us` included), `zoom.com` or
+`zoomgov.com`, or an organisation's own Zoom front door when the link has Zoom's join shape; Jitsi
+on any deployment. Every address the host resolves to must be public, so a link that points at, or
+resolves to, a loopback, private, CGNAT, link-local or cloud-metadata address is refused with a
+`422` naming the host. A Jitsi server inside your own network joins once the operator lists it in
+`VEXA_MEETING_HOST_ALLOW` ([Configuration](/configuration)). The bot's browser holds every
+navigation and redirect to the same rule; a refusal there fails the join with a reason starting
+`meeting_host_refused`.
+
 On **Google Meet** and **Jitsi** the transcript also carries the meeting's **chat**: each chat
 message from another participant arrives as a segment with `source: "chat"` (the sender is the
 `speaker`). Read it alone with `GET /bots/{platform}/{native_meeting_id}/chat`, follow it live as
