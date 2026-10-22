@@ -506,3 +506,85 @@ def test_the_join_confirmation_rule_defaults_to_what_the_engine_actually_does():
     assert policies.DEFAULTS["organizer_confirms_join"] is False
     assert policies.resolve(None)["organizer_confirms_join"] is False
     assert policies.resolve("---\norganizer_confirms_join: on\n---\n")["organizer_confirms_join"] is True
+
+
+# ── P6 · the first read waits for the door ───────────────────────────────────────────────────────
+#
+# At first boot a worker can start before the gateway's door (or agent-api behind it) answers. It
+# used to read the file as unreadable, run under the closed rules, and say so only in a swallowed
+# warning. Now the boot read retries, says what it heard, and an unreadable company layer is asked
+# again within seconds instead of being held for the full quota TTL.
+
+def _door_up_after(n_failures: int, content: "str | None" = "---\nprofile: bank\n---\n"):
+    calls = []
+
+    def ws_file(uid, *_a, **_k):
+        calls.append(uid)
+        if len(calls) <= n_failures:
+            raise policies.PolicyUnreadable("http GET http://gateway:8002/agent/...: URLError: "
+                                            "[Errno 111] Connection refused")
+        return content
+    return ws_file, calls
+
+
+def test_the_boot_read_retries_until_the_door_answers(monkeypatch, capsys):
+    ws_file, calls = _door_up_after(3)
+    monkeypatch.setattr(policies, "ws_file", ws_file)
+    slept = []
+    assert policies.read_at_boot(attempts=10, wait_s=2.0, sleep=slept.append) == "answered"
+    assert len(calls) == 4 and slept == [2.0, 2.0, 2.0]
+    assert calls == [policies.COMPANY_READER] * 4
+    out = capsys.readouterr().out
+    assert out.count("unreadable at boot") == 3 and "Connection refused" in out
+    assert "_global/POLICIES.md read at boot: answered (attempt 4)" in out
+
+
+def test_the_boot_read_says_absent_and_no_agent_domain_without_retrying(monkeypatch, capsys):
+    monkeypatch.setattr(policies, "ws_file", lambda *_a, **_k: None)
+    assert policies.read_at_boot(attempts=5, sleep=lambda _s: pytest.fail("no retry")) == "absent"
+
+    def absent(*_a, **_k):
+        raise policies.AgentDomainAbsent("no agent domain here")
+    monkeypatch.setattr(policies, "ws_file", absent)
+    assert policies.read_at_boot(attempts=5, sleep=lambda _s: pytest.fail("no retry")) == "no agent domain"
+    assert "read at boot: no agent domain (attempt 1)" in capsys.readouterr().out
+
+
+def test_a_boot_read_that_never_hears_the_file_says_so_at_error_and_never_raises(monkeypatch, capsys):
+    ws_file, calls = _door_up_after(99)
+    monkeypatch.setattr(policies, "ws_file", ws_file)
+    assert policies.read_at_boot(attempts=3, wait_s=0.0, sleep=lambda _s: None) == "unreadable"
+    assert len(calls) == 3
+    out = capsys.readouterr().out
+    assert "error: policies: _global/POLICIES.md could not be read at boot after 3 attempts" in out
+    assert "every widening rule is closed until it can be read" in out
+
+
+def test_an_unreadable_company_layer_is_asked_again_within_seconds(monkeypatch):
+    """The quota cache held a closed answer for COMPANY_TTL_S (30 s) — a worker that read before the
+    door was up ran half a minute under the install default. An unreadable read is held only
+    COMPANY_RETRY_S; a heard one still the full TTL."""
+    ws_file, calls = _door_up_after(1, "---\nroutine_runs_per_day: 7\n---\n")
+    monkeypatch.setattr(policies, "ws_file", ws_file)
+    monkeypatch.setitem(policies._CQ, "rules", None)
+    monkeypatch.setitem(policies._CQ, "at", 0.0)
+    import flows_config
+    install_default = flows_config.get_int("VEXA_FLOWS_USER_RUNS_PER_DAY")
+    assert install_default != 7
+    t0 = 1_000_000.0
+    assert (policies.company_quota("routine_runs_per_day", "VEXA_FLOWS_USER_RUNS_PER_DAY", now=t0)
+            == install_default)
+    later = t0 + 6.0                      # seconds after the door came up, well inside the 30 s TTL
+    assert policies.company_quota("routine_runs_per_day", "VEXA_FLOWS_USER_RUNS_PER_DAY", now=later) == 7
+    assert len(calls) == 2
+    # a heard answer is held for the TTL: no third read inside it
+    assert policies.company_quota("routine_runs_per_day", "VEXA_FLOWS_USER_RUNS_PER_DAY",
+                                  now=later + 20.0) == 7
+    assert len(calls) == 2
+
+
+def test_the_worker_reads_the_policy_file_before_its_loop():
+    src = (Path(policies.__file__).resolve().parents[1] / "flows_worker" / "__main__.py").read_text()
+    body = src[src.index("def main()"):]
+    assert "policies.read_at_boot()" in body
+    assert body.index("policies.read_at_boot()") < body.index("while True:")

@@ -1298,13 +1298,17 @@ services:
       start_period: 10s
     init: true
     depends_on:
-      # WHAT IT CANNOT BOOT WITHOUT, and nothing else: its own database, and IDENTITY — the one
-      # domain decision 40.7 lets everybody depend on. Not meeting-api, not agent-api, not the
-      # terminal: flows reaches those at STEP time, and 40.7's whole point is that a deployment may
-      # not carry them. A depends_on there would turn an optional domain into a boot requirement.
+      # WHAT IT CANNOT BOOT WITHOUT, and nothing else: its own database, IDENTITY — the one domain
+      # decision 40.7 lets everybody depend on — and the GATEWAY, because the service door on its
+      # port 8002 is flows' only way to identity and every other domain. Not meeting-api, not
+      # agent-api, not the terminal directly: flows reaches those at STEP time, and 40.7's whole
+      # point is that a deployment may not carry them. A process that starts before the door answers
+      # reads `_global/POLICIES.md` as unreadable and runs under the closed rules.
       postgres:
         condition: service_healthy
       admin-api:
+        condition: service_healthy
+      gateway:
         condition: service_healthy
     volumes:
       - connections-sensors-key:/run/vexa-connections/sensors:ro   # sensor_test reads through the broker
@@ -1459,12 +1463,14 @@ services:
       - fact-verify-keys:/run/vexa-fact-verify:ro
     init: true
     depends_on:
-      # The same two, and for the same reason — plus flows-api, because this lane's whole output is
-      # `POST /events` against it. That is not a domain dependency; it is this process talking to
-      # its own domain's API.
+      # The same three, and for the same reason — plus flows-api, because this lane's whole output
+      # is `POST /events` against it. That is not a domain dependency; it is this process talking
+      # to its own domain's API.
       postgres:
         condition: service_healthy
       admin-api:
+        condition: service_healthy
+      gateway:
         condition: service_healthy
       flows-api:
         condition: service_healthy
@@ -1483,11 +1489,11 @@ services:
   # M steps` line it prints on boot, then the reaction rows it advances — there is no `/health` to
   # poll, so this service carries none, exactly like `flows-mailbox` above it.
   #
-  # depends_on ONLY postgres + admin-api, not flows-api: the worker never calls flows-api over
-  # HTTP, it opens the SAME Postgres DSN directly (`postgres_db(db_url())`) and reads/writes the
-  # `reaction` table flows-api also writes to — a dependency on flows-api's `/health` would couple
-  # two processes that do not actually talk to each other, exactly the reasoning the comment on
-  # flows-api's own depends_on block already gives for stopping at postgres + admin-api.
+  # depends_on postgres + admin-api + the gateway (its door), NOT flows-api: the worker never calls
+  # flows-api over HTTP, it opens the SAME Postgres DSN directly (`postgres_db(db_url())`) and
+  # reads/writes the `reaction` table flows-api also writes to — a dependency on flows-api's
+  # `/health` would couple two processes that do not actually talk to each other, exactly the
+  # reasoning the comment on flows-api's own depends_on block gives for what it names.
   flows-worker:
     build:
       context: ../..
@@ -1623,6 +1629,10 @@ services:
       postgres:
         condition: service_healthy
       admin-api:
+        condition: service_healthy
+      # the door every step reaches the other domains through, and the first thing the worker reads
+      # at boot (`_global/POLICIES.md`, `policies.read_at_boot`)
+      gateway:
         condition: service_healthy
     volumes:
       - connections-sensors-key:/run/vexa-connections/sensors:ro

@@ -114,6 +114,10 @@ def main() -> int:
     # X-Trace-Id on every Vexa call the step makes; see flows_worker/unit.py.
     flows_obs.set_service(SERVICE)
     instrument(reg)
+    # THE COMPANY'S RULES BEFORE THE FIRST STEP. Every step reads `_global/POLICIES.md` through the
+    # gateway's door; a worker that starts before the door answers waits for it here (bounded) and
+    # says what it heard, instead of running its first steps under rules nobody wrote.
+    policies.read_at_boot()
 
     def emit(event_type: str, source_id: str, refs: dict) -> int:
         n = admit(db, reg, clock, source_event_id=source_id,

@@ -489,6 +489,7 @@ def read(uid: str) -> dict:
         swallowed("policies.read", "policy-file-unreadable", exc, file=f"{GLOBAL_SLUG}/{POLICIES_FILE}")
         out = closed(f"{GLOBAL_SLUG}/{POLICIES_FILE} could not be read "
                      f"({type(exc).__name__}) — every widening rule is closed")
+        out["_unreadable"] = True
     for problem in out.get("problems") or ():
         logger.warning("policies: %s", problem)
     return out
@@ -496,6 +497,10 @@ def read(uid: str) -> dict:
 
 _CQ: dict = {"at": 0.0, "rules": None}
 COMPANY_TTL_S = 30.0
+#: How long an UNREADABLE company layer is held before the next read asks again. A heard answer is
+#: held for `COMPANY_TTL_S`; a door that was not up yet is asked again within seconds, so a closed
+#: answer from before the gateway came up does not stand in for the admin's for half a minute.
+COMPANY_RETRY_S = 5.0
 
 
 def company_quota(key: str, env_name: str, *, scale: int = 1, now: "float | None" = None) -> int:
@@ -505,11 +510,9 @@ def company_quota(key: str, env_name: str, *, scale: int = 1, now: "float | None
     import time as _t  # noqa: PLC0415
     import flows_config  # noqa: PLC0415
     now = _t.time() if now is None else now
-    if _CQ["rules"] is None or now - _CQ["at"] > COMPANY_TTL_S:
-        try:
-            _CQ["rules"] = read_company()
-        except Exception:  # noqa: BLE001
-            _CQ["rules"] = {}
+    held = COMPANY_RETRY_S if (_CQ["rules"] or {}).get("_unreadable") else COMPANY_TTL_S
+    if _CQ["rules"] is None or now - _CQ["at"] > held:
+        _CQ["rules"] = read_company()
         _CQ["at"] = now
     v = str((_CQ["rules"] or {}).get(key) or "").strip().replace(",", "")
     return int(v) * scale if v.isdigit() else flows_config.get_int(env_name)
@@ -528,6 +531,45 @@ def read_company() -> dict:
     inbound mailbox's allow-list and its invite switch. Same file, same absent-is-defaults and
     unreadable-is-closed rule as `read`; only the reader differs."""
     return read(COMPANY_READER)
+
+
+#: THE FIRST READ WAITS FOR THE DOOR. A worker that starts before the gateway (or agent-api behind
+#: it) answers would read the file as unreadable and run its first steps under the closed rules.
+#: At boot it asks again, `BOOT_READ_ATTEMPTS` times `BOOT_READ_WAIT_S` apart, and says what it heard.
+BOOT_READ_ATTEMPTS = 30
+BOOT_READ_WAIT_S = 2.0
+
+
+def read_at_boot(*, attempts: int = BOOT_READ_ATTEMPTS, wait_s: float = BOOT_READ_WAIT_S,
+                 sleep=None) -> str:
+    """Read `_global/POLICIES.md` once before the worker runs a step, retrying while it is
+    unreadable. Returns what was heard — `answered`, `absent`, `no agent domain` or `unreadable` —
+    and prints one line saying so. Each failed attempt prints a warning naming the cause; when every
+    attempt failed it prints an error: the widening rules are closed until a later read hears the
+    file (`read` asks on every call). Never raises."""
+    import time as _t  # noqa: PLC0415
+    sleep = _t.sleep if sleep is None else sleep
+    where = f"{GLOBAL_SLUG}/{POLICIES_FILE}"
+    last = ""
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            raw = ws_file(COMPANY_READER, POLICIES_FILE, GLOBAL_SLUG)
+        except AgentDomainAbsent:
+            heard = "no agent domain"
+        except Exception as exc:  # noqa: BLE001 — reported below, never raised
+            last = f"{type(exc).__name__}: {exc}"[:300]
+            print(f"warning: policies: {where} unreadable at boot (attempt {attempt} of {attempts}, "
+                  f"{last})", flush=True)
+            if attempt < attempts:
+                sleep(wait_s)
+            continue
+        else:
+            heard = "absent" if raw is None else "answered"
+        print(f"policies: {where} read at boot: {heard} (attempt {attempt})", flush=True)
+        return heard
+    print(f"error: policies: {where} could not be read at boot after {attempts} attempts ({last}) — "
+          f"every widening rule is closed until it can be read", flush=True)
+    return "unreadable"
 
 
 def param(ctx, key: str, uid: str = ""):
