@@ -42,6 +42,7 @@ from control_plane import workspace_glyph as wg
 from control_plane import workspace_icon as wi
 from control_plane import workspace_membership as membership_mod
 from control_plane.ceiling import is_delegated
+from control_plane.commit_trailers import attributed
 from shared.gitexec import run_git
 
 logger = logging.getLogger("agent_api.workspace_icon")
@@ -138,13 +139,14 @@ def build(**d) -> APIRouter:
             return None
         return home_media.get(key)
 
-    def _commit(ws: Path, paths: list[str], message: str, author: str) -> None:
+    def _commit(request: Request, ws: Path, paths: list[str], message: str, author: str) -> None:
+        """One commit of ``paths``, closed with the writer's trailers when an agent made it (H10)."""
         if not (ws / ".git").is_dir():
             return
         staged = [p for p in dict.fromkeys(paths) if run_git(ws, "add", "--", p).returncode == 0]
         if staged:
             run_git(ws, "-c", f"user.name={author or 'vexa'}", "-c", "user.email=terminal@vexa.local",
-                    "commit", "-q", "-m", message, "--", *staged)
+                    "commit", "-q", "-m", attributed(message, request.headers), "--", *staged)
 
     def _glyph(ws: Path, slug: str) -> tuple[str, str]:
         """The standard icon that shows: the stored one (and who chose it), else the derived one."""
@@ -233,7 +235,7 @@ def build(**d) -> APIRouter:
                 if agent and _shared(slug):
                     raise HTTPException(status_code=403, detail=(
                         "in a shared workspace an agent proposes a new image; resetting it is the owner's"))
-                _commit(ws, wi.reset_icon(ws), "workspace image: reset", subject)
+                _commit(request, ws, wi.reset_icon(ws), "workspace image: reset", subject)
                 return {"set": True, "reset": True}
             raw, kind, source = _bytes(ws, body)
         except wi.IconRefused as exc:
@@ -246,7 +248,7 @@ def build(**d) -> APIRouter:
             touched = wi.write_icon(ws, raw, kind)
         except wi.IconRefused as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from None
-        _commit(ws, touched, f"workspace image ({source or 'uploaded'})", subject)
+        _commit(request, ws, touched, f"workspace image ({source or 'uploaded'})", subject)
         return {"set": True, "path": wi.icon_path(ws), "source": source}
 
     def _set_glyph(request: Request, slug: str, ws: Path, subject: str, agent: bool, want: str):
@@ -265,7 +267,7 @@ def build(**d) -> APIRouter:
             touched = wi.set_glyph(ws, pick, by)
         except wi.IconRefused as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from None
-        _commit(ws, touched, f"workspace icon: {pick} ({by})", subject)
+        _commit(request, ws, touched, f"workspace icon: {pick} ({by})", subject)
         return {"set": True, "glyph": pick, "glyph_by": by}
 
     def _bytes(ws: Path, body: IconSetBody) -> tuple[bytes, str, str]:
@@ -321,7 +323,7 @@ def build(**d) -> APIRouter:
             return {"set": False, "declined": True}
         by = (wi.proposal(ws) or {}).get("by", "")
         touched = wi.accept_proposal(ws) or []
-        _commit(ws, touched, f"workspace image (proposed by {by or 'an agent'}, accepted)", subject)
+        _commit(request, ws, touched, f"workspace image (proposed by {by or 'an agent'}, accepted)", subject)
         return {"set": True, "path": wi.icon_path(ws)}
 
     return router

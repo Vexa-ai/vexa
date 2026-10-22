@@ -79,33 +79,9 @@ import os
 import re
 
 
-#: WHO WROTE A PAGE (H10). A page-route commit made for a person by their agent (a delegated caller)
-#: closes its message with git trailers that say so: ``On-behalf-of: <person>`` and
-#: ``Written-by: agent`` (plus ``Agent-unit: <unit>`` when the identity names one). The person's own
-#: write carries none. The audit reads them with ``git log --format=%(trailers)``; nothing a caller
-#: sends reaches the trailer block, which is written here from the verified identity alone.
-ON_BEHALF_OF = "On-behalf-of"
-WRITTEN_BY = "Written-by"
-AGENT_UNIT = "Agent-unit"
-_TRAILER_VALUE = re.compile(r"[^A-Za-z0-9@._+:-]")
-
-
-def writer_trailers(headers) -> list:
-    """The trailer lines a commit made for this caller carries: none for a person's own write."""
-    if not identity_token.is_delegated(headers):
-        return []
-    subject = _TRAILER_VALUE.sub("", str(headers.get("x-user-id") or ""))[:128] or "unknown"
-    out = [f"{ON_BEHALF_OF}: {subject}", f"{WRITTEN_BY}: agent"]
-    unit = _TRAILER_VALUE.sub("", identity_token.session_of(headers))[:160]
-    if unit:
-        out.append(f"{AGENT_UNIT}: {unit}")
-    return out
-
-
-def attributed(message: str, headers) -> str:
-    """``message`` with the writer's trailers as its last paragraph (unchanged for a person)."""
-    lines = writer_trailers(headers)
-    return f"{message}\n\n" + "\n".join(lines) if lines else message
+#: WHO WROTE A PAGE (H10): `control_plane.commit_trailers` — a delegated caller's page-route
+#: commit closes with On-behalf-of / Written-by / Agent-unit trailers; a person's own carries none.
+from control_plane.commit_trailers import attributed, writer_trailers  # noqa: E402
 
 
 #: HOW FAR BACK THE FRONT PAGE LOOKS for a change a person can read (Vexa-ai/vexa#1634). Deep enough
@@ -1961,7 +1937,7 @@ def build(**d) -> APIRouter:
         # ITS STANDARD ICON, picked from the name at birth (founder 2026-10-18), changeable any time
         from control_plane import workspace_icon as _wicon  # noqa: PLC0415
         _wicon.assign_glyph(workspace_slot_dir(wsr.root, subject, result.slug), name or "", result.slug,
-                            author=str(subject))
+                            author=str(subject), trailers=writer_trailers(request.headers))
         return {"subject": result.subject, "slug": result.slug, "created": result.slug,
                 "name": name or result.slug, "changed": result.changed, "added": True,
                 "say": (f"Created {name or result.slug} — its slug is `{result.slug}`. Say so, and that "

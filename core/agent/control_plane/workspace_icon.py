@@ -36,7 +36,7 @@ import re
 import time
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 from urllib.parse import urljoin
 from xml.etree import ElementTree as ET
 
@@ -313,11 +313,13 @@ def set_glyph(ws: Path, name: str, by: str) -> list[str]:
     return touched
 
 
-def assign_glyph(ws: Path, name: str, ws_id: str, *, purpose: str = "", author: str = "vexa") -> Optional[str]:
+def assign_glyph(ws: Path, name: str, ws_id: str, *, purpose: str = "", author: str = "vexa",
+                 trailers: Iterable[str] = ()) -> Optional[str]:
     """AT CREATION: store the icon the name (and purpose) match, else a neutral one, as ``auto``, in one
-    commit. Never raises — a workspace is made with or without its icon (the image route still
+    commit (closed with ``trailers``: who made it when an agent did, ``commit_trailers``). Never raises — a workspace is made with or without its icon (the image route still
     derives one). No model call here: creation stays instant; ``PUT … glyph: auto`` asks one."""
     from control_plane import workspace_glyph  # noqa: PLC0415
+    from control_plane.commit_trailers import with_trailers  # noqa: PLC0415
     from shared.gitexec import run_git  # noqa: PLC0415
     try:
         pick, by = workspace_glyph.choose(name or "", purpose, ws_id)
@@ -325,7 +327,7 @@ def assign_glyph(ws: Path, name: str, ws_id: str, *, purpose: str = "", author: 
         if (ws / ".git").is_dir():
             run_git(ws, "add", "--", *touched)
             run_git(ws, "-c", f"user.name={author or 'vexa'}", "-c", "user.email=terminal@vexa.local",
-                    "commit", "-q", "-m", f"workspace icon: {pick} ({by})", "--", *touched)
+                    "commit", "-q", "-m", with_trailers(f"workspace icon: {pick} ({by})", trailers), "--", *touched)
         return pick
     except Exception:  # noqa: BLE001
         return None

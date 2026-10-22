@@ -329,7 +329,10 @@ outside the page routes since its last commit is taken as written. Every writer'
 authored `vexa-terminal`. A commit your agent made for you ends with git trailers that say so:
 `On-behalf-of: <your account>`, `Written-by: agent` and `Agent-unit: <its session>`. Your own edits
 carry none, so `git log --format='%(trailers)'` tells your writes from your agent's. This holds for
-writing, removing, restoring and moving a page, entity cards and stored assets.
+every commit an agent's request makes:
+
+- writing, removing, restoring and moving a page, entity cards and stored assets;
+- a workspace's icon or image, including the icon a workspace gets when an agent creates it.
 
 ### Configuration
 
