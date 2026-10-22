@@ -376,6 +376,77 @@ def test_k8s_secret_mount_file_uses_subpath_and_keeps_dir_writable():
             "readOnly": True, "subPath": "auth.json"} in c["volumeMounts"]
 
 
+# ── the mounted key's CONTENT: a model API key under an innocent key name never reaches a worker ──
+_JWT = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLWFzay1BYmNkZWZnaGlqa2xtbm9wcXJzdHV2In0.c2lnTask-abcdefghijklmnopqrstuvwxyz0123456789"  # "sk-" inside a token is no key
+_FAKE_OPENAI = "sk-proj-" + "x" * 40
+_FAKE_ANTHROPIC = "sk-ant-api03-" + "y" * 40
+
+
+def _content_check(tmp_path, content: str) -> int:
+    """Build an agent-worker Pod with one Secret mount and run its mount check against a local file
+    holding ``content``, the way the init container runs it against the projected Secret key."""
+    import subprocess
+    env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1"}
+    pod = build_pod(name="w", workload_id="w", namespace=None, resources=None,
+                    runnable=_profiles.agent("img:1"), env=env,
+                    overlay_env={**env, "RUNTIME_K8S_SECRET_MOUNTS": _SM})
+    checks = [c for c in pod["spec"].get("initContainers", []) if c["name"] == "vexa-secret-mount-check"]
+    assert checks, "a Pod with a Secret mount runs the mount check before the worker starts"
+    check = checks[0]
+    assert check["image"] == "img:1"
+    hardening = {k: v for k, v in pod["spec"]["containers"][0]["securityContext"].items() if k != "capabilities"}
+    assert {k: v for k, v in check["securityContext"].items() if k != "capabilities"} == hardening
+    assert check["securityContext"]["capabilities"] == {"drop": ["ALL"]}    # reading a file needs none
+    shell, flag, script, argv0, *paths = check["command"]
+    assert (shell, flag) == ("/bin/sh", "-c") and len(paths) == 1
+    mounted = {vm["mountPath"]: vm for vm in check["volumeMounts"]}
+    assert all(vm["readOnly"] for vm in mounted.values())
+    assert paths[0].startswith(tuple(mounted)) and paths[0].endswith("/auth.json")
+    f = tmp_path / "auth.json"
+    f.write_text(content)
+    proc = subprocess.run(["/bin/sh", "-c", script, argv0, str(f)], capture_output=True, text=True)
+    assert content not in proc.stderr and (_FAKE_OPENAI not in proc.stderr)   # never echoes a secret
+    return proc.returncode
+
+
+@pytest.mark.parametrize("content", [
+    json.dumps({"OPENAI_API_KEY": _FAKE_OPENAI}),                               # codex auth.json, API-key mode
+    json.dumps({"OPENAI_API_KEY": "not-shaped-like-sk-but-a-key", "tokens": None}),
+    _FAKE_ANTHROPIC + "\n",                                                    # a bare Anthropic API key
+    _FAKE_OPENAI,                                                               # a bare OpenAI key
+    "ANTHROPIC_API_KEY=whatever-the-key-is\n",                                 # an env file
+    json.dumps({"VEXA_MODEL_SECRET_OPENROUTER": "or-key"}),
+    json.dumps({"apiKey": "sk-or-v1-" + "z" * 40}),                            # any sk- key, any field
+])
+def test_k8s_a_model_key_under_another_key_name_is_refused_by_content(tmp_path, content):
+    """H5/W1 by CONTENT: the runtime has no right to read Secrets, so a key name like ``auth.json``
+    says nothing about what it holds. The Pod's first init container reads the mounted key and stops
+    the Pod when it holds a model-provider API key or a control-plane secret; the worker never starts."""
+    assert _content_check(tmp_path, content) != 0
+
+
+@pytest.mark.parametrize("content", [
+    # a Codex subscription: OAuth tokens (JWTs) and no API key
+    json.dumps({"OPENAI_API_KEY": None, "tokens": {"id_token": _JWT, "access_token": _JWT,
+                "refresh_token": "rt_" + "r" * 40, "account_id": "acct-1"}, "last_refresh": "2026-10-01"}),
+    json.dumps({"OPENAI_API_KEY": "", "tokens": {"access_token": _JWT}}),
+    # a Claude subscription file: OAuth access and refresh tokens are a subscription, not an API key
+    json.dumps({"claudeAiOauth": {"accessToken": "sk-ant-oat01-" + "a" * 40,
+                                  "refreshToken": "sk-ant-ort01-" + "b" * 40}}),
+    "plain config, nothing secret\n",
+])
+def test_k8s_a_subscription_file_passes_the_mount_check(tmp_path, content):
+    """The legitimate mount — a harness's subscription file — passes the check and the worker starts."""
+    assert _content_check(tmp_path, content) == 0
+
+
+def test_k8s_no_secret_mount_no_mount_check():
+    env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1"}
+    pod = build_pod(name="w", workload_id="w", namespace=None, resources=None,
+                    runnable=_profiles.agent("img:1"), env=env)
+    assert "initContainers" not in pod["spec"]
+
+
 # ── WS-S3: the s3 workspace backend — nothing backs the store on the substrate ──────────────────
 def test_the_s3_backend_binds_nothing_on_docker_and_a_private_emptydir_on_k8s(monkeypatch):
     from runtime_kernel.mounts import EMPTYDIR_SOURCE

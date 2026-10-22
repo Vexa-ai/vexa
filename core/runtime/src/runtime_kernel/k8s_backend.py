@@ -93,6 +93,7 @@ NODE_SELECTOR_ENV = "RUNTIME_K8S_NODE_SELECTOR"  # JSON object of node-label sel
 # the internal tier's secret is refused — those live with agent-api and the model proxy alone. A
 # refused entry fails the spawn loudly, never quietly mounting less.
 SECRET_MOUNTS_ENV = "RUNTIME_K8S_SECRET_MOUNTS"  # JSON array of {secret, file, mountPath}
+CRED_VOLUME_PREFIX = "cred-"
 def refused_secret_mount(entry: object) -> Optional[str]:
     """Why a ``RUNTIME_K8S_SECRET_MOUNTS`` entry may not be mounted, or None when it may."""
     if not (isinstance(entry, dict) and entry.get("secret") and entry.get("mountPath")):
@@ -105,6 +106,57 @@ def refused_secret_mount(entry: object) -> Optional[str]:
         return (f"key {key!r} is a model credential or a control-plane secret, and no workload holds "
                 "one (H5/W1)")
     return None
+# THE KEY'S CONTENT, CHECKED IN THE POD. The runtime holds no right to read Secrets, so a key name
+# (``auth.json``) says nothing about what the key holds; a model API key stored under it would reach
+# the worker. Every Pod that carries a Secret mount therefore runs an init container first (the
+# workload's own image and hardening) that reads each mounted key and stops the Pod when it holds a
+# model-provider API key or a control-plane secret: an ``sk-`` key (an Anthropic subscription's OAuth
+# ``sk-ant-oat``/``sk-ant-ort`` tokens excepted — a subscription file is what this seam is for), or a
+# non-empty value assigned to a name ``refused_secret_mount`` refuses. The worker never starts with
+# it, and the check never prints what it read.
+SECRET_MOUNT_CHECK_DIR = "/etc/vexa/secret-mount-check"
+_REFUSED_ASSIGNMENT = (
+    "(" + "|".join(sorted(workload_env.REFUSED_SECRET_KEYS)) + "|"
+    + workload_env.REFUSED_SECRET_KEY_PREFIX + "[A-Za-z0-9_]+)"
+    + "\"?[[:space:]]*(:[[:space:]]*\"[^\"]|=[[:space:]]*\"?[^\"[:space:]])")
+_API_KEY_TOKEN = "(^|[^A-Za-z0-9_-])sk-[A-Za-z0-9_-]{20,}"
+_SUBSCRIPTION_TOKEN = "sk-ant-o[ar]t[0-9]"
+SECRET_MOUNT_CHECK_SCRIPT = (
+    "set -u\n"
+    "refused=0\n"
+    'for f in "$@"; do\n'
+    f"  if grep -Eq '{_REFUSED_ASSIGNMENT}' \"$f\" || "
+    f"grep -oE '{_API_KEY_TOKEN}' \"$f\" | grep -vqE '{_SUBSCRIPTION_TOKEN}'; then\n"
+    '    echo "secret mount $f refused: it holds a model-provider API key or a control-plane secret, '
+    'and no worker holds one (H5/W1)" >&2\n'
+    "    refused=1\n"
+    "  fi\n"
+    "done\n"
+    'exit "$refused"\n'
+)
+
+
+def apply_secret_mount_check(spec: dict, container: dict) -> None:
+    """Run ``SECRET_MOUNT_CHECK_SCRIPT`` over every Secret-mounted key before the workload starts."""
+    mounts = [vm for vm in container.get("volumeMounts", []) if vm.get("name", "").startswith(CRED_VOLUME_PREFIX)]
+    if not mounts:
+        return
+    security = json.loads(json.dumps(container.get("securityContext") or {}))
+    (security.get("capabilities") or {}).pop("add", None)     # reading files needs none
+    check: dict = {
+        "name": "vexa-secret-mount-check",
+        "image": container["image"],
+        "command": ["/bin/sh", "-c", SECRET_MOUNT_CHECK_SCRIPT, "secret-mount-check",
+                    *(f"{SECRET_MOUNT_CHECK_DIR}/{i}/{vm['subPath']}" for i, vm in enumerate(mounts))],
+        "volumeMounts": [{"name": vm["name"], "mountPath": f"{SECRET_MOUNT_CHECK_DIR}/{i}", "readOnly": True}
+                         for i, vm in enumerate(mounts)],
+        "securityContext": security,
+    }
+    if container.get("resources"):
+        check["resources"] = json.loads(json.dumps(container["resources"]))
+    spec["initContainers"] = [check, *spec.get("initContainers", [])]
+
+
 # Corporate TLS inspection (the chart's global.extraCA): every outbound HTTPS call is re-signed by
 # the operator's own root CA, so every spawned Pod must trust it exactly as the chart's own Pods do.
 # JSON {"configMap" | "secret": <name>, "key": <key holding the PEM>, "awsCaBundle": <bool>}. Unset ⇒
@@ -298,7 +350,7 @@ def pod_overrides(env: dict[str, str], *, container_name: str,
         why = refused_secret_mount(sm)
         if why:
             raise ValueError(f"{SECRET_MOUNTS_ENV}[{i}] refused: {why}")
-        name = f"cred-{i}-{sm['secret']}"[:63].rstrip("-")
+        name = f"{CRED_VOLUME_PREFIX}{i}-{sm['secret']}"[:63].rstrip("-")
         # only the named key is projected into the volume, so nothing else of the Secret is there
         volumes.append({"name": name, "secret": {"secretName": sm["secret"],
                                                  "items": [{"key": sm["file"], "path": sm["file"]}]}})
@@ -479,6 +531,8 @@ def build_pod(
     if runnable.run_as_non_root:
         security["runAsNonRoot"] = True
     container["securityContext"] = security
+    # The Secret-mounted keys' content, after hardening so the init container copies it.
+    apply_secret_mount_check(pod["spec"], container)
     # Corporate TLS inspection: the operator's CA, after hardening so the init container copies it.
     ca = extra_ca(overlay_source)
     if ca:
