@@ -2107,7 +2107,7 @@ class Dispatcher:
                 logger.error("model proxy not configured (VEXA_MODEL_PROXY_URL / VEXA_MODEL_PROXY_SECRET "
                              "/ Redis) — unit=%s runs with no model credential", uid)
             return model_proxy.confine(env, url=self._settings.model_proxy_url, grants=grants,
-                                       unit=uid, cold=cold)
+                                       unit=uid, cold=cold, toolbelt=self._settings.mcp_url)
         except Exception:  # noqa: BLE001 — a route that cannot be sealed is never handed out instead
             logger.exception("model route for unit=%s could not be sealed — it runs with no model "
                              "credential", uid)

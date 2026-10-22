@@ -266,9 +266,9 @@ def test_a_subscription_route_keeps_its_credential_with_the_cli_and_is_never_pro
     stamped empty, and the proxy refuses to forward a model call on it."""
     _r, _clock, grants, upstream, client = world
     env = {"VEXA_RUNNER": "claude-code", "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-SUB",
-           "VEXA_MCP_URL": "http://gateway:8000/mcp", "VEXA_MCP_DELEGATION_TOKEN": DELEGATION}
+           "VEXA_MCP_DELEGATION_TOKEN": DELEGATION}
     token = mp.confine(env, url=PROXY, grants=grants, unit="agent-1", cold=True,
-                       source={"ANTHROPIC_API_KEY": "sk-ant-api03-DEPLOY"})
+                       toolbelt="http://gateway:8000/mcp", source={"ANTHROPIC_API_KEY": "sk-ant-api03-DEPLOY"})
     assert env["VEXA_MODEL_ROUTE"] == mp.ROUTE_SUBSCRIPTION
     assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-SUB" and env["ANTHROPIC_API_KEY"] == ""
     assert env["ANTHROPIC_BASE_URL"] == ""
@@ -486,7 +486,7 @@ def test_the_dispatch_seals_the_toolbelt_and_the_worker_attaches_the_proxy(monke
     bearer = env["VEXA_MCP_DELEGATION_TOKEN"]
     assert d.verify_delegation(secret, bearer)
     route = mp.Grants(r, SECRET).route(env[mg.TOKEN_ENV])
-    assert (route.mcp_url, route.mcp_bearer) == ("http://gateway:8000/mcp", bearer)
+    assert (route.toolbelt, route.toolbelt_bearer) == ("http://gateway:8000/mcp", bearer)
     # the worker: what it writes for its harness names the proxy and the turn token, never the bearer
     for k in ("VEXA_MCP_URL", "VEXA_MCP_DELEGATION_TOKEN", mg.URL_ENV):
         monkeypatch.setenv(k, env[k])

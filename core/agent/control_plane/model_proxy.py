@@ -110,14 +110,14 @@ class Route:
     max_output_tokens: int = 0
     #: The toolbelt (the gateway's /mcp) and the unit's delegation token at spawn: the harness's MCP
     #: attachment points at this proxy with the turn's token, and the proxy presents the bearer.
-    mcp_url: str = ""
-    mcp_bearer: str = field(default="", repr=False)
+    toolbelt: str = ""
+    toolbelt_bearer: str = field(default="", repr=False)
 
     def as_dict(self) -> dict:
         return {"base_url": self.base_url, "auth": self.auth, "credential": self.credential,
                 "subscription": self.subscription, "models": list(self.models),
-                "max_output_tokens": self.max_output_tokens, "mcp_url": self.mcp_url,
-                "mcp_bearer": self.mcp_bearer}
+                "max_output_tokens": self.max_output_tokens, "toolbelt": self.toolbelt,
+                "toolbelt_bearer": self.toolbelt_bearer}
 
     @classmethod
     def from_dict(cls, d: Mapping) -> "Route":
@@ -126,10 +126,11 @@ class Route:
                    subscription=str(d.get("subscription") or ""),
                    models=tuple(str(m) for m in d.get("models") or ()),
                    max_output_tokens=int(d.get("max_output_tokens") or 0),
-                   mcp_url=str(d.get("mcp_url") or ""), mcp_bearer=str(d.get("mcp_bearer") or ""))
+                   toolbelt=str(d.get("toolbelt") or ""),
+                   toolbelt_bearer=str(d.get("toolbelt_bearer") or ""))
 
-    def with_toolbelt(self, url: str, bearer: str) -> "Route":
-        return Route(**{**self.__dict__, "mcp_url": url, "mcp_bearer": bearer})
+    def with_toolbelt(self, endpoint: str, bearer: str) -> "Route":
+        return Route(**{**self.__dict__, "toolbelt": endpoint, "toolbelt_bearer": bearer})
 
 
 def _v(env: Mapping[str, str], name: str) -> str:
@@ -325,16 +326,16 @@ class Grants:
         (agent-api re-mints it before it expires, ``control_plane.delegation_refresh``), else the one
         sealed at spawn. MCP requests are not model requests: they do not count against the ceiling."""
         rec, route = self._resolve(token)
-        if not route.mcp_url:
+        if not route.toolbelt:
             raise Refused(404, "this turn has no toolbelt")
         from control_plane import delegation_revocation as dr  # noqa: PLC0415
 
         current = self._r.get(dr.CURRENT_PREFIX + str(rec.get("unit") or ""))
         current = current.decode() if isinstance(current, bytes) else current
-        bearer = (current or "").strip() or route.mcp_bearer
+        bearer = (current or "").strip() or route.toolbelt_bearer
         if not bearer:
             raise Refused(401, "this turn's toolbelt holds no delegation")
-        return route.mcp_url, bearer
+        return route.toolbelt, bearer
 
     def revoke(self, token: str) -> bool:
         d = _digest((token or "").strip())
@@ -357,7 +358,7 @@ def grant_ttl_sec(env: Mapping[str, str] = os.environ) -> int:
 
 
 def confine(env: dict, *, url: str, grants: Optional[Grants], unit: str, cold: bool,
-            source: Mapping[str, str] = os.environ) -> str:
+            toolbelt: str = "", source: Mapping[str, str] = os.environ) -> str:
     """Take the model route out of a dispatched worker env, in place, and return the turn's token
     (``""`` when no token could be minted: the worker then holds no model credential at all).
 
@@ -366,8 +367,8 @@ def confine(env: dict, *, url: str, grants: Optional[Grants], unit: str, cold: b
     for the unit; a message to a running worker gets a token to the route that worker runs."""
     eff = {n: (env[n] if n in env else source.get(n, "")) or "" for n in ROUTE_ENV}
     eff["VEXA_MODEL_ROUTE"] = env.get("VEXA_MODEL_ROUTE", "")
-    route = route_of(eff).with_toolbelt((env.get("VEXA_MCP_URL") or "").strip(),
-                                        (env.get("VEXA_MCP_DELEGATION_TOKEN") or "").strip())
+    bearer = (env.get("VEXA_MCP_DELEGATION_TOKEN") or "").strip()
+    route = route_of(eff).with_toolbelt(toolbelt.strip() if bearer else "", bearer)
     token = ""
     if grants is not None and url:
         rid = None if cold else grants.unit_route(unit)
