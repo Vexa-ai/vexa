@@ -11,15 +11,20 @@ mkdir -p "$LOG"
 export PYTHONPATH="$FL/src"
 BASE=$(sed 's#/flows$##' "$HOME/.storm/dburl")
 export VEXA_FLOWS_DB_URL="$BASE/flows_sim"                          # <- lane db
-export VEXA_FLOWS_GATEWAY_URL="http://localhost:18456"
-export VEXA_FLOWS_AGENT_API_URL="http://localhost:18500"
-export VEXA_FLOWS_ADMIN_API_URL="http://localhost:18457"
 export VEXA_FLOWS_API_KEY="$(cat "$HOME/.storm/sim-flows-api-key")" # <- lane operator key
-export VEXA_FLOWS_ADMIN_KEY="$(docker inspect vexa-dogfood-admin-api-1 \
-  --format '{{range .Config.Env}}{{println .}}{{end}}' | grep '^ADMIN_API_TOKEN=' | cut -d= -f2)"
-export VEXA_INTERNAL_SECRET="$(cat "$HOME/.storm/internal-secret" 2>/dev/null)"
-if [ -z "${VEXA_INTERNAL_SECRET:-}" ]; then
-  echo 'sim-lane: REFUSING to start — no internal-tier secret; every meeting room would silently read zero desks.' >&2
+# Flows reaches the other services only through the gateway's service door (port 8002 of the
+# gateway container, published on no host port), with the flows service key the gateway holds.
+# Flows holds no admin key and no internal secret.
+GW_CONTAINER="${VEXA_DOGFOOD_GATEWAY:-vexa-dogfood-gateway-1}"
+DOOR="${VEXA_FLOWS_DOOR_URL:-http://$(docker inspect "$GW_CONTAINER" \
+  --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' 2>/dev/null | awk '{print $1}'):8002}"
+export VEXA_FLOWS_GATEWAY_URL="$DOOR/meetings"
+export VEXA_FLOWS_AGENT_API_URL="$DOOR/agent"
+export VEXA_FLOWS_ADMIN_API_URL="$DOOR/identity"
+export VEXA_FLOWS_SERVICE_KEY="$(docker inspect "$GW_CONTAINER" \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep '^VEXA_FLOWS_SERVICE_KEY=' | cut -d= -f2-)"
+if [ -z "${VEXA_FLOWS_SERVICE_KEY:-}" ] || [ "$DOOR" = "http://:8002" ]; then
+  echo "sim-lane: REFUSING to start — no flows service key on $GW_CONTAINER, or no address for its door." >&2
   exit 1
 fi
 export VEXA_UI_URL="https://app.dev.vexa.ai"

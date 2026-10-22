@@ -14,12 +14,21 @@ export VEXA_MAILPIT_URL=http://127.0.0.1:8025
 export VEXA_MAIL_SMTP_HOST=127.0.0.1
 export VEXA_MAIL_SMTP_PORT=1025
 export VEXA_MAIL_SMTP_MODE=plain
-export VEXA_FLOWS_GATEWAY_URL="http://localhost:18456"
-export VEXA_FLOWS_AGENT_API_URL="http://localhost:18500"
-export VEXA_FLOWS_ADMIN_API_URL="http://localhost:18457"
-export VEXA_FLOWS_ADMIN_KEY="$(docker inspect vexa-dogfood-admin-api-1 \
-  --format '{{range .Config.Env}}{{println .}}{{end}}' | grep '^ADMIN_API_TOKEN=' | cut -d= -f2)"
-export VEXA_INTERNAL_SECRET="$(cat "$HOME/.storm/internal-secret")"
+# Flows reaches the other services only through the gateway's service door (port 8002 of the
+# gateway container, published on no host port), with the flows service key the gateway holds.
+# Flows holds no admin key and no internal secret.
+GW_CONTAINER="${VEXA_DOGFOOD_GATEWAY:-vexa-dogfood-gateway-1}"
+DOOR="${VEXA_FLOWS_DOOR_URL:-http://$(docker inspect "$GW_CONTAINER" \
+  --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' 2>/dev/null | awk '{print $1}'):8002}"
+export VEXA_FLOWS_GATEWAY_URL="$DOOR/meetings"
+export VEXA_FLOWS_AGENT_API_URL="$DOOR/agent"
+export VEXA_FLOWS_ADMIN_API_URL="$DOOR/identity"
+export VEXA_FLOWS_SERVICE_KEY="$(docker inspect "$GW_CONTAINER" \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep '^VEXA_FLOWS_SERVICE_KEY=' | cut -d= -f2-)"
+if [ -z "${VEXA_FLOWS_SERVICE_KEY:-}" ] || [ "$DOOR" = "http://:8002" ]; then
+  echo "sim-mailbox: REFUSING to start — no flows service key on $GW_CONTAINER, or no address for its door." >&2
+  exit 1
+fi
 export VEXA_UI_URL="https://app.dev.vexa.ai"
 export VEXA_FLOWS_ATTENDEE_DOMAINS="rehearse.test,rehearsal.test,studio.example,bank.example"
 mkdir -p /tmp/sim-logs

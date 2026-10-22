@@ -698,10 +698,12 @@ fi
 # A12.1 — VEXA_FLOWS_AGENT_API_URL was rendered as an EMPTY STRING exactly when the agent domain
 # WAS enabled, and flows' `_is_set` reads "" as unset: the guard and the value were inverted, so
 # every agent step answered not_present on an estate running agent-api. Value-level, both branches.
-if grep -A1 'name: VEXA_FLOWS_AGENT_API_URL' <<< "$FLOWS_DEFAULT" | grep -q 'value: "http://vexa-vexa-agent-api:8100"'; then
-  echo "  OK: flows names the agent-api Service when agentApi.enabled (not an empty string) (#A12)"
+# Flows reaches agent-api only through the gateway's service door (its /agent prefix), never the
+# agent-api Service itself.
+if grep -A1 'name: VEXA_FLOWS_AGENT_API_URL' <<< "$FLOWS_DEFAULT" | grep -q 'value: "http://vexa-vexa-gateway-door:8002/agent"'; then
+  echo "  OK: flows names the gateway door's /agent when agentApi.enabled (not an empty string) (#A12)"
 else
-  echo "  FAIL: flows renders VEXA_FLOWS_AGENT_API_URL with no Service address — unset by any reader (#A12)"; fail=1
+  echo "  FAIL: flows renders VEXA_FLOWS_AGENT_API_URL with no door address — unset by any reader (#A12)"; fail=1
 fi
 
 # A12.2 — the flows-api container carries the doors and credentials the worker/mailbox carry.
@@ -714,8 +716,8 @@ fi
 # down. Select the document by its own kind + component label instead.
 FLOWS_API_ONLY="$(awk 'BEGIN{RS="\n---\n"} /kind: Deployment/ && /component: flows-api/' <<< "$FLOWS_DEFAULT")"
 for kv in \
-  'VEXA_FLOWS_ADMIN_API_URL|value: "http://vexa-vexa-admin-api:8001"' \
-  'VEXA_FLOWS_GATEWAY_URL|value: "http://vexa-vexa-gateway:8000"' \
+  'VEXA_FLOWS_ADMIN_API_URL|value: "http://vexa-vexa-gateway-door:8002/identity"' \
+  'VEXA_FLOWS_GATEWAY_URL|value: "http://vexa-vexa-gateway-door:8002/meetings"' \
   'VEXA_FLOWS_API_HOST|value: "0.0.0.0"' ; do
   k="${kv%%|*}"; v="${kv##*|}"
   if grep -A1 "name: $k" <<< "$FLOWS_API_ONLY" | grep -qF "$v"; then
@@ -724,10 +726,16 @@ for kv in \
     echo "  FAIL: flows-api is missing $k = ${v#value: } (#A12)"; fail=1
   fi
 done
-if grep -q 'key: ADMIN_API_TOKEN' <<< "$FLOWS_API_ONLY"; then
-  echo "  OK: flows-api sources VEXA_FLOWS_ADMIN_KEY from the admin-token Secret (#A12)"
+# Flows holds one credential, the flows service key, and no secret that can act as any person.
+if grep -A4 'name: VEXA_FLOWS_SERVICE_KEY$' <<< "$FLOWS_API_ONLY" | grep -q 'key: VEXA_FLOWS_SERVICE_KEY'; then
+  echo "  OK: flows-api sources VEXA_FLOWS_SERVICE_KEY from the shared Secret (#A12)"
 else
-  echo "  FAIL: flows-api does not source VEXA_FLOWS_ADMIN_KEY (#A12)"; fail=1
+  echo "  FAIL: flows-api does not source VEXA_FLOWS_SERVICE_KEY (#A12)"; fail=1
+fi
+if grep -qE 'ADMIN_API_TOKEN|INTERNAL_API_SECRET|VEXA_FLOWS_ADMIN_KEY' <<< "$FLOWS_API_ONLY"; then
+  echo "  FAIL: flows-api references ADMIN_API_TOKEN, INTERNAL_API_SECRET or VEXA_FLOWS_ADMIN_KEY"; fail=1
+else
+  echo "  OK: flows-api references neither ADMIN_API_TOKEN nor INTERNAL_API_SECRET"
 fi
 
 # A12.3 — probes on flows-api (it has a /health; the worker and mailbox have no server at all and
@@ -2057,4 +2065,71 @@ SCR_ON="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --sho
 tb "calls.transcribeSharedScreen by default: the shared screen is transcribed" 'grep -A1 "name: CALL_TRANSCRIBE_SHARED_SCREEN$" <<< "$SCR_ON" | grep -qF "value: \"true\""'
 SCR_OFF="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-only templates/deployment-meeting-api.yaml --set meetingApi.calls.transcribeSharedScreen=false)"
 tb "calls.transcribeSharedScreen=false (a boolean) renders \"false\"" 'grep -A1 "name: CALL_TRANSCRIBE_SHARED_SCREEN$" <<< "$SCR_OFF" | grep -qF "value: \"false\""'
+# The flows tier's one credential is VEXA_FLOWS_SERVICE_KEY, and it opens only the gateway's service
+# door: a ClusterIP Service on 8002 that exists only with flows on, never a port on the public gateway
+# Service, reachable only from flows-*, signals and the terminal. Flows holds no admin token and no
+# internal secret, and agent-api no longer admits flows Pods directly.
+DOOR_ON="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true,signals.enabled=true,flows.mail.enabled=true,flows.mail.address=a@b.c,crm.enabled=true,crm.orgId=x)"
+DOOR_OFF="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=false,signals.enabled=true)"
+door_check() { python3 -c '
+import sys, yaml
+mode = sys.argv[1]; docs = [d for d in yaml.safe_load_all(sys.stdin) if d]
+by = {(d["kind"], d["metadata"]["name"]): d for d in docs}
+door = by.get(("Service", "vexa-vexa-gateway-door"))
+np = by.get(("NetworkPolicy", "vexa-vexa-gateway-door-ingress"))
+gw = by[("Deployment", "vexa-vexa-gateway")]["spec"]["template"]["spec"]["containers"][0]
+gw_env = {e["name"]: e for e in gw.get("env", [])}
+gw_ports = {p["containerPort"] for p in gw.get("ports", [])}
+def comps(n):
+    out = set()
+    for ing in n["spec"].get("ingress", []):
+        for fr in ing.get("from", []):
+            ps = fr.get("podSelector", {})
+            out |= set(ps.get("matchLabels", {}).get("app.kubernetes.io/component", "").split()) - {""}
+            for e in ps.get("matchExpressions", []):
+                out |= set(e.get("values", []))
+    return out
+if mode == "off":
+    assert door is None and np is None, "door rendered with flows off"
+    assert "VEXA_FLOWS_SERVICE_KEY" not in gw_env and 8002 not in gw_ports, "gateway serves a door with flows off"
+    print("ok"); sys.exit()
+check = sys.argv[2]
+if check == "service":
+    assert door["spec"]["type"] == "ClusterIP", door["spec"].get("type")
+    assert [p["port"] for p in door["spec"]["ports"]] == [8002], door["spec"]["ports"]
+    assert door["spec"]["selector"]["app.kubernetes.io/component"] == "gateway", door["spec"]["selector"]
+    pub = by[("Service", "vexa-vexa-gateway")]
+    assert 8002 not in [p["port"] for p in pub["spec"]["ports"]], pub["spec"]["ports"]
+    assert 8002 in gw_ports and gw_env["VEXA_FLOWS_SERVICE_KEY"]["valueFrom"]["secretKeyRef"]["key"] == "VEXA_FLOWS_SERVICE_KEY"
+elif check == "netpol":
+    assert comps(np) == {"flows-api", "flows-worker", "flows-mailbox", "signals", "terminal"}, comps(np)
+    assert [p["port"] for i in np["spec"]["ingress"] for p in i.get("ports", [])] == [8002], np["spec"]["ingress"]
+    aa = by[("NetworkPolicy", "vexa-vexa-agent-api-ingress")]
+    assert not any(c.startswith("flows") for c in comps(aa)), comps(aa)
+elif check == "flows":
+    seen = 0
+    for name in ("flows-api", "flows-worker", "flows-mailbox"):
+        c = [c for c in by[("Deployment", "vexa-vexa-" + name)]["spec"]["template"]["spec"]["containers"] if c["name"] == name][0]
+        env = {e["name"]: e for e in c.get("env", [])}
+        assert env["VEXA_FLOWS_SERVICE_KEY"]["valueFrom"]["secretKeyRef"]["key"] == "VEXA_FLOWS_SERVICE_KEY", name
+        text = yaml.safe_dump(c)
+        for bad in ("ADMIN_API_TOKEN", "INTERNAL_API_SECRET", "VEXA_FLOWS_ADMIN_KEY", "VEXA_INTERNAL_SECRET"):
+            assert bad not in text, (name, bad)
+        for k, v in (("VEXA_FLOWS_AGENT_API_URL", "/agent"), ("VEXA_FLOWS_ADMIN_API_URL", "/identity"),
+                     ("VEXA_FLOWS_GATEWAY_URL", "/meetings"), ("VEXA_FLOWS_CRM_API_URL", "/crm")):
+            assert env[k]["value"] == "http://vexa-vexa-gateway-door:8002" + v, (name, k, env[k])
+        seen += 1
+    assert seen == 3
+elif check == "signals":
+    sg = {e["name"]: e for e in by[("Deployment", "vexa-vexa-signals")]["spec"]["template"]["spec"]["containers"][0].get("env", [])}
+    assert sg["VEXA_FLOWS_API_URL"]["value"] == "http://vexa-vexa-gateway-door:8002/to-flows", sg["VEXA_FLOWS_API_URL"]
+print("ok")
+' "$@"; }
+tb "flows door: gateway-door is a ClusterIP Service on 8002 only, the public gateway Service has no 8002, the gateway serves it with the flows key" 'door_check on service <<< "$DOOR_ON" >/dev/null'
+tb "flows door: gateway-door-ingress admits exactly flows-api, flows-worker, flows-mailbox, signals, terminal on 8002; agent-api ingress admits no flows Pod" 'door_check on netpol <<< "$DOOR_ON" >/dev/null'
+tb "flows door: every flows container sources VEXA_FLOWS_SERVICE_KEY, reaches agent/identity/meetings/crm through the door, and holds no ADMIN_API_TOKEN or INTERNAL_API_SECRET" 'door_check on flows <<< "$DOOR_ON" >/dev/null'
+tb "flows door: signals hands its facts to flows through the door's /to-flows" 'door_check on signals <<< "$DOOR_ON" >/dev/null'
+tb "flows off (negative control): no door Service, no door NetworkPolicy, and the gateway holds no flows key and no 8002 port" 'door_check off <<< "$DOOR_OFF" >/dev/null'
+FSK_RE='^  VEXA_FLOWS_SERVICE_KEY: "[A-Za-z0-9]{32,}"$'
+tb "the chart's Secret renders a generated VEXA_FLOWS_SERVICE_KEY" '[ "$(grep -cE "$FSK_RE" <<< "$DOOR_ON")" -eq 1 ]'
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

@@ -21,7 +21,7 @@ deploys the same control plane as the Compose stack, with the runtime pointed at
 | pgbouncer | optional connection pooling |
 | dashboard (deprecated 0.10 UI) | optional Deployment + Service, **off by default** |
 | RBAC for the k8s spawn backend | Role/RoleBinding scoped to Pod create/watch/delete |
-| NetworkPolicy for agent-api, meeting-api, the runtime and spawned Pods | on by default (`networkPolicy.enabled`): only the gateway, the MCP service, the runtime, flows, the terminal and (for meeting-api) agent-api and meeting bots reach agent-api and meeting-api; only agent-api and meeting-api reach the runtime. Spawned bots and workers take no inbound connection and reach only DNS, addresses outside `networkPolicy.workloads.privateCidrs`, and their own dependencies — workers the gateway, redis and flows-api, bots meeting-api and redis. **An STT service, LLM endpoint, S3 or proxy your bots or workers reach on a private address must be added** with `networkPolicy.workloads.bot.extraEgress` / `.worker.extraEgress`. Spawned Pods mount no ServiceAccount token. Needs a CNI that enforces NetworkPolicy |
+| NetworkPolicy for agent-api, meeting-api, the runtime and spawned Pods | on by default (`networkPolicy.enabled`): only the gateway, the MCP service, the runtime, the terminal and (for meeting-api) agent-api and meeting bots reach agent-api and meeting-api; the flows tier reaches neither, only the gateway's service door (below); only agent-api and meeting-api reach the runtime. Spawned bots and workers take no inbound connection and reach only DNS, addresses outside `networkPolicy.workloads.privateCidrs`, and their own dependencies — workers the gateway, redis and flows-api, bots meeting-api and redis. **An STT service, LLM endpoint, S3 or proxy your bots or workers reach on a private address must be added** with `networkPolicy.workloads.bot.extraEgress` / `.worker.extraEgress`. Spawned Pods mount no ServiceAccount token. Needs a CNI that enforces NetworkPolicy |
 
 The gateway, admin-api, meeting-api (and the migrations Job), MCP, terminal and flows images run as
 uid 10001, and their pods set `runAsNonRoot` with that uid and `fsGroup`. The runtime and agent-api
@@ -53,6 +53,7 @@ What the chart allows its own Pods:
 | Pod | Takes connections from | May connect to |
 |---|---|---|
 | gateway, terminal, dashboard | anywhere, on their own port | DNS, the chart's Pods, any address outside `controlPlane.egressExcept` |
+| gateway, service door (port 8002, the `<release>-gateway-door` ClusterIP Service, only with `flows.enabled`) | flows-api, flows-worker, flows-mailbox, signals and the terminal (`<release>-gateway-door-ingress`) | as the gateway |
 | admin-api, mcp, pgbouncer | the chart's Pods | same as above |
 | flows-api | the chart's Pods and agent workers | same as above |
 | agent-api, meeting-api, runtime | their named callers (see the table above) | same as above |
@@ -1115,6 +1116,11 @@ lack:
   [Execution](/architecture/execution#the-model-proxy).
 - `VEXA_MCP_DELEGATION_SECRET`, and the CRM outbox's `VEXA_FLOWS_CRM_PUBLISH_KEY` when the CRM is
   on (without it the outbox does not start).
+- `VEXA_FLOWS_SERVICE_KEY` when flows is on. It is the flows tier's one credential: flows-api,
+  flows-worker and flows-mailbox present it to the gateway's service door, and the gateway holds the
+  same value. Without it flows does not start and the gateway serves no door. Keep `ADMIN_API_TOKEN`
+  and `INTERNAL_API_SECRET` in your Secret for the other services; the flows Pods no longer mount
+  either.
 
 Fact producers sign with their own keys. The CRM outbox signs card facts with its own Ed25519
 private key, kept in `<release>-fact-seal-crm-key`, and flows verifies under the public half in
@@ -1136,6 +1142,14 @@ private key, kept in `<release>-fact-seal-crm-key`, and flows verifies under the
 
 ### What changes on upgrade
 
+- **Flows calls the other services through the gateway's service door.** With `flows.enabled`, the
+  flows Pods reach agent-api, admin-api, meeting-api and the CRM only through
+  `http://<release>-gateway-door:8002/agent`, `/identity`, `/meetings` and `/crm`, and signals hands
+  facts to flows through `/to-flows` on the same door. The door forwards a fixed list of routes and
+  refuses the rest with 403. Add `VEXA_FLOWS_SERVICE_KEY` to a Secret you bring with
+  `secrets.existingSecretName` (above). If you manage network policies yourself, allow port 8002 on
+  the gateway from flows-api, flows-worker, flows-mailbox, signals and the terminal; the flows Pods
+  no longer need agent-api, and `VEXA_FLOWS_ADMIN_KEY` is gone.
 - **In-chart databases restart once.** The in-chart Postgres and Redis gained a startup probe, so
   `helm upgrade` restarts each of them once, with a short outage. Postgres keeps its data. Redis loses
   its keys, including delegation records, if its persistence is off. Nothing restarts when you use
