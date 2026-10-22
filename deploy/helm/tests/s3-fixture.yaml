@@ -31,7 +31,7 @@ spec:
     spec:
       containers:
         - name: versitygw
-          image: versity/versitygw:v1.8.0@sha256:30292fc2eeacc67a36993b01f7a7a5e3361a19cced0e80c1d71cfa2a4b0a2499
+          image: versity/versitygw:v1.9.0@sha256:eb7f786fcd91e72194e48fcf1ac16302d686bf8e3a71434bdbc067a6efd3fdc7
           args: ["--port", ":7070", "--health", "/health", "posix", "/data"]
           env:
             - name: ROOT_ACCESS_KEY
@@ -85,7 +85,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: create-bucket
-          image: versity/versitygw:v1.8.0@sha256:30292fc2eeacc67a36993b01f7a7a5e3361a19cced0e80c1d71cfa2a4b0a2499
+          image: versity/versitygw:v1.9.0@sha256:eb7f786fcd91e72194e48fcf1ac16302d686bf8e3a71434bdbc067a6efd3fdc7
           command: ["/bin/sh", "-c"]
           args:
             - |

@@ -71,7 +71,7 @@ absent).
   or pass `{"transcribe_enabled": false}` on the spawn. See
   [Configuration](/configuration#transcription-stt).
 - **Object storage** — the `storage` service runs versitygw (`versity/versitygw`, Apache-2.0,
-  pinned by tag and digest), an S3 server whose POSIX backend keeps every recording as a plain file
+  v1.9.0, pinned by tag and digest), an S3 server whose POSIX backend keeps every recording as a plain file
   in the `storage-data` volume. meeting-api reaches it over S3 with the `MINIO_*` settings (the
   variable names are unchanged): `MINIO_ENDPOINT=storage:9000`, and `MINIO_ACCESS_KEY` /
   `MINIO_SECRET_KEY` are the server's root credentials, so change both before exposing the stack.
