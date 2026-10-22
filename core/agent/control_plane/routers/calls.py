@@ -35,6 +35,7 @@ from control_plane import identity_token, room_echo, session_access, session_syn
 from control_plane import workspace_membership as membership_mod
 from control_plane.bodies import CHAT_SESSION_PATTERN
 from control_plane.ceiling import names_in_ceiling, refuse_delegated, require_in_ceiling
+from control_plane.commit_trailers import agent_trailers, attributed, with_trailers, writer_trailers
 from control_plane.session_store import SessionDenied
 from control_plane.livekit_rooms import room_ended
 from control_plane.workspace_membership import MembershipError
@@ -495,7 +496,8 @@ def build(**d) -> APIRouter:
         # as its owner would have landed it — their write rights, their name on the commit. The
         # request must then carry the owner as its person (the internal tier's X-User-Id).
         if _auto_accept(request, p):
-            commit = _land(request, body.owner, p, p["body"])
+            commit = _land(request, body.owner, p, p["body"],
+                           trailers=agent_trailers(body.owner, identity_token.session_of(request.headers)))
             p = s.decide(p["id"], body.owner, accept=True)
             return {"proposal": p, "commit": commit, "auto_accepted": True}
         return {"proposal": p}
@@ -512,9 +514,11 @@ def build(**d) -> APIRouter:
                 return False
         return session_access.auto_accept_policy(global_root, ws_root)
 
-    def _land(request: Request, subject: str, p: dict, body: str) -> Optional[str]:
+    def _land(request: Request, subject: str, p: dict, body: str, *, trailers=None) -> Optional[str]:
         """Write an accepted page or entity into its workspace AS the owner, and commit it in their
-        name. The owner's own write rights apply: a workspace they cannot write refuses here."""
+        name. The owner's own write rights apply: a workspace they cannot write refuses here.
+        ``trailers`` say who wrote it (``commit_trailers``): by default the caller's — none for the
+        owner's own acceptance — and an agent's for a change the post-meeting run lands itself."""
         if p["kind"] not in ("page", "entity"):
             return None
         slug = p["workspace"]
@@ -534,8 +538,10 @@ def build(**d) -> APIRouter:
             return None
         email = request.headers.get("x-user-email", "") or f"{subject}@vexa.local"
         run_git(target, "add", "--", p["path"])
+        message = f"accept: {p['title'] or p['path']} (proposed after a call)"
+        message = with_trailers(message, writer_trailers(request.headers) if trailers is None else trailers)
         run_git(target, "-c", f"user.name={subject}", "-c", f"user.email={email}", "commit", "-m",
-                f"accept: {p['title'] or p['path']} (proposed after a call)", "--", p["path"])
+                message, "--", p["path"])
         return run_git(target, "rev-parse", "HEAD").stdout.strip() or None
 
     # ── WHAT THE ROOM'S AGENT CHANGED DURING A CALL, AND ITS UNDO (R1 1.5) ───────────────────────
@@ -617,7 +623,8 @@ def build(**d) -> APIRouter:
                 email = request.headers.get("x-user-email", "") or f"{subject}@vexa.local"
                 run_git(target, "add", "--", c["path"])
                 run_git(target, "-c", f"user.name={subject}", "-c", f"user.email={email}", "commit", "-m",
-                        f"undo: {c['path']} (Vexa's change during the call)", "--", c["path"])
+                        attributed(f"undo: {c['path']} (Vexa's change during the call)", request.headers),
+                        "--", c["path"])
                 commit = run_git(target, "rev-parse", "HEAD").stdout.strip() or None
         s.undo_call_change(change_id, subject)
         try:
