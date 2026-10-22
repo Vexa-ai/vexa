@@ -1,15 +1,15 @@
 """log_scrub.py — a credential in a query string never reaches a log line (security review 2026-10-17, M7).
 
-`/ws` and the VNC relay still accept `?api_key=<key>` — ws.v1 publishes it, for clients that cannot
-set a header (a browser `WebSocket`). The terminal never uses it (its server injects `x-api-key`), but
+`/ws` and the VNC relay still accept `?api_key=<key>`, deprecated — ws.v1 published it for clients that
+cannot set a header (a browser `WebSocket`), which now name the key in the subprotocol list instead
+(`ws_auth.py`). The terminal never uses it (its server injects `x-api-key`), but
 whoever does would leave the key in every access log the request passes: uvicorn's access line and
 its WebSocket `accepted` line both print the full path with its query.
 
 This filter rewrites those records before any handler formats them: the VALUE of `api_key`, `token`,
 `access_token`, `key` and `apikey` query parameters becomes `[redacted]`, in the message and in every
 string argument. It is installed on the uvicorn loggers once, by `create_app`; installing it twice is
-a no-op. Withdrawing the query parameter itself is a ws.v1 change (a published wire), left to its own
-decision; this closes the log leak now.
+a no-op. The query parameter goes in ws.v2; until then this keeps it out of the logs.
 """
 from __future__ import annotations
 

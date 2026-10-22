@@ -17,6 +17,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from .delegation import is_delegated
 from .obs import log_event, set_user_id
+from .ws_auth import accept, ws_credential
 from .ports import Authorizer, AuthUnavailable, RedisBus
 
 
@@ -173,9 +174,13 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
             await ws.close(code=4401)  # pre-accept reject → HTTP 403 to the upgrade
             return
 
-    await ws.accept()
+    credential = ws_credential(ws)
+    await accept(ws, credential.subprotocol)
 
-    api_key = ws.headers.get("x-api-key") or ws.query_params.get("api_key")
+    api_key = credential.key
+    if credential.source == "query":
+        log_event("ws_query_key_deprecated", audience="system", level="warning", span="ws",
+                  fields={"path": "/ws", "use": "x-api-key header or the vexa.key.<key> subprotocol"})
     if not api_key:
         try:
             await ws.send_text(json.dumps({"type": "error", "error": "missing_api_key"}))

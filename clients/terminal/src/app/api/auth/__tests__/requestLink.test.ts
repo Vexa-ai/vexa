@@ -16,7 +16,7 @@ vi.mock("../mailer", () => ({ sendMail: (opts: MailArgs) => sendMail(opts) }));
 import { POST as requestLinkRoute } from "../request-link/route";
 import { _settleLinkDeliveries } from "../linkDelivery";
 import { _resetLinkRateLimits } from "../linkRateLimit";
-import { verifyMagicToken } from "../magicToken";
+import { browserHoldsLink, verifyMagicToken } from "../magicToken";
 
 /** The route answers BEFORE it asks admin-api or mails anything (Vexa-ai/vexa#1783 — so a refused
  *  address cannot be told apart by timing), so every case here waits for the delivery it started. */
@@ -197,5 +197,28 @@ describe("what it does refuse", () => {
     const res = await requestLink(makeReq({ email: "someone@example.com" }));
     expect(res.status).toBe(503);
     expect(sendMail).not.toHaveBeenCalled();
+  });
+});
+
+describe("the link is bound to the browser that asked (S03T-3)", () => {
+  it("sets an httpOnly binding cookie for the redeem route, and the link names its hash", async () => {
+    const res = await requestLink(makeReq({ email: "bound@vexa.ai" }));
+    const c = res.cookies.get("vexa-signin-bind");
+    expect(c?.value).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(c).toMatchObject({ httpOnly: true, path: "/api/auth/redeem", sameSite: "lax" });
+    const v = verifyMagicToken(sentLink().token);
+    if (!v.ok) throw new Error("did not verify");
+    expect(browserHoldsLink(v, c!.value)).toBe(true);
+    expect(browserHoldsLink(v, "Q".repeat(43))).toBe(false);
+    expect(browserHoldsLink(v, undefined)).toBe(false);
+  });
+
+  it("a browser that already holds one keeps it, so its earlier links stay good", async () => {
+    const mine = "K".repeat(43);
+    const res = await requestLink(makeReq({ email: "again@vexa.ai" }, { host: "terminal.test", cookie: `vexa-signin-bind=${mine}` }));
+    expect(res.cookies.get("vexa-signin-bind")?.value).toBe(mine);
+    const v = verifyMagicToken(sentLink().token);
+    if (!v.ok) throw new Error("did not verify");
+    expect(browserHoldsLink(v, mine)).toBe(true);
   });
 });

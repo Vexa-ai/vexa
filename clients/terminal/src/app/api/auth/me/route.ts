@@ -36,7 +36,6 @@ import { cookies } from "next/headers";
 import { AUTH_COOKIE, USER_INFO_COOKIE, validateAuthToken } from "../adminApi";
 import { PERSON_COOKIE, PERSON_INFO_COOKIE, adminAccountAddresses } from "../companyMode";
 import { testUsersEnabled } from "../testUsers";
-import { sessionCookieHeader, upgradeBrowserSession } from "../sessionUpgrade";
 
 export const dynamic = "force-dynamic";
 
@@ -75,10 +74,6 @@ export async function GET() {
   }
 
   if (validated.ok) {
-    // A browser signed in before sessions existed still holds the old login KEY (hotfix 2026-10-18):
-    // move it onto a session now, on the page load, so its first card press already works. Best-effort
-    // — a refusal leaves the tab exactly as signed in as it was. Never in a Company-mode tab.
-    const upgraded = validated.credentialClass === "key" && !personToken ? await upgradeBrowserSession() : null;
     const res = NextResponse.json(
       {
         authenticated: true,
@@ -97,7 +92,6 @@ export async function GET() {
       },
       { headers: NO_STORE },
     );
-    if (upgraded) res.headers.append("Set-Cookie", sessionCookieHeader(upgraded));
     return res;
   }
 

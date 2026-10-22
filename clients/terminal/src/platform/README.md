@@ -13,6 +13,10 @@ terminal profile — full · meetings · minutes), `session.ts` (the auth-failur
 `meetingRoute.ts`. They lived in `app/`, which made every folder that read them import the composition
 root that imports them back; here they sit below every folder that needs them.
 
+`navigate.ts` is the one way a URL that came from data (a notification, a reference, a claim's
+arrival) becomes a navigation: `navigateWithin` follows it only when it stays on this origin, and
+lands on `/` otherwise — never a `javascript:` URL, never another host.
+
 `layout.ts` is the `LayoutService` (which list is active, which tabs are open in the centre). The
 workbench shell renders it; surfaces, the canvas and minutes open tabs through it, so it sits here,
 below all of them.

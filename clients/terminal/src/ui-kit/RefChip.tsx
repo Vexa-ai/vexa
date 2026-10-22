@@ -14,6 +14,7 @@ import { Icon } from "./index";
 import type { RefAnswer } from "../data/workspaceApi";
 import { parseUniversalRef, resolveUniversalRef } from "./universalRefs";
 import { OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT, OPEN_SESSION_EVENT } from "../platform";
+import { navigateWithin } from "../platform/navigate";
 
 const ICON: Record<string, string> = {
   workspace: "folder", chat: "msg", room: "msg", message: "msg", page: "file", file: "file", entity: "tag", meeting: "cal",
@@ -27,7 +28,7 @@ export function openRef(a: RefAnswer): void {
   if (o.chat) { window.dispatchEvent(new CustomEvent(OPEN_SESSION_EVENT, { detail: { session: String(o.chat), ...(o.message ? { message: String(o.message) } : {}) } })); return; }
   if (o.card) { openSuppliedCard(String(o.card)); return; }
   if (o.path) { window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { path: String(o.path), slug: o.slug ? String(o.slug) : undefined, ...(anchor ? { anchor } : {}) } })); return; }
-  if (o.join) { window.location.assign(`/join/${o.join}`); return; }
+  if (o.join) { navigateWithin(`/join/${encodeURIComponent(String(o.join))}`); return; }
   // a meeting opens on the right; the chat in the centre stays (founder rule 2026-10-16)
   if (o.meeting !== undefined) {
     const t = anchor?.startsWith("t=") ? anchor.slice(2) : undefined;
@@ -35,7 +36,7 @@ export function openRef(a: RefAnswer): void {
     window.dispatchEvent(new CustomEvent(OPEN_MEETING_EVENT, { detail: { ref: String(o.meeting), ...(t ? { at: t } : {}), ...(line ? { line } : {}) } }));
     return;
   }
-  window.location.assign(a.url || "/");
+  navigateWithin(a.url);
 }
 
 export function RefChip({ text }: { text: string }) {

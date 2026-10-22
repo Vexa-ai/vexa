@@ -28,3 +28,8 @@ export const linkLedger = {
     return new Response(JSON.stringify({ first: true }), { status: 200 });
   },
 };
+
+/** The browser that asked for every link these tests mint, and the cookie it holds (magicToken.ts
+ *  binds a link to the browser that asked). */
+export const TEST_BROWSER = "B".repeat(43);
+export const BROWSER_COOKIE = `vexa-signin-bind=${TEST_BROWSER}`;

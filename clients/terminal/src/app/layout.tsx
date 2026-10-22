@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { headers } from "next/headers";
 import { Analytics } from "./AnalyticsScript";
-import { NONCE_HEADER } from "./contentSecurityPolicy";
+import { NONCE_HEADER, styleNonceBootstrap } from "./contentSecurityPolicy";
 // Geist Sans and Geist Mono (SIL OFL 1.1, served unmodified as web fonts; logged as a Category B
 // exception in license-exceptions.json). Each sets a CSS variable that tokens.css reads.
 import { GeistSans } from "geist/font/sans";
@@ -28,6 +28,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   return (
     <html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`}>
       <head>
+        {/* first: <style> elements scripts create carry this response's nonce (style-src-elem) */}
+        {nonce && <script nonce={nonce} dangerouslySetInnerHTML={{ __html: styleNonceBootstrap(nonce) }} />}
         {/* apply the saved theme before first paint so day mode doesn't flash dark on reload */}
         <script nonce={nonce} dangerouslySetInnerHTML={{ __html: `try{if(localStorage.getItem('vexa.terminal.theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}` }} />
       </head>

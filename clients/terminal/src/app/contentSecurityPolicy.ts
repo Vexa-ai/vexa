@@ -7,14 +7,22 @@
  *    loaded them ('strict-dynamic', which covers Next's chunks, next/script and gtag). An inline
  *    script that came in with page content has no nonce, so it does not run, and that holds inside
  *    an `srcdoc` frame too, because such a frame inherits this policy.
- *  - 'unsafe-eval' stays, for the MDX renderer (`@mdx-js/mdx` `evaluate`, ui-kit/MdxDoc.tsx), which
- *    turns a page's text into code in the browser, and for the call blur's WebAssembly compile. A
- *    Meeting Canvas view is NOT compiled on these pages: it runs in `/canvas-frame` under its own
- *    policy (`canvasFrameContentSecurityPolicy` below), in an opaque-origin sandbox.
- *  - Styles allow 'unsafe-inline': React renders `style` attributes, and the appearance tokens,
- *    mermaid's diagrams and LiveKit write `<style>` elements at run time. A nonce cannot cover
- *    attributes, and naming one would switch 'unsafe-inline' off for the elements. The one foreign
- *    stylesheet is Google Fonts', for the fonts a person can pick (platform/appearance.ts).
+ *  - No string becomes code: there is no 'unsafe-eval'. A workspace page is parsed to a tree and
+ *    drawn as elements (ui-kit/MdxDoc.tsx), never compiled. 'wasm-unsafe-eval' admits WebAssembly
+ *    compilation alone, for the call's background blur (MediaPipe). The development server keeps
+ *    'unsafe-eval' for React's refresh runtime; a production build never carries it. A Meeting
+ *    Canvas view is NOT compiled on these pages: it runs in `/canvas-frame` under its own policy
+ *    (`canvasFrameContentSecurityPolicy` below), in an opaque-origin sandbox.
+ *  - A `<style>` ELEMENT applies only with this response's nonce (`style-src-elem`). The server
+ *    stamps the nonce on the ones it renders; an element a running script creates gets it from
+ *    `styleNonceBootstrap` (below) — a script that runs is already trusted by `script-src`, and the
+ *    appearance tokens, sonner, CodeMirror and mermaid all write `<style>` elements at run time. A
+ *    `<style>` that arrives as markup (a page's HTML, an injected fragment) has no nonce and does
+ *    not apply. Style ATTRIBUTES stay 'unsafe-inline' (`style-src-attr`): React renders `style`
+ *    props into the server's HTML, and CSP has no nonce for an attribute. What an attribute can
+ *    reach is bounded by `img-src` and `font-src` below, so it cannot send anything off this origin.
+ *    The one foreign stylesheet is Google Fonts', for the fonts a person can pick
+ *    (platform/appearance.ts).
  *  - Connections are this origin (REST, `/ws`, the event streams), plus the deployment's LiveKit
  *    server when calls are on (`LIVEKIT_URL`, the address meeting-api and agent-api hand the
  *    browser), plus Google Analytics when `NEXT_PUBLIC_GA_MEASUREMENT_ID` is set.
@@ -65,14 +73,21 @@ export function livekitOrigins(url: string | undefined): string[] {
   return [`${secure ? "wss" : "ws"}://${u.host}`, `${secure ? "https" : "http"}://${u.host}`];
 }
 
-export function contentSecurityPolicy(nonce: string, sources: PolicySources = policySources()): string {
+/** Whether this process is Next's development server (React refresh evaluates modules). */
+export const isDevelopmentServer = (): boolean => process.env.NODE_ENV === "development";
+
+export function contentSecurityPolicy(nonce: string, sources: PolicySources = policySources(),
+  development: boolean = isDevelopmentServer()): string {
   const ga = (sources.gaMeasurementId ?? "").trim() !== "";
   const connect = ["'self'", ...livekitOrigins(sources.livekitUrl), ...(ga ? GA_CONNECT : [])];
   const img = ["'self'", "data:", "blob:", ...(ga ? GA_IMG : [])];
+  const styles = `'self' 'nonce-${nonce}' https://fonts.googleapis.com`;
   return [
     "default-src 'self'",
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'unsafe-eval'`,
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'wasm-unsafe-eval'${development ? " 'unsafe-eval'" : ""}`,
+    `style-src ${styles}`,
+    `style-src-elem ${styles}`,
+    "style-src-attr 'unsafe-inline'",
     "font-src 'self' https://fonts.gstatic.com",
     `connect-src ${connect.join(" ")}`,
     `img-src ${img.join(" ")}`,
@@ -94,7 +109,15 @@ export function contentSecurityPolicy(nonce: string, sources: PolicySources = po
  *  - `connect-src 'none'` and nothing to load but this response's own scripts and styles: the view
  *    reaches no server at all — not the terminal's API, not anybody's. Its one channel is
  *    `postMessage` to the page that frames it.
- *  - 'unsafe-eval' because compiling the view is this document's job (`new Function`).
+ *  - 'unsafe-eval' because compiling the view is this document's job (`new Function`). This is the
+ *    one document that keeps it, and it is the one whose origin is opaque and whose network is shut.
+ *  - It cannot carry the view's data to another host by NAVIGATING either: the frame's own
+ *    navigation is checked against the embedding page's `frame-src 'self'`, so the browser refuses
+ *    one to any other host. A navigation to this origin is allowed and reaches only this server,
+ *    without the reader's cookies (canvas/frame/lockdown.ts says why nothing can cancel it).
+ *    `canvas/frame/lockdown.ts` removes WebRTC before any view code runs, and
+ *    `X-DNS-Prefetch-Control: off` (middleware.ts) asks the browser not to resolve names a view
+ *    writes into links.
  *  - `frame-ancestors 'self'`: only the terminal's own pages may frame it. */
 export function canvasFrameContentSecurityPolicy(nonce: string): string {
   return [
@@ -114,6 +137,20 @@ export function canvasFrameContentSecurityPolicy(nonce: string): string {
     "frame-ancestors 'self'",
     "sandbox allow-scripts",
   ].join("; ");
+}
+
+/** THE STYLE NONCE FOR ELEMENTS A SCRIPT CREATES. Runs first in the page's `<head>`, under the
+ *  response's nonce: every `<style>` element created through `document.createElement` /
+ *  `createElementNS` from then on carries the nonce, so the libraries that write styles at run time
+ *  keep working under `style-src-elem`. Markup is never stamped — a `<style>` parsed out of HTML is
+ *  refused. `window.__vxStyleNonce` lets the renderer stamp mermaid's own `<style>` in the SVG text
+ *  it inserts (ui-kit/docDiagrams.tsx). */
+export function styleNonceBootstrap(nonce: string): string {
+  return `(function(n){try{var D=Document.prototype,c=D.createElement,s=D.createElementNS;` +
+    `function t(e){if(e&&String(e.localName).toLowerCase()==="style")e.setAttribute("nonce",n);return e}` +
+    `D.createElement=function(){return t(c.apply(this,arguments))};` +
+    `D.createElementNS=function(){return t(s.apply(this,arguments))};` +
+    `Object.defineProperty(window,"__vxStyleNonce",{value:n})}catch(e){}})(${JSON.stringify(nonce)})`;
 }
 
 /** A fresh nonce: 128 random bits, base64. */

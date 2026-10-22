@@ -68,8 +68,7 @@ describe("/api/auth/login — direct email login against a mocked admin-api", ()
     const tok = setCookies.find((c) => c.name === "vexa-token");
     const info = setCookies.find((c) => c.name === "vexa-user-info");
     expect(tok?.value).toBe("minted-tok");
-    // `id` is part of the info cookie and is LOAD-BEARING: the minutes seams
-    // (api/minutes/ensure-meeting, api/minutes/person-state) read the user id straight out of it.
+    // `id` is part of the (display-only) info cookie: the client scopes its stored state by it.
     expect(JSON.parse(info!.value)).toEqual({ id: 42, email: "test-a@b.com", name: "A" });
     expect((tok?.opts as { httpOnly?: boolean })?.httpOnly).toBe(true);
   });

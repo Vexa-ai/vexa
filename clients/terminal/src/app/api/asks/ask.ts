@@ -3,13 +3,11 @@
  *  with the signed-in person's OWN credential (the session cookie) — never a deployment key — because
  *  the press is the person's attestation. Not a route file: route files export only handlers.
  *
- *  A browser still holding a pre-session login KEY (hotfix 2026-10-18) is refused by agent-api with
- *  `session_required`: the cookie's key is upgraded to a session for the same person
- *  (`auth/sessionUpgrade.ts`), the cookie is swapped, and the call is retried ONCE. If that cannot
- *  happen the refusal goes back marked `sign_in_again`, and the card asks the person to sign in again
- *  instead of saying "Couldn't send". */
+ *  A browser still holding a pre-session login KEY is refused by agent-api with `session_required`.
+ *  The refusal goes back marked `sign_in_again`, and the card asks the person to sign in again —
+ *  which mints their session — instead of saying "Couldn't send". */
 import { gatewayPost, json, otherOrigin, personKey } from "../desktop/desk";
-import { isSessionRequired, sessionCookieHeader, upgradeBrowserSession } from "../auth/sessionUpgrade";
+import { isSessionRequired } from "../auth/sessionRequired";
 
 const NO_STORE = { "Cache-Control": "no-store", "Content-Type": "application/json" } as const;
 
@@ -26,16 +24,7 @@ export async function forwardAsk(req: Request, path: string): Promise<Response> 
     const first = await gatewayPost(path, key, body);
     const text = await first.text();
     if (!isSessionRequired(first.status, text)) return new Response(text, { status: first.status, headers: NO_STORE });
-    const session = await upgradeBrowserSession();
-    if (!session || session === key) return signInAgain();
-    const retry = await gatewayPost(path, session, body);
-    const again = await retry.text();
-    const res = isSessionRequired(retry.status, again)
-      ? signInAgain()
-      : new Response(again, { status: retry.status, headers: NO_STORE });
-    // The session is this browser's from now on, whatever the retry answered.
-    res.headers.append("Set-Cookie", sessionCookieHeader(session));
-    return res;
+    return signInAgain();
   } catch {
     return json({ detail: "Answers are temporarily unavailable" }, 503);
   }

@@ -18,7 +18,7 @@ vi.mock("../minutes/seed/dockerSh", () => ({
   },
 }));
 
-import { POST } from "../minutes/seed/route";
+import { POST } from "../minutes/seed/route.dev";
 
 function req(body: unknown) {
   return { json: async () => body } as unknown as Parameters<typeof POST>[0];

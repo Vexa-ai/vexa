@@ -604,7 +604,10 @@ export async function mintSessionToken(
  *  falls back to the old `bot,tx,browser` login KEY, with a warning; there every decision that needs a
  *  session is refused (fail closed). With the secret set, an admin-api that cannot mint (404/503) fails
  *  the sign-in rather than quietly handing the browser a key. Both carry the `terminal-login` name,
- *  so the prune bounds both. */
+ *  so the prune bounds both, and both end when their cookie does (`LOGIN_LIFETIME_SECONDS`). */
+/** A sign-in credential lives exactly as long as the browser cookie that carries it. */
+export const LOGIN_LIFETIME_SECONDS = 60 * 60 * 24 * 30;
+
 export async function mintLoginToken(userId: string | number): Promise<AdminResult<{ token: string; id: number }>> {
   const session = await mintSessionToken(userId);
   if (session.ok && session.data) {
@@ -615,31 +618,11 @@ export async function mintLoginToken(userId: string | number): Promise<AdminResu
   }
   console.warn(`[terminal-auth] session credential unavailable (${session.error || session.status}); `
     + "signing in with an ordinary key — decisions that need a session will be refused");
-  const minted = await mintUserToken(userId, { scopes: ["bot", "tx", "browser"], name: TERMINAL_LOGIN_TOKEN_NAME });
+  const minted = await mintUserToken(userId, { scopes: ["bot", "tx", "browser"], name: TERMINAL_LOGIN_TOKEN_NAME, expiresIn: LOGIN_LIFETIME_SECONDS });
   if (!minted.ok || !minted.data?.token) {
     return { ok: false, status: minted.status || 500, error: minted.error || "Failed to mint API token" };
   }
   return { ok: true, status: minted.status, data: { token: minted.data.token, id: minted.data.id } };
-}
-
-/** Move a browser that signed in before sessions existed onto one (hotfix 2026-10-18): admin-api's
- *  `POST /internal/sessions/upgrade {token}` (both secrets) mints a session for the SAME user and
- *  retires the old key, but only when `token` is the exact legacy sign-in key (`terminal-login`,
- *  `bot,tx,browser`, no expiry) — never a self-serve key, a session or a delegation. Callers pass only
- *  the browser's own httpOnly auth cookie (`sessionUpgrade.ts`). */
-export async function upgradeLoginSession(token: string): Promise<AdminResult<AdminMintedSession>> {
-  const sessionSecret = process.env.VEXA_TERMINAL_SESSION_SECRET || "";
-  if (!sessionSecret) return { ok: false, status: 503, error: "VEXA_TERMINAL_SESSION_SECRET is not set" };
-  const res = await internalRequest<AdminMintedSession>("/internal/sessions/upgrade", {
-    method: "POST",
-    headers: { "X-Terminal-Session-Secret": sessionSecret },
-    body: JSON.stringify({ token }),
-  });
-  if (!res.ok) return res;
-  if (!res.data?.token || res.data.credential_class !== "session") {
-    return { ok: false, status: 502, error: "admin-api's session upgrade did not answer a session" };
-  }
-  return res;
 }
 
 export function revokeToken(tokenId: string | number): Promise<AdminResult<void>> {

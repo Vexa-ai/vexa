@@ -8,8 +8,11 @@ vexa `main` (the shapes are exactly those main's **G5 WebSocket gate test** asse
 SDKs, and any client build against.
 
 ## Protocol
-- **Connect:** `ws(s)://<host>/ws` with auth `x-api-key:<token>` header **or** `?api_key=<token>`
-  query. Missing key → `{type:"error", error:"missing_api_key"}` then close `4401`; a key that
+- **Connect:** `ws(s)://<host>/ws` with the key in the `x-api-key:<token>` header, **or** — for a
+  client that cannot set a header, such as a browser — in the subprotocol list:
+  `new WebSocket(url, ["vexa.v1", "vexa.key.<token>"])`; the server answers `vexa.v1`. The key then
+  rides in `Sec-WebSocket-Protocol`, never in the URL. The `?api_key=<token>` query is
+  **deprecated**: still accepted, logged as `ws_query_key_deprecated`, removed in ws.v2. Missing key → `{type:"error", error:"missing_api_key"}` then close `4401`; a key that
   resolves to nobody → `invalid_api_key`, close `4401`; the key cannot be resolved now →
   `auth_unavailable`, close `4503`. The socket is held to the REST routes' key scopes: a key that may
   read no meeting status (`GET /meetings`, `GET /bots/status`) → `insufficient_scope`, close `4403`.

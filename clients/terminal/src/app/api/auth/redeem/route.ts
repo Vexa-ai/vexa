@@ -11,6 +11,10 @@
  *    page changes nothing. A link already expired, forged, or closed by the operator is refused here
  *    exactly as before.
  *  HEAD — 200, empty, no side effect, whatever the token.
+ *  THE BROWSER THAT ASKED (S03T-3): a link is good only in the browser holding the
+ *  `vexa-signin-bind` cookie it was minted for (`../magicToken.ts`). Opened anywhere else, the GET
+ *  says so and offers no button, and the POST refuses it before anything is spent — so a link
+ *  somebody asked for to their own address cannot sign a victim into their account.
  *  POST (the button; form fields `t`, `next`) — the only verb that signs anybody in:
  *    0. SAME-ORIGIN ONLY: `Sec-Fetch-Site` (when sent) must be `same-origin` and `Origin` (when sent)
  *       must be this instance's origin; a POST carrying neither is refused too. Otherwise another
@@ -34,7 +38,9 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { AUTH_COOKIE, USER_INFO_COOKIE, findOrCreateUserToken, mintFirstVisitScaffold } from "../adminApi";
-import { redeemMagicToken, safeNext, verifyMagicToken, type VerifyFailure } from "../magicToken";
+import { BIND_COOKIE, browserHoldsLink, redeemMagicToken, safeNext, verifyMagicToken, type VerifyFailure } from "../magicToken";
+import { readCookie } from "../cookieHeader.mjs";
+import { createHash } from "node:crypto";
 import { SIGNIN_NOT_ALLOWED, SIGNIN_UNAVAILABLE } from "../../../signinRefusal";
 import { signinMethodEnabled } from "../oidcConfig.mjs";
 import { captureSigninPhoto } from "../signinPhoto";
@@ -48,12 +54,8 @@ const NO_STORE = { "Cache-Control": "no-store, no-cache, must-revalidate" } as c
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-/** One self-contained card — the refusals and the sign-in question share it. */
-function card(title: string, inner: string, status: number): NextResponse {
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer">
-<style>
+/** The card's one stylesheet, and the hash its policy admits it by. */
+const CARD_STYLE = `
  :root{color-scheme:dark light}
  body{margin:0;min-height:100vh;min-height:100dvh;overflow-x:hidden;display:flex;align-items:center;justify-content:center;
       background:#0d0f12;color:#e6e8eb;font:14px/1.55 ui-sans-serif,system-ui,-apple-system,sans-serif}
@@ -63,10 +65,26 @@ function card(title: string, inner: string, status: number): NextResponse {
  p{margin:0 0 16px;font-size:12.5px;color:#9aa3af}
  a,button{display:inline-block;background:#3b82f6;color:#fff;text-decoration:none;border-radius:7px;
    padding:9px 14px;font-size:13px;font-weight:600;border:0;cursor:pointer;font-family:inherit}
-</style></head><body><div class="card">
+`;
+/** Nothing runs on the card; its stylesheet applies by hash; its one form posts back here. */
+const CARD_POLICY = [
+  "default-src 'none'",
+  `style-src 'sha256-${createHash("sha256").update(CARD_STYLE, "utf8").digest("base64")}'`,
+  "form-action 'self'",
+  "base-uri 'none'",
+  "frame-ancestors 'none'",
+].join("; ");
+
+/** One self-contained card — the refusals and the sign-in question share it. */
+function card(title: string, inner: string, status: number): NextResponse {
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer">
+<style>${CARD_STYLE}</style></head><body><div class="card">
 <h1>${esc(title)}</h1>${inner}
 </div></body></html>`;
-  return new NextResponse(html, { status, headers: { "Content-Type": "text/html; charset=utf-8", ...NO_STORE } });
+  return new NextResponse(html, { status, headers: {
+    "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": CARD_POLICY, ...NO_STORE } });
 }
 
 /** The refused-link card. Almost every refusal here means the link is gone (used, expired, forged,
@@ -96,6 +114,9 @@ function refusal(reason: VerifyFailure): NextResponse {
       return page("Email sign-in is not configured", "This instance cannot verify sign-in links.", 503);
     case "unavailable":
       return page("Sign-in is unavailable", "We could not check this link just now. It has not been used; try it again in a minute.", 503);
+    case "other-browser":
+      return page("Open this link where you asked for it",
+        "This sign-in link works only in the browser you asked for it from. Open it there, or ask for a new link in this browser.", 403);
     default:
       return page("This sign-in link is not valid", "The link looks incomplete or altered. Ask for a fresh one.", 400);
   }
@@ -158,6 +179,7 @@ export async function GET(request: NextRequest) {
   // spending it is the POST's job.
   const verdict = verifyMagicToken(token);
   if (!verdict.ok) return refusal(verdict.reason);
+  if (!browserHoldsLink(verdict, readCookie(request.headers.get("cookie"), BIND_COOKIE))) return refusal("other-browser");
 
   const who = maskEmail(verdict.email);
   return card(
@@ -198,6 +220,12 @@ export async function POST(request: NextRequest) {
   if (rawNext === null) rawNext = request.nextUrl.searchParams.get("next");
   const target = safeNext(rawNext);
 
+  // ANOTHER BROWSER'S LINK is refused before it is spent: the person it belongs to can still use it.
+  const checked = verifyMagicToken(token);
+  if (checked.ok && !browserHoldsLink(checked, readCookie(request.headers.get("cookie"), BIND_COOKIE))) {
+    console.info("[terminal-auth] magic-link redeem refused: the link was asked for in another browser");
+    return refusal("other-browser");
+  }
   const verdict = await redeemMagicToken(token);
   if (!verdict.ok) return refusal(verdict.reason);
 
@@ -236,6 +264,7 @@ export async function POST(request: NextRequest) {
   });
   const opts = { httpOnly: true, secure: isSecureRequest(), sameSite: "lax" as const, maxAge: 60 * 60 * 24 * 30, path: "/" };
   res.cookies.set(AUTH_COOKIE, apiToken, opts);
+  res.cookies.set(BIND_COOKIE, "", { httpOnly: true, secure: isSecureRequest(), sameSite: "lax", path: "/api/auth/redeem", maxAge: 0 });
   res.cookies.set(
     USER_INFO_COOKIE,
     JSON.stringify({ id: user.id, email: user.email, name: user.name || user.email.split("@")[0] }),

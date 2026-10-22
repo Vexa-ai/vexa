@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
   }
   const name = typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 255) : undefined;
   // The sign-in's own names are reserved: a self-serve key named like a login credential would pass as
-  // one (admin-api upgrades only a legacy `terminal-login` key to a session — sessionUpgrade.ts).
+  // one (the login-token prune bounds every key under that name).
   if (name && (name.toLowerCase() === TERMINAL_LOGIN_TOKEN_NAME || /^company:/i.test(name))) {
     return NextResponse.json({ error: `"${name}" is reserved for sign-in; choose another name` }, { status: 400, headers: NO_STORE });
   }

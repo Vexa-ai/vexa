@@ -13,6 +13,10 @@ import { MeetingStateProvider } from "../useMeeting";
 import type { HarnessActions, MeetingState } from "../types";
 import { compileView } from "./compile";
 import { ACTION_NAMES, readToFrame, type ActionName, type FromFrame } from "./protocol";
+import { lockFrame } from "./lockdown";
+
+// Before anything else in the frame's realm, and long before a view is compiled (lockdown.ts).
+lockFrame();
 
 type ActiveView = { source: string; component: ComponentType };
 

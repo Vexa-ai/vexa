@@ -56,6 +56,7 @@
 import "./gate.css";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { adoptAccount } from "../platform/accountStorage";
+import { navigateWithin } from "../platform/navigate";
 import { signIn } from "next-auth/react";
 import { onSessionSuspect } from "../platform/session";
 import { signinErrorMessage } from "./signinRefusal";
@@ -493,7 +494,7 @@ function ClaimInstanceCard({ email, onSignOut }: { email: string | null; onSignO
         // `/` when there is none. A full navigation, not a flip: the claim changes what every probe
         // on this page would answer, so nothing may be left holding the old answer.
         const body = (await r.json().catch(() => ({}))) as { url?: string };
-        window.location.assign(body.url || "/");
+        navigateWithin(body.url);
         return;
       }
       const body = (await r.json().catch(() => ({}))) as { error?: string; reload?: boolean };

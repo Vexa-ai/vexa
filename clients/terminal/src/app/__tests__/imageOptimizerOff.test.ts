@@ -10,7 +10,8 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import nextConfig from "../../../next.config";
+import { PHASE_PRODUCTION_BUILD, PHASE_PRODUCTION_SERVER } from "next/constants";
+import config from "../../../next.config";
 
 function sourceFiles(dir: string, acc: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -24,7 +25,7 @@ function sourceFiles(dir: string, acc: string[] = []): string[] {
 
 describe("Next image optimizer", () => {
   it("is off — /_next/image answers 404 and never loads sharp", () => {
-    expect(nextConfig.images?.unoptimized).toBe(true);
+    for (const phase of [PHASE_PRODUCTION_BUILD, PHASE_PRODUCTION_SERVER]) expect(config(phase).images?.unoptimized).toBe(true);
   });
 
   it("is not needed — no source file renders next/image", () => {

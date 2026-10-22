@@ -2,8 +2,8 @@
 
 A person signs a bot account in by driving a short-lived browser through noVNC in the page. The
 browser's websocket opens ``/bot-accounts/sessions/{session_id}/vnc`` at this edge; the edge
-resolves the caller exactly as ``/ws`` does (``x-api-key`` header, or the ``api_key`` query
-parameter a browser socket can carry), holds the key to the scopes of the session's own REST row
+resolves the caller exactly as ``/ws`` does (``ws_auth.ws_credential``: the ``x-api-key`` header,
+or the ``vexa.key.<key>`` subprotocol a browser socket can carry; ``?api_key=`` is deprecated), holds the key to the scopes of the session's own REST row
 (``GET /bot-accounts/sessions/{session_id}`` in ``core/meetings/routes.v1.json``), and then opens
 a websocket to the SAME path on meeting-api carrying the SAME identity headers an HTTP forward
 stamps — the gateway-identity.v1 claims and their ``X-Vexa-Identity`` signature. meeting-api
@@ -36,6 +36,7 @@ from . import identity_token
 from .delegation import is_delegated
 from .obs import TRACE_HEADER, get_trace_id, log_event, set_user_id
 from .ports import Authorizer, AuthUnavailable
+from .ws_auth import accept, requested_subprotocols, without_vexa, ws_credential
 
 #: The REST row whose scopes the socket is held to: whoever may read the session may watch it.
 SESSION_ROUTE = ("GET", "/bot-accounts/sessions/{session_id}")
@@ -92,7 +93,7 @@ def _refusal_code(status: int) -> int:
 
 async def _refuse(ws: WebSocket, code: int, error: str) -> None:
     with contextlib.suppress(Exception):  # already accepted when the relay itself failed
-        await ws.accept()
+        await accept(ws, ws_credential(ws).subprotocol)
     with contextlib.suppress(Exception):
         await ws.send_json({"type": "error", "error": error})
     with contextlib.suppress(Exception):
@@ -102,7 +103,11 @@ async def _refuse(ws: WebSocket, code: int, error: str) -> None:
 async def run_vnc_relay(ws: WebSocket, session_id: str, *, authorizer: Authorizer,
                         route_scopes: Mapping, meeting_api_url: str, identity_key=None,
                         connect: Optional[Connector] = None) -> None:
-    api_key = ws.headers.get("x-api-key") or ws.query_params.get("api_key")
+    credential = ws_credential(ws)
+    api_key = credential.key
+    if credential.source == "query":
+        log_event("ws_query_key_deprecated", audience="system", level="warning", span="ws",
+                  fields={"path": PATH, "use": "x-api-key header or the vexa.key.<key> subprotocol"})
     if not api_key:
         return await _refuse(ws, 4401, "missing_api_key")
     try:
@@ -135,11 +140,13 @@ async def run_vnc_relay(ws: WebSocket, session_id: str, *, authorizer: Authorize
     headers[TRACE_HEADER] = get_trace_id() or ""
 
     url = upstream_url(meeting_api_url, session_id)
-    requested = list(ws.scope.get("subprotocols") or [])
+    # ws.v1's own entries (the key above all) never travel upstream; the viewer's own (noVNC's
+    # `binary`) do, and the answer is upstream's choice — or `vexa.v1` when the viewer offered only it.
+    requested = without_vexa(requested_subprotocols(ws))
     opener = connect or websockets_connect
     try:
         async with opener(url, headers, requested) as upstream:
-            await ws.accept(subprotocol=getattr(upstream, "subprotocol", None) or None)
+            await accept(ws, getattr(upstream, "subprotocol", None) or credential.subprotocol)
             log_event("vnc_relay_opened", audience="system", level="debug", span="ws",
                       user_id=user_id, fields={"path": PATH})
             code = await _pump(ws, upstream)

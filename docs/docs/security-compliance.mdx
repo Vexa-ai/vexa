@@ -393,6 +393,45 @@ Deny tests (security review 2026-10-17):
 | A card fact reaches its audience only (deny test 19) | `core/flows/tests/test_d8_audience.py` | every test in the file |
 | The rest of this section | `core/crm/tests/test_card_lifecycle.py`, `core/agent/tests/test_s5_asks.py`, `core/agent/tests/test_notice_expiry.py` | every test in those files |
 
+## The terminal in the browser
+
+Workspace pages, chat replies and Meeting Canvas views are written by agents from meetings and outside
+content, so the terminal treats them as untrusted input in the reader's own signed-in tab.
+
+### How it works
+
+- **No text becomes code.** A workspace page is parsed as MDX and drawn as elements from a closed set
+  of components; nothing compiles it into a program. Each page's Content-Security-Policy carries a
+  per-response nonce and has no `'unsafe-eval'` (only `'wasm-unsafe-eval'`, for the call's background
+  blur). A `<style>` element applies only with that nonce, so styles written as markup do nothing.
+- **Every response has a policy.** Pages get theirs per response. API answers, the `/b/` bot proxy,
+  build assets and public files get a fixed one when their route sets none: an API answer opened as a
+  document runs and loads nothing, and the sign-in browser's live view runs only its own scripts.
+- **A canvas view keeps what it was shown.** It runs in an opaque-origin sandbox that connects
+  nowhere, and WebRTC is removed before any view code runs. The page's `frame-src` refuses the
+  frame's navigation to another host; a navigation to the terminal's own origin reaches only the
+  terminal, without the reader's cookies.
+- **An emailed link signs in only the browser that asked.** The link carries the hash of an httpOnly
+  cookie set when it was requested, so someone who forwards a link for their own address cannot sign
+  you into their account.
+- **Browser sign-ins end.** A session, and the older sign-in key, ends with its 30-day cookie. No key is
+  traded up to a session: a browser that still holds one signs in again.
+- **Keys stay out of URLs.** A browser connects to `/ws` with the key in the WebSocket subprotocol
+  list. The `?api_key=` query still connects for older clients, but it is deprecated and logged.
+- **Data-driven navigation stays on this origin.** A link from a notification, a reference or a sign-in
+  arrival is followed only when it is a path on the terminal itself.
+
+### Why it complies
+
+| Protection | Test file | Tests |
+|---|---|---|
+| No eval in the pages' policy; pages still render MDX | `clients/terminal/src/app/__tests__/contentSecurityPolicy.test.ts`, `clients/terminal/src/ui-kit/__tests__/mdxNoEval.test.tsx` | every test in those files |
+| A policy on every non-page response | `clients/terminal/src/app/api/__tests__/responsePolicy.test.ts` | every test in the file |
+| A canvas frame opens no WebRTC; its foreign navigation is refused | `clients/terminal/src/canvas/__tests__/frameLockdown.test.ts` | every test in the file |
+| A link signs in only its own browser | `clients/terminal/src/app/api/auth/__tests__/redeem.test.ts` | `describe("bound to the browser that asked (S03T-3)")` |
+| No session from a key; sign-ins end | `core/identity/services/admin-api/tests/test_session_credential.py`, `test_sign_in_expiry_backfill_pg.py` | `test_a_legacy_login_key_is_never_traded_for_a_session`, `test_sign_in_credentials_with_no_end_end_with_their_cookie` |
+| The websocket key travels outside the URL | `core/gateway/services/gateway/tests/test_ws_key_subprotocol.py` | every test in the file |
+
 ## Tracing a session
 
 Every control-plane service writes one JSON object per log line, in one shape

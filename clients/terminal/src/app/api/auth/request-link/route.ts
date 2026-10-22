@@ -24,11 +24,17 @@
  *  RATE LIMITED per client address and per email address (`../linkRateLimit.ts`): past the client
  *  limit a 429, past the address limit the usual 200 with nothing sent.
  *
+ *  BOUND TO THIS BROWSER (S03T-3): the answer sets `vexa-signin-bind` (httpOnly, scoped to the
+ *  redeem route, as long as a link can live) and the link carries its hash, so only this browser can
+ *  use it (`../magicToken.ts`). Every answer sets it, refused address or not, so it says nothing.
+ *
  *  This route never creates a user and never mints a session — everything happens at `redeem/`,
  *  after the recipient proves they hold the mailbox.
  */
 import { NextResponse, type NextRequest } from "next/server";
-import { mintMagicToken, safeNext, ttlSeconds } from "../magicToken";
+import { BIND_COOKIE, MAX_TTL_SECONDS, browserBinding, mintMagicToken, safeNext, ttlSeconds } from "../magicToken";
+import { readCookie } from "../cookieHeader.mjs";
+import { isSecureRequest } from "../sameOrigin";
 import { startLinkDelivery } from "../linkDelivery";
 import { takeLinkRequest } from "../linkRateLimit";
 import { CLIENT_ADDRESS_HEADER } from "../clientAddress.mjs";
@@ -92,7 +98,7 @@ export async function POST(request: NextRequest) {
   }
   if (verdict === "address-limited") {
     console.info("[terminal-auth] sign-in link NOT sent — too many requested for this address recently");
-    return NextResponse.json({ ok: true }, { headers: NO_STORE });
+    return bound(NextResponse.json({ ok: true }, { headers: NO_STORE }), browserBinding(readCookie(request.headers.get("cookie"), BIND_COOKIE)));
   }
 
   const base = baseUrl();
@@ -100,7 +106,8 @@ export async function POST(request: NextRequest) {
     console.error("[terminal-auth] magic link refused: no public URL configured (NEXTAUTH_URL or TERMINAL_URL)");
     return NextResponse.json({ error: "Email sign-in is not configured on this instance." }, { status: 503, headers: NO_STORE });
   }
-  const minted = mintMagicToken(normalized);
+  const browser = browserBinding(readCookie(request.headers.get("cookie"), BIND_COOKIE));
+  const minted = mintMagicToken(normalized, browser);
   if (!minted.ok) {
     console.error(`[terminal-auth] magic link refused: ${minted.error}`);
     return NextResponse.json({ error: "Email sign-in is not configured on this instance." }, { status: 503, headers: NO_STORE });
@@ -113,5 +120,13 @@ export async function POST(request: NextRequest) {
   // Admission and the send run AFTER this response (../linkDelivery.ts) — see the header.
   startLinkDelivery(normalized, url, minutes);
 
-  return NextResponse.json({ ok: true }, { headers: NO_STORE });
+  return bound(NextResponse.json({ ok: true }, { headers: NO_STORE }), browser);
+}
+
+/** The answer, carrying this browser's binding cookie — only the redeem route ever reads it. */
+function bound(res: NextResponse, browser: string): NextResponse {
+  res.cookies.set(BIND_COOKIE, browser, {
+    httpOnly: true, secure: isSecureRequest(), sameSite: "lax", path: "/api/auth/redeem", maxAge: MAX_TTL_SECONDS,
+  });
+  return res;
 }

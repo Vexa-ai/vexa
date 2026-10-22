@@ -349,6 +349,39 @@ def _ensure_default_org(conn: Connection):
                      {"id": DEFAULT_ORG_ID, "crm": crm})
 
 
+# MIGRATION-0011 — every sign-in credential ends with the cookie that carries it (B1).
+#
+# A session minted before sessions had a lifetime, and the `terminal-login` KEY a browser was signed
+# in with before sessions existed (or on a deployment without them), have `expires_at` NULL: a
+# standing credential, though the browser cookie that carried it lived 30 days. Each gets the end its
+# cookie had — `created_at` + 30 days, which may already be past (that cookie is gone) — and a row
+# with no `created_at` gets 30 days from this convergence. Only rows with no end are touched, so the
+# pass is idempotent and an operator's own expiry is never moved. Self-serve keys (any other name)
+# are the person's to bound, and are left alone.
+LOGIN_LIFETIME_SECONDS = 60 * 60 * 24 * 30
+SIGN_IN_TOKEN_NAME = "terminal-login"
+
+
+def _bound_sign_in_credentials(conn: Connection):
+    if conn.dialect.name != "postgresql":
+        return
+    inspector = inspect(conn)
+    if "api_tokens" not in set(inspector.get_table_names()):
+        return
+    cols = {c["name"] for c in inspector.get_columns("api_tokens")}
+    if not {"kind", "expires_at", "created_at", "name", "scopes"} <= cols:
+        return
+    result = conn.execute(text(
+        "UPDATE api_tokens "
+        "SET expires_at = COALESCE(created_at, now() AT TIME ZONE 'utc') + make_interval(secs => :life) "
+        "WHERE expires_at IS NULL AND (kind = 'session' "
+        "OR (kind = 'key' AND name = :name AND 'browser' = ANY(scopes)))"
+    ), {"life": LOGIN_LIFETIME_SECONDS, "name": SIGN_IN_TOKEN_NAME})
+    if result.rowcount:
+        logger.info("schema-sync (MIGRATION-0011): %d sign-in credential(s) with no end now end with "
+                    "their cookie (created_at + 30 days)", result.rowcount)
+
+
 def _sync_functions(conn: Connection):
     conn.execute(text(_MEETING_EVENT_TIME_FN))
 
@@ -382,6 +415,7 @@ def _ensure_schema_sync(conn: Connection, base, deferred: list | None = None):
     _sync_columns(conn, base)                          # additive columns
     _backfill_token_scopes(conn, predate_scopes)       # MIGRATION-0004 data backfill
     _ensure_default_org(conn)                          # MIGRATION-0008 the default org row
+    _bound_sign_in_credentials(conn)                   # MIGRATION-0011 sign-in credentials end
     _sync_indexes(conn, base, deferred)                # additive indexes (non-unique: deferred)
 
 

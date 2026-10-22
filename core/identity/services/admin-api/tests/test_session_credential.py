@@ -239,7 +239,7 @@ def test_credential_class_of_is_positive_evidence():
     assert sessions_mod.credential_class_of(APIToken()) == "key"
 
 
-# --- the upgrade: a browser signed in before sessions existed (hotfix 2026-10-18) ---------------
+# --- no door trades a credential up to a session (B1) ------------------------------------------
 
 def _seed(session, token, **kw):
     row = APIToken(token=token, user_id=kw.pop("user_id", 42), scopes=kw.pop("scopes", ["bot", "tx", "browser"]),
@@ -259,62 +259,19 @@ def _upgrade(client, token, *, internal=INTERNAL, terminal=SESSION_SECRET):
     return client.post("/internal/sessions/upgrade", json={"token": token}, headers=headers)
 
 
-def test_a_legacy_login_key_is_upgraded_to_a_session_and_retired(world):
+@pytest.mark.parametrize("created_at", [datetime(2026, 9, 1), datetime(2026, 10, 18, 23, 59), None])
+def test_a_legacy_login_key_is_never_traded_for_a_session(world, created_at):
+    """The exact pre-session sign-in key, with both secrets, gets no session and is left as it was:
+    the browser holding it signs in again."""
     client, session = world
-    old = _seed(session, "vxa_bot_legacy-login-key")
+    old = _seed(session, "vxa_bot_legacy-login-key", created_at=created_at)
     r = _upgrade(client, old.token)
-    assert r.status_code == 201, r.text
-    body = r.json()
-    assert body["credential_class"] == "session" and body["user_id"] == 42 and body["retired"] == old.id
-    new = session.tokens[body["token"]]
-    assert new.kind == "session" and new.user_id == 42 and new.name == "terminal-login"
-    # the old key keeps working for a grace window, and — now expiring — never upgrades again
-    assert old.expires_at is not None
-    assert _upgrade(client, old.token).status_code == 409
-    assert _validate(client, body["token"]).json()["credential_class"] == "session"
+    assert r.status_code in (404, 405), r.text
+    assert list(session.tokens) == [old.token] and old.kind == "key"
+    assert not any(isinstance(o, APIToken) and o.kind == "session" for o in session.added)
 
 
-@pytest.mark.parametrize("shape", [
-    {"name": "my-script"},                       # a self-serve key
-    {"scopes": ["bot", "tx"]},                   # not the login shape
-    {"kind": "session"},                         # already a session
-])
-def test_anything_but_a_legacy_login_key_is_refused(world, shape):
-    client, session = world
-    tok = _seed(session, "vxa_bot_not-a-login-key", **shape)
-    before = len(session.tokens)
-    assert _upgrade(client, tok.token).status_code == 409
-    assert len(session.tokens) == before and tok.expires_at is None
-
-
-def test_an_unknown_token_is_not_upgraded(world):
-    client, session = world
-    assert _upgrade(client, "vxa_bot_nobody").status_code == 404
-    assert not session.tokens
-
-
-@pytest.mark.parametrize("terminal", [None, "", "wrong-secret"])
-def test_the_upgrade_needs_the_terminal_secret(world, terminal):
-    client, session = world
-    old = _seed(session, "vxa_bot_legacy-login-key")
-    assert _upgrade(client, old.token, terminal=terminal).status_code == 403
-    assert old.expires_at is None and len(session.tokens) == 1
-
-
-def test_the_upgrade_needs_the_internal_tier(world):
-    client, session = world
-    old = _seed(session, "vxa_bot_legacy-login-key")
-    assert _upgrade(client, old.token, internal=None).status_code in (401, 403)
-    assert old.expires_at is None
-
-
-def test_a_delegation_token_is_never_upgraded(world):
-    client, session = world
-    r = _upgrade(client, "vxd_" + "x" * 40)
-    assert r.status_code == 404 and not session.tokens
-
-
-# --- a session has an end, and only a pre-session browser upgrades ------------------------------
+# --- a session has an end ------------------------------------------------------------------------
 
 def _days_left(row):
     return (row.expires_at - datetime.utcnow()) / timedelta(days=1)
@@ -326,26 +283,15 @@ def test_a_minted_session_ends_with_its_cookie(world):
     assert row.expires_at is not None and 29.9 < _days_left(row) <= 30
 
 
+def test_a_session_lives_as_long_as_the_convergence_bounds_one():
+    from admin_api.schema import sync
+    assert sessions_mod.SESSION_LIFETIME_SECONDS == sync.LOGIN_LIFETIME_SECONDS == 30 * 24 * 3600
+
+
 def test_a_session_cannot_be_asked_to_outlive_its_cookie(world):
     client, session = world
     row = session.tokens[_mint(client, {"user_id": 42, "expires_in": 10 ** 9}).json()["token"]]
     assert _days_left(row) <= 30
-
-
-def test_an_upgraded_session_ends_with_its_cookie(world):
-    client, session = world
-    old = _seed(session, "vxa_bot_legacy-login-key")
-    new = session.tokens[_upgrade(client, old.token).json()["token"]]
-    assert new.expires_at is not None and 29.9 < _days_left(new) <= 30
-
-
-@pytest.mark.parametrize("created_at", [datetime(2026, 10, 19, 0, 0, 1), datetime(2027, 1, 1), None])
-def test_a_login_key_minted_after_sessions_began_does_not_upgrade(world, created_at):
-    client, session = world
-    tok = _seed(session, "vxa_bot_late-login-key", created_at=created_at)
-    before = len(session.tokens)
-    assert _upgrade(client, tok.token).status_code == 409
-    assert len(session.tokens) == before and tok.expires_at is None
 
 
 @pytest.mark.parametrize("query,body", [

@@ -27,7 +27,11 @@ The production edge logic, injectable. Modules:
   `routes_manifest.Assembly.shared_allow` holds the allowed rows.
 - **`log_scrub.py`** — M7: a logging filter on the uvicorn loggers that redacts a credential query
   value (`api_key`, `token`, …) before any access or WebSocket line is formatted. `create_app`
-  installs it. The `?api_key=` parameter itself is still accepted (ws.v1).
+  installs it. The `?api_key=` parameter itself is still accepted (ws.v1) but deprecated.
+- **`ws_auth.py`** — where a websocket's key comes from: the `x-api-key` header, else a
+  `vexa.key.<key>` subprotocol entry (a browser; the edge answers `vexa.v1`), else the deprecated
+  `?api_key=` query, logged `ws_query_key_deprecated`. `/ws` and the VNC relay share it; ws.v1's own
+  subprotocol entries never travel upstream.
 - **`identity_token.py`** — vendored `gateway-identity.v1`: signs the resolved identity onto every
   forward (byte-identical to the contract's canonical copy).
 - **`ratelimit.py`** / **`edge_guard.py`** — the per-user request rate limit and the opt-in

@@ -6,20 +6,20 @@
  *  Flags live in the user's PRIVATE system workspace (`.system/<uid>/minutes-state.json`), so
  *  "has this person been onboarded / door-kicked?" survives browsers, devices and reloads —
  *  the localStorage guard it replaces only remembered a browser profile, which is why a fresh
- *  profile re-greeted a known person. 404 outside local-dev minutes mode.
+ *  profile re-greeted a known person. 404 outside local-dev minutes mode, and not built at all into
+ *  a production build (`route.dev.ts`, next.config.ts `pageExtensions`). The person is the one the
+ *  session cookie validates as (`../../tokens/currentUser`).
  */
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
-import { USER_INFO_COOKIE } from "../../auth/adminApi";
+import { currentUser } from "../../tokens/currentUser";
 
+/** The signed-in person, from the VALIDATED session cookie — never the display-only info cookie,
+ *  which a hand-written Cookie header can set to anybody. */
 async function userId(): Promise<string | null> {
-  try {
-    const info = (await cookies()).get(USER_INFO_COOKIE)?.value;
-    const id = info ? JSON.parse(info)?.id : null;
-    return id != null && /^[0-9]+$/.test(String(id)) ? String(id) : null;
-  } catch { return null; }
+  const me = await currentUser();
+  return me.ok && /^[0-9]+$/.test(String(me.userId)) ? String(me.userId) : null;
 }
 
 const run = promisify(execFile);

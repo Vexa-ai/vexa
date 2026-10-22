@@ -124,7 +124,24 @@ export async function renderMermaid(source: string, theme: DiagramTheme): Promis
   });
   await mermaid.parse(source);
   const { svg } = await mermaid.render(`vexa-mermaid-${++seq}`, source);
-  return svg;
+  return withStyleNonce(svg, styleNonce());
+}
+
+/** The page's style nonce, which the root layout's first script publishes
+ *  (`styleNonceBootstrap`, app/contentSecurityPolicy.ts); "" outside a page. */
+function styleNonce(): string {
+  if (typeof window === "undefined") return "";
+  return String((window as unknown as { __vxStyleNonce?: string }).__vxStyleNonce ?? "");
+}
+
+/** Mermaid scopes its colours in ONE `<style>` placed right after the root `<svg …>` tag. Both
+ *  callers insert the SVG as markup, and the page applies a markup `<style>` only with the
+ *  response's nonce (`style-src-elem`, app/contentSecurityPolicy.ts) — so that one element, and no
+ *  other, carries it. A `<style>` anywhere else in the text (the diagram's own labels) stays
+ *  without one and does not apply. */
+export function withStyleNonce(svg: string, nonce: string): string {
+  if (!nonce || !/^[A-Za-z0-9+/=]+$/.test(nonce)) return svg;
+  return svg.replace(/^(\s*<svg\b[^>]*>)<style>/, `$1<style nonce="${nonce}">`);
 }
 
 // ── the live theme ───────────────────────────────────────────────────────────────────

@@ -2,9 +2,15 @@
  *
  *  Mintlify-style model: markdown + a CLOSED registry of declarative components
  *  (<Note>, <Warning>, <Card>, <CardGroup>, <Steps>/<Step>, <Tabs>/<Tab>) rendered
- *  with the terminal's design tokens. Compilation happens in the browser from the
- *  file's string content via @mdx-js/mdx (MIT) — no build step, so agent-written
- *  files render immediately after every edit.
+ *  with the terminal's design tokens. The file's string content is PARSED as MDX (remark-mdx) into a
+ *  syntax tree and the tree is rendered to React elements directly (hast-util-to-jsx-runtime) — no
+ *  build step, so agent-written files render immediately after every edit.
+ *
+ *  NOTHING IS COMPILED TO CODE. A page never becomes a JavaScript program: there is no `eval`, no
+ *  `new Function`, and the page's Content-Security-Policy carries no 'unsafe-eval'
+ *  (app/contentSecurityPolicy.ts). The only values read out of the syntax tree are literal attribute
+ *  values (`cols={2}`) and the names of registered components (`literalEvaluater` below); anything
+ *  else throws into the fallback.
  *
  *  Failure containment: agent-authored MDX can be malformed (stray `<`, unbalanced
  *  braces). If compile/run throws, we fall back to the legacy <Markdown> renderer
@@ -14,8 +20,12 @@
 import { InlineCard, parseInlineCard } from "./InlineCard";
 import { suppliedCardInline } from "./shellProvided";
 import { createContext, isValidElement, useContext, useEffect, useMemo, useState, type ComponentType, type CSSProperties, type ReactNode } from "react";
-import * as runtime from "react/jsx-runtime";
-import { evaluate } from "@mdx-js/mdx";
+import { Fragment, jsx, jsxs } from "react/jsx-runtime";
+import { unified } from "unified";
+import remarkParse from "remark-parse";
+import remarkMdx from "remark-mdx";
+import remarkRehype, { type Options as RemarkRehypeOptions } from "remark-rehype";
+import { toJsxRuntime, type CreateEvaluater } from "hast-util-to-jsx-runtime";
 import remarkGfm from "remark-gfm";
 import { EntityProperties, entityProperties } from "./EntityProperties";
 import { Markdown, stripHtmlComments } from "./Markdown";
@@ -361,9 +371,89 @@ export function transformDocRefs(src: string, names: string[] = []): string {
   }).join("");
 }
 
+// ── the tree becomes elements, never code ───────────────────────────────────────
+/** A paragraph that holds nothing but JSX elements (and the whitespace between them) is those
+ *  elements, as blocks: `<Wikilink title="a" /> <DocPath path="b" />` alone on a line must not put
+ *  a registered component's block markup inside a `<p>`. */
+type MdNode = { type: string; value?: string; children?: MdNode[] };
+function unravelJsxParagraphs(node: MdNode): void {
+  const kids = node.children;
+  if (!kids) return;
+  for (let i = 0; i < kids.length; i++) {
+    const child = kids[i];
+    if (child.type === "paragraph" && child.children?.length) {
+      const parts = child.children;
+      const onlyJsx = parts.some((c) => c.type === "mdxJsxTextElement")
+        && parts.every((c) => c.type === "mdxJsxTextElement" || (c.type === "text" && /^[\t\r\n ]*$/.test(c.value ?? "")));
+      if (onlyJsx) {
+        const blocks = parts.filter((c) => c.type === "mdxJsxTextElement").map((c) => ({ ...c, type: "mdxJsxFlowElement" }));
+        kids.splice(i, 1, ...blocks);
+        i += blocks.length - 1;
+        continue;
+      }
+    }
+    unravelJsxParagraphs(child);
+  }
+}
+function remarkUnravelJsxParagraphs() {
+  return (tree: MdNode) => unravelJsxParagraphs(tree);
+}
+
+/** The MDX node types the HTML tree keeps as they are (mdast's own types do not name them). */
+const MDX_NODE_TYPES = ["mdxFlowExpression", "mdxJsxFlowElement", "mdxJsxTextElement", "mdxTextExpression", "mdxjsEsm"] as unknown as RemarkRehypeOptions["passThrough"];
+
+/** The one parse pipeline: markdown + MDX syntax → the checks above → an HTML syntax tree that still
+ *  carries the JSX elements. Frozen once; `runSync` is reentrant. */
+const docPipeline = unified()
+  .use(remarkParse)
+  .use(remarkMdx)
+  .use(remarkGfm)
+  .use(remarkForbidExecutable)
+  .use(remarkLiteralTagsThroughComponents)
+  .use(remarkUnravelJsxParagraphs)
+  .use(remarkRehype, { passThrough: MDX_NODE_TYPES })
+  .freeze();
+
+type Estree = { type: string; value?: unknown; name?: string; operator?: string; argument?: Estree };
+/** What the renderer may read out of the tree, and nothing more: a literal attribute value
+ *  (`cols={2}`, `open={true}`, `-1` — the forms `remarkForbidExecutable` admits) and the name of a
+ *  registered component. Every other expression or program throws, and the throw routes the page
+ *  into the plain-Markdown fallback. This is not an evaluator: it never runs anything. */
+const literalEvaluater: CreateEvaluater = () => ({
+  evaluateExpression(node) {
+    const e = node as unknown as Estree;
+    if (e.type === "Literal") return e.value;
+    if (e.type === "UnaryExpression" && e.operator === "-" && e.argument?.type === "Literal" && typeof e.argument.value === "number") {
+      return -e.argument.value;
+    }
+    if (e.type === "Identifier" && e.name && Object.prototype.hasOwnProperty.call(MDX_COMPONENTS, e.name)) {
+      return (MDX_COMPONENTS as Record<string, unknown>)[e.name];
+    }
+    throw new Error(`${e.type === "Identifier" ? `<${e.name}>` : "this expression"} is not something workspace docs may use`);
+  },
+  evaluateProgram() {
+    throw new Error("executable MDX is not allowed in workspace docs");
+  },
+});
+
+/** Workspace MDX source → React elements drawn with `components`. Throws on anything the checks
+ *  above refuse; the caller falls back to the plain renderer. */
+export function renderDocTree(source: string, components: Record<string, unknown> = MDX_COMPONENTS): ReactNode {
+  const hast = docPipeline.runSync(docPipeline.parse(source));
+  return toJsxRuntime(hast as Parameters<typeof toJsxRuntime>[0], {
+    Fragment, jsx, jsxs,
+    components: components as never,
+    createEvaluater: literalEvaluater,
+    elementAttributeNameCase: "react",
+    stylePropertyNameCase: "dom",
+    tableCellAlignToStyle: true,
+    ignoreInvalidStyle: true,
+    passKeys: true,
+  });
+}
+
 type CompileState =
-  | { status: "loading" }
-  | { status: "ok"; Content: import("mdx/types").MDXContent }
+  | { status: "ok"; content: ReactNode }
   | { status: "fallback"; error: string };
 
 // Frontmatter renders through the declared document header or the entity properties view.
@@ -494,7 +584,6 @@ function MdxBody({ children, style }: { children: string; style?: CSSProperties 
   const src = directivesToComponents(sanitizeDocHtml(stripHtmlComments(children ?? "")));
   const rich = useMemo(() => enrichMarkdown(src), [src]);
   const taskApi = useTaskApi(rich.tasks);
-  const [state, setState] = useState<CompileState>({ status: "loading" });
   // Recognizing a workspace NAME needs the known set, and the transform cannot await. Prime the
   // snapshot once and recompile when it lands; a warm snapshot costs no second compile.
   const [wsGen, setWsGen] = useState(0);
@@ -514,16 +603,16 @@ function MdxBody({ children, style }: { children: string; style?: CSSProperties 
     return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    setState({ status: "loading" });
-    evaluate(transformDocRefs(rich.src, meta.path ? knownEntityNames(meta.slug) : []), { ...runtime, remarkPlugins: [remarkGfm, remarkForbidExecutable, remarkLiteralTagsThroughComponents] })
-      .then((mod) => { if (!cancelled) setState({ status: "ok", Content: mod.default }); })
-      .catch((err: unknown) => { if (!cancelled) setState({ status: "fallback", error: String((err as Error)?.message ?? err) }); });
-    return () => { cancelled = true; };
+  const state = useMemo<CompileState>(() => {
+    try {
+      return { status: "ok", content: renderDocTree(transformDocRefs(rich.src, meta.path ? knownEntityNames(meta.slug) : [])) };
+    } catch (err) {
+      return { status: "fallback", error: String((err as Error)?.message ?? err) };
+    }
+    // wsGen: the known workspace and entity names landed — the same source now links more
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rich.src, wsGen, meta.path, meta.slug]);
 
-  if (state.status === "loading") return <div className="c-3 t-xs" style={{ ...style }}>rendering…</div>;
   if (state.status === "fallback") {
     return (
       <div style={style}>
@@ -536,10 +625,9 @@ function MdxBody({ children, style }: { children: string; style?: CSSProperties 
       </div>
     );
   }
-  const Content = state.Content;
   return (
     <div className="vx-prose" style={style}>
-      <TaskContext.Provider value={taskApi}><Content components={MDX_COMPONENTS} /></TaskContext.Provider>
+      <TaskContext.Provider value={taskApi}>{state.content}</TaskContext.Provider>
     </div>
   );
 }

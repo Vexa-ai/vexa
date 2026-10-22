@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
 import path from "path";
 
 /**
@@ -15,6 +16,11 @@ import path from "path";
  * The image optimizer is off: the terminal renders no `next/image`, so `/_next/image` answers 404,
  * the server never loads `sharp`, and the optimizer's decode path (GHSA-2xp9-vwfh-vxw4) is
  * unreachable. src/app/__tests__/imageOptimizerOff.test.ts holds it off.
+ *
+ * DEVELOPMENT-ONLY ROUTES ARE NOT BUILT. A route file named `route.dev.ts` (the local-dev minutes
+ * seams, src/app/api/minutes/) is a route only to the development server: `pageExtensions` names
+ * `dev.ts` there and nowhere else, so `next build` compiles no such route and a production server
+ * has nothing at that path to switch on. src/app/__tests__/devOnlyRoutes.test.ts holds it.
  */
 const VEXA_API_URL = process.env.VEXA_API_URL;
 
@@ -31,4 +37,13 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+/** Next's default page extensions, and the development server's extra ones. */
+export const PAGE_EXTENSIONS = ["tsx", "ts", "jsx", "js"];
+export const DEV_ONLY_PAGE_EXTENSIONS = ["dev.tsx", "dev.ts"];
+
+export default function config(phase: string): NextConfig {
+  return {
+    ...nextConfig,
+    pageExtensions: phase === PHASE_DEVELOPMENT_SERVER ? [...DEV_ONLY_PAGE_EXTENSIONS, ...PAGE_EXTENSIONS] : PAGE_EXTENSIONS,
+  };
+}

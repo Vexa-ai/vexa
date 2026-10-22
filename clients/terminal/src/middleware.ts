@@ -23,6 +23,8 @@ export function middleware(request: NextRequest) {
   headers.set("Content-Security-Policy", csp);
   const response = NextResponse.next({ request: { headers } });
   response.headers.set("Content-Security-Policy", csp);
+  // The canvas frame names no host it may resolve, so a link in a view leaks nothing through DNS.
+  if (request.nextUrl.pathname === CANVAS_FRAME_PATH) response.headers.set("X-DNS-Prefetch-Control", "off");
   return response;
 }
 

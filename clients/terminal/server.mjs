@@ -26,6 +26,7 @@ import { authSecretStartupError } from "./src/app/api/auth/authSecret.mjs";
 import { signinConfigStartupError } from "./src/app/api/auth/oidcConfig.mjs";
 import { stampClientAddress, trustedProxies } from "./src/app/api/auth/clientAddress.mjs";
 import { isImageOptimizerPath, refuseImageOptimizer } from "./src/app/api/imageOptimizer.mjs";
+import { applyFallbackPolicy } from "./src/app/api/responsePolicy.mjs";
 import { refuseUpgrade, upgradeRefusal, upstreamKey } from "./src/app/api/socketUpgrade.mjs";
 import { wsUpstream } from "./src/app/api/wsUpstream.mjs";
 
@@ -80,6 +81,9 @@ const TRUSTED_PROXIES = trustedProxies(process.env);
 
 const server = createServer((req, res) => {
   stampClientAddress(req, TRUSTED_PROXIES);
+  // A response its route gave no Content-Security-Policy leaves with the one for its path
+  // (src/app/api/responsePolicy.mjs): the API, the /b/ proxy, build assets and public files.
+  applyFallbackPolicy(req, res);
   // The optimizer is off; answered here so Next never sets up its cache for it (src/app/api/imageOptimizer.mjs).
   if (isImageOptimizerPath(req.url)) return refuseImageOptimizer(res);
   Promise.resolve(handle(req, res)).catch((err) => {

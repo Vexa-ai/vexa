@@ -46,7 +46,7 @@ vi.mock("../adminApi", async (importOriginal) => ({
   redeemSigninLink: (jti: string, expiresAt: number) => linkLedger.redeem(jti, expiresAt),
 }));
 import { mintMagicToken } from "../magicToken";
-import { linkLedger } from "./linkLedgerDouble";
+import { BROWSER_COOKIE, TEST_BROWSER, linkLedger } from "./linkLedgerDouble";
 import { SIGNIN_NOT_ALLOWED, SIGNIN_UNAVAILABLE, signinErrorMessage } from "../../../signinRefusal";
 
 // ── a fake admin-api that models the admission rule ───────────────────────────────────────────────
@@ -166,11 +166,11 @@ function redeemReq(token: string) {
   const url = new URL("https://terminal.test/api/auth/redeem");
   url.searchParams.set("t", token);
   url.searchParams.set("next", "/?ask=catch-up");
-  return { nextUrl: url, url: url.toString(), method: "POST", headers: new Headers({ origin: "https://terminal.test", "sec-fetch-site": "same-origin" }) } as unknown as import("next/server").NextRequest;
+  return { nextUrl: url, url: url.toString(), method: "POST", headers: new Headers({ origin: "https://terminal.test", "sec-fetch-site": "same-origin", cookie: BROWSER_COOKIE }) } as unknown as import("next/server").NextRequest;
 }
 
 function clickLinkFor(email: string) {
-  const m = mintMagicToken(email);
+  const m = mintMagicToken(email, TEST_BROWSER);
   if (!m.ok) throw new Error("mint failed");
   return redeem(redeemReq(m.token));
 }
@@ -271,7 +271,9 @@ describe("the email form never reveals who is allowed", () => {
     const refused = await askForLink("stranger@evil.example");
     expect(refused.status).toBe(allowed.status);
     expect(await refused.text()).toBe(await allowed.text());
-    expect([...refused.headers.entries()]).toEqual([...allowed.headers.entries()]);
+    // each browser gets its own random binding value (magicToken.ts); its shape is the same for both
+    const shape = (r: Response) => [...r.headers.entries()].map(([k, v]) => [k, v.replace(/vexa-signin-bind=[\w-]{43}/, "vexa-signin-bind=<value>")]);
+    expect(shape(refused)).toEqual(shape(allowed));
     // …and only one of them was mailed
     expect(sendMail).toHaveBeenCalledTimes(1);
     expect(sendMail.mock.calls[0][0].to).toBe("member@example.com");

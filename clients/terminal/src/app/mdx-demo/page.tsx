@@ -91,7 +91,7 @@ export default function MdxDemo() {
       <div>
         <div style={{ fontSize: 17, fontWeight: 600 }}>Workspace MDX renderer</div>
         <div style={{ fontSize: 12.5, color: "var(--t3)", marginTop: 3 }}>
-          agent-authored markdown (left) → live interface (right) · runtime-compiled with @mdx-js/mdx, closed component registry, plain-markdown fallback
+          agent-authored markdown (left) → live interface (right) · parsed and drawn as elements (no code compiled), closed component registry, plain-markdown fallback
         </div>
       </div>
       <div style={{ display: "flex", gap: 14, alignItems: "stretch", minHeight: 0 }}>

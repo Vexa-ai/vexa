@@ -21,8 +21,17 @@
  *
  *  SINGLE USE: admin-api remembers a redeemed `jti` until the token would have expired anyway, for
  *  every terminal replica at once, so a link works exactly once (`redeemMagicToken`).
+ *
+ *  BOUND TO THE BROWSER THAT ASKED (S03T-3). Asking for a link sets `vexa-signin-bind`, an httpOnly
+ *  cookie holding a random value, on the browser that asked; the link carries the SHA-256 of that
+ *  value (claim `b`), signed with the rest. The link signs in only the browser that holds the cookie
+ *  (`browserHoldsLink`). Without this, anybody could ask for a link to their OWN address, forward it,
+ *  and have whoever pressed Sign in working in the sender's account (login CSRF). A link opened in
+ *  another browser shows why it cannot be used there and spends nothing. The one unbound link is a
+ *  reserved-domain test user's, which an instance administrator mints by hand
+ *  (`../test-users/link`, `@example.test` only).
  */
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { redeemSigninLink } from "./adminApi";
 import { magicLinkKey } from "./authSecret.mjs";
 
@@ -56,26 +65,61 @@ function signPayload(payload: string, key: string): string {
   return b64url(createHmac("sha256", key).update(payload).digest());
 }
 
+// ── the browser that asked ────────────────────────────────────────────────────────────────
+/** The httpOnly cookie that ties a link to the browser that asked for it. */
+export const BIND_COOKIE = "vexa-signin-bind";
+const BIND_VALUE = /^[A-Za-z0-9_-]{43}$/;
+/** The only address a link may be minted for without a browser: the reserved test domain. */
+const UNBOUND_ADDRESS = /^[a-z0-9._+-]+@example\.test$/;
+
+/** This browser's binding value: the one its cookie already holds, so every link it asked for
+ *  stays good, or a fresh 256-bit one. */
+export function browserBinding(existing: string | null | undefined): string {
+  return typeof existing === "string" && BIND_VALUE.test(existing) ? existing : b64url(randomBytes(32));
+}
+
+/** What a link carries for a binding value: its SHA-256, so the mail never holds the cookie. */
+export function bindingClaim(value: string): string {
+  return b64url(createHash("sha256").update(value, "utf8").digest());
+}
+
+/** Does the browser whose cookie holds `cookie` hold this verified link? An unbound link (a test
+ *  user's) is held by any browser. */
+export function browserHoldsLink(v: { binding: string }, cookie: string | null | undefined): boolean {
+  if (!v.binding) return true;
+  if (typeof cookie !== "string" || !BIND_VALUE.test(cookie)) return false;
+  const want = Buffer.from(v.binding, "utf8");
+  const have = Buffer.from(bindingClaim(cookie), "utf8");
+  return want.length === have.length && timingSafeEqual(want, have);
+}
+
 export type MintResult =
   | { ok: true; token: string; jti: string; expiresAt: number }
   | { ok: false; error: string };
 
-/** Sign a link for `email`. `now`/`ttl` are injectable so expiry is testable without sleeping. */
-export function mintMagicToken(email: string, opts: { ttl?: number; now?: number } = {}): MintResult {
+/** Sign a link for `email`, bound to the browser whose binding value is `browser`. `null` mints an
+ *  unbound link, and only for a reserved-domain test address. `now`/`ttl` are injectable so expiry
+ *  is testable without sleeping. */
+export function mintMagicToken(email: string, browser: string | null, opts: { ttl?: number; now?: number } = {}): MintResult {
   const key = secret();
   if (!key) return { ok: false, error: "no usable NEXTAUTH_SECRET (or MAGIC_LINK_SECRET) — magic links are disabled" };
+  if (browser === null ? !UNBOUND_ADDRESS.test(email) : !BIND_VALUE.test(browser)) {
+    return { ok: false, error: "a sign-in link is bound to the browser that asked for it" };
+  }
   const nowSec = Math.floor((opts.now ?? Date.now()) / 1000);
   const expiresAt = nowSec + Math.min(opts.ttl ?? ttlSeconds(), MAX_TTL_SECONDS);
   const jti = randomUUID();
-  const payload = b64url(Buffer.from(JSON.stringify({ e: email, x: expiresAt, j: jti }), "utf8"));
+  const b = browser === null ? "" : bindingClaim(browser);
+  const payload = b64url(Buffer.from(JSON.stringify({ e: email, x: expiresAt, j: jti, b }), "utf8"));
   return { ok: true, token: `${payload}.${signPayload(payload, key)}`, jti, expiresAt };
 }
 
 /** `unavailable`: the link verified, but whether it was already used could not be learned (admin-api
- *  down or unconfigured). It refuses, and the link is not spent. */
-export type VerifyFailure = "unconfigured" | "malformed" | "bad-signature" | "expired" | "used" | "unavailable";
+ *  down or unconfigured). It refuses, and the link is not spent. `other-browser`: the link is good,
+ *  but it was asked for in another browser (the route decides this, `browserHoldsLink`). */
+export type VerifyFailure = "unconfigured" | "malformed" | "bad-signature" | "expired" | "used" | "unavailable" | "other-browser";
 export type VerifyResult =
-  | { ok: true; email: string; jti: string; expiresAt: number }
+  | { ok: true; email: string; jti: string; expiresAt: number; binding: string }
   | { ok: false; reason: VerifyFailure };
 
 /** Signature + expiry only — PURE, and it does NOT consume the jti. Callers that actually let
@@ -96,7 +140,7 @@ export function verifyMagicToken(token: string, opts: { now?: number } = {}): Ve
     return { ok: false, reason: "bad-signature" };
   }
 
-  let claims: { e?: unknown; x?: unknown; j?: unknown };
+  let claims: { e?: unknown; x?: unknown; j?: unknown; b?: unknown };
   try {
     claims = JSON.parse(unb64url(payload).toString("utf8"));
   } catch {
@@ -106,6 +150,9 @@ export function verifyMagicToken(token: string, opts: { now?: number } = {}): Ve
   const jti = typeof claims.j === "string" ? claims.j : "";
   const expiresAt = typeof claims.x === "number" ? claims.x : NaN;
   if (!email || !jti || !Number.isFinite(expiresAt)) return { ok: false, reason: "malformed" };
+  // Every link names the browser it belongs to; only a test user's may name none.
+  const binding = typeof claims.b === "string" ? claims.b : null;
+  if (binding === null || (!binding && !UNBOUND_ADDRESS.test(email))) return { ok: false, reason: "malformed" };
 
   const nowSec = Math.floor((opts.now ?? Date.now()) / 1000);
   if (nowSec >= expiresAt) return { ok: false, reason: "expired" };
@@ -113,7 +160,7 @@ export function verifyMagicToken(token: string, opts: { now?: number } = {}): Ve
   // one of ours, whatever signed it.
   if (expiresAt - nowSec > MAX_TTL_SECONDS) return { ok: false, reason: "malformed" };
 
-  return { ok: true, email, jti, expiresAt };
+  return { ok: true, email, jti, expiresAt, binding };
 }
 
 // ── single use ─────────────────────────────────────────────────────────────────────────────

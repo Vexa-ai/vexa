@@ -1,8 +1,8 @@
 # auth
 
 Terminal-owned authentication. The auth contract downstream is the httpOnly `vexa-token` +
-`vexa-user-info` cookies (read by `server.mjs`'s WS proxy, `api/proxyAuth.ts`, `me/`, and the
-`api/minutes/*` seams, which read the user `id` out of the info cookie).
+`vexa-user-info` cookies (read by `server.mjs`'s WS proxy, `api/proxyAuth.ts` and `me/`). The info
+cookie is display-only: nothing decides who somebody is from it.
 
 Two doors, and no third:
 

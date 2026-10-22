@@ -32,7 +32,9 @@ describe("the terminal pages' policy", () => {
     expect(d["default-src"]).toEqual(["'self'"]);
     expect(d["connect-src"]).toEqual(["'self'"]);
     expect(d["img-src"]).toEqual(["'self'", "data:", "blob:"]);
-    expect(d["style-src"]).toEqual(["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"]);
+    expect(d["style-src"]).toEqual(["'self'", "'nonce-abc'", "https://fonts.googleapis.com"]);
+    expect(d["style-src-elem"]).toEqual(["'self'", "'nonce-abc'", "https://fonts.googleapis.com"]);
+    expect(d["style-src-attr"]).toEqual(["'unsafe-inline'"]);
     expect(d["font-src"]).toEqual(["'self'", "https://fonts.gstatic.com"]);
     expect(d["media-src"]).toEqual(["'self'"]);
     expect(d["worker-src"]).toEqual(["'self'", "blob:"]);
@@ -79,6 +81,29 @@ describe("the terminal pages' policy", () => {
     }
   });
 
+  it("turns no string into code: no 'unsafe-eval', WebAssembly alone for the call blur", () => {
+    const d = directives(contentSecurityPolicy("abc", {}, false));
+    expect(d["script-src"]).not.toContain("'unsafe-eval'");
+    expect(d["script-src"]).toContain("'wasm-unsafe-eval'");
+    // the development server keeps it for React's refresh runtime, and only there
+    expect(directives(contentSecurityPolicy("abc", {}, true))["script-src"]).toContain("'unsafe-eval'");
+  });
+
+  it("the policy a production server sends carries no 'unsafe-eval'", () => {
+    const before = process.env.NODE_ENV;
+    try {
+      (process.env as Record<string, string>).NODE_ENV = "production";
+      for (const path of ["/", "/w/notes", "/canvas-frame/other"]) {
+        const csp = middleware(new NextRequest(`https://app.example.test${path}`)).headers.get("content-security-policy") ?? "";
+        expect(csp, path).not.toMatch(/'unsafe-eval'/);
+        expect(csp, path).toMatch(/style-src-elem [^;]*'nonce-/);
+        expect(csp, path).not.toMatch(/style-src-elem [^;]*'unsafe-inline'/);
+      }
+    } finally {
+      (process.env as Record<string, string | undefined>).NODE_ENV = before;
+    }
+  });
+
   it("a nonce is fresh on every response", () => {
     const a = newNonce(), b = newNonce();
     expect(a).not.toBe(b);
@@ -120,6 +145,15 @@ describe("the Meeting Canvas frame's policy (S03T-1)", () => {
     expect(d["frame-src"]).toEqual(["'none'"]);
     expect(d["frame-ancestors"]).toEqual(["'self'"]);
     expect(d["script-src"]).toContain("'nonce-abc'");
+  });
+
+  it("keeps the frame's DNS to itself", () => {
+    const frame = middleware(new NextRequest("https://terminal.example.test/canvas-frame"));
+    expect(frame.headers.get("X-DNS-Prefetch-Control")).toBe("off");
+  });
+
+  it("the page that frames it refuses a frame navigation to any other host", () => {
+    expect(directives(contentSecurityPolicy("abc", {}))["frame-src"]).toEqual(["'self'"]);
   });
 
   it("is the policy the middleware serves /canvas-frame with, and only that path", () => {

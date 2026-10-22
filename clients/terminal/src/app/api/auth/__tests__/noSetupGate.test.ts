@@ -30,7 +30,7 @@ vi.mock("../adminApi", async (importOriginal) => ({
   redeemSigninLink: (jti: string, expiresAt: number) => linkLedger.redeem(jti, expiresAt),
 }));
 import { mintMagicToken } from "../magicToken";
-import { linkLedger } from "./linkLedgerDouble";
+import { BROWSER_COOKIE, TEST_BROWSER, linkLedger } from "./linkLedgerDouble";
 
 function loginReq(body: unknown): import("next/server").NextRequest {
   return { json: async () => body } as unknown as import("next/server").NextRequest;
@@ -39,7 +39,7 @@ function loginReq(body: unknown): import("next/server").NextRequest {
 function redeemReq(query: Record<string, string>): import("next/server").NextRequest {
   const url = new URL("https://terminal.test/api/auth/redeem");
   for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
-  return { nextUrl: url, url: url.toString(), method: "POST", headers: new Headers({ origin: "https://terminal.test", "sec-fetch-site": "same-origin" }) } as unknown as import("next/server").NextRequest;
+  return { nextUrl: url, url: url.toString(), method: "POST", headers: new Headers({ origin: "https://terminal.test", "sec-fetch-site": "same-origin", cookie: BROWSER_COOKIE }) } as unknown as import("next/server").NextRequest;
 }
 
 /** An admin-api from before the change: it would still refuse this address if asked. */
@@ -105,7 +105,7 @@ describe("no door is gated on `_global`", () => {
 
   it("/api/auth/redeem signs a non-admin in, and never asks signin-allowed", async () => {
     const calls = stubAdminApi();
-    const minted = mintMagicToken("member@example.com");
+    const minted = mintMagicToken("member@example.com", TEST_BROWSER);
     if (!minted.ok) throw new Error("mint failed");
     const res = await redeem(redeemReq({ t: minted.token, next: "/?ask=catch-up" }));
     expect(res.status).toBe(303);
@@ -116,7 +116,7 @@ describe("no door is gated on `_global`", () => {
 
   it("a replayed link is still refused — the link stays single-use", async () => {
     stubAdminApi();
-    const minted = mintMagicToken("member@example.com");
+    const minted = mintMagicToken("member@example.com", TEST_BROWSER);
     if (!minted.ok) throw new Error("mint failed");
     expect((await redeem(redeemReq({ t: minted.token, next: "/?ask=catch-up" }))).status).toBe(303);
     const second = await redeem(redeemReq({ t: minted.token, next: "/?ask=catch-up" }));

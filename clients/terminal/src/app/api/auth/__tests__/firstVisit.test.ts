@@ -26,12 +26,12 @@ vi.mock("../adminApi", async (importOriginal) => ({
   redeemSigninLink: (jti: string, expiresAt: number) => linkLedger.redeem(jti, expiresAt),
 }));
 import { mintMagicToken } from "../magicToken";
-import { linkLedger } from "./linkLedgerDouble";
+import { BROWSER_COOKIE, TEST_BROWSER, linkLedger } from "./linkLedgerDouble";
 
 function makeReq(query: Record<string, string>): import("next/server").NextRequest {
   const url = new URL("https://terminal.test/api/auth/redeem");
   for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
-  return { nextUrl: url, url: url.toString(), method: "POST", headers: new Headers({ origin: "https://terminal.test", "sec-fetch-site": "same-origin" }) } as unknown as import("next/server").NextRequest;
+  return { nextUrl: url, url: url.toString(), method: "POST", headers: new Headers({ origin: "https://terminal.test", "sec-fetch-site": "same-origin", cookie: BROWSER_COOKIE }) } as unknown as import("next/server").NextRequest;
 }
 
 /** Every POST agent-api saw, so the test can assert on the BODY — which is where the rule about
@@ -99,7 +99,7 @@ afterEach(() => {
 });
 
 const link = () => {
-  const m = mintMagicToken("new@example.com");
+  const m = mintMagicToken("new@example.com", TEST_BROWSER);
   if (!m.ok) throw new Error("mint failed");
   return m.token;
 };

@@ -1,5 +1,7 @@
-/** `POST {email}` → a one-time sign-in link for a reserved-domain test user, minted exactly as the
- *  emailed door mints one; redeeming it is the ordinary `/api/auth/redeem` (admission included). */
+/** `POST {email}` → a one-time sign-in link for a reserved-domain test user, minted as the emailed
+ *  door mints one but bound to no browser (the administrator opens it in another profile); redeeming
+ *  it is the ordinary `/api/auth/redeem` (admission included). Only an `@example.test` address may
+ *  hold an unbound link (`../../magicToken.ts`). */
 import { NextResponse, type NextRequest } from "next/server";
 import { mintMagicToken, ttlSeconds } from "../../magicToken";
 import { NO_STORE, adminGate, isTestAddress, publicBase } from "../../testUsers";
@@ -16,7 +18,7 @@ export async function POST(request: NextRequest) {
   }
   const address = email.trim().toLowerCase();
   const base = publicBase();
-  const minted = base ? mintMagicToken(address) : null;
+  const minted = base ? mintMagicToken(address, null) : null;
   if (!base || !minted || !minted.ok) {
     return NextResponse.json({ error: "Sign-in links are not configured on this instance" }, { status: 503, headers: NO_STORE });
   }

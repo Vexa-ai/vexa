@@ -188,7 +188,8 @@ The terminal carries its own Google/Microsoft OAuth login, so the proxy needs no
 Every terminal sign-in — the emailed link, Google, Microsoft — is admitted only for an **existing
 user** of this instance, an **admin**, or an address on the **sign-in allow-list**. Anybody else is
 refused before an account is created, and the email form answers "check your email" either way
-without sending them anything. Seed the list in `deploy/compose/.env` (admin-api reads it; restart
+without sending them anything. An emailed link signs in only the browser that asked for it: opened
+in another browser (a phone, a different profile), it says so and asks for a new link there. Seed the list in `deploy/compose/.env` (admin-api reads it; restart
 it after a change), and add more in the terminal under **Settings → Sign-in** — the effective list is
 both:
 

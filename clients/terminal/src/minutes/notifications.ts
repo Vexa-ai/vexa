@@ -14,6 +14,7 @@
  *  re-dispatched as a window event (`RAIL_CHANGED_EVENT`) for the shell to read its chats again.
  */
 import { FOCUS_WORKSPACE_EVENT, OPEN_MEETING_EVENT, OPEN_SESSION_EVENT } from "../platform/events";
+import { navigateWithin, pathWithin } from "../platform/navigate";
 import { onGatewayWSConnected, onUserFrame, parseNotice, type NoticeFrame, type UserFrame } from "../surfaces/gatewayWS";
 import { readableSentence } from "./callsList";
 
@@ -223,7 +224,7 @@ export function openNotice(n: Notice): void {
     return;
   }
   if (n.object.kind === "meeting") {
-    if (n.object.url && n.object.url.startsWith("/")) { window.location.assign(n.object.url); return; }
+    if (pathWithin(n.object.url)) { navigateWithin(n.object.url); return; }
     // a meeting the agent pointed at (`notify`), or the bot's: the shell opens it like a meeting chip
     window.dispatchEvent(new CustomEvent(OPEN_MEETING_EVENT, { detail: { ref: n.object.id } }));
     return;
@@ -233,8 +234,8 @@ export function openNotice(n: Notice): void {
     focusWorkspace(n.object.id, n.object.name);
     return;
   }
-  if (n.object.url) { window.location.assign(n.object.url); return; }
-  if (n.object.kind === "workspace") window.location.assign(`/w/${encodeURIComponent(n.object.id)}`);
+  if (n.object.url) { navigateWithin(n.object.url); return; }
+  if (n.object.kind === "workspace") navigateWithin(`/w/${encodeURIComponent(n.object.id)}`);
 }
 
 function focusWorkspace(id: string, name?: string): void {
@@ -294,7 +295,7 @@ export async function actOn(n: Notice, action: Act["action"]): Promise<boolean> 
     if (r && r.status !== 404 && r.status !== 405 && r.status !== 503) return false;
     // an older server: the invite's own doors
     if (action === "decline") return declineInvite(n);
-    if (action === "accept" && n.object.url && typeof window !== "undefined") { window.location.assign(n.object.url); return true; }
+    if (action === "accept" && n.object.url && typeof window !== "undefined") { navigateWithin(n.object.url); return true; }
     return false;
   }
   const d = await r.json().catch(() => ({})) as { notification?: unknown; open?: { kind?: string; id?: string; name?: string; url?: string; turn?: string } | null };
@@ -307,7 +308,7 @@ export async function actOn(n: Notice, action: Act["action"]): Promise<boolean> 
     else if ((o.kind === "chat" || o.kind === "call") && o.id)
       window.dispatchEvent(new CustomEvent(OPEN_SESSION_EVENT, { detail: { session: o.id, ...(o.turn ? { turn: o.turn } : {}), ...(o.kind === "call" ? { call: true } : {}) } }));
     else if (o.kind === "meeting" && o.id) {
-      if (o.url && o.url.startsWith("/")) window.location.assign(o.url);
+      if (pathWithin(o.url)) navigateWithin(o.url);
       else window.dispatchEvent(new CustomEvent(OPEN_MEETING_EVENT, { detail: { ref: o.id } }));
     }
   }

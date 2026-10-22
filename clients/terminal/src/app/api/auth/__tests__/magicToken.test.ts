@@ -21,7 +21,7 @@ import {
   ttlSeconds,
   verifyMagicToken,
 } from "../magicToken";
-import { linkLedger } from "./linkLedgerDouble";
+import { BROWSER_COOKIE, TEST_BROWSER, linkLedger } from "./linkLedgerDouble";
 
 function b64url(buf: Buffer): string {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -41,7 +41,7 @@ afterEach(() => {
 describe("mint / verify", () => {
   it("round-trips the email and defaults to a 15-minute TTL", () => {
     const now = 1_700_000_000_000;
-    const minted = mintMagicToken("someone@example.com", { now });
+    const minted = mintMagicToken("someone@example.com", TEST_BROWSER, { now });
     expect(minted.ok).toBe(true);
     if (!minted.ok) return;
     expect(minted.expiresAt).toBe(Math.floor(now / 1000) + DEFAULT_TTL_SECONDS);
@@ -52,7 +52,7 @@ describe("mint / verify", () => {
   });
 
   it("refuses a token whose payload was edited (the signature is over the payload)", () => {
-    const minted = mintMagicToken("victim@example.com");
+    const minted = mintMagicToken("victim@example.com", TEST_BROWSER);
     expect(minted.ok).toBe(true);
     if (!minted.ok) return;
     const [, sig] = minted.token.split(".");
@@ -68,7 +68,7 @@ describe("mint / verify", () => {
   });
 
   it("refuses a token signed with a different secret", () => {
-    const minted = mintMagicToken("someone@example.com");
+    const minted = mintMagicToken("someone@example.com", TEST_BROWSER);
     expect(minted.ok).toBe(true);
     if (!minted.ok) return;
     vi.stubEnv("NEXTAUTH_SECRET", "a-completely-different-secret-0123456789");
@@ -85,7 +85,7 @@ describe("mint / verify", () => {
 
   it("expires: valid one second before, refused one second after", () => {
     const now = 1_700_000_000_000;
-    const minted = mintMagicToken("someone@example.com", { now, ttl: 900 });
+    const minted = mintMagicToken("someone@example.com", TEST_BROWSER, { now, ttl: 900 });
     expect(minted.ok).toBe(true);
     if (!minted.ok) return;
     expect(verifyMagicToken(minted.token, { now: now + 899_000 }).ok).toBe(true);
@@ -96,7 +96,7 @@ describe("mint / verify", () => {
     vi.stubEnv("MAGIC_LINK_TTL_SECONDS", "60");
     expect(ttlSeconds()).toBe(60);
     const now = 1_700_000_000_000;
-    const minted = mintMagicToken("someone@example.com", { now });
+    const minted = mintMagicToken("someone@example.com", TEST_BROWSER, { now });
     expect(minted.ok).toBe(true);
     if (!minted.ok) return;
     expect(minted.expiresAt).toBe(Math.floor(now / 1000) + 60);
@@ -112,7 +112,7 @@ describe("mint / verify", () => {
     "a published or short session secret (%s) closes the door: nothing is minted or verified",
     (weak) => {
       vi.stubEnv("NEXTAUTH_SECRET", weak);
-      expect(mintMagicToken("someone@example.com").ok).toBe(false);
+      expect(mintMagicToken("someone@example.com", TEST_BROWSER).ok).toBe(false);
       const payload = b64url(Buffer.from(JSON.stringify({ e: "someone@example.com", x: Math.floor(Date.now() / 1000) + 600, j: "j1" })));
       for (const key of [weak, createHmac("sha256", weak).update("vexa-terminal/magic-link/v1").digest("hex")]) {
         const sig = b64url(createHmac("sha256", key).update(payload).digest());
@@ -123,7 +123,7 @@ describe("mint / verify", () => {
 
   it("a configured MAGIC_LINK_SECRET signs the links", () => {
     vi.stubEnv("MAGIC_LINK_SECRET", "a-separate-link-secret-0123456789abcdef");
-    const minted = mintMagicToken("someone@example.com");
+    const minted = mintMagicToken("someone@example.com", TEST_BROWSER);
     expect(minted.ok).toBe(true);
     if (!minted.ok) return;
     expect(verifyMagicToken(minted.token).ok).toBe(true);
@@ -135,7 +135,7 @@ describe("mint / verify", () => {
     vi.stubEnv("MAGIC_LINK_TTL_SECONDS", String(30 * 24 * 3600));
     expect(ttlSeconds()).toBe(MAX_TTL_SECONDS);
     const now = 1_700_000_000_000;
-    const long = mintMagicToken("someone@example.com", { now, ttl: 30 * 24 * 3600 });
+    const long = mintMagicToken("someone@example.com", TEST_BROWSER, { now, ttl: 30 * 24 * 3600 });
     expect(long.ok).toBe(true);
     if (!long.ok) return;
     expect(long.expiresAt).toBe(Math.floor(now / 1000) + MAX_TTL_SECONDS);
@@ -147,18 +147,18 @@ describe("mint / verify", () => {
   });
 
   it("fails CLOSED with no NEXTAUTH_SECRET — nothing can be minted or verified", () => {
-    const minted = mintMagicToken("someone@example.com");
+    const minted = mintMagicToken("someone@example.com", TEST_BROWSER);
     expect(minted.ok).toBe(true);
     if (!minted.ok) return;
     vi.stubEnv("NEXTAUTH_SECRET", "");
-    expect(mintMagicToken("someone@example.com").ok).toBe(false);
+    expect(mintMagicToken("someone@example.com", TEST_BROWSER).ok).toBe(false);
     expect(verifyMagicToken(minted.token)).toEqual({ ok: false, reason: "unconfigured" });
   });
 });
 
 describe("single use (admin-api's shared record)", () => {
   it("redeems once, then refuses the same link as used", async () => {
-    const minted = mintMagicToken("someone@example.com");
+    const minted = mintMagicToken("someone@example.com", TEST_BROWSER);
     expect(minted.ok).toBe(true);
     if (!minted.ok) return;
     expect(await redeemMagicToken(minted.token)).toMatchObject({ ok: true, email: "someone@example.com" });
@@ -167,8 +167,8 @@ describe("single use (admin-api's shared record)", () => {
   });
 
   it("two DIFFERENT links are independent (the record keys on jti, not on the address)", async () => {
-    const a = mintMagicToken("someone@example.com");
-    const b = mintMagicToken("someone@example.com");
+    const a = mintMagicToken("someone@example.com", TEST_BROWSER);
+    const b = mintMagicToken("someone@example.com", TEST_BROWSER);
     expect(a.ok && b.ok).toBe(true);
     if (!a.ok || !b.ok) return;
     expect(a.jti).not.toBe(b.jti);
@@ -177,7 +177,7 @@ describe("single use (admin-api's shared record)", () => {
   });
 
   it("verifyMagicToken does NOT burn the jti — only redeem does", async () => {
-    const minted = mintMagicToken("someone@example.com");
+    const minted = mintMagicToken("someone@example.com", TEST_BROWSER);
     expect(minted.ok).toBe(true);
     if (!minted.ok) return;
     expect(verifyMagicToken(minted.token).ok).toBe(true);
@@ -186,14 +186,14 @@ describe("single use (admin-api's shared record)", () => {
   });
 
   it("a link redeemed by ANOTHER process is used here too", async () => {
-    const minted = mintMagicToken("someone@example.com");
+    const minted = mintMagicToken("someone@example.com", TEST_BROWSER);
     if (!minted.ok) throw new Error("mint failed");
     await linkLedger.redeem(minted.jti, minted.expiresAt);
     expect(await redeemMagicToken(minted.token)).toEqual({ ok: false, reason: "used" });
   });
 
   it("an unreachable record refuses, and does not spend the link", async () => {
-    const minted = mintMagicToken("someone@example.com");
+    const minted = mintMagicToken("someone@example.com", TEST_BROWSER);
     if (!minted.ok) throw new Error("mint failed");
     linkLedger.down = true;
     expect(await redeemMagicToken(minted.token)).toEqual({ ok: false, reason: "unavailable" });

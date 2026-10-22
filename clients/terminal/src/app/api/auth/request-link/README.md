@@ -22,6 +22,9 @@
   one `server.mjs` stamps (`../clientAddress.mjs`): the TCP peer, or the rightmost
   `X-Forwarded-For` entry when the peer is loopback or named in `TERMINAL_TRUSTED_PROXIES` (addresses
   or CIDR ranges). A private peer is not trusted for being private.
+- The link is bound to the browser that asked: every answer sets the httpOnly `vexa-signin-bind`
+  cookie (path `/api/auth/redeem`, one hour; an existing value is kept, so earlier links stay good)
+  and the token carries its SHA-256. `../redeem` signs in only that browser.
 - `next` is reduced to a site-relative path (`safeNext`) BEFORE it is written into the mail.
 - Creates nothing and mints no session — that happens at `../redeem`, after the recipient proves
   they hold the mailbox.
