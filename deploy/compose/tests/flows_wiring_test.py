@@ -139,10 +139,11 @@ def test_the_mailbox_is_a_lane_of_its_own_and_off_by_default():
     assert "core/flows/Dockerfile" in block, "same image as flows-api — one image, three entrypoints"
 
 
-def test_both_flows_lanes_carry_the_same_configuration():
-    """ONE DECLARATION, TWO LANES. `config.v1` is declared for the flows DOMAIN, and
-    `gate:config-contract` reads the flows-api block; a mail policy that held in one lane and not
-    the other would pass that gate and still be wrong. Same keys, both lanes."""
+def test_every_flows_lane_carries_the_same_configuration():
+    """ONE DECLARATION, THREE LANES. `config.v1` is declared for the flows DOMAIN, and
+    `gate:config-contract` reads the flows-api block; a key that held in one lane and not another
+    would pass that gate and still be wrong. Same keys, every lane: flows-api, flows-mailbox and
+    flows-worker run one image under one configuration and differ by `command` alone."""
     def keys(name):
         lines = _service(name).split("\n")
         start = lines.index("    environment:") + 1
@@ -155,9 +156,9 @@ def test_both_flows_lanes_carry_the_same_configuration():
                 out.add(m.group(1))
         return out
 
-    api, mailbox = keys("flows-api"), keys("flows-mailbox")
-    assert api == mailbox, {"only flows-api": sorted(api - mailbox),
-                            "only flows-mailbox": sorted(mailbox - api)}
+    api, mailbox, worker = keys("flows-api"), keys("flows-mailbox"), keys("flows-worker")
+    for lane, got in (("flows-mailbox", mailbox), ("flows-worker", worker)):
+        assert api == got, {"only flows-api": sorted(api - got), f"only {lane}": sorted(got - api)}
     assert "VEXA_FLOWS_MAIL_DOMAINS" in mailbox, "the intake allow-list must reach the intake"
 
 

@@ -1361,6 +1361,8 @@ services:
       # one-shot writes crm.pem); public only, so nothing here can seal. No file = that producer's
       # envelopes do not verify.
       - VEXA_FACT_VERIFY_KEYS_DIR=/run/vexa-fact-verify
+      # the crm outbox's publish key (security review 19.1): POST /events for the CRM's own facts, nothing else.
+      - VEXA_FLOWS_CRM_PUBLISH_KEY=${VEXA_FLOWS_CRM_PUBLISH_KEY:-}
       # S6 nudges (D15): off unless VEXA_FLOWS_NUDGES=1 and the flows_defs.nudges pack is loaded
       - VEXA_FLOWS_NUDGES=${VEXA_FLOWS_NUDGES:-}
       - VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN=${VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN:-5}
@@ -1527,6 +1529,8 @@ services:
       # one-shot writes crm.pem); public only, so nothing here can seal. No file = that producer's
       # envelopes do not verify.
       - VEXA_FACT_VERIFY_KEYS_DIR=/run/vexa-fact-verify
+      # the crm outbox's publish key (security review 19.1): POST /events for the CRM's own facts, nothing else.
+      - VEXA_FLOWS_CRM_PUBLISH_KEY=${VEXA_FLOWS_CRM_PUBLISH_KEY:-}
       # S6 nudges (D15): off unless VEXA_FLOWS_NUDGES=1 and the flows_defs.nudges pack is loaded
       - VEXA_FLOWS_NUDGES=${VEXA_FLOWS_NUDGES:-}
       - VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN=${VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN:-5}
