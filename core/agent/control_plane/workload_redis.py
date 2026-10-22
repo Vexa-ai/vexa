@@ -82,14 +82,12 @@ def unit_keys(unit_id: str) -> tuple[str, str, str]:
     return input_topic(unit_id), output_topic(unit_id), inbox_cursor_key(unit_id)
 
 
-def acl_rules(unit_id: str, password: str, *, read_only_input: bool = True) -> list[str]:
-    """The ``ACL SETUSER`` rules for one unit's worker, from a clean slate. The input stream and the
-    delegation key are read-only to it (``%R~``, a Redis 7 / Valkey key permission): agent-api writes
-    both. ``read_only_input=False`` is the form for a server without key permissions, where the
-    pattern grants read and write (the refresh re-mints from agent-api's own record, never from the
-    worker's copy, so a worker writing its copy changes nothing but its own attachment)."""
+def acl_rules(unit_id: str, password: str) -> list[str]:
+    """The ``ACL SETUSER`` rules for one unit's worker, from a clean slate. The input stream, the
+    delegation key, the edge's privacy marks and the mount audience are read-only to it (``%R~``, a
+    Redis 7 / Valkey key permission): agent-api writes them all."""
     inp, out, cursor = unit_keys(unit_id)
-    read_only = "%R~" if read_only_input else "~"
+    read_only = "%R~"
     return (["reset", "on", f">{password}"]
             + [read_only + _glob_literal(inp)]
             + [f"~{_glob_literal(k)}" for k in (out, cursor)]
@@ -113,19 +111,23 @@ def acl_rules(unit_id: str, password: str, *, read_only_input: bool = True) -> l
             + [f"+{c}" for c in WORKER_COMMANDS])
 
 
+#: Why a server without key permissions defines no worker user.
+NO_KEY_PERMISSIONS = ("this Redis has no read-only key permissions (Redis 7+ / Valkey 7.2+, which every "
+                      "Vexa deploy surface ships): a worker's user would also write its own input, "
+                      "privacy marks and mount audience, so no worker user is defined")
+
+
 def _set_user(client, user: str, unit_id: str, password: str) -> None:
-    """``ACL SETUSER`` with the read-only input stream; on a server that does not know key
-    permissions (Redis before 7, which names the ``%R~`` rule it refuses), the read-write form,
-    said loudly — the worker's user can then also append to its own input stream."""
+    """``ACL SETUSER`` with the read-only rules. A server that does not know key permissions (Redis
+    before 7, which names the ``%R~`` rule it refuses) gets no user at all: a read-write form would
+    let the worker rewrite the marks and the audience its own commit hold reads."""
     try:
         client.execute_command("ACL", "SETUSER", user, *acl_rules(unit_id, password))
     except Exception as e:  # noqa: BLE001 — classified below; anything else is the caller's error
-        if "%R~" not in str(e):
-            raise
-        logger.warning("this Redis has no read-only key permissions (Redis 7+ / Valkey): the worker "
-                       "of unit %s may also write its own input stream", unit_id)
-        client.execute_command("ACL", "SETUSER", user,
-                               *acl_rules(unit_id, password, read_only_input=False))
+        if "%R~" in str(e):
+            logger.error("%s (unit %s)", NO_KEY_PERMISSIONS, unit_id)
+            raise WorkloadRedisError(NO_KEY_PERMISSIONS) from None
+        raise
 
 
 def worker_url(service_url: str, user: str, password: str) -> str:
@@ -148,6 +150,8 @@ def grant(client, *, secret: str, unit_id: str, service_url: str,
     try:
         _set_user(client, user, unit_id, password)
         client.hset(INDEX_KEY, user, f"{unit_id}|{int((now or time.time)())}")
+    except WorkloadRedisError:
+        raise
     except Exception as e:  # noqa: BLE001 — any failure leaves the worker without a credential
         raise WorkloadRedisError(f"the worker's Redis user could not be defined: {type(e).__name__}") from e
     return worker_url(service_url, user, password)

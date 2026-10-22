@@ -72,18 +72,6 @@ def test_the_rules_name_the_units_three_keys_and_nothing_else():
         "~vexa:taint:wsession:agent-7-chat-a\\*b",
         # WHO READS EACH MOUNT NOW (M2-b): agent-api writes it, the worker's commit hold reads it
         "%R~vexa:audience:unit:agent-7-chat-a\\*b"]
-    legacy = wr.acl_rules("agent-7-chat-a*b", "pw", read_only_input=False)
-    assert [r for r in legacy if "~" in r] == [
-        "~unit:agent-7-chat-a\\*b:in", "~unit:agent-7-chat-a\\*b:out", "~unit:agent-7-chat-a\\*b:cursor",
-        "~unit:agent-7-chat-a\\*b:delegation",
-        "~unit:agent-7-chat-a\\*b:bundle:*", "~unit:agent-7-chat-a\\*b:handback:*",
-        "~unit:agent-7-chat-a\\*b:send-now",
-        "~unit:agent-7-chat-a\\*b:stop",
-        "~vexa:taint:unit:agent-7-chat-a\\*b", "~vexa:taint:session:agent-7-chat-a\\*b",
-        "~vexa:taint:wsession:agent-7-chat-a\\*b", "~vexa:audience:unit:agent-7-chat-a\\*b"]
-    assert "resetchannels" in rules and "-@all" in rules
-    assert sorted(r[1:] for r in rules if r.startswith("+")) == sorted(wr.WORKER_COMMANDS)
-    assert not any(r.startswith("&") or r in ("+@all", "~*", "allkeys", "allchannels") for r in rules)
 
 
 def test_grant_defines_the_user_and_hands_back_its_url():
@@ -107,14 +95,19 @@ class OldRedis(FakeRedis):
         return super().execute_command(*args)
 
 
-def test_a_server_without_key_permissions_gets_the_read_write_form_said_loudly(caplog):
+def test_a_server_without_key_permissions_defines_no_worker_user_never_a_read_write_one(caplog):
+    """A read-write form would let the worker rewrite its own privacy marks and mount audience — the
+    very keys its commit hold reads. Refused instead, loudly, and never widened on a restore."""
     r = OldRedis()
-    url = wr.grant(r, secret=SECRET, unit_id="agent-7-chat-s1", service_url=SERVICE_URL)
+    with pytest.raises(wr.WorkloadRedisError, match="read-only key permissions"):
+        wr.grant(r, secret=SECRET, unit_id="agent-7-chat-s1", service_url=SERVICE_URL)
     user = wr.user_for("agent-7-chat-s1")
-    assert r.users[user] == wr.acl_rules("agent-7-chat-s1", urlsplit(url).password, read_only_input=False)
-    assert "read-only key permissions" in caplog.text
-    del r.users[user]
-    assert wr.restore(r, secret=SECRET) == 1 and user in r.users
+    assert user not in r.users and "read-only key permissions" in caplog.text
+    assert all(any(str(a).startswith("%R~") for a in call) for call in r.calls), r.calls
+    r.index[user] = "agent-7-chat-s1|100"
+    with pytest.raises(wr.WorkloadRedisError):
+        wr.restore(r, secret=SECRET)
+    assert user not in r.users
 
 
 def test_any_other_refusal_is_still_an_error():
