@@ -160,11 +160,11 @@ function Inside({ call, name, nameWith, onLeave, onPrivate, onName, onAddPeople,
   });
   const screen = cams.find((t) => t.source === Track.Source.ScreenShare);
   // AN OUTGOING CALL (the agent called someone for this person): "Calling <to>…" with Cancel until
-  // somebody else is in the call — then it is just the call.
+  // somebody else is in the call or the ring ends (`callState`) — then it is just the call.
   const othersIn = people.some((p) => !p.self);
   const session = call.session;
   useEffect(() => { if (othersIn) callAnswered(session); }, [othersIn, session]);
-  const calling = call.outgoing && !othersIn ? call.outgoing.to : "";
+  const calling = call.outgoing && !othersIn ? call.outgoing : null;
   const active = speaking.find((p) => !LISTENER.test(p.identity))?.identity;
   // An untranscribed call (a private or incognito chat's) has no meeting: no notes, no transcript.
   // ADD PEOPLE BY LINK (founder 2026-10-16): this call's chat join link, a day, revocable
@@ -192,7 +192,7 @@ function Inside({ call, name, nameWith, onLeave, onPrivate, onName, onAddPeople,
       </>}
       share={screen ? { by: screen.participant.identity, byName: screen.participant.isLocal ? "You" : (screen.participant.name || "Someone"),
         title: "Screen", content: <VideoTrack trackRef={screen} /> } : null} />
-    {calling && <CallOutgoing to={calling} onCancel={onLeave} />}
+    {calling && <CallOutgoing to={calling.to} unanswered={calling.unanswered} onCancel={onLeave} />}
     <BlurNotice />
     {/* A ROOM CALL (R1, `rooms`): Vexa has its own tile — it listens; it speaks when addressed */}
     {roomCall && transcribed && <div className="vx-ck-withvexa">

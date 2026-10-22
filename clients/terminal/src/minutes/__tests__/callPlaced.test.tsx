@@ -11,11 +11,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { callFromThisView, OWN_SUBMIT_WINDOW_MS, placedCall, streamChatTurn, type ChatStreamCallbacks, type PlacedCall } from "../../surfaces/chatStream";
 import { __resetPlacedCalls, joinPlacedCall, readPlaced, type PlacedDeps } from "../callPlaced";
-import { activeCall, callAnswered, enterCall, leaveCall, type ActiveCall } from "../callState";
+import { activeCall, callAnswered, enterCall, leaveCall, NO_ANSWER_SHOWN_MS, type ActiveCall } from "../callState";
+import { RING_FOR_MS } from "../../platform/sounds";
 import { CallOutgoing } from "../callkit/CallBar";
 import type { CallJoin, CallState } from "../../surfaces/callsApi";
 
-afterEach(() => { cleanup(); leaveCall(); __resetPlacedCalls(); });
+afterEach(() => { cleanup(); leaveCall(); __resetPlacedCalls(); vi.useRealTimers(); });
 
 const CALL = { room: "call-abc123", meeting_id: 7, owner: "2", url: "wss://calls.test", started: 1, transcribed: true, participants: 0 };
 const join: CallJoin = { session_id: "s-0123abcd", url: "wss://calls.test", token: "tok", role: "owner", call: CALL };
@@ -154,5 +155,43 @@ describe("the outgoing call in the dock", () => {
     expect(cancel.getAttribute("data-variant")).toBe("secondary");
     fireEvent.click(cancel);
     expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  // app.dev 22 Oct: «Calling Evgeniagrani…» with Cancel still under the call at 1:11:15 — the founder
+  // was in the call alone, sharing his screen; nobody answered, and the ring never ended.
+  it("an unanswered ring ends with the callee's ring: «No answer», then the line goes; the call stays", async () => {
+    vi.useFakeTimers();
+    const callDeps = { getCall: vi.fn(async () => ({ session_id: "s-0123abcd", calls: true, call: CALL })),
+      startCall: vi.fn(), joinCall: vi.fn(async () => join) };
+    await enterCall("s-0123abcd", "Call with Tester B", callDeps as never, { autoJoin: true, outgoing: { to: "Tester B" } });
+    expect(activeCall()?.outgoing).toMatchObject({ to: "Tester B" });
+    expect(activeCall()?.outgoing?.unanswered).toBeFalsy();
+    vi.advanceTimersByTime(RING_FOR_MS - 1);
+    expect(activeCall()?.outgoing?.unanswered).toBeFalsy();
+    vi.advanceTimersByTime(1);
+    expect(activeCall()?.outgoing).toMatchObject({ to: "Tester B", unanswered: true });
+    vi.advanceTimersByTime(NO_ANSWER_SHOWN_MS);
+    expect(activeCall()?.outgoing).toBeUndefined();
+    expect(activeCall()).toMatchObject({ session: "s-0123abcd", autoJoin: true });   // still in the call
+  });
+
+  it("an answered ring is not later marked unanswered; leaving stops the ring", async () => {
+    vi.useFakeTimers();
+    const callDeps = { getCall: vi.fn(async () => ({ session_id: "s-0123abcd", calls: true, call: CALL })),
+      startCall: vi.fn(), joinCall: vi.fn(async () => join) };
+    await enterCall("s-0123abcd", "Call with Tester B", callDeps as never, { autoJoin: true, outgoing: { to: "Tester B" } });
+    callAnswered("s-0123abcd");
+    vi.advanceTimersByTime(RING_FOR_MS + NO_ANSWER_SHOWN_MS);
+    expect(activeCall()?.outgoing).toBeUndefined();
+    await enterCall("s-0123abcd", "Call with Tester B", callDeps as never, { autoJoin: true, outgoing: { to: "Tester B" } });
+    leaveCall();
+    vi.advanceTimersByTime(RING_FOR_MS);
+    expect(activeCall()).toBeNull();
+  });
+
+  it("says nobody answered, without Cancel (the call goes on; Leave is on the bar)", () => {
+    render(<CallOutgoing to="Tester B" unanswered onCancel={() => {}} />);
+    expect(screen.getByRole("status").textContent).toContain("No answer from Tester B");
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
   });
 });

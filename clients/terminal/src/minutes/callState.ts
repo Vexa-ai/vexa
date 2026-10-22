@@ -8,6 +8,7 @@ import { useSyncExternalStore } from "react";
 import { getCall, joinCall, startCall, type CallJoin } from "../surfaces/callsApi";
 import { readScope } from "../data/workspaceApi";
 import { roomOf } from "../surfaces/roomState";
+import { RING_FOR_MS } from "../platform/sounds";
 
 export interface ActiveCall {
   /** the chat the call belongs to (its id as the rail knows it) */
@@ -19,8 +20,9 @@ export interface ActiveCall {
    *  (`callPlaced.ts`): a call nobody joins ends within 30 s, so the bar's Join would come too late */
   autoJoin?: boolean;
   /** this person is calling someone and nobody else has joined yet: the dock shows "Calling <to>…"
-   *  with Cancel until another person is in the call */
-  outgoing?: { to: string };
+   *  with Cancel while the callee's app rings (`RING_FOR_MS`), then "No answer from <to>" for
+   *  `NO_ANSWER_SHOWN_MS`, then nothing — the caller stays in the call either way */
+  outgoing?: { to: string; unanswered?: boolean };
 }
 
 export interface EnterOpts {
@@ -52,6 +54,21 @@ const emit = () => listeners.forEach((l) => l());
 let snapshot: { current: ActiveCall | null; error: string } = { current, error };
 const set = (c: ActiveCall | null, e = "") => { current = c; error = e; snapshot = { current, error }; emit(); };
 
+/** How long "No answer from <to>" stays after the ring ends. */
+export const NO_ANSWER_SHOWN_MS = 5000;
+/** THE RING ENDS WHERE IT IS MADE: the callee's app rings for `RING_FOR_MS`; the caller's
+ *  "Calling …" line ends with it. One ring at a time — a new call, an answer or leaving stops it. */
+let ringTimer: ReturnType<typeof setTimeout> | null = null;
+const stopRinging = () => { if (ringTimer) clearTimeout(ringTimer); ringTimer = null; };
+function ringFor(session: string): void {
+  stopRinging();
+  ringTimer = setTimeout(() => {
+    if (current?.session !== session || !current.outgoing) return;
+    set({ ...current, outgoing: { ...current.outgoing, unanswered: true } }, error);
+    ringTimer = setTimeout(() => { ringTimer = null; callAnswered(session); }, NO_ANSWER_SHOWN_MS);
+  }, RING_FOR_MS);
+}
+
 export function useActiveCall(): { current: ActiveCall | null; error: string } {
   return useSyncExternalStore(
     (l) => { listeners.add(l); return () => listeners.delete(l); },
@@ -74,6 +91,7 @@ export async function enterCall(session: string, label: string, deps: CallDeps =
     const next: ActiveCall = { session, label, join,
       ...(opts.autoJoin ? { autoJoin: true } : {}), ...(opts.outgoing ? { outgoing: opts.outgoing } : {}) };
     set(next);
+    if (next.outgoing) ringFor(session); else stopRinging();
     return next;
   } catch (e) {
     set(current, e instanceof Error ? e.message : "Could not join the call.");
@@ -81,11 +99,13 @@ export async function enterCall(session: string, label: string, deps: CallDeps =
   }
 }
 
-export function leaveCall(): void { set(null); }
+export function leaveCall(): void { stopRinging(); set(null); }
 
-/** Somebody else is in the call now: it is no longer an outgoing call (the "Calling …" line goes). */
+/** Somebody else is in the call now, or the ring is over: it is no longer an outgoing call (the
+ *  "Calling …" line goes). */
 export function callAnswered(session: string): void {
   if (current?.session === session && current.outgoing) {
+    stopRinging();
     const { outgoing: _gone, ...rest } = current;
     set(rest, error);
   }

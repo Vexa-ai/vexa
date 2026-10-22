@@ -150,15 +150,16 @@ export function CallJoinBar({ name, transcribed, listener, mic, onMic, onJoin, o
 
 /** AN OUTGOING CALL (call-person-autojoin): the person asked the agent to call someone, is already in
  *  the call, and nobody else has joined yet. One quiet line under the bar — whom they are calling —
- *  and Cancel, which leaves the call (an emptied call ends on its own). Kit Button, no fill (UI 7r). */
-export function CallOutgoing({ to, onCancel }: { to: string; onCancel: () => void }) {
+ *  and Cancel, which leaves the call (an emptied call ends on its own). Kit Button, no fill (UI 7r).
+ *  When the ring ends unanswered the line says so, without Cancel: the call goes on, Leave is on the bar. */
+export function CallOutgoing({ to, unanswered, onCancel }: { to: string; unanswered?: boolean; onCancel: () => void }) {
   return (
-    <div className="vx-cb-outgoing" data-call="outgoing">
+    <div className="vx-cb-outgoing" data-call="outgoing" data-unanswered={unanswered ? "" : undefined}>
       <span className="vx-cb-quiet" role="status" aria-live="polite">
-        <PhoneOutgoing size={12} aria-hidden /> Calling {to}…
+        <PhoneOutgoing size={12} aria-hidden /> {unanswered ? `No answer from ${to}` : `Calling ${to}…`}
       </span>
       <span className="vx-cb-gap" />
-      <Button variant="secondary" size="sm" data-call="outgoing-cancel" onClick={onCancel}>Cancel</Button>
+      {!unanswered && <Button variant="secondary" size="sm" data-call="outgoing-cancel" onClick={onCancel}>Cancel</Button>}
     </div>
   );
 }
