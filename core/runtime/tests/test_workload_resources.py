@@ -304,7 +304,7 @@ _SIZING_ENV = ("RUNTIME_BOT_CPU", "RUNTIME_BOT_CPU_LIMIT", "RUNTIME_BOT_MEMORY_M
 def _sized_registry(monkeypatch, **env):
     """default_registry() with exactly ``env`` set among the sizing knobs, the rest unset."""
     monkeypatch.setenv("BROWSER_IMAGE", "bot:test")
-    monkeypatch.setenv("AGENT_IMAGE", "vexaai/v012-agent-api:test")
+    monkeypatch.setenv("AGENT_IMAGE", "vexaai/vexa-agent-api:test")
     for key in (*_SIZING_ENV, k8s_backend.TOLERATIONS_ENV, k8s_backend.NODE_SELECTOR_ENV):
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():

@@ -13,6 +13,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { guardTree } from "./test-tree.mjs";
+
+guardTree();
 
 const GATES = join(dirname(fileURLToPath(import.meta.url)), "gates.mjs");
 const readme = (cwd) => execFileSync("node", [GATES, "readme"], { cwd, stdio: ["ignore", "pipe", "pipe"] }).toString();

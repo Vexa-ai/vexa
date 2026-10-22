@@ -56,7 +56,8 @@ async function main() {
       // may render no frames at all (see layout-sweep.mjs), and the opener is not under test.
       await dialogSection.first().evaluate((el) => el.scrollIntoView({ block: "center" }));
       await dialogSection.getByRole("button", { name: opener, exact: true }).first().dispatchEvent("click");
-      const dialog = page.getByRole("dialog");
+      // the dialog the opener raised, in the modal layer: a page peek on the catalogue is a dialog too
+      const dialog = page.locator(".vx-dialog-layer [role=dialog]");
       await dialog.waitFor();
       // Enable a type-to-confirm button so it can be clicked.
       const typed = dialog.locator("input[data-autofocus]");
