@@ -24,11 +24,18 @@ const throws = (fn: () => unknown): Error | null => { try { fn(); return null; }
 
 // ── every committed invocation.v1 golden parses ──
 const goldens = readdirSync(GOLDEN_DIR).filter((n) => n.startsWith('Invocation.') && n.endsWith('.json'));
-check('found all invocation goldens', goldens.length === 6, `got ${goldens.join(', ')}`);
+check('found all invocation goldens', goldens.length === 7, `got ${goldens.join(', ')}`);
 for (const g of goldens) {
   const raw = readFileSync(join(GOLDEN_DIR, g), 'utf8');
   const err = throws(() => parseInvocation(raw));
   check(`golden ${g} parses`, err === null, err?.message ?? '');
+}
+
+// ── the operator's meeting-host allowance rides typed ──
+{
+  const onprem = parseInvocation(readFileSync(join(GOLDEN_DIR, 'Invocation.jitsi-onprem.json'), 'utf8'));
+  check('jitsi-onprem: meetingHostAllow typed', JSON.stringify(onprem.meetingHostAllow) === '["jitsi.corp.example","10.20.0.0/16"]',
+    JSON.stringify(onprem.meetingHostAllow));
 }
 
 // ── typed access on the full golden ──
