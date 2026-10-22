@@ -43,7 +43,7 @@ call and not a bot you manage: it starts with the call and ends with it, and the
 a call. The notice comes from the room itself, so every client shows the same thing.
 
 When someone shares a screen with sound (a tab or a video, with "Share audio" ticked in the browser's
-picker), that sound is transcribed too, as its own speaker: "<name> (shared screen)". The Vexa mark's
+picker), that sound is transcribed too, as its own speaker: "`<name> (shared screen)`". The Vexa mark's
 tooltip says so. The administrator turns this off with `CALL_TRANSCRIBE_SHARED_SCREEN=false`; the
 shared screen is then still seen and heard by everyone in the call, but Vexa does not transcribe it.
 
@@ -248,7 +248,7 @@ The services' keys:
 | `CALL_EMPTY_GRACE_SEC` | meeting-api | `30` | `CALL_EMPTY_GRACE_SEC` | `meetingApi.calls.emptyGraceSeconds` | how long an emptied room waits before the call ends |
 | `CALL_FIRST_JOIN_TIMEOUT_SEC` | meeting-api | `30` | `CALL_FIRST_JOIN_TIMEOUT_SEC` | `meetingApi.calls.firstJoinTimeoutSeconds` | how long a new call waits for its first participant |
 | `CALL_MAX_PARTICIPANTS` | meeting-api | `50` | `CALL_MAX_PARTICIPANTS` | `meetingApi.calls.maxParticipants` | the most people one room admits |
-| `CALL_TRANSCRIBE_SHARED_SCREEN` | meeting-api | `true` | `CALL_TRANSCRIBE_SHARED_SCREEN` | `meetingApi.calls.transcribeSharedScreen` | whether the sound of a shared screen is transcribed too, as "<name> (shared screen)" |
+| `CALL_TRANSCRIBE_SHARED_SCREEN` | meeting-api | `true` | `CALL_TRANSCRIBE_SHARED_SCREEN` | `meetingApi.calls.transcribeSharedScreen` | whether the sound of a shared screen is transcribed too, as "`<name> (shared screen)`" |
 | `CALL_TRANSCRIPTION_SWITCHABLE` | meeting-api | `false` | `CALL_TRANSCRIPTION_SWITCHABLE` | `meetingApi.calls.transcriptionSwitchable` | whether a call may be started untranscribed through the API |
 
 The LiveKit server's own settings:
