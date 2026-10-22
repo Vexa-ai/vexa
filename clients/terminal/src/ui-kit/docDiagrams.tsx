@@ -138,10 +138,14 @@ function styleNonce(): string {
  *  callers insert the SVG as markup, and the page applies a markup `<style>` only with the
  *  response's nonce (`style-src-elem`, app/contentSecurityPolicy.ts) — so that one element, and no
  *  other, carries it. A `<style>` anywhere else in the text (the diagram's own labels) stays
- *  without one and does not apply. */
+ *  without one and does not apply.
+ *
+ *  Mermaid builds that `<style>` with `createElementNS`, so the layout's bootstrap has already
+ *  stamped it, and the browser hides a nonce once the element is in a document: the text mermaid
+ *  serializes carries `<style nonce="">`. That attribute is replaced with the nonce. */
 export function withStyleNonce(svg: string, nonce: string): string {
   if (!nonce || !/^[A-Za-z0-9+/=]+$/.test(nonce)) return svg;
-  return svg.replace(/^(\s*<svg\b[^>]*>)<style>/, `$1<style nonce="${nonce}">`);
+  return svg.replace(/^(\s*<svg\b[^>]*>)<style(?:\s+nonce="[^"<>]*")?>/, `$1<style nonce="${nonce}">`);
 }
 
 // ── the live theme ───────────────────────────────────────────────────────────────────

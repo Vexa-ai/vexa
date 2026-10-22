@@ -36,4 +36,14 @@ describe("the style nonce", () => {
     expect(withStyleNonce(svg, `x" onload="y`)).toBe(svg);
     expect(withStyleNonce(svg, "")).toBe(svg);
   });
+
+  it("mermaid's <style>, already stamped and serialized with its nonce hidden, gets the nonce back", () => {
+    // what mermaid returns in a browser: the bootstrap stamped the element it created, the browser
+    // hid the value once it was in the document, and the serialized text keeps an empty attribute
+    const svg = `<svg id="m2" viewBox="0 0 1 1"><style nonce="">#m2{fill:red}</style><g><style nonce="">x{}</style></g></svg>`;
+    const out = withStyleNonce(svg, "abc=");
+    expect(out.startsWith(`<svg id="m2" viewBox="0 0 1 1"><style nonce="abc=">#m2{fill:red}</style>`)).toBe(true);
+    expect(out.match(/nonce="abc="/g)).toHaveLength(1);
+    expect(out).toContain(`<g><style nonce="">x{}</style></g>`);
+  });
 });
