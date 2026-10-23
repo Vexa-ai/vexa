@@ -56,6 +56,7 @@ MEETING_API_HOST_PORT = _host_port("MEETING_API_PORT", "18080")
 RUNTIME_HOST_PORT = _host_port("RUNTIME_API_PORT", "18090")
 AGENT_API_HOST_PORT = _host_port("AGENT_API_PORT", "18100")
 TERMINAL_HOST_PORT = _host_port("TERMINAL_PORT", "13000")
+TERMINAL_CANVAS_HOST_PORT = _host_port("TERMINAL_CANVAS_HOST_PORT", "13002")
 MCP_HOST_PORT = _host_port("MCP_HOST_PORT", "18010")
 POSTGRES_HOST_PORT = _host_port("POSTGRES_HOST_PORT", "5458")
 STORAGE_HOST_PORT = _host_port("STORAGE_HOST_PORT", "18900")
@@ -162,6 +163,7 @@ def _stack_env() -> dict:
         "RUNTIME_API_PORT": RUNTIME_HOST_PORT,
         "AGENT_API_PORT": AGENT_API_HOST_PORT,
         "TERMINAL_PORT": TERMINAL_HOST_PORT,
+        "TERMINAL_CANVAS_HOST_PORT": TERMINAL_CANVAS_HOST_PORT,
         # every published host port must be pinned here — a var left out falls through to
         # deploy/compose/.env (a developer's live stack) and collides with its running ports
         "MCP_HOST_PORT": MCP_HOST_PORT,
