@@ -2289,4 +2289,128 @@ tb "flows egress: the OpenShift profile still renders with flows on, and carries
 tb "flows.mail.authMode defaults to mta on the mailbox" 'grep -A1 "name: VEXA_FLOWS_MAIL_AUTH_MODE\$" <<< "$MB" | has -F "value: \"mta\""'
 AUTHMODE_MB="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.address=bot@corp.example --set flows.mail.existingSecret=mail-creds --set flows.mail.authMode=inapp --show-only templates/flows.yaml | awk '/^---/{p=0} /name: vexa-vexa-flows-mailbox$/{p=1} p')"
 tb "flows.mail.authMode=inapp reaches the mailbox as VEXA_FLOWS_MAIL_AUTH_MODE" 'grep -A1 "name: VEXA_FLOWS_MAIL_AUTH_MODE\$" <<< "$AUTHMODE_MB" | has -F "value: \"inapp\""'
+# subject-ticket.v1 (car 57): each ticket producer signs with its OWN Ed25519 key — meeting-api
+# (`meetings`), agent-api (`agent`), the flows mail intake (`mail`: flows-worker and flows-mailbox,
+# never flows-api). Each private key is a Secret kept through an uninstall and mounted by its producer
+# alone; the gateway mounts only the public halves (a ConfigMap) for its service door. Nothing renders
+# without flows.
+st_check() { python3 -c '
+import sys, yaml
+mode = sys.argv[1]; docs = [d for d in yaml.safe_load_all(sys.stdin) if d]
+by = {(d["kind"], d["metadata"]["name"]): d for d in docs}
+SECRETS = {"meetings": "vexa-vexa-subject-ticket-meetings-key", "agent": "vexa-vexa-subject-ticket-agent-key",
+           "mail": "vexa-vexa-subject-ticket-mail-key"}
+CM = "vexa-vexa-subject-ticket-verify-keys"
+def pod(d):
+    return d["spec"]["template"]["spec"] if d["kind"] in ("Deployment", "StatefulSet", "DaemonSet", "Job") else (
+        d["spec"]["jobTemplate"]["spec"]["template"]["spec"] if d["kind"] == "CronJob" else None)
+def mounts_of(name):  # workloads whose volumes name the Secret/ConfigMap
+    out = set()
+    for d in docs:
+        sp = pod(d)
+        if not sp: continue
+        for v in sp.get("volumes") or []:
+            if (v.get("secret") or {}).get("secretName") == name or (v.get("configMap") or {}).get("name") == name:
+                out.add(d["metadata"]["name"].replace("vexa-vexa-", ""))
+            for src in (v.get("projected") or {}).get("sources") or []:
+                if (src.get("secret") or {}).get("name") == name or (src.get("configMap") or {}).get("name") == name:
+                    out.add(d["metadata"]["name"].replace("vexa-vexa-", ""))
+    return out
+def ctr(dep, cname=None):
+    cs = by[("Deployment", "vexa-vexa-" + dep)]["spec"]["template"]["spec"]["containers"]
+    return [c for c in cs if c["name"] == (cname or dep)][0] if cname or len(cs) > 1 else cs[0]
+def env(c): return {e["name"]: e.get("value") for e in c.get("env") or []}
+def mpaths(c): return {m["name"]: m["mountPath"] for m in c.get("volumeMounts") or []}
+if mode == "on":
+    want_iss = sys.argv[2].split(",")
+    for iss, name in SECRETS.items():
+        sec = by.get(("Secret", name))
+        if iss not in want_iss:
+            assert sec is None, ("rendered without its producer", name); continue
+        assert sec["metadata"]["annotations"]["helm.sh/resource-policy"] == "keep", sec["metadata"]
+        assert list(sec["data"]) == ["signing-key.pem"], list(sec["data"])
+    cm = by[("ConfigMap", CM)]
+    assert sorted(cm["data"]) == sorted(i + ".pem" for i in want_iss), sorted(cm["data"])
+    holders = {"meetings": {"meeting-api"}, "agent": {"agent-api"}, "mail": {"flows-worker", "flows-mailbox"}}
+    for iss in want_iss:
+        assert mounts_of(SECRETS[iss]) == holders[iss], (iss, mounts_of(SECRETS[iss]))
+    assert mounts_of(CM) == {"gateway"}, mounts_of(CM)
+    for dep in [d for d in ("meeting-api", "agent-api") if ("meetings" if d == "meeting-api" else "agent") in want_iss]:
+        c = ctr(dep)
+        assert env(c)["VEXA_SUBJECT_TICKET_KEY_FILE"] == "/run/vexa-subject-ticket/key.pem", dep
+        assert mpaths(c)["subject-ticket-key"] == "/run/vexa-subject-ticket", dep
+    for dep in ("flows-worker", "flows-mailbox"):
+        c = ctr(dep, dep)
+        assert env(c)["VEXA_FLOWS_MAIL_TICKET_KEY_FILE"] == "/run/vexa-subject-ticket/key.pem", dep
+    fa = yaml.safe_dump(by[("Deployment", "vexa-vexa-flows-api")])
+    assert "subject-ticket" not in fa and "TICKET_KEY" not in fa, "flows-api holds a ticket key or mount"
+    gw = ctr("gateway")
+    assert env(gw)["VEXA_SUBJECT_TICKET_KEYS_DIR"] == "/run/vexa-subject-ticket-verify", env(gw)
+    assert mpaths(gw)["subject-ticket-verify-keys"] == "/run/vexa-subject-ticket-verify", mpaths(gw)
+    assert not any(mounts_of(n) & {"gateway"} for n in SECRETS.values()), "the gateway mounts a private ticket key"
+elif mode == "netpol":
+    # The callers that present a ticket reach the door, and the door reaches identity for the address
+    # lookup — the policies car 55 narrowed still carry the ticket path.
+    def comps(n):
+        out = set()
+        for ing in n["spec"].get("ingress", []):
+            for fr in ing.get("from", []):
+                ps = fr.get("podSelector", {})
+                out |= set(ps.get("matchLabels", {}).get("app.kubernetes.io/component", "").split()) - {""}
+                for e in ps.get("matchExpressions", []):
+                    out |= set(e.get("values", []))
+        return out
+    door = by[("NetworkPolicy", "vexa-vexa-gateway-door-ingress")]
+    assert {"flows-api", "flows-worker", "flows-mailbox"} <= comps(door), comps(door)
+    fe = by[("NetworkPolicy", "vexa-vexa-flows-egress")]["spec"]["egress"]
+    assert any(any(t.get("podSelector", {}).get("matchLabels", {}).get("app.kubernetes.io/component") == "gateway" for t in r.get("to", []))
+               and [p["port"] for p in r.get("ports", [])] == [8002] for r in fe), fe
+    assert "gateway" in comps(by[("NetworkPolicy", "vexa-vexa-admin-api-ingress")])
+elif mode == "off":
+    assert not any(d["metadata"]["name"].startswith("vexa-vexa-subject-ticket") for d in docs), "a ticket object renders with flows off"
+    assert "VEXA_SUBJECT_TICKET_KEYS_DIR" not in env(ctr("gateway"))
+    for dep in ("meeting-api", "agent-api"):
+        assert "subject-ticket" not in yaml.safe_dump(by[("Deployment", "vexa-vexa-" + dep)]), dep
+print("ok")
+' "$@"; }
+st_pem() { awk -v k="  $2.pem: |" '$0==k{f=1;next} f&&/^    /{sub(/^    /,"");print;next} f{exit}' <<< "$1"; }  # st_pem <configmap doc> <issuer>
+st_pair_ok() {  # st_pair_ok <render> <issuer>: the ConfigMap's <issuer>.pem IS that Secret's public half
+  local priv pub derived tmp
+  tmp="$(mktemp -d)"
+  priv="$(awk '/^  signing-key.pem: /{print $2}' <<< "$(doc Secret "vexa-vexa-subject-ticket-$2-key" "$1")")"
+  pub="$(st_pem "$(doc ConfigMap vexa-vexa-subject-ticket-verify-keys "$1")" "$2")"
+  [ -n "$priv" ] && [ -n "$pub" ] || { rm -rf "$tmp"; return 1; }
+  printf '%s' "$priv" | base64 -d > "$tmp/k" 2>/dev/null || printf '%s' "$priv" | base64 -D > "$tmp/k"
+  openssl pkey -in "$tmp/k" -noout -text 2>/dev/null | has 'ED25519 Private-Key' || { rm -rf "$tmp"; return 1; }
+  derived="$(openssl pkey -in "$tmp/k" -pubout 2>/dev/null)"
+  rm -rf "$tmp"
+  [ "$derived" = "$pub" ]
+}
+ST_ON="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.enabled=true)"
+if command -v openssl >/dev/null 2>&1; then
+  tb "subject tickets: each producer's Secret is an Ed25519 key whose public half is the verify ConfigMap's <issuer>.pem" 'st_pair_ok "$ST_ON" meetings && st_pair_ok "$ST_ON" agent && st_pair_ok "$ST_ON" mail'
+else
+  echo "  SKIP: openssl not installed — subject ticket key pairs not cross-checked"
+fi
+tb "subject tickets: three Secrets kept through an uninstall, each mounted by its producer alone (mail: flows-worker and flows-mailbox), flows-api holds no ticket key, the gateway mounts only the ConfigMap" 'st_check on meetings,agent,mail <<< "$ST_ON" >/dev/null'
+tb "subject tickets: the flows door and egress policies admit the ticket presenters, and admin-api admits the door's address lookup" 'st_check netpol <<< "$ST_ON" >/dev/null'
+tb "subject tickets: the OpenShift profile renders them with flows on, wired the same way" \
+  'helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.enabled=true -f "$CHART/values-openshift.yaml" --set agentApi.workspaces.storageClassName=rwx-class | st_check on meetings,agent,mail >/dev/null'
+tb "subject tickets: with agent-api off there is no agent key and no agent.pem" \
+  'helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.enabled=true --set agentApi.enabled=false | st_check on meetings,mail >/dev/null'
+tb "subject tickets (control): with flows off nothing renders, the gateway has no keys dir, no producer mounts a key" 'st_check off <<< "$RENDER" >/dev/null'
+if command -v openssl >/dev/null 2>&1; then
+  NOT_ED="$(openssl genpkey -algorithm rsa -pkeyopt rsa_keygen_bits:2048 2>/dev/null)"
+  st_rsa="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set-string subjectTickets.meetings.signingKey="$NOT_ED" 2>&1 || true)"
+  tb "subjectTickets.<issuer>.signingKey that is not Ed25519 (RSA) refuses the render, naming the fix" 'grep -q "subjectTickets.meetings.signingKey must be an Ed25519 private key" <<< "$st_rsa" && grep -q "openssl genpkey -algorithm ed25519" <<< "$st_rsa"'
+  OWN_PUB="$(openssl genpkey -algorithm ed25519 2>/dev/null | openssl pkey -pubout 2>/dev/null)"
+  st_nopub="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set subjectTickets.mail.existingSecret=my-mail-key 2>&1 || true)"
+  st_ext="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.enabled=true --set subjectTickets.mail.existingSecret=my-mail-key --set-string subjectTickets.mail.publicKey="$OWN_PUB")"
+  tb "subjectTickets.<issuer>.existingSecret: refused without publicKey; with it no generated Secret, the ConfigMap carries the given key, the producers mount the named Secret" 'grep -q "subjectTickets.mail.publicKey is required with subjectTickets.mail.existingSecret" <<< "$st_nopub" && [ -z "$(doc Secret vexa-vexa-subject-ticket-mail-key "$st_ext")" ] && [ "$(st_pem "$(doc ConfigMap vexa-vexa-subject-ticket-verify-keys "$st_ext")" mail)" = "$OWN_PUB" ] && [ "$(grep -c "secretName: my-mail-key" <<< "$st_ext")" -eq 2 ]'
+  ST_PIN="$(openssl genpkey -algorithm ed25519 2>/dev/null)"
+  st_a="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set-string subjectTickets.agent.signingKey="$ST_PIN" --show-only templates/subject-ticket-keys.yaml)"
+  st_b="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set-string subjectTickets.agent.signingKey="$ST_PIN" --show-only templates/subject-ticket-keys.yaml)"
+  tb "subjectTickets.<issuer>.signingKey pins the pair across renders (helm template / GitOps)" '[ -n "$(st_pem "$(doc ConfigMap vexa-vexa-subject-ticket-verify-keys "$st_a")" agent)" ] && [ "$(st_pem "$(doc ConfigMap vexa-vexa-subject-ticket-verify-keys "$st_a")" agent)" = "$(st_pem "$(doc ConfigMap vexa-vexa-subject-ticket-verify-keys "$st_b")" agent)" ] && [ "$(st_pem "$(doc ConfigMap vexa-vexa-subject-ticket-verify-keys "$st_a")" agent)" = "$(printf "%s\n" "$ST_PIN" | openssl pkey -pubout 2>/dev/null)" ]'
+  unset NOT_ED OWN_PUB ST_PIN
+fi
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

@@ -39,7 +39,9 @@ the credential broker. The gateway signs every request it forwards; the others c
 signature and cannot make one. If you render with `helm template` (GitOps), set `identity.signingKey`
 to a key from `openssl genpkey -algorithm ed25519`, or every render mints a new pair. The chart Secret
 also generates `VEXA_MCP_DELEGATION_SECRET` and `VEXA_MODEL_PROXY_SECRET`; with
-`secrets.existingSecretName`, your Secret must carry both.
+`secrets.existingSecretName`, your Secret must carry both. With flows on, the chart also generates the
+subject-ticket keypairs (`<release>-subject-ticket-{meetings,agent,mail}-key`, see
+[Secrets the chart generates](#secrets-the-chart-generates)), kept the same way.
 
 ## Network policy
 
@@ -1153,6 +1155,19 @@ private key, kept in `<release>-fact-seal-crm-key`, and flows verifies under the
 `<release>-fact-verify-keys`. `VEXA_FACT_SEAL_SECRET` is gone; remove it from your own Secret. With
 `helm template`, set `factSeal.crm.signingKey`, or `factSeal.crm.existingSecret` with
 `factSeal.crm.publicKey` (see [The CRM](#the-crm-optional)).
+
+With flows on, a flows call that acts for a person passes the gateway's service door only with a
+subject ticket signed by the producer of that person's fact. Each producer has its own Ed25519 key,
+which the chart generates on install and keeps across upgrades and through an uninstall:
+`<release>-subject-ticket-meetings-key` (mounted by meeting-api), `<release>-subject-ticket-agent-key`
+(agent-api) and `<release>-subject-ticket-mail-key` (flows-worker and flows-mailbox, never flows-api).
+The gateway mounts only the public halves, `<issuer>.pem` in the `<release>-subject-ticket-verify-keys`
+ConfigMap. With `helm template`, set `subjectTickets.<issuer>.signingKey` for `meetings`, `agent` and
+`mail` (`openssl genpkey -algorithm ed25519`), or `subjectTickets.<issuer>.existingSecret` with
+`subjectTickets.<issuer>.publicKey`; otherwise every render mints new pairs. `secrets.existingSecretName`
+needs nothing new for them. To rotate a key, delete its Secret, run `helm upgrade`, then restart that
+producer and the gateway (the gateway reads the public keys at start). Rotating the agent key voids
+the routine grants it signed, so each running routine needs its owner to turn it on once more.
 
 ### Services that need a setting
 
