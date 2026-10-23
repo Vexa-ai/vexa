@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from . import receipts
+from . import receipts, tickets
 from .clock import Clock
 from .db import DB, dumps, loads
 from .model import Block, Done, NotPresent, Reaction, StepCtx, StepError, Wait
@@ -162,7 +162,8 @@ def tick(db: DB, registry: Registry, clock: Clock, *, emit=None, present=None) -
 
     ctx.checkpoint = _checkpoint
     try:
-        out = registry.steps[r.step](ctx)
+        with tickets.presenting(tickets.union(tickets.of(r.subject_refs), _grant_of(db, flow))):
+            out = registry.steps[r.step](ctx)
         _save_scratch()
     except StepError as e:
         _save_scratch()
@@ -201,14 +202,36 @@ def _with_origin(emit, r: Reaction, flow):
     """THE ORIGIN CHAIN RIDES EVERY FACT A STEP EMITS (ADR-0046 decision 8). The emitted refs carry
     `_origin`: the chain the reaction itself was started by, plus this flow. Admission reads it and
     refuses a hop that would loop — so a person's flow whose step publishes the very event it reacts
-    to runs once, not forever."""
+    to runs once, not forever. The parent's subject tickets (`_tickets`) ride it too."""
     if emit is None:
         return None
     chain = list((r.subject_refs or {}).get("_origin") or []) + [flow.ident]
+    inherited = tickets.of(r.subject_refs)
 
     def _emit(event_type: str, source_id: str, refs: dict):
-        return emit(event_type, source_id, {**(refs or {}), "_origin": chain})
+        out = {**(refs or {}), "_origin": chain}
+        # THE PARENT'S TICKETS RIDE THE CHILD FACT: the flow it starts acts for the same person
+        # because of the same producer's fact.
+        carried = tickets.union(tickets.of(refs), inherited)
+        if carried:
+            out[tickets.REFS_KEY] = carried
+        return emit(event_type, source_id, out)
     return _emit
+
+
+def _grant_of(db: DB, flow) -> list:
+    """A PERSON'S FLOW PRESENTS ITS ROUTINE GRANT on every run — schedule, keyed or event fired:
+    the grant the person's own session (or agent-api for it) issued when they turned the routine
+    on, stored with the flow version (`flow_version.subject_grant`). Read per run, so a grant
+    renewed on resume is the one presented. The instance's flows have none."""
+    if not getattr(flow, "owner", ""):
+        return []
+    try:
+        rows = db.execute("SELECT subject_grant FROM flow_version WHERE scope = :sc AND name = :n "
+                          "AND version = :v", {"sc": flow.scope, "n": flow.name, "v": flow.version})
+    except Exception:  # noqa: BLE001 — a store without the table (a bare test double) holds none
+        return []
+    return [str(rows[0][0])] if rows and rows[0][0] else []
 
 
 def _not_present(db: DB, r: Reaction, clock: Clock, key: str, out: NotPresent) -> None:

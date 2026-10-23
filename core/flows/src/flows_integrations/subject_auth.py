@@ -214,11 +214,64 @@ def _validate(base: str, token: str, key: str):
     `flows_steps.common.http` rather than httpx: flows has no httpx at runtime and reaches every
     service over urllib — declaring a wheel for one POST would make this module the reason the
     image grows.
+
+    THE DOOR'S TICKET. On a credential it validated, the service door answers a short `gateway`
+    subject ticket for that person (`X-Vexa-Subject-Ticket` on the response, subject-ticket.v1);
+    it joins this request's presented tickets (`flows.tickets`), so the door calls flows-api makes
+    for the person during this request carry it.
     """
+    from flows import tickets
     from flows_steps.common import http
     from flows_steps.common import SERVICE_KEY_HEADER
+    from flows_steps.subject_ticket import HEADER, split
     headers = {SERVICE_KEY_HEADER: key, ACCEPTS_DELEGATION_HEADER: ACCEPTS_DELEGATION_VALUE}
-    return http("POST", f"{base}{VALIDATE_PATH}", headers, {"token": token}, timeout=TIMEOUT_S)
+    answered: dict = {}
+    code, body = http("POST", f"{base}{VALIDATE_PATH}", headers, {"token": token},
+                      timeout=TIMEOUT_S, response_headers=answered)
+    if int(code or 0) == 200:
+        tickets.add(split(answered.get(HEADER.lower())))
+    return code, body
+
+
+#: The header flows-api sends on the validate hop to ask the door for a ROUTINE GRANT
+#: (`user:<uid>/<name>`), and the response header the door answers it in — a `gateway` grant,
+#: issued only for a session credential (subject-ticket.v1).
+GRANT_REQUEST_HEADER = "X-Vexa-Ticket-Grant"
+GRANT_HEADER = "X-Vexa-Subject-Grant"
+
+
+def _request_grant(base: str, token: str, key: str, routine: str) -> str:
+    """The door's routine grant for `routine` (`user:<uid>/<name>`) on this credential, or "".
+    The same validate hop, asking for a grant; alone in a function so a test replaces exactly it."""
+    from flows_steps.common import http
+    from flows_steps.common import SERVICE_KEY_HEADER
+    headers = {SERVICE_KEY_HEADER: key, ACCEPTS_DELEGATION_HEADER: ACCEPTS_DELEGATION_VALUE,
+               GRANT_REQUEST_HEADER: routine}
+    answered: dict = {}
+    code, _body = http("POST", f"{base}{VALIDATE_PATH}", headers, {"token": token},
+                       timeout=TIMEOUT_S, response_headers=answered)
+    grant = str(answered.get(GRANT_HEADER.lower()) or "").strip()
+    return grant if int(code or 0) == 200 else ""
+
+
+def routine_grant(token: str, routine: str, *, secret: str = "") -> str:
+    """A `gateway` routine grant for the person whose session `token` is, for `routine`
+    (`user:<uid>/<name>`) — or "" when the door issues none (not a session, identity down, a door
+    that issues no grants). Never raises: arming does not fail for want of a grant; the routine's
+    bound calls are refused at the door instead, and say so."""
+    token = str(token or "").strip()
+    if not token or not routine:
+        return ""
+    try:
+        if not secret:
+            from flows_steps.common import require_service_key
+            secret = require_service_key()
+        base = flows_config.require("VEXA_FLOWS_ADMIN_API_URL").rstrip("/")
+        return _request_grant(base, token, secret, routine)
+    except Exception as e:  # noqa: BLE001 — named, never fatal
+        flows_obs.log_event("routine_grant_unavailable", level="warning",
+                            fields={"routine": routine, "error": type(e).__name__})
+        return ""
 
 
 def _delegation_of(token: str, body: Mapping) -> Optional[dict]:

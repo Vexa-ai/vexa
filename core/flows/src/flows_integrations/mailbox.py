@@ -44,6 +44,7 @@ from flows import Registry, SystemClock, admit, postgres_db
 from flows_defs import production
 from flows_integrations import mail_policy, outlook
 from flows_integrations import mailbox_status
+from flows_integrations import mail_tickets
 from flows_integrations.inbox import get_inbox
 from flows_steps.common import db_url
 from flows_steps.mail_transport import MailTransportError
@@ -358,6 +359,16 @@ def workspace_invite(ics: str) -> dict:
     return {}
 
 
+def _uid_or_blank(known_uid, address: str) -> str:
+    """The platform id `known_uid` answers for `address`, or "" — never raises (a ticket for an
+    organizer who is not a user yet names their address alone)."""
+    try:
+        uid = known_uid(address)
+    except Exception:  # noqa: BLE001
+        return ""
+    return str(uid) if uid not in (None, "") else ""
+
+
 def _addr(frm: str) -> str:
     """The bare, lower-cased address of a `From:` value (`Name <a@b>` or `a@b`)."""
     from email.utils import parseaddr
@@ -469,6 +480,39 @@ def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
                    f"({', '.join(sorted(allowed)) or 'empty'})"
                    + (f"; its In-Reply-To named thread {ref} it is not a participant of"
                       if forged else ""))})
+
+
+_GMEET_CODE = re.compile(r"^[a-z]{3}-[a-z]{4}-[a-z]{3}$")
+_ZOOM_ID = re.compile(r"\d{9,11}")
+
+
+def invite_native(url: str) -> tuple[str, str]:
+    """(platform, native_meeting_id) of an invite's meeting link, or ("", "") — the pair meeting-api
+    files the meeting under, so a mail ticket's `native` names the meeting the bot is sent to.
+
+    A local read of meeting-api's canonical parser
+    (`core/meetings/services/meeting-api/src/meeting_api/collector/meeting_link.py`
+    :func:`parse_meeting_url`) for the four links this intake extracts (`_meeting_url`); flows stays
+    import-free of the services. If the two ever disagree, that file wins."""
+    import urllib.parse as _u
+    value = (url or "").strip()
+    parsed = _u.urlparse(value)
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return ("", "")
+    if host == "meet.google.com":
+        code = next((p for p in reversed(parsed.path.split("/")) if p), "").lower()
+        return ("google_meet", code) if _GMEET_CODE.match(code) else ("", "")
+    if "zoom" in host:
+        m = _ZOOM_ID.search(parsed.path) or _ZOOM_ID.search(parsed.query)
+        return ("zoom", m.group(0)) if m else ("", "")
+    teams = outlook.teams_native_id(value)
+    if teams:
+        return teams
+    if host in _JITSI_HOSTS:
+        room = parsed.path.strip("/")
+        return ("jitsi", room) if room and "/" not in room else ("", "")
+    return ("", "")
 
 
 def invite_source_id(ev: dict) -> str:
@@ -662,8 +706,15 @@ def handle(db, reg, clock, self_addr: str, msg, known_uid, is_scaffolded,
             facts=payload, at=now)
         return ("invite_policy_off", 0)
     if kind == "invite":
-        n = admit(db, reg, clock, source_event_id=invite_source_id(payload),
-                  event_type="invite.received", subject_refs=payload)
+        # THE MAIL ISSUER VOUCHES FOR THE INVITE (subject-ticket.v1) — after route() authenticated
+        # its organizer and placed them; the ticket is what lets flows act for them at the door.
+        sid = invite_source_id(payload)
+        ticket = mail_tickets.invite_ticket(payload, evt=sid, sub=_uid_or_blank(known_uid,
+                                                                                payload["organizer"]),
+                                            now=now)
+        n = admit(db, reg, clock, source_event_id=sid,
+                  event_type="invite.received",
+                  subject_refs=mail_tickets.carrying(payload, ticket))
         return ("invite", n)
     if kind == "invite_cancel":
         n = admit(db, reg, clock,
@@ -703,10 +754,12 @@ def handle(db, reg, clock, self_addr: str, msg, known_uid, is_scaffolded,
         return ("rate_limited", 0)
     if kind == "new_sender_mail":
         payload["uid"] = provision(msg.frm)
-    n = admit(db, reg, clock,
-              source_event_id=f"mail-{msg.message_id or msg.ext_id}",
-              event_type="mail.reply",
-              subject_refs=reply_refs(payload["uid"], payload["session"], msg))
+    sid = f"mail-{msg.message_id or msg.ext_id}"
+    ticket = mail_tickets.reply_ticket(uid=str(payload["uid"]), addr=_addr(msg.frm), evt=sid,
+                                       now=now)
+    n = admit(db, reg, clock, source_event_id=sid, event_type="mail.reply",
+              subject_refs=mail_tickets.carrying(reply_refs(payload["uid"], payload["session"], msg),
+                                                 ticket))
     if n:
         mail_policy.record_turn(db, ext, msg.frm, now)
     return (kind, n)

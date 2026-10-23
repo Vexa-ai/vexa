@@ -26,6 +26,7 @@ from collections import Counter
 
 from .clock import Clock
 from .db import DB, dumps, loads
+from . import tickets
 from .registry import Flow, Registry
 
 _log = logging.getLogger(__name__)
@@ -344,11 +345,20 @@ def _merge_into_admitted(db: DB, clock: Clock, *, key: str, source_event_id: str
 def _merge_refs(existing: dict, incoming: dict) -> tuple[dict, list[str]]:
     """New keys from `incoming` are added. A key already in `existing` is kept as-is UNLESS its
     value is empty (falsy) and the `incoming` value for that key is not — an empty value never
-    overwrites a non-empty one, whichever side arrived first. Returns (merged, keys_that_changed)
+    overwrites a non-empty one, whichever side arrived first. The subject tickets (`_tickets`) are
+    the exception: both deliveries' tickets are kept (union). Returns (merged, keys_that_changed)
     so the caller can skip a no-op write and record exactly what a merge added."""
     merged = dict(existing)
     changed: list[str] = []
     for k, v in incoming.items():
+        if k == tickets.REFS_KEY:
+            # A SECOND DELIVERY'S TICKETS ARE ADDED, never dropped: meeting-api's `meeting.completed`
+            # and invite_join's own emit name the same fact, and each producer signs its own.
+            both = tickets.union(tickets.of(merged), tickets.of(incoming))
+            if both != tickets.of(merged):
+                merged[k] = both
+                changed.append(k)
+            continue
         if k not in merged or (not merged[k] and v):
             if merged.get(k) != v:
                 merged[k] = v

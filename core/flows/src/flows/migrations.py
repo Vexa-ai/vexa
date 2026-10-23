@@ -27,6 +27,8 @@ ADD_COLUMNS = (
     # ADR-0050: the per-person keyed cap (a stack that ran the first cut of keyed_schedule)
     "ALTER TABLE keyed_schedule ADD COLUMN IF NOT EXISTS person TEXT NOT NULL DEFAULT ''",
     "CREATE INDEX IF NOT EXISTS keyed_person ON keyed_schedule (scope, person)",
+    # subject-ticket.v1: the routine grant a person's flow presents on every run
+    "ALTER TABLE flow_version ADD COLUMN IF NOT EXISTS subject_grant TEXT",
 )
 
 KEY_HAS_SCOPE = """SELECT COUNT(*) FROM information_schema.key_column_usage k

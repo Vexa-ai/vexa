@@ -96,6 +96,8 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Reques
 from pydantic import BaseModel, Field  # noqa: E402
 
 from flows import Registry, SystemClock, admit, cancel, db_from_url, resume, retry, wake  # noqa: E402
+from flows import tickets  # noqa: E402 — subject tickets a request presents on its door calls
+from flows_steps import subject_ticket  # noqa: E402 — subject-ticket.v1 (carried, never minted)
 from flows import fact_envelope  # noqa: E402 — event.v2: the sealed fact envelope (D8)
 from flows_integrations import fact_keys  # noqa: E402 — event.v2: the producers' public keys
 from flows.admission import strip_sealed  # noqa: E402
@@ -107,7 +109,8 @@ from flows_steps.common import (db_url, require_service_key,  # noqa: E402
                                 service_key, setting)
 from flows_integrations import friction_dedup  # noqa: E402 — the repeat counter POST /friction keeps
 from flows_integrations.subject_auth import (REFUSAL, SHARED_REFUSAL, Caller,  # noqa: E402
-                                              IdentityUnavailable, SubjectUnknown, resolve)
+                                              IdentityUnavailable, SubjectUnknown, resolve,
+                                              routine_grant)
 # ALIASED, and it is not style. The route below is also called `list_reactions`, and `def` rebinds
 # the module global — so the route was calling ITSELF, and every authenticated `GET /reactions`
 # answered 500 (`TypeError: list_reactions() got multiple values for argument 'status'`). The 401
@@ -341,6 +344,32 @@ app = FastAPI(title="flows-api", version="0.1.0",
 # THE TRACE (logevent.v1): adopt the caller's X-Trace-Id or mint one, bind it for the request, echo
 # it; `flows_steps.common.http` forwards it on every call this request makes to a Vexa service.
 app.add_middleware(flows_obs.TraceMiddleware, service="flows-api")
+
+
+class SubjectTicketMiddleware:
+    """THE TICKETS A REQUEST PRESENTS (subject-ticket.v1). Per request, `flows.tickets.current`
+    holds the tickets a caller presented in `X-Vexa-Subject-Ticket` (agent-api, calling for a
+    person) and — added by `subject_auth._validate` — the ticket the service door answers for a
+    person's own credential. Every door call the request makes sends them (`door_headers`).
+    Pure ASGI, so the list is set before any dependency or route body runs."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        presented: list = []
+        name = subject_ticket.HEADER.lower()
+        for k, v in scope.get("headers") or ():
+            if k.decode("latin-1").lower() == name:
+                presented += subject_ticket.split(v.decode("latin-1"))
+        with tickets.presenting(presented):
+            await self.app(scope, receive, send)
+
+
+app.add_middleware(SubjectTicketMiddleware)
 
 
 def _same_key(presented: str, expected: str) -> bool:
@@ -687,6 +716,10 @@ class FlowSubmission(BaseModel):
     #: deployment's admin account (its own key, or its chat's delegation); the operator key may name
     #: a person (the routine migration).
     scope: Optional[str] = None
+    #: THE ROUTINE GRANT (subject-ticket.v1, kind `grant`) the person's session issued for this
+    #: routine — sent by agent-api when it activates one for the person. Stored with the version and
+    #: presented on every run; never read from `params`.
+    grant: Optional[str] = Field(default=None, max_length=subject_ticket.MAX_TOKEN_BYTES)
 
 
 #: Typed refusals a submission can meet (ADR-0046 decisions 5, 6, 9). Each is a `detail.refused`.
@@ -1099,7 +1132,9 @@ def _check_user_flow(scope: str, sub: FlowSubmission, cron: Optional[str], *,
 
 @app.post("/flows", status_code=201)
 def submit_flow(sub: FlowSubmission, x_actor: str = Header(default="api"),
-                caller: Caller = Depends(subject_or_operator)):
+                x_vexa_subject_grant: str = Header(default=""),
+                caller: Caller = Depends(subject_or_operator),
+                request: Request = None):  # noqa: RUF013 — FastAPI injects it
     """Author a new version of a flow: a trigger — an event to react to, or a schedule — and the
     ordered steps to run. A routine is a flow of your own with a schedule and the `agent_run` step.
 
@@ -1175,12 +1210,15 @@ def submit_flow(sub: FlowSubmission, x_actor: str = Header(default="api"),
     # routine that runs every day as its owner.
     status = "active" if (sub.activate and not proposed) else "draft"
     by = x_actor if caller.is_admin else (caller.email or f"user:{caller.uid}")
+    presented = sub.grant or (x_vexa_subject_grant if isinstance(x_vexa_subject_grant, str) else "")
+    grant = (_arming_grant(caller, request, scope, sub.name, presented)
+             if status == "active" and scope != "instance" else "")
     db.execute("""INSERT INTO flow_version (scope, name, version, on_event, cron, steps, params,
-                                            status, created_by, created_at)
-                  VALUES (:sc,:n,:v,:e,:c,:s,:p,:st,:by,:t)""",
+                                            status, created_by, created_at, subject_grant)
+                  VALUES (:sc,:n,:v,:e,:c,:s,:p,:st,:by,:t,:g)""",
                {"sc": scope, "n": sub.name, "v": version, "e": on_event, "c": cron,
                 "s": json.dumps(sub.steps), "p": json.dumps(sub.params), "st": status,
-                "by": by, "t": clock.now()})
+                "by": by, "t": clock.now(), "g": grant or None})
     if status == "active":
         _supersede(scope, sub.name, version)
     if granted:
@@ -1320,6 +1358,10 @@ def admit_event(ev: EventSubmission, x_actor: str = Header(default=""),
     # whose seal verifies over THIS fact — its type, its id and its refs exactly as posted — and has
     # not expired. One that does not verify is refused, never admitted as if unsigned (P18).
     refs = {**strip_sealed(ev.refs), "admitted_by": actor}
+    # A TICKET THE PRODUCER PRESENTED IN THE HEADER rides the fact like one in its refs.
+    carried = tickets.union(tickets.of(refs), tickets.presented())
+    if carried:
+        refs[tickets.REFS_KEY] = carried
     sealed = None
     if ev.envelope is not None:
         producers = frozenset({producer}) if producer else ENVELOPE_PRODUCERS
@@ -1525,9 +1567,48 @@ def _require_session_to_arm(caller: Caller, target: str) -> None:
         raise HTTPException(status_code=403, detail=SESSION_REFUSAL)
 
 
+class Arming(BaseModel):
+    #: THE ROUTINE GRANT for a resumed or activated routine (see `FlowSubmission.grant`).
+    grant: Optional[str] = Field(default=None, max_length=subject_ticket.MAX_TOKEN_BYTES)
+
+
+def _grant_value(raw: Optional[str]) -> str:
+    """A grant as presented, or 400: one `st1.` token. Flows cannot verify it (it holds no
+    producer's key) — the door does, on every call the routine makes."""
+    g = str(raw or "").strip()
+    if not g:
+        return ""
+    if (not g.startswith(subject_ticket.VERSION + ".") or "," in g
+            or len(g) > subject_ticket.MAX_TOKEN_BYTES):
+        _refuse(400, "bad_grant", note="grant is one subject-ticket.v1 token (st1.…)")
+    return g
+
+
+def _arming_grant(caller: Caller, request: Optional[Request], scope: str, name: str,
+                  presented: Optional[str]) -> str:
+    """THE GRANT A PERSON'S ROUTINE RUNS ON, at the moment it is armed: the one the caller
+    presented (agent-api, for the person's session), else — when the person's own session arms it
+    here — one the service door issues for that session. "" when neither exists; the routine is
+    armed and its bound calls are refused at the door until a grant is presented."""
+    given = _grant_value(presented)
+    if given:
+        return given
+    if not caller.is_session or request is None:
+        return ""
+    token = _bearer(request.headers.get("authorization", ""), request.headers.get("x-api-key", ""))
+    grant = _grant_value(routine_grant(token, f"{scope}/{name}", secret=DOOR_KEY))
+    flows_obs.log_event("routine_grant_issued" if grant else "routine_grant_missing",
+                        level="info" if grant else "warning",
+                        fields={"flow": f"{scope}/{name}"})
+    return grant
+
+
 @app.post("/flows/{name}/{version}/{action}")
 def set_flow_status(name: str, version: int, action: str, scope: str = "",
-                    caller: Caller = Depends(subject_or_operator)):
+                    body: Optional[Arming] = Body(default=None),
+                    x_vexa_subject_grant: str = Header(default=""),
+                    caller: Caller = Depends(subject_or_operator),
+                    request: Request = None):  # noqa: RUF013 — FastAPI injects it
     """Activate, pause, resume or retire ONE version of a flow, addressed by name and version.
 
     `action` is `activate`, `retire`, `pause` (the same as retire) or `resume` (the same as
@@ -1562,6 +1643,12 @@ def set_flow_status(name: str, version: int, action: str, scope: str = "",
         rows = _supersede(target, name, version)
         if rows:
             _clear_pause(target, name, version)
+            grant = ("" if target == "instance" else
+                     _arming_grant(caller, request, target, name,
+                                   (body.grant if body else None) or x_vexa_subject_grant))
+            if grant:
+                db.execute("UPDATE flow_version SET subject_grant=:g WHERE scope=:sc AND name=:n "
+                           "AND version=:v", {"g": grant, "sc": target, "n": name, "v": version})
     else:
         rows = db.execute("UPDATE flow_version SET status=:s WHERE scope=:sc AND name=:n "
                           "AND version=:v RETURNING name", {"s": st, "sc": target, "n": name,
@@ -1702,7 +1789,8 @@ class TriggerAdd(BaseModel):
 
 @app.post("/routines/triggers", status_code=201)
 def add_routine_trigger(body: TriggerAdd, x_actor: str = Header(default="api"),
-                        caller: Caller = Depends(subject_or_operator)):
+                        caller: Caller = Depends(subject_or_operator),
+                        request: Request = None):  # noqa: RUF013 — FastAPI injects it
     """GIVE A CHAT ANOTHER TIMER — one more routine it owns (a schedule; an event-triggered agent is a
     different thing, not made here). A chat is a standing concern (production monitoring, a
     pipeline): each wake is a turn in it with its history as memory. Same checks as `POST /flows`
@@ -1713,7 +1801,8 @@ def add_routine_trigger(body: TriggerAdd, x_actor: str = Header(default="api"),
             "note": "a routine runs on a schedule; an event-triggered agent is not a routine"})
     made = submit_flow(FlowSubmission(name=body.name, trigger=body.trigger, steps=["agent_run"],
                                       params={"instruction": body.instruction, "thread": body.thread}),
-                       x_actor=x_actor, caller=caller)
+                       x_actor=x_actor, x_vexa_subject_grant="", caller=caller,
+                       request=request)
     facts = _routine_facts(made["scope"], made["name"])
     if made.get("awaiting_approval"):
         # proposed by an agent turn (D24): nothing wakes until the person turns it on
@@ -1779,7 +1868,8 @@ class Subscribe(BaseModel):
 
 @app.post("/sinks", status_code=201)
 def chat_subscribe(body: Subscribe, x_actor: str = Header(default="api"),
-                   caller: Caller = Depends(subject_or_operator)):
+                   caller: Caller = Depends(subject_or_operator),
+                   request: Request = None):  # noqa: RUF013 — FastAPI injects it
     """SUBSCRIBE A CHAT TO AN EVENT STREAM — a sink. Every matching event lands in the chat as one
     compact card (no agent run, never counted as one; capped per chat per hour). The chat's agent
     wakes only as `wake` says: never (a pure log), per_event, batch:<minutes>, match:<text>. This
@@ -1789,7 +1879,8 @@ def chat_subscribe(body: Subscribe, x_actor: str = Header(default="api"),
                                       params={"thread": body.thread, "filter": body.filter,
                                               "wake": body.wake, **({"instruction": body.instruction}
                                                                     if body.instruction else {})}),
-                       x_actor=x_actor, caller=caller)
+                       x_actor=x_actor, x_vexa_subject_grant="", caller=caller,
+                       request=request)
     return {**_routine_facts(made["scope"], made["name"]), "kind": "sink", "filter": body.filter,
             "wake": body.wake}
 
@@ -1880,7 +1971,8 @@ def sensor_test(name: str, scope: str = "", caller: Caller = Depends(subject_or_
 
 @app.post("/sensors/{name}/connect")
 def sensor_connect(name: str, body: SensorConnect, scope: str = "",
-                   caller: Caller = Depends(subject_or_operator)):
+                   caller: Caller = Depends(subject_or_operator),
+                   request: Request = None):  # noqa: RUF013 — FastAPI injects it
     """Connect a sensor's events to a chat (this one: `thread` is the id your turn states): each event
     lands there as one card, and the chat's agent wakes as `wake` says (per_event · batch:<minutes> ·
     match:<text> · never) with `instruction`. The chat's agent then proposes; it does not act alone."""
@@ -1894,7 +1986,7 @@ def sensor_connect(name: str, body: SensorConnect, scope: str = "",
     made = chat_subscribe(Subscribe(thread=body.thread, name=f"sensor-{name}"[:80], event=event,
                                     filter={"_sensor": f"{sc}/{name}"}, wake=body.wake,
                                     instruction=body.instruction),
-                          caller=caller)
+                          caller=caller, request=request)
     return {"sensor": _sensor_view(sc, name), "connected": made}
 
 

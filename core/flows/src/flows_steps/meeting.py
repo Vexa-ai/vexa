@@ -255,7 +255,7 @@ def transcript_text(uid: str, meeting_id) -> str | None:
     return "\n".join(str(g.get("text") or "") for g in segs)
 
 
-def transcript_segment_count(uid: str, meeting_id) -> int | None:
+def transcript_segment_count(uid: str, meeting_id, tickets=None) -> int | None:
     """HOW MANY SEGMENTS this meeting captured — or **None** when it could not be read at all.
 
     The same read `transcript_text` does, through the same owning-service endpoint, answering the
@@ -266,10 +266,14 @@ def transcript_segment_count(uid: str, meeting_id) -> int | None:
 
     THE THREE ANSWERS ARE THREE: `None` unreadable, `0` a meeting that captured nothing, `n` a
     meeting that did. A caller deciding *has this person seen Vexa work yet* must not read a
-    gateway restart as a person who never tried."""
+    gateway restart as a person who never tried.
+
+    `tickets` are the subject tickets of the fact that names this meeting when it is not the
+    running reaction's own (a `meeting.completed` read from another reaction's row): the door
+    reads a transcript only for a ticket that names this meeting."""
     try:
         _st, body = http("GET", f"{meetings_door()}/transcripts/by-id/{meeting_id}",
-                         door_headers(str(uid)))
+                         door_headers(str(uid), tickets=tickets))
     except StepError:
         return None
     if not isinstance(body, dict) or "segments" not in body:

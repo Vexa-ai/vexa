@@ -23,6 +23,8 @@ What a tick does — no model, ever:
   * THE WORKSPACE: an invite whose text carries this deployment's workspace invite link
     (`<VEXA_UI_URL>/join/<token>`) names that workspace; the token is resolved by the producer of
     the link (`workspace_invite_token`), never trusted here.
+  * VOUCHES for what it emits on a live sensor: an invite and a reply carry a `mail` subject ticket
+    (`flows_integrations.mail_tickets`), so the door calls they cause can act for that person.
   * FIRST READ (no cursor — a new sensor, or `sensor_test`): the newest messages are read and only
     invitations to meetings that have not started yet are kept; the cursor anchors at the tail. A
     reply from before the sensor existed is history, never a new agent turn.
@@ -134,9 +136,9 @@ class MailboxSensor(SensorKind):
         return Tick(changes=changes, cursor=new_cursor)
 
     def _judge(self, db, rules: dict, self_addr: str, msg, *, first: bool, live: bool):
-        from flows_integrations import mail_policy
+        from flows_integrations import mail_policy, mail_tickets
         from flows_integrations.mail_sensor import KEEP_INVITE, KEEP_REPLY, classify
-        from flows_integrations.mailbox import reply_refs, route
+        from flows_integrations.mailbox import _addr, _uid_or_blank, reply_refs, route
         kept, _why = classify(db, msg, "vexa")
         if kept is None:
             return None                                      # dropped at the edge, no trace
@@ -174,6 +176,11 @@ class MailboxSensor(SensorKind):
                     **{k: payload[k] for k in ("workspace_invite_link", "workspace_invite_token",
                                                "ics_uid", "occurrence", "share_opt_out", "group",
                                                "participant_names") if payload.get(k)}}
+            if live:
+                # THE MAIL ISSUER VOUCHES FOR THE INVITE route() authenticated (subject-ticket.v1).
+                refs = mail_tickets.carrying(refs, mail_tickets.invite_ticket(
+                    payload, evt=f"{key}:{seq}", sub=_uid_or_blank(self._who, payload["organizer"]),
+                    now=self._clock()))
             return Change("invite.received", f"{key}:{seq}", refs)
         if kind == "invite_quarantine":
             if live:
@@ -189,8 +196,12 @@ class MailboxSensor(SensorKind):
                                            reason=limited, facts={"subject": msg.subject})
                     return None
                 mail_policy.record_turn(db, ext, msg.frm)
-            return Change("mail.reply", f"mail-{ext}",
-                          reply_refs(payload["uid"], payload["session"], msg))
+            refs = reply_refs(payload["uid"], payload["session"], msg)
+            if live:
+                refs = mail_tickets.carrying(refs, mail_tickets.reply_ticket(
+                    uid=str(payload["uid"]), addr=_addr(msg.frm), evt=f"mail-{ext}",
+                    now=self._clock()))
+            return Change("mail.reply", f"mail-{ext}", refs)
         if kind == "quarantine" and live:
             mail_policy.quarantine(db, ext_id=ext, frm=msg.frm, kind=payload["kind"],
                                    reason=payload["reason"], facts={"subject": msg.subject})

@@ -207,6 +207,11 @@ class FlowVersion(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
     created_by: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    #: THE ROUTINE GRANT a person's flow presents on every run (subject-ticket.v1, kind `grant`):
+    #: issued when the person turned it on — by agent-api for their session, or by the gateway for
+    #: a session that armed it through flows-api. Written only by flows-api's arming routes, never
+    #: from a submission's params.
+    subject_grant: Mapped[str | None] = mapped_column(Text)
     __table_args__ = (CheckConstraint("status IN ('draft','active','retired')", name="flow_status"),)
 
 

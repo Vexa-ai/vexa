@@ -19,6 +19,8 @@ import flows_obs
 # out of this module's import graph for every caller that only wants `http` or a door.
 from flows import StepError
 
+from . import subject_ticket
+
 #: The agent domain's door, or "" when the agent domain is not deployed (PRD decision 40.7). Read
 #: through the contract, which declares it a CAPABILITY rather than a defaulted URL — see
 #: `flows_config`'s DOORS block for why a host-port default is a correctness bug and not a
@@ -194,14 +196,44 @@ def require_service_key() -> str:
     return key
 
 
-def door_headers(uid=None) -> dict:
-    """The headers of one call through the service door: the flows key, and the SUBJECT the call
-    acts for when it acts for one. The subject is the only identity fact flows can name — the door
-    drops every other `x-user-*` — and the door decides which routes it may be named on."""
+def door_headers(uid=None, tickets=None) -> dict:
+    """The headers of one call through the service door: the flows key, the SUBJECT the call acts
+    for when it acts for one, and the SUBJECT TICKETS that say why flows may act for them.
+
+    The subject is the only identity fact flows can name — the door drops every other `x-user-*` —
+    and the door decides which routes it may be named on. On a route bound to a person's event or
+    grant (`subject-ticket.v1`) it also needs a ticket a producer signed for that person; flows
+    holds no producer's key and only carries them: the running step's reaction's tickets and its
+    flow's routine grant (`flows.tickets.current`, set by the engine per step and by flows-api per
+    request), plus any the caller passes for a fact it reads beyond its own reaction."""
+    from flows import tickets as _tickets
     h = {SERVICE_KEY_HEADER: require_service_key()}
     if uid not in (None, ""):
         h["X-User-Id"] = str(uid)
+    presented = subject_ticket.join(_tickets.union(_tickets.presented(), tickets))
+    if presented:
+        h[subject_ticket.HEADER] = presented
     return h
+
+
+#: The door's refusals of a call bound to a person's event or grant (subject-ticket.v1). The first
+#: two are RETRYABLE: the producer delivery that carries the ticket can merge into the reaction
+#: moments after the step first ran (meeting-api's `meeting.completed` racing invite_join's own).
+#: A ticket already spent on a once-only call is final.
+TICKET_RETRYABLE = frozenset({"subject_ticket_required", "subject_ticket_refused"})
+TICKET_FINAL = frozenset({"ticket_replayed"})
+
+
+def _ticket_refusal(method: str, url: str, code, body) -> None:
+    """Raise the typed StepError for a door's subject-ticket refusal; anything else passes."""
+    if code != 403 or not isinstance(body, dict):
+        return
+    reason = str(body.get("reason") or "")
+    if reason not in TICKET_RETRYABLE and reason not in TICKET_FINAL:
+        return
+    from urllib.parse import urlsplit
+    raise StepError(f"door refused {method} {urlsplit(url).path}: {reason}"[:400],
+                    retryable=reason in TICKET_RETRYABLE)
 
 
 
@@ -345,7 +377,11 @@ def swallowed(source: str, kind: str, exc: BaseException | None = None, **facts)
     print(f"warning: swallowed source={source} kind={kind!r}{tail}{detail}"[:600], flush=True)
 
 
-def http(method: str, url: str, headers: dict, body: dict | None = None, timeout: float = 20):
+def http(method: str, url: str, headers: dict, body: dict | None = None, timeout: float = 20,
+         response_headers: Optional[dict] = None):
+    """One call to a Vexa service: `(status, body)`. A door refusal for a missing or refused subject
+    ticket raises a retryable StepError, a replayed one a final StepError (`_ticket_refusal`).
+    `response_headers`, when given a dict, receives the answer's headers (lower-cased names)."""
     req = urllib.request.Request(url, method=method,
                                  data=json.dumps(body).encode() if body is not None else None)
     # THE TRACE TRAVELS ON EVERY HOP THROUGH HERE (logevent.v1). This is the one door to Vexa
@@ -357,10 +393,17 @@ def http(method: str, url: str, headers: dict, body: dict | None = None, timeout
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             raw = r.read().decode()
+            if response_headers is not None:
+                response_headers.update({k.lower(): v for k, v in
+                                         (getattr(r, "headers", None) or {}).items()})
             return r.status, (json.loads(raw) if raw.strip().startswith(("{", "[")) else raw)
     except urllib.error.HTTPError as e:
         raw = e.read().decode()
-        return e.code, (json.loads(raw) if raw.strip().startswith(("{", "[")) else raw)
+        if response_headers is not None and e.headers is not None:
+            response_headers.update({k.lower(): v for k, v in e.headers.items()})
+        answer = json.loads(raw) if raw.strip().startswith(("{", "[")) else raw
+        _ticket_refusal(method, url, e.code, answer)
+        return e.code, answer
     except Exception as e:  # noqa: BLE001 — steps turn this into a typed retry
         from flows import StepError
         # The reason column is the only thing anyone reads when a reaction is stuck, so it has to

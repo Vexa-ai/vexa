@@ -556,7 +556,7 @@ def test_flows_declares_to_identity_that_it_reads_a_delegation(monkeypatch):
     gateway's service door."""
     import flows_steps.common as common
     seen = []
-    monkeypatch.setattr(common, "http", lambda method, url, headers, body=None, timeout=20:
+    monkeypatch.setattr(common, "http", lambda method, url, headers, body=None, timeout=20, **_:
                         seen.append((method, url, headers, body)) or (200, {}))
     subject_auth._validate("http://admin-api:8001", "vxd_tok", "the-secret")
     (method, url, headers, body), = seen

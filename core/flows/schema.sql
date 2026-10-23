@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS flow_version (
 	status TEXT NOT NULL, 
 	created_by TEXT, 
 	created_at DOUBLE PRECISION NOT NULL, 
+	subject_grant TEXT, 
 	PRIMARY KEY (scope, name, version), 
 	CONSTRAINT flow_status CHECK (status IN ('draft','active','retired'))
 );

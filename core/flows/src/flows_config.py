@@ -115,6 +115,14 @@ DECLARED: dict[str, tuple[str, object, str]] = {
     "VEXA_FLOWS_SENSORS_KEY_FILE": ("capability", None,
                                     "the broker's sensors-role key file (ADR-0050); the broker holds "
                                     "the same file. UNSET: no sensor reads a connection."),
+    "VEXA_FLOWS_MAIL_TICKET_KEY_FILE": ("capability", None,
+                                       "the mail issuer's private key (PKCS#8 PEM, Ed25519) for "
+                                       "subject-ticket.v1: the mail intake and the worker's mailbox "
+                                       "sensor sign the tickets an authenticated invite or reply "
+                                       "carries; the gateway's service door holds its public half "
+                                       "(mail.pem). Read through `mail_tickets.KEY_FILE_ENV`. "
+                                       "UNSET: mail facts carry no ticket and the door refuses the "
+                                       "calls they would have opened."),
     "VEXA_FLOWS_AGENT_API_URL": ("capability", None,
                                  "agent-api's internal tier. UNSET MEANS THE AGENT DOMAIN IS NOT "
                                  "DEPLOYED — see flows_steps.common.domain_present."),

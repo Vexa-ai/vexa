@@ -55,7 +55,7 @@ import sys as _sys
 import time
 from pathlib import Path
 
-from flows import Done, NotPresent, Registry, StepCtx, StepError, Wait, EventType
+from flows import Done, NotPresent, Registry, StepCtx, StepError, Wait, EventType, tickets
 
 from flows_steps import agent as ag
 from flows_steps import emailx as mx          # thread bookkeeping + the iMIP calendar reply only
@@ -3061,7 +3061,7 @@ def build(reg: Registry, db) -> None:
             mid = str(refs.get("meeting_id") or "").strip()
             if not mid or mid in seen:
                 continue
-            n = mt.transcript_segment_count(uid, mid)
+            n = mt.transcript_segment_count(uid, mid, tickets=tickets.of(refs))
             if n is None:
                 continue                      # unreadable — ask again next tick, do not decide
             if n > 0:
