@@ -28,7 +28,7 @@ vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
 }));
 
-import { oidcConfig, pemCertificates, signinConfigStartupError, signinMethods } from "../oidcConfig.mjs";
+import { oidcConfig, pemCertificates, signinConfigStartupError, signinMethods, signinSchemeStartupWarning } from "../oidcConfig.mjs";
 import { oidcDisplayName, oidcSubject, verifiedProviderIdentity } from "../providerIdentity";
 import { SIGNIN_ERROR_NOT_ALLOWED, SIGNIN_ERROR_UNVERIFIED } from "../../../signinRefusal";
 import { providersFrom } from "../../../AuthGate";
@@ -117,6 +117,17 @@ describe("the configuration", () => {
     expect(oidcConfig({ ...BASE_ENV, VEXA_OIDC_CA_FILE: join(dir, "ok.pem") })).toMatchObject({ enabled: true, ca: [CERT.trim(), CERT.trim()] });
     expect(signinConfigStartupError({ ...BASE_ENV, VEXA_OIDC_CA_FILE: join(dir, "empty.pem") })).toMatch(/no PEM certificate/);
     expect(pemCertificates(undefined)).toEqual([]);
+  });
+
+  it("warns at start when a production terminal's public URL is plain http on a non-loopback host", () => {
+    const prod = { NODE_ENV: "production" };
+    expect(signinSchemeStartupWarning({ ...prod, NEXTAUTH_URL: "http://vexa.bank.example" })).toMatch(/csrf=true/);
+    expect(signinSchemeStartupWarning({ ...prod, NEXTAUTH_URL: "http://10.0.0.5:3000/" })).toMatch(/http:\/\/10\.0\.0\.5:3000/);
+    expect(signinSchemeStartupWarning({ ...prod, NEXTAUTH_URL: "https://vexa.bank.example" })).toBeNull();
+    expect(signinSchemeStartupWarning({ ...prod, NEXTAUTH_URL: "http://localhost:3000" })).toBeNull();
+    expect(signinSchemeStartupWarning({ ...prod, NEXTAUTH_URL: "http://127.0.0.1:3000" })).toBeNull();
+    expect(signinSchemeStartupWarning({ ...prod })).toBeNull();
+    expect(signinSchemeStartupWarning({ NODE_ENV: "development", NEXTAUTH_URL: "http://vexa.bank.example" })).toBeNull();
   });
 
   it("VEXA_SIGNIN_METHODS: unset offers everything; unknown or empty entries refuse to start; oidc needs an issuer", () => {

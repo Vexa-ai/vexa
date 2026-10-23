@@ -24,7 +24,7 @@ import nextEnv from "@next/env";
 import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
 import { authSecretStartupError } from "./src/app/api/auth/authSecret.mjs";
-import { signinConfigStartupError } from "./src/app/api/auth/oidcConfig.mjs";
+import { signinConfigStartupError, signinSchemeStartupWarning } from "./src/app/api/auth/oidcConfig.mjs";
 import { stampClientAddress, trustedProxies } from "./src/app/api/auth/clientAddress.mjs";
 import { isImageOptimizerPath, refuseImageOptimizer } from "./src/app/api/imageOptimizer.mjs";
 import { applyFallbackPolicy } from "./src/app/api/responsePolicy.mjs";
@@ -53,6 +53,8 @@ if (signinError) {
   console.error(`[terminal] refusing to start: ${signinError}`);
   process.exit(1);
 }
+const schemeWarning = signinSchemeStartupWarning(process.env);
+if (schemeWarning) console.warn(schemeWarning);
 
 // The Meeting Canvas origin (src/app/canvasOrigin.mjs): a value that cannot be served, or one with no
 // terminal origin to let frame it, is refused by name; unset, the canvas shares this origin, and the

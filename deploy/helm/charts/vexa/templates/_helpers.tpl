@@ -993,3 +993,20 @@ echo "ca-bundle: $(grep -c 'BEGIN CERTIFICATE' "$out") certificates"
     {{- toYaml ($c.resources | default (dict "requests" (dict "cpu" "10m" "memory" "16Mi") "limits" (dict "cpu" "100m" "memory" "64Mi"))) | nindent 4 }}
 {{- end -}}
 {{- end -}}
+
+{{/*
+vexa.checksum — the value of a pod template's `checksum/<name>` annotation, so `helm upgrade` rolls
+the Pods when an operator changes a value they read from a chart-rendered Secret or ConfigMap (env
+from a Secret is read once, at container start). Argument: (list $root <value>...).
+
+Only operator-supplied VALUES are hashed, never rendered Secret data: a generated secret is random in
+a `helm template` render and kept by lookup across an upgrade, so hashing it would roll every Pod on
+every GitOps render, and roll nothing a real upgrade changed. Every hash mixes in
+secrets.internalApiSecret (required, 32+ bytes), so an annotation — readable by anyone who can read
+Pods — is no oracle for a short value. A Secret the operator brings (secrets.existingSecretName,
+*.existingSecret) is not the chart's to watch: roll the Pods when you change it.
+*/}}
+{{- define "vexa.checksum" -}}
+{{- $root := first . -}}
+{{- toJson (list ($root.Values.secrets.internalApiSecret | default "") (rest .)) | sha256sum -}}
+{{- end -}}

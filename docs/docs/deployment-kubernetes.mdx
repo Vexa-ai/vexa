@@ -199,7 +199,7 @@ full list of what such a render must supply is under
 
 **The chat agent's meeting tools** (send the bot, read the transcript, stop it) are deployed by
 default. The agent also needs a model that does tool calling: for a self-hosted or LiteLLM model, set
-`models.runner`, `models.llmBaseUrl` and `secrets.llmApiKey`. See
+`models.runner: openai-agent`, `models.llmBaseUrl` and, if the endpoint needs a key, `secrets.llmApiKey`. See
 [Agent tools on Kubernetes](/deployment-helm-agent-tools).
 
 `values-staging.yaml` and `values-test.yaml` show environment overlays. Chart tests
@@ -1376,6 +1376,11 @@ runtime starts, because the CA key is mounted into every workload.
 
 ### Sign-in and identity
 
+- **The Terminal needs an `https://` public URL.** A production Terminal sets every sign-in cookie
+  `Secure`, so with an `http://` `terminal.publicUrl` the browser drops them and OIDC sign-in returns
+  to `/?csrf=true` without an error. Front the Terminal with TLS (an ingress or an OpenShift edge
+  route) and set `terminal.publicUrl` to the `https://` address. The Terminal warns in its log at
+  start when the URL is `http://` on a host other than `localhost`.
 - **An OIDC provider that sends no `email_verified`.** Generic OIDC sign-in requires the ID token to
   say `email_verified: true`. ADFS, and other directories that issue no such claim, need
   `terminal.oidc.requireEmailVerified: "0"` (`VEXA_OIDC_REQUIRE_EMAIL_VERIFIED=0`); without it

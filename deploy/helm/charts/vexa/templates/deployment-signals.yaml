@@ -26,7 +26,10 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: signals
       annotations:
-        {{- toYaml .Values.global.podAnnotations | nindent 8 }}
+        checksum/secrets: {{ include "vexa.checksum" (list . .Values.secrets) }}
+        {{- with .Values.global.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       enableServiceLinks: false
       {{- if eq (include "vexa.securityContextDeliver" .) "true" }}

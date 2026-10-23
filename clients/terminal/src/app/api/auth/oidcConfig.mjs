@@ -168,3 +168,26 @@ export function signinConfigStartupError(env = process.env, readFile = readFileS
   }
   return null;
 }
+
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/** A production terminal sets every sign-in cookie Secure (authOptions `useSecureCookies`), and a
+ *  browser drops a Secure cookie an http:// page sets — except on a loopback host. So a production
+ *  terminal whose public URL is plain http on any other host loses its CSRF cookie, and every
+ *  sign-in through a provider comes back to `/?csrf=true` with nothing in the log. Front it with TLS
+ *  (an ingress or route) and set the https URL. */
+/** @param {Env} [env] @returns {string | null} */
+export function signinSchemeStartupWarning(env = process.env) {
+  if (str(env.NODE_ENV) !== "production") return null;
+  const url = str(env.NEXTAUTH_URL);
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" || LOOPBACK.has(parsed.hostname.toLowerCase())) return null;
+  return `[terminal] NEXTAUTH_URL is ${parsed.origin}, plain http: a production terminal sets its sign-in ` +
+    "cookies Secure, a browser drops them on an http page, and OIDC / Google / Microsoft sign-in fails " +
+    "silently with ?csrf=true. Serve the terminal over https (an ingress or route) and set that URL.";
+}

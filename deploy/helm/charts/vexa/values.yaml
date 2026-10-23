@@ -267,10 +267,9 @@ secrets:
   anthropicBaseUrl: ""
   claudeCodeOauthToken: ""
   # The openai-agent harness's bearer token for models.llmBaseUrl (VEXA_LLM_API_KEY) — a LiteLLM
-  # virtual key, say. It is also what tells agent-api a model credential is configured: with no key
-  # here and none of the ANTHROPIC_* / OAuth ones, every chat turn is refused before it starts, so an
-  # endpoint that needs no key still takes a placeholder value. With existingSecretName, carry
-  # VEXA_LLM_API_KEY.
+  # virtual key, say. Leave it empty for an endpoint that needs no key: with models.runner
+  # openai-agent, models.llmBaseUrl is configuration enough, and no Authorization header is sent.
+  # With existingSecretName, carry VEXA_LLM_API_KEY.
   llmApiKey: ""
 
 # ---------- Shared backing config ----------

@@ -1787,12 +1787,33 @@ def _has_custom_model_endpoint(cfg: dict) -> bool:
     return model_endpoint.has_custom_endpoint(cfg)
 
 
+def _keyless_endpoint_configured(cfg: Optional[dict], env=None) -> bool:
+    """True iff this turn runs the openai-agent harness against an endpoint the deployment names.
+
+    An OpenAI-compatible endpoint on the deployment's own network (a bank's in-house model, a vLLM
+    box) often takes no credential at all, so no ``model_inference`` key is set and none should be:
+    the endpoint IS the configuration. The turn's harness is the subject's pinned runner, else the
+    deployment's; its endpoint is ``VEXA_LLM_BASE_URL``, else ``ANTHROPIC_BASE_URL`` — read exactly as
+    ``model_proxy.route_of`` reads the route the proxy then dials, with no credential attached.
+    The operator chose that URL, so it is on the allow-list by construction
+    (``model_endpoint.allowed_patterns``)."""
+    env = os.environ if env is None else env
+    runner = str((cfg or {}).get("runner") or "").strip()
+    if runner not in units.RUNNERS:
+        runner = (env.get("VEXA_RUNNER") or "").strip() or units.DEFAULT_RUNNER
+    if runner != "openai-agent":
+        return False
+    return bool((env.get("VEXA_LLM_BASE_URL") or "").strip()
+                or (env.get("ANTHROPIC_BASE_URL") or "").strip())
+
+
 def _model_creds_error_message() -> str:
     keys = ", ".join(missing_capability_keys("model_inference"))
     return (
         "No model credentials are configured, so the agent cannot run. "
         f"Set one of {keys} in the deployment environment "
         "(deploy/compose/.env for the compose stack, then `make all`), "
+        "set VEXA_LLM_BASE_URL with VEXA_RUNNER=openai-agent for an endpoint that needs no key, "
         "or add a custom endpoint under Settings → Models."
     )
 

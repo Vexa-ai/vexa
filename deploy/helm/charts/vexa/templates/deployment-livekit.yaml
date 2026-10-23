@@ -39,6 +39,8 @@ spec:
       labels:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: livekit
+      annotations:
+        checksum/secrets: {{ include "vexa.checksum" (list . .Values.secrets.livekitApiSecret) }}
     spec:
       enableServiceLinks: false
       hostNetwork: {{ .Values.livekit.hostNetwork }}

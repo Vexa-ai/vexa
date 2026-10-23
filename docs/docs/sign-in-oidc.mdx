@@ -23,6 +23,14 @@ Hand this section to the people who run your IdP. Fill in `<terminal URL>` first
 people type to reach the Terminal (the chart's `terminal.publicUrl`), for example
 `https://vexa.example.com`.
 
+<Warning>
+The Terminal's public URL must be `https://`. A production Terminal sets its sign-in cookies
+`Secure`, and a browser drops those cookies on a plain `http://` page, so sign-in through your
+provider returns to `/?csrf=true` and nothing reaches the log. Put the Terminal behind TLS (an
+ingress or an OpenShift route) before you register the redirect URI. A Terminal started with an
+`http://` `NEXTAUTH_URL` on a host other than `localhost` warns about this in its log.
+</Warning>
+
 ### ADFS (Windows Server 2016 or later)
 
 1. **Create an application group.** AD FS Management → Application Groups → Add Application Group →
@@ -224,6 +232,7 @@ link as a fallback. A door left out is closed on the server, not only hidden:
 | The ID token has no address in the configured claim, comes from another issuer, or does not say `email_verified: true` while the check is on | Back on the card: the provider did not verify the address. The Terminal log names the reason (`[terminal-auth] oidc sign-in refused: …`). |
 | The account is bound to another identity at this issuer | Refused with the same sentence as "not admitted". |
 | The Terminal cannot reach the IdP, or does not trust its certificate (missing or wrong CA chain) | The button returns to the card with `?error=OAuthSignin` before the browser ever leaves; the Terminal log carries the TLS or network error. Check egress and `VEXA_OIDC_CA_FILE`. |
+| The Terminal's public URL is `http://` (not `localhost`) | The button goes to the IdP and back, then lands on `/?csrf=true` with no session. The Terminal log carries one start-up warning naming `NEXTAUTH_URL`. Serve the Terminal over `https://` and set that URL. |
 | The redirect URI is not registered exactly | The IdP shows its own error page (ADFS: MSIS9224 or similar) and never returns. |
 | admin-api is unreachable | New sign-ins are refused; existing sessions keep working. |
 | The issuer is set but the client id, secret or CA file is missing or unreadable, `VEXA_OIDC_REQUIRE_EMAIL_VERIFIED` is neither on nor off, or `VEXA_SIGNIN_METHODS` names an unknown door | The Terminal does not start. Its log says `refusing to start:` and names the key. |

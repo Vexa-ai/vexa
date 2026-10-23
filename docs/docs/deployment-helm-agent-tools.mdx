@@ -118,7 +118,7 @@ plain Kubernetes (`deliver: true`) both run as uid 10001.
 | Symptom | Cause | Fix |
 |---|---|---|
 | The turn ends with **Model provider · cannot call tools** (`model-provider` / `no_tool_calling`) | the endpoint or model does not do tool calling | serve the model with tool calling on (above), or choose another model under Settings → Models |
-| *"No model credentials are configured, so the agent cannot run"* | no `secrets.llmApiKey` and no other model credential | set `secrets.llmApiKey`; an endpoint that needs no key still takes a placeholder |
+| *"No model credentials are configured, so the agent cannot run"* | no `models.llmBaseUrl` with `models.runner: openai-agent`, and no model credential | set `models.runner: openai-agent` and `models.llmBaseUrl` (an endpoint that needs no key needs nothing else), or a credential such as `secrets.llmApiKey` |
 | The turn ends with **Model provider · unavailable** | the worker cannot reach the endpoint | add the endpoint to `networkPolicy.workloads.worker.extraEgress` |
 | The MCP Pod restarts a few times right after install | it asks each service for its tools at boot and refuses to start with some missing | none needed: it settles once agent-api and meeting-api are ready |
 | Chat workers stay in `ImagePullBackOff` | the worker image is not in your registry | set `runtime.agentWorkerImage` to your mirror's repository |

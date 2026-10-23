@@ -1511,7 +1511,7 @@
     "model_inference": {
       "description": "agent turns can reach a model: agent-api holds a model-provider API key (sealed per turn for the model proxy; no worker holds it, H5/W1) or the deployment's subscription is configured (the OAuth token agent-api stamps for a subscription turn, or the file the runtime mounts — read by the vendor's own CLI)",
       "mode": "any",
-      "when_unconfigured": "terminal chat / workspace turns fail at their first model call — set an ANTHROPIC_* / OPENAI_API_KEY key (with VEXA_MODEL_PROXY_URL and VEXA_MODEL_PROXY_SECRET), CLAUDE_CODE_OAUTH_TOKEN, or HOST_CLAUDE_CREDENTIALS (docker subscription mount)"
+      "when_unconfigured": "terminal chat / workspace turns fail at their first model call — set an ANTHROPIC_* / OPENAI_API_KEY key (with VEXA_MODEL_PROXY_URL and VEXA_MODEL_PROXY_SECRET), CLAUDE_CODE_OAUTH_TOKEN, or HOST_CLAUDE_CREDENTIALS (docker subscription mount). A keyless OpenAI-compatible endpoint is not a credential: with VEXA_RUNNER=openai-agent, VEXA_LLM_BASE_URL alone lets turns run while this row reads not_configured"
     },
     "connections": {
       "description": "Connections: the agent can request, list and use a person's connected accounts and services through the credential broker, without ever receiving a credential",

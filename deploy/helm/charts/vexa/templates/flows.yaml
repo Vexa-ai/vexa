@@ -152,6 +152,9 @@ spec:
       labels:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: flows-worker
+      annotations:
+        checksum/secrets: {{ include "vexa.checksum" (list . .Values.secrets) }}
+        checksum/flows: {{ include "vexa.checksum" (list . .Values.flows) }}
     spec:
       enableServiceLinks: false
       {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
@@ -316,6 +319,9 @@ spec:
       labels:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: flows-mailbox
+      annotations:
+        checksum/secrets: {{ include "vexa.checksum" (list . .Values.secrets) }}
+        checksum/flows: {{ include "vexa.checksum" (list . .Values.flows) }}
     spec:
       enableServiceLinks: false
       {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
@@ -478,6 +484,9 @@ spec:
       labels:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: flows-api
+      annotations:
+        checksum/secrets: {{ include "vexa.checksum" (list . .Values.secrets) }}
+        checksum/flows: {{ include "vexa.checksum" (list . .Values.flows) }}
     spec:
       enableServiceLinks: false
       {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}

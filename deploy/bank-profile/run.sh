@@ -272,7 +272,6 @@ cmd_install() {
       -f "$CHART/values-openshift.yaml" -f "$(bank_values)" \
       --set global.imageTag="$IMAGE_TAG" --set runtime.browserImage="vexaai/mock-bot:$IMAGE_TAG" \
       --set secrets.internalApiSecret="$(secret internal-api)" "${extra[@]}" \
-      --set secrets.llmApiKey="$(secret llm-key)" \
       --wait --timeout 15m > "$WORK/helm-$v.log" 2>&1; then
     pass "[$v] helm install (deployer)" "deployed in $(( $(date +%s) - t0 ))s as system:serviceaccount:$NS:bank-deployer"
   else

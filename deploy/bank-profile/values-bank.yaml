@@ -37,8 +37,7 @@ models:
   runner: openai-agent
   llmBaseUrl: https://model.bank-ext.svc.cluster.local/v1
   agentModel: bank-stub
-  # The model needs no key, but agent-api counts a model credential as configured only when one is
-  # set, so run.sh passes a generated placeholder as secrets.llmApiKey (values.yaml says the same).
+  # The model needs no key, so none is set: the openai-agent runner and llmBaseUrl configure it.
 
 meetingApi:
   replicaCount: 1

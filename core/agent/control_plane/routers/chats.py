@@ -35,7 +35,7 @@ from control_plane import admin_account_scope, global_layer, model_providers, sy
 from control_plane.api_shared import (
     CONTEXT_SENTINEL, GLOBAL_TARGET_NOTE,
     _chat_turn_head, _context_grounding, _has_custom_model_endpoint, _is_slug,
-    _model_creds_error_message, _record_chat_turn_head, _sse, _stream_tail_id,
+    _keyless_endpoint_configured, _model_creds_error_message, _record_chat_turn_head, _sse, _stream_tail_id,
     inbox_pending, inbox_send_now, inbox_withdraw, stop_turns, logger, turn_outcome, turns_taken_after, running_turn_from, meeting_binding, target_preamble, toolbelt_preamble,
     pinned_pages_preamble, qualify_artifact, unit_busy, workspace_focus)
 from control_plane.peer_lookups import meeting_access_check
@@ -2019,7 +2019,8 @@ def build(**d) -> APIRouter:
                 if (capability_state("model_inference") == NOT_CONFIGURED
                         and dispatcher.catalog.empty):
                     cfg = dispatcher.resolve_model_config(subject)
-                    if cfg is not None and not _has_custom_model_endpoint(cfg):
+                    if (cfg is not None and not _has_custom_model_endpoint(cfg)
+                            and not _keyless_endpoint_configured(cfg)):
                         if not stream:
                             # A SUBMISSION THAT CANNOT RUN IS REFUSED OUT LOUD. It has no stream to
                             # fold the frame into, and answering 200 would put a queued row on

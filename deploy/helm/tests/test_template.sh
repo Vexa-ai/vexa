@@ -2547,4 +2547,37 @@ SL="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set ful
   --set migrations.enabled=true --set migrations.image.repository=vexaai/vexa-admin-api)"
 tb "no Pod template takes service-link env (enableServiceLinks: false on every workload)" \
   'python3 -c "import sys,yaml; w=[d for d in yaml.safe_load_all(sys.stdin) if d and d[\"kind\"] in (\"Deployment\",\"StatefulSet\",\"DaemonSet\",\"Job\")]; bad=[d[\"metadata\"][\"name\"] for d in w if d[\"spec\"][\"template\"][\"spec\"].get(\"enableServiceLinks\") is not False]; print(len(w), bad); sys.exit(1 if bad or len(w) < 15 else 0)" <<< "$SL" >/dev/null'
+# A changed operator value in a chart-rendered Secret rolls the Pods that read it (checksum/* on the
+# pod template), and a render with the same values rolls nothing — generated secrets are random in
+# every `helm template`, so they are never hashed.
+ck() { helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" --set flows.enabled=true --set flows.mail.address=minutes@example.com \
+  --set livekit.enabled=true --set livekit.url=wss://calls.example --set dashboard.enabled=true "$@"; }
+CK_A="$(ck)"; CK_B="$(ck)"; CK_KEY="$(ck --set secrets.llmApiKey=sk-rotated)"
+CK_FLOWS="$(ck --set flows.mail.appPassword=rotated)"; CK_REDIS="$(ck --set secrets.redisPassword=0123456789abcdef0123456789abcdef-rotated)"
+CK_PY='import sys, yaml
+def ann(path):
+    out = {}
+    for d in yaml.safe_load_all(open(path)):
+        if d and d["kind"] in ("Deployment", "StatefulSet"):
+            a = d["spec"]["template"]["metadata"].get("annotations") or {}
+            out[d["metadata"]["name"]] = {k: v for k, v in a.items() if k.startswith("checksum/")}
+    return out
+mode, a, b = sys.argv[1], ann(sys.argv[2]), ann(sys.argv[3])
+moved = sorted(n for n in a if a[n] != b.get(n))
+want = set(sys.argv[4].split(",")) if len(sys.argv) > 4 and sys.argv[4] else set()
+print(mode, moved)
+if mode == "same": sys.exit(1 if moved else 0)
+sys.exit(0 if want <= set(moved) and not (set(moved) & set(sys.argv[5].split(","))) else 1)'
+ckf="$(mktemp -d)"; trap 'rm -rf "$ckf"' EXIT
+for v in A B KEY FLOWS REDIS; do eval "printf '%s\n' \"\$CK_$v\"" > "$ckf/$v.yaml"; done
+tb "the same values render the same checksums twice (generated secrets are not hashed)" \
+  'python3 -c "$CK_PY" same "$ckf/A.yaml" "$ckf/B.yaml" >/dev/null'
+tb "a changed secrets.llmApiKey rolls agent-api, runtime and terminal — not redis or the credential broker" \
+  'python3 -c "$CK_PY" moved "$ckf/A.yaml" "$ckf/KEY.yaml" vexa-vexa-agent-api,vexa-vexa-runtime,vexa-vexa-terminal vexa-vexa-redis,vexa-vexa-credential-broker >/dev/null'
+tb "a changed flows mail password rolls the three flows Deployments and not agent-api" \
+  'python3 -c "$CK_PY" moved "$ckf/A.yaml" "$ckf/FLOWS.yaml" vexa-vexa-flows-worker,vexa-vexa-flows-mailbox,vexa-vexa-flows-api vexa-vexa-agent-api >/dev/null'
+tb "a changed secrets.redisPassword rolls redis and its clients, and not livekit" \
+  'python3 -c "$CK_PY" moved "$ckf/A.yaml" "$ckf/REDIS.yaml" vexa-vexa-redis,vexa-vexa-agent-api vexa-vexa-livekit >/dev/null'
+tb "every Deployment that reads the chart Secret carries checksum/secrets" \
+  'python3 -c "import sys,yaml; ds=[d for d in yaml.safe_load_all(open(sys.argv[1])) if d and d[\"kind\"]==\"Deployment\"]; uses=[d for d in ds if \"name: vexa-vexa-secrets\" in yaml.safe_dump(d[\"spec\"][\"template\"][\"spec\"])]; bad=[d[\"metadata\"][\"name\"] for d in uses if \"checksum/secrets\" not in (d[\"spec\"][\"template\"][\"metadata\"].get(\"annotations\") or {})]; print(len(uses), bad); sys.exit(1 if bad or len(uses) < 10 else 0)" "$ckf/A.yaml" >/dev/null'
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }
