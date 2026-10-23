@@ -17,6 +17,8 @@ import json
 import time
 
 import pytest
+
+from conftest import HashedTokens
 from fastapi.testclient import TestClient
 
 from admin_api import delegation
@@ -47,7 +49,7 @@ class _Session:
     """One API key and its account; a user by id for a delegation's subject."""
 
     def __init__(self, tokens, users):
-        self._tokens, self._users = tokens, users
+        self._tokens, self._users = HashedTokens(tokens), users
 
     async def execute(self, stmt):
         params = list(stmt.compile().params.values())

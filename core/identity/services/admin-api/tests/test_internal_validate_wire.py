@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from typing import get_type_hints
 
 import pytest
+
+from conftest import HashedTokens
 from fastapi.testclient import TestClient
 
 from admin_api import delegation
@@ -43,7 +45,7 @@ class _Session:
     and a user by id (for a delegation's subject)."""
 
     def __init__(self, tokens, users):
-        self._tokens, self._users = tokens, users
+        self._tokens, self._users = HashedTokens(tokens), users
         self.commits = 0
 
     async def execute(self, stmt):

@@ -37,6 +37,7 @@ from sqlalchemy.future import select
 
 from .. import delegation as delegation_mod
 from .. import obs
+from ..key_store import token_matches
 from ..schema.models import APIToken, User
 from . import delegation_revocation as revocation
 from . import admin_account
@@ -387,7 +388,7 @@ async def validate_token(payload: ValidateRequest, request: Request,
 
     row = (await db.execute(
         select(APIToken, User).join(User, APIToken.user_id == User.id)
-        .where(APIToken.token == token)
+        .where(token_matches(APIToken, token))
     )).first()
     if not row:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=INVALID_TOKEN)

@@ -382,6 +382,35 @@ def _bound_sign_in_credentials(conn: Connection):
                     "their cookie (created_at + 30 days)", result.rowcount)
 
 
+# MIGRATION-0013 — keys are held as their SHA-256, never as their value (`key_store.py`).
+#
+# Every row that still holds a plaintext `token` gets `token_hash` (SHA-256 of the value, hex) and
+# `token_hint` (prefix + last four), and its `token` is cleared. The key itself is unchanged: a caller
+# presents the same value, identity hashes it, and the row matches. `token` loses its NOT NULL first,
+# a catalog-only change. Idempotent: it reads only rows whose `token` is set, so a second boot finds
+# none, and a row a not-yet-upgraded writer adds in plaintext is hashed on the next one. One-way:
+# nothing can restore a value from its hash.
+def _hash_api_tokens(conn: Connection):
+    from ..key_store import hash_token, token_hint  # noqa: PLC0415 — key_store imports nothing from here
+
+    inspector = inspect(conn)
+    if "api_tokens" not in set(inspector.get_table_names()):
+        return
+    cols = {c["name"]: c for c in inspector.get_columns("api_tokens")}
+    if not {"token", "token_hash", "token_hint"} <= set(cols):
+        return
+    if conn.dialect.name == "postgresql" and not cols["token"]["nullable"]:
+        conn.execute(text('ALTER TABLE "api_tokens" ALTER COLUMN "token" DROP NOT NULL'))
+    rows = conn.execute(text("SELECT id, token FROM api_tokens WHERE token IS NOT NULL")).all()
+    if not rows:
+        return
+    conn.execute(text("UPDATE api_tokens SET token_hash = :h, token_hint = :hint, token = NULL "
+                      "WHERE id = :id"),
+                 [{"id": r[0], "h": hash_token(r[1]), "hint": token_hint(r[1])} for r in rows])
+    logger.info("schema-sync (MIGRATION-0013): %d key(s) now held as their SHA-256; plaintext cleared",
+                len(rows))
+
+
 def _sync_functions(conn: Connection):
     conn.execute(text(_MEETING_EVENT_TIME_FN))
 
@@ -416,6 +445,7 @@ def _ensure_schema_sync(conn: Connection, base, deferred: list | None = None):
     _backfill_token_scopes(conn, predate_scopes)       # MIGRATION-0004 data backfill
     _ensure_default_org(conn)                          # MIGRATION-0008 the default org row
     _bound_sign_in_credentials(conn)                   # MIGRATION-0011 sign-in credentials end
+    _hash_api_tokens(conn)                             # MIGRATION-0013 keys held as SHA-256
     _sync_indexes(conn, base, deferred)                # additive indexes (non-unique: deferred)
 
 

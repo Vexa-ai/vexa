@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from admin_api.schema.models import (
     APIToken, Base, Meeting, MeetingSession, Transcription, User,
 )
+from admin_api.key_store import hash_token
 from admin_api.schema.sync import ensure_schema_sync
 
 from conftest import requires_docker
@@ -258,11 +259,11 @@ def test_backfill_grandfathers_pre_scope_tokens(engine):
 
     ensure_schema_sync(engine, Base)
     with Session(engine) as s:
-        assert set(s.query(APIToken).filter_by(token="vxa_legacy_0_10").one().scopes) == {"bot", "tx", "browser"}
+        assert set(s.query(APIToken).filter_by(token_hash=hash_token("vxa_legacy_0_10")).one().scopes) == {"bot", "tx", "browser"}
 
     ensure_schema_sync(engine, Base)
     with Session(engine) as s:
-        assert set(s.query(APIToken).filter_by(token="vxa_legacy_0_10").one().scopes) == {"bot", "tx", "browser"}
+        assert set(s.query(APIToken).filter_by(token_hash=hash_token("vxa_legacy_0_10")).one().scopes) == {"bot", "tx", "browser"}
 
 
 def test_an_empty_scope_token_is_never_widened(engine):
@@ -281,8 +282,8 @@ def test_an_empty_scope_token_is_never_widened(engine):
     ensure_schema_sync(engine, Base)
     ensure_schema_sync(engine, Base)
     with Session(engine) as s:
-        assert s.query(APIToken).filter_by(token="vxa_empty").one().scopes == []
-        assert set(s.query(APIToken).filter_by(token="vxa_tx_scoped").one().scopes) == {"tx"}
+        assert s.query(APIToken).filter_by(token_hash=hash_token("vxa_empty")).one().scopes == []
+        assert set(s.query(APIToken).filter_by(token_hash=hash_token("vxa_tx_scoped")).one().scopes) == {"tx"}
 
 
 def test_recordings_live_in_meeting_data_jsonb(engine):

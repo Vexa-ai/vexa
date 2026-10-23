@@ -146,3 +146,31 @@ def revocation_store(monkeypatch):
     store = FakeRevocationStore()
     monkeypatch.setattr(delegation_revocation, "_client", store)
     return store
+
+
+class HashedTokens(dict):
+    """A fake session's key rows, stored the way identity stores them: by the key's SHA-256. A test
+    reads and writes them by the key's value, and the lookup identity makes (by hash) finds them."""
+
+    def __init__(self, rows=None):
+        super().__init__()
+        for key, value in (rows or {}).items():
+            self[key] = value
+
+    @staticmethod
+    def _k(key):
+        from admin_api.key_store import hash_token  # noqa: PLC0415
+        return key if isinstance(key, str) and len(key) == 64 and key.isalnum() and key == key.lower() \
+            else hash_token(key)
+
+    def __getitem__(self, key):
+        return super().__getitem__(self._k(key))
+
+    def __setitem__(self, key, value):
+        super().__setitem__(self._k(key), value)
+
+    def __contains__(self, key):
+        return super().__contains__(self._k(key))
+
+    def get(self, key, default=None):
+        return super().get(self._k(key), default)

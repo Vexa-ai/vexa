@@ -37,6 +37,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..key_store import stored_fields
 from ..schema.models import APIToken, User
 from ..schema.sync import LOGIN_LIFETIME_SECONDS
 from ..token_scope import generate_prefixed_token
@@ -103,13 +104,14 @@ def build_router() -> APIRouter:
                                 detail="a workspace principal holds no session")
         lifetime = min(body.expires_in, SESSION_LIFETIME_SECONDS) if body.expires_in else SESSION_LIFETIME_SECONDS
         expires_at = datetime.utcnow() + timedelta(seconds=lifetime)
-        tok = APIToken(token=generate_prefixed_token(SESSION_PREFIX_SCOPE), user_id=user.id,
+        value = generate_prefixed_token(SESSION_PREFIX_SCOPE)
+        tok = APIToken(**stored_fields(value), user_id=user.id,
                        scopes=list(SESSION_SCOPES), name=body.name or DEFAULT_NAME,
                        created_at=datetime.utcnow(), expires_at=expires_at, kind=KIND_SESSION)
         db.add(tok)
         await db.commit()
         await db.refresh(tok)
-        return {"token": tok.token, "id": tok.id, "user_id": user.id, "scopes": list(SESSION_SCOPES),
+        return {"token": value, "id": tok.id, "user_id": user.id, "scopes": list(SESSION_SCOPES),
                 "credential_class": KIND_SESSION}
 
     return router

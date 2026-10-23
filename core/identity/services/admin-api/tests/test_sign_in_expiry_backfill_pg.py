@@ -14,6 +14,7 @@ from sqlalchemy import create_engine, text
 
 from admin_api.app import db as app_db
 from admin_api.app.main import create_app
+from admin_api.key_store import hash_token
 from admin_api.schema.models import Base
 from admin_api.schema.sync import LOGIN_LIFETIME_SECONDS, ensure_schema_sync
 from conftest import requires_docker
@@ -63,7 +64,8 @@ def _row(client, uid, token, *, kind, name, scopes, created_at, expires_at=None)
 
 
 def _expiry(client, token):
-    return _sql(client, "SELECT expires_at FROM api_tokens WHERE token = :t", t=token)[0][0]
+    return _sql(client, "SELECT expires_at FROM api_tokens WHERE token_hash = :h OR token = :t",
+                h=hash_token(token), t=token)[0][0]
 
 
 def _validates(client, token):

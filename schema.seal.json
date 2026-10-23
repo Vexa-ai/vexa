@@ -469,7 +469,9 @@
       "last_used_at": "Column(DateTime, nullable=True)",
       "name": "Column(String(255), nullable=True)",
       "scopes": "Column(ARRAY(Text), nullable=False, server_default=text(\"'{}'::text[]\"))",
-      "token": "Column(String(255), unique=True, index=True, nullable=False)",
+      "token": "Column(String(255), unique=True, index=True, nullable=True)",
+      "token_hash": "Column(String(64), unique=True, index=True, nullable=True)",
+      "token_hint": "Column(String(32), nullable=True)",
       "user_id": "Column(Integer, ForeignKey('users.id'), nullable=False, index=True)"
     },
     "invites": {

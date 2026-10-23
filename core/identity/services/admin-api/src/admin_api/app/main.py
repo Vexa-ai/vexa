@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..schema.models import (APIToken, Meeting, MeetingSession, PersonPhoto, PlatformSetting,
                              Transcription, User)
+from ..key_store import stored_fields, token_matches
 from ..token_scope import VALID_SCOPES, generate_prefixed_token
 from .. import obs
 from .db import get_db
@@ -105,7 +106,7 @@ async def get_current_user(api_key: str = Security(USER_KEY_HEADER),
                            db: AsyncSession = Depends(get_db)) -> User:
     if not api_key:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Missing API Key")
-    row = (await db.execute(select(APIToken).where(APIToken.token == api_key))).scalars().first()
+    row = (await db.execute(select(APIToken).where(token_matches(APIToken, api_key)))).scalars().first()
     if not row:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid API Key")
     token_scopes = set(row.scopes) if row.scopes else set()
@@ -274,12 +275,11 @@ class UserResponse(BaseModel):
 
 
 class TokenResponse(BaseModel):
+    """The mint answer: the one place a key's value crosses the wire (it is stored only as a hash)."""
     id: int
     token: str
     user_id: int
     scopes: List[str]
-
-    model_config = {"from_attributes": True}
 
 
 class TokenCreate(BaseModel):
@@ -301,6 +301,8 @@ class TokenInfo(BaseModel):
     user_id: int
     scopes: List[str]
     name: Optional[str] = None
+    #: `vxa_bot_…AbCd` — the prefix and last four characters, all a list ever shows of a key.
+    token_hint: Optional[str] = None
     created_at: Optional[datetime] = None
     last_used_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
@@ -890,13 +892,13 @@ def create_app() -> FastAPI:
             expires_at = datetime.utcnow() + timedelta(seconds=token_expires_in)
         # Always a KEY (D13): this door has no parameter that reaches `kind`; a session is minted
         # only by `POST /internal/sessions` (app/sessions.py).
-        tok = APIToken(token=token_value, user_id=user_id, scopes=scope_list,
+        tok = APIToken(**stored_fields(token_value), user_id=user_id, scopes=scope_list,
                        name=token_name, created_at=datetime.utcnow(), expires_at=expires_at,
                        kind="key")
         db.add(tok)
         await db.commit()
         await db.refresh(tok)
-        return TokenResponse.model_validate(tok)
+        return TokenResponse(id=tok.id, token=token_value, user_id=tok.user_id, scopes=list(tok.scopes))
 
     # --- GET /admin/users/{user_id}/tokens → the user's tokens, metadata only (no secret values).
     # Added for the terminal's token self-serve surface: it lists on the user's behalf (admin tier,

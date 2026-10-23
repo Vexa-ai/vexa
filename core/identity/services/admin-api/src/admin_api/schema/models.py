@@ -258,7 +258,11 @@ class APIToken(Base):
     __tablename__ = "api_tokens"
 
     id = Column(Integer, primary_key=True, index=True)
-    token = Column(String(255), unique=True, index=True, nullable=False)
+    # MIGRATION-0013: a key is held as its SHA-256 (`key_store.py`). `token` is the plaintext column
+    # rows had before; the convergence hashes and clears it, so it is NULL on every converged row.
+    token = Column(String(255), unique=True, index=True, nullable=True)
+    token_hash = Column(String(64), unique=True, index=True, nullable=True)
+    token_hint = Column(String(32), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     scopes = Column(ARRAY(Text), nullable=False, server_default=text("'{}'::text[]"))
     name = Column(String(255), nullable=True)
