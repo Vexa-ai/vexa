@@ -123,6 +123,15 @@
       "targets": []
     },
     {
+      "key": "VEXA_JITSI_HOSTS",
+      "class": "defaulted",
+      "default": "",
+      "description": "Comma-separated additional Jitsi deployment hostnames, read by the service door's copy of meeting-api's link parser (fact meeting-link-door) to name the meeting a flows bot dispatch addresses. Set it to the same value meeting-api has; unset \u21d2 no extra hosts.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
       "key": "MCP_URL",
       "class": "defaulted",
       "default": "http://mcp:8010",

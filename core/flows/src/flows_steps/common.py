@@ -232,7 +232,12 @@ def _ticket_refusal(method: str, url: str, code, body) -> None:
     if reason not in TICKET_RETRYABLE and reason not in TICKET_FINAL:
         return
     from urllib.parse import urlsplit
-    raise StepError(f"door refused {method} {urlsplit(url).path}: {reason}"[:400],
+    why = ",".join(str(w) for w in (body.get("why") or []) if isinstance(w, str))
+    hint = ("" if reason in TICKET_FINAL else
+            " — no ticket this call carries names this person for this call; a routine needs the "
+            "grant its person's session gives when turning it on (turn it off and on again)")
+    raise StepError(f"door refused {method} {urlsplit(url).path}: {reason}"
+                    f"{f' ({why})' if why else ''}{hint}"[:400],
                     retryable=reason in TICKET_RETRYABLE)
 
 

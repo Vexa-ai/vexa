@@ -497,6 +497,23 @@
       ]
     },
     {
+      "id": "meeting-link-door",
+      "fact": "how a meeting link names its meeting (platform, native id): meeting-api's parser, read by the service door to hold a bot dispatch to the meeting a ticket names",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/meetings/services/meeting-api/src/meeting_api/collector/meeting_link.py",
+      "how_to_agree": "edit meeting-api's meeting_link.py and copy it VERBATIM to the gateway",
+      "why": "meeting-api files a bot under the (platform, native id) this parser answers; the door compares that pair with a mail ticket's `native` before it lets flows dispatch the bot. A door parser that drifted would refuse a legitimate invite's bot, or hold the ticket to a different meeting than the one the bot joins.",
+      "sites": [
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/collector/meeting_link.py"
+        },
+        {
+          "path": "core/gateway/services/gateway/src/gateway/meeting_link.py"
+        }
+      ]
+    },
+    {
       "id": "identity-header",
       "fact": "the header the gateway's signed identity travels in (gateway-identity.v1 X-Vexa-Identity)",
       "kind": "header",

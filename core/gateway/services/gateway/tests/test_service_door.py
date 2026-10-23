@@ -15,8 +15,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gateway import identity_token
-from gateway.service_door import (FLOWS_INBOUND, FLOWS_OUTBOUND, build_door_app, create_door_app,
-                                  usable_key)
+from gateway.service_door import (BOUND, FLOWS_INBOUND, FLOWS_OUTBOUND, build_door_app,
+                                  create_door_app, usable_key)
 
 FLOWS_KEY = "flows-key-0123456789abcdef0123456789abcdef"
 INTERNAL = "internal-0123456789abcdef0123456789abcdef"
@@ -195,7 +195,8 @@ def _concrete(template: str) -> str:
 
 
 @pytest.mark.parametrize("domain,method,template",
-                         [(d, m, t) for d, rows in FLOWS_OUTBOUND.items() for m, t in rows])
+                         [(d, m, t) for d, rows in FLOWS_OUTBOUND.items() for m, t in rows
+                          if (d, m, t) not in BOUND])
 def test_every_listed_call_crosses_to_its_own_route(door, domain, method, template):
     c, up = door
     path = _concrete(template)
@@ -212,7 +213,7 @@ def test_every_listed_call_crosses_to_its_own_route(door, domain, method, templa
 
 def test_an_internal_tier_call_carries_the_secret_the_subject_and_the_flow_headers(door):
     c, up = door
-    c.post("/agent/api/chat/submit", json={"m": 1}, headers=_flows(**{
+    c.post("/agent/api/sessions/s-1/proposals", json={"m": 1}, headers=_flows(**{
         "X-User-Id": "7", "X-Vexa-Flow-Regime": "autonomous", "X-Vexa-Flow-Grants": "bot.request",
         "X-Vexa-Message-From-Uid": "9", "X-Trace-Id": "t-1"}))
     (sent,) = up.forwarded()
@@ -226,7 +227,7 @@ def test_a_meetings_call_carries_the_subject_s_signed_identity_with_the_door_s_s
     """meeting-api checks a door call the way it checks the person's own key: verified identity,
     scopes, the bot limit, the workspaces they may write. No internal secret reaches it."""
     c, up = door
-    c.post("/meetings/bots", json={"platform": "zoom"}, headers=_flows(**{"X-User-Id": "7"}))
+    c.get("/meetings/meetings", headers=_flows(**{"X-User-Id": "7"}))
     (sent,) = up.forwarded()
     h = {k.lower(): v for k, v in sent.headers.items()}
     assert "x-internal-secret" not in h

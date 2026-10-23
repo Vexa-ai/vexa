@@ -1093,6 +1093,8 @@ services:
       # acts for a person only with a ticket one of them verifies; the gateway's own tickets are
       # signed with its identity key. Public halves only: the gateway cannot sign for a producer.
       - VEXA_SUBJECT_TICKET_KEYS_DIR=/run/vexa-subject-ticket-verify
+      # the door holds a bot dispatch to the meeting a ticket names with meeting-api's link parser
+      - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # fastapi-guard edge layer (edge_guard.py): per-IP throttle + auto-ban at the edge.
       # ON by default with generous limits (owner ruling — protection that ships dark protects
