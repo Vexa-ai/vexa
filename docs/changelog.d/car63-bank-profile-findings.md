@@ -4,7 +4,8 @@
   Leave `secrets.llmApiKey` empty for such an endpoint; a placeholder is no longer needed.
 - **`helm upgrade` rolls the Pods that read a changed chart Secret.** Pod templates carry
   `checksum/*` annotations over the operator-supplied values they read (`secrets.*`,
-  `flows.*`, the credential broker's Google client secret, `storage.s3` on admin-api). Generated
+  `flows.*`, the credential broker's Google client secret, `storage.s3` on admin-api, and a pinned
+  `subjectTickets.<issuer>.signingKey` on its producer and the gateway). Generated
   secrets are not hashed, so a render with the same values rolls nothing.
 - **The Terminal needs an `https://` public URL for sign-in.** The OIDC guide and the Enterprise
   section say so, and a production Terminal started with an `http://` `NEXTAUTH_URL` on a host

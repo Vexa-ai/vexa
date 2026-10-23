@@ -2580,4 +2580,12 @@ tb "a changed secrets.redisPassword rolls redis and its clients, and not livekit
   'python3 -c "$CK_PY" moved "$ckf/A.yaml" "$ckf/REDIS.yaml" vexa-vexa-redis,vexa-vexa-agent-api vexa-vexa-livekit >/dev/null'
 tb "every Deployment that reads the chart Secret carries checksum/secrets" \
   'python3 -c "import sys,yaml; ds=[d for d in yaml.safe_load_all(open(sys.argv[1])) if d and d[\"kind\"]==\"Deployment\"]; uses=[d for d in ds if \"name: vexa-vexa-secrets\" in yaml.safe_dump(d[\"spec\"][\"template\"][\"spec\"])]; bad=[d[\"metadata\"][\"name\"] for d in uses if \"checksum/secrets\" not in (d[\"spec\"][\"template\"][\"metadata\"].get(\"annotations\") or {})]; print(len(uses), bad); sys.exit(1 if bad or len(uses) < 10 else 0)" "$ckf/A.yaml" >/dev/null'
+# The subject-ticket keys (car 57) are files their holders read once at start: a pinned
+# subjectTickets.<issuer>.signingKey that changes rolls that producer and the gateway, and no other producer.
+if command -v openssl >/dev/null 2>&1; then
+  CK_TK="$(ck --set-string subjectTickets.agent.signingKey="$(openssl genpkey -algorithm ed25519 2>/dev/null)")"
+  printf '%s\n' "$CK_TK" > "$ckf/TK.yaml"
+  tb "a changed subjectTickets.agent.signingKey rolls agent-api and the gateway, not meeting-api or the flows Deployments" \
+    'python3 -c "$CK_PY" moved "$ckf/A.yaml" "$ckf/TK.yaml" vexa-vexa-agent-api,vexa-vexa-gateway vexa-vexa-meeting-api,vexa-vexa-flows-worker,vexa-vexa-flows-mailbox,vexa-vexa-flows-api >/dev/null'
+fi
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

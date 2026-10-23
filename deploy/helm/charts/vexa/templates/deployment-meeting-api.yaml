@@ -22,6 +22,9 @@ spec:
         # Roll the pods when storage.s3 changes: boto3 reads its config file once per process.
         checksum/storage-s3: {{ include "vexa.s3" . | sha256sum }}
         checksum/secrets: {{ include "vexa.checksum" (list . .Values.secrets) }}
+        {{- if .Values.flows.enabled }}
+        checksum/subject-tickets: {{ include "vexa.checksum" (list . .Values.subjectTickets.meetings) }}
+        {{- end }}
         {{- with .Values.global.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

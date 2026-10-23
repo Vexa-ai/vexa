@@ -23,6 +23,9 @@ spec:
         app.kubernetes.io/component: gateway
       annotations:
         checksum/secrets: {{ include "vexa.checksum" (list . .Values.secrets) }}
+        {{- if .Values.flows.enabled }}
+        checksum/subject-tickets: {{ include "vexa.checksum" (list . .Values.subjectTickets) }}
+        {{- end }}
         {{- with .Values.global.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

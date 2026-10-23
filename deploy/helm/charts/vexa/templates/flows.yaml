@@ -155,6 +155,7 @@ spec:
       annotations:
         checksum/secrets: {{ include "vexa.checksum" (list . .Values.secrets) }}
         checksum/flows: {{ include "vexa.checksum" (list . .Values.flows) }}
+        checksum/subject-tickets: {{ include "vexa.checksum" (list . .Values.subjectTickets.mail) }}
     spec:
       enableServiceLinks: false
       {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
@@ -322,6 +323,7 @@ spec:
       annotations:
         checksum/secrets: {{ include "vexa.checksum" (list . .Values.secrets) }}
         checksum/flows: {{ include "vexa.checksum" (list . .Values.flows) }}
+        checksum/subject-tickets: {{ include "vexa.checksum" (list . .Values.subjectTickets.mail) }}
     spec:
       enableServiceLinks: false
       {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}

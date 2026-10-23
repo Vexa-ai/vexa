@@ -1432,8 +1432,9 @@ The gateway mounts only the public halves, `<issuer>.pem` in the `<release>-subj
 ConfigMap. With `helm template`, set `subjectTickets.<issuer>.signingKey` for `meetings`, `agent` and
 `mail` (`openssl genpkey -algorithm ed25519`), or `subjectTickets.<issuer>.existingSecret` with
 `subjectTickets.<issuer>.publicKey`; otherwise every render mints new pairs. `secrets.existingSecretName`
-needs nothing new for them. To rotate a key, delete its Secret, run `helm upgrade`, then restart that
-producer and the gateway (the gateway reads the public keys at start). Rotating the agent key voids
+needs nothing new for them. A changed `subjectTickets.<issuer>.signingKey` rolls that producer and the
+gateway on `helm upgrade` (`checksum/subject-tickets`). To rotate a generated key, delete its Secret, run
+`helm upgrade`, then restart that producer and the gateway (the gateway reads the public keys at start). Rotating the agent key voids
 the routine grants it signed, so each running routine needs its owner to turn it on once more.
 
 ### Services that need a setting
