@@ -14,3 +14,13 @@
   into `DOCKER_GID` on Linux, replacing the old default `0`; a value you set is kept. If the runtime
   logs `permission denied` on the socket after upgrading, set `DOCKER_GID` to
   `stat -c %g /var/run/docker.sock`.
+- **Helm: the control plane reaches only the endpoints you declare (upgrade action).** Control-plane
+  egress was open to any address on any port. It now allows DNS, the chart's own Pods, the object
+  store on its port, an external database and Redis on theirs, the Kubernetes API server (the
+  runtime and the postgres-password hook only), and each entry of
+  `networkPolicy.controlPlane.egress` (`{cidr, ports}`). **Before upgrading, list every external
+  endpoint you configured**: model providers, speech-to-text, SMTP, git remotes, the OIDC issuer,
+  Microsoft Graph, Google and Telegram, webhook targets, and `openrouter.ai` for the daily model
+  prices (or `VEXA_MODEL_PRICES_URL=off`). Anything unlisted is blocked once the upgrade lands.
+  `networkPolicy.controlPlane.anyAddress: true` keeps the old rule while you collect them. See
+  [Control-plane egress](/deployment-kubernetes#control-plane-egress).

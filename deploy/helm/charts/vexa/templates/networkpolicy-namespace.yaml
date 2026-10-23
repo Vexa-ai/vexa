@@ -52,6 +52,27 @@ spec:
 {{- /* egress of every chart Pod but the two datastores, and but the flows Pods while their own
 policy holds them (networkpolicy-flows.yaml): policies add up, so a Pod this one also selected
 would keep every egress it allows */}}
+{{- /* "any address": everything outside egressExcept, the one shape the chart uses for an endpoint
+whose address it cannot know */}}
+{{- $anyList := list (dict "ipBlock" (ternary (dict "cidr" "0.0.0.0/0") (dict "cidr" "0.0.0.0/0" "except" $cp.egressExcept.ipv4) (empty $cp.egressExcept.ipv4))) }}
+{{- if $.Values.networkPolicy.workloads.ipv6 }}
+{{- $anyList = append $anyList (dict "ipBlock" (ternary (dict "cidr" "::/0") (dict "cidr" "::/0" "except" $cp.egressExcept.ipv6) (empty $cp.egressExcept.ipv6))) }}
+{{- end }}
+{{- $anyPeers := toYaml $anyList }}
+{{- /* the external endpoints the values configure, each on its own port: the database and Redis when
+the chart runs neither, and the object store */}}
+{{- $external := list }}
+{{- if not .Values.postgres.enabled }}
+{{- $external = append $external (dict "port" .Values.database.port "cidrs" $cp.databaseEgress) }}
+{{- end }}
+{{- if not .Values.redis.enabled }}
+{{- $external = append $external (dict "port" .Values.redisConfig.port "cidrs" $cp.redisEgress) }}
+{{- end }}
+{{- with .Values.storage.s3.endpoint }}
+{{- $u := urlParse . }}
+{{- $port := regexFind ":[0-9]+$" $u.host | trimPrefix ":" }}
+{{- $external = append $external (dict "port" ($port | default (ternary 80 443 (eq $u.scheme "http"))) "cidrs" $cp.storageEgress) }}
+{{- end }}
 {{- $notIn := list "postgres" "redis" }}
 {{- if and .Values.flows.enabled (.Values.networkPolicy.flows | default dict).enabled }}
 {{- $notIn = concat $notIn $flows }}
@@ -76,25 +97,78 @@ spec:
     {{- include "vexa.dnsEgress" $ | nindent 4 }}
     - to:
         {{- toYaml $chartPods | nindent 8 }}
+    {{- if $cp.anyAddress }}
+    - to:
+        {{- $anyPeers | nindent 8 }}
+    {{- else }}
+    {{- range $cp.egress }}
+    {{- if not (and .cidr .ports) }}
+    {{- fail "networkPolicy.controlPlane.egress: every entry needs a cidr and its ports, e.g. {cidr: 203.0.113.10/32, ports: [443]}" }}
+    {{- end }}
     - to:
         - ipBlock:
-            cidr: 0.0.0.0/0
-            {{- with $cp.egressExcept.ipv4 }}
-            except:
-              {{- toYaml . | nindent 14 }}
-            {{- end }}
-        {{- if $.Values.networkPolicy.workloads.ipv6 }}
-        - ipBlock:
-            cidr: ::/0
-            {{- with $cp.egressExcept.ipv6 }}
-            except:
-              {{- toYaml . | nindent 14 }}
-            {{- end }}
+            cidr: {{ .cidr | quote }}
+      ports:
+        {{- range .ports }}
+        - port: {{ . | int }}
+          protocol: TCP
         {{- end }}
+    {{- end }}
+    {{- range $ext := $external }}
+    - to:
+        {{- with $ext.cidrs }}
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+        {{- else }}
+        {{- $anyPeers | nindent 8 }}
+        {{- end }}
+      ports:
+        - port: {{ $ext.port | int }}
+          protocol: TCP
+    {{- end }}
+    {{- end }}
     {{- with $cp.extraEgress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 ---
+{{- if not $cp.anyAddress }}
+{{- /* the Kubernetes API server: the runtime's k8s backend and the postgres-password hook call it.
+Policies match the API server's own address and port (443 on managed clusters, 6443 on kubeadm and
+kind), which the chart cannot know: any address on those ports unless apiServer.cidrs names it */}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vexa.componentName" (list $ "api-server-egress") }}
+  labels:
+    {{- include "vexa.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $sel | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [runtime, postgres-password]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        {{- with $cp.apiServer.cidrs }}
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+        {{- else }}
+        {{- $anyPeers | nindent 8 }}
+        {{- end }}
+      ports:
+        {{- range $cp.apiServer.ports }}
+        - port: {{ . | int }}
+          protocol: TCP
+        {{- end }}
+---
+{{- end }}
 {{- /* the front doors */}}
 {{- range $door := list (dict "c" "gateway" "on" $.Values.gateway.enabled "port" 8000) (dict "c" "terminal" "on" $.Values.terminal.enabled "port" 3000) (dict "c" "dashboard" "on" $.Values.dashboard.enabled "port" 3000) }}
 {{- if $door.on }}

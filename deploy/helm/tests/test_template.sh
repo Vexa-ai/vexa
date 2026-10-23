@@ -1305,7 +1305,7 @@ else echo "  FAIL: an explicit database.password was not rendered"; fail=1; fi
 # The rotation hook renders only on an upgrade whose live Secret holds a published value (lookup);
 # an offline render never sees one, so it renders none. Its run is proven on a live cluster.
 upgrade_render="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --is-upgrade)"
-if grep -q 'postgres-password' <<< "$upgrade_render"; then
+if grep -qE 'name: vexa-vexa-postgres-password$' <<< "$upgrade_render"; then
   echo "  FAIL: the postgres-password hook rendered without a published live Secret"; fail=1
 else echo "  OK: no postgres-password hook without a published live Secret"; fi
 # Its run is live-only (lookup), so its source is held here: the hook's rights go when it fails as
@@ -2483,4 +2483,44 @@ tb "N4: the OpenShift profile sends DNS to openshift-dns on 53 and 5353" \
   'helm template vexa "$CHART" -n vexa "${ALL_ON[@]}" -f "$CHART/values-openshift.yaml" --set agentApi.workspaces.storageClassName=rwx-class | dns_check openshift-dns 53,5353'
 tb "N4 (control): networkPolicy.dns.to=null allows the DNS ports to any address" \
   'helm template vexa "$CHART" -n vexa "${ALL_ON[@]}" --set networkPolicy.dns.to=null | dns_check any 53'
+# P24 / N3: the control plane reaches DNS, the chart's Pods and the endpoints the values declare,
+# each on its own port; nothing is open on every port, and only the runtime and the hook reach the
+# API server. networkPolicy.controlPlane.anyAddress restores the old open rule.
+cp_check() { python3 -c '
+import sys, yaml
+mode = sys.argv[1]
+by = {(d["kind"], d["metadata"]["name"]): d for d in yaml.safe_load_all(sys.stdin) if d}
+cp = by[("NetworkPolicy", "vexa-vexa-control-plane-egress")]["spec"]["egress"]
+api = by.get(("NetworkPolicy", "vexa-vexa-api-server-egress"))
+def blocks(r): return [t["ipBlock"]["cidr"] for t in r.get("to", []) if "ipBlock" in t]
+def ports(r): return sorted(p["port"] for p in r.get("ports", []))
+ip_rules = [(blocks(r), ports(r)) for r in cp if blocks(r)]
+if mode == "open":
+    assert ([b for b, p in ip_rules if not p] == [["0.0.0.0/0", "::/0"]]) and api is None, (ip_rules, api)
+    sys.exit(0)
+assert all(p for b, p in ip_rules), ("an ipBlock rule open on every port", ip_rules)
+if mode == "default":
+    assert ip_rules == [(["0.0.0.0/0", "::/0"], [7070])], ip_rules            # the object store only
+    sel = api["spec"]["podSelector"]["matchExpressions"][0]
+    assert sel["operator"] == "In" and sel["values"] == ["runtime", "postgres-password"], sel
+    assert [(blocks(r), ports(r)) for r in api["spec"]["egress"]] == [(["0.0.0.0/0", "::/0"], [443, 6443])]
+elif mode == "declared":
+    assert ip_rules == [(["203.0.113.10/32"], [443]), (["198.51.100.0/24"], [25, 587]),
+                        (["10.20.0.5/32"], [6432]), (["10.20.0.9/32"], [6380]), (["10.30.0.0/16"], [9000])], ip_rules
+    assert [(blocks(r), ports(r)) for r in api["spec"]["egress"]] == [(["172.20.0.1/32"], [443, 6443])]
+' "$1"; }
+CPD=(--set "networkPolicy.controlPlane.egress[0].cidr=203.0.113.10/32" --set "networkPolicy.controlPlane.egress[0].ports={443}"
+  --set "networkPolicy.controlPlane.egress[1].cidr=198.51.100.0/24" --set "networkPolicy.controlPlane.egress[1].ports={587,25}"
+  --set postgres.enabled=false --set database.host=db.example.internal --set database.port=6432 --set "networkPolicy.controlPlane.databaseEgress={10.20.0.5/32}"
+  --set redis.enabled=false --set redisConfig.url=redis://redis.example.internal:6380/0 --set redisConfig.port=6380 --set "networkPolicy.controlPlane.redisEgress={10.20.0.9/32}"
+  --set storage.s3.endpoint=https://s3.example.internal:9000 --set "networkPolicy.controlPlane.storageEgress={10.30.0.0/16}"
+  --set "networkPolicy.controlPlane.apiServer.cidrs={172.20.0.1/32}")
+tb "N3: by default the control plane reaches the object store on its port and nothing else outside the cluster; only the runtime and the hook reach the API server (443, 6443)" \
+  'helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" | cp_check default'
+tb "N3: declared endpoints (egress, database, redis, object store, API server) render as CIDRs on their own ports" \
+  'helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CPD[@]}" | cp_check declared'
+tb "N3: an egress entry without ports is refused" \
+  '! helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set "networkPolicy.controlPlane.egress[0].cidr=203.0.113.10/32" >/dev/null 2>&1'
+tb "N3 (control): networkPolicy.controlPlane.anyAddress=true renders the open rule and no API-server policy" \
+  'helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set networkPolicy.controlPlane.anyAddress=true | cp_check open'
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

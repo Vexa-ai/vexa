@@ -55,7 +55,7 @@ What the chart allows its own Pods:
 
 | Pod | Takes connections from | May connect to |
 |---|---|---|
-| gateway, terminal, dashboard | anywhere, on their own port | DNS, the chart's Pods, any address outside `controlPlane.egressExcept` |
+| gateway, terminal, dashboard | anywhere, on their own port | DNS, the chart's Pods, and the endpoints you declare (see [Control-plane egress](#control-plane-egress)); the runtime and the postgres-password hook also reach the Kubernetes API server |
 | gateway, service door (port 8002, the `<release>-gateway-door` ClusterIP Service, only with `flows.enabled`) | flows-api, flows-worker, flows-mailbox, signals and the terminal (`<release>-gateway-door-ingress`) | as the gateway |
 | admin-api | the gateway, terminal, dashboard, MCP, agent-api, meeting-api; with the CRM on, crm-api and crm-outbox | same as above |
 | crm-api | the gateway, MCP, agent-api and admin-api | same as above |
@@ -73,13 +73,55 @@ The settings, all under `networkPolicy`:
 |---|---|---|
 | `defaultDeny.enabled` | `true` | `false` turns the namespace default-deny off; the per-service policies stay |
 | `dns.to` / `dns.ports` | the kube-dns/CoreDNS Pods in `kube-system` / `[53]` | where every policy sends name resolution, as NetworkPolicy peers and ports (UDP and TCP). Policies match the DNS Pods' own port, after the Service's translation: OpenShift (`values-openshift.yaml`) selects `openshift-dns` on 53 and 5353. For NodeLocal DNSCache add `- ipBlock: {cidr: 169.254.20.10/32}`; an empty `to` allows the ports to any address |
-| `controlPlane.egressExcept.ipv4` / `.ipv6` | `[169.254.0.0/16]` / `["fe80::/10"]` | ranges the chart's Pods may not reach; empty them if a control-plane Pod authenticates through the cloud metadata server (GKE Workload Identity, EKS Pod Identity); add your private ranges to tighten egress |
-| `controlPlane.extraEgress` | `[]` | extra egress rules for the chart's Pods |
+| `controlPlane.egress` | `[]` | the endpoints you configure, each `{cidr, ports}`: see [Control-plane egress](#control-plane-egress) |
+| `controlPlane.databaseEgress` / `.redisEgress` / `.storageEgress` | `[]` | the CIDRs of an external database, an external Redis and the object store; each is reached on its own port, at any address when empty |
+| `controlPlane.apiServer.cidrs` / `.ports` | `[]` / `[443, 6443]` | the Kubernetes API server, for the runtime and the postgres-password hook; any address on those ports when `cidrs` is empty |
+| `controlPlane.anyAddress` | `false` | `true` restores the open rule: any address outside `egressExcept`, on any port |
+| `controlPlane.egressExcept.ipv4` / `.ipv6` | `[169.254.0.0/16]` / `["fe80::/10"]` | ranges "any address" never includes; empty them if a control-plane Pod authenticates through the cloud metadata server (GKE Workload Identity, EKS Pod Identity) |
+| `controlPlane.extraEgress` | `[]` | extra egress rules for the chart's Pods, as written (a `namespaceSelector` for a service in another namespace, a proxy) |
 | `controlPlane.extraIngress` | `[]` | ingress rules added to every chart Pod, for example a metrics scraper in another namespace |
 | `postgres.extraFrom` | `[]` | more callers of the bundled database, as NetworkPolicy peers |
 
 `controlPlane.extraIngress` is rendered only while the default-deny is on. All of these policies need
 a CNI that enforces NetworkPolicy; without one they have no effect.
+
+### Control-plane egress
+
+The chart's Pods (all but postgres, redis and the flows Pods, which have their own policy) reach DNS,
+each other, and only the endpoints the values declare:
+
+- the object store, on the port of `storage.s3.endpoint`;
+- an external database (`postgres.enabled: false`) on `database.port`, and an external Redis
+  (`redis.enabled: false`) on `redisConfig.port`;
+- the Kubernetes API server, for the runtime and the postgres-password hook only;
+- each entry of `networkPolicy.controlPlane.egress`.
+
+Every other endpoint you configure needs an entry: your model providers, speech-to-text, SMTP for the
+terminal's mail, git remotes, the OIDC issuer, Microsoft Graph, Google and Telegram for connections,
+the webhook targets users add, and `openrouter.ai` for the daily model prices (or set
+`VEXA_MODEL_PRICES_URL=off`). An endpoint with no entry is unreachable, and the feature that calls it
+fails.
+
+```yaml
+networkPolicy:
+  controlPlane:
+    egress:
+      - {cidr: 203.0.113.10/32, ports: [443]}   # your model gateway
+      - {cidr: 198.51.100.0/24, ports: [587]}   # your SMTP relay
+    storageEgress: [10.30.0.0/16]               # narrows the object store to its addresses
+    apiServer:
+      cidrs: [172.20.0.1/32]                    # kubectl get endpoints kubernetes -n default
+```
+
+An endpoint the chart knows (object store, database, Redis, API server) with no CIDRs listed is
+reached on its port at any address outside `egressExcept`. A host name cannot be a NetworkPolicy
+peer: list the addresses it resolves to, or route through an egress proxy and list the proxy.
+`anyAddress: true` restores the open rule.
+
+**Upgrading from an earlier 0.13.** Control-plane egress used to be open to any address on any port.
+After the upgrade, everything above that you have not listed is blocked. Before upgrading, list each
+external endpoint under `networkPolicy.controlPlane.egress`, or set `anyAddress: true` to keep the
+old rule while you collect them.
 
 ### Flows egress
 
@@ -1030,11 +1072,11 @@ are the chart's own `values.yaml`; "opt-in" means off until you set it.
 |---|---|---|---|---|---|
 | N1 | One HTTPS host routed to the terminal (port 3000); optionally a second host for `terminal.canvasHost` | users' browsers | The terminal is the one public front door. The canvas host serves agent-made pages from an origin of their own ([meeting canvas isolation](/meeting-canvas-isolation)). | The first: yes. The canvas host: no, without it the frame shares the terminal's origin and the terminal warns at start. | Ingress is off by default (`ingress.enabled`); bring your own route. |
 | N2 | A CNI that enforces NetworkPolicy | the chart's policies (`networkPolicy.enabled`, on) | Default-deny in the namespace, then one allow per edge ([Network policy](#network-policy)) | No: without enforcement the policies are inert and Vexa still runs. | Nothing to do; or set `networkPolicy.enabled: false` if your platform manages policy. |
-| N3 | Control-plane Pods may reach any address but link-local, on any port | every chart Deployment (`control-plane-egress`) | The control plane calls endpoints you configure (N7) whose addresses the chart cannot know, and the runtime reaches the Kubernetes API server. | No: broader than N7 declares. | Put an egress proxy or firewall in front. To remove: per-destination rules from the values that name each endpoint (size M). |
+| N3 | Control-plane Pods reach the endpoints the values declare, each on its own port: the object store, an external database and Redis, the Kubernetes API server (runtime and the postgres-password hook only, 443 and 6443), and each `networkPolicy.controlPlane.egress` entry | every chart Deployment (`control-plane-egress`, `api-server-egress`) | The control plane calls the endpoints you configure (N7) | The endpoints you use: yes | List CIDRs (`storageEgress`, `databaseEgress`, `redisEgress`, `apiServer.cidrs`) to narrow the four the chart knows from any address to their own ([Control-plane egress](#control-plane-egress)). |
 | N4 | DNS (TCP/UDP 53) to the cluster DNS Pods only: kube-dns/CoreDNS in `kube-system` by default, `openshift-dns` on 53 and 5353 with `values-openshift.yaml` | every chart Pod and spawned Pod | Name resolution | Yes | Nothing to avoid. A cluster whose DNS runs elsewhere sets `networkPolicy.dns.to` and `.ports`. |
 | N5 | Meeting bots reach the public internet on any port (private ranges refused) | meeting bots (`bot-egress`) | Meeting platforms carry media over UDP and TCP on ports and addresses they choose per call. | Yes | For an on-premises Jitsi, name its host in `VEXA_MEETING_HOST_ALLOW`. |
 | N6 | Agent workers reach the public internet on any port (private ranges refused) | agent workers (`worker-egress`) | The model's tools fetch pages and clone repositories; models are reached through model-proxy. | Yes, while agents may browse | Narrow with your egress proxy. |
-| N7 | The endpoints you configure, and only those: your speech-to-text URL (empty by default); your model providers (none by default); SMTP for mail; Microsoft Graph for a flows mailbox; Google and Telegram for connections (the credential broker); git remotes; the webhook URLs users add (private addresses refused unless allowed) | meeting-api, bots, agent-api, model-proxy, flows, credential broker | Each is a feature you turn on by configuring it. | Only for the features you use | Leave it unset. |
+| N7 | The endpoints you configure, and only those: your speech-to-text URL (empty by default); your model providers (none by default); SMTP for mail; Microsoft Graph for a flows mailbox; Google and Telegram for connections (the credential broker); git remotes; the webhook URLs users add (private addresses refused unless allowed) | meeting-api, bots, agent-api, model-proxy, flows, credential broker | Each is a feature you turn on by configuring it. | Only for the features you use | Leave it unset. On Kubernetes each one is reachable only once listed in `networkPolicy.controlPlane.egress` (N3). |
 | N8 | `openrouter.ai` once a day for public model prices | agent-api | Prices the usage it records at market rates | No | `VEXA_MODEL_PRICES_URL=off`: the snapshot bundled with the release prices every call. |
 | N9 | The Codex CLI inside agent workers may contact its vendor besides the model API (telemetry, update checks); Claude Code's non-essential traffic is off in the image (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` in its managed settings) | agent workers running Codex | Default behaviour of the vendor's CLI | No | Block it at your egress proxy. To remove: the same switch for Codex, once its traffic is measured (size S). |
 | N10 | LiveKit on the node's network, with its UDP media range open (`livekit.hostNetwork`, on when calls are on) | calls (`livekit.enabled`, opt-in) | WebRTC media to browsers outside the cluster | Only with calls | Leave calls off. With `livekit.hostNetwork: false` you expose the UDP range yourself ([Calls](#calls-optional)). |
@@ -1395,7 +1437,9 @@ with the [self-hosted transcription unit](/deployment#transcription-the-separate
 GPU or CPU — and your own LLM endpoint ([Configuration](/configuration)) so the audio path never
 calls out. See [Security & compliance](/security-compliance).
 
-Two calls leave the cluster unless you stop them. agent-api reads public model prices from
+With a CNI that enforces NetworkPolicy, the chart's own Pods reach no external address you have not
+declared ([Control-plane egress](#control-plane-egress)); meeting bots and agent workers keep their
+public-internet rules (N5, N6). Two calls leave the cluster unless you stop them. agent-api reads public model prices from
 `openrouter.ai` once a day: set `VEXA_MODEL_PRICES_URL=off` in `agentApi.extraEnv`, and the
 snapshot bundled with the release prices every call. The Codex CLI inside agent workers may contact
 its vendor for telemetry and update checks: block that at your egress proxy. (Claude Code's

@@ -460,14 +460,37 @@ networkPolicy:
   defaultDeny:
     enabled: true
   controlPlane:
-    # The chart's Pods (all but postgres and redis) may reach DNS, each other, and any address outside
-    # these ranges — external databases, object stores, model providers, STT, mail, webhooks and the
-    # Kubernetes API sit wherever the cluster puts them. The default keeps them off the cloud metadata
+    # WHERE THE CHART'S PODS (all but postgres and redis) MAY CONNECT: DNS, each other, and the
+    # endpoints declared here, nothing else (requirements row N3).
+    #   - the object store (storage.s3.endpoint), on its port;
+    #   - an external database (postgres.enabled: false) on database.port, and an external Redis
+    #     (redis.enabled: false) on redisConfig.port;
+    #   - the Kubernetes API server, for the runtime and the postgres-password hook (apiServer);
+    #   - every entry of `egress`: the endpoints you configure, as CIDRs with their ports, e.g. your
+    #     model providers, speech-to-text, SMTP, git remotes, OIDC issuer, Microsoft Graph, Google and
+    #     Telegram for connections, webhook targets, and openrouter.ai for the daily model prices
+    #     (or VEXA_MODEL_PRICES_URL=off). Nothing outside them is reachable.
+    # An endpoint above with no CIDRs listed is reached on its port at any address outside
+    # egressExcept. anyAddress: true restores the rule before 0.13.4, any address outside
+    # egressExcept on any port.
+    anyAddress: false
+    egress: []
+    #   - {cidr: 203.0.113.10/32, ports: [443]}     # your model gateway
+    #   - {cidr: 198.51.100.0/24, ports: [587]}     # your SMTP relay
+    databaseEgress: []         # CIDRs of an external database, e.g. [10.20.0.5/32]
+    redisEgress: []            # CIDRs of an external Redis
+    storageEgress: []          # CIDRs of the object store
+    apiServer:
+      cidrs: []                # the API server's addresses (`kubectl get endpoints kubernetes -n default`)
+      ports: [443, 6443]
+    # Ranges "any address" never includes. The default keeps the chart's Pods off the cloud metadata
     # range; empty it if a control-plane Pod authenticates through the metadata server (GKE Workload
     # Identity, EKS Pod Identity), or add your private ranges to tighten it.
     egressExcept:
       ipv4: [169.254.0.0/16]
       ipv6: ["fe80::/10"]
+    # More NetworkPolicy egress rules for the chart's Pods, rendered as written (a namespaceSelector
+    # for an in-cluster service in another namespace, a proxy).
     extraEgress: []
     # NetworkPolicy ingress rules added to every chart Pod — e.g. a Prometheus in another namespace.
     extraIngress: []
