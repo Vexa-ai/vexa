@@ -67,7 +67,7 @@ Two, because there are two databases and Postgres cannot join across them.
 | uid | Database | Tables read |
 |---|---|---|
 | `vexa-app-db` | `database.name` (default `vexa`) | `users`, `meetings` |
-| `vexa-flows-db` | `flows.databaseName` (default `flows`) | `reaction` |
+| `vexa-flows-db` | `flows.databaseName` (default: `database.name`) | `reaction` |
 
 **No panel joins across the two**, by construction — every panel names exactly one datasource.
 When a deployment sets `flows.databaseName == database.name` (the shape compose runs) both

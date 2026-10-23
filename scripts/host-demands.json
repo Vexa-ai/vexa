@@ -7,8 +7,6 @@
       "reason": "creates the CRM's own login role (ADR-0047), limited to the CRM tables; only with crm.enabled; a pre-created role needs no CREATEROLE" },
     { "file": "deploy/helm/charts/vexa/dashboards/reporting-role.sql", "demand": "db-createrole", "row": "D4",
       "reason": "SQL the operator's DBA runs by hand for the optional adoption panel's read-only Grafana login; no service runs it" },
-    { "file": "deploy/helm/charts/vexa/templates/flows.yaml", "demand": "db-createdb", "row": "D3",
-      "reason": "flows' ensure-db initContainer creates the flows database when flows.databaseName differs from database.name; avoided by pre-creating it or sharing the main database" },
     { "file": "deploy/helm/charts/vexa/templates/daemonset-bot-seccomp.yaml", "demand": "daemonset", "row": "F2",
       "reason": "writes the meeting bots' seccomp profile (Chromium's user-namespace sandbox) onto every node bots may land on; off with runtime.botSandbox.installer.enabled=false" },
     { "file": "deploy/helm/charts/vexa/templates/daemonset-bot-seccomp.yaml", "demand": "root-user", "row": "F2",

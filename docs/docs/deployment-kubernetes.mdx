@@ -85,6 +85,26 @@ The settings, all under `networkPolicy`:
 `controlPlane.extraIngress` is rendered only while the default-deny is on. All of these policies need
 a CNI that enforces NetworkPolicy; without one they have no effect.
 
+### Flows database
+
+With `flows.enabled`, flows keeps its tables in the main database (`database.name`), as Compose and
+Lite do, so a backup of that database covers it. Vexa never creates a database. To keep flows in a
+database of its own, have your DBA create it, owned by `database.user`, and set
+`flows.databaseName` to its name.
+
+Each flows Pod starts with an `ensure-db` init container that creates nothing and stops the Pod with
+the step to take:
+
+- `flows.databaseName` names a database that does not exist: create it, or unset the value.
+- `flows.databaseName` is empty, the main database has no flows tables, and a database named `flows`
+  has some (or cannot be read).
+
+**Upgrading an install that ran flows.** Until this release flows kept its tables in a database named
+`flows` by default. Set `flows.databaseName: flows` before upgrading, and flows keeps using it. If you
+upgrade without it, the flows Pods stop at `ensure-db` with that instruction and start nothing empty.
+To move flows into the main database instead, copy its tables there first, then set
+`flows.databaseName` to `database.name`.
+
 ### Control-plane egress
 
 The chart's Pods (all but postgres, redis and the flows Pods, which have their own policy) reach DNS,
@@ -1062,7 +1082,7 @@ are the chart's own `values.yaml`; "opt-in" means off until you set it.
 |---|---|---|---|---|---|
 | D1 | A Postgres database the migration user (`database.user`) owns. The chart ships `postgres:17-alpine`; an external Postgres 14 to 17 works. | admin-api (converges the schema at start), the migration and schema Jobs | Every service's tables live there; from Postgres 15 only the database owner (or a `CREATE` grant on `public`) may create tables. | Yes | Nothing to avoid. No superuser, no `REPLICATION`, no `BYPASSRLS`, no extension: Vexa runs no `CREATE EXTENSION`. |
 | D2 | `CREATEROLE` for the migration user, or two roles your DBA pre-creates | the session-store schema Job (`agentApi.sessions`), the CRM schema Job (`crm.enabled`, opt-in) | Each makes its own login role (`vexa_agent_sessions`, `vexa_crm`) that reaches only its own tables, so agent-api and crm-api never hold the admin credential. | The separate roles: yes. `CREATEROLE`: no. | Pre-create both roles with the passwords in their Secrets; the Jobs then issue no role statement. See [Database privileges on an external Postgres](#database-privileges-on-an-external-postgres). |
-| D3 | `CREATEDB` for the migration user | the flows `ensure-db` init container (`flows.enabled`, opt-in) | Flows keeps its tables in a database of its own (`flows.databaseName`, default `flows`) and creates it when absent. | No | Pre-create the database (`CREATE DATABASE flows OWNER <database.user>`), or set `flows.databaseName` to `database.name` so flows shares the main database, as Compose and Lite do. To remove: the default should be the shared database (size M: existing installs keep theirs, so the default needs an upgrade path). |
+| D3 | Nothing: no role needs `CREATEDB`. Flows keeps its tables in the main database (`flows.databaseName` empty, the default, as Compose and Lite do); a separate one is used only when your DBA has created it and you name it | flows (`flows.enabled`, opt-in) | — | No | Nothing to avoid. Vexa never creates a database: the `ensure-db` init container only checks, and stops with the step to take ([Flows database](#flows-database)). |
 | D4 | A read-only reporting role, created by your DBA from `dashboards/reporting-role.sql` | the optional adoption panel (Grafana) | Grafana's login, limited to the columns the panel reads | No, the panel is optional | Skip the panel. |
 | D5 | Compose and Lite connect as `postgres`, the superuser of the Postgres they bring | every service's migrations there | They own that database server, so the default user is its superuser. | No | Point `DB_HOST`/`DB_USER` at your own Postgres; the user needs only D1 and D2. |
 

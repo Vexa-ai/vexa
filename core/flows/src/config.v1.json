@@ -890,7 +890,7 @@
     },
     {
       "key": "DB_NAME",
-      "reason": "the application database the Helm ensure-db init container connects to while it creates flows.databaseName; no flows process reads it."
+      "reason": "the main database the Helm ensure-db init container connects to while it checks the flows database (it creates none); no flows process reads it."
     },
     {
       "key": "DB_HOST",
@@ -906,7 +906,11 @@
     },
     {
       "key": "FLOWS_DB_NAME",
-      "reason": "the database part of the composed VEXA_FLOWS_DB_URL, and the database the Helm ensure-db init container creates (Helm only)."
+      "reason": "the database part of the composed VEXA_FLOWS_DB_URL, and the database the Helm ensure-db init container checks (Helm only)."
+    },
+    {
+      "key": "FLOWS_DB_SHARED",
+      "reason": "1 when the flows tables live in the main database: the Helm ensure-db init container then looks for flows data an earlier release left in the database 'flows' (Helm only)."
     }
   ]
 }

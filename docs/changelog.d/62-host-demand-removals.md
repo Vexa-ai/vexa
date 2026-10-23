@@ -24,3 +24,10 @@
   prices (or `VEXA_MODEL_PRICES_URL=off`). Anything unlisted is blocked once the upgrade lands.
   `networkPolicy.controlPlane.anyAddress: true` keeps the old rule while you collect them. See
   [Control-plane egress](/deployment-kubernetes#control-plane-egress).
+- **Helm: flows uses the main database, and no role needs CREATEDB (upgrade action if flows is on).**
+  `flows.databaseName` now defaults to empty: flows keeps its tables in `database.name`, as Compose
+  and Lite do. Vexa no longer creates a database; the flows `ensure-db` init container only checks
+  and stops with the step to take. **If you ran flows before, its data is in the database `flows`:
+  set `flows.databaseName: flows` before upgrading** to keep using it. Without it, the flows Pods
+  stop at `ensure-db` with that instruction rather than start empty. A separate database must be
+  created by your DBA. See [Flows database](/deployment-kubernetes#flows-database).

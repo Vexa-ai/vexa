@@ -496,26 +496,37 @@ else
   echo "  FAIL: flows tier lost VEXA_UI_URL under the default terminal.enabled=true (#F-D5.5)"; fail=1
 fi
 
-# (6) the ensure-db initContainer tolerates a pre-created database / a role with no CREATEDB: the
-#     create is attempted only when the database is absent, and a privilege failure re-checks once
-#     more (another replica, or a pre-created database, may already have it) before refusing loudly
-#     rather than crash-looping on a raw permission-denied traceback. Static proof only — no live
-#     cluster to actually withhold CREATEDB from a role and watch this branch execute.
-if grep -q 'does not exist and this role could' <<< "$FLOWS_DEFAULT" \
-  && grep -q 'already exists (created by another process)' <<< "$FLOWS_DEFAULT"; then
-  echo "  OK: ensure-db initContainer codes the CREATEDB-tolerant retry/refuse path (#F-D5.6)"
+# (6) P24 / D3: the ensure-db initContainer creates no database (no role needs CREATEDB). It stops
+#     the Pod with the step to take: a named database that does not exist is the DBA's to create,
+#     and flows data left in the database "flows" (the old default) is kept by naming it.
+if ! grep -q 'CREATE DATABASE' <<< "$FLOWS_DEFAULT" \
+  && grep -q 'Vexa does not create databases: ask your DBA to create it' <<< "$FLOWS_DEFAULT" \
+  && grep -q 'Set flows.databaseName: flows to keep using it' <<< "$FLOWS_DEFAULT"; then
+  echo "  OK: ensure-db creates no database and stops with the step to take (D3)"
 else
-  echo "  FAIL: ensure-db initContainer is missing the CREATEDB-tolerant retry/refuse path (#F-D5.6)"; fail=1
+  echo "  FAIL: ensure-db creates a database or lacks the stop messages (D3)"; fail=1
 fi
 
-# flows.databaseName — default "flows" (nothing changes for anyone); set equal to database.name to
-# put the flows tables in the application's own database instead (the shape compose already runs —
-# its flows tables live in the shared vexa database, no separate CREATE DATABASE at all). Prod
-# reason: the db-backup CronJob dumps only the named application database, so a separate "flows"
-# database is unbacked-up. When the two names match, the ensure-db initContainer is skipped
-# entirely — nothing to create, the application database already exists by definition.
+# flows.databaseName — empty by default: the flows tables live in the main database, the shape
+# Compose and Lite run, covered by any backup of that database. ensure-db still renders by default,
+# to find flows data an earlier release left in the database "flows"; set equal to database.name it
+# is skipped (the operator has said where flows lives); set to another name it checks that name.
 FLOWS_SHARED_DB="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
   --set flows.enabled=true --set flows.mail.enabled=true --set flows.databaseName=vexa --show-only templates/flows.yaml)"
+FLOWS_OWN_DB="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set flows.enabled=true --set flows.mail.enabled=true --set flows.databaseName=flows --show-only templates/flows.yaml)"
+if [ "$(grep -A1 'name: FLOWS_DB_NAME' <<< "$FLOWS_DEFAULT" | grep -c 'value: "vexa"')" -eq 6 ] \
+  && [ "$(grep -A1 'name: FLOWS_DB_SHARED' <<< "$FLOWS_DEFAULT" | grep -c 'value: "1"')" -eq 3 ]; then
+  echo "  OK: D3: by default every flows container (3 Deployments + their ensure-db) uses the main database"
+else
+  echo "  FAIL: D3: the default flows database is not the main database"; fail=1
+fi
+if [ "$(grep -A1 'name: FLOWS_DB_NAME' <<< "$FLOWS_OWN_DB" | grep -c 'value: "flows"')" -eq 6 ] \
+  && [ "$(grep -A1 'name: FLOWS_DB_SHARED' <<< "$FLOWS_OWN_DB" | grep -c 'value: "0"')" -eq 3 ]; then
+  echo "  OK: D3: flows.databaseName=flows keeps an existing install on its flows database"
+else
+  echo "  FAIL: D3: flows.databaseName=flows does not render the flows database"; fail=1
+fi
 if grep -A1 'name: FLOWS_DB_NAME' <<< "$FLOWS_SHARED_DB" | has 'value: "vexa"'; then
   echo "  OK: flows.databaseName=vexa renders FLOWS_DB_NAME=vexa on every composed DSN"
 else
@@ -527,9 +538,15 @@ else
   echo "  OK: ensure-db initContainer is skipped when flows.databaseName equals database.name"
 fi
 if grep -q 'ensure-db' <<< "$FLOWS_DEFAULT"; then
-  echo "  OK: ensure-db initContainer still renders under the default flows.databaseName (\"flows\" != \"vexa\")"
+  echo "  OK: ensure-db initContainer renders under the default (it looks for an earlier release's flows database)"
 else
   echo "  FAIL: ensure-db initContainer missing under the default flows.databaseName"; fail=1
+fi
+D3_ALL="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.enabled=true --set crm.enabled=true --set crm.orgId=org1)"
+if grep -q 'kind: Deployment' <<< "$D3_ALL" && ! grep -q 'CREATE DATABASE' <<< "$D3_ALL"; then
+  echo "  OK: D3: no render issues CREATE DATABASE"
+else
+  echo "  FAIL: D3: a render issues CREATE DATABASE"; fail=1
 fi
 
 # ── the adoption panel (PRD §16.2 item 5) ────────────────────────────────────────────────────

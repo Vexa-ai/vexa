@@ -369,6 +369,111 @@ spawned every chat worker from Docker Hub and, offline, none started. */}}
 {{- end -}}
 {{- end -}}
 
+{{/*
+THE FLOWS DATABASE (requirements row D3). Flows keeps its tables in the main database
+(database.name) unless flows.databaseName names another one, which the operator creates: Vexa never
+creates a database, so no role needs CREATEDB.
+*/}}
+{{- define "vexa.flowsDatabaseName" -}}
+{{- .Values.flows.databaseName | default .Values.database.name -}}
+{{- end -}}
+
+{{/*
+The ensure-db init container on every flows Deployment, or nothing. It creates nothing; it stops the
+Pod with the step to take when
+  - flows.databaseName names a database that does not exist (ask the DBA to create it, or unset
+    flows.databaseName), or
+  - flows.databaseName is unset, the main database has no flows tables, and a database named "flows"
+    (where flows kept its tables while that was the default) has some or cannot be read: set
+    flows.databaseName: flows to keep using it.
+Rendered when flows.databaseName is unset or names another database; flows.databaseName set to
+database.name skips it.
+*/}}
+{{- define "vexa.flowsDbCheck" -}}
+{{- $name := include "vexa.flowsDatabaseName" . -}}
+{{- if or (not .Values.flows.databaseName) (ne $name .Values.database.name) -}}
+- name: ensure-db
+  {{- include "vexa.containerSecurityContext" . | nindent 2 }}
+  image: {{ include "vexa.flowsImage" . | quote }}
+  command: ["python", "-c"]
+  args:
+    - |
+      import os, sys
+      from sqlalchemy import text
+      from flows import pg_engine
+      e = os.environ
+      name, shared, legacy = e["FLOWS_DB_NAME"], e["FLOWS_DB_SHARED"] == "1", "flows"
+      def url(db):
+          return ("postgresql+pg8000://" + e["DB_USER"] + ":" + e["DB_PASSWORD"] + "@" + e["DB_HOST"]
+                  + ":" + e["DB_PORT"] + "/" + db + "?sslmode=" + e["DB_SSL_MODE"])
+      def stop(msg):
+          print("STOP: " + msg, file=sys.stderr)
+          sys.exit(1)
+      def has_flows_tables(db):
+          with pg_engine(url(db)).connect() as c:
+              return c.execute(text("SELECT to_regclass('public.flow_version')")).scalar() is not None
+      with pg_engine(url(e["DB_NAME"])).connect() as c:
+          def present(n):
+              return c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": n}).first() is not None
+          if not shared:
+              if not present(name):
+                  stop("flows.databaseName is " + repr(name) + " and no database of that name exists. "
+                       "Vexa does not create databases: ask your DBA to create it, owned by "
+                       + repr(e["DB_USER"]) + ", or unset flows.databaseName so flows keeps its "
+                       "tables in the main database " + repr(e["DB_NAME"]) + ".")
+              print("flows uses database " + name)
+              sys.exit(0)
+          legacy_there = name != legacy and present(legacy)
+      if not legacy_there or has_flows_tables(name):
+          print("flows uses database " + name)
+          sys.exit(0)
+      try:
+          old = has_flows_tables(legacy)
+      except Exception as exc:
+          stop("a database named 'flows' exists and this role cannot read it (" + exc.__class__.__name__
+               + "). If it holds flows data from an earlier release, set flows.databaseName: flows "
+               "to keep using it; if it belongs to something else, set flows.databaseName: "
+               + repr(name) + " to keep flows in the main database.")
+      if old:
+          stop("flows data from an earlier release is in the database 'flows', which was the default "
+               "then. Set flows.databaseName: flows to keep using it. To move flows into the main "
+               "database instead, copy its tables into " + repr(name) + " first, then set "
+               "flows.databaseName: " + repr(name) + ".")
+      print("flows uses database " + name + " (the database 'flows' holds no flows tables)")
+  env:
+    - name: DB_USER
+      valueFrom:
+        secretKeyRef:
+          name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+          key: POSTGRES_USER
+    - name: DB_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+          key: POSTGRES_PASSWORD
+    - name: DB_NAME
+      valueFrom:
+        secretKeyRef:
+          name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+          key: POSTGRES_DB
+    - name: DB_HOST
+      value: {{ include "vexa.dbHostEffective" . | quote }}
+    - name: DB_PORT
+      value: {{ include "vexa.dbPortEffective" . | quote }}
+    - name: DB_SSL_MODE
+      value: {{ .Values.database.sslMode | quote }}
+    - name: FLOWS_DB_NAME
+      value: {{ $name | quote }}
+    - name: FLOWS_DB_SHARED
+      value: {{ ternary "1" "0" (eq $name .Values.database.name) | quote }}
+  {{- /* every container declares cpu+memory requests and limits (S6): with none, a namespace
+  LimitRange's default can OOMKill a check that imports SQLAlchemy before it reaches the database */}}
+  resources:
+    requests: {cpu: 50m, memory: 96Mi}
+    limits: {cpu: 250m, memory: 256Mi}
+{{- end -}}
+{{- end -}}
+
 {{/* The flows-tier image ref (flows-api + flows-worker + flows-mailbox + the ensure-db
 initContainer — one image, four entrypoints). Same shape as vexa.botImage: an explicit
 flows.image wins, otherwise global.imageTag pins the standard repo, otherwise the chart's own

@@ -172,103 +172,22 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- /* the ensure-db bootstrap only has work to do when the flows tables live in a database
-      OTHER than the application's own — when flows.databaseName == database.name they already
-      live in a database that is guaranteed to exist (F-D5 follow-up: compose already runs this
-      shape, sharing the app's own "vexa" database — no separate CREATE DATABASE anywhere). */}}
-      {{- if or (ne .Values.flows.databaseName .Values.database.name) (include "vexa.extraCA.enabled" .) }}
+      {{- /* the flows database check (vexa.flowsDbCheck): every Deployment that opens
+      VEXA_FLOWS_DB_URL checks before it starts, so none relies on another's pod starting first */}}
+      {{- $dbCheck := include "vexa.flowsDbCheck" . }}
+      {{- if or $dbCheck (include "vexa.extraCA.enabled" .) }}
       initContainers:
       {{- end }}
         {{- with include "vexa.extraCA.initContainer" . }}{{ . | trim | nindent 8 }}{{ end }}
-      {{- if ne .Values.flows.databaseName .Values.database.name }}
-        - name: ensure-db
-          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
-          image: {{ include "vexa.flowsImage" . | quote }}
-          command: ["python", "-c"]
-          args:
-            - |
-              # Bootstraps the SEPARATE flows.databaseName database (F-D5 item 3+6): connects to
-              # the APPLICATION database (database.name via DB_NAME/POSTGRES_DB — guaranteed to
-              # exist, unlike Postgres's own "postgres" maintenance database, which many managed
-              # Postgres offerings do not expose to the app's own role) purely as a bootstrap
-              # target, then checks/creates flows.databaseName. pg_database is a global catalog —
-              # visible from any database in the cluster, so the presence check works regardless
-              # of which database this connection lands on.
-              #
-              # Tolerates a role with no CREATEDB (F-D5 item 6, common on managed Postgres): the
-              # create is attempted only when the database is absent, and a privilege failure is
-              # not immediately fatal — it re-checks once more (another replica, or an operator,
-              # may have created it in the meantime / ahead of time) before refusing loudly.
-              import os
-              from sqlalchemy import text
-              from flows import pg_engine
-              name = os.environ["FLOWS_DB_NAME"]
-              admin_url = (
-                  "postgresql+pg8000://" + os.environ["DB_USER"] + ":" + os.environ["DB_PASSWORD"]
-                  + "@" + os.environ["DB_HOST"] + ":" + os.environ["DB_PORT"] + "/" + os.environ["DB_NAME"]
-                  + "?sslmode=" + os.environ["DB_SSL_MODE"]
-              )
-              e = pg_engine(admin_url, isolation_level="AUTOCOMMIT")
-              with e.connect() as c:
-                  exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
-                  if not exists:
-                      try:
-                          c.execute(text('CREATE DATABASE "' + name + '"'))
-                          print("created database " + name)
-                      except Exception as exc:
-                          exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
-                          if not exists:
-                              raise RuntimeError(
-                                  "database " + repr(name) + " does not exist and this role could "
-                                  "not create it (" + repr(exc) + ") — pre-create it "
-                                  "(CREATE DATABASE ...) or grant CREATEDB"
-                              ) from exc
-                          print("database " + name + " already exists (created by another process)")
-                  else:
-                      print("database " + name + " already exists")
-          env:
-            - name: DB_USER
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
-                  key: POSTGRES_USER
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
-                  key: POSTGRES_PASSWORD
-            - name: DB_NAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
-                  key: POSTGRES_DB
-            - name: DB_HOST
-              value: {{ include "vexa.dbHostEffective" . | quote }}
-            - name: DB_PORT
-              value: {{ include "vexa.dbPortEffective" . | quote }}
-            - name: DB_SSL_MODE
-              value: {{ .Values.database.sslMode | quote }}
-            - name: FLOWS_DB_NAME
-              value: {{ .Values.flows.databaseName | quote }}
-          {{- /* EVERY container declares cpu+memory requests AND limits — initContainers are
-          containers. This one had no resources block at all, which is the exact shape the
-          enterprise station gate's S6 check refuses (12 findings, 4 per flows Deployment) and the
-          exact shape of the 64Mi LimitRange squeeze in #1005: with no request, a namespace
-          LimitRange hands this pod its default, and a bootstrap that imports SQLAlchemy inside
-          64Mi is OOMKilled before it reaches the database. Sized like flows-api/flows-mailbox —
-          it opens one connection, runs one catalog query and exits. */}}
-          resources:
-            requests: {cpu: 50m, memory: 96Mi}
-            limits: {cpu: 250m, memory: 256Mi}
-      {{- end }}
+        {{- with $dbCheck }}{{ . | trim | nindent 8 }}{{ end }}
       containers:
         - name: flows-worker
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
           image: {{ include "vexa.flowsImage" . | quote }}
           # Composes VEXA_FLOWS_DB_URL from secretKeyRef-sourced parts (F-D5 item 1) rather than
           # a literal DSN in the Secret — see the file header. sslmode threads from database.sslMode
-          # (F-D5 item 2); the target database is flows.databaseName (default "flows", separate
-          # from the app database — set equal to database.name to share it, see values.yaml).
+          # (F-D5 item 2); the target database is vexa.flowsDatabaseName (the main database unless
+          # flows.databaseName names another, see values.yaml).
           command: ["/bin/sh", "-c"]
           args:
             - |
@@ -304,7 +223,7 @@ spec:
             - name: DB_SSL_MODE
               value: {{ .Values.database.sslMode | quote }}
             - name: FLOWS_DB_NAME
-              value: {{ .Values.flows.databaseName | quote }}
+              value: {{ include "vexa.flowsDatabaseName" . | quote }}
             - name: VEXA_FLOWS_GATEWAY_URL
               value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/meetings"
             {{- /* AGENT DOMAIN PRESENCE (F-D5 item 4): unset means "no agent domain deployed" to
@@ -416,89 +335,14 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- /* F192 — the SAME ensure-db initContainer flows-worker carries above: every Deployment
-      that opens VEXA_FLOWS_DB_URL must be able to create the database it opens, not rely on
-      flows-worker's pod happening to have won the startup race first (k8s makes no promise
-      about pod start order). Reconciled to the SAME shape as flows-worker's block (merge of
-      #1505/F192 with #1509/F-D5, which landed on top of it): the CREATEDB-tolerant bootstrap
-      against flows.databaseName, guarded by the same "nothing to do when it equals the app's
-      own database" skip. See flows-worker above for the full reasoning in one place. A Helm
-      TEMPLATE comment, not a YAML one — a plain "#" line here renders into every values-name
-      permutation regardless of the if-guard below, including the word "ensure-db" the guard
-      exists to keep OUT of the no-op case. */}}
-      {{- if or (ne .Values.flows.databaseName .Values.database.name) (include "vexa.extraCA.enabled" .) }}
+      {{- /* the flows database check (vexa.flowsDbCheck): every Deployment that opens
+      VEXA_FLOWS_DB_URL checks before it starts, so none relies on another's pod starting first */}}
+      {{- $dbCheck := include "vexa.flowsDbCheck" . }}
+      {{- if or $dbCheck (include "vexa.extraCA.enabled" .) }}
       initContainers:
       {{- end }}
         {{- with include "vexa.extraCA.initContainer" . }}{{ . | trim | nindent 8 }}{{ end }}
-      {{- if ne .Values.flows.databaseName .Values.database.name }}
-        - name: ensure-db
-          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
-          image: {{ include "vexa.flowsImage" . | quote }}
-          command: ["python", "-c"]
-          args:
-            - |
-              import os
-              from sqlalchemy import text
-              from flows import pg_engine
-              name = os.environ["FLOWS_DB_NAME"]
-              admin_url = (
-                  "postgresql+pg8000://" + os.environ["DB_USER"] + ":" + os.environ["DB_PASSWORD"]
-                  + "@" + os.environ["DB_HOST"] + ":" + os.environ["DB_PORT"] + "/" + os.environ["DB_NAME"]
-                  + "?sslmode=" + os.environ["DB_SSL_MODE"]
-              )
-              e = pg_engine(admin_url, isolation_level="AUTOCOMMIT")
-              with e.connect() as c:
-                  exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
-                  if not exists:
-                      try:
-                          c.execute(text('CREATE DATABASE "' + name + '"'))
-                          print("created database " + name)
-                      except Exception as exc:
-                          exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
-                          if not exists:
-                              raise RuntimeError(
-                                  "database " + repr(name) + " does not exist and this role could "
-                                  "not create it (" + repr(exc) + ") — pre-create it "
-                                  "(CREATE DATABASE ...) or grant CREATEDB"
-                              ) from exc
-                          print("database " + name + " already exists (created by another process)")
-                  else:
-                      print("database " + name + " already exists")
-          env:
-            - name: DB_USER
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
-                  key: POSTGRES_USER
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
-                  key: POSTGRES_PASSWORD
-            - name: DB_NAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
-                  key: POSTGRES_DB
-            - name: DB_HOST
-              value: {{ include "vexa.dbHostEffective" . | quote }}
-            - name: DB_PORT
-              value: {{ include "vexa.dbPortEffective" . | quote }}
-            - name: DB_SSL_MODE
-              value: {{ .Values.database.sslMode | quote }}
-            - name: FLOWS_DB_NAME
-              value: {{ .Values.flows.databaseName | quote }}
-          {{- /* EVERY container declares cpu+memory requests AND limits — initContainers are
-          containers. This one had no resources block at all, which is the exact shape the
-          enterprise station gate's S6 check refuses (12 findings, 4 per flows Deployment) and the
-          exact shape of the 64Mi LimitRange squeeze in #1005: with no request, a namespace
-          LimitRange hands this pod its default, and a bootstrap that imports SQLAlchemy inside
-          64Mi is OOMKilled before it reaches the database. Sized like flows-api/flows-mailbox —
-          it opens one connection, runs one catalog query and exits. */}}
-          resources:
-            requests: {cpu: 50m, memory: 96Mi}
-            limits: {cpu: 250m, memory: 256Mi}
-      {{- end }}
+        {{- with $dbCheck }}{{ . | trim | nindent 8 }}{{ end }}
       containers:
         - name: flows-mailbox
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
@@ -545,7 +389,7 @@ spec:
             - name: DB_SSL_MODE
               value: {{ .Values.database.sslMode | quote }}
             - name: FLOWS_DB_NAME
-              value: {{ .Values.flows.databaseName | quote }}
+              value: {{ include "vexa.flowsDatabaseName" . | quote }}
             - name: VEXA_FLOWS_GATEWAY_URL
               value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/meetings"
             {{- if .Values.agentApi.enabled }}
@@ -657,79 +501,14 @@ spec:
       VEXA_FLOWS_DB_URL must be able to create the database it opens itself, not rely on
       flows-worker's pod happening to have won the startup race first. Helm TEMPLATE comment,
       not YAML — see the note on flows-mailbox's identical block for why. */}}
-      {{- if or (ne .Values.flows.databaseName .Values.database.name) (include "vexa.extraCA.enabled" .) }}
+      {{- /* the flows database check (vexa.flowsDbCheck): every Deployment that opens
+      VEXA_FLOWS_DB_URL checks before it starts, so none relies on another's pod starting first */}}
+      {{- $dbCheck := include "vexa.flowsDbCheck" . }}
+      {{- if or $dbCheck (include "vexa.extraCA.enabled" .) }}
       initContainers:
       {{- end }}
         {{- with include "vexa.extraCA.initContainer" . }}{{ . | trim | nindent 8 }}{{ end }}
-      {{- if ne .Values.flows.databaseName .Values.database.name }}
-        - name: ensure-db
-          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
-          image: {{ include "vexa.flowsImage" . | quote }}
-          command: ["python", "-c"]
-          args:
-            - |
-              import os
-              from sqlalchemy import text
-              from flows import pg_engine
-              name = os.environ["FLOWS_DB_NAME"]
-              admin_url = (
-                  "postgresql+pg8000://" + os.environ["DB_USER"] + ":" + os.environ["DB_PASSWORD"]
-                  + "@" + os.environ["DB_HOST"] + ":" + os.environ["DB_PORT"] + "/" + os.environ["DB_NAME"]
-                  + "?sslmode=" + os.environ["DB_SSL_MODE"]
-              )
-              e = pg_engine(admin_url, isolation_level="AUTOCOMMIT")
-              with e.connect() as c:
-                  exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
-                  if not exists:
-                      try:
-                          c.execute(text('CREATE DATABASE "' + name + '"'))
-                          print("created database " + name)
-                      except Exception as exc:
-                          exists = c.execute(text("SELECT 1 FROM pg_database WHERE datname=:n"), {"n": name}).first()
-                          if not exists:
-                              raise RuntimeError(
-                                  "database " + repr(name) + " does not exist and this role could "
-                                  "not create it (" + repr(exc) + ") — pre-create it "
-                                  "(CREATE DATABASE ...) or grant CREATEDB"
-                              ) from exc
-                          print("database " + name + " already exists (created by another process)")
-                  else:
-                      print("database " + name + " already exists")
-          env:
-            - name: DB_USER
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
-                  key: POSTGRES_USER
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
-                  key: POSTGRES_PASSWORD
-            - name: DB_NAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
-                  key: POSTGRES_DB
-            - name: DB_HOST
-              value: {{ include "vexa.dbHostEffective" . | quote }}
-            - name: DB_PORT
-              value: {{ include "vexa.dbPortEffective" . | quote }}
-            - name: DB_SSL_MODE
-              value: {{ .Values.database.sslMode | quote }}
-            - name: FLOWS_DB_NAME
-              value: {{ .Values.flows.databaseName | quote }}
-          {{- /* EVERY container declares cpu+memory requests AND limits — initContainers are
-          containers. This one had no resources block at all, which is the exact shape the
-          enterprise station gate's S6 check refuses (12 findings, 4 per flows Deployment) and the
-          exact shape of the 64Mi LimitRange squeeze in #1005: with no request, a namespace
-          LimitRange hands this pod its default, and a bootstrap that imports SQLAlchemy inside
-          64Mi is OOMKilled before it reaches the database. Sized like flows-api/flows-mailbox —
-          it opens one connection, runs one catalog query and exits. */}}
-          resources:
-            requests: {cpu: 50m, memory: 96Mi}
-            limits: {cpu: 250m, memory: 256Mi}
-      {{- end }}
+        {{- with $dbCheck }}{{ . | trim | nindent 8 }}{{ end }}
       containers:
         - name: flows-api
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
@@ -772,7 +551,7 @@ spec:
             - name: DB_SSL_MODE
               value: {{ .Values.database.sslMode | quote }}
             - name: FLOWS_DB_NAME
-              value: {{ .Values.flows.databaseName | quote }}
+              value: {{ include "vexa.flowsDatabaseName" . | quote }}
             {{- /* THE LISTENER. flows_api.py defaults VEXA_FLOWS_API_HOST to 127.0.0.1 on purpose
             (it also runs as a host lane on the dogfood rig, where 0.0.0.0 would publish that box's
             every interface). In a POD, loopback is this container's loopback: the Service below

@@ -74,7 +74,7 @@ data:
   VEXA_DB_HOST: {{ include "vexa.dbHostEffective" . | quote }}
   VEXA_DB_PORT: {{ include "vexa.dbPortEffective" . | quote }}
   VEXA_APP_DB: {{ .Values.database.name | quote }}
-  VEXA_FLOWS_DB: {{ .Values.flows.databaseName | quote }}
+  VEXA_FLOWS_DB: {{ include "vexa.flowsDatabaseName" . | quote }}
   VEXA_DB_SSLMODE: {{ .Values.database.sslMode | quote }}
   {{- /* not a value Grafana reads: the Secret the operator wires VEXA_DB_USER/PASSWORD from */}}
   VEXA_READER_SECRET: {{ $reader | quote }}
