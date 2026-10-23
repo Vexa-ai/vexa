@@ -1035,7 +1035,7 @@ are the chart's own `values.yaml`; "opt-in" means off until you set it.
 | N6 | Agent workers reach the public internet on any port (private ranges refused) | agent workers (`worker-egress`) | The model's tools fetch pages and clone repositories; models are reached through model-proxy. | Yes, while agents may browse | Narrow with your egress proxy. |
 | N7 | The endpoints you configure, and only those: your speech-to-text URL (empty by default); your model providers (none by default); SMTP for mail; Microsoft Graph for a flows mailbox; Google and Telegram for connections (the credential broker); git remotes; the webhook URLs users add (private addresses refused unless allowed) | meeting-api, bots, agent-api, model-proxy, flows, credential broker | Each is a feature you turn on by configuring it. | Only for the features you use | Leave it unset. |
 | N8 | `openrouter.ai` once a day for public model prices | agent-api | Prices the usage it records at market rates | No | `VEXA_MODEL_PRICES_URL=off`: the snapshot bundled with the release prices every call. |
-| N9 | The Claude Code and Codex CLIs inside agent workers may contact their vendors besides the model API (telemetry, error reports, update checks) | agent workers | Default behaviour of the vendors' CLIs | No | Block it at your egress proxy. To remove: switch it off in the worker image (size S). |
+| N9 | The Codex CLI inside agent workers may contact its vendor besides the model API (telemetry, update checks); Claude Code's non-essential traffic is off in the image (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` in its managed settings) | agent workers running Codex | Default behaviour of the vendor's CLI | No | Block it at your egress proxy. To remove: the same switch for Codex, once its traffic is measured (size S). |
 | N10 | LiveKit on the node's network, with its UDP media range open (`livekit.hostNetwork`, on when calls are on) | calls (`livekit.enabled`, opt-in) | WebRTC media to browsers outside the cluster | Only with calls | Leave calls off. With `livekit.hostNetwork: false` you expose the UDP range yourself ([Calls](#calls-optional)). |
 
 **Filesystem and nodes**
@@ -1394,12 +1394,12 @@ with the [self-hosted transcription unit](/deployment#transcription-the-separate
 GPU or CPU — and your own LLM endpoint ([Configuration](/configuration)) so the audio path never
 calls out. See [Security & compliance](/security-compliance).
 
-Two calls leave the cluster unless you switch them off. agent-api reads public model prices from
+Two calls leave the cluster unless you stop them. agent-api reads public model prices from
 `openrouter.ai` once a day: set `VEXA_MODEL_PRICES_URL=off` in `agentApi.extraEnv`, and the
-snapshot bundled with the release prices every call. The Claude Code and Codex CLIs inside agent
-workers may contact their vendors for telemetry, error reports and update checks; block them at your
-egress proxy. The full list is the [platform requirements](#what-vexa-requires-of-your-platform)
-table (N3 to N9).
+snapshot bundled with the release prices every call. The Codex CLI inside agent workers may contact
+its vendor for telemetry and update checks: block that at your egress proxy. (Claude Code's
+non-essential traffic is already off in the worker image.) The full list is the
+[platform requirements](#what-vexa-requires-of-your-platform) table, rows N3 to N9.
 
 **One gap on this path, and it is this chart's:** `TRANSCRIPTION_MODEL` is **not values-plumbed**
 — set it on the meeting-api and terminal Deployments via `extraEnv` until it lands, which the

@@ -284,8 +284,9 @@ posture the regulated verticals ask for.
 
 Two calls leave the host unless you switch them off: agent-api reads public model prices from
 `openrouter.ai` once a day (`VEXA_MODEL_PRICES_URL=off` in `deploy/compose/.env` uses the snapshot
-bundled with the release), and the Claude Code and Codex CLIs inside agent workers may contact their
-vendors for telemetry, error reports and update checks (block them at your egress proxy). Every
+bundled with the release), and the Codex CLI inside agent workers may contact its vendor for
+telemetry and update checks (block it at your egress proxy; Claude Code's non-essential traffic is
+off in the image). Every
 requirement Vexa places on a host is listed in the
 [platform requirements](/deployment-kubernetes#what-vexa-requires-of-your-platform) table, Compose
 and Lite differences included.

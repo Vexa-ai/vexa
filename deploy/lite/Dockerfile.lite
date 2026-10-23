@@ -200,9 +200,11 @@ RUN chmod o+x /root
 # 2.1.293 declares engines.node >= 22; this stage's Playwright noble base ships Node 22.
 RUN npm install -g @anthropic-ai/claude-code@2.1.293
 # No hook runs in a worker, from any scope: the managed settings file is read whatever
-# --setting-sources says (the launch also passes the same key with --settings).
+# --setting-sources says (the launch also passes the same key with --settings). Nor does the CLI
+# call its vendor for anything but the model (telemetry, error reports, update checks): a worker
+# reaches only the endpoints the operator declared (P24).
 RUN mkdir -p /etc/claude-code && \
-    printf '%s\n' '{"disableAllHooks": true}' > /etc/claude-code/managed-settings.json
+    printf '%s\n' '{"disableAllHooks": true, "env": {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}}' > /etc/claude-code/managed-settings.json
 
 # ── Service source + the sealed contracts each loads BY PATH (layout mirrors each service image,
 #    re-rooted under /app/<service> so the import walk-up resolves the same relative tree). ────────

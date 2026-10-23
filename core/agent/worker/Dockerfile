@@ -43,9 +43,11 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
     npm install -g @anthropic-ai/claude-code@2.1.293 @openai/codex@0.146.0 && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 # No hook runs in a worker, from any scope: the managed settings file is read whatever
-# --setting-sources says (the launch also passes the same key with --settings).
+# --setting-sources says (the launch also passes the same key with --settings). Nor does the CLI
+# call its vendor for anything but the model (telemetry, error reports, update checks): a worker
+# reaches only the endpoints the operator declared (P24).
 RUN mkdir -p /etc/claude-code && \
-    printf '%s\n' '{"disableAllHooks": true}' > /etc/claude-code/managed-settings.json
+    printf '%s\n' '{"disableAllHooks": true, "env": {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}}' > /etc/claude-code/managed-settings.json
 # The user the model's tools run as (llm/ports.py TOOLS_USER). The worker runs as root where the
 # substrate lets it and starts every harness CLI as this user, so the model's Bash cannot read the
 # worker's environment through /proc or write the worker's code; the worker hands it, by group, only

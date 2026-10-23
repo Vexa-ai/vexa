@@ -336,7 +336,8 @@ def test_a_workspace_skill_hook_cannot_run(tmp_path, monkeypatch):
                        REPO / "deploy" / "lite" / "Dockerfile.lite"):
         text = dockerfile.read_text()
         line = next(ln for ln in text.splitlines() if "managed-settings.json" in ln and "printf" in ln)
-        assert json.loads(line.split("'")[3]) == {"disableAllHooks": True}
+        assert json.loads(line.split("'")[3]) == {
+            "disableAllHooks": True, "env": {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}}
         assert "/etc/claude-code/managed-settings.json" in line
     assert not list((home / ".claude").glob("settings*.json"))
     assert "hooks" not in {k.lower() for k in _frontmatter(
@@ -471,14 +472,15 @@ REPO = Path(__file__).resolve().parents[3]
 
 
 def test_the_worker_images_turn_hooks_off_and_run_a_supported_node():
-    """Both images that run Claude Code carry a managed settings file with disableAllHooks (the
-    managed scope is read whatever `--setting-sources` says), and the worker image installs the Node
+    """Both images that run Claude Code carry a managed settings file with disableAllHooks and the
+    CLI's non-essential traffic (telemetry, error reports, update checks) off (the managed scope is
+    read whatever `--setting-sources` says), and the worker image installs the Node
     major the pinned CLI declares (`engines.node >= 22`). Lite's base image already ships Node 22."""
     worker = (REPO / "core" / "agent" / "worker" / "Dockerfile").read_text()
     lite = (REPO / "deploy" / "lite" / "Dockerfile.lite").read_text()
     for text in (worker, lite):
         assert "/etc/claude-code/managed-settings.json" in text
-        assert '{"disableAllHooks": true}' in text
+        assert '{"disableAllHooks": true, "env": {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}}' in text
     # Node 22, from the official image pinned by digest (never a remote setup script)
     assert "COPY --from=node:22-" in worker and "@sha256:" in worker and "nodesource" not in worker
 
