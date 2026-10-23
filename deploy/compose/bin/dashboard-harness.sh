@@ -23,7 +23,7 @@ export IMAGE_TAG=dev COMPOSE_PROJECT_NAME="$PROJ" ADMIN_TOKEN="$ADMIN" \
        DB_PASSWORD="${DB_PASSWORD:-$(openssl rand -hex 32)}" \
        REDIS_PASSWORD="${REDIS_PASSWORD:-$(openssl rand -hex 32)}" \
        NEXTAUTH_SECRET="${NEXTAUTH_SECRET:-$(openssl rand -hex 32)}" \
-       BROWSER_IMAGE="${BROWSER_IMAGE:-mock-bot:dev}" DOCKER_GID="${DOCKER_GID:-0}" \
+       BROWSER_IMAGE="${BROWSER_IMAGE:-mock-bot:dev}" DOCKER_GID="${DOCKER_GID:-$( [ "$(uname -s)" = Linux ] && stat -c %g "${DOCKER_SOCK:-/var/run/docker.sock}" 2>/dev/null || echo 0)}" \
        STORAGE_HOST_PORT="${STORAGE_HOST_PORT:-19000}"
 DC=(docker compose -p "$PROJ" -f docker-compose.yml -f docker-compose.dashboard.yml)
 

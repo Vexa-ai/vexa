@@ -54,3 +54,20 @@ def test_mint_writes_the_socket_group_over_the_old_default(tmp_path):
         assert _value(env_file, "DOCKER_GID") == "4242"
     finally:
         s.close()
+
+
+@pytest.mark.skipif(platform.system() != "Linux", reason="the socket's group is read on Linux only")
+def test_the_test_stack_gives_the_runtime_the_socket_group(tmp_path, monkeypatch):
+    from conftest import _docker_gid
+
+    sock = tmp_path / "docker.sock"
+    s = socket.socket(socket.AF_UNIX)
+    s.bind(str(sock))
+    try:
+        monkeypatch.delenv("DOCKER_GID", raising=False)
+        monkeypatch.setenv("DOCKER_SOCK", str(sock))
+        assert _docker_gid() == str(sock.stat().st_gid)    # not 0: uid 10001 is not root
+        monkeypatch.setenv("DOCKER_GID", "4242")             # an explicit value wins
+        assert _docker_gid() == "4242"
+    finally:
+        s.close()

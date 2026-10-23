@@ -15,6 +15,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -139,6 +140,21 @@ def _compose(*args: str, env: dict | None = None, check: bool = True, timeout: i
     return result
 
 
+def _docker_gid() -> str:
+    """The group the runtime (uid 10001) reaches the engine's socket through, as mint-dev-env.sh
+    writes it: an explicit DOCKER_GID; on Linux the socket's own group; else 0 (Docker Desktop's
+    socket belongs to group 0 inside its VM, and the host-side path says nothing about that)."""
+    if os.getenv("DOCKER_GID"):
+        return os.environ["DOCKER_GID"]
+    sock = os.getenv("DOCKER_SOCK", "/var/run/docker.sock")
+    if sys.platform.startswith("linux"):
+        try:
+            return str(os.stat(sock).st_gid)
+        except OSError:
+            pass
+    return "0"
+
+
 def _stack_env() -> dict:
     return {
         # dev = the locally-built images (the routine gate). Release CI overrides this to pin the
@@ -169,8 +185,8 @@ def _stack_env() -> dict:
         "MCP_HOST_PORT": MCP_HOST_PORT,
         "POSTGRES_HOST_PORT": POSTGRES_HOST_PORT,
         "STORAGE_HOST_PORT": STORAGE_HOST_PORT,
-        # Docker-Desktop / Linux root socket → group 0 is fine for the mounted socket.
-        "DOCKER_GID": os.getenv("DOCKER_GID", "0"),
+        # The runtime runs as uid 10001 and reaches the engine's socket through this group.
+        "DOCKER_GID": _docker_gid(),
         "LOG_LEVEL": os.getenv("LOG_LEVEL", "info"),
     }
 
