@@ -2029,20 +2029,67 @@ VEXA_MCP_TOOLS = tuple(_MCP_TOOLS_DOC["tools"])
 VEXA_MCP_SHARED_TOOLS = tuple(_MCP_TOOLS_DOC.get("shared_tools") or ())
 
 
+def _delegation_claims(token: str) -> "dict | None":
+    """The delegation token's claims, read without verifying them (the worker only NARROWS on
+    them), or None when they cannot be read."""
+    try:
+        import base64  # noqa: PLC0415
+        part = str(token or "").split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+    except Exception:  # noqa: BLE001
+        return None
+    return claims if isinstance(claims, dict) else None
+
+
 def delegation_is_shared(token: str) -> bool:
     """Is this worker's delegation a SHARED one (other people read its answer: `scope.shared`, or a
     workspace principal, D2)? Read off the token's claims without verifying them — the
     worker only NARROWS on it, and every service enforces the same claim from the verified token.
     A token that cannot be read narrows: the fail direction is closed."""
-    try:
-        import base64  # noqa: PLC0415
-        part = str(token or "").split(".")[1]
-        claims = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
-    except Exception:  # noqa: BLE001 — unreadable: treat as shared, never as private
+    claims = _delegation_claims(token)
+    if claims is None:
         return True
-    scope = claims.get("scope") if isinstance(claims, dict) else None
+    scope = claims.get("scope")
     return (isinstance(scope, dict) and scope.get("shared") is True) or \
-        (claims or {}).get("principal_kind") == "workspace"
+        claims.get("principal_kind") == "workspace"
+
+
+def delegation_unattended(token: str) -> "tuple[bool, frozenset]":
+    """``(unattended, grants)``: does this worker run with nobody in the loop (``scope.regime`` is
+    not ``human``: a routine's, an inbound mail's or a meeting signal's turn), and which routine
+    grants does its token carry? An unreadable token reads unattended with no grants."""
+    claims = _delegation_claims(token)
+    scope = (claims or {}).get("scope")
+    if not isinstance(scope, dict):
+        return True, frozenset()
+    grants = frozenset(str(g) for g in (scope.get("grants") or ()) if isinstance(g, str))
+    return scope.get("regime") != "human", grants
+
+
+#: THE LIVE BOT'S VERBS AN UNATTENDED TURN IS NOT HANDED → the routine grant that hands one back
+#: (``""``: none does). meeting-api refuses the same verbs to the same turns
+#: (`meeting_api.regime.LIVE_BOT_VERBS`); `tests/test_unattended_bot_verbs.py` holds every MCP tool
+#: that reaches one of them to this table.
+UNATTENDED_BOT_VERBS = {
+    "request_meeting_bot": "bot.request",
+    "stop_bot": "bot.stop",
+    "update_bot_config": "",
+    "speak_in_meeting": "",
+}
+
+
+def unattended_toolbelt(grants: "frozenset | set" = frozenset()) -> list[str]:
+    """The MCP allow-set for an unattended turn whose worker the model proxy does not front.
+
+    Without the proxy, the attachment the harness reads carries the delegation bearer itself, so
+    the allow-set is the one client-side line between a prompt-injected turn (a mail, a call's
+    speech, a routine's reading) and the person's live bot. Each tool is named, never the bare
+    server prefix, and the live bot's verbs are left out unless the routine's person granted that
+    verb. meeting-api refuses those verbs to the same turns whatever this list says."""
+    def handed(tool: str) -> bool:
+        grant = UNATTENDED_BOT_VERBS.get(tool)
+        return grant is None or (bool(grant) and grant in grants)
+    return [f"mcp__{VEXA_MCP_SERVER}__{t}" for t in VEXA_MCP_TOOLS if handed(t)]
 
 
 #: The verbs that act on a LIVE meeting. A post-meeting turn is offered none of them.
@@ -2328,6 +2375,12 @@ def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
         # A SHARED TURN IS OFFERED ONLY ITS NAMED TOOLS (D3): no bare `mcp__vexa` prefix, which would
         # permit every tool the server lists, and none of the person-wide ones.
         return str(path), [f"mcp__{VEXA_MCP_SERVER}__{t}" for t in VEXA_MCP_SHARED_TOOLS]
+    if not model_grant.proxy_toolbelt():
+        unattended, grants = delegation_unattended(token)
+        if unattended:
+            # NO PROXY, NOBODY IN THE LOOP: the bearer is in the file above, so the turn is offered
+            # its tools by name and none of the live bot's verbs it was not granted.
+            return str(path), unattended_toolbelt(grants)
     return str(path), [f"mcp__{VEXA_MCP_SERVER}",
                        *(f"mcp__{VEXA_MCP_SERVER}__{t}" for t in VEXA_MCP_TOOLS)]
 

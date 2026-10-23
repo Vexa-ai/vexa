@@ -17,6 +17,9 @@ membership does not reach this route. The edge's ``bot`` scope is checked again 
 Refusals, in the order they are checked:
 
   * ``401`` — no signed caller identity.
+  * ``403`` — a turn with nobody in the loop: a routine's, an inbound mail's or a meeting signal's
+    (``regime.LIVE_BOT_VERBS``). A line in the meeting speaks for the person, so only they, or a
+    turn they are watching, send one.
   * ``422`` — the platform is not in the sealed ``Platform`` enum, its bot has no chat sender (only
     ``google_meet`` and ``jitsi`` do), or the body is not an object carrying a non-blank string
     ``text`` of at most ``MAX_CHAT_CHARS`` characters (the sealed ``ChatSendRequest``).
@@ -48,10 +51,11 @@ import time
 import uuid
 from typing import Any, Callable, Optional
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from ..bot_spawn.ports import MeetingRepo
 from ..chat_delivery import ChatDeliveryLedger
+from ..regime import live_bot_guard
 from .stop import leave_command_channel
 from .stop_router import _SUPPORTED_PLATFORMS, CommandPublisher, _active_rows, _resolve_user_id
 
@@ -142,7 +146,8 @@ def build_chat_router(repo: MeetingRepo, publisher: CommandPublisher,
     limit = rate_limit or ChatRateLimit(publisher)
     sends = ledger or ChatDeliveryLedger(publisher)
 
-    @router.post("/bots/{platform}/{native_meeting_id}/chat")
+    @router.post("/bots/{platform}/{native_meeting_id}/chat",
+                 dependencies=[Depends(live_bot_guard("POST", "/bots/{platform}/{native_meeting_id}/chat"))])
     async def send_chat(
         platform: str,
         native_meeting_id: str,

@@ -33,9 +33,10 @@ import asyncio
 import json
 from typing import Any, Optional, Protocol, runtime_checkable
 
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 
 from ..bot_spawn.ports import MeetingRepo, WorkloadUnknown
+from ..regime import live_bot_guard
 from .stop import leave_command_channel, leave_command_payload
 
 
@@ -113,7 +114,8 @@ def build_stop_router(repo: MeetingRepo, publisher: CommandPublisher, runtime=No
     ``RuntimeClient`` for the direct-teardown guarantee) ports."""
     router = APIRouter()
 
-    @router.delete("/bots/{platform}/{native_meeting_id}")
+    @router.delete("/bots/{platform}/{native_meeting_id}",
+                   dependencies=[Depends(live_bot_guard("DELETE", "/bots/{platform}/{native_meeting_id}"))])
     async def stop_bot(
         platform: str,
         native_meeting_id: str,

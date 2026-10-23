@@ -19,6 +19,22 @@ verb by name when they create it; the routine's own unwatched turn carries the g
 (gateway-identity.v1 `delegation.grants` beside `delegation.flow`), and `require_person_or_granted`
 lets exactly that verb through and logs each use. Every other verb still refuses it.
 
+THE LIVE BOT'S VERBS (`LIVE_BOT_VERBS`): stopping the person's bot, changing its configuration,
+typing into the meeting chat and speaking in the call act on a meeting other people are in, right
+now. An unattended turn is untrusted in a way a chat turn is not: anyone who can email the person
+starts an inbound-mail turn (D25), anyone audible in a call shapes a meeting signal's turn, and a
+routine runs whatever its own reading tells it. Each of them is a delegated identity whose regime is
+not ``human``, so each is refused these verbs:
+
+* stop — unless the routine's person granted it ``bot.stop`` when they made it (flows phase 0), the
+  same per-verb grant ``POST /bots`` honours. A mail or signal turn carries no grant (agent-api
+  mints them least-privilege).
+* reconfigure — always.
+* chat and speak — open only to an agent-api-signed opt-in naming that verb and that call. No such
+  claim is minted, so every unattended caller is refused.
+
+The person's own credential and a turn they are watching (``human``) keep every verb.
+
 A worker whose turn other people read (``delegation.shared``, ADR-0048) is refused EVERY route here
 (`refuse_shared`): a shared conversation's answer may use only what every participant can read, and
 a person's meetings are theirs alone.
@@ -59,6 +75,26 @@ def require_person_or_granted(action: str):
                 "flow": request.headers.get(identity_token.DELEGATION_HEADERS["flow"], ""),
                 "user_id": request.headers.get("x-user-id", "")})
     return guard
+
+
+#: Every route that acts on a person's live bot → the routine grant that opens it to an unattended
+#: turn (``""``: none does). `live_bot_guard` reads this table, and a test holds every mutating
+#: ``/bots/{platform}/{native_meeting_id}…`` route of the app to it, so a verb added later (a
+#: ``/speak`` backend) cannot ship unguarded.
+LIVE_BOT_VERBS = {
+    ("DELETE", "/bots/{platform}/{native_meeting_id}"): "bot.stop",
+    ("PUT", "/bots/{platform}/{native_meeting_id}/config"): "",
+    ("POST", "/bots/{platform}/{native_meeting_id}/chat"): "",
+    ("POST", "/bots/{platform}/{native_meeting_id}/speak"): "",
+}
+
+
+def live_bot_guard(method: str, path: str):
+    """The dependency for one of `LIVE_BOT_VERBS`: :func:`require_person_or_granted` for a verb a
+    routine may be granted, :func:`require_person` otherwise. A route missing from the table raises
+    at import, never opens."""
+    grant = LIVE_BOT_VERBS[(method, path)]
+    return require_person_or_granted(grant) if grant else require_person
 
 
 def refuse_shared(request: HTTPConnection) -> None:

@@ -27,10 +27,11 @@ import json
 import os
 from typing import Any, Optional, Protocol, runtime_checkable
 
-from fastapi import APIRouter, Body, Header, HTTPException
+from fastapi import APIRouter, Body, Depends, Header, HTTPException
 
 from ..bot_spawn import transcription_language as tlang
 from ..obs import log_event
+from ..regime import live_bot_guard
 from .stop import leave_command_channel
 from .stop_router import CommandPublisher, _resolve_user_id
 
@@ -99,7 +100,8 @@ def workspace_roles_from_env() -> WorkspaceRoles:
 def build_reconfigure_router(repo, publisher: CommandPublisher, roles: WorkspaceRoles) -> APIRouter:
     router = APIRouter()
 
-    @router.put("/bots/{platform}/{native_meeting_id}/config", status_code=202)
+    @router.put("/bots/{platform}/{native_meeting_id}/config", status_code=202,
+                dependencies=[Depends(live_bot_guard("PUT", "/bots/{platform}/{native_meeting_id}/config"))])
     async def update_bot_config(
         platform: str,
         native_meeting_id: str,

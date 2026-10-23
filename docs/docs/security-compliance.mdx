@@ -388,6 +388,12 @@ instructions. These turns read, and they **propose**; a person decides.
 7. **A meeting write-up reads no attendee's desk.** The post-meeting report is written from the
    transcript, the room's workspace and what was shared explicitly. No other attendee's personal
    workspace is mounted, whoever the invite names.
+8. **An unattended turn leaves your live bot alone.** A routine's turn, a mail's turn and a call
+   signal's turn cannot stop your bot, change its settings, type into the meeting chat or speak in
+   the call. meeting-api answers them `403 human_session_required`. The one exception: a routine
+   you granted `bot.stop` when you made it may stop the bot. You, and a turn you are watching in
+   your own chat, keep every one of these. On a deployment without the model proxy, an unattended
+   worker is also offered none of these tools.
 
 ### Why it complies
 
@@ -406,6 +412,7 @@ Deny tests (security review 2026-10-17):
 | Room signal turns propose (deny test 10) | `core/agent/tests/test_sec_deny_rooms.py` | `test_room_signal_turn_cannot_write_pages_directly` |
 | Audience survives refresh (deny test 4) | `core/agent/tests/test_sec_deny_rooms.py` | `test_cross_org_room_token_keeps_audience_after_refresh` |
 | No attendee desk in a write-up (deny test 9) | `core/agent/tests/test_sec_deny_policy_taint.py` | `test_post_meeting_run_cannot_read_other_attendees_held_writes` |
+| Unattended turns leave the live bot alone | `core/meetings/services/meeting-api/tests/test_live_bot_verbs_unattended.py`, `core/agent/tests/test_unattended_bot_verbs.py` | every test in both files |
 | The rest of this section | `core/flows/tests/test_s1e_security_floor.py`, `core/agent/tests/test_s1e_security_floor.py` | every test in both files |
 
 ## Decisions on cards: who moves an obligation
