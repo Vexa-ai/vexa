@@ -107,6 +107,14 @@ spec:
             # below). This service verifies the gateway's signature and cannot make one.
             - name: VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE
               value: /run/vexa-identity/public/key.pem
+            {{- if .Values.flows.enabled }}
+            # subject-ticket.v1: meeting-api's OWN Ed25519 private key (issuer `meetings`, the
+            # subject-ticket-meetings-key Secret, mounted below and by no other workload). Its meeting
+            # facts carry a ticket naming the owner, which the flows calls they cause present to the
+            # gateway's service door.
+            - name: VEXA_SUBJECT_TICKET_KEY_FILE
+              value: /run/vexa-subject-ticket/key.pem
+            {{- end }}
             # MeetingToken is signed AND verified with the SAME admin secret admin-api holds.
             - name: ADMIN_TOKEN
               valueFrom:
@@ -310,6 +318,11 @@ spec:
             - name: identity-public-key
               mountPath: /run/vexa-identity/public
               readOnly: true
+            {{- if .Values.flows.enabled }}
+            - name: subject-ticket-key
+              mountPath: /run/vexa-subject-ticket
+              readOnly: true
+            {{- end }}
             {{- if include "vexa.botAccountsEnabled" . }}
             - name: connections-keys
               mountPath: /run/vexa-connections
@@ -335,6 +348,15 @@ spec:
             defaultMode: 0444
             items:
               - { key: public-key.pem, path: key.pem }
+        {{- if .Values.flows.enabled }}
+        # subject-ticket.v1: this producer's own ticket key, here and in no other workload.
+        - name: subject-ticket-key
+          secret:
+            secretName: {{ .Values.subjectTickets.meetings.existingSecret | default (include "vexa.componentName" (list . "subject-ticket-meetings-key")) }}
+            defaultMode: 0440
+            items:
+              - { key: signing-key.pem, path: key.pem }
+        {{- end }}
         {{- if include "vexa.botAccountsEnabled" . }}
         # The bots role key only — never the agent, human or git key.
         - name: connections-keys

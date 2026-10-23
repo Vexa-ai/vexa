@@ -93,6 +93,11 @@ spec:
                   key: VEXA_FLOWS_SERVICE_KEY
             - name: FLOWS_API_URL
               value: "http://{{ include "vexa.componentName" (list . "flows-api") }}:18200"
+            # subject-ticket.v1: the ticket producers' PUBLIC keys, `<issuer>.pem` (the
+            # subject-ticket-verify-keys ConfigMap, mounted below). The door forwards a call that
+            # acts for a person only with a ticket one of them verifies. Public halves only.
+            - name: VEXA_SUBJECT_TICKET_KEYS_DIR
+              value: /run/vexa-subject-ticket-verify
             {{- end }}
             # gateway-identity.v1: the Ed25519 PRIVATE key that signs the identity the edge resolved
             # onto every forward. The gateway is the only workload that mounts it.
@@ -167,6 +172,11 @@ spec:
             - name: identity-signing-key
               mountPath: /run/vexa-identity/signing
               readOnly: true
+            {{- if .Values.flows.enabled }}
+            - name: subject-ticket-verify-keys
+              mountPath: /run/vexa-subject-ticket-verify
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.gateway.resources | nindent 12 }}
       volumes:
@@ -178,6 +188,13 @@ spec:
             defaultMode: 0440
             items:
               - { key: signing-key.pem, path: key.pem }
+        {{- if .Values.flows.enabled }}
+        # subject-ticket.v1: the producers' public keys (subject-ticket-keys.yaml), never a private one.
+        - name: subject-ticket-verify-keys
+          configMap:
+            name: {{ include "vexa.componentName" (list . "subject-ticket-verify-keys") }}
+            defaultMode: 0444
+        {{- end }}
       {{- with .Values.global.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

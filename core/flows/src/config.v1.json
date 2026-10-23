@@ -120,6 +120,15 @@
       ]
     },
     {
+      "key": "VEXA_FLOWS_MAIL_TICKET_KEY_FILE",
+      "class": "capability",
+      "capability": "mail_tickets",
+      "description": "subject-ticket.v1: a file holding the MAIL issuer's own Ed25519 PRIVATE key (PKCS#8 PEM). The mail intake (flows-mailbox) and the worker's mailbox sensor sign the ticket an authenticated invite or reply carries: the DMARC-authenticated organizer or sender, the invite's meeting and attendees, a bot for that meeting once. The gateway's service door verifies under the public half (`mail.pem` in its VEXA_SUBJECT_TICKET_KEYS_DIR). Set on every flows lane (one configuration) but the file is mounted only where mail is read: flows-mailbox and flows-worker, never flows-api. UNSET or no file: mail facts carry no ticket and the door refuses the calls they would have opened (403 subject_ticket_required). Generated at install: compose's subject-ticket-keys one-shot, the Helm subject-ticket-mail-key Secret.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
       "key": "VEXA_FLOWS_CRM_PUBLISH_KEY",
       "class": "capability",
       "description": "The crm outbox's publish key: with it in `X-Flows-Publisher-Key`, `POST /events` admits the CRM's own facts (`crm.record.changed`, its `carriers.json` owner) with envelopes sealed as producer `crm`, and every other fact type and every other route refuses it. The outbox holds this and never the operator key, which submits, pauses and retires every company's flows. Unset, only the operator key admits facts and the crm outbox's deliveries are refused 401 (the rows stay pending).",
@@ -860,6 +869,10 @@
     "crm_publish_key": {
       "description": "A publish-only credential for the crm outbox: `POST /events`, the CRM's own facts only.",
       "when_unconfigured": "Only the operator key admits facts; the crm outbox's deliveries are refused and its rows stay pending."
+    },
+    "mail_tickets": {
+      "description": "The mail intake vouches for an authenticated invite or reply with a subject ticket (subject-ticket.v1, issuer `mail`), so the bot, transcript, turn and desk calls it causes pass the gateway's service door for the people it names.",
+      "when_unconfigured": "Mail facts are admitted as before, without a ticket; the door refuses the bot dispatch, transcript read, autonomous turn and attendee desks an invite or reply would have opened (403 subject_ticket_required)."
     }
   },
   "surface_only": [

@@ -655,6 +655,11 @@ services:
       # check it and cannot make one, and forwards it unchanged to the credential broker. Written by
       # the `identity-keys` one-shot; this service mounts the public half only.
       - VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE=/run/vexa-identity/public/key.pem
+      # subject-ticket.v1: agent-api's OWN Ed25519 private key (issuer `agent`). A routine the
+      # person turns on carries a grant signed with it, a message to a person's chat an event
+      # ticket; the gateway's service door verifies them. Written by `subject-ticket-keys`;
+      # mounted here and nowhere else.
+      - VEXA_SUBJECT_TICKET_KEY_FILE=/run/vexa-subject-ticket/key.pem
       # The post-meeting room resolves a participant's email to a subject through admin-api. There
       # is no narrow door yet — the internal-secret tier exposes no by-email lookup, and
       # GET /admin/users/email/{email} sits behind this much broader credential, which can also
@@ -804,6 +809,8 @@ services:
       - connections-git-key:/run/vexa-connections/git:ro
       # gateway-identity.v1: the gateway's public key (never the signing key).
       - identity-public-key:/run/vexa-identity/public:ro
+      # subject-ticket.v1: agent-api's own ticket key (issuer `agent`), mounted by no other service.
+      - subject-ticket-agent-key:/run/vexa-subject-ticket:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8100/health').status==200 else 1)"]
       interval: 10s
@@ -817,6 +824,8 @@ services:
       connections-keys:
         condition: service_completed_successfully
       identity-keys:
+        condition: service_completed_successfully
+      subject-ticket-keys:
         condition: service_completed_successfully
       # the session store (ADR-0048): its role and tables, its bucket and scoped key
       agent-sessions-init:
@@ -884,6 +893,10 @@ services:
       # meeting-api reads come from a signature it verifies (or the internal tier), never a bare
       # header. Written by `identity-keys`; mounted read-only below, public half only.
       - VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE=/run/vexa-identity/public/key.pem
+      # subject-ticket.v1: meeting-api's OWN Ed25519 private key (issuer `meetings`). Its meeting
+      # facts carry a ticket naming the meeting's owner, which the flows calls they cause present
+      # to the gateway's service door. Written by `subject-ticket-keys`; mounted here and nowhere else.
+      - VEXA_SUBJECT_TICKET_KEY_FILE=/run/vexa-subject-ticket/key.pem
       # The bot's display name in the meeting. The terminal omits bot_name on join, so this is what
       # participants see; set DEFAULT_BOT_NAME in .env and restart meeting-api (no terminal rebuild).
       - DEFAULT_BOT_NAME=${DEFAULT_BOT_NAME:-Vexa}
@@ -995,6 +1008,7 @@ services:
     volumes:
       - identity-public-key:/run/vexa-identity/public:ro
       - connections-bots-key:/run/vexa-connections/bots:ro
+      - subject-ticket-meetings-key:/run/vexa-subject-ticket:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').status==200 else 1)"]
       interval: 10s
@@ -1016,6 +1030,8 @@ services:
       identity-keys:
         condition: service_completed_successfully
       connections-keys:
+        condition: service_completed_successfully
+      subject-ticket-keys:
         condition: service_completed_successfully
     # `bots`: bots post their lifecycle callbacks and uploads here. `connections`: the credential
     # broker, which keeps bot accounts.
@@ -1072,6 +1088,11 @@ services:
       # credential broker get the public half and can verify but never sign. Written once by the
       # `identity-keys` one-shot below.
       - VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE=/run/vexa-identity/signing/key.pem
+      # subject-ticket.v1: the ticket producers' PUBLIC keys (`meetings.pem`, `agent.pem`,
+      # `mail.pem`, written by `subject-ticket-keys`). The service door forwards a flows call that
+      # acts for a person only with a ticket one of them verifies; the gateway's own tickets are
+      # signed with its identity key. Public halves only: the gateway cannot sign for a producer.
+      - VEXA_SUBJECT_TICKET_KEYS_DIR=/run/vexa-subject-ticket-verify
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # fastapi-guard edge layer (edge_guard.py): per-IP throttle + auto-ban at the edge.
       # ON by default with generous limits (owner ruling — protection that ships dark protects
@@ -1104,6 +1125,8 @@ services:
     volumes:
       # gateway-identity.v1: the signing key, mounted here and nowhere else.
       - identity-signing-key:/run/vexa-identity/signing:ro
+      # subject-ticket.v1: the producers' public keys, read-only.
+      - subject-ticket-verify-keys:/run/vexa-subject-ticket-verify:ro
     init: true
     depends_on:
       admin-api:
@@ -1113,6 +1136,8 @@ services:
       redis:
         condition: service_healthy
       identity-keys:
+        condition: service_completed_successfully
+      subject-ticket-keys:
         condition: service_completed_successfully
     networks: [vexa, workers]   # workers reach their toolbelt at /mcp here
     restart: unless-stopped
@@ -1138,6 +1163,31 @@ services:
     volumes:
       - identity-signing-key:/keys/signing
       - identity-public-key:/keys/public
+    network_mode: none
+    restart: "no"
+
+  # ─── subject-ticket.v1: the ticket producers' keypairs ─────────────────────────────────────────
+  # One-shot: an Ed25519 keypair per ticket producer — `meetings` (meeting-api), `agent`
+  # (agent-api), `mail` (the flows mail intake and the worker's mailbox sensor) — generated the
+  # first time the stack starts and left alone afterwards (an existing private key is kept and its
+  # public half rewritten from it). Each PRIVATE key goes to its producer's own volume, mounted by
+  # that producer alone; the PUBLIC halves go to `subject-ticket-verify-keys` as `<issuer>.pem`,
+  # which only the gateway mounts (read-only) for its service door. Same image and generator as
+  # `identity-keys`. meeting-api and the flows lanes run as uid 10001, so their keys are handed to
+  # that uid, still 0600; agent-api runs as root and keeps root's. To rotate one producer, remove
+  # its volume and restart the stack (that producer and the gateway then load the new pair).
+  subject-ticket-keys:
+    build:
+      context: ../..
+      dockerfile: core/gateway/services/gateway/Dockerfile
+    image: vexaai/vexa-gateway:${IMAGE_TAG:-dev}
+    user: "0:0"
+    command: ["sh", "-c", "for i in meetings agent mail; do python /app/src/gateway/identity_token.py keygen /keys/$$i/key.pem /keys/public/$$i.pem || exit 1; done && chown 10001:10001 /keys/meetings/key.pem /keys/mail/key.pem"]
+    volumes:
+      - subject-ticket-meetings-key:/keys/meetings
+      - subject-ticket-agent-key:/keys/agent
+      - subject-ticket-mail-key:/keys/mail
+      - subject-ticket-verify-keys:/keys/public
     network_mode: none
     restart: "no"
 
@@ -1197,6 +1247,10 @@ services:
       # one-shot writes crm.pem); public only, so nothing here can seal. No file = that producer's
       # envelopes do not verify.
       - VEXA_FACT_VERIFY_KEYS_DIR=/run/vexa-fact-verify
+      # subject-ticket.v1: the MAIL issuer's private key. The same setting on every lane (one
+      # configuration), but the file is mounted only where mail is read — flows-mailbox and
+      # flows-worker (its mailbox sensor) — never flows-api: no file there, no mail ticket.
+      - VEXA_FLOWS_MAIL_TICKET_KEY_FILE=/run/vexa-subject-ticket/key.pem
       # the crm outbox's publish key (security review 19.1): POST /events for the CRM's own facts, nothing else.
       - VEXA_FLOWS_CRM_PUBLISH_KEY=${VEXA_FLOWS_CRM_PUBLISH_KEY:-}
       # S6 nudges (D15): off unless VEXA_FLOWS_NUDGES=1 and the flows_defs.nudges pack is loaded
@@ -1368,6 +1422,10 @@ services:
       # one-shot writes crm.pem); public only, so nothing here can seal. No file = that producer's
       # envelopes do not verify.
       - VEXA_FACT_VERIFY_KEYS_DIR=/run/vexa-fact-verify
+      # subject-ticket.v1: the MAIL issuer's private key. The same setting on every lane (one
+      # configuration), but the file is mounted only where mail is read — flows-mailbox and
+      # flows-worker (its mailbox sensor) — never flows-api: no file there, no mail ticket.
+      - VEXA_FLOWS_MAIL_TICKET_KEY_FILE=/run/vexa-subject-ticket/key.pem
       # the crm outbox's publish key (security review 19.1): POST /events for the CRM's own facts, nothing else.
       - VEXA_FLOWS_CRM_PUBLISH_KEY=${VEXA_FLOWS_CRM_PUBLISH_KEY:-}
       # S6 nudges (D15): off unless VEXA_FLOWS_NUDGES=1 and the flows_defs.nudges pack is loaded
@@ -1471,6 +1529,8 @@ services:
       # the flows broker key, for the relay password by reference (VEXA_MAIL_SMTP_PASSWORD_REF)
       - connections-sensors-key:/run/vexa-connections/sensors:ro
       - fact-verify-keys:/run/vexa-fact-verify:ro
+      # subject-ticket.v1: the mail issuer's private key (this lane and flows-worker only)
+      - subject-ticket-mail-key:/run/vexa-subject-ticket:ro
     init: true
     depends_on:
       # The same three, and for the same reason — plus flows-api, because this lane's whole output
@@ -1537,6 +1597,10 @@ services:
       # one-shot writes crm.pem); public only, so nothing here can seal. No file = that producer's
       # envelopes do not verify.
       - VEXA_FACT_VERIFY_KEYS_DIR=/run/vexa-fact-verify
+      # subject-ticket.v1: the MAIL issuer's private key. The same setting on every lane (one
+      # configuration), but the file is mounted only where mail is read — flows-mailbox and
+      # flows-worker (its mailbox sensor) — never flows-api: no file there, no mail ticket.
+      - VEXA_FLOWS_MAIL_TICKET_KEY_FILE=/run/vexa-subject-ticket/key.pem
       # the crm outbox's publish key (security review 19.1): POST /events for the CRM's own facts, nothing else.
       - VEXA_FLOWS_CRM_PUBLISH_KEY=${VEXA_FLOWS_CRM_PUBLISH_KEY:-}
       # S6 nudges (D15): off unless VEXA_FLOWS_NUDGES=1 and the flows_defs.nudges pack is loaded
@@ -1650,6 +1714,9 @@ services:
     volumes:
       - connections-sensors-key:/run/vexa-connections/sensors:ro
       - fact-verify-keys:/run/vexa-fact-verify:ro
+      # subject-ticket.v1: the mail issuer's private key, for the mailbox sensor (this lane and
+      # flows-mailbox only)
+      - subject-ticket-mail-key:/run/vexa-subject-ticket:ro
     networks: [vexa, connections]
     restart: unless-stopped
 
@@ -2288,6 +2355,12 @@ volumes:
   # event.v2: the CRM's fact seal key (crm-outbox only) and the producers' public keys (flows lanes).
   fact-seal-crm-key:
   fact-verify-keys:
+  # subject-ticket.v1: each producer's private key (that producer only) and their public halves
+  # (the gateway only).
+  subject-ticket-meetings-key:
+  subject-ticket-agent-key:
+  subject-ticket-mail-key:
+  subject-ticket-verify-keys:
 
 networks:
   # The control plane. No spawned bot or worker joins it.

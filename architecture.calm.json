@@ -627,6 +627,18 @@
    ]
   },
   {
+   "unique-id": "subject-ticket.v1",
+   "node-type": "contract",
+   "name": "subject-ticket.v1",
+   "description": "subject-ticket.v1 \u2014 sealed contract (gateway): the producer-signed ticket that binds a flows call made for a person to that person's own event or grant. meeting-api (meetings), agent-api (agent), the flows mail intake (mail) and the gateway (its identity key) each sign with their own Ed25519 key; tickets ride a fact's refs (_tickets) through flows and reach the service door in X-Vexa-Subject-Ticket; the door holds only the public halves (VEXA_SUBJECT_TICKET_KEYS_DIR) and refuses a person-bound call without a ticket for that subject, class and meeting",
+   "metadata": [
+    {
+     "path": "core/gateway/contracts/subject-ticket.v1",
+     "domain": "gateway"
+    }
+   ]
+  },
+  {
    "unique-id": "ws.v1",
    "node-type": "contract",
    "name": "ws.v1",
@@ -2608,6 +2620,7 @@
       "api.v1",
       "logevent.v1",
       "gateway-identity.v1",
+      "subject-ticket.v1",
       "ws.v1",
       "routes.v1",
       "mcp",
@@ -4048,7 +4061,7 @@
   },
   {
    "unique-id": "flows-worker-calls-gateway",
-   "description": "every call a flow step makes into another domain goes through the gateway's SERVICE DOOR (core/gateway/services/gateway/src/gateway/service_door.py, port 8002, never published) with the flows tier's one credential VEXA_FLOWS_SERVICE_KEY; flows-api's identity, timeline and mail-admin calls take the same door. The door forwards only its fixed allow-list (FLOWS_OUTBOUND): agent-api, admin-api and crm-api over the internal tier with the named subject, meeting-api with the subject's identity signed by the gateway (scopes bot+tx); anything else is a 403 at the door. flows holds no INTERNAL_API_SECRET and no admin key, and a domain never knows flows exists",
+   "description": "every call a flow step makes into another domain goes through the gateway's SERVICE DOOR (core/gateway/services/gateway/src/gateway/service_door.py, port 8002, never published) with the flows tier's one credential VEXA_FLOWS_SERVICE_KEY; flows-api's identity, timeline and mail-admin calls take the same door. The door forwards only its fixed allow-list (FLOWS_OUTBOUND): agent-api, admin-api and crm-api over the internal tier with the named subject, meeting-api with the subject's identity signed by the gateway (scopes bot+tx); anything else is a 403 at the door. A call made for a person (transcript.read, bot.dispatch, chat.autonomous, desk.write, room.bills_to, routine.turn) also carries the subject tickets of the fact or routine that caused it (X-Vexa-Subject-Ticket, subject-ticket.v1), signed by that fact's producer; the door verifies them under the producers' public keys and refuses the call (403 subject_ticket_required / subject_ticket_refused) unless one names that subject, class and meeting. flows holds no INTERNAL_API_SECRET and no admin key, and a domain never knows flows exists",
    "relationship-type": {
     "connects": {
      "source": {
@@ -4751,7 +4764,7 @@
      }
     }
    },
-   "description": "the publish edge: POST /events (desk.unscaffolded, claim.proposed) and POST /friction with the operator key (X-Flows-Operator-Key); GET /flows/pages to land the pages of authored flows in _global/flows/",
+   "description": "the publish edge: POST /events (desk.unscaffolded, claim.proposed) and POST /friction with the operator key (X-Flows-Operator-Key); GET /flows/pages to land the pages of authored flows in _global/flows/; POST /flows and resume carry the person's routine grant (subject-ticket.v1, signed with agent-api's own key, kept with the flow version) and a message fact carries an event ticket for its recipient",
    "protocol": "HTTP",
    "metadata": [
     {

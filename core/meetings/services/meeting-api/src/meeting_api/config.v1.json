@@ -953,6 +953,7 @@
    "description": "operator key for the same edge, sent as X-Flows-Operator-Key (flows' POST /events is authenticated). Declared as part of the edge rather than beside it, on the same terms as identity's admin-api and agent-api's control_plane declare theirs: unset alongside an unset URL is the no-flows profile; unset with a URL set is a deployment whose facts are being refused.",
    "targets": ["compose", "helm"]
   },
+  {"key": "VEXA_SUBJECT_TICKET_KEY_FILE", "class": "capability", "capability": "subject_tickets", "targets": ["compose", "helm"], "description": "subject-ticket.v1: a file holding meeting-api's OWN Ed25519 PRIVATE key (PKCS#8 PEM), issuer `meetings`. meeting.started / meeting.completed / meeting.shared carry a ticket signed with it (refs._tickets) naming the meeting's owner and the meeting, which the flows calls those facts cause present to the gateway's service door; the door verifies under the public half (`meetings.pem` in its VEXA_SUBJECT_TICKET_KEYS_DIR) and holds nothing that signs. No other service mounts this file. Unset or unreadable, facts still reach flows without a ticket (one warning) and the door refuses the person-bound calls they would have opened (403 subject_ticket_required). Generated at install: compose's subject-ticket-keys one-shot, the Helm subject-ticket-meetings-key Secret"},
   {"key": "VEXA_BOT_ACCOUNTS_BROKER_URL", "class": "capability", "capability": "bot_accounts", "targets": ["compose", "helm"], "description": "the credential broker's base URL (credential-broker.v1, role `bots`): where meeting-api keeps bot accounts — saved signed-in browser profiles a meeting bot joins as (ADR-0049). Set together with VEXA_BOT_ACCOUNTS_KEY_FILE; either unset, every bot-account route answers 409 \"bot accounts are not configured on this deployment\" and POST /bots spawns guest bots as before"},
   {"key": "VEXA_BOT_ACCOUNTS_KEY_FILE", "class": "capability", "capability": "bot_accounts", "secret": true, "targets": ["compose", "helm"], "description": "path of the broker's `bots` role key (at least 32 bytes; the connections-keys `bots` key, mounted read-only). meeting-api signs every bot-account request with it (X-Vexa-Assertion). A file that is unreadable, too short or one of the contract's published fixture keys refuses the boot"},
   {"key": "VEXA_COMPANY_BOT_USE", "class": "defaulted", "default": "admins", "description": "who may send a meeting bot as a COMPANY bot account: `all`, `admins` (the instance admins and the admin account) or `none`; an unknown value reads as `admins`. The company's statement of this rule is `_global/POLICIES.md` `company_bot_use`; this env carries it to meeting-api until meeting-api reads policies. Creating and deleting company accounts is the admin account's alone, whatever this says", "targets": []},
@@ -1000,6 +1001,11 @@
    "description": "recordings persist to the object store (chunk upload + finalize → meeting.data JSONB)",
    "mode": "all",
    "when_unconfigured": "recording upload/finalize fails at request time with a storage auth error; transcripts are unaffected"
+  },
+  "subject_tickets": {
+   "description": "meeting-api signs who its meeting facts are about (subject-ticket.v1, issuer `meetings`), so the flows calls those facts cause pass the gateway's service door for that person and that meeting only",
+   "mode": "all",
+   "when_unconfigured": "meeting facts reach flows without a ticket, and the door refuses the person-bound calls post-meeting processing makes (transcript reads and shares, the autonomous turn, desk writes, the room payer) with 403 subject_ticket_required; everything else is unchanged"
   },
   "bot_accounts": {
    "description": "people sign meeting bots into their own accounts through a live browser session, and bots join meetings as those saved accounts (ADR-0049)",

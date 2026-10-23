@@ -236,10 +236,23 @@ door does not list.
 4. **Only the subject crosses.** The door forwards `X-User-Id` and the flow headers. Every other
    `x-user-*` (scopes, credential class, delegation, workspaces) and every authority header flows
    sends is dropped.
-5. **The internal secret never reaches flows.** The signals service's wake and the terminal's
+5. **A call made for a person needs that person's ticket.** The flows key alone does not let flows
+   name a person. On the calls that act for one (reading or sharing a meeting's transcript, sending
+   or stopping a bot, an autonomous turn in their session, writing their desk, naming who pays for a
+   room, a routine's turn or notice in their chat) the door also needs a **subject ticket**
+   (subject-ticket.v1): a short claim, signed by the service that produced the person's fact, that
+   names the person, the calls it opens and an expiry. meeting-api signs one for the owner of a
+   meeting that started, ended or was shared; agent-api for a routine the person turned on from
+   their own session and for a message to a person; the mail intake for an authenticated invite or
+   reply; the gateway itself for a person's own sign-in presented to flows-api. Each producer holds
+   its own Ed25519 private key; the door holds only the public halves, so flows cannot make a
+   ticket. A call without a valid ticket for that person (and, where it names one, that meeting) is
+   `403 subject_ticket_required` or `subject_ticket_refused`; an invite's bot can be sent once
+   (`403 ticket_replayed`). Lookups and settings reads name no person and need none.
+6. **The internal secret never reaches flows.** The signals service's wake and the terminal's
    sign-in mail go to the door's `/to-flows` leg with `X-Internal-Secret`; the door forwards the
    allow-listed calls (`FLOWS_INBOUND`) to flows-api with the flows key.
-6. **Per-person data outside the allow-list is refused.** A person's calendar and mail are read only
+7. **Per-person data outside the allow-list is refused.** A person's calendar and mail are read only
    through their own connection. The flows calendar sensor reads it through the credential broker
    with its own `sensors` role; the door has no route to `/api/connections/*`.
 

@@ -126,6 +126,32 @@ factSeal:
     existingSecret: ""
     publicKey: ""
 
+# subject-ticket.v1: one Ed25519 keypair per ticket producer (subject-ticket-keys.yaml). The flows
+# service door forwards a call that acts for a person only with a ticket the producer of that
+# person's fact signed: `meetings` (meeting-api), `agent` (agent-api), `mail` (flows-mailbox and
+# flows-worker). Each private key is mounted by its producer alone; the gateway holds the public
+# halves. Rendered only with flows.enabled.
+#   Empty → GENERATED at install and kept across upgrades (read back from the release's Secret,
+#   which also survives an uninstall). With `helm template` / GitOps set, per producer, either
+#   `signingKey` (`openssl genpkey -algorithm ed25519`) or `existingSecret` (a Secret holding it as
+#   `signing-key.pem`) plus `publicKey` (`openssl pkey -in signing-key.pem -pubout`); otherwise
+#   every render mints a new pair and tickets stop verifying until producer and gateway restart on
+#   the same render. To rotate one: delete its Secret, `helm upgrade`, restart that producer and
+#   the gateway.
+subjectTickets:
+  meetings:
+    signingKey: ""
+    existingSecret: ""
+    publicKey: ""
+  agent:
+    signingKey: ""
+    existingSecret: ""
+    publicKey: ""
+  mail:
+    signingKey: ""
+    existingSecret: ""
+    publicKey: ""
+
 # ---------- Shared secrets ----------
 # Recommended: override via --set-file / external secret tooling, or point existingSecretName at a
 # Secret carrying these keys: ADMIN_API_TOKEN, INTERNAL_API_SECRET, TRANSCRIPTION_SERVICE_TOKEN,

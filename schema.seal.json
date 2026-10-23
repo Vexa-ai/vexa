@@ -310,6 +310,7 @@
       "scope": "scope TEXT DEFAULT 'instance' NOT NULL",
       "status": "status TEXT NOT NULL",
       "steps": "steps TEXT NOT NULL",
+      "subject_grant": "subject_grant TEXT",
       "version": "version INTEGER NOT NULL"
     },
     "friction_occurrence": {

@@ -43,7 +43,7 @@ def test_declaration_loads_and_is_internally_consistent():
     decl = cp.load_declaration()
     assert decl["service"] == "meeting-api"
     caps = decl["capabilities"]
-    assert set(caps) == {"stt", "object_storage", "calls", "bot_accounts"}
+    assert set(caps) == {"stt", "object_storage", "calls", "bot_accounts", "subject_tickets"}
     # the canonical capability carries the live auth probe (the silent-401 incident's fix)
     assert caps["stt"]["probe"]["kind"] == "http"
     # every capability-classed key resolves (load_declaration raises otherwise) and stt's members

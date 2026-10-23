@@ -343,6 +343,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: VEXA_FLOWS_SERVICE_KEY
+            {{- /* subject-ticket.v1: the MAIL issuer's private key (the subject-ticket-mail-key Secret),
+            for the mailbox sensor's invite and reply tickets. Mounted here and in flows-mailbox,
+            never in flows-api. */}}
+            - name: VEXA_FLOWS_MAIL_TICKET_KEY_FILE
+              value: /run/vexa-subject-ticket/key.pem
           {{- /* NO PROBE, and that is a documented gap rather than an oversight (A12/E4).
           `flows_worker/__main__.py` and `flows_integrations.mailbox` are `while True: tick();
           sleep()` loops with no server and no port — there is nothing for an httpGet to reach,
@@ -350,15 +355,26 @@ spec:
           the database's health, not the loop's. The compose file says the same thing about the
           same two processes. Giving these a real liveness surface needs a health endpoint in
           flows itself; that is E4's work, not this template's. */}}
-          {{- with print (include "vexa.flowsMailCaMount" .) (include "vexa.extraCA.mounts" .) }}
-          volumeMounts:{{ . | trim | nindent 12 }}
-          {{- end }}
+          volumeMounts:
+            - name: subject-ticket-mail-key
+              mountPath: /run/vexa-subject-ticket
+              readOnly: true
+            {{- with include "vexa.flowsMailCaMount" . }}{{ . | trim | nindent 12 }}{{ end }}
+            {{- with include "vexa.extraCA.mounts" . }}{{ . | trim | nindent 12 }}{{ end }}
           resources:
             requests: {cpu: 100m, memory: 128Mi}
             limits: {cpu: 500m, memory: 512Mi}
-      {{- with print (include "vexa.flowsMailCaVolume" .) (include "vexa.extraCA.volumes" .) }}
-      volumes:{{ . | trim | nindent 8 }}
-      {{- end }}
+      volumes:
+        # subject-ticket.v1: the mail issuer's private key (subject-ticket-keys.yaml), mounted by
+        # flows-worker and flows-mailbox only.
+        - name: subject-ticket-mail-key
+          secret:
+            secretName: {{ .Values.subjectTickets.mail.existingSecret | default (include "vexa.componentName" (list . "subject-ticket-mail-key")) }}
+            defaultMode: 0440
+            items:
+              - { key: signing-key.pem, path: key.pem }
+        {{- with include "vexa.flowsMailCaVolume" . }}{{ . | trim | nindent 8 }}{{ end }}
+        {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{ end }}
 {{- /* THE MAILBOX RENDERS ONLY WHEN IT CAN RUN (vexa.flowsMailboxEnabled): an explicit
 flows.mail.enabled, or an address. Without one it used to render anyway and restart-loop on its
 first IMAP login — the "broken deployment" picture the compose profile already avoids. */}}
@@ -552,6 +568,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: VEXA_FLOWS_SERVICE_KEY
+            {{- /* subject-ticket.v1: the MAIL issuer's private key (the subject-ticket-mail-key Secret):
+            the intake signs the ticket an authenticated invite or reply carries. Mounted here and in
+            flows-worker, never in flows-api. */}}
+            - name: VEXA_FLOWS_MAIL_TICKET_KEY_FILE
+              value: /run/vexa-subject-ticket/key.pem
           {{- /* READINESS FROM THE LOOP'S OWN REPORT. The loop writes how its last poll went to a file
           in its temp directory (`flows_integrations/mailbox_status.py`) and this probe reads it: a
           wrong password, an untrusted certificate or an unreachable IMAP host shows as NotReady
@@ -569,6 +590,9 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: subject-ticket-mail-key
+              mountPath: /run/vexa-subject-ticket
+              readOnly: true
             {{- with include "vexa.flowsMailCaMount" . }}{{ . | trim | nindent 12 }}{{ end }}
             {{- with include "vexa.extraCA.mounts" . }}{{ . | trim | nindent 12 }}{{ end }}
           resources:
@@ -577,6 +601,14 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+        # subject-ticket.v1: the mail issuer's private key (subject-ticket-keys.yaml), mounted by
+        # flows-worker and flows-mailbox only.
+        - name: subject-ticket-mail-key
+          secret:
+            secretName: {{ .Values.subjectTickets.mail.existingSecret | default (include "vexa.componentName" (list . "subject-ticket-mail-key")) }}
+            defaultMode: 0440
+            items:
+              - { key: signing-key.pem, path: key.pem }
         {{- with include "vexa.flowsMailCaVolume" . }}{{ . | trim | nindent 8 }}{{ end }}
         {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{ end }}
 {{- end }}

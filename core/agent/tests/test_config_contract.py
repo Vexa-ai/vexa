@@ -39,7 +39,7 @@ def test_declaration_loads_and_is_internally_consistent():
     assert decl["service"] == "agent-api"
     assert set(decl["capabilities"]) == {"bot_gateway", "model_inference", "connections", "calls",
                                          "git_credential_broker", "worker_toolbelt",
-                                         "session_store", "person_resolution"}
+                                         "session_store", "person_resolution", "subject_tickets"}
     assert decl["capabilities"]["worker_toolbelt"]["mode"] == "all"
     assert decl["capabilities"]["model_inference"]["mode"] == "any"
 
@@ -363,7 +363,9 @@ def test_the_qwen_lane_dials_are_declared():
 #      CODEX_API_KEY, which agent-api now reads (and seals) in place of the runtime.
 # 161: +2 VEXA_ROOM_RING_PER_PERSON, VEXA_ROOM_RING_PER_CALLER (the ring limit, room_ring).
 # 163: +2 VEXA_GIT_ALLOWED_INTERNAL_HOSTS, GIT_SSH_COMMAND (car 40: git egress check and pin).
-EXPECTED_DECLARED_KEYS = 164
+# 164: +1 VEXA_ON_BEHALF_OF (H10: the person a room's agent turn answered, the commit trailer).
+# 165: +1 VEXA_SUBJECT_TICKET_KEY_FILE (subject-ticket.v1: agent-api's own ticket key).
+EXPECTED_DECLARED_KEYS = 165
 
 
 def test_connections_keys_are_capabilities_on_real_surfaces():

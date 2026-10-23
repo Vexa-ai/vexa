@@ -61,6 +61,16 @@ auto-join block list), `meetingApi.transcriptionLanguage` / `meetingApi.transcri
   keypair; set `factSeal.crm.signingKey`, or `factSeal.crm.existingSecret` with
   `factSeal.crm.publicKey`, when rendering with `helm template`. `secrets.existingSecretName` does
   not carry it.
+- **Generated at install: the subject-ticket keypairs** (`templates/subject-ticket-keys.yaml`, with
+  flows on). The flows service door forwards a call that acts for a person only with a ticket the
+  producer of that person's fact signed (subject-ticket.v1). One Ed25519 keypair per producer, each
+  private key a Secret mounted by that producer alone — `subject-ticket-meetings-key` (meeting-api),
+  `subject-ticket-agent-key` (agent-api), `subject-ticket-mail-key` (flows-mailbox and flows-worker)
+  — and the public halves in the `subject-ticket-verify-keys` ConfigMap (`<issuer>.pem`), mounted by
+  the gateway alone. Same lifecycle as the identity keypair; per producer set
+  `subjectTickets.<issuer>.signingKey`, or `subjectTickets.<issuer>.existingSecret` with
+  `subjectTickets.<issuer>.publicKey`, when rendering with `helm template`.
+  `secrets.existingSecretName` does not carry them.
 - **One MCP server.** `mcp.enabled` (default on) deploys the assembled MCP service; the gateway relays
   `/mcp` to it and agent-api points every worker's toolbelt at the gateway's `/mcp`. Workers reach it
   only through the gateway.

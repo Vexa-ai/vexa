@@ -194,6 +194,13 @@ spec:
             # below). This service verifies the gateway's signature and cannot make one.
             - name: VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE
               value: /run/vexa-identity/public/key.pem
+            {{- if .Values.flows.enabled }}
+            # subject-ticket.v1: agent-api's OWN Ed25519 private key (issuer `agent`, the
+            # subject-ticket-agent-key Secret, mounted below and by no other workload). A routine the
+            # person turns on carries a grant signed with it, a message to a person an event ticket.
+            - name: VEXA_SUBJECT_TICKET_KEY_FILE
+              value: /run/vexa-subject-ticket/key.pem
+            {{- end }}
             # THE WORKER'S TOOLBELT (worker_toolbelt): each worker presents a per-dispatch delegation
             # token, signed with this secret, at the gateway's /mcp — the one assembled MCP server.
             {{- if .Values.mcp.enabled }}
@@ -412,6 +419,11 @@ spec:
             - name: identity-public-key
               mountPath: /run/vexa-identity/public
               readOnly: true
+            {{- if .Values.flows.enabled }}
+            - name: subject-ticket-key
+              mountPath: /run/vexa-subject-ticket
+              readOnly: true
+            {{- end }}
             {{- if include "vexa.credentialBrokerEnabled" . }}
             - name: connections-keys
               mountPath: /run/vexa-connections
@@ -462,6 +474,15 @@ spec:
             defaultMode: 0444
             items:
               - { key: public-key.pem, path: key.pem }
+        {{- if .Values.flows.enabled }}
+        # subject-ticket.v1: this producer's own ticket key, here and in no other workload.
+        - name: subject-ticket-key
+          secret:
+            secretName: {{ .Values.subjectTickets.agent.existingSecret | default (include "vexa.componentName" (list . "subject-ticket-agent-key")) }}
+            defaultMode: 0440
+            items:
+              - { key: signing-key.pem, path: key.pem }
+        {{- end }}
         {{- if include "vexa.credentialBrokerEnabled" . }}
         # The agent and git role keys — never the human key, never the store key.
         - name: connections-keys

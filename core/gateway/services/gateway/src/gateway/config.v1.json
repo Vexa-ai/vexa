@@ -14,6 +14,11 @@
       "description": "This deployment runs a flows tier, and the gateway serves its service door (service_door.py): the only way the flows services reach another domain, and the only way the internal tier reaches flows-api.",
       "mode": "all",
       "when_unconfigured": "No door is served. A deployment without flows needs none; flows itself refuses to start without its key."
+    },
+    "subject_tickets": {
+      "description": "The service door binds a flows call that acts for a person to a ticket the producer of that person's fact signed (subject-ticket.v1): meeting-api for a meeting, agent-api for a routine or message, the mail intake for an authenticated invite or reply, this gateway for a person's own bearer.",
+      "mode": "all",
+      "when_unconfigured": "No producer's ticket verifies, so the door refuses every person-bound flows call (403 subject_ticket_required / subject_ticket_refused) except the ones a gateway ticket opens; unbound and system calls are unchanged. A deployment without flows serves no door and needs no keys."
     }
   },
   "keys": [
@@ -95,6 +100,16 @@
       "class": "capability",
       "capability": "flows_service_door",
       "description": "flows-api's base URL (the name flows' mcp.tools.v1 manifest binds for the edge, base_url_env), for the door's inbound leg (/to-flows/*): the signals service's wake and the terminal's sign-in mail present X-Internal-Secret to the door, never to flows, and the door forwards the allow-listed calls (FLOWS_INBOUND) with the flows key.",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "VEXA_SUBJECT_TICKET_KEYS_DIR",
+      "class": "capability",
+      "capability": "subject_tickets",
+      "description": "subject-ticket.v1: the directory of the ticket producers' Ed25519 PUBLIC keys, one SubjectPublicKeyInfo PEM per issuer named `<issuer>.pem` (`meetings.pem`, `agent.pem`, `mail.pem`); the `gateway` issuer is this process's own identity key and needs no file. The service door (with VEXA_FLOWS_SERVICE_KEY set) forwards a person-bound flows call (transcript.read, bot.dispatch, chat.autonomous, desk.write, room.bills_to, routine.turn) only when one ticket in X-Vexa-Subject-Ticket verifies under its issuer's key here, is unexpired, lists the class and names the call's subject (and meeting); otherwise 403 subject_ticket_required / subject_ticket_refused / ticket_replayed. Public keys only: the gateway can verify and never sign for meetings, agent or mail. UNSET, or no file for an issuer, that issuer's tickets do not verify. Filled at install from each producer's keypair: compose's subject-ticket-keys one-shot, the Helm subject-ticket-verify-keys ConfigMap.",
       "targets": [
         "compose",
         "helm"

@@ -91,6 +91,7 @@ system gateway-system  # the one public edge (api.v1, ws.v1)
   contract api.v1
   contract logevent.v1
   contract gateway-identity.v1
+  contract subject-ticket.v1
   contract ws.v1
   contract routes.v1
   service mcp
@@ -219,7 +220,7 @@ edges:
   flows-worker -write-> flows-rows
   flows-api -write-> flows-rows  # the second writer, recorded because it is real: POST /events admits a fact in the API process (flows_integrations/flows_api.py → flows.admit → INSERT INTO reaction) and the registry writes flow_version there too. The chart carried only flows-worker, so the one shared carrier in this domain read as single-writer
   flows-api -read-> flows-rows
-  flows-worker -req-> gateway  # every call a flow step makes into another domain goes through the gateway's SERVICE DOOR (core/gateway/services/gateway/src/gateway/service_door.py, port 8002, never published) with the flows tier's one credential VEXA_FLOWS_SERVICE_KEY; flows-api's identity, timeline and mail-admin calls take the same door. The door forwards only its fixed allow-list (FLOWS_OUTBOUND): agent-api, admin-api and crm-api over the internal tier with the named subject, meeting-api with the subject's identity signed by the gateway (scopes bot+tx); anything else is a 403 at the door. flows holds no INTERNAL_API_SECRET and no admin key, and a domain never knows flows exists
+  flows-worker -req-> gateway  # every call a flow step makes into another domain goes through the gateway's SERVICE DOOR (core/gateway/services/gateway/src/gateway/service_door.py, port 8002, never published) with the flows tier's one credential VEXA_FLOWS_SERVICE_KEY; flows-api's identity, timeline and mail-admin calls take the same door. The door forwards only its fixed allow-list (FLOWS_OUTBOUND): agent-api, admin-api and crm-api over the internal tier with the named subject, meeting-api with the subject's identity signed by the gateway (scopes bot+tx); anything else is a 403 at the door. A call made for a person (transcript.read, bot.dispatch, chat.autonomous, desk.write, room.bills_to, routine.turn) also carries the subject tickets of the fact or routine that caused it (X-Vexa-Subject-Ticket, subject-ticket.v1), signed by that fact's producer; the door verifies them under the producers' public keys and refuses the call (403 subject_ticket_required / subject_ticket_refused) unless one names that subject, class and meeting. flows holds no INTERNAL_API_SECRET and no admin key, and a domain never knows flows exists
   agent-api -req-> credentials-broker  # agent-api to the credential broker, signed role assertions (credential-broker.v1): role agent for the Connections routes (request, list, read, draft, call; no consent, no stored credential returned) and role git for the Git credential store (the person's own Git credentials and their shared workspaces' deploy keys); every call of either role carries the gateway's X-Vexa-Identity for the person, unchanged, and the broker acts only for the subject it names
   terminal -req-> credentials-broker  # the terminal's server to the credential broker, role human for the identity-validated person (credential-broker.v1): consent, credential save, disconnect, delete
   credentials-broker -req-> credentials-vault
@@ -253,7 +254,7 @@ edges:
   agent-api -write-> unit-fault  # SET the typed fault a refused spawn ended in; GET it for the SSE relay and the pending list; DEL on the next spawn
   meeting-api -write-> acl-bots-index  # HSET/HDEL the bot users it defined
   agent-api -write-> routine-state  # routine approvals and the re-signing marker
-  agent-api -req-> flows-api  # the publish edge: POST /events (desk.unscaffolded, claim.proposed) and POST /friction with the operator key (X-Flows-Operator-Key); GET /flows/pages to land the pages of authored flows in _global/flows/
+  agent-api -req-> flows-api  # the publish edge: POST /events (desk.unscaffolded, claim.proposed) and POST /friction with the operator key (X-Flows-Operator-Key); GET /flows/pages to land the pages of authored flows in _global/flows/; POST /flows and resume carry the person's routine grant (subject-ticket.v1, signed with agent-api's own key, kept with the flow version) and a message fact carries an event ticket for its recipient
   agent-api -req-> gateway  # the transcription watcher, with VEXA_BOT_API_KEY: GET /meetings to resolve a meeting row to its native id, and POST /meetings/{platform}/{native}/docs to link the meeting's own page on session end
   mcp -req-> flows-api  # boot assembly: GET /.well-known/mcp-tools.json + /openapi.json — the flows domain's tools join the one MCP surface; its operator-keyed tools need the MCP to hold the key its admin_auth names
   mcp -req-> meeting-api  # boot assembly: GET /.well-known/mcp-tools.json + /openapi.json on the meetings domain's door; a 404 is a deployed domain that publishes no manifest, and contributes no tools

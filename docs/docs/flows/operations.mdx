@@ -63,6 +63,31 @@ calls on its allow-list and answers anything else `403`; see
 Flows no longer holds `INTERNAL_API_SECRET` or `ADMIN_TOKEN`. The signals service and the terminal
 reach flows-api through the door's `/to-flows` leg.
 
+### Subject tickets
+
+A call the door forwards **for a person** also needs a subject ticket (subject-ticket.v1) signed by
+the producer of that person's fact: meeting-api for a meeting they own, agent-api for a routine they
+turned on or a message to them, the mail intake for an authenticated invite or reply, the gateway for
+their own sign-in. Flows carries tickets from the fact to the calls it causes and cannot make one.
+Without a valid ticket the door answers `403 subject_ticket_required` or `subject_ticket_refused`
+(`ticket_replayed` for an invite's bot sent twice), and the flow's step fails with that reason.
+
+The keys are generated for you, one Ed25519 keypair per producer:
+
+| Producer | Private key, mounted only there | Variable |
+|---|---|---|
+| meeting-api (`meetings`) | compose volume `subject-ticket-meetings-key`; Helm Secret `<release>-subject-ticket-meetings-key` | `VEXA_SUBJECT_TICKET_KEY_FILE` |
+| agent-api (`agent`) | `subject-ticket-agent-key`; `<release>-subject-ticket-agent-key` | `VEXA_SUBJECT_TICKET_KEY_FILE` |
+| flows-mailbox and flows-worker (`mail`) | `subject-ticket-mail-key`; `<release>-subject-ticket-mail-key` | `VEXA_FLOWS_MAIL_TICKET_KEY_FILE` |
+
+The gateway mounts the public halves (`subject-ticket-verify-keys`, one `<issuer>.pem` each) at
+`VEXA_SUBJECT_TICKET_KEYS_DIR`. flows-api mounts no ticket key. A producer started without its key
+still delivers its facts and logs `subject_ticket_key_missing` (meeting-api, agent-api) or
+`mail_ticket_unavailable` (flows) once; the person-bound calls those facts cause are then refused.
+To rotate one, remove its volume (compose) or delete its Secret and `helm upgrade` (Helm), then
+restart that producer and the gateway. With `helm template`, set `subjectTickets.<issuer>.signingKey`,
+or `subjectTickets.<issuer>.existingSecret` with `subjectTickets.<issuer>.publicKey`.
+
 ## Who the mailbox will act for
 
 The mailbox is reachable by anyone who can send email, so it answers that question before it

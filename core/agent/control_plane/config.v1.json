@@ -539,6 +539,16 @@
       "description": "gateway-identity.v1 verification key: a file holding the gateway's Ed25519 PUBLIC key (SubjectPublicKeyInfo PEM). agent-api rebuilds every x-user-* header from a verified signature and refuses (401) an identity that is neither signed nor carried by the internal tier, and forwards the verified token unchanged to the credential broker on every agent-role call. It verifies and cannot sign; a private key in this file refuses the boot, as does a missing file or any other key type. Generated at install with the gateway's signing key: compose's identity-keys one-shot, the Helm identity-keys ConfigMap, the Lite entrypoint"
     },
     {
+      "key": "VEXA_SUBJECT_TICKET_KEY_FILE",
+      "class": "capability",
+      "capability": "subject_tickets",
+      "description": "subject-ticket.v1: a file holding agent-api's OWN Ed25519 PRIVATE key (PKCS#8 PEM), issuer `agent`. When a person turns a routine on from their own session agent-api signs a routine GRANT with it (routine.turn, bot.dispatch; kept with the flow version and presented on every run), and a message to a person's chat carries an event ticket (routine.turn). The gateway's service door verifies under the public half (`agent.pem` in its VEXA_SUBJECT_TICKET_KEYS_DIR) and holds nothing that signs. No other service mounts this file. Unset or unreadable, routines and messages still reach flows without a ticket (one warning) and the door refuses the person-bound calls they cause (403 subject_ticket_required). Generated at install: compose's subject-ticket-keys one-shot, the Helm subject-ticket-agent-key Secret",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
       "key": "VEXA_INTERNAL_API_SECRET",
       "class": "defaulted",
       "default": "(unset — DEPRECATED alias of INTERNAL_API_SECRET; read only when the canonical name is absent, and the boot logs a deprecation warning)",
@@ -1532,6 +1542,11 @@
       "description": "calls in a session (ADR-0048 decision 6): agent-api mints participants' room tokens on the deployment's LiveKit server and binds a call to its session",
       "mode": "all",
       "when_unconfigured": "GET /api/sessions/{s}/call answers calls:false and the Terminal shows no Call button; the token and bind routes answer 503"
+    },
+    "subject_tickets": {
+      "description": "agent-api signs the routines a person turned on and the messages it posts to a person (subject-ticket.v1, issuer `agent`), so the flows calls they cause pass the gateway's service door for that person only",
+      "mode": "all",
+      "when_unconfigured": "routines and messages reach flows without a ticket, and the door refuses the routine turns, notices and bots they would run with 403 subject_ticket_required; everything else is unchanged"
     }
   },
   "surface_only": [

@@ -13,6 +13,7 @@ the same machinery as every other `<domain>/contracts/<name>.v<N>` (gate:schema 
 | [`routes.v1`](routes.v1/) | each domain → gateway (`routes.v1.json`: the routes a domain asks the edge to serve, with each row's scopes and policy: `delegation`, `mcp_reentry`, `stream`, `forward`) | sealed; validate.mjs also holds every manifest in the repo |
 | [`mcp.tools.v1`](mcp.tools.v1/) | each domain → the MCP edge (`mcp.tools.v1.json`: the tools a domain serves and the door behind each; `services/mcp` assembles them) | sealed; validate.mjs also holds every manifest in the repo |
 | [`gateway-identity.v1`](gateway-identity.v1/) | gateway → agent-api / meeting-api / credential broker (`X-Vexa-Identity`, the Ed25519-signed identity on every forward; the gateway alone holds the private key) | sealed; the signer/verifier is vendored byte for byte (`gate:fact-parity`) |
+| [`subject-ticket.v1`](subject-ticket.v1/) | meeting-api / agent-api / the flows mail intake / the gateway → the gateway's flows service door (`X-Vexa-Subject-Ticket`, the producer-signed ticket that binds a flows call to the person whose event or grant caused it; each producer holds its own Ed25519 private key, the door only the public halves) | sealed; the module is vendored byte for byte (`gate:fact-parity`) |
 
 The rule (MANIFEST §2): a back-compatible change re-seals (`pnpm seal:contracts`); a
 breaking change opens `api.v2`, leaving `api.v1` until no consumer pins it.
