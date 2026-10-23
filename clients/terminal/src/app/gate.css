@@ -1,5 +1,10 @@
 /* The full-screen gate cards in front of the workbench (app/App.tsx: share refused, invite consent;
  * app/AuthGate.tsx: sign-in). Tokens only. */
+/* What the server renders before the session probe settles is classes only: the page's policy
+ * refuses style attributes (contentSecurityPolicy.ts, style-src-attr 'none'). */
+.vx-gate-blank { height: 100vh; }
+.vx-gate-center { height: 100vh; display: flex; align-items: center; justify-content: center; }
+.vx-gate-scroll { overflow-y: auto; }
 .vx-gate-wrap { height: 100vh; background: var(--bg); display: flex; align-items: center; justify-content: center; padding: var(--space-5); }
 .vx-gate-card { width: 100%; max-width: 440px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-xl); padding: 26px 26px var(--space-6); }
 .vx-gate-eyebrow { text-transform: uppercase; letter-spacing: .08em; }
@@ -11,3 +16,7 @@
 .vx-gate-btn-primary { background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent); font-weight: var(--weight-semibold); }
 .vx-gate-btn-ghost { background: transparent; color: var(--t2); }
 .vx-gate-error { font-size: var(--text-xs); color: var(--danger); line-height: 1.5; }
+/* not-found.tsx: the shape of Next's own 404, on the terminal's tokens */
+.vx-notfound { display: flex; align-items: center; color: var(--t1); }
+.vx-notfound-code { margin: 0 20px 0 0; padding: 0 23px 0 0; font-size: 24px; font-weight: 500; line-height: 49px; border-right: 1px solid var(--line2); }
+.vx-notfound-text { margin: 0; font-size: 14px; font-weight: 400; line-height: 49px; }

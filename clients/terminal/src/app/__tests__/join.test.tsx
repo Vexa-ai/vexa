@@ -13,6 +13,8 @@
  *    spent          one sentence
  *    wrong address  one sentence, from the redeem's own 403, after a sign-in that looked fine
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
@@ -352,13 +354,17 @@ describe("the one-click join (S2)", () => {
     render(<JoinPage />);
     const card = await screen.findByTestId("join-card");
     const shell = card.parentElement as HTMLElement;
-    expect(shell.style.overflowX).toBe("hidden");
+    // classes, never a style attribute (the page's policy refuses those); their rules are join.css's
+    const css = readFileSync(join(__dirname, "..", "join", "join.css"), "utf8");
+    const rule = (cls: string) => new RegExp(`\\.${cls} \\{([^}]*)\\}`).exec(css)?.[1] ?? "";
+    expect(shell.className).toContain("vx-join-shell");
+    expect(rule("vx-join-shell")).toContain("overflow-x: hidden");
     expect(shell.className).toContain("p-4");          // --space-4: the 16px gutter
-    expect(card.style.width).toBe("100%");
-    expect(card.style.maxWidth).toBe("360px");
+    expect(card.className).toContain("vx-join-card");
+    expect(rule("vx-join-card")).toMatch(/width: 100%;.*max-width: 360px/);
     const btn = screen.getByTestId("join-one-click-button") as HTMLElement;
-    expect(btn.style.width).toBe("100%");
-    expect(btn.style.minHeight).toBe("44px");
+    expect(btn.className).toContain("vx-join-submit");
+    expect(rule("vx-join-submit")).toMatch(/width: 100%;.*min-height: 44px/);
   });
 
   it("the pure parts: landing, the page, the mask", () => {

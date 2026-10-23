@@ -302,7 +302,7 @@ export function App() {
   // mounted so the server HTML (which can't see localStorage/dockview) matches — no hydration mismatch.
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
-  if (!mounted) return <div className="bg-0" style={{ height: "100vh" }} />;
+  if (!mounted) return <div className="bg-0 vx-gate-blank" />;
 
   // AuthGate logs the user in first (a ?invite= link preserves its query through the OAuth round-trip);
   // InviteGate then shows the consent screen for any ?invite= INSIDE the authed subtree, so its preview /

@@ -269,22 +269,22 @@ export default function JoinPage() {
   const where = preview ? ((preview.room?.title ? `${preview.room.title}` : preview.name || preview.workspace_id) || "") : "";
 
   return (
-    <div className="p-4" style={shell}>
-      <div style={card} data-testid="join-card">
-        <button type="button" onClick={goBack} className="bg-none bd-none c-2 t-sm p-0" style={backBtn}
+    <div className="p-4 vx-join-shell">
+      <div className="vx-join-card" data-testid="join-card">
+        <button type="button" onClick={goBack} className="bg-none bd-none c-2 t-sm p-0 vx-join-back"
           data-testid="join-back" aria-label="Back">
           ‹ Back
         </button>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div className="vx-join-brand">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/vexa-logo.svg" alt="Vexa" width={28} height={28} className="r-md" style={{ display: "block", flex: "none" }} />
+          <img src="/vexa-logo.svg" alt="Vexa" width={28} height={28} className="r-md vx-join-logo" />
           <div className="t-md fw-600 c-1">
             {phase === "refused" ? "This invite" : "You have been invited"}
           </div>
         </div>
 
         {phase === "loading" && (
-          <div style={muted} data-testid="join-loading">Checking this invite…</div>
+          <div className="vx-join-muted" data-testid="join-loading">Checking this invite…</div>
         )}
 
         {phase === "refused" && (
@@ -301,17 +301,17 @@ export default function JoinPage() {
         {phase === "confirm" && preview && (
           <>
             <Identity kind="workspace" id={preview.workspace_id} name={preview.name || preview.workspace_id} size={40} label />
-            <div style={sentence} data-testid="join-sentence">{inviteSentence(preview)}</div>
+            <div className="vx-join-sentence" data-testid="join-sentence">{inviteSentence(preview)}</div>
             {preview.purpose ? (
-              <div style={muted} data-testid="join-purpose">{preview.purpose}</div>
+              <div className="vx-join-muted" data-testid="join-purpose">{preview.purpose}</div>
             ) : null}
-            <div style={muted} data-testid="join-confirm-note">
+            <div className="vx-join-muted" data-testid="join-confirm-note">
               Joining adds this workspace to your list. Your chats keep writing where they write now.
             </div>
             {signedInLine(signedInAs) && (
-              <div style={muted} data-testid="join-signed-in-as">{signedInLine(signedInAs)}</div>
+              <div className="vx-join-muted" data-testid="join-signed-in-as">{signedInLine(signedInAs)}</div>
             )}
-            <button type="button" onClick={() => void redeem(token)} style={submitBtn} data-testid="join-confirm">
+            <button type="button" onClick={() => void redeem(token)} className="vx-join-submit" data-testid="join-confirm">
               Join {preview.name || preview.workspace_id}
             </button>
             <button type="button" onClick={() => window.location.assign("/")} className="vx-join-quiet" data-testid="join-not-now">
@@ -326,45 +326,45 @@ export default function JoinPage() {
         {(phase === "joining" || phase === "joined") && preview && (
           <>
             <Identity kind="workspace" id={preview.workspace_id} name={preview.name || preview.workspace_id} size={40} label />
-            <div style={sentence} data-testid="join-sentence">{inviteSentence(preview)}</div>
-            <div style={muted} data-testid="join-joining">Adding you to it…</div>
+            <div className="vx-join-sentence" data-testid="join-sentence">{inviteSentence(preview)}</div>
+            <div className="vx-join-muted" data-testid="join-joining">Adding you to it…</div>
           </>
         )}
 
         {phase === "preview" && preview && (
           <>
             <Identity kind="workspace" id={preview.workspace_id} name={preview.name || preview.workspace_id} size={40} label />
-            <div style={sentence} data-testid="join-sentence">{inviteSentence(preview)}</div>
+            <div className="vx-join-sentence" data-testid="join-sentence">{inviteSentence(preview)}</div>
             {preview.purpose ? (
-              <div style={muted} data-testid="join-purpose">{preview.purpose}</div>
+              <div className="vx-join-muted" data-testid="join-purpose">{preview.purpose}</div>
             ) : null}
 
             {note && oneClickNote(note) ? (
-              <div style={muted} data-testid="join-note">{oneClickNote(note)}</div>
+              <div className="vx-join-muted" data-testid="join-note">{oneClickNote(note)}</div>
             ) : null}
 
             {oneClick && !sent ? (
-              <form method="post" action="/api/join/accept" style={{ display: "flex", flexDirection: "column", gap: 8 }}
+              <form method="post" action="/api/join/accept" className="vx-join-form vx-join-form-tight"
                 data-testid="join-one-click">
                 <input type="hidden" name="i" value={token} />
-                <button type="submit" style={submitBtn} data-testid="join-one-click-button">
+                <button type="submit" className="vx-join-submit" data-testid="join-one-click-button">
                   Join {where}
                 </button>
-                <div style={muted}>
+                <div className="vx-join-muted">
                   Signs you in as {maskAddress(bound)} — this link was sent to that address. It works once.
                 </div>
               </form>
             ) : sent ? (
               <>
                 <div className="t-sm c-1 lh-snug">Check your email.</div>
-                <div style={muted}>
+                <div className="vx-join-muted">
                   If {sent} can sign in here, a link is on its way. It brings you straight back to this
                   invite. It works once and expires in a few minutes.
                 </div>
                 {!locked && (
                   <button
                     onClick={() => { setSent(null); setError(null); }}
-                    className="bg-none bd-none c-3 t-xs p-0" style={{ cursor: "pointer", alignSelf: "flex-start" }}
+                    className="bg-none bd-none c-3 t-xs p-0 vx-join-link"
                   >
                     Use a different address
                   </button>
@@ -372,25 +372,25 @@ export default function JoinPage() {
               </>
             ) : (
               <>
-                <div style={muted}>Sign in to accept it.</div>
+                <div className="vx-join-muted">Sign in to accept it.</div>
 
                 {providers.google && (
-                  <button onClick={() => signIn("google", { callbackUrl: returnPath(token) })} style={oauthBtn}>
+                  <button onClick={() => signIn("google", { callbackUrl: returnPath(token) })} className="vx-join-oauth">
                     Continue with Google
                   </button>
                 )}
                 {providers.microsoft && (
-                  <button onClick={() => signIn("microsoft", { callbackUrl: returnPath(token) })} style={oauthBtn}>
+                  <button onClick={() => signIn("microsoft", { callbackUrl: returnPath(token) })} className="vx-join-oauth">
                     Continue with Microsoft
                   </button>
                 )}
                 {providers.oidc && (
-                  <button onClick={() => signIn("oidc", { callbackUrl: returnPath(token) })} style={oauthBtn}>
+                  <button onClick={() => signIn("oidc", { callbackUrl: returnPath(token) })} className="vx-join-oauth">
                     Continue with {providers.oidc}
                   </button>
                 )}
 
-                {emailLink && <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {emailLink && <form onSubmit={submit} className="vx-join-form">
                   <div className="t-xs c-3 lh-snug">
                     {locked
                       ? "This invite is for this address. We’ll email it a sign-in link."
@@ -407,7 +407,7 @@ export default function JoinPage() {
                     placeholder="you@company.com"
                     className="bg-0 bd-strong r-md pt-2 pr-2 pb-2 pl-2 t-sm" style={{ color: locked ? "var(--t2)" : "var(--t1)", outline: "none", width: "100%", boxSizing: "border-box", minHeight: 44 }}
                   />
-                  <button type="submit" disabled={sending} style={submitBtn}>
+                  <button type="submit" disabled={sending} className="vx-join-submit">
                     {sending ? "Sending…" : "Email me a sign-in link"}
                   </button>
                 </form>}
@@ -420,27 +420,3 @@ export default function JoinPage() {
     </div>
   );
 }
-
-// PHONE (PRD 0.13.4 §11): at 390px the card fills the width inside a 16px gutter, nothing scrolls
-// sideways (long addresses and names wrap anywhere), the page scrolls vertically when the keyboard
-// is up, and the one act on the page is full width and at least 44px tall.
-const shell: React.CSSProperties = {
-  minHeight: "100dvh", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center",
-  boxSizing: "border-box", overflowX: "hidden",
-};
-const card: React.CSSProperties = {
-  width: "100%", maxWidth: 360, boxSizing: "border-box", background: "var(--panel)", border: "1px solid var(--line2)",
-  borderRadius: 12, padding: 20, display: "flex", flexDirection: "column", gap: 14, boxShadow: "0 8px 32px rgba(0,0,0,.3)",
-};
-const backBtn: React.CSSProperties = { alignSelf: "flex-start", minHeight: 32, cursor: "pointer" };
-const sentence: React.CSSProperties = { fontSize: 13, color: "var(--t1)", lineHeight: 1.55 };
-const muted: React.CSSProperties = { fontSize: 11.5, color: "var(--t3)", lineHeight: 1.5 };
-const oauthBtn: React.CSSProperties = {
-  display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: "var(--bg)",
-  color: "var(--t1)", border: "1px solid var(--line2)", borderRadius: 7, padding: "11px 12px",
-  fontSize: 14, fontWeight: 500, cursor: "pointer", width: "100%", minHeight: 44,
-};
-const submitBtn: React.CSSProperties = {
-  background: "var(--accent)", color: "var(--on-accent)", border: "none", borderRadius: 7,
-  padding: "11px 12px", fontSize: 14, fontWeight: 600, cursor: "pointer", width: "100%", minHeight: 44,
-};

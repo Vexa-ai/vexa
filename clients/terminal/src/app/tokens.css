@@ -119,6 +119,7 @@
   --shadow-2: 0 16px 48px rgba(0, 0, 0, 0.45);  /* dialog, sheet */
   --shadow-3: 0 8px 28px rgba(0, 0, 0, 0.38);   /* toast */
   --shadow-mention-menu: 0 6px 20px rgba(0, 0, 0, 0.18);  /* the live transcript's inline entity menu (both themes) */
+  --shadow-join-card: 0 8px 32px rgba(0, 0, 0, 0.3);       /* the /join card (both themes) */
 
   /* ── motion ──────────────────────────────────────────────────────────────────────────────── */
   --dur-fast: 120ms;

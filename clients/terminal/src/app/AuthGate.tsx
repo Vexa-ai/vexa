@@ -275,18 +275,18 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     // Evaluated on every page load — see the header. It is here, above `children`, because the
     // workbench mounts chats and fires dispatches on mount.
     const verdict = gateVerdict({ probed: instanceProbed, adminExists });
-    if (verdict === "pending") return <div className="bg-0" style={{ height: "100vh" }} />;
+    if (verdict === "pending") return <div className="bg-0 vx-gate-blank" />;
     if (verdict === "claim") return <ClaimInstanceCard email={subjectEmail} onSignOut={signOut} />;
     return <>{children}</>;
   }
-  if (status === "checking") return <div className="bg-0" style={{ height: "100vh" }} />;
+  if (status === "checking") return <div className="bg-0 vx-gate-blank" />;
 
   // The session died under a running app. Say THAT — not a status code, and not a console pointer —
   // and offer exactly one thing to do about it. The button reveals the sign-in card below, which
   // carries `destination()` so the round trip lands back on the same deeplink.
   if (ended) {
     return (
-      <div className="bg-0" style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div className="bg-0 vx-gate-center">
         <div
           data-testid="session-ended"
           className="bg-2 bd-strong r-lg p-6" style={{ width: 340, display: "flex", flexDirection: "column", gap: 14, boxShadow: "0 8px 32px rgba(0,0,0,.3)" }}
@@ -317,7 +317,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const hasOAuth = providers.google || providers.microsoft || !!providers.oidc;
 
   return (
-    <div className="bg-0" style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+    <div className="bg-0 vx-gate-center">
       <div
         className="bg-2 bd-strong r-lg p-6" style={{ width: claiming ? 380 : 320, display: "flex", flexDirection: "column", gap: 14, boxShadow: "0 8px 32px rgba(0,0,0,.3)" }}
       >
@@ -451,7 +451,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
  *  person who lands on it recognises where they are. */
 function GateShell({ testId, title, children }: { testId: string; title: string; children: React.ReactNode }) {
   return (
-    <div className="bg-0" style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", overflowY: "auto" }}>
+    <div className="bg-0 vx-gate-center vx-gate-scroll">
       <div
         data-testid={testId}
         className="bg-2 bd-strong r-lg p-6" style={{ width: 400, maxWidth: "94vw", display: "flex", flexDirection: "column", gap: 14, boxShadow: "0 8px 32px rgba(0,0,0,.3)" }}

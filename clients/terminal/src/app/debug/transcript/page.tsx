@@ -6,6 +6,7 @@
  *  so we can see, for any live meeting, whether segments are arriving and re-rendering in real time —
  *  independent of everything downstream.  Open /debug/transcript?id=<native_meeting_id>. */
 import { useEffect, useRef, useState } from "react";
+import "../debug.css";
 import { useLiveMeetings } from "../../../surfaces/liveMeetings";
 import { useMeetingLive } from "../../../surfaces/meetingLive";
 
@@ -78,7 +79,7 @@ export default function TranscriptDebug() {
 
   const mono: React.CSSProperties = { fontFamily: "monospace", fontSize: 12 };
   if (!mounted) {
-    return <div style={{ padding: 20, ...mono, color: "var(--t3)", background: "var(--bg)", minHeight: "100vh" }} suppressHydrationWarning>loading probe…</div>;
+    return <div className="vx-debug-loading" suppressHydrationWarning>loading probe…</div>;
   }
   return (
     <div style={{ padding: 20, color: "var(--t1)", background: "var(--bg)", minHeight: "100vh", ...mono }}>
