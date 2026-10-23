@@ -286,6 +286,8 @@ STAT_ALLOW = {
         "the store root's own `_global` entry (a stale empty FILE left by an old bind), not inside a tree",
     "agent/control_plane/legacy_git_store.py": "the retired .secrets store at the store root, never a tree",
     "workspaces/store/cache.py::tree_bytes": "the store's own cache measuring whole trees (lstat sizes)",
+    "agent/control_plane/config_preflight.py::_file_probe":
+        "config.v1's vendored preflight probing an operator-mounted credentials file, never a work tree",
 }
 _PRIMITIVES = {"agent/shared/gitexec.py", "agent/llm/gitexec.py", "workspaces/shared/gitexec.py",
                "workspaces/shared/workspace_paths.py", "agent/llm/workspace_paths.py"}
