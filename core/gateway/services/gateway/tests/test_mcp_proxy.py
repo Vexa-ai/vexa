@@ -363,8 +363,8 @@ def test_mcp_invalid_key_is_401():
 
 def test_mcp_accepts_the_bearer_carrier_the_transport_actually_sends():
     """MCP clients carry the credential as `Authorization: Bearer <key>` (mcp-remote, Claude
-    connectors), not `x-api-key`. The edge resolves EITHER to the same Vexa API key, and forwards
-    both spellings downstream so the MCP service authorizes identically."""
+    connectors), not `x-api-key`. The edge resolves EITHER to the same Vexa API key, and hands the
+    MCP that key in ONE carrier, `x-api-key` — the one its tools call back with."""
     ds = StreamingDownstream(chunks=[b"data: open\n\n"])
     client, _ = _client(ds)
     with client.stream("GET", "/mcp", headers={"authorization": f"Bearer {VALID_KEY}", **SSE_ACCEPT}) as r:
@@ -372,7 +372,7 @@ def test_mcp_accepts_the_bearer_carrier_the_transport_actually_sends():
         list(r.iter_bytes())
     assert ds.last["headers"]["x-user-id"] == "7"
     assert ds.last["headers"]["x-api-key"] == VALID_KEY
-    assert ds.last["headers"]["authorization"] == f"Bearer {VALID_KEY}"
+    assert "authorization" not in ds.last["headers"]
 
 
 def test_mcp_accepts_a_raw_authorization_value():

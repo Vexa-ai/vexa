@@ -158,7 +158,8 @@ class AdminApiAuthorizer:
                 await self._sleep(wait)
 
     async def authorize_subscribe(self, api_key: str, meetings: list) -> dict:
-        auth_headers = {"X-API-Key": api_key, TRACE_HEADER: get_trace_id() or ""}
+        # meeting-api learns who is subscribing from the signed identity alone; the key stays here.
+        auth_headers = {TRACE_HEADER: get_trace_id() or ""}
         try:
             user_data = await self.resolve(api_key)
         except AuthUnavailable as e:

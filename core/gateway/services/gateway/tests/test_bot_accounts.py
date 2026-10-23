@@ -154,7 +154,7 @@ def test_the_upstream_is_meeting_api_at_the_same_path_with_the_signed_identity()
     claims = identity_token.verify(VERIFY_KEY, headers[identity_token.HEADER])
     assert claims["sub"] == str(VALID_USER["user_id"])
     assert headers["x-user-id"] == str(VALID_USER["user_id"])
-    assert headers["x-api-key"] == VALID_KEY
+    assert "x-api-key" not in headers and "authorization" not in headers   # the key stays at the edge
     assert "x-internal-secret" not in headers
 
 

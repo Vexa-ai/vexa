@@ -132,8 +132,9 @@ async def run_vnc_relay(ws: WebSocket, session_id: str, *, authorizer: Authorize
     if not _SESSION_ID.match(session_id or ""):
         return await _refuse(ws, 4404, "not_found")
 
-    # The identity a forward stamps (`app._authorize`), and nothing the client sent.
-    headers = {"x-api-key": api_key}
+    # The identity a forward stamps (`app._authorize`), and nothing the client sent — the key
+    # included: meeting-api learns who the viewer is from the signed identity alone.
+    headers: dict = {}
     if identity_key is not None:
         headers.update(identity_token.signed_headers(identity_key, user_data))
     else:
