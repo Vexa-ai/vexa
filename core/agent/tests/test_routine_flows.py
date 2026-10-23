@@ -57,7 +57,7 @@ class FakeFlows:
         self.rows: list[dict] = []
         self.refuse: dict = {}
 
-    def submit(self, subject, name, cron, instruction, *, activate=True):
+    def submit(self, subject, name, cron, instruction, *, activate=True, grant=""):
         if name in self.refuse:
             raise rf.FlowsError(403, {"refused": self.refuse[name]})
         scope = f"user:{subject}"
@@ -78,7 +78,7 @@ class FakeFlows:
                     newest[r["name"]] = r
         return list(newest.values())
 
-    def set_status(self, subject, name, version, action):
+    def set_status(self, subject, name, version, action, *, grant=""):
         for r in self.rows:
             if r["scope"] == f"user:{subject}" and r["name"] == name and r["version"] == version:
                 r["status"] = "active" if action in ("resume", "activate") else "retired"

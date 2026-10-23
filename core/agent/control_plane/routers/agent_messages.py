@@ -41,7 +41,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from control_plane import ceiling, identity_token, private_taint
+from control_plane import ceiling, identity_token, private_taint, subject_ticket, ticket_mint
 from control_plane import publish as publish_mod
 from control_plane.bodies import SessionId
 
@@ -253,7 +253,12 @@ def build(**d) -> APIRouter:
                 # unwatched because a message was delivered into an ordinary chat is not one
                 "sender_routine": bool(routine) or unattended,
                 "_origin": chain + [f"thread:{sender}/{body.from_thread}"]}
-        code, answer = _publish(f"msg:{sender}:{message_id}", refs)
+        source_event_id = f"msg:{sender}:{message_id}"
+        # The recipient's ticket: flows delivers the message as a turn in `target`'s chat.
+        ticket = ticket_mint.message_ticket(target, source_event_id)
+        if ticket:
+            refs[subject_ticket.REFS_KEY] = [ticket]
+        code, answer = _publish(source_event_id, refs)
         if target != sender and code == 403 and (answer or {}).get("refused") == "agent_messages_shared":
             answer = dict(CROSS_PERSON_REFUSAL)
         if 200 <= code < 300:

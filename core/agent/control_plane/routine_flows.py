@@ -103,12 +103,13 @@ class FlowsClient:
     base: str = field(default_factory=flows_base)
     key: str = field(default_factory=flows_key)
 
-    def _call(self, method: str, path: str, body: Optional[dict] = None):
+    def _call(self, method: str, path: str, body: Optional[dict] = None,
+              headers: Optional[dict] = None):
         req = urllib.request.Request(
             f"{self.base}{path}", method=method,
             data=json.dumps(body).encode() if body is not None else None,
             headers={"content-type": "application/json", "X-Flows-Operator-Key": self.key,
-                     "X-Actor": "agent-api:routines"})
+                     "X-Actor": "agent-api:routines", **(headers or {})})
         try:
             with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:  # noqa: S310 — operator-configured
                 raw = r.read()
@@ -121,11 +122,15 @@ class FlowsClient:
             raise FlowsError(e.code, detail) from e
 
     def submit(self, subject: str, name: str, cron: str, instruction: str, *,
-               activate: bool = True) -> dict:
-        return self._call("POST", "/flows", {
-            "name": flow_name(name), "scope": f"user:{subject}",
-            "trigger": {"kind": "schedule", "cron": cron}, "steps": ["agent_run"],
-            "params": {"instruction": instruction}, "activate": activate})
+               activate: bool = True, grant: str = "") -> dict:
+        """`grant`: the person's routine grant (`ticket_mint.routine_grant`), sent when their own
+        session arms the routine as it is created."""
+        body = {"name": flow_name(name), "scope": f"user:{subject}",
+                "trigger": {"kind": "schedule", "cron": cron}, "steps": ["agent_run"],
+                "params": {"instruction": instruction}, "activate": activate}
+        if grant:
+            body["grant"] = grant
+        return self._call("POST", "/flows", body)
 
     def routines(self, subject: str) -> list[dict]:
         """The person's schedule flows that run `agent_run`, newest version per name."""
@@ -151,9 +156,16 @@ class FlowsClient:
         q = urllib.parse.urlencode({"subject": subject, "limit": max(1, min(int(limit), 200))})
         return list((self._call("GET", f"/flows/runs?{q}") or {}).get("runs") or [])
 
-    def set_status(self, subject: str, name: str, version: int, action: str) -> dict:
+    def set_status(self, subject: str, name: str, version: int, action: str, *,
+                   grant: str = "") -> dict:
+        """`grant`: the person's routine grant, sent on a resume their own session pressed — as
+        the body field `grant` and the `X-Vexa-Subject-Grant` header."""
         q = urllib.parse.urlencode({"scope": f"user:{subject}"})
-        return self._call("POST", f"/flows/{urllib.parse.quote(name)}/{int(version)}/{action}?{q}")
+        path = f"/flows/{urllib.parse.quote(name)}/{int(version)}/{action}?{q}"
+        if not grant:
+            return self._call("POST", path)
+        from control_plane.ticket_mint import GRANT_HEADER  # noqa: PLC0415
+        return self._call("POST", path, {"grant": grant}, headers={GRANT_HEADER: grant})
 
 
 def card_from_flow(subject: str, f: dict, *, state: Optional[dict] = None) -> dict:

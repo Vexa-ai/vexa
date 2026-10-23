@@ -19,7 +19,7 @@ from tests.test_routine_flows import ROUTINE, FakeFlows, _as, world  # noqa: F40
 class DatedFlows(FakeFlows):
     """FakeFlows with the `created_at` flows-api lists, so a merge can tell which side is newer."""
 
-    def submit(self, subject, name, cron, instruction, *, activate=True):
+    def submit(self, subject, name, cron, instruction, *, activate=True, grant=""):
         row = super().submit(subject, name, cron, instruction, activate=activate)
         self.rows[-1]["created_at"] = str(time.time())
         return dict(self.rows[-1])

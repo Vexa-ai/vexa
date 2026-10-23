@@ -19,6 +19,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from control_plane import identity_token
 from control_plane.ceiling import require_session_credential
 from control_plane import routine_flows
+from control_plane import ticket_mint
 from control_plane.api_shared import logger
 from control_plane import routine_needs
 from control_plane.bodies import RoutineCreate, RoutineEnabledPatch
@@ -99,9 +100,13 @@ def build(**d) -> APIRouter:
         # only a signed-in session arms a routine as it creates it.
         from control_plane import policy_decide  # noqa: PLC0415
         proposed = policy_decide.credential_of(request.headers) != policy_decide.SESSION
+        # The person's session arming it signs the routine's grant: the door lets flows run its
+        # turns and bots for them on it. A proposal carries none; turning it on signs one.
+        grant = "" if proposed else ticket_mint.routine_grant(
+            subject, routine_flows.flow_name(body.name))
         try:
             made = routine_flows.FlowsClient().submit(subject, body.name, body.cron, body.prompt,
-                                                      activate=not proposed)
+                                                      activate=not proposed, grant=grant)
         except routine_flows.FlowsError as e:
             raise _flows_refusal(e)
         _inherit_scope(request, str(subject), made)
@@ -159,9 +164,12 @@ def build(**d) -> APIRouter:
         flow = _flow_routine(subject, routine_flows.flow_name(name))
         if flow is None:
             raise HTTPException(status_code=404, detail="unknown routine")
+        # Past `require_session_credential` above: the person's own press signs the grant.
+        grant = ticket_mint.routine_grant(subject, flow["name"]) if body.enabled else ""
         try:
             routine_flows.FlowsClient().set_status(
-                subject, flow["name"], flow["version"], "resume" if body.enabled else "pause")
+                subject, flow["name"], flow["version"], "resume" if body.enabled else "pause",
+                grant=grant)
         except routine_flows.FlowsError as e:
             raise _flows_refusal(e)
         # switching a routine on clears why it was paused; switching it off is the person's own act
