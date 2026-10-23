@@ -153,6 +153,7 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: flows-worker
     spec:
+      enableServiceLinks: false
       {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
       {{- /* global scheduling and pull secrets, the same as every other component Deployment:
       without them the flows tier sits Pending on a cluster whose nodes are all tainted. */}}
@@ -316,6 +317,7 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: flows-mailbox
     spec:
+      enableServiceLinks: false
       {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
       {{- /* global scheduling and pull secrets, the same as every other component Deployment:
       without them the flows tier sits Pending on a cluster whose nodes are all tainted. */}}
@@ -477,6 +479,7 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: flows-api
     spec:
+      enableServiceLinks: false
       {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
       {{- /* global scheduling and pull secrets, the same as every other component Deployment:
       without them the flows tier sits Pending on a cluster whose nodes are all tainted. */}}

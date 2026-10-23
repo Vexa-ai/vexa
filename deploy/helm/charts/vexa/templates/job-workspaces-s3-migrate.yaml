@@ -24,6 +24,7 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: workspaces-s3-migrate
     spec:
+      enableServiceLinks: false
       restartPolicy: Never
       {{- include "vexa.podSecurityContext" . | nindent 6 }}
       {{- with .Values.global.imagePullSecrets }}

@@ -35,6 +35,7 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: bot-seccomp
     spec:
+      enableServiceLinks: false
       automountServiceAccountToken: false
       securityContext:
         seccompProfile:

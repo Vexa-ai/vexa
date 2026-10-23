@@ -40,6 +40,7 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: livekit
     spec:
+      enableServiceLinks: false
       hostNetwork: {{ .Values.livekit.hostNetwork }}
       {{- if .Values.livekit.hostNetwork }}
       dnsPolicy: ClusterFirstWithHostNet

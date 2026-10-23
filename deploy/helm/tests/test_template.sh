@@ -2540,4 +2540,11 @@ tb "N3: an egress entry without ports is refused" \
   '! helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set "networkPolicy.controlPlane.egress[0].cidr=203.0.113.10/32" >/dev/null 2>&1'
 tb "N3 (control): networkPolicy.controlPlane.anyAddress=true renders the open rule and no API-server policy" \
   'helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set networkPolicy.controlPlane.anyAddress=true | cp_check open'
+# fullnameOverride=vexa names the agent-api Service vexa-agent-api, and Kubernetes' service-link env
+# would hand every Pod VEXA_AGENT_API_PORT=tcp://… — the services' own VEXA_* settings. No Pod gets them.
+SL="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set fullnameOverride=vexa "${CRM[@]}" \
+  --set flows.enabled=true --set signals.enabled=true --set livekit.enabled=true --set livekit.url=wss://calls.example --set dashboard.enabled=true \
+  --set migrations.enabled=true --set migrations.image.repository=vexaai/vexa-admin-api)"
+tb "no Pod template takes service-link env (enableServiceLinks: false on every workload)" \
+  'python3 -c "import sys,yaml; w=[d for d in yaml.safe_load_all(sys.stdin) if d and d[\"kind\"] in (\"Deployment\",\"StatefulSet\",\"DaemonSet\",\"Job\")]; bad=[d[\"metadata\"][\"name\"] for d in w if d[\"spec\"][\"template\"][\"spec\"].get(\"enableServiceLinks\") is not False]; print(len(w), bad); sys.exit(1 if bad or len(w) < 15 else 0)" <<< "$SL" >/dev/null'
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

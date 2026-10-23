@@ -28,6 +28,7 @@ spec:
       annotations:
         {{- toYaml .Values.global.podAnnotations | nindent 8 }}
     spec:
+      enableServiceLinks: false
       {{- if eq (include "vexa.securityContextDeliver" .) "true" }}
       securityContext:
         {{- toYaml (merge (deepCopy (.Values.global.podSecurityContext | default dict)) (dict "runAsNonRoot" true "seccompProfile" (dict "type" "RuntimeDefault"))) | nindent 8 }}

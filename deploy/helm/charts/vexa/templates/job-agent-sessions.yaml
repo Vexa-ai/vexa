@@ -34,6 +34,7 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: migrations
     spec:
+      enableServiceLinks: false
       restartPolicy: Never
       {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
       {{- with .Values.global.imagePullSecrets }}

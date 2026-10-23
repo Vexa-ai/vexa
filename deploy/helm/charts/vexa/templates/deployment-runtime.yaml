@@ -20,6 +20,7 @@ spec:
       annotations:
         {{- toYaml .Values.global.podAnnotations | nindent 8 }}
     spec:
+      enableServiceLinks: false
       {{- if eq .Values.runtime.backend "k8s" }}
       # The k8s backend only calls the API server (kubectl, its ServiceAccount): it holds no engine
       # socket and starts no process as another uid, so it runs as the chart's unprivileged uid. The
