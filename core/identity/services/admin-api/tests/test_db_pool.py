@@ -33,6 +33,7 @@ def test_boot_reads_db_pool_size_env(monkeypatch):
     # build_production_app only configures the engine + registers the startup schema hook).
     monkeypatch.setenv("INTERNAL_API_SECRET", "a-real-secret")
     monkeypatch.setenv("DB_PASSWORD", "a-real-db-password")
+    monkeypatch.setenv("VEXA_TERMINAL_SESSION_SECRET", "a-real-session-secret")
     monkeypatch.setenv("DATABASE_URL", FAKE_URL)
     monkeypatch.setenv("DB_POOL_SIZE", "7")
     monkeypatch.setenv("DB_MAX_OVERFLOW", "3")
