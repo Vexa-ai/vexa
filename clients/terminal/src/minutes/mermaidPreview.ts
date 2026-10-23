@@ -14,7 +14,7 @@
  *  without a live CodeMirror view.
  */
 import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
-import { isMermaidFence, renderMermaid, type DiagramTheme } from "../ui-kit/docDiagrams";
+import { isMermaidFence, mermaidSvgNode, renderMermaid, type DiagramTheme } from "../ui-kit/docDiagrams";
 
 /** One drawn fence. `eq` is load-bearing: the decoration set is rebuilt on every keystroke, and
  *  without it every diagram in the document would be re-rendered (and visibly re-flow) while you
@@ -35,7 +35,7 @@ class MermaidWidget extends WidgetType {
     // placeholder that would push the text the author is typing down and then up again.
     const measure = () => { try { view.requestMeasure(); } catch { /* view already torn down */ } };
     renderMermaid(this.source, this.theme).then(
-      (svg) => { box.innerHTML = svg; measure(); },
+      (svg) => { box.replaceChildren(mermaidSvgNode(svg)); measure(); },
       (err: unknown) => {
         box.setAttribute("data-mermaid-error", "");
         box.style.cssText += ";font-family:var(--mono);font-size:10.5px;color:var(--t3);text-align:left";

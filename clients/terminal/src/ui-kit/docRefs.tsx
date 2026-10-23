@@ -57,6 +57,13 @@ export const ENTITY_CHIP: Record<string, { icon: string; color: string; bg: stri
 };
 export const DEFAULT_ENTITY_CHIP = { icon: "link", color: "var(--blue)", bg: "var(--bluebg)" };
 
+/** A chip colour as the stylesheet names it: `var(--blue)` → `blue`, painted by
+ *  `.vx-entity .vx-chip-icon[data-tone]` (primitives/controls.css). An attribute, never a style:
+ *  a chip a server renders carries no style attribute (app/contentSecurityPolicy.ts). */
+export function toneOf(color: string): string | undefined {
+  return /^var\(--([a-z]+)\)$/.exec(color)?.[1];
+}
+
 /** The ONE entity-kind → color lookup for the whole client (chips, inline transcript
  *  highlights, entity dots). Returns undefined for unknown kinds so each site picks its
  *  own fallback (chips default blue, transcript text defaults muted). */

@@ -1,5 +1,8 @@
 /* ui-kit primitives (guidelines §4). Global, `vx-` prefixed; see src/ui-kit/styles.css for why. */
 
+/* the legacy icon set (index.tsx `Icon`) never shrinks in a flex row */
+.vx-icon { flex: none; }
+
 /* ── text units ───────────────────────────────────────────────────────────────────────────── */
 .vx-nowrap { white-space: nowrap; }
 .vx-tabular { font-variant-numeric: tabular-nums; }

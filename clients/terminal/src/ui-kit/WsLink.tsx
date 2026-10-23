@@ -19,7 +19,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Icon } from "./index";
 import { ContextMenu } from "./ContextMenu";
 import { usePeekOrOpen } from "./peekSeam";
-import { useOpenEntity, ENTITY_CHIP, DEFAULT_ENTITY_CHIP } from "./docRefs";
+import { useOpenEntity, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, toneOf } from "./docRefs";
 import { humanize, parseWsRef, resolveLink, type ResolvedLink } from "./wsLinks";
 
 
@@ -131,7 +131,7 @@ export function WsLink({ refText, slug, label }: { refText: string; slug?: strin
     <span role="link" tabIndex={0} className="vx-chip vx-entity vx-inline-chip" data-kind={kindOf(target) ?? "doc"} {...peek.bind}
       aria-label={target.workspace ? `Open ${title} — in ${target.workspace}` : `Open ${title}`}
       onClick={open} onKeyDown={(e) => { if (e.key === "Enter") open(); }}>
-      <span className="vx-chip-icon" aria-hidden style={{ color: c.color }}><Icon name={c.icon} size={12} /></span>
+      <span className="vx-chip-icon" aria-hidden data-tone={toneOf(c.color)}><Icon name={c.icon} size={12} /></span>
       <span className="vx-chip-label">{shown}</span>
     </span>
     {peek.peek}

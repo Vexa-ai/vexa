@@ -29,7 +29,7 @@ import { resolveLink } from "./wsLinks";
 import { MeetingChip, meetingNotePath, meetingRefOfHref } from "./MeetingChip";
 // The link vocabulary both renderers share. Re-exported below so every existing importer of
 // docLinks keeps working — the extraction is about the dependency graph, not about the API.
-import { DocMetaContext, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, useOpenEntity } from "./docRefs";
+import { DocMetaContext, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, toneOf, useOpenEntity } from "./docRefs";
 
 export { DocNavContext, DocMetaContext, useOpenEntity, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, entityColor } from "./docRefs";
 export type { DocNavigate } from "./docRefs";
@@ -579,7 +579,7 @@ function EntityWikilink({ title }: { title: string }) {
     <>
       <span role="link" tabIndex={0} className="vx-chip vx-entity vx-inline-chip" data-kind={target?.type ?? "doc"} {...peek.bind}
         onClick={open} onKeyDown={(e) => { if (e.key === "Enter") open(); }}>
-        <span className="vx-chip-icon" aria-hidden style={{ color: c.color }}><Icon name={c.icon} size={12} /></span>
+        <span className="vx-chip-icon" aria-hidden data-tone={toneOf(c.color)}><Icon name={c.icon} size={12} /></span>
         <span className="vx-chip-label">{title}</span>
       </span>
       {peek.peek}
@@ -684,7 +684,7 @@ function LocalPathLink({ href, children }: { href: string; children?: ReactNode 
   const path = href.startsWith("/") ? href : normalizeDocPath(href.replace(/^\.\//, ""), meta.path);
   return (
     <span role="link" onClick={() => openEntity({ path })}
-      className="c-info" style={{ textDecoration: "underline", cursor: "pointer" }}>{children}</span>
+      className="c-info vx-doc-link">{children}</span>
   );
 }
 
@@ -692,7 +692,6 @@ function LocalPathLink({ href, children }: { href: string; children?: ReactNode 
  *  MdxDoc registers it in the MDX component vocabulary, and the plain-Markdown fallback
  *  reconstructs it from raw <Card> tags so a failed MDX compile doesn't print tag soup. */
 export function Card({ title, icon, href, children }: { title?: string; icon?: string; href?: string; children?: ReactNode }) {
-  const [hover, setHover] = useState(false);
   const clickable = Boolean(href);
   const openEntity = useOpenEntity();
   const meta = useContext(DocMetaContext);
@@ -704,9 +703,9 @@ export function Card({ title, icon, href, children }: { title?: string; icon?: s
     else if (isInternalHref(href)) openEntity({ path: href.startsWith("/") ? href : normalizeDocPath(href.replace(/^\.\//, ""), meta.path) });
   };
   return (
-    <div onClick={clickable ? open : undefined} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-      className="r-lg pt-3 pr-3 pb-3 pl-3" style={{ border: `1px solid ${hover && clickable ? "var(--line2)" : "var(--line)"}`, background: hover && clickable ? "var(--panel2)" : "var(--panel)", cursor: clickable ? "pointer" : undefined, minWidth: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: children ? 6 : 0 }}>
+    <div onClick={clickable ? open : undefined} data-clickable={clickable ? "" : undefined}
+      className="r-lg pt-3 pr-3 pb-3 pl-3 vx-doc-card">
+      <div className="vx-doc-card-head" data-body={children ? "" : undefined}>
         {icon && <span className="c-info"><Icon name={icon} size={14} /></span>}
         <span className="fw-600 c-1 t-sm">{title}</span>
       </div>
@@ -715,8 +714,14 @@ export function Card({ title, icon, href, children }: { title?: string; icon?: s
   );
 }
 
+/** A card grid's column count as the stylesheet names it (`.vx-doc-cards[data-cols]`, 1–6). */
+export function cardColumns(cols: unknown): number {
+  const n = Math.round(Number(cols));
+  return Number.isFinite(n) ? Math.min(6, Math.max(1, n)) : 2;
+}
+
 export function CardGroup({ cols = 2, children }: { cols?: number; children?: ReactNode }) {
-  return <div className="mt-2 mr-0 mb-3 ml-0" style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: 10 }}>{children}</div>;
+  return <div className="mt-2 mr-0 mb-3 ml-0 vx-doc-cards" data-cols={cardColumns(cols)}>{children}</div>;
 }
 
 /** True when an href points inside the workspace (no scheme, not an anchor, not //host). */

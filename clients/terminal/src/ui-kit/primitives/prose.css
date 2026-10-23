@@ -92,3 +92,26 @@ li:hover > .vx-task-ask, li:focus-within > .vx-task-ask, p:hover > .vx-task-ask,
 .vx-doc-column { min-width: 0; }
 .vx-doc-column > :first-child { margin-top: 0; }
 .vx-rd-line .vx-checkbox { margin-right: var(--space-1_5); }
+
+/* The plain-Markdown fallback's headings (Markdown.tsx), by level. */
+.vx-md-heading { margin: 10px 0 4px; }
+.vx-md-heading[data-level="1"] { font-size: 18px; margin: 12px 0 6px; }
+.vx-md-heading[data-level="2"] { font-size: 16px; margin: 12px 0 6px; }
+.vx-md-heading[data-level="3"] { font-size: 14.5px; }
+.vx-md-heading[data-level="4"] { font-size: 13.5px; }
+/* <Card> and <CardGroup> (docLinks.tsx); a card that links lights on hover. */
+.vx-doc-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.vx-doc-cards[data-cols="1"] { grid-template-columns: minmax(0, 1fr); }
+.vx-doc-cards[data-cols="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.vx-doc-cards[data-cols="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.vx-doc-cards[data-cols="5"] { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.vx-doc-cards[data-cols="6"] { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.vx-doc-card { border: 1px solid var(--line); background: var(--panel); min-width: 0; }
+.vx-doc-card[data-clickable] { cursor: pointer; }
+.vx-doc-card[data-clickable]:hover { border-color: var(--line2); background: var(--panel2); }
+.vx-doc-card-head { display: flex; align-items: center; gap: 8px; }
+.vx-doc-card-head[data-body] { margin-bottom: 6px; }
+.vx-doc-link { text-decoration: underline; cursor: pointer; }
+/* a diagram fence as its source (docDiagrams.tsx), and the drawn figure */
+[data-mermaid-source] > pre.vx-mermaid-source { font-family: var(--mono); font-size: 12px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; margin: 6px 0 10px; overflow-x: auto; line-height: 1.5; color: var(--t1); }
+.vx-mermaid-figure { overflow-x: auto; line-height: normal; text-align: center; }

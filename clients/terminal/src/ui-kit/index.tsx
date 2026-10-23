@@ -55,7 +55,7 @@ const PATHS: Record<string, string> = {
 export function Icon({ name, size = 18, style }: { name: string; size?: number; style?: CSSProperties }) {
   return (
     <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor"
-      strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" style={{ flex: "none", ...style }}
+      strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className="vx-icon" style={style}
       aria-hidden="true">
       <path d={PATHS[name] ?? ""} />
     </svg>

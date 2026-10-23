@@ -213,7 +213,6 @@ export function parseCardBlock(src: string): ParsedCardBlock {
   return { cols, grouped: Boolean(group), cards };
 }
 
-const HEADING_SIZE: Record<number, number> = { 1: 18, 2: 16, 3: 14.5, 4: 13.5 };
 type TableAlign = "left" | "center" | "right";
 
 function splitTableRow(line: string): string[] | null {
@@ -396,7 +395,7 @@ function markdownBlocks(text: string, slots: ReactNode[]): ReactNode[] {
     if (h) {
       const lvl = h[1].length;
       blocks.push(
-        <div key={key++} className="fw-600 c-1 lh-tight" style={{ fontSize: HEADING_SIZE[lvl], margin: lvl <= 2 ? "12px 0 6px" : "10px 0 4px" }}>
+        <div key={key++} className="fw-600 c-1 lh-tight vx-md-heading" data-level={lvl}>
           {inline(h[2])}
         </div>,
       );

@@ -81,6 +81,12 @@
 .vx-entity[data-kind="meeting"] .vx-chip-icon { color: var(--meeting-text); }
 .vx-chip:hover, .vx-entity:hover { border-color: var(--border-control); }
 .vx-chip-icon { display: inline-flex; color: var(--text-3); flex: none; }
+/* an entity chip's icon in its type's colour (docRefs.ts ENTITY_CHIP, through `toneOf`): an attribute the
+ * server can render, where a style attribute would be refused (app/contentSecurityPolicy.ts) */
+.vx-entity .vx-chip-icon[data-tone="blue"] { color: var(--blue); }
+.vx-entity .vx-chip-icon[data-tone="accent"] { color: var(--accent); }
+.vx-entity .vx-chip-icon[data-tone="violet"] { color: var(--violet); }
+.vx-entity .vx-chip-icon[data-tone="green"] { color: var(--green); }
 .vx-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* a badge's disambiguator (a meeting's time, a page's workspace) — quiet, never truncating the name first */
 .vx-chip-hint { color: var(--text-3); white-space: nowrap; margin-left: var(--space-1); flex: none; }
