@@ -85,12 +85,8 @@ spec:
     {{- end }}
   policyTypes: [Egress]
   egress:
-    # name resolution, wherever the cluster serves it (kube-dns, NodeLocal DNSCache, OpenShift DNS)
-    - ports:
-        - port: 53
-          protocol: UDP
-        - port: 53
-          protocol: TCP
+    # name resolution: the cluster DNS Pods (networkPolicy.dns)
+    {{- include "vexa.dnsEgress" $ | nindent 4 }}
     - to:
         - podSelector:
             matchLabels:

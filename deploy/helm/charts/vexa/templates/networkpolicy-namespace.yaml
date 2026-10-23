@@ -73,11 +73,7 @@ spec:
           {{- toYaml $notIn | nindent 10 }}
   policyTypes: [Egress]
   egress:
-    - ports:
-        - port: 53
-          protocol: UDP
-        - port: 53
-          protocol: TCP
+    {{- include "vexa.dnsEgress" $ | nindent 4 }}
     - to:
         {{- toYaml $chartPods | nindent 8 }}
     - to:

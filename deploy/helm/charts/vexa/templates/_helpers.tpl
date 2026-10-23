@@ -623,6 +623,27 @@ pgbouncer): only the seccomp profile of global.podSecurityContext (RuntimeDefaul
 uid or fsGroup an operator sets for Vexa's own images never reaches an upstream entrypoint. Same
 `deliver` gate; renders nothing when the profile is unset.
 */}}
+{{/*
+THE DNS EGRESS RULE every policy that allows egress starts with: the cluster's DNS Pods
+(networkPolicy.dns.to) on networkPolicy.dns.ports, UDP and TCP. Policies match after the Service's
+address is translated, so the peers are the DNS Pods themselves and the ports are the ones they
+listen on (OpenShift: 5353). An empty `to` allows those ports to any address.
+*/}}
+{{- define "vexa.dnsEgress" -}}
+{{- $dns := .Values.networkPolicy.dns | default dict -}}
+- ports:
+  {{- range ($dns.ports | default (list 53)) }}
+    - port: {{ . | int }}
+      protocol: UDP
+    - port: {{ . | int }}
+      protocol: TCP
+  {{- end }}
+  {{- with $dns.to }}
+  to:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end -}}
+
 {{- define "vexa.seccompPodSecurityContext" -}}
 {{- $p := (.Values.global.podSecurityContext | default dict).seccompProfile -}}
 {{- if and $p (eq (include "vexa.securityContextDeliver" .) "true") -}}

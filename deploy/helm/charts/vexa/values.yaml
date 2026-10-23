@@ -441,6 +441,19 @@ mcp:
 # NetworkPolicy.
 networkPolicy:
   enabled: true
+  # Where every Pod resolves names: the cluster DNS Pods, as NetworkPolicy peers, on these ports
+  # (UDP and TCP). The default selects kube-dns/CoreDNS in kube-system (kubeadm, kind, EKS, GKE, AKS,
+  # k3s). OpenShift: values-openshift.yaml selects openshift-dns on 5353. NodeLocal DNSCache: add
+  # `- ipBlock: {cidr: 169.254.20.10/32}`. An empty `to` allows these ports to any address.
+  dns:
+    to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: kube-system
+        podSelector:
+          matchLabels:
+            k8s-app: kube-dns
+    ports: [53]
   # A namespace-wide default-deny (both directions) with explicit allows for the chart's Pods
   # (templates/networkpolicy-namespace.yaml). It also denies every Pod in the namespace that is not
   # the chart's, so install Vexa in a namespace of its own or give those Pods their own policies.

@@ -43,11 +43,7 @@ spec:
         values: [flows-api, flows-worker, flows-mailbox]
   policyTypes: [Egress]
   egress:
-    - ports:
-        - port: 53
-          protocol: UDP
-        - port: 53
-          protocol: TCP
+    {{- include "vexa.dnsEgress" $ | nindent 4 }}
     - to:
         - podSelector:
             matchLabels:

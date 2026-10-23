@@ -2209,7 +2209,9 @@ def rules():
         assert ports, ("a flows egress rule with no ports opens every port", r)
         peers = []
         for t in r.get("to", []):
-            if "podSelector" in t:
+            if "namespaceSelector" in t:
+                peers.append("dns")
+            elif "podSelector" in t:
                 peers.append("pod:" + t["podSelector"]["matchLabels"]["app.kubernetes.io/component"])
             else:
                 peers.append("cidr:" + t["ipBlock"]["cidr"] + ("-private" if t["ipBlock"].get("except") else ""))
@@ -2218,31 +2220,31 @@ def rules():
 def cp_excludes_flows():
     cp = by[("NetworkPolicy", "vexa-vexa-control-plane-egress")]["spec"]["podSelector"]["matchExpressions"][0]
     return cp["operator"] == "NotIn" and all(f in cp["values"] for f in FLOWS)
-DNS = ((), (("53", "TCP"), ("53", "UDP")))
+DNS = ("dns",)  # one rule to the cluster DNS Pods (its ports: the N4 rows)
 def dns(rs):
-    return [((), tuple(sorted((str(p), t) for p, t in r[1]))) for r in rs if r[0] == ()]
+    return [r[0] for r in rs if r[0] == DNS]
 MAILP = ((25, "TCP"), (143, "TCP"), (465, "TCP"), (587, "TCP"), (993, "TCP"))
 if mode == "default":
     rs = rules()
     assert dns(rs) == [DNS], rs
-    rest = [r for r in rs if r[0] != ()]
+    rest = [r for r in rs if r[0] != ("dns",)]
     want = sorted([(("pod:gateway",), ((8002, "TCP"),)), (("pod:postgres",), ((5432, "TCP"),)),
                    (("cidr:0.0.0.0/0-private", "cidr:::/0-private"), MAILP)])
     assert rest == want, rest
     assert cp_excludes_flows()
 elif mode == "mail":
-    rest = [r for r in rules() if r[0] != ()]
+    rest = [r for r in rules() if r[0] != ("dns",)]
     assert (("cidr:203.0.113.10/32",), ((587, "TCP"), (993, "TCP"))) in rest, rest
     assert not any(p[0].startswith("cidr:0.0.0.0/0") for p, _ in rest), rest
 elif mode == "extdb":
-    rest = [r for r in rules() if r[0] != ()]
+    rest = [r for r in rules() if r[0] != ("dns",)]
     assert (("cidr:10.20.0.5/32",), ((6432, "TCP"),)) in rest, rest
     assert not any("pod:postgres" in p for p, _ in rest), rest
 elif mode == "extdb-open":
-    rest = [r for r in rules() if r[0] != ()]
+    rest = [r for r in rules() if r[0] != ("dns",)]
     assert (("cidr:0.0.0.0/0", "cidr:::/0"), ((6432, "TCP"),)) in rest, rest
 elif mode == "broker":
-    rest = [r for r in rules() if r[0] != ()]
+    rest = [r for r in rules() if r[0] != ("dns",)]
     assert any(p == ("pod:credential-broker",) for p, _ in rest), rest
     bi = by[("NetworkPolicy", "vexa-vexa-credential-broker")]["spec"]["ingress"][0]["from"]
     assert any(sorted((f["podSelector"].get("matchExpressions") or [{}])[0].get("values", [])) == FLOWS for f in bi), bi
@@ -2455,4 +2457,30 @@ tb "K5: postgres, redis and pgbouncer take the seccomp profile and no uid, even 
   'helm template vexa "$CHART" -n vexa "${ALL_ON[@]}" --set global.podSecurityContext.runAsUser=1234 | seccomp_check datastores >/dev/null'
 tb "K5 (control): the OpenShift profile renders no pod securityContext at all" \
   'helm template vexa "$CHART" -n vexa "${ALL_ON[@]}" -f "$CHART/values-openshift.yaml" --set agentApi.workspaces.storageClassName=rwx-class | seccomp_check none >/dev/null'
+# P24 / N4: name resolution goes to the cluster DNS Pods only (networkPolicy.dns), never to any
+# address on port 53; OpenShift's DNS Pods are selected on 5353 as well.
+dns_check() { python3 -c '
+import sys, yaml
+want_ns, want_ports = sys.argv[1], sorted(int(p) for p in sys.argv[2].split(","))
+bad, n = [], 0
+for d in yaml.safe_load_all(sys.stdin):
+    if not d or d.get("kind") != "NetworkPolicy": continue
+    for r in d["spec"].get("egress") or []:
+        ports = sorted({p.get("port") for p in r.get("ports") or []} & {53, 5353})
+        if not ports: continue
+        n += 1
+        peers = r.get("to") or []
+        ns = [((p.get("namespaceSelector") or {}).get("matchLabels") or {}).get("kubernetes.io/metadata.name") for p in peers]
+        if want_ns == "any":
+            if peers: bad.append(d["metadata"]["name"])
+        elif not peers or ns != [want_ns] or ports != want_ports or any("ipBlock" in p for p in peers):
+            bad.append(d["metadata"]["name"])
+if bad or n < 3: print(n, bad); sys.exit(1)
+' "$1" "$2"; }
+tb "N4: every DNS egress rule (control plane, flows, bots, workers) goes to kube-dns in kube-system on 53 only" \
+  'helm template vexa "$CHART" -n vexa "${ALL_ON[@]}" | dns_check kube-system 53'
+tb "N4: the OpenShift profile sends DNS to openshift-dns on 53 and 5353" \
+  'helm template vexa "$CHART" -n vexa "${ALL_ON[@]}" -f "$CHART/values-openshift.yaml" --set agentApi.workspaces.storageClassName=rwx-class | dns_check openshift-dns 53,5353'
+tb "N4 (control): networkPolicy.dns.to=null allows the DNS ports to any address" \
+  'helm template vexa "$CHART" -n vexa "${ALL_ON[@]}" --set networkPolicy.dns.to=null | dns_check any 53'
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

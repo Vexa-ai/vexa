@@ -30,3 +30,16 @@ agentApi:
     # ReadWriteMany class (OpenShift Data Foundation: CephFS, typically ocs-storagecluster-cephfs).
     accessMode: ReadWriteMany
     storageClassName: ""
+
+# OpenShift's cluster DNS: the openshift-dns Pods, which listen on 5353 behind the dns-default
+# Service's port 53 (policies match the Pod's port).
+networkPolicy:
+  dns:
+    to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: openshift-dns
+        podSelector:
+          matchLabels:
+            dns.operator.openshift.io/daemonset-dns: default
+    ports: [53, 5353]
