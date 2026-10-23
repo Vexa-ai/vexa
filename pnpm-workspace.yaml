@@ -41,10 +41,11 @@ overrides:
   # nanoid <3.3.18: custom/non-secure generators can loop indefinitely. Enters via postcss.
   # Held to ^3 — nanoid 4+ is ESM-only and postcss requires the 3.x CJS build.
   "nanoid@<3.3.18": "^3.3.18"
-  # fast-uri >=3.0.0 <3.1.8: host-confusion / SSRF advisories (GHSA-hrr3-gc8f-f4qj and six
-  # earlier). Enters via ajv, ajv-formats and dependency-cruiser. Held to ^3 — 4.x is a major ajv
+  # fast-uri >=3.0.0 <3.1.9: GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr, GHSA-333x-w4r6-6crp,
+  # GHSA-xhq7-xmqj-769h, and the earlier host-confusion / SSRF advisories (GHSA-hrr3-gc8f-f4qj and
+  # six more). Enters via ajv, ajv-formats and dependency-cruiser. Held to ^3 — 4.x is a major ajv
   # has not adopted.
-  "fast-uri@>=3.0.0 <3.1.8": "^3.1.8"
+  "fast-uri@>=3.0.0 <3.1.9": "^3.1.9"
   # brace-expansion 1.x <1.1.21: DoS via expansion and recursion (GHSA-6j4f-fj2g-mc7p,
   # GHSA-q2hr-2g5m-vwhr, GHSA-qhr7-859c-m2p7 and earlier). Only the 1.x line is in the tree (via
   # minimatch@3 under puppeteer-extra-plugin-stealth in the join and remote-browser modules), and
@@ -58,10 +59,11 @@ overrides:
   # protobufjs >=7.5.0 <=7.6.4: DoS via infinite loop. Enters via onnxruntime-web under
   # @huggingface/transformers. Held to ^7 — 8.x is a major bump transformers has not adopted.
   "protobufjs@>=7.5.0 <7.6.5": "^7.6.5"
-  # undici >=7.0.0 <7.29.1: GHSA-w293-vg96-wgc3 and GHSA-rfgv-xxqx-mfg5 (high) and earlier ones.
+  # undici >=7.0.0 <7.30.1: GHSA-xjj6-f33q-929c (high), GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472,
+  # GHSA-w293-vg96-wgc3 and GHSA-rfgv-xxqx-mfg5 (high) and earlier ones.
   # Dev-only here (jsdom under vitest in the terminal and join packages), but Dependabot scores
   # the lockfile, not the scope.
-  "undici@>=7.0.0 <7.29.1": "^7.29.1"
+  "undici@>=7.0.0 <7.30.1": "^7.30.1"
   # source-map-js <1.2.2: event-loop DoS through an indexed source map (GHSA-68fv-2mgg-jv7q).
   # Enters via postcss (next, tailwind) and css-tree (jsdom).
   "source-map-js@<1.2.2": "^1.2.2"
