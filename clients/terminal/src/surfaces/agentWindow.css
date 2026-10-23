@@ -1,0 +1,53 @@
+/* THE AGENT WINDOW'S OWN SHAPES (agent-window.tsx). Colours are the tokens; a value off the scale
+   stays literal here rather than snapping to a step it never had. A tone decided at render time
+   (an op's status, an alert phase) arrives as `--aw-tone` on the element and is read by `.aw-tone`. */
+
+.aw-tone { color: var(--aw-tone); }
+.aw-glyph { display: inline-flex; flex: none; }
+.aw-glyph[data-tone="muted"] { color: var(--t3); }
+.aw-glyph[data-tone="accent"] { color: var(--accent); }
+.aw-glyph[data-nudge] { margin-top: 1px; }
+
+/* the running-op ring: the track is the border, the moving arc is the tone */
+.aw-spin { width: 11px; height: 11px; flex: none; border: 1.5px solid var(--line2); border-top-color: var(--aw-tone); }
+
+.aw-op { color: var(--t2); }
+.aw-op[data-running] { color: var(--t1); }
+
+/* the reader's own message */
+.aw-bubble {
+  max-width: 82%; margin: 0 0 0 auto; padding: var(--space-2) var(--space-3);
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; border-top-right-radius: var(--radius-sm);
+  font-size: var(--text-sm); color: var(--t1); line-height: 1.5; white-space: pre-wrap;
+}
+.aw-bubble[data-queued] { opacity: 0.55; }
+
+/* "older context compacted" — a quiet note in the activity line */
+.aw-compacted { font-family: var(--mono); font-size: 11px; color: var(--t3); flex: none; opacity: 0.8; }
+.aw-compacted-alone { margin: 0 0 var(--space-2) 5px; }
+
+/* a fault the turn ended on (FaultBlock) — one muted line, never a red box (founder, 2026-10-13).
+   The danger token is only for a security refusal: `data-fault-tone="danger"`. */
+.aw-fault { margin-top: var(--space-2); max-width: 680px; font-size: var(--text-xs); line-height: 1.45; color: var(--t2); }
+.aw-fault-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-1) var(--space-2); }
+.aw-fault[data-fault-tone="danger"] .aw-fault-summary { color: var(--danger); }
+.aw-fault-retry {
+  font: inherit; color: var(--info); background: none; border: none; padding: 0; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.aw-fault-retry:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; border-radius: var(--radius-sm); }
+.aw-fault-details { color: var(--t3); }
+.aw-fault-details > summary { cursor: pointer; list-style: none; font-family: var(--mono); font-size: 11px; }
+.aw-fault-details > summary::-webkit-details-marker { display: none; }
+.aw-fault-details[open] { flex-basis: 100%; }
+.aw-fault-details[open] > summary { margin-bottom: var(--space-0_5); }
+.aw-fault-details > div { font-family: var(--mono); font-size: 11px; overflow-wrap: break-word; }
+.aw-fault-remedy { margin-top: var(--space-0_5); color: var(--t3); }
+
+/* A WRITE-TARGET PROPOSAL (UI decision 6b): one line under the reply — the question, then Switch / Keep. */
+.aw-proposal { margin-top: var(--space-2); max-width: 680px; display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1) var(--space-2); font-size: var(--text-sm); color: var(--t1); }
+.aw-proposal-acts { display: inline-flex; gap: var(--space-1); }
+.aw-proposal-done { color: var(--t3); font-size: var(--text-xs); }
+
+/* R1 2.2 — the room agent's reason line ("because …"), quiet, above the act */
+.vx-because { margin: 0 0 4px; font-size: var(--text-xs); color: var(--text-3); }

@@ -44,6 +44,513 @@ transit a vendor's infrastructure. This page collects what a security review ask
 - **Identity at the edge.** The gateway derives identity from your API key server-side;
   internal services trust only the gateway's asserted identity, not client-supplied fields.
 
+## Outbound URLs
+
+A person can give the deployment a URL it will call: a webhook, a calendar feed, their own
+transcription endpoint, a model endpoint, a page for the agent to fetch. Every server-side fetch
+of such a URL goes through one guard, which refuses loopback, private, link-local (cloud
+metadata) and other internal ranges in every address notation, and pins the connection to the
+address it checked. An address is judged by where a connection to it lands, whichever notation it
+is written in, and the connection is made to the address that was checked, on every request and
+redirect.
+
+The same check covers every caller:
+
+- webhook deliveries, and the webhook URL when it is saved;
+- calendar feeds, when the feed is saved and when it is fetched;
+- the agent's web fetches and image fetches;
+- custom-service connections and their OAuth exchanges, in the credential broker;
+- repository attaches;
+- the model endpoint check under Settings → Models;
+- a person's own transcription endpoint, when it is saved and on every request the bot makes.
+
+A URL that is stored before it is used is checked as written when it is saved. A calendar feed,
+webhook or transcription endpoint that names an internal destination is refused with `422` at save
+time, not at the first fetch. The rule, where it is enforced and its tests are in the
+[`outbound-url.v1` contract](https://github.com/Vexa-ai/vexa/blob/main/deploy/contracts/outbound-url.v1/README.md).
+The deployment's own endpoints (its bundled transcription service, its own model gateway) are
+configuration, not user input, and are not held to it.
+
+## Bot and runtime credentials
+
+Two internal hops carry their own credential: a meeting bot calling back into meeting-api, and
+the runtime reporting a workload's state to meeting-api.
+
+### How it works
+
+**The MeetingToken (bot → meeting-api).**
+
+1. meeting-api derives the MeetingToken key from the deployment's admin secret:
+   `HMAC-SHA256(ADMIN_TOKEN, "vexa/meeting-token/v1")`. The admin secret itself never signs a
+   token, and no new secret is distributed. meeting-api is the only service that mints or
+   verifies one.
+2. At each spawn, `bot_spawn` mints one HS256 token for that bot session. It carries
+   `session_uid` (the spawn's connection id), `meeting_id`, `user_id`, `aud`
+   (`transcription-collector`), `scope` (`transcribe:write`), `iat`, `exp` and a `jti`. Its
+   lifetime is `MEETING_TOKEN_TTL_SECONDS` (default 18000 s). It rides in the bot's
+   `invocation.v1` as `token`.
+3. The bot presents it as `Authorization: Bearer <token>` on the three meeting-api doors it calls:
+   `POST /bots/internal/callback/lifecycle` (the session is the event's `connection_id`),
+   `POST /internal/recordings/upload` (the request's `session_uid`), and an authenticated bot's
+   `PUT /internal/browser-session/{session_uid}`. Each door admits it through one function,
+   `admit_session`: valid signature, unexpired `exp`, the MeetingToken `aud` and `scope`, and bound
+   to exactly the session the request names. A recording chunk and a signal tape both arrive on the
+   upload door, so a token bound to another session, or to none, uploads nothing. A token is never
+   minted without a session.
+4. The transcript entries a bot writes to Redis carry the token's header and payload and a
+   signature; the collector recomputes the token under the same key and drops an entry whose
+   meeting is not the token's.
+
+**Runtime callbacks (runtime → meeting-api).**
+
+1. The runtime and meeting-api share the runtime caller credential, `RUNTIME_API_TOKEN`.
+   meeting-api presents it as a bearer token to call the runtime.
+2. The runtime does not send that token to a callback URL. It signs each delivery:
+   `X-Runtime-Signature: t=<unix seconds>,v2=<hex>`, an HMAC keyed from the token over the signing
+   time, the URL it delivers to and the event (canonical JSON). A retry is signed again when sent.
+3. `POST /runtime/callback` accepts a callback only when the signature is valid for the URL it was
+   received on, its time is within 300 s of meeting-api's clock, and the same signature has not
+   been accepted before (a replay guard in Redis, shared by every meeting-api replica, else in
+   process). Anything else is a 401 and a `runtime_callback_rejected` log line.
+
+**Without a key, every callback is refused.** When meeting-api starts without `ADMIN_TOKEN`
+(the MeetingToken key) the lifecycle callback refuses every caller, and without `RUNTIME_API_TOKEN`
+the runtime callback refuses every caller. Neither door falls back to open.
+
+<Note>
+Upgrade the bot image and meeting-api together. A meeting-api that checks the session binding on
+uploads should run with bots of the same release.
+</Note>
+
+**Who owns what.** meeting-api mints and verifies MeetingTokens and keeps no token table. The
+runtime signs callbacks; meeting-api verifies them. Code:
+`core/meetings/services/meeting-api/src/meeting_api/meeting_token.py`,
+`core/meetings/services/meeting-api/src/meeting_api/runtime_signature.py` and the runtime's
+`runtime_kernel/caller_auth.py`. Configuration: `ADMIN_TOKEN`, `RUNTIME_API_TOKEN` and
+`MEETING_TOKEN_TTL_SECONDS` in meeting-api's `config.v1.json`.
+
+### Why it complies
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| P14: config validated at boot | meeting-api refuses to boot without `ADMIN_TOKEN` or with a value published in this repository; the runtime refuses to boot without a usable `RUNTIME_API_TOKEN` | `gate:config-contract`, `gate:python` |
+| P23 and ADR-0044: no duplicated fact drifts | The key label is one fact across meeting-api and the two recording proofs that mint tokens; the callback signer and verifier are pinned to one shared vector | `gate:fact-parity` (fact `meeting-token-key-label`), `gate:python` |
+| P20: every access is checked, default deny | Every bot door admits one session per token; a callback door with no key configured refuses every caller | `gate:python` |
+| P18: fail loud | A refused callback is a 401 with a logged reason, never a silent accept | ungated: reviewed |
+
+Deny tests:
+
+| Protection | Test file | Tests |
+|---|---|---|
+| MeetingToken key, claims and session binding | `core/meetings/services/meeting-api/tests/test_meeting_token.py` | `test_the_meeting_token_key_is_derived_from_the_admin_secret`, `test_a_token_signed_with_the_raw_admin_secret_is_refused`, `test_a_token_missing_exp_aud_or_scope_is_refused`, `test_a_token_with_another_aud_scope_or_a_bad_exp_is_refused`, `test_forged_and_expired_tokens_are_refused`, `test_admit_refuses_another_session_or_none`, `test_no_token_is_minted_without_a_session`, `test_the_upload_refuses_a_token_bound_to_no_session`, `test_the_lifecycle_callback_refuses_a_token_bound_to_no_session`, `test_both_doors_refuse_a_token_signed_with_the_raw_admin_secret` |
+| Transcript entries | `core/meetings/services/meeting-api/tests/test_segment_entry_auth.py` | `test_a_bot_cannot_write_another_meetings_transcript`, `test_every_other_entry_is_dropped` |
+| Callbacks fail closed | `core/meetings/services/meeting-api/tests/test_callbacks_fail_closed.py` | `test_no_meeting_token_key_refuses_every_lifecycle_callback`, `test_no_runtime_key_refuses_every_runtime_callback`, `test_the_production_entrypoint_never_opens_the_doors` |
+| Runtime callback signature | `core/meetings/services/meeting-api/tests/test_runtime_callback_signature.py` | `test_the_verifier_matches_the_runtimes_signer`, `test_an_unsigned_forged_stale_misdirected_or_replayed_callback_is_refused`, `test_a_refused_callback_moves_no_meeting` |
+| The runtime's side | `core/runtime/tests/test_caller_auth.py` | `test_every_control_route_refuses_a_caller_without_the_credential`, `test_production_boot_refuses_without_a_token`, `test_the_signature_covers_the_time_the_url_and_the_event`, `test_every_callback_carries_the_runtimes_signature_and_never_its_token` |
+
+## Agent workers
+
+An agent worker acts for one person with a **delegation token** that agent-api mints for each
+dispatch. The token names the person, a **regime** (`human` when the person is in the chat this
+turn) and a **ceiling**: the workspaces the dispatch may touch. A chat with the person present
+carries every workspace the person can reach; a scheduled or event-triggered run carries only the
+workspaces it has mounted: it may write those mounted read-write and only read those mounted
+read-only (the mount table is the one source), and an event agent may write none.
+
+### How it works
+
+1. **The ceiling holds on every route.** agent-api checks a named workspace against the ceiling
+   where the workspace is resolved, before anything else runs. A workspace outside the set is
+   refused with `403` (`out_of_scope`). This covers identity, activate, swap, import, rename,
+   sharing, invites, members, reset, the chat target and the desk touch.
+2. **Meeting reads follow the ceiling.** When a worker's token reaches identity, identity answers
+   with only the person's shared-workspace memberships that fall inside the ceiling. The meeting
+   tools list and read a colleague's meeting only when it is bound to one of those workspaces.
+3. **Some verbs need a person.** Publishing, pushing, pulling and detaching a Git remote, and every
+   other verb marked as needing a person, are refused to a worker with nobody in the loop:
+   `403 human_session_required`. agent-api, meeting-api and flows-api give the same refusal.
+4. **One rule for "is a person in the loop".** agent-api and meeting-api read it from one shared
+   file. An identity that carries delegation headers is a worker. A worker whose regime is anything
+   but `human` (empty, missing or unknown included) runs with nobody watching. On flows-api such a
+   worker can still read the person's queue, reactions, timeline and flows and file friction;
+   `reaction_signal` (retry, resume, wake or cancel a reaction) is refused.
+5. **The token is refreshed while the worker runs.** The token lives for
+   `VEXA_MCP_DELEGATION_TTL_SEC` when set, else `VEXA_CHAT_IDLE_TIMEOUT_SEC` + 900 s (1800 s at
+   the defaults).
+   Once half its life has passed, agent-api mints a new one for the same person, regime, ceiling
+   and audience, and the worker uses it from its next turn. The new token is published only when
+   its scope equals the old one exactly; otherwise the worker keeps its current token until it
+   expires, and its tools then fail loud. The replaced token keeps working until its own expiry,
+   so a turn that started with it has 900 s of headroom at the default. A worker that has stopped
+   gets no new token, and its tokens are revoked.
+6. **A turn that outlives its tool access fails loud.** Its Vexa tool calls are refused and the turn
+   ends with the fault `Vexa tools · tool access expired`, with a Retry. It does not carry on
+   without its tools.
+7. **The worker runs no hooks, and workspace skills cannot grant tools.** See
+   [Agents → Skills and hooks in the worker](/core/agents#skills-and-hooks-in-the-worker).
+
+### Why it complies
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| P20: every access is checked, default deny | The ceiling is checked by every resolver of a named workspace; a generated test calls every such route as a worker outside its ceiling | `gate:python` |
+| P23 and ADR-0044: no duplicated fact drifts | The ceiling rule is one file shared by identity and agent-api; the person-in-the-loop rule and its refusal are one file shared by agent-api and meeting-api | `gate:fact-parity` (facts `delegation-token`, `identity-token`) |
+| P7, P18, P21 | A token lives as long as its unit; a turn past its access ends with a typed fault | [ADR-0045](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0045-a-workers-delegation-token-lives-as-long-as-its-unit.md), `gate:python` |
+
+Deny tests:
+
+| Protection | Test file | Tests |
+|---|---|---|
+| Workspace ceiling | `core/agent/tests/test_delegation_ceiling_verbs.py` | `test_a_workspace_outside_the_ceiling_is_refused_and_nothing_changes`, `test_an_empty_ceiling_refuses_every_named_workspace`, `test_the_generated_set_does_not_shrink` |
+| Person-only verbs | `core/agent/tests/test_identity_guard.py`, `core/meetings/services/meeting-api/tests/test_regime.py` | `test_a_delegated_worker_without_a_person_is_refused_a_person_verb`, `test_a_present_but_empty_regime_counts_as_delegated` |
+| Meeting reads | `core/identity/services/admin-api/tests/test_delegation_workspaces.py` | `test_a_ceiling_bounded_worker_is_answered_only_the_memberships_inside_it`, `test_a_person_in_the_loop_keeps_every_membership` |
+| flows-api | `core/flows/tests/test_subject_bearer.py` | `test_a_worker_with_nobody_in_the_loop_is_refused_every_person_only_verb`, `test_a_worker_with_nobody_in_the_loop_still_reads_and_reports`, `test_every_route_a_person_reaches_is_classified_for_a_worker` |
+| Token refresh | `core/agent/tests/test_delegation_refresh.py` | `test_a_unit_alive_past_the_ttl_keeps_its_tools`, `test_a_stopped_unit_is_never_refreshed_and_its_token_is_refused`, `test_end_to_end_a_turn_that_outlives_its_token_fails_loud` |
+| Skills and hooks | `core/agent/tests/test_llm_claude_code.py`, `core/agent/tests/test_claude_skills_staging.py` | `test_build_argv_turns_every_hook_off`, `test_a_workspace_skill_grants_no_tools_and_registers_no_hooks`, `test_a_platform_skill_keeps_its_name_over_a_workspace_copy`, `test_a_workspace_skill_past_the_turns_budget_is_not_staged` |
+
+## The flows tier's credential
+
+The flows services (flows-api, flows-worker, flows-mailbox) act for people: they read a meeting's
+transcript for its owner, write a desk, post a notice into a chat and put an invite's attendees on
+the platform. They hold **one credential**, `VEXA_FLOWS_SERVICE_KEY`, and it opens one thing: the
+gateway's **service door**. Flows holds no `INTERNAL_API_SECRET` and no `ADMIN_TOKEN`, so a
+compromised or faulty flows process cannot mint a token for anybody, and cannot reach a route the
+door does not list.
+
+### How it works
+
+1. **The door listens on its own port.** It is port 8002 of the gateway process. No deploy surface
+   publishes it: on compose it is reachable only on the compose network; on Kubernetes it has its
+   own ClusterIP Service (`gateway-door`), and a NetworkPolicy admits only the flows Pods, the
+   signals service and the terminal. The door exists only where `VEXA_FLOWS_SERVICE_KEY` is set.
+2. **A fixed allow-list.** `FLOWS_OUTBOUND` in `core/gateway/services/gateway/src/gateway/service_door.py`
+   names every call flows makes, by domain, method and path. A call on it is forwarded to agent-api,
+   admin-api or crm-api over the internal tier, naming the subject flows asked for. Anything else is
+   `403 not_on_the_allow_list` and never leaves the gateway. Token minting (`/admin/*`), connections
+   (calendar, Gmail, connected services), workspace deletion and invites, `/invocations`, recordings
+   and every other route are not on it.
+3. **Meetings calls carry the person's signed identity.** For meeting-api the door asks identity
+   for the subject's identity and signs it with the gateway's key, with the scopes `bot` and `tx`.
+   meeting-api checks the bot limit, the workspaces the person may write and the route's scopes
+   exactly as it does for the person's own key. No internal secret reaches meeting-api from the door.
+4. **Only the subject crosses.** The door forwards `X-User-Id` and the flow headers. Every other
+   `x-user-*` (scopes, credential class, delegation, workspaces) and every authority header flows
+   sends is dropped.
+5. **A call made for a person needs that person's ticket.** The flows key alone does not let flows
+   name a person. On the calls that act for one (reading or sharing a meeting's transcript, sending
+   or stopping a bot, an autonomous turn in their session, writing their desk, naming who pays for a
+   room, a routine's turn or notice in their chat) the door also needs a **subject ticket**
+   (subject-ticket.v1): a short claim, signed by the service that produced the person's fact, that
+   names the person, the calls it opens and an expiry. meeting-api signs one for the owner of a
+   meeting that started, ended or was shared; agent-api for a routine the person turned on from
+   their own session and for a message to a person; the mail intake for an authenticated invite or
+   reply; the gateway itself for a person's own sign-in presented to flows-api. Each producer holds
+   its own Ed25519 private key; the door holds only the public halves, so flows cannot make a
+   ticket. A call without a valid ticket for that person (and, where it names one, that meeting) is
+   `403 subject_ticket_required` or `subject_ticket_refused`; an invite's bot can be sent once
+   (`403 ticket_replayed`). Lookups and settings reads name no person and need none.
+6. **The internal secret never reaches flows.** The signals service's wake and the terminal's
+   sign-in mail go to the door's `/to-flows` leg with `X-Internal-Secret`; the door forwards the
+   allow-listed calls (`FLOWS_INBOUND`) to flows-api with the flows key.
+7. **Per-person data outside the allow-list is refused.** A person's calendar and mail are read only
+   through their own connection. The flows calendar sensor reads it through the credential broker
+   with its own `sensors` role; the door has no route to `/api/connections/*`.
+
+**What the allow-list still lets flows do.** On a listed route, flows names the subject. A flows
+process can therefore still act as any person on those routes, for example write a desk file or
+post a chat turn. Binding each listed call to a grant the person issued is not built.
+
+### Why it complies
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| P20: every access is checked, default deny | The door refuses every call that is not on its allow-list, and refuses a missing or wrong key | `gate:python` |
+| P9 and ADR-0037: a domain reaches another only through a declared door | The gateway reaches flows-api through flows' declared binding (`FLOWS_API_URL`) | `gate:domain-doors` |
+| P23: the architecture model is the truth | `flows-worker → gateway` and `gateway → flows-api` carry the door; the direct flows edges to agent-api, admin-api and crm-api are gone | `gate:calm`, `gate:dataflow` |
+
+Deny tests:
+
+| Protection | Test file | Tests |
+|---|---|---|
+| No token for anybody | `core/gateway/services/gateway/tests/test_service_door.py` | `test_the_flows_credential_cannot_obtain_a_token_for_anybody` |
+| No calendar or mail | `core/gateway/services/gateway/tests/test_service_door.py` | `test_the_flows_credential_cannot_read_a_calendar` |
+| Off-list routes | `core/gateway/services/gateway/tests/test_service_door.py` | `test_routes_off_the_list_are_refused`, `test_a_path_cannot_climb_out_of_a_listed_route`, `test_only_the_subject_crosses_never_a_scope_a_class_or_a_delegation` |
+| Flows holds no impersonation secret | `core/flows/tests/test_flows_holds_no_impersonation_secret.py` | every test in the file |
+
+## Private data stays out of shared surfaces
+
+A chat agent may read the person's private data: CRM records, meeting transcripts, mail, the
+calendar, a connected service, the person-wide views (follow-ups, home, notifications, chats).
+What it read must not reach a page, a message or a card that other people read unless the person
+decides to share it.
+
+### How it works
+
+1. **A read says what it returned.** Each service labels its answer with `X-Vexa-Privacy`: CRM
+   answers `private; class=crm`; meeting-api answers `private; class=transcript` for transcripts,
+   meetings, recordings and in-call chat; agent-api labels its connection and person-wide routes.
+   Anything else answers `none`. **An answer with no label counts as private.**
+2. **The edge marks the session in Redis.** When a worker's request returns private data, the
+   gateway records the source on the worker's unit and on its conversation, with a 12-hour TTL. For
+   CRM and flows tools, which the MCP calls directly, the MCP reports the label to the gateway. The
+   gateway takes the unit from the identity it signed, not from the caller. If the mark cannot be
+   written, the data is not returned (`503 privacy_mark_unavailable`).
+3. **The mark outlives the process.** A restart, a second agent-api replica, a worker's idle exit
+   and a new mount generation all read the same mark. The mark is shared across the conversation,
+   so the routine and signal units of the same chat see it too. The worker's Redis user may read
+   the mark and may not clear it.
+4. **Every write into a surface other people read is held.** The hold covers these writes from a
+   marked session:
+   - page writes, uploads and assets;
+   - renames and moves;
+   - a workspace's name and purpose;
+   - a message into a conversation someone else reads;
+   - a notice to other people and a room message;
+   - CRM writes and card proposals to a board.
+
+   It also covers the agent's own file writes at the end of a turn. A commit into a shared
+   workspace from a marked session gets a fixed body, never the agent's reply. A write to the
+   person's own desk is not held.
+5. **When the mark cannot be read, the write is held.** This covers an unreachable store, a worker
+   request with no unit and a service that received no mark. The person sees a held state with a
+   typed fault, `held_private_egress`, and its source `unverifiable`.
+6. **Held content is encrypted in agent-api.** It is stored with AES-GCM under a key derived from
+   the deployment's internal secret, bound to the person and the code, and expires after 3 days.
+   No held content is stored on a desk or a mount. Older `.vexa/held-writes/` files are moved off
+   every desk at boot (a post-meeting room mounts no attendee desk, decision 3). Only the person can list,
+   open or discard held items (`GET /agent/held`); workers are refused.
+7. **The person releases a held write.** The person replies `confirm <code>` in their own chat,
+   which releases that one write once. A worker's held file write is then written by agent-api
+   before the next turn runs. An agent cannot confirm its own write.
+
+### Why it complies
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| P20: every access is checked, default deny | The data is labelled where it is served, an unlabelled answer is private, and the hold runs in the service that owns each surface, not in the model's judgement | `gate:python` |
+| P23: one writer per fact | The gateway and agent-api write the mark. The worker writes only its own observation key, and agent-api alone keeps held content | `gate:python` |
+| P18: no silent failure | An unreadable mark holds the write, a mark that cannot be written refuses the read, and each case answers with a typed fault | `gate:python` |
+| ADR-0042, H7 | Held content is encrypted at rest, bound to its person and never on a mount another run can read | `gate:python` |
+
+Deny tests:
+
+| Protection | Test file | Tests |
+|---|---|---|
+| Reads mark the session, persisted | `core/agent/tests/test_sec_deny_policy_taint.py` | `test_private_read_marks_session_private`, `test_private_mark_survives_restart`, `test_agent_message_from_marked_session_is_held`, `test_post_meeting_run_cannot_read_other_attendees_held_writes` |
+| Labels, restart, fail closed, held store, every surface | `core/agent/tests/test_d6_privacy_taint.py` | 17 tests |
+| The worker's commit seam | `core/agent/tests/test_private_writes_commit.py` | `test_an_unreadable_mark_holds`, `test_the_mark_survives_a_worker_idle_exit`, `test_the_commit_body_of_a_marked_session_is_never_the_reply`, `test_a_roster_edited_by_the_turn_does_not_shrink_its_audience` |
+| The edge | `core/gateway/services/gateway/tests/test_privacy_mark.py`, `core/gateway/services/mcp/tests/test_privacy_report.py` | all |
+| CRM writes and cards | `core/crm/tests/test_privacy_hold.py` | all |
+
+## Untrusted triggers: routines, mail and room calls
+
+Some agent turns are started by something other than the person typing in their own chat: a
+routine an agent wrote, an email, or speech on a call. Text from those sources can carry
+instructions. These turns read, and they **propose**; a person decides.
+
+### How it works
+
+1. **An agent proposes a routine; the person turns it on.** A flow submitted by an agent turn
+   (any delegated worker) is filed as a draft, whatever `activate` it sent, and the answer says
+   `awaiting_approval: true`. Activating or resuming a flow from an agent turn is refused with
+   `403 person_approval_required`. Pausing and retiring stay open to it. The person turns the
+   routine on from their Routines board, with their own session. Routine files from before flows
+   are migrated as paused unless an approval record covers their exact bytes.
+2. **Mail is a person only when its domain says so.** Before the mailbox treats a `From:` as a
+   known user, a reply on a known thread or a colleague inside the allowed domains, it reads the
+   receiving mail server's verdict in `Authentication-Results`. It needs a DMARC pass for the
+   `From:` domain, or, when the domain publishes no DMARC policy, a DKIM or SPF pass aligned with
+   it. Only the topmost `Authentication-Results` header counts, because the receiving server adds
+   its own on top. Set `VEXA_FLOWS_MAIL_AUTHSERV_ID` (for example `mx.google.com`) to accept only
+   your own server's verdict. For any IMAP server other than the Gmail preset it is required, and
+   the mailbox does not start without it. The id is public, so it protects only when your receiving
+   server both writes its own `Authentication-Results` on every message it accepts and removes any
+   arriving header that already carries its id. A server that does not would leave a header the
+   sender forged, naming your id, on top. To stop depending on the server, set
+   `VEXA_FLOWS_MAIL_AUTH_MODE=inapp`: the mailbox then ignores `Authentication-Results` and verifies
+   the DKIM signature itself, aligned with the `From:` domain under its DMARC record (`both`
+   requires the server's verdict as well). SPF is not checked in-app, because a mailbox read over
+   IMAP never sees the sending server's address. A mail that fails is quarantined like a
+   stranger's (`unauthenticated_mail`).
+3. **A turn an email started proposes only.** It runs on its own worker with every workspace
+   mounted read-only. It may write one file, the thread's reply `mail_outbox/<session>.md`, which
+   flows mails back. Anything else it wants to change, it proposes.
+4. **A room's call speaks into a turn that proposes.** A room's signal turn (Vexa woken by speech on
+   the room's call, or by the room's messages) reads the room's workspace and its connected open
+   workspaces. It writes only the call's note; every other write is refused (`signal_scope`) and
+   becomes a proposal.
+5. **Everyone on the call counts in the audience.** Each person on the room's live call must be a
+   member of the room's workspace. Anyone who cannot be placed, or a call whose participants cannot
+   be read, makes the audience `cross_org`, so CRM reads return public fields only.
+6. **The room's grant is read every turn.** The room's roster, connected workspaces, the speaker's
+   role and the audience are read again on each turn. The worker's id carries a digest of that
+   grant, so any change starts a new worker with new mounts and a new token.
+7. **A meeting write-up reads no attendee's desk.** The post-meeting report is written from the
+   transcript, the room's workspace and what was shared explicitly. No other attendee's personal
+   workspace is mounted, whoever the invite names.
+8. **An unattended turn leaves your live bot alone.** A routine's turn, a mail's turn and a call
+   signal's turn cannot stop your bot, change its settings, type into the meeting chat or speak in
+   the call. meeting-api answers them `403 human_session_required`. The one exception: a routine
+   you granted `bot.stop` when you made it may stop the bot. You, and a turn you are watching in
+   your own chat, keep every one of these. On a deployment without the model proxy, an unattended
+   worker is also offered none of these tools.
+
+### Why it complies
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| P20: every access is checked, default deny | Arming a flow, writing a page from a signal or mail turn, and acting for a `From:` are checked at the service that owns them (flows-api, agent-api `signal_scope`, the mailbox), never in a prompt | `gate:python` |
+| R7: no implicit rights | A routine runs only after its person turns it on; a write by an untrusted turn is a proposal | `gate:python` |
+| P23: one writer per fact | The audience is computed once per turn by `room_principal.resolve`; the refreshed token is the same scope or none | `gate:python` |
+
+Deny tests (security review 2026-10-17):
+
+| Protection | Test file | Tests |
+|---|---|---|
+| Agent routines are proposals (deny test 14) | `core/flows/tests/test_sec_deny_2026_10_17.py`, `core/agent/tests/test_sec_deny_policy_taint.py` | `test_agent_created_flow_is_inactive_until_person_approves`, `test_agent_cannot_activate_flow_without_session_approval`, `test_routine_without_an_approval_record_is_not_stood_behind` |
+| Mail needs DMARC (deny test 11) | `core/flows/tests/test_sec_deny_2026_10_17.py` | `test_inbound_mail_without_dmarc_pass_is_quarantined` |
+| Room signal turns propose (deny test 10) | `core/agent/tests/test_sec_deny_rooms.py` | `test_room_signal_turn_cannot_write_pages_directly` |
+| Audience survives refresh (deny test 4) | `core/agent/tests/test_sec_deny_rooms.py` | `test_cross_org_room_token_keeps_audience_after_refresh` |
+| No attendee desk in a write-up (deny test 9) | `core/agent/tests/test_sec_deny_policy_taint.py` | `test_post_meeting_run_cannot_read_other_attendees_held_writes` |
+| Unattended turns leave the live bot alone | `core/meetings/services/meeting-api/tests/test_live_bot_verbs_unattended.py`, `core/agent/tests/test_unattended_bot_verbs.py` | every test in both files |
+| The rest of this section | `core/flows/tests/test_s1e_security_floor.py`, `core/agent/tests/test_s1e_security_floor.py` | every test in both files |
+
+## Decisions on cards: who moves an obligation
+
+A card is the one unit of obligation: a commitment, an approval, a question (and asks, invitations
+and policy changes, which follow the approval or question shape). Agents offer cards; only the person
+whose move it is moves one, from their own signed-in app.
+
+### How it works
+
+- **One next actor.** Every open card of a kind names exactly one person whose move it is, the
+  person waiting on it, and when Vexa next checks it. Its route comes from a seeded template:
+  a commitment is proposed, accepted, delivered with evidence, confirmed by the person waiting, then
+  closed; an approval is opened, decided, executed with an effect receipt, then closed; a question is
+  asked, answered, used, then closed. An organisation can rename the stages; it cannot change who
+  passes a gate.
+- **Taken is not passed.** A card is first *offered* to its next actor. Only their acceptance moves
+  custody, and a gate passes only when its owner confirms it: a delivery is the doer's claim, the
+  confirmation is the waiting person's.
+- **Whose move it is is not a field.** The person waiting is fixed when the card is made. Only the
+  person waiting or the current next actor hands a card to someone else, and nobody makes themselves
+  its next actor by an edit, so a writer of the card cannot become the one who decides it. A card of
+  a kind made through the generic record create (`crm_change`) waits on the person who makes it: a
+  `Requester` naming anyone else is refused (403).
+- **A decision is a record.** Each gate decision is an append-only revision of the card that carries
+  the action, the credential it was made with, a server nonce bound to that person and that card at
+  that revision, and the hash of the card face they saw. A replayed nonce, a nonce minted for someone
+  else, a card that changed since it was shown, or a face with a field hidden from the signer is
+  refused.
+- **Only the app decides.** Decisions, their nonces and "seen" take the credential the app's sign-in
+  mints. Any API key, a browser-scoped one included, and any agent token is refused.
+- **Seen means seen.** A card counts as seen only when the app rendered it in view, never when it was
+  delivered or fetched. The person waiting sees that it was seen only if the organisation turns that on.
+- **In-chat questions are pending items.** When an agent asks you to choose or confirm in a chat, your
+  press answers a pending item bound to the exact card the agent wrote, once.
+- **Facts name their audience.** When a card changes, the CRM computes who the change reaches (the next
+  actor, the person waiting, the card's members and the rooms whose boards hold it), seals that into
+  the fact, and sends only lifecycle fields — never the card's title or content. Flows starts a
+  person's routine only for a fact about them or one sealed with them in its audience.
+
+### Why it complies
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| R6: taken is not passed | Custody moves only on the next actor's acknowledgement; a gate passes only on its owner's action, and "executed" needs a receipt reference (`crm/card_templates.py`) | `gate:python` |
+| R10: an agent proposes, a person decides | An agent's card of a kind is offered and never moved by it; `/card/decide` refuses every delegation | `gate:python` |
+| P21: report state from evidence | "Seen" is written only by `/card/seen` from the app, on render | `gate:python` |
+| P23: one writer per carrier | crm-api writes cards, decision records and seen; agent-api writes pending asks and notices (a notice is a notification row with an expiry) | `gate:dataflow` |
+| H9: audit | A write's audit row is written in the same transaction as the write; a read's before the answer leaves | `gate:python` |
+| D8: who a fact reaches | The producer seals owner, visibility and audience into `event.v2`; flows admits by subject or audience and refuses an unverified envelope | `gate:schema` |
+
+Deny tests (security review 2026-10-17):
+
+| Protection | Test file | Tests |
+|---|---|---|
+| No API key reviews or signs (deny test 12) | `core/crm/tests/test_sec_deny_2026_10_17.py` | `test_api_key_cannot_review_card`, `test_api_key_cannot_sign_a_card` |
+| An in-chat answer is bound, not replayable, not delegated (deny test 13) | `core/agent/tests/test_sec_deny_policy_taint.py` | `test_inline_card_decision_requires_browser_session` |
+| A locked field blocks that viewer's signature (deny test 17) | `core/crm/tests/test_sec_deny_2026_10_17.py`, `core/crm/tests/test_card_lifecycle.py` | `test_card_with_locked_field_cannot_be_signed_by_that_viewer`, `test_a_locked_field_blocks_the_viewers_decision` |
+| Room search audited with ids, on-behalf-of and workspace (deny test 18) | `core/crm/tests/test_sec_deny_2026_10_17.py`, `core/crm/tests/test_card_lifecycle.py` | `test_room_crm_search_audits_record_ids_and_on_behalf_of`, `test_a_write_that_cannot_audit_does_not_commit` |
+| A card fact reaches its audience only (deny test 19) | `core/flows/tests/test_d8_audience.py` | every test in the file |
+| The rest of this section | `core/crm/tests/test_card_lifecycle.py`, `core/agent/tests/test_s5_asks.py`, `core/agent/tests/test_notice_expiry.py` | every test in those files |
+
+## The terminal in the browser
+
+Workspace pages, chat replies and Meeting Canvas views are written by agents from meetings and outside
+content, so the terminal treats them as untrusted input in the reader's own signed-in tab.
+
+### How it works
+
+- **No text becomes code.** A workspace page is parsed as MDX and drawn as elements from a closed set
+  of components; nothing compiles it into a program. Each page's Content-Security-Policy carries a
+  per-response nonce and has no `'unsafe-eval'` (only `'wasm-unsafe-eval'`, for the call's background
+  blur). A `<style>` element applies only with that nonce, so styles written as markup do nothing.
+- **Every response has a policy.** Pages get theirs per response. API answers, the `/b/` bot proxy,
+  build assets and public files get a fixed one when their route sets none: an API answer opened as a
+  document runs and loads nothing, and the sign-in browser's live view runs only its own scripts.
+- **A canvas view keeps what it was shown.** It runs in an opaque-origin sandbox that connects
+  nowhere, and WebRTC is removed before any view code runs. A script it creates loads only from the
+  frame's own origin. Served from an origin of its own (`TERMINAL_CANVAS_ORIGIN`, see
+  [Meeting Canvas isolation](/meeting-canvas-isolation)), the page frames that origin alone, so the
+  frame's own navigation can reach only the canvas host, which serves the frame and the build's files
+  and refuses any other URL. On every deployment the terminal refuses to be loaded into a frame by
+  another origin, and serves no script, stylesheet or font to one but its build files.
+- **An emailed link signs in only the browser that asked.** The link carries the hash of an httpOnly
+  cookie set when it was requested, so someone who forwards a link for their own address cannot sign
+  you into their account.
+- **Browser sign-ins end.** A session, and the older sign-in key, ends with its 30-day cookie. No key is
+  traded up to a session: a browser that still holds one signs in again.
+- **Keys stay out of URLs.** A browser connects to `/ws` with the key in the WebSocket subprotocol
+  list. The `?api_key=` query still connects for older clients, but it is deprecated and logged.
+- **Data-driven navigation stays on this origin.** A link from a notification, a reference or a sign-in
+  arrival is followed only when it is a path on the terminal itself.
+
+### Why it complies
+
+| Protection | Test file | Tests |
+|---|---|---|
+| No eval in the pages' policy; pages still render MDX | `clients/terminal/src/app/__tests__/contentSecurityPolicy.test.ts`, `clients/terminal/src/ui-kit/__tests__/mdxNoEval.test.tsx` | every test in those files |
+| A policy on every non-page response | `clients/terminal/src/app/api/__tests__/responsePolicy.test.ts` | every test in the file |
+| A canvas frame opens no WebRTC; its foreign navigation is refused | `clients/terminal/src/canvas/__tests__/frameLockdown.test.ts` | every test in the file |
+| A canvas view carries nothing out: the canvas origin, the door, the frame's script policy | `clients/terminal/src/app/api/__tests__/frameDoor.test.ts`, `clients/terminal/src/app/__tests__/canvasOrigin.test.ts`, `clients/terminal/src/app/__tests__/contentSecurityPolicy.test.ts`; in a browser, `clients/terminal/scripts/canvas-isolation.mjs` | every test in the first two files; `describe("the Meeting Canvas on an origin of its own (TERMINAL_CANVAS_ORIGIN)")` |
+| A link signs in only its own browser | `clients/terminal/src/app/api/auth/__tests__/redeem.test.ts` | `describe("bound to the browser that asked (S03T-3)")` |
+| No session from a key; sign-ins end | `core/identity/services/admin-api/tests/test_session_credential.py`, `test_sign_in_expiry_backfill_pg.py` | `test_a_legacy_login_key_is_never_traded_for_a_session`, `test_sign_in_credentials_with_no_end_end_with_their_cookie` |
+| The websocket key travels outside the URL | `core/gateway/services/gateway/tests/test_ws_key_subprotocol.py` | every test in the file |
+
+## Tracing a session
+
+Every control-plane service writes one JSON object per log line, in one shape
+([`logevent.v1`](https://github.com/Vexa-ai/vexa/tree/main/core/gateway/contracts/logevent.v1)). Two ids
+let you follow what an agent did:
+
+| Id | What it is | Where it comes from |
+|---|---|---|
+| `trace_id` | One request, or one agent turn. | Minted by the gateway (or taken from your `X-Trace-Id`) and forwarded on every hop: gateway, meeting-api, runtime, agent-api, the agent worker, the MCP service, the credential broker, identity, flows-api, flows-worker and the mailbox. agent-api hands a turn's trace to its worker, and the worker sends it on its tool calls. |
+| `session` | One chat thread, or one background job: the agent **unit**. A chat's unit is `agent-<user id>-chat-<thread>`, with `-g<n>` appended after the chat creates a workspace. A job's unit is `agent-<user id>-<trigger>-<digest>`. | agent-api writes it into the worker's delegation token, and the token is signed. Identity, the gateway, agent-api, flows-api and the broker read it only from that signature, and never from a header a client can set. The credential broker records the same value in `audit.session`. |
+
+Lines carry ids and outcomes only. They never carry tokens, credentials, prompts, message or mail
+text.
+
+To list everything one chat caused:
+
+```bash
+UNIT=agent-42-chat-main                       # the chat; a prefix match also covers its -g<n> units
+# 1. every trace the session started (gateway, agent-api, worker, identity, flows, broker lines)
+docker compose logs --no-log-prefix > all.jsonl            # or your log store's export
+jq -R -r --arg u "$UNIT" 'fromjson? | select((.session // "") | startswith($u)) | .trace_id' all.jsonl | sort -u > traces.txt
+# 2. every line on those traces, including the hops that only know the trace (meeting-api, MCP, runtime)
+jq -R -c --rawfile t traces.txt 'fromjson? | select(.trace_id as $x | ($t | split("\n") | index($x)))' all.jsonl
+# 3. every credential use, from the broker's own audit table
+sqlite3 /state/metadata.sqlite \
+  "SELECT datetime(at,'unixepoch'), actor, action, outcome, connection FROM audit
+   WHERE session LIKE '$UNIT%' ORDER BY seq"
+```
+
+A worker's own lines (`service: agent-worker`) go to its container's stderr, so collect them
+wherever your runtime keeps workload logs. The bot's in-meeting pipeline does not carry the trace
+yet.
+
 ## Audit artifacts in the repo
 
 | Artifact | What it gives a reviewer |

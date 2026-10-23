@@ -10,7 +10,7 @@ behavior is the v0.12 carve of the deployed ``services/api-gateway/main.py``:
     refused at request time and refuses to build at all,
   * the CORE proxy routes — each forwards its method to the matching downstream URL and returns
     the downstream body + status VERBATIM (main.py:450-831, 367),
-  * the ``/ws`` multiplex control loop + redis pub/sub fan-in — subscribe → Subscribed ack;
+  * the ``/ws`` multiplex control loop + redis pub/sub fan-in (``multiplex.py``) — subscribe → Subscribed ack;
     unsubscribe → Unsubscribed ack AND stop the fan-in; ping → pong; the invalid_json /
     unknown_action / invalid_subscribe_payload / invalid_unsubscribe_payload / missing_api_key
     error vocabulary; raw redis payloads forwarded over ``tc:…:mutable`` / ``bm:…:status`` /
@@ -26,29 +26,54 @@ forwards it to the downstream hop; user/system ``log_event``s are emitted on the
 spans (preserved from the carve so gate:tracing stays green).
 """
 from __future__ import annotations
-
-import asyncio
-import json
-import os
-from contextlib import AsyncExitStack
-from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 from urllib.parse import quote
+
+import json
+from contextlib import AsyncExitStack
+from typing import Dict, FrozenSet, List, Literal, Optional, Tuple
 
 import httpx  # the downstream adapter's transport errors are mapped to 502/504 (not leaked as a 500)
 
-from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Path, Request, Response, WebSocket
 
-from . import routes_manifest
+from . import identity_token, routes_manifest
+from .agent_admission import AgentAllow, refused_response as _agent_tier_refused
+from . import taint as taint_mod
+from .delegation import (McpReentry, delegated_route_response, is_delegated, reentry_unlisted_response,
+                         shared_delegation, shared_route_response,
+                         reported_admin,
+                         reported_admin_account)
+from .multiplex import run_multiplex
+from .vnc_relay import run_vnc_relay
+from .paths import (forwarded_param, forwarded_target_error, invalid_path_param_response,
+                    path_segment, tail_path)
 from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRoute
 
-from .obs import TRACE_HEADER, TraceMiddleware, get_trace_id, log_event, set_user_id
+from .obs import (TRACE_HEADER, TraceMiddleware, get_trace_id, log_event, session_of_validation,
+                  set_session, set_user_id)
 from .ports import Authorizer, AuthUnavailable, DownstreamClient, RedisBus
 
 # #495: the honest answer when the auth path itself is unreachable — a retryable 503, never a
 # 401 that blames the caller's (valid) key. Shared by /auth/me and the proxy authorizer. Also
 # emits a TYPED, non-empty auth-infra log line (FM02: the old path swallowed the failure in a
 # silent `except`, erasing the one signal that would have named this incident for what it was).
+#: WHOSE SERVICE FAILED, said in the body (2026-10-13). A deploy restarted admin-api; a Gmail read
+#: answered this 503 and the agent told the person Google was having a problem. The words were ours.
+#: `detail` stays as it was (clients and docs read it); the typed fields say it is Vexa's own sign-in
+#: service, and a tool result renders `reason: message` first (vexa_mcp.tool_errors).
+AUTH_UNAVAILABLE_BODY = {
+    "detail": "Authentication temporarily unavailable, retry",
+    "code": "auth_unavailable",
+    "reason": "vexa_sign_in_unavailable",
+    "source": "vexa",
+    "retry_after": 1,
+    "message": ("Vexa's own sign-in service is briefly unavailable (for example during an update). "
+                "This is not your account and not Google or Microsoft: no provider was asked. "
+                "Retry in a few seconds."),
+}
+
+
 def _auth_unavailable_response(exc: Exception, *, span: str) -> Response:
     log_event(
         "auth_infra_unavailable",
@@ -58,7 +83,7 @@ def _auth_unavailable_response(exc: Exception, *, span: str) -> Response:
         fields={"reason": type(exc).__name__, "detail": str(exc)},
     )
     return Response(
-        content=json.dumps({"detail": "Authentication temporarily unavailable, retry"}),
+        content=json.dumps(AUTH_UNAVAILABLE_BODY),
         status_code=503,
         media_type="application/json",
         headers={"Retry-After": "1"},
@@ -141,10 +166,56 @@ def undeclared_routes(app: FastAPI, table=None, unscoped=None) -> List[Tuple[str
                 missing.append(key)
     return missing
 
+#: The meeting platforms a `{platform}` path segment may name: api.v1 `components/schemas/Platform`,
+#: held equal to it by tests/test_meeting_paths.py. A handler types its `platform` with it, so any
+#: other value is refused with the 422 api.v1 declares for these routes, before the caller is
+#: authorized and before anything is forwarded.
+#: A bot account's or sign-in session's id (ADR-0049): 32 lowercase hex, else the 422 before any forward.
+_HEX32 = r"^[a-f0-9]{32}$"
+
+MeetingPlatform = Literal["google_meet", "zoom", "teams", "jitsi", "browser_session", "voice_note", "vexa_call"]
+
 # Default sentinel base URL. The DownstreamClient (real httpx or the fake ASGI transport) resolves
 # it; what matters is the PATH the gateway forwards to (verbatim from the route). v0.12 P2 folded
 # the transcription-collector INTO meeting-api (one modular monolith), so /transcripts + /meetings
 # now forward to the SAME target as /bots — the standalone collector URL is gone.
+# A SERVICE BEING REPLACED IS NOT A FAILED REQUEST (Vexa-ai/vexa#1783, friction 2026-10-14).
+# A deploy recreates a service's container; for those seconds no connection opens and the buffered
+# forward used to answer 502 at once — a person's `workspace_remove` failed twice while agent-api
+# was swapped. A connect that never opened SENT NOTHING, so trying again is safe for every method:
+# retried with backoff for at most this long, then the same 502 as before. A failure after the
+# request may have left (a read or protocol error) is never repeated.
+CONNECT_RETRY_WINDOW_S = 20.0
+_CONNECT_BACKOFF_S = (0.25, 0.5, 1.0, 2.0)
+
+
+async def _retry_sleep(seconds: float) -> None:
+    import asyncio
+    await asyncio.sleep(seconds)
+
+
+#: WHICH HOP FAILED, said in the body (Vexa-ai/vexa#1783, frictions 2026-10-13). A connection test
+#: answered a bare `upstream timeout` and nobody could tell whether Vexa, the credential broker or
+#: the connected service was slow. `detail` stays as it was (clients and docs read it); beside it the
+#: hop, that the service is Vexa's own, and a sentence a tool result renders first.
+def _upstream_fault(url: str, exc: Optional[Exception]) -> Response:
+    try:
+        service = httpx.URL(url).host or "the service"
+    except Exception:  # noqa: BLE001 — naming the hop must never be the thing that fails
+        service = "the service"
+    hop = f"gateway → {service}"
+    if exc is None:
+        body = {"detail": "upstream timeout", "reason": "upstream_timeout", "source": "vexa", "hop": hop,
+                "message": (f"Vexa's {service} did not answer the gateway in time. This is Vexa's own "
+                            "service, not the connected service or your account. Retry in a moment.")}
+        return Response(content=json.dumps(body, ensure_ascii=False), status_code=504, media_type="application/json")
+    body = {"detail": f"upstream unreachable: {type(exc).__name__}", "reason": "upstream_unreachable",
+            "source": "vexa", "hop": hop,
+            "message": (f"Vexa's {service} could not be reached by the gateway. This is Vexa's own "
+                        "service, not the connected service or your account. Retry in a moment.")}
+    return Response(content=json.dumps(body, ensure_ascii=False), status_code=502, media_type="application/json")
+
+
 _DEFAULT_MEETING_API_URL = "http://meeting-api"
 # The AGENT control plane (agent-api): chat · sessions · routines · workspace · models · history.
 # The gateway fronts it under /api/* so the SAME edge resolves the key → user and injects X-User-Id;
@@ -163,54 +234,45 @@ _DEFAULT_MCP_URL = "http://mcp:8010"
 # request; drop it at the edge and the session can never be bound. Passed through on BOTH legs.
 _MCP_HEADERS = ("mcp-session-id", "mcp-protocol-version")
 
-
-# Path params reach a handler URL-DECODED (Starlette resolves %3F/%23/%2E before the route sees
-# them), so interpolating one raw into a downstream URL lets a caller graft a query string, a
-# fragment or a dot-segment onto the hop — ``%2E%2E`` walks /user/calendars/{id} back up to
-# admin-api's /user. Every param is re-encoded as ONE opaque segment before it is interpolated.
-# Control characters (NUL, CR, LF) are refused here instead: httpx raises ``InvalidURL`` for them,
-# which is NOT a ``RequestError`` and would escape the 502/504 mapping as a gateway 500.
-def _path_segment(value: str) -> Tuple[Optional[str], Optional[Response]]:
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
-        return None, _invalid_path_param_response()
-    segment = quote(value, safe="")
-    # ``quote`` leaves "." alone (it is unreserved), but httpx RESOLVES a dot-only segment against
-    # the base path — "/user/calendars/.." becomes admin-api's "/user". Percent-encode it so the
-    # id stays data; "%2E%2E" survives httpx untouched and decodes back to ".." downstream.
-    if segment and set(segment) == {"."}:
-        segment = segment.replace(".", "%2E")
-    return segment, None
+#: The meeting-bundle hop's own deadline (`_forward_meeting_bundle`): a bundle is one file of up to
+#: hundreds of MB, so the buffered leg's 30 s total would cap it at whatever a link moves in 30 s.
+#: Connecting and getting a pool slot stay as tight as anywhere; reading and writing may pause for
+#: up to ten minutes between chunks (a slow uplink, a recording master being assembled).
+BUNDLE_TIMEOUT = httpx.Timeout(connect=10.0, read=600.0, write=600.0, pool=10.0)
 
 
-def _invalid_path_param_response() -> Response:
-    return Response(
-        content=json.dumps({"detail": "invalid path parameter"}),
-        status_code=400,
-        media_type="application/json",
-    )
+# Every hop's path is built from what the request MATCHED, never interpolated raw: a meetings row's
+# target is its manifest row's (`_meeting_target`), a forwarded domain's literal row and catch-all
+# are filled by `_register_forwarded`, and identity's calendar id by `path_segment`. Each parameter
+# is one opaque segment, or a 400 (`paths.py`).
+
+
+def _route_key(request: Request) -> Optional[Tuple[str, str]]:
+    """(method, route TEMPLATE) of the route this request matched — the key every manifest row uses.
+
+    The matched template (``request.scope["route"].path``), not the request path, so
+    ``/user/calendars/{id}`` is one declaration instead of a prefix that also swallows whatever
+    route is added beside it next."""
+    path = getattr(request.scope.get("route"), "path", None)
+    return (request.method.upper(), path) if path else None
 
 
 def _required_scopes(request: Request, table=None) -> Optional[FrozenSet[str]]:
     """The scopes declared for the route this request MATCHED, or ``None`` when it declares none.
 
-    Resolved from the matched route's template (``request.scope["route"].path``) rather than from
-    the request path, so ``/user/calendars/{id}`` is one declaration instead of a prefix that also
-    swallows whatever route is added beside it next. ``None`` means DENY: the caller of this
-    function fails closed, so a route that reaches ``_authorize`` without a declaration answers 403
-    instead of forwarding.
+    ``None`` means DENY: the caller of this function fails closed, so a route that reaches
+    ``_authorize`` without a declaration answers 403 instead of forwarding.
     """
-    route = request.scope.get("route")
-    path = getattr(route, "path", None)
-    if not path:
-        return None
-    return (ROUTE_SCOPES if table is None else table).get((request.method.upper(), path))
+    key = _route_key(request)
+    return (ROUTE_SCOPES if table is None else table).get(key) if key else None
 
 
 # ── the authority-header strip (F95) ─────────────────────────────────────────────
 # Downstream services trust a small vocabulary of headers as AUTHORITY: ``x-user-*`` is the identity
-# the gateway resolved from the api-key, ``x-internal-secret`` is the internal service tier (agent-api
-# ``_internal_caller``, admin-api ``_check_internal`` — the gate the meeting room calls its own trust
-# boundary), ``x-gateway-verified`` is the marker ``VEXA_REQUIRE_GATEWAY_IDENTITY`` looks for, and
+# the gateway resolved from the api-key, ``x-vexa-identity`` is the signature that makes it believable
+# (gateway-identity.v1 — agent-api and meeting-api refuse an ``x-user-*`` header without it),
+# ``x-internal-secret`` is the internal service tier (agent-api ``_internal_caller``, admin-api
+# ``_check_internal`` — the gate the meeting room calls its own trust boundary), and
 # ``x-admin-api-key`` is admin-api's privileged surface.
 #
 # NONE of them may arrive from a client. The strip used to be an eight-name list of ``x-user-*``
@@ -219,7 +281,7 @@ def _required_scopes(request: Request, table=None) -> Optional[FrozenSet[str]]:
 # any api-key holder. A LIST rots the moment a new authority header is added; a PREFIX rule does not,
 # which is why this matches by family and why every new internal header must be spelled into one.
 _AUTHORITY_HEADER_PREFIXES = ("x-user-", "x-internal-", "x-vexa-internal-")
-_AUTHORITY_HEADER_EXACT = frozenset({"x-admin-api-key", "x-gateway-verified"})
+_AUTHORITY_HEADER_EXACT = frozenset({"x-admin-api-key", identity_token.HEADER, taint_mod.STATE_HEADER})
 
 
 def _is_authority_header(name: str) -> bool:
@@ -236,6 +298,9 @@ def _insufficient_scope_response() -> Response:
     )
 
 
+# A worker's delegation token is an MCP credential: where it is admitted is `delegation.py`.
+
+
 def create_app(
     authorizer: Authorizer,
     downstream: DownstreamClient,
@@ -243,9 +308,15 @@ def create_app(
     *,
     meeting_api_url: str = _DEFAULT_MEETING_API_URL,
     agent_api_url: Optional[str] = None,
+    crm_api_url: Optional[str] = None,
     admin_api_url: str = _DEFAULT_ADMIN_API_URL,
     mcp_url: str = _DEFAULT_MCP_URL,
+    identity_key=None,
     rate_limiter=None,
+    voice_note_dialer=None,
+    vnc_connect=None,
+    agent_allow: Optional[str] = None,
+    taint_marker=None,
 ) -> FastAPI:
     """Build the gateway FastAPI app over the injected ports.
 
@@ -253,7 +324,19 @@ def create_app(
     ``downstream``  — forwards proxied HTTP requests to meeting-api (the unified control plane:
                       /bots + /transcripts + /meetings + /recordings all live there now, P2).
     ``redis``       — pub/sub bus for the ``/ws`` fan-in.
+    ``identity_key`` — the Ed25519 PRIVATE key that signs the resolved identity onto every forward
+                      (gateway-identity.v1, ``X-Vexa-Identity``). The gateway is its only holder. The
+                      production builder loads it from ``VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE``,
+                      which the boot requires; a harness that injects fakes downstream may leave it
+                      ``None`` and forward plain headers.
+    ``agent_allow`` — the people the agent tier is enabled for (`agent_admission.py`); ``None`` reads
+                      ``VEXA_AGENT_ALLOW`` from the environment.
+    ``vnc_connect`` — opens the upstream websocket of a bot-account sign-in session's live view
+                      (``vnc_relay.py``); ``None`` is the ``websockets`` client, a test injects a fake.
     """
+    # M7: a credential in a query string (`/ws?api_key=…`) never reaches a log line.
+    from . import log_scrub as _log_scrub  # noqa: PLC0415
+    _log_scrub.install()
     # ── WHICH DOMAINS THIS DEPLOYMENT FRONTS (PRD decisions 40.6 + 40.7) ─────────────────────
     #
     # Presence is a CONFIGURATION FACT — whether the deployment named the door — never a probe. A
@@ -277,7 +360,15 @@ def create_app(
     _agent_present = bool((agent_api_url or "").strip())
     if _agent_present:
         _present.add("agent")
+    # The optional CRM (ADR-0047) on the same terms: named means fronted under /crm/*, unnamed is a
+    # deployment without it and /crm/* is a 404. There is no default — a build never assumes a CRM.
+    _crm_present = bool((crm_api_url or "").strip())
+    if _crm_present:
+        _present.add("crm")
     _assembly = routes_manifest.load(_present)
+    # Which people the agent tier is enabled for: read once, applied in `_authorize` to the agent
+    # domain's rows only, so a meetings, identity or MCP row is unchanged for everyone.
+    _agent_allow = AgentAllow(agent_allow) if agent_allow is not None else AgentAllow.from_env()
     _route_scopes = _assembly.scopes
     _unscoped = _assembly.unscoped
 
@@ -307,22 +398,89 @@ def create_app(
         if not user_data:
             return Response(content=json.dumps({"detail": "Invalid API key"}),
                             status_code=401, media_type="application/json")
+        # A worker's delegation token is answered here only on the MCP's own re-entry, and only
+        # because the edge's manifest declares this an MCP callback route (`"mcp_reentry"`).
+        delegated = is_delegated(api_key, user_data)
+        if delegated and not _admits_mcp_reentry(request, user_data):
+            return delegated_route_response()
+        if delegated and shared_delegation(user_data) and _route_key(request) not in _assembly.shared_allow:
+            return shared_route_response()
+        is_admin = reported_admin(user_data, delegated=delegated)
+        admin_account = reported_admin_account(user_data, delegated=delegated)
         set_user_id(user_data["user_id"])
+        set_session(session_of_validation(user_data))
         return {
             "user_id": user_data["user_id"],
             "email": user_data.get("email", ""),
             "scopes": user_data.get("scopes", []),
             "max_concurrent": user_data.get("max_concurrent", 3),
+            "is_admin": is_admin,
+            "admin_account": admin_account,
         }
+
+    # --- /internal/mcp/taint — the MCP reports the label of a read it made DIRECTLY (crm, flows), on
+    # its signed re-entry with the worker's own token; the unit comes from the identity this edge
+    # resolved, never from the MCP. With no `sources` it only answers the session's current mark
+    # (the MCP forwards it to the service as `X-Vexa-Taint`). Marking only: no decision here (D6).
+    @app.post("/internal/mcp/taint")
+    async def mcp_taint(request: Request):
+        api_key = request.headers.get("x-api-key")
+        if not api_key:
+            return Response(content=json.dumps({"detail": "Missing API key"}),
+                            status_code=401, media_type="application/json")
+        try:
+            user_data = await authorizer.resolve(api_key)
+        except AuthUnavailable as e:
+            return _auth_unavailable_response(e, span="auth")
+        if not user_data:
+            return Response(content=json.dumps({"detail": "Invalid API key"}),
+                            status_code=401, media_type="application/json")
+        delegated = is_delegated(api_key, user_data)
+        if not delegated:
+            return {"marked": False, "state": "none"}         # a person's own key has no session
+        if not _admits_mcp_reentry(request, user_data):
+            return delegated_route_response()
+        unit = session_of_validation(user_data)
+        if not unit:
+            return {"marked": False, "state": taint_mod.UNVERIFIABLE}
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        sources = [str(x) for x in (body.get("sources") or [])] if isinstance(body, dict) else []
+        if sources:
+            if taint_marker is None:
+                return _mark_refused()
+            try:
+                await taint_marker.mark(unit, sources)
+            except taint_mod.MarkUnavailable:
+                return _mark_refused()
+        return {"marked": bool(sources), "state": await taint_mod.state_for(taint_marker, unit)}
 
     # --- auth + identity prep, shared by the buffered REST proxy (_forward) and the streaming proxy
     # (agent chat SSE). Returns (downstream_headers, None) on success, or (None, error_Response) when
     # the caller is rejected (fail-closed). This is the ONE place the key → user resolution and the
     # anti-spoof identity injection live, so REST and SSE scope a request identically.
+    reentry = McpReentry(identity_key)
+
+    def _admits_mcp_reentry(request: Request, user_data) -> bool:
+        """Is this a worker's call the MCP makes back into a route its tools call?
+
+        Both halves, always: the re-entry identity proves the MCP is acting on an `/mcp` request
+        this edge admitted, and the row's `"mcp_reentry": true` says this is a route the MCP's
+        tools call. Either alone is not enough — a valid re-entry on any other route is refused."""
+        return _route_key(request) in _assembly.mcp_reentry and reentry.admits(request, user_data)
+
     async def _authorize(method: str, request: Request, *, api_key: Optional[str] = None):
         # ``api_key`` overrides the header lookup for a route whose CLIENT protocol carries the key
         # somewhere else (the MCP transport uses ``Authorization: Bearer``). The resolution, the
         # scope check and the identity injection below are the same for every route.
+        # A worker's delegation token (`vxd_…`) is resolved like any other bearer: identity verifies
+        # it (signature, audience, expiry, the account still existing) and answers with the person it
+        # acts for plus the dispatch's ceiling, which rides the signed identity below as
+        # `delegation`. It is ADMITTED only on a row whose manifest says `"delegation": true`, or on
+        # a row that says `"mcp_reentry": true` when the request is the MCP's own re-entry — see
+        # `delegation.py`.
         client_key = api_key if api_key is not None else request.headers.get("x-api-key")
         # Fail-closed: a client route with no key is rejected before any downstream call.
         if not client_key:
@@ -348,6 +506,8 @@ def create_app(
         # Bind the resolved user to the trace context so every later line carries user_id.
         user_id = user_data["user_id"]
         set_user_id(user_id)
+        # …and the agent session, when the bearer is a worker's delegation token (Vexa-ai/vexa#1783).
+        set_session(session_of_validation(user_data))
 
         # Per-user request rate limit (WS-6) — a valid key could otherwise fire unlimited requests at
         # the control plane (the max_concurrent_bots cap bounds active bots, not request rate). 429 when
@@ -359,6 +519,34 @@ def create_app(
                 media_type="application/json",
                 headers={"Retry-After": "1"},
             )
+
+        if (is_delegated(client_key, user_data)
+                and _route_key(request) not in _assembly.delegation
+                and not _admits_mcp_reentry(request, user_data)):
+            # a valid re-entry here means a tool calls a route this edge does not list for tools
+            unlisted = reentry.admits(request, user_data)
+            log_event(
+                "request_denied_reentry_unlisted" if unlisted else "request_denied_delegated_route",
+                audience="user",
+                level="warning",
+                span="auth",
+                user_id=user_id,
+                fields={"method": method, "path": request.url.path},
+            )
+            if unlisted:
+                return None, reentry_unlisted_response(method, request.url.path)
+            return None, delegated_route_response()
+
+        # D3 — DEFAULT-DENY FOR SHARED TOKENS, AT THE EDGE. A delegation whose turn other people read
+        # (a room's or a shared chat's, `delegation.shared`; or a workspace principal, D2) reaches only
+        # the rows its domain's routes.v1 declares `"shared": "allow"`. This is the boundary: the MCP
+        # manifest filter is a narrowing of what the model is offered, and a worker can present its
+        # bearer to this edge directly (security review H5). Each service keeps its own check too.
+        if is_delegated(client_key, user_data) and shared_delegation(user_data) \
+                and _route_key(request) not in _assembly.shared_allow:
+            log_event("request_denied_shared_route", audience="user", level="warning", span="auth",
+                      user_id=user_id, fields={"method": method, "path": request.url.path})
+            return None, shared_route_response()
 
         # Scope enforcement — DENY BY DEFAULT. Every proxied route declares its scopes in
         # ROUTE_SCOPES; an undeclared route is refused here rather than forwarded, so the failure
@@ -392,6 +580,21 @@ def create_app(
             )
             return None, _insufficient_scope_response()
 
+        # THE AGENT TIER, PER PERSON (`VEXA_AGENT_ALLOW`). Asked of every agent-domain row — literal,
+        # streamed or catch-all, a person's key or the MCP's re-entry with a worker's token, which
+        # identity resolved to the person it acts for — after the scope check, before any forward.
+        if (_assembly.owner_of.get(_route_key(request)) == "agent"
+                and not _agent_allow.admits(user_data)):
+            log_event(
+                "request_denied_agent_tier",
+                audience="user",
+                level="warning",
+                span="auth",
+                user_id=user_id,
+                fields={"method": method, "path": request.url.path},
+            )
+            return None, _agent_tier_refused()
+
         # USER-facing event: the request was accepted on behalf of this user.
         log_event(
             "request_accepted",
@@ -409,32 +612,49 @@ def create_app(
             if _is_authority_header(h):
                 headers.pop(h, None)
         headers["x-api-key"] = client_key
-        headers["x-user-id"] = str(user_id)
-        # The RESOLVED verified email (never client-declared; /internal/validate returns it). agent-api's
-        # membership redeem (Lane M) checks it for RESTRICTED invites (allowed_emails).
-        if user_data.get("email"):
-            headers["x-user-email"] = str(user_data["email"])
-        headers["x-user-scopes"] = ",".join(user_data.get("scopes", []))
-        headers["x-user-limits"] = str(user_data.get("max_concurrent", 3))
-        # Lane A: the RESOLVED shared-workspace membership ids (never client-declared; /internal/validate
-        # returns them). meeting-api authorizes a member's live-transcript subscribe against this set.
-        if user_data.get("workspaces"):
-            headers["x-user-workspaces"] = ",".join(str(w) for w in user_data["workspaces"])
-        # Per-user webhook config (identity owns it; /internal/validate returns it from user.data).
-        # Forwarded so bot_spawn persists it into meeting.data → the lifecycle callback delivers from
-        # there, with NO cross-domain users-table read (the carve's principled path; main read the user
-        # row inline as a monolith).
-        if user_data.get("webhook_url"):
-            headers["x-user-webhook-url"] = str(user_data["webhook_url"])
-            if user_data.get("webhook_secret"):
-                headers["x-user-webhook-secret"] = str(user_data["webhook_secret"])
-            if user_data.get("webhook_events"):
-                headers["x-user-webhook-events"] = json.dumps(user_data["webhook_events"])
+        # THE RESOLVED IDENTITY, RE-STAMPED (gateway-identity.v1). Every value comes from /internal/validate,
+        # never from the client: the user id; the verified email agent-api's membership redeem checks
+        # for RESTRICTED invites (Lane M); the scopes and the bot limit `POST /bots` enforces; the
+        # shared-workspace memberships meeting-api authorizes a member's transcript subscribe against
+        # (Lane A); the per-user webhook bot_spawn persists into meeting.data (identity owns it); and,
+        # for a worker's delegation token, the dispatch's ceiling. The services behind this edge
+        # believe these headers only with the signature beside them — `X-Vexa-Identity`, an Ed25519
+        # signature over the same claims with a short expiry, made with a private key only this edge
+        # holds — so a process that reaches them past this edge cannot name a user.
+        if identity_key is not None:
+            headers.update(identity_token.signed_headers(identity_key, user_data))
+        else:
+            headers.update(identity_token.headers_from_claims(
+                identity_token.claims_from_validation(user_data)))
         headers[TRACE_HEADER] = get_trace_id() or ""
+        # THE PRIVACY MARK (D6, `taint.py`): a worker's request carries its session's current mark to
+        # the service (a service with no Redis holds from it), and its answer marks the session.
+        unit = session_of_validation(user_data) if is_delegated(client_key, user_data) else None
+        if unit:
+            request.state.vexa_taint_unit = unit
+            headers[taint_mod.STATE_HEADER] = await taint_mod.state_for(taint_marker, unit)
+        elif is_delegated(client_key, user_data):
+            headers[taint_mod.STATE_HEADER] = taint_mod.UNVERIFIABLE
         return headers, None
 
+    async def _mark_answer(request: Request, status: int, label: Optional[str]) -> bool:
+        """Mark the worker's session from a forwarded answer's label. False = refuse the answer."""
+        unit = getattr(request.state, "vexa_taint_unit", None)
+        if not unit or _assembly.owner_of.get(_route_key(request)) not in taint_mod.MARKED_DOMAINS:
+            return True
+        ok = await taint_mod.mark_from_response(taint_marker, unit, status, label)
+        if not ok:
+            log_event("privacy_mark_unavailable", audience="system", level="error", span="proxy",
+                      fields={"method": request.method, "path": request.url.path})
+        return ok
+
+    def _mark_refused() -> Response:
+        return Response(content=json.dumps({"detail": taint_mod.mark_unavailable_body()}),
+                        status_code=503, media_type="application/json")
+
     # --- the REST proxy: faithful carve of main.forward_request for client (non-admin) routes.
-    async def _forward(method: str, url: str, request: Request, *, api_key: Optional[str] = None) -> Response:
+    async def _forward(method: str, url: str, request: Request, *, api_key: Optional[str] = None
+                       ) -> Response:
         headers, error = await _authorize(method, request, api_key=api_key)
         if error is not None:
             return error
@@ -444,23 +664,34 @@ def create_app(
         # an unreachable/transport-failed upstream → 502, so a client can tell "backend down" from
         # "gateway broke" (and get a retryable signal). Timeout is a subclass of RequestError → catch it first.
         try:
-            resp = await downstream.request(
-                method,
-                url,
-                headers=headers,
-                params=dict(request.query_params) or None,
-                content=content,
-            )
+            waited, attempt = 0.0, 0
+            while True:
+                try:
+                    resp = await downstream.request(
+                        method,
+                        url,
+                        headers=headers,
+                        params=dict(request.query_params) or None,
+                        content=content,
+                    )
+                    break
+                except httpx.ConnectError:
+                    # NOTHING WAS SENT (see CONNECT_RETRY_WINDOW_S): the upstream is between
+                    # containers. Wait it out, briefly, then answer as before.
+                    pause = _CONNECT_BACKOFF_S[min(attempt, len(_CONNECT_BACKOFF_S) - 1)]
+                    if waited + pause > CONNECT_RETRY_WINDOW_S:
+                        raise
+                    await _retry_sleep(pause)
+                    waited += pause
+                    attempt += 1
         except httpx.InvalidURL:
             # Not a RequestError: without this arm an unparseable hop URL surfaces as a gateway 500
             # even though the fault is in what the CALLER put in the path.
-            return _invalid_path_param_response()
+            return invalid_path_param_response()
         except httpx.TimeoutException:
-            return Response(content=json.dumps({"detail": "upstream timeout"}),
-                            status_code=504, media_type="application/json")
+            return _upstream_fault(url, None)
         except httpx.RequestError as e:
-            return Response(content=json.dumps({"detail": f"upstream unreachable: {type(e).__name__}"}),
-                            status_code=502, media_type="application/json")
+            return _upstream_fault(url, e)
 
         # SYSTEM/debug event: the proxy hop completed.
         log_event(
@@ -470,6 +701,9 @@ def create_app(
             span="proxy",
             fields={"method": method, "path": url, "downstream_status": resp.status_code},
         )
+
+        if not await _mark_answer(request, resp.status_code, resp.headers.get(taint_mod.LABEL_HEADER)):
+            return _mark_refused()
 
         # Return downstream body + status VERBATIM (drop hop-by-hop headers; main.py:367).
         resp_headers = resp.headers
@@ -500,43 +734,160 @@ def create_app(
     def _meeting(path: str) -> str:
         return f"{meeting_api_url}{path}"
 
+    # A MEETINGS ROW'S HOP IS ITS MANIFEST ROW'S, FILLED ONE OPAQUE SEGMENT AT A TIME. The target is
+    # the row's own path, or the `upstream` it declares (`/user/webhook/deliveries` is meeting-api's
+    # `/webhooks/deliveries`) — the same field meeting-api reads to check, on each of its routes, the
+    # scopes this edge checked (`meeting_api/route_scopes.py`), so the two cannot disagree about
+    # which row reaches which route. Every `{name}` is filled from what the request matched under the
+    # forwarded-row rule (`paths.forwarded_param`): a `.`/`..` value, or an encoded `/` or `\`
+    # anywhere in the target, is a 400 before the caller is authorized; anything else, `?` and `#`
+    # included, is percent-encoded into the one segment it arrived in. Starlette hands a handler its
+    # parameters DECODED, so a raw interpolation would let `%2E%2E` or `%23` reshape the hop and land
+    # it on a meeting-api route other than the one whose scope was checked here.
+    def _meeting_target(request: Request) -> Tuple[Optional[str], Optional[Response]]:
+        key = _route_key(request)
+        if key is None or _assembly.owner_of.get(key) != "meetings":
+            return None, _insufficient_scope_response()  # not a meetings row: nothing to forward
+        error = forwarded_target_error(request)
+        if error is not None:
+            return None, error
+        target = _assembly.upstream.get(key, key[1])
+        for name in routes_manifest.params_of(target):
+            segment, error = forwarded_param(str(request.path_params.get(name, "")), request)
+            if error is not None:
+                return None, error
+            target = target.replace("{" + name + "}", segment, 1)
+        # A catch-all row (the sign-in session's live-view files) forwards its tail verbatim under
+        # the catch-all rule (`paths.tail_path`): each segment re-encoded, a dot segment refused.
+        if target.endswith(routes_manifest.CATCH_ALL):
+            tail, error = tail_path(str(request.path_params.get("path", "")), request)
+            if error is not None:
+                return None, error
+            target = target[:-len(routes_manifest.CATCH_ALL)] + tail
+        return _meeting(target), None
+
+    async def _forward_meeting(request: Request) -> Response:
+        url, error = _meeting_target(request)
+        if error is not None:
+            return error
+        return await _forward(request.method, url, request)
+
+    # A MEETING BUNDLE IS ONE FILE OF UP TO HUNDREDS OF MB, and it is the only meetings traffic that
+    # is. Its three rows ride a streamed forward instead of the buffered one: the request body is
+    # relayed as it arrives (never read into this process), the response is relayed chunk by chunk
+    # with its Content-Length and Content-Disposition, and the hop carries its own deadline,
+    # `BUNDLE_TIMEOUT`, in place of the buffered leg's 30 s — scoped to these routes alone, so no
+    # other route's fault detection loosens. Authorization, the target and the identity it carries
+    # are the buffered forward's, unchanged.
+    async def _forward_meeting_bundle(request: Request) -> Response:
+        url, error = _meeting_target(request)
+        if error is not None:
+            return error
+        headers, error = await _authorize(request.method, request)
+        if error is not None:
+            return error
+        content = request.stream() if request.method == "POST" else None
+        stack = AsyncExitStack()
+        try:
+            upstream = await stack.enter_async_context(downstream.open_stream(
+                request.method, url, headers=headers, params=dict(request.query_params) or None,
+                content=content, timeout=BUNDLE_TIMEOUT))
+        except httpx.InvalidURL:
+            await stack.aclose()
+            return invalid_path_param_response()
+        except httpx.TimeoutException:
+            await stack.aclose()
+            return _upstream_fault(url, None)
+        except httpx.RequestError as e:
+            await stack.aclose()
+            return _upstream_fault(url, e)
+        log_event("downstream_stream_opened", audience="system", level="debug", span="proxy",
+                  fields={"method": request.method, "path": url, "downstream_status": upstream.status_code})
+
+        async def body():
+            async with stack:  # closes the downstream stream when the client goes away
+                async for chunk in upstream.aiter_bytes():
+                    yield chunk
+
+        up = upstream.headers
+        relayed = {k: up[k] for k in ("content-length", "content-disposition", "x-content-type-options",
+                                     "cache-control") if k in up}
+        return StreamingResponse(body(), status_code=upstream.status_code,
+                                 media_type=up.get("content-type") or "application/json", headers=relayed)
+
     # ---- CORE routes (each forwards to the matching downstream path, per main's route table) ----
+    # Bot accounts (ADR-0049): saved signed-in browser profiles a meeting bot can join as, and the
+    # short-lived sign-in sessions a person makes one through. meeting-api owns them; a session is
+    # readable only by the person who opened it, which meeting-api decides. Ids are 32 hex.
+    @app.get("/bot-accounts")
+    async def list_bot_accounts(request: Request):
+        return await _forward_meeting(request)
+
+    @app.post("/bot-accounts/sessions", status_code=201)
+    async def open_bot_account_session(request: Request):
+        return await _forward_meeting(request)
+
+    @app.get("/bot-accounts/sessions/{session_id}")
+    async def get_bot_account_session(request: Request,
+                                      session_id: str = Path(pattern=_HEX32)):
+        return await _forward_meeting(request)
+
+    @app.delete("/bot-accounts/sessions/{session_id}")
+    async def close_bot_account_session(request: Request,
+                                        session_id: str = Path(pattern=_HEX32)):
+        return await _forward_meeting(request)
+
+    # The live view's web client (noVNC's files, served by the session's workload): the bytes and
+    # their content-type come back as meeting-api answered them.
+    @app.get("/bot-accounts/sessions/{session_id}/view/{path:path}")
+    async def view_bot_account_session(path: str, request: Request,
+                                       session_id: str = Path(pattern=_HEX32)):
+        return await _forward_meeting(request)
+
+    @app.delete("/bot-accounts/{account_id}")
+    async def delete_bot_account(request: Request, account_id: str = Path(pattern=_HEX32)):
+        return await _forward_meeting(request)
+
+    @app.post("/bot-accounts/{account_id}/verify", status_code=202)
+    async def verify_bot_account(request: Request, account_id: str = Path(pattern=_HEX32)):
+        return await _forward_meeting(request)
+
     @app.get("/bots")
     async def list_bots(request: Request):
-        return await _forward("GET", _meeting("/bots"), request)
+        return await _forward_meeting(request)
 
     @app.post("/bots", status_code=201)
     async def create_bot(request: Request):
-        return await _forward("POST", _meeting("/bots"), request)
+        return await _forward_meeting(request)
 
     @app.get("/bots/status")
     async def bots_status(request: Request):
-        return await _forward("GET", _meeting("/bots/status"), request)
+        return await _forward_meeting(request)
 
     @app.delete("/bots/{platform}/{native_meeting_id}")
-    async def stop_bot(platform: str, native_meeting_id: str, request: Request):
-        return await _forward("DELETE", _meeting(f"/bots/{platform}/{native_meeting_id}"), request)
+    async def stop_bot(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     @app.put("/bots/{platform}/{native_meeting_id}/config", status_code=202)
-    async def update_config(platform: str, native_meeting_id: str, request: Request):
-        return await _forward("PUT", _meeting(f"/bots/{platform}/{native_meeting_id}/config"), request)
+    async def update_config(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     @app.post("/bots/{platform}/{native_meeting_id}/speak")
-    async def speak(platform: str, native_meeting_id: str, request: Request):
-        return await _forward("POST", _meeting(f"/bots/{platform}/{native_meeting_id}/speak"), request)
+    async def speak(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     # P0 (cross-tenant leak fix): the by-ROW-id transcript read the terminal uses to fetch EXACTLY the
     # row it displays (owner-scoped downstream). Registered BEFORE the native route so `by-id` is not
     # matched as a {platform}. Forwarded verbatim; the auth/identity prep (X-User-Id) is shared.
     @app.get("/transcripts/by-id/{meeting_id}")
     async def transcript_by_id(meeting_id: int, request: Request):
-        return await _forward("GET", _meeting(f"/transcripts/by-id/{meeting_id}"), request)
+        return await _forward_meeting(request)
 
     # Redeem an INDEPENDENT transcript share token (Lane A / M0). Declared BEFORE the {platform}/{native}
     # GET so `share/accept` is not matched as a 2-segment transcript path.
     @app.post("/transcripts/share/accept")
     async def accept_transcript_share(request: Request):
-        return await _forward("POST", _meeting("/transcripts/share/accept"), request)
+        return await _forward_meeting(request)
 
     # native-keyed share MINT alias (#579 C3): the 0.10 api.v1 share path. The mint MOVED to
     # POST /meetings/{platform}/{native}/share in 0.12; alias the old transcripts path to it so a
@@ -544,76 +895,103 @@ def create_app(
     # shape ({id, token, mode, expires_at}), NOT the sealed TranscriptShareResponse public-URL shape
     # ({share_id, url, expires_at, expires_in_seconds}) — the public-URL-share backend is gone; only
     # the capability-token share exists. See the PR's "signed gaps" section.
+    # by-ROW-id share alias, mirroring the `transcripts/by-id` read above so a client that knows a
+    # meeting only as a row id has one path shape for both. Declared BEFORE the {platform}/{native}
+    # form so `by-id` is not captured as a platform name.
+    @app.post("/transcripts/by-id/{meeting_id}/share")
+    async def mint_transcript_share_by_id_alias(meeting_id: int, request: Request):
+        return await _forward_meeting(request)
+
     @app.post("/transcripts/{platform}/{native_meeting_id}/share")
-    async def mint_transcript_share_alias(platform: str, native_meeting_id: str, request: Request):
-        return await _forward("POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/share"), request)
+    async def mint_transcript_share_alias(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     # Declared BEFORE /transcripts/{platform}/... so `search` is matched as a literal, not
     # captured as a platform name.
     @app.get("/transcripts/search")
     async def search_transcripts(request: Request):
-        return await _forward("GET", _meeting("/transcripts/search"), request)
+        return await _forward_meeting(request)
 
     @app.get("/transcripts/{platform}/{native_meeting_id}")
-    async def transcript(platform: str, native_meeting_id: str, request: Request):
-        return await _forward("GET", _meeting(f"/transcripts/{platform}/{native_meeting_id}"), request)
+    async def transcript(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     @app.get("/recordings")
     async def list_recordings(request: Request):
-        return await _forward("GET", _meeting("/recordings"), request)
+        return await _forward_meeting(request)
 
     @app.get("/recordings/{recording_id}")
     async def get_recording(recording_id: int, request: Request):
-        return await _forward("GET", _meeting(f"/recordings/{recording_id}"), request)
+        return await _forward_meeting(request)
 
     @app.delete("/recordings/{recording_id}")
     async def delete_recording(recording_id: int, request: Request):
-        return await _forward("DELETE", _meeting(f"/recordings/{recording_id}"), request)
+        return await _forward_meeting(request)
 
     # finalize-on-read master metadata (audio|video); the recording player fetches this, then the
     # raw_url it returns. ?type= is preserved by _forward.
     @app.get("/recordings/{recording_id}/master")
     async def get_recording_master(recording_id: int, request: Request):
-        return await _forward("GET", _meeting(f"/recordings/{recording_id}/master"), request)
+        return await _forward_meeting(request)
 
     # The master byte stream the recording player loads (the master metadata's raw_url points here).
     @app.get("/recordings/{recording_id}/media/{media_file_id}/raw")
     async def get_recording_media_raw(recording_id: int, media_file_id: int, request: Request):
-        return await _forward(
-            "GET", _meeting(f"/recordings/{recording_id}/media/{media_file_id}/raw"), request
-        )
+        return await _forward_meeting(request)
 
     # native download alias (#579 C3): the sealed api.v1 media-download path a 0.10 client calls.
     # 0.12 renamed the media byte route to .../raw (finalize-on-read master stream); alias .../download
     # to it so recording playback no longer 404s. Forwarded verbatim (Range headers preserved).
     @app.get("/recordings/{recording_id}/media/{media_file_id}/download")
     async def get_recording_media_download(recording_id: int, media_file_id: int, request: Request):
-        return await _forward(
-            "GET", _meeting(f"/recordings/{recording_id}/media/{media_file_id}/raw"), request
-        )
+        return await _forward_meeting(request)
 
     @app.get("/meetings")
     async def meetings(request: Request):
-        return await _forward("GET", _meeting("/meetings"), request)
+        return await _forward_meeting(request)
 
     # Create a PLANNED meeting (intent status, no bot) — the Meetings surface's "Plan a meeting".
     @app.post("/meetings", status_code=201)
     async def create_planned_meeting(request: Request):
-        return await _forward("POST", _meeting("/meetings"), request)
+        return await _forward_meeting(request)
+
+    # Import a meeting-bundle.v1 archive as a new meeting the caller owns (`?dry_run=true` previews
+    # it and writes nothing). A literal segment, so it is never matched as a row id.
+    @app.post("/meetings/import")
+    async def import_meeting_bundle(request: Request):
+        return await _forward_meeting_bundle(request)
 
     # Single meeting — forwards to meeting-api's GET /meetings/{id} (the meeting-detail page reads it).
     @app.get("/meetings/{meeting_id}")
     async def meeting(meeting_id: int, request: Request):
-        return await _forward("GET", _meeting(f"/meetings/{meeting_id}"), request)
+        return await _forward_meeting(request)
+
+    # The meeting as one portable meeting-bundle.v1 file, for its owner. The zip and its
+    # Content-Disposition pass through verbatim.
+    @app.get("/meetings/{meeting_id}/export")
+    async def export_meeting_bundle(meeting_id: int, request: Request):
+        return await _forward_meeting_bundle(request)
+
+    # The same export with a parts archive as the body: the meeting's workspace tree and notes page,
+    # which the owner's client fetched from the agent domain, placed into the bundle by meeting-api.
+    @app.post("/meetings/{meeting_id}/export")
+    async def export_meeting_bundle_with_parts(meeting_id: int, request: Request):
+        return await _forward_meeting_bundle(request)
+
+    # A room's planned call as an iCalendar file, for its creator to send from their own calendar
+    # (rooms, F1). The text/calendar body and its Content-Disposition pass through verbatim.
+    @app.get("/meetings/{meeting_id}/ics")
+    async def planned_meeting_ics(meeting_id: int, request: Request):
+        return await _forward_meeting_bundle(request)
 
     # Edit / delete a PLANNED meeting by ROW id (owner-scoped; meeting-api refuses FSM rows with 409).
     @app.patch("/meetings/{meeting_id}")
     async def patch_planned_meeting(meeting_id: int, request: Request):
-        return await _forward("PATCH", _meeting(f"/meetings/{meeting_id}"), request)
+        return await _forward_meeting(request)
 
     @app.delete("/meetings/{meeting_id}", status_code=204)
     async def delete_planned_meeting(meeting_id: int, request: Request):
-        return await _forward("DELETE", _meeting(f"/meetings/{meeting_id}"), request)
+        return await _forward_meeting(request)
 
     # User-owned scheduling intent (schedule/cancel) — the Meetings surface's Schedule/Cancel action
     # PUTs here; forwards to meeting-api's PUT /meetings/{platform}/{native}/intent (owner-scoped).
@@ -621,10 +999,8 @@ def create_app(
     # The caller's own description of a meeting — title + arbitrary metadata — writable in ANY
     # status (meeting-api refuses nothing here; nothing in the dispatch pipeline reads it).
     @app.post("/meetings/{platform}/{native_meeting_id}/annotate")
-    async def annotate_meeting(platform: str, native_meeting_id: str, request: Request):
-        return await _forward(
-            "POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/annotate"), request
-        )
+    async def annotate_meeting(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     # Annotate by ROW id — the identity a meeting always has. The (platform, native) pair is not
     # one: a Google Meet room code is reused across sessions and downstream resolves it to the
@@ -634,7 +1010,7 @@ def create_app(
     # POST /meetings/{meeting_id}/share below already relies on.
     @app.post("/meetings/{meeting_id}/annotate")
     async def annotate_meeting_by_id(meeting_id: int, request: Request):
-        return await _forward("POST", _meeting(f"/meetings/{meeting_id}/annotate"), request)
+        return await _forward_meeting(request)
 
     # Mint by ROW id — the identity a meeting always has. The (platform, native) pair is not one: a
     # row planned from an invite whose url matched no platform is platform='unknown' with an empty
@@ -644,30 +1020,54 @@ def create_app(
     # _forward, so the same auth/identity header prep (X-User-Id, X-User-Email, X-User-Workspaces).
     @app.post("/meetings/{meeting_id}/share")
     async def mint_transcript_share_by_id(meeting_id: int, request: Request):
-        return await _forward("POST", _meeting(f"/meetings/{meeting_id}/share"), request)
+        return await _forward_meeting(request)
+
+    # The OWNER's side of a share: who can read this meeting, the recording setting, and taking
+    # access back — a grant (an invite or a link) or one reader. Row-id addressed like the mint above;
+    # meeting-api owner-scopes every one (404 for a meeting that is not the caller's). The `int`
+    # meeting id keeps `PATCH /meetings/42/access` off the pair route, whose first segment is a
+    # platform name.
+    @app.get("/meetings/{meeting_id}/access")
+    async def get_meeting_access(meeting_id: int, request: Request):
+        return await _forward_meeting(request)
+
+    @app.patch("/meetings/{meeting_id}/access")
+    async def set_meeting_access(meeting_id: int, request: Request):
+        return await _forward_meeting(request)
+
+    @app.delete("/meetings/{meeting_id}/share/{grant_id}")
+    async def revoke_meeting_share(meeting_id: int, grant_id: str, request: Request):
+        return await _forward_meeting(request)
+
+    @app.delete("/meetings/{meeting_id}/viewers/{viewer_id}")
+    async def remove_meeting_viewer(meeting_id: int, viewer_id: int, request: Request):
+        return await _forward_meeting(request)
+
+    # Import a transcript into a meeting the caller owns — "this already happened, here are its
+    # words" — and complete it. Row-id addressed like the mint above; same _forward, so the same
+    # key→identity resolution (X-User-Id) the meeting-api route scopes on.
+    @app.post("/meetings/{meeting_id}/transcript-import")
+    async def import_meeting_transcript(meeting_id: int, request: Request):
+        return await _forward_meeting(request)
 
     @app.post("/meetings/{platform}/{native_meeting_id}/share")
-    async def mint_transcript_share(platform: str, native_meeting_id: str, request: Request):
-        return await _forward("POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/share"), request)
+    async def mint_transcript_share(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     # Bind a meeting to a shared workspace (owner) — Lane A (optional convenience).
     @app.post("/meetings/{platform}/{native_meeting_id}/workspace")
-    async def bind_meeting_workspace(platform: str, native_meeting_id: str, request: Request):
-        return await _forward("POST", _meeting(f"/meetings/{platform}/{native_meeting_id}/workspace"), request)
+    async def bind_meeting_workspace(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     # Who was in this meeting, as far as the core actually knows — invitation attendees + heard
     # speakers, each row labelled with its source (Vexa-ai/vexa#451). Owner-scoped downstream.
     @app.get("/meetings/{platform}/{native_meeting_id}/participants")
-    async def get_meeting_participants(platform: str, native_meeting_id: str, request: Request):
-        return await _forward(
-            "GET", _meeting(f"/meetings/{platform}/{native_meeting_id}/participants"), request
-        )
+    async def get_meeting_participants(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     @app.put("/meetings/{platform}/{native_meeting_id}/intent")
-    async def set_meeting_intent(platform: str, native_meeting_id: str, request: Request):
-        return await _forward(
-            "PUT", _meeting(f"/meetings/{platform}/{native_meeting_id}/intent"), request
-        )
+    async def set_meeting_intent(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     # native-keyed mutate (#579 C1): the sealed api.v1 PATCH/DELETE a 0.10 client (incl. the shipped
     # dashboard) calls by (platform, native_meeting_id). Thin passthrough — meeting-api resolves
@@ -675,19 +1075,30 @@ def create_app(
     # (unknown/unowned native → 404, FSM-owned row → 409). Additive: the by-ROW-id int routes above
     # are unchanged; these 2-segment paths never shadow them (FastAPI matches on segment count).
     @app.patch("/meetings/{platform}/{native_meeting_id}")
-    async def patch_native_meeting(platform: str, native_meeting_id: str, request: Request):
-        return await _forward("PATCH", _meeting(f"/meetings/{platform}/{native_meeting_id}"), request)
+    async def patch_native_meeting(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
     @app.delete("/meetings/{platform}/{native_meeting_id}")
-    async def delete_native_meeting(platform: str, native_meeting_id: str, request: Request):
-        return await _forward("DELETE", _meeting(f"/meetings/{platform}/{native_meeting_id}"), request)
+    async def delete_native_meeting(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
 
-    # native-keyed chat READ (#579 C3): the sealed api.v1 GET the 0.10 dashboard's chat panel calls.
-    # Thin passthrough to meeting-api's honest empty-list restore (0.12 does not persist in-meeting
-    # chat server-side). The POST (send) half is a SIGNED GAP — no bot-command backend in 0.12.
+    # native-keyed in-meeting chat (sealed api.v1). GET reads the meeting's captured chat (the
+    # `source:'chat'` transcript segments); POST sends a line into the meeting — meeting-api publishes
+    # it to the bot as an acts.v1 `chat_send` and answers a `request_id`; GET …/chat/{request_id}
+    # reads whether that line posted. Thin passthroughs: owner resolution, the active-meeting check,
+    # the command publish and the delivery record all live in meeting-api.
     @app.get("/bots/{platform}/{native_meeting_id}/chat")
-    async def read_meeting_chat(platform: str, native_meeting_id: str, request: Request):
-        return await _forward("GET", _meeting(f"/bots/{platform}/{native_meeting_id}/chat"), request)
+    async def read_meeting_chat(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
+
+    @app.post("/bots/{platform}/{native_meeting_id}/chat")
+    async def send_meeting_chat(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
+
+    @app.get("/bots/{platform}/{native_meeting_id}/chat/{request_id}")
+    async def read_meeting_chat_send(platform: MeetingPlatform, native_meeting_id: str, request_id: str,
+                                     request: Request):
+        return await _forward_meeting(request)
 
     # ---- user self-serve webhook config (main.py:1080 set_user_webhook_proxy) ----
     # Identity OWNS the config (user.data JSONB via admin-api); the gateway is the public edge for
@@ -708,6 +1119,78 @@ def create_app(
     async def get_user_webhook(request: Request):
         return await _forward("GET", _admin("/user/webhook"), request)
 
+    # ---- the person's own settings and workspace regime (identity owns both, user.data via
+    # admin-api; Vexa-ai/vexa#1783). The one MCP's `settings*` and `workspace_regime*` tools call
+    # back through these, so the rows admit the MCP's re-entry. ----
+    @app.get("/user/settings")
+    async def get_user_settings(request: Request):
+        return await _forward("GET", _admin("/user/settings"), request)
+
+    @app.put("/user/settings")
+    async def set_user_setting(request: Request):
+        return await _forward("PUT", _admin("/user/settings"), request)
+
+    @app.get("/user/workspace-regime")
+    async def get_user_workspace_regime(request: Request):
+        return await _forward("GET", _admin("/user/workspace-regime"), request)
+
+    @app.put("/user/workspace-regime")
+    async def set_user_workspace_regime(request: Request):
+        return await _forward("PUT", _admin("/user/workspace-regime"), request)
+
+    # ---- the person's own photo (identity keeps it; UI 15g). The person's own key only: these rows
+    # admit neither a delegation nor the MCP's re-entry — an agent may suggest a photo, never set one.
+    @app.get("/user/photo")
+    async def get_user_photo(request: Request):
+        return await _forward("GET", _admin("/user/photo"), request)
+
+    @app.put("/user/photo")
+    async def set_user_photo(request: Request):
+        return await _forward("PUT", _admin("/user/photo"), request)
+
+    @app.delete("/user/photo")
+    async def delete_user_photo(request: Request):
+        return await _forward("DELETE", _admin("/user/photo"), request)
+    # ---- the person's notification policy (identity; PRD 0.13.4 S6 Settings → Notifications). The
+    # person's own key only: no delegation, no MCP re-entry — how a person is interrupted is theirs.
+    @app.get("/user/notifications")
+    async def get_user_notifications(request: Request):
+        return await _forward("GET", _admin("/user/notifications"), request)
+
+    @app.put("/user/notifications")
+    async def set_user_notifications(request: Request):
+        return await _forward("PUT", _admin("/user/notifications"), request)
+
+    # ---- the person's PUBLIC PROFILE, company verification and the directory (R4; identity is the
+    # one writer, admin-api refuses all of it unless `public_profiles` is switched on by name). ----
+    @app.get("/user/profile")
+    async def get_user_profile(request: Request):
+        return await _forward("GET", _admin("/user/profile"), request)
+
+    @app.put("/user/profile")
+    async def set_user_profile(request: Request):
+        return await _forward("PUT", _admin("/user/profile"), request)
+
+    @app.post("/user/profile/withdraw")
+    async def withdraw_user_profile(request: Request):
+        return await _forward("POST", _admin("/user/profile/withdraw"), request)
+
+    @app.post("/user/company-verification")
+    async def start_company_verification(request: Request):
+        return await _forward("POST", _admin("/user/company-verification"), request)
+
+    @app.post("/user/company-verification/check")
+    async def check_company_verification(request: Request):
+        return await _forward("POST", _admin("/user/company-verification/check"), request)
+
+    @app.get("/user/directory/profiles")
+    async def search_directory_profiles(request: Request):
+        return await _forward("GET", _admin("/user/directory/profiles"), request)
+
+    @app.get("/user/directory/profiles/{handle}")
+    async def read_directory_profile(handle: str, request: Request):
+        return await _forward("GET", _admin(f"/user/directory/profiles/{quote(handle, safe='')}"), request)
+
     # #841: the per-user webhook DELIVERY HISTORY — the queryable record of real delivery outcomes
     # (the user-facing completion of #815→#817). Unlike the config above (identity-owned, admin-api),
     # the deliveries live in meeting-api (the dispatcher that records each outcome), so this forwards
@@ -715,7 +1198,7 @@ def create_app(
     # meeting-api scopes the read to the owner.
     @app.get("/user/webhook/deliveries")
     async def get_user_webhook_deliveries(request: Request):
-        return await _forward("GET", _meeting("/webhooks/deliveries"), request)
+        return await _forward_meeting(request)
 
     # ---- user self-serve calendar-sync config (identity owns it, same shape as /user/webhook).
     # The ICS URL is a secret — admin-api masks it on every read-back. Scoped BOT, not BOT_OR_TX:
@@ -725,11 +1208,11 @@ def create_app(
     # (identity). Registered before the config routes only for reading clarity - paths are exact.
     @app.get("/user/calendar/sync")
     async def get_user_calendar_sync(request: Request):
-        return await _forward("GET", _meeting("/user/calendar/sync"), request)
+        return await _forward_meeting(request)
 
     @app.post("/user/calendar/sync")
     async def run_user_calendar_sync(request: Request):
-        return await _forward("POST", _meeting("/user/calendar/sync"), request)
+        return await _forward_meeting(request)
 
     @app.put("/user/calendar")
     async def set_user_calendar(request: Request):
@@ -749,31 +1232,25 @@ def create_app(
 
     @app.patch("/user/calendars/{calendar_id}")
     async def update_user_calendar(calendar_id: str, request: Request):
-        segment, error = _path_segment(calendar_id)
+        segment, error = path_segment(calendar_id)
         if error is not None:
             return error
         return await _forward("PATCH", _admin(f"/user/calendars/{segment}"), request)
 
     @app.delete("/user/calendars/{calendar_id}")
     async def delete_user_calendar(calendar_id: str, request: Request):
-        segment, error = _path_segment(calendar_id)
+        segment, error = path_segment(calendar_id)
         if error is not None:
             return error
         return await _forward("DELETE", _admin(f"/user/calendars/{segment}"), request)
 
     @app.get("/user/calendars/{calendar_id}/sync")
     async def get_calendar_connection_sync(calendar_id: str, request: Request):
-        segment, error = _path_segment(calendar_id)
-        if error is not None:
-            return error
-        return await _forward("GET", _meeting(f"/user/calendars/{segment}/sync"), request)
+        return await _forward_meeting(request)
 
     @app.post("/user/calendars/{calendar_id}/sync")
     async def run_calendar_connection_sync(calendar_id: str, request: Request):
-        segment, error = _path_segment(calendar_id)
-        if error is not None:
-            return error
-        return await _forward("POST", _meeting(f"/user/calendars/{segment}/sync"), request)
+        return await _forward_meeting(request)
 
     # ---- user self-serve model + transcription prefs (identity owns them, same shape as
     # /user/webhook: secrets masked by admin-api on every read-back, scoped BOT_OR_TX). ----
@@ -793,13 +1270,9 @@ def create_app(
     async def get_user_transcription(request: Request):
         return await _forward("GET", _admin("/user/transcription"), request)
 
-    # ---- the AGENT domain (P20·Stage 2): the gateway fronts agent-api under the canonical /agent/*
-    # prefix so the SAME edge resolves key → user and injects X-User-Id; agent-api derives `subject`
-    # from it (never the client). The terminal therefore talks ONLY to the gateway (one authenticated
-    # edge, clean SoC). _agent() maps the public /agent/<path> to agent-api's internal /api/<path>.
-    def _agent(path: str) -> str:
-        return f"{agent_api_url}/api/{path}"
-
+    # ---- the AGENT domain (P20·Stage 2): fronted wholesale under the prefix its manifest declares
+    # (`forward`), so the SAME edge resolves key → user and injects X-User-Id; agent-api derives
+    # `subject` from it (never the client). The terminal therefore talks ONLY to the gateway.
     # The agent SSE routes (chat turn · live meeting feed) must be STREAMED, not buffered like the JSON
     # routes — so they get their own forward, declared BEFORE the catch-all so they win. Identity is
     # injected by the SAME _authorize the buffered proxy uses (so the streamed turn is scoped identically).
@@ -812,9 +1285,38 @@ def create_app(
         content = await request.body()
         params = dict(request.query_params) or None
 
+        # THE HEAD DECIDES, NOT THE ROUTE. Only an upstream that answered a 2xx event stream is
+        # relayed as SSE; a refusal (403 from a person-only verb, 501, 404) or any other non-stream
+        # answer reaches the caller with the upstream's own status and body, instead of a 200 SSE
+        # envelope wrapped around an error. Transport failures map to 504/502 as the buffered
+        # forward maps them.
+        stack = AsyncExitStack()
+        try:
+            upstream = await stack.enter_async_context(
+                downstream.open_stream(method, url, headers=headers, params=params, content=content))
+        except httpx.TimeoutException:
+            await stack.aclose()
+            return _upstream_fault(url, None)
+        except httpx.RequestError as e:
+            await stack.aclose()
+            return _upstream_fault(url, e)
+
+        if not await _mark_answer(request, upstream.status_code,
+                                  upstream.headers.get(taint_mod.LABEL_HEADER)):
+            await stack.aclose()
+            return _mark_refused()
+        media_type = upstream.headers.get("content-type") or "application/json"
+        if not (200 <= upstream.status_code < 300 and media_type.startswith("text/event-stream")):
+            try:
+                answer = b"".join([chunk async for chunk in upstream.aiter_bytes()])
+            finally:
+                await stack.aclose()
+            return Response(content=answer, status_code=upstream.status_code, media_type=media_type)
+
         async def body():
-            async for chunk in downstream.stream(method, url, headers=headers, params=params, content=content):
-                yield chunk
+            async with stack:  # closes the downstream stream when the client goes away
+                async for chunk in upstream.aiter_bytes():
+                    yield chunk
 
         return StreamingResponse(body(), media_type="text/event-stream", headers=SSE_HEADERS)
 
@@ -830,7 +1332,7 @@ def create_app(
     # after a head is in hand does the body iterator take over; the exit stack keeps the downstream
     # stream open for its life and closes it when the client goes away.
     async def _forward_stream_verbatim(
-        method: str, url: str, request: Request, *, api_key: Optional[str] = None
+        method: str, url: str, request: Request, *, api_key: Optional[str] = None,
     ) -> Response:
         headers, error = await _authorize(method, request, api_key=api_key)
         if error is not None:
@@ -845,12 +1347,10 @@ def create_app(
             )
         except httpx.TimeoutException:
             await stack.aclose()
-            return Response(content=json.dumps({"detail": "upstream timeout"}),
-                            status_code=504, media_type="application/json")
+            return _upstream_fault(url, None)
         except httpx.RequestError as e:
             await stack.aclose()
-            return Response(content=json.dumps({"detail": f"upstream unreachable: {type(e).__name__}"}),
-                            status_code=502, media_type="application/json")
+            return _upstream_fault(url, e)
 
         log_event(
             "downstream_stream_opened",
@@ -875,27 +1375,61 @@ def create_app(
             body(), status_code=upstream.status_code, media_type=media_type, headers=relayed
         )
 
-    # The agent domain lives under the canonical /agent/* prefix (peer to the meetings domain). The SSE
-    # routes (chat turn · live meeting feed) are STREAMED and declared BEFORE the catch-all so they win;
-    # everything else (sessions · history · routines · workspace tree/file/git/upload · models) is
-    # request/response JSON → the buffered _forward, with X-User-Id injected. All carry the path/method/
-    # query/body verbatim to agent-api's matching /api/<path> via _agent().
+    # A FORWARDED DOMAIN IS REGISTERED FROM ITS MANIFEST, and this code names none of its routes.
+    # `forward` maps `<edge_prefix><path>` onto `<upstream_prefix><path>` at the domain's door; a
+    # row that is not the catch-all is a route of its own — its `{name}` segments re-encoded
+    # (`paths.py`), relayed as server-sent events when it says `stream` — registered BEFORE the
+    # prefix's `{path:path}` catch-all so it wins; the catch-all carries the path/method/query/body
+    # verbatim, its tail re-encoded too. What a row admits (its scopes, a worker's delegation token,
+    # the MCP's re-entry) is read from the same row by `_authorize`.
     #
-    # REGISTERED ONLY WHEN THE AGENT DOMAIN IS DEPLOYED. `core/agent/routes.v1.json` declares
-    # these seven rows and is loaded on the same condition, so in a no-agents deployment the
-    # routes and their declarations are absent together and `/agent/anything` is a 404.
+    # REGISTERED ONLY WHEN THE AGENT DOMAIN IS DEPLOYED: its manifest is loaded on the same
+    # condition, so in a no-agents deployment the routes and their declarations are absent together
+    # and `/agent/anything` is a 404.
+    def _register_forwarded(domain: str, base_url: str) -> None:
+        if domain not in _assembly.forwards:
+            raise routes_manifest.ManifestError(
+                f"{domain} is fronted wholesale but its routes.v1.json declares no forward")
+        edge, upstream = _assembly.forwards[domain]
+        rows = sorted(k for k, d in _assembly.owner_of.items() if d == domain)
+
+        def literal(method: str, path: str):
+            template = f"{base_url}{upstream}{path[len(edge):]}"
+            names = routes_manifest.params_of(path)
+            relay = _forward_stream if (method, path) in _assembly.stream else _forward
+
+            async def forward_literal(request: Request):
+                # Held to the catch-all's rule (`paths.py`): an encoded separator in the target is a
+                # 400, and a `{name}` segment is filled with what the caller sent, re-encoded as ONE
+                # opaque segment (a `.`/`..` value refused, as the catch-all refuses it).
+                error = forwarded_target_error(request)
+                if error is not None:
+                    return error
+                url = template
+                for name in names:
+                    segment, error = forwarded_param(str(request.path_params.get(name, "")), request)
+                    if error is not None:
+                        return error
+                    url = url.replace("{" + name + "}", segment, 1)
+                return await relay(method, url, request)
+            app.add_api_route(path, forward_literal, methods=[method])
+
+        for method, path in rows:
+            if not path.endswith(routes_manifest.CATCH_ALL):
+                literal(method, path)
+        catch_all = sorted(m for m, p in rows if p.endswith(routes_manifest.CATCH_ALL))
+        if catch_all:
+            async def forward_tail(path: str, request: Request):
+                tail, error = tail_path(path, request)
+                if error is not None:
+                    return error
+                return await _forward(request.method, f"{base_url}{upstream}{tail}", request)
+            app.add_api_route(edge + routes_manifest.CATCH_ALL, forward_tail, methods=catch_all)
+
     if _agent_present:
-        @app.post("/agent/chat")
-        async def agent_chat(request: Request):
-            return await _forward_stream("POST", _agent("chat"), request)
-
-        @app.get("/agent/meeting/stream")
-        async def agent_meeting_stream(request: Request):
-            return await _forward_stream("GET", _agent("meeting/stream"), request)
-
-        @app.api_route("/agent/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-        async def agent_proxy(path: str, request: Request):
-            return await _forward(request.method, _agent(path), request)
+        _register_forwarded("agent", agent_api_url)
+    if _crm_present:
+        _register_forwarded("crm", crm_api_url)
 
     # ---- the MCP front door (#795): the streamable-HTTP transport, fronted at the edge ----
     # MCP streamable-HTTP is ONE endpoint driven by two methods with opposite lifetimes:
@@ -906,8 +1440,10 @@ def create_app(
     #               read timeout, and answers a gateway-manufactured 5xx the MCP service never sees
     #               (#795 — 8 × 503 on GET at the edge, 0 at the service, POST 116/116 fine).
     # The two legs are therefore declared separately: GET streams, everything else buffers.
-    def _mcp(path: str) -> str:
-        return f"{mcp_url}{path}"
+    # ONE MCP server (ADR-0037 §2): every bearer — a person's API key, a worker's delegation token —
+    # reaches the same assembled surface, authenticated by the same `_authorize`.
+    def _mcp(path: str, request: Request) -> str:
+        return f"{mcp_url.rstrip('/')}{path}"
 
     def _mcp_key(request: Request) -> Optional[str]:
         """The caller's Vexa API key, from whichever carrier the MCP transport used.
@@ -930,30 +1466,83 @@ def create_app(
             return token.strip() or None
         return auth
 
+    # The MCP manifest declares every row `"delegation": true`: these are the routes a worker's
+    # delegation token is FOR.
     @app.get("/mcp")
     async def mcp_stream(request: Request):
-        return await _forward_stream_verbatim("GET", _mcp("/mcp"), request, api_key=_mcp_key(request))
+        return await _forward_stream_verbatim("GET", _mcp("/mcp", request), request,
+                                              api_key=_mcp_key(request))
 
     @app.get("/mcp/{path:path}")
     async def mcp_stream_path(path: str, request: Request):
+        tail, error = tail_path(path, request)
+        if error is not None:
+            return error
         return await _forward_stream_verbatim(
-            "GET", _mcp(f"/mcp/{path}"), request, api_key=_mcp_key(request)
-        )
+            "GET", _mcp(f"/mcp/{tail}", request), request, api_key=_mcp_key(request))
 
     @app.api_route("/mcp", methods=["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
     async def mcp_message(request: Request):
-        return await _forward(request.method, _mcp("/mcp"), request, api_key=_mcp_key(request))
+        return await _forward(request.method, _mcp("/mcp", request), request,
+                              api_key=_mcp_key(request))
 
     @app.api_route("/mcp/{path:path}", methods=["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
     async def mcp_message_path(path: str, request: Request):
+        tail, error = tail_path(path, request)
+        if error is not None:
+            return error
         return await _forward(
-            request.method, _mcp(f"/mcp/{path}"), request, api_key=_mcp_key(request)
-        )
+            request.method, _mcp(f"/mcp/{tail}", request), request, api_key=_mcp_key(request))
 
     # ---- the /ws multiplex (carve of main.websocket_multiplex, main.py:2165-2340) ----
     @app.websocket("/ws")
     async def websocket_multiplex(ws: WebSocket):
-        await run_multiplex(ws, authorizer, redis)
+        await run_multiplex(ws, authorizer, redis, route_scopes=_route_scopes)
+
+    # ---- a voice note's audio socket (#1783): the meetings row is its upgrade GET ----
+    # A plain GET is told to upgrade (426); the socket is authorized once, at the upgrade, against
+    # the same row, then relayed to meeting-api with the signed identity (voice_relay.py).
+    # The recorder request (the MCP tool record_voice_note): meeting-api answers with the ui_action
+    # the person's Minutes tab opens the recorder on; a worker with nobody present is refused there.
+    @app.post("/voice-notes/recorder")
+    async def voice_note_recorder(request: Request):
+        return await _forward_meeting(request)
+
+    @app.get("/voice-notes/{native_meeting_id}/stream")
+    async def voice_note_stream_without_upgrade(native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)   # meeting-api answers a plain GET with 426
+
+    def _sign_voice_headers(user_data: dict) -> dict:
+        if identity_key is not None:
+            headers = dict(identity_token.signed_headers(identity_key, user_data))
+        else:
+            headers = dict(identity_token.headers_from_claims(
+                identity_token.claims_from_validation(user_data)))
+        headers[TRACE_HEADER] = get_trace_id() or ""
+        return headers
+
+    @app.websocket("/voice-notes/{native_meeting_id}/stream")
+    async def voice_note_stream(ws: WebSocket, native_meeting_id: str):
+        from .voice_relay import run_voice_note_relay
+
+        dialer = voice_note_dialer
+        if dialer is None:
+            from .adapters import WebsocketsDialer
+
+            dialer = WebsocketsDialer()
+        await run_voice_note_relay(
+            ws, native_meeting_id, authorizer=authorizer, route_scopes=_route_scopes,
+            sign_headers=_sign_voice_headers, dialer=dialer, upstream_base=meeting_api_url,
+            rate_limiter=rate_limiter)
+
+    # ---- the sign-in session's live view: a websocket relayed to meeting-api's (vnc_relay.py) ----
+    # Not a manifest row (routes.v1 declares HTTP verbs); held to the scopes of the session's own
+    # GET row, authenticated as /ws is, and stamped with the identity an HTTP forward carries.
+    @app.websocket("/bot-accounts/sessions/{session_id}/vnc")
+    async def bot_account_session_vnc(ws: WebSocket, session_id: str):
+        await run_vnc_relay(ws, session_id, authorizer=authorizer, route_scopes=_route_scopes,
+                            meeting_api_url=meeting_api_url, identity_key=identity_key,
+                            connect=vnc_connect)
 
     # ---- deny by default, at BUILD time ----
     # The route table is now complete, so every route must have declared its scopes. Refusing to
@@ -971,252 +1560,3 @@ def create_app(
         )
 
     return app
-
-
-async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus) -> None:
-    """The ``/ws`` control loop + fan-in, carved verbatim from main.websocket_multiplex.
-
-    PUBLIC (P2 follow-up): the conformance ws-harness drives this directly to exercise the SHIPPED
-    multiplex against its fakes — exposed on the front door (``gateway.run_multiplex``) so the
-    harness no longer reaches for a private (the P1-flagged smell).
-
-    guard (PRE-accept, opt-in) → accept → authenticate (missing key → error + close 4401) →
-      loop over client frames:
-      subscribe   → authorize, register a redis fan-in per meeting, ack ``subscribed``;
-      unsubscribe → cancel the fan-in task(s), ack ``unsubscribed`` (stops forwarding);
-      ping        → ``pong``;
-      otherwise   → an ``error`` frame (invalid_json / unknown_action / invalid_*_payload).
-    Each subscription fans in ``tc:meeting:{id}:mutable`` / ``bm:meeting:{id}:status`` /
-    ``va:meeting:{id}:chat`` and forwards every raw payload to the socket (main.py:2204).
-    """
-    # --- optional WS guard hook (GUARD_WS_ENABLED, default false) ---
-    # HTTP SecurityMiddleware does not intercept /ws (Starlette middleware is HTTP-only).
-    # When the toggle is on, resolve the client IP via the same trusted-proxies XFF logic
-    # as guard's HTTP path and deny over-limit/banned IPs at connect. Opt-in: the default
-    # (false) leaves the WS path unchanged so the conformance harness observes zero change.
-    #
-    # PRE-ACCEPT: the full guard check (whitelist/blacklist/ban/rate-limit) runs BEFORE
-    # ``ws.accept()`` so a banned IP never gets a WebSocket upgrade. On denial, close with
-    # 4401 BEFORE accept — Starlette forwards the pre-accept ``websocket.close`` unchanged
-    # (its state machine accepts ``websocket.close`` while CONNECTING); uvicorn (0.51 here)
-    # turns that into an HTTP 403 to the upgrade request (no upgrade, no frames). A data
-    # frame (send_text) cannot be sent before accept, so the rejection is the close alone —
-    # the client sees the 403, not an ip_blocked JSON frame.
-    from .ratelimit import env_truthy
-
-    if env_truthy(os.getenv("GUARD_WS_ENABLED")):
-        from .edge_guard import ws_guard_check
-
-        if not ws_guard_check(ws):
-            await ws.close(code=4401)  # pre-accept reject → HTTP 403 to the upgrade
-            return
-
-    await ws.accept()
-
-    api_key = ws.headers.get("x-api-key") or ws.query_params.get("api_key")
-    if not api_key:
-        try:
-            await ws.send_text(json.dumps({"type": "error", "error": "missing_api_key"}))
-        finally:
-            await ws.close(code=4401)  # Unauthorized
-        return
-
-    # Connect-time identity resolve (Track G — meeting-status-ws §C.2). Today connect only checked
-    # the key was PRESENT and resolved user_id per-subscribe; now we resolve the key to a user up
-    # front (the SAME resolver /auth/me + the proxy use — ports.py resolve / app.py:96-99,119-125)
-    # so we can auto-subscribe the socket to its USER-SCOPED channel. Fail-closed like the proxy:
-    # a present-but-invalid key → invalid_api_key + close 4401, not a silently half-open socket.
-    try:
-        user_data = await authorizer.resolve(api_key)
-    except AuthUnavailable as e:
-        # #495: resolve() now RAISES when the validation hop is unreachable/faulted. On the REST
-        # surface that becomes a 503; on this already-accepted socket the truthful equivalent is a
-        # typed error frame + a distinct retryable close code (4503 ≈ HTTP 503), NOT 4401 (which
-        # asserts the key is bad) and NOT an uncaught raise (which drops the socket 1006/1011 with
-        # no signal). A valid key must not be told it is invalid because our auth path is down.
-        log_event("auth_infra_unavailable", audience="system", level="error", span="ws",
-                  fields={"reason": type(e).__name__, "detail": str(e)})
-        try:
-            await ws.send_text(json.dumps({"type": "error", "error": "auth_unavailable"}))
-        finally:
-            await ws.close(code=4503)  # retry later — auth infrastructure unavailable
-        return
-    if not user_data:
-        try:
-            await ws.send_text(json.dumps({"type": "error", "error": "invalid_api_key"}))
-        finally:
-            await ws.close(code=4401)  # Unauthorized
-        return
-    user_id = user_data["user_id"]
-    set_user_id(user_id)
-
-    sub_tasks: Dict[Tuple, asyncio.Task] = {}
-    subscribed_meetings: Set[Tuple] = set()
-
-    async def fan_in(channels: List[str]):
-        pubsub = redis.pubsub()
-        await pubsub.subscribe(*channels)
-        try:
-            async for message in pubsub.listen():
-                if message.get("type") != "message":
-                    continue
-                data = message.get("data")
-                try:
-                    await ws.send_text(data)  # forward the raw redis payload (main.py:2204)
-                except Exception:
-                    break
-        finally:
-            try:
-                await pubsub.unsubscribe(*channels)
-                await pubsub.close()
-            except Exception:
-                pass
-
-    async def subscribe_meeting(platform: str, native_id: str, user_id, meeting_id):
-        key = (platform, native_id, user_id)
-        if key in subscribed_meetings:
-            return
-        subscribed_meetings.add(key)
-        channels = [
-            f"tc:meeting:{meeting_id}:mutable",
-            f"bm:meeting:{meeting_id}:status",
-            f"va:meeting:{meeting_id}:chat",
-        ]
-        sub_tasks[key] = asyncio.create_task(fan_in(channels))
-
-    async def unsubscribe_meeting(platform: str, native_id: str, user_id):
-        key = (platform, native_id, user_id)
-        task = sub_tasks.pop(key, None)
-        if task:
-            task.cancel()
-        subscribed_meetings.discard(key)
-
-    # Auto-subscribe the authed socket to its USER scope (Track G — meeting-status-ws §C.2). The
-    # user-scoped redis channel `u:{user_id}:meetings` carries every meeting.status frame for this
-    # user (the publisher mirrors each bm:meeting:{id}:status onto it — §C.3). No client `subscribe`
-    # frame is needed: the identity is resolved at connect. This reuses the SAME verbatim `fan_in`
-    # path as the per-meeting channels — the gateway is a thin raw forwarder for the user channel
-    # exactly as it is for tc:/bm:/va:. Per-meeting subscriptions below are unchanged.
-    user_channel = f"u:{user_id}:meetings"
-    user_sub_task = asyncio.create_task(fan_in([user_channel]))
-
-    try:
-        while True:
-            try:
-                raw = await ws.receive_text()
-            except WebSocketDisconnect:
-                break
-
-            try:
-                msg = json.loads(raw)
-            except Exception:
-                await ws.send_text(json.dumps({"type": "error", "error": "invalid_json"}))
-                continue
-            # Syntactically-valid but NON-OBJECT JSON ([1,2,3], 42, "x", null): guard before `.get()`,
-            # else AttributeError escapes run_multiplex and KILLS the socket — a trivial public-edge DoS.
-            if not isinstance(msg, dict):
-                await ws.send_text(json.dumps({"type": "error", "error": "invalid_json"}))
-                continue
-
-            action = msg.get("action")
-            if action == "subscribe":
-                meetings = msg.get("meetings", None)
-                if not isinstance(meetings, list):
-                    await ws.send_text(json.dumps({
-                        "type": "error", "error": "invalid_subscribe_payload",
-                        "details": "'meetings' must be a non-empty list"}))
-                    continue
-                if len(meetings) == 0:
-                    await ws.send_text(json.dumps({
-                        "type": "error", "error": "invalid_subscribe_payload",
-                        "details": "'meetings' list cannot be empty"}))
-                    continue
-                payload_meetings = []
-                for m in meetings:
-                    if isinstance(m, dict):
-                        plat = str(m.get("platform", "")).strip()
-                        nid = str(m.get("native_id", "")).strip()
-                        if plat and nid:
-                            payload_meetings.append({"platform": plat, "native_meeting_id": nid})
-                if not payload_meetings:
-                    await ws.send_text(json.dumps({
-                        "type": "error", "error": "invalid_subscribe_payload",
-                        "details": "no valid meeting objects"}))
-                    continue
-
-                # The downstream authorize hop must never crash the socket: a RAISE → authorization_call_failed
-                # frame + continue; a non-200 (errors carried, nothing authorized) → authorization_service_error
-                # frame, NOT a misleading empty `subscribed` ack that hides the auth backend being down.
-                try:
-                    result = await authorizer.authorize_subscribe(api_key, payload_meetings)
-                except Exception as e:  # noqa: BLE001 — surface as a protocol error, keep the socket alive
-                    await ws.send_text(json.dumps({
-                        "type": "error", "error": "authorization_call_failed", "details": str(e)}))
-                    continue
-                authorized = result.get("authorized") or []
-                auth_errors = result.get("errors") or []
-                if not authorized and auth_errors:
-                    first = str(auth_errors[0])
-                    code = ("authorization_call_failed"
-                            if first.startswith("authorization_call_failed")
-                            else "authorization_service_error")
-                    await ws.send_text(json.dumps({"type": "error", "error": code, "details": first}))
-                    continue
-                subscribed: List[Dict[str, str]] = []
-                for item in authorized:
-                    plat = item.get("platform"); nid = item.get("native_id")
-                    user_id = item.get("user_id"); meeting_id = item.get("meeting_id")
-                    if plat and nid and user_id and meeting_id:
-                        await subscribe_meeting(plat, nid, user_id, meeting_id)
-                        subscribed.append({"platform": plat, "native_id": nid})
-                await ws.send_text(json.dumps({"type": "subscribed", "meetings": subscribed}))
-
-            elif action == "unsubscribe":
-                meetings = msg.get("meetings", None)
-                if not isinstance(meetings, list):
-                    await ws.send_text(json.dumps({
-                        "type": "error", "error": "invalid_unsubscribe_payload",
-                        "details": "'meetings' must be a list"}))
-                    continue
-                unsubscribed: List[Dict[str, str]] = []
-                errors: List[str] = []
-                for idx, m in enumerate(meetings):
-                    if not isinstance(m, dict):
-                        errors.append(f"meetings[{idx}] must be an object")
-                        continue
-                    plat = str(m.get("platform", "")).strip()
-                    nid = str(m.get("native_id", "")).strip()
-                    if not plat or not nid:
-                        errors.append(f"meetings[{idx}] missing 'platform' or 'native_id'")
-                        continue
-                    matching_key = None
-                    for key in subscribed_meetings:
-                        if key[0] == plat and key[1] == nid:
-                            matching_key = key
-                            break
-                    if matching_key:
-                        await unsubscribe_meeting(plat, nid, matching_key[2])
-                        unsubscribed.append({"platform": plat, "native_id": nid})
-                    else:
-                        errors.append(f"meetings[{idx}] not currently subscribed")
-                if errors and not unsubscribed:
-                    await ws.send_text(json.dumps({
-                        "type": "error", "error": "invalid_unsubscribe_payload", "details": errors}))
-                    continue
-                await ws.send_text(json.dumps({"type": "unsubscribed", "meetings": unsubscribed}))
-
-            elif action == "ping":
-                await ws.send_text(json.dumps({"type": "pong"}))
-            else:
-                await ws.send_text(json.dumps({"type": "error", "error": "unknown_action"}))
-    except WebSocketDisconnect:
-        pass
-    finally:
-        user_sub_task.cancel()  # Track G — tear down the user-scope fan-in on disconnect.
-        for task in sub_tasks.values():
-            task.cancel()
-
-
-# Backward-compatible private alias (kept so any existing internal reference still resolves; the
-# public name ``run_multiplex`` is the front door the conformance harness now imports).
-_run_multiplex = run_multiplex

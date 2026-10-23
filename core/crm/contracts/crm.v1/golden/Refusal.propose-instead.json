@@ -1,0 +1,5 @@
+{
+  "instruction": "Only the person, or you in a turn they typed in their own one-person chat, may change their desktop directly. Call desktop_arrange_propose with the same ops and a one-line reason; the person applies it from their desktop. Do not retry it another way.",
+  "reason": "propose_instead",
+  "status": "refused"
+}

@@ -1,0 +1,22 @@
+{
+  "why": "a verbs row's shared declaration is allow or refuse, never a boolean or a free word",
+  "manifest": {
+    "contract": "routes.v1",
+    "domain": "agent",
+    "owner": "core/agent",
+    "edge": "gateway",
+    "forward": {
+      "edge_prefix": "/agent/",
+      "upstream_prefix": "/api/"
+    },
+    "routes": [],
+    "verbs": [
+      {
+        "method": "GET",
+        "path": "/agent/people/known",
+        "person": false,
+        "shared": "yes"
+      }
+    ]
+  }
+}

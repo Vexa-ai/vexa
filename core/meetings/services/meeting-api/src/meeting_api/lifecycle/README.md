@@ -30,6 +30,10 @@ parent's FM-003 discipline). `active → joining` (and any re-open of a terminal
   `update_meeting_status`, so this brick is the sole writer of meeting attribution in production),
   `LifecycleSink` (`apply(event)` / `apply_change(event, transition_source=…)`), `IllegalTransition`,
   `TransitionSource`, `StatusChange`.
+- `mount.py` — `mount_lifecycle(app, ...)`: the lifecycle HTTP mount on the unified app — the
+  bot's `POST /bots/internal/callback/lifecycle`, the runtime's `POST /runtime/callback`, and the
+  one in-process entry both drive (`app.state.apply_lifecycle_event`: FSM advance + persist,
+  finalize, webhooks, flows publish, ws publish, copilot reap).
 - `receiver.py` — `create_app(store, on_status_change)`: the FastAPI receiver.
   `POST /bots/internal/callback/lifecycle` validates → drives the FSM → emits the
   `meeting.status_change` webhook → `200 accepted` / `409 illegal-transition` / `422 schema-violation`.
@@ -38,6 +42,18 @@ parent's FM-003 discipline). `active → joining` (and any re-open of a terminal
 - `stop.py` (P3b) — the user-stop path: `request_stop(record, publisher, meeting_id)` sets
   `stop_requested` + publishes the `bot_commands:meeting:{id}` `{action:"leave"}` command;
   `classify_user_stop` / `stop_event_for` resolve the bot's exit to an ATTRIBUTED terminal.
+- `reconfigure_router.py` — `PUT /bots/{platform}/{native_meeting_id}/config`: the live language
+  change (transcription-language.v1). Owner, or an owner/contributor of the bound workspace (role read
+  from identity); publishes an acts.v1 `reconfigure` and stores `data.transcription_language` only when a
+  bot received it (409 otherwise).
+- `chat_router.py` — `POST /bots/{platform}/{native_meeting_id}/chat`: an acts.v1 `chat_send` to the
+  owner's admitted bot (google_meet · jitsi). Owner only; 409 when the bot is not in the meeting or no
+  bot received the act; `text` capped at `MAX_CHAT_CHARS`; 429 + `Retry-After` past
+  `CHAT_POSTS_PER_WINDOW` posts per `CHAT_WINDOW_SEC` s per meeting (`ChatRateLimit`, counted in the
+  command bus's Redis so every replica shares it). The answer carries a `request_id` the act carries
+  to the bot; `GET …/chat/{request_id}` reads the send's outcome (`queued` · `posted` · `failed` +
+  the bot's reason · `unconfirmed` after `UNCONFIRMED_AFTER_SEC`), sender only, from the record
+  `../chat_delivery.py` keeps and the collector settles from the bot's `chat_send_result`.
 - `retry.py` (P3d) — `JoinRetryController` + the transient/permanent taxonomy
   (`classify_retry` / `is_transient`): on a TRANSIENT join-failure schedule a fresh re-spawn (a new
   `meeting_session`) through the runtime scheduler with bounded exponential backoff; a PERMANENT

@@ -1,0 +1,324 @@
+{
+  "contract": "mcp.tools.v1",
+  "domain": "crm",
+  "source": "oss",
+  "owner": "core/crm",
+  "base_url_env": "CRM_API_URL",
+  "served_at": "/.well-known/mcp-tools.json",
+  "depends_on": [
+    "identity"
+  ],
+  "tools": [
+    {
+      "name": "crm_describe",
+      "shared": "allow",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/describe"
+      },
+      "arguments": [
+        "object_type"
+      ]
+    },
+    {
+      "name": "crm_search",
+      "shared": "allow",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/search"
+      },
+      "arguments": [
+        "object_type",
+        "filters",
+        "limit",
+        "offset"
+      ]
+    },
+    {
+      "name": "crm_read",
+      "shared": "allow",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/read"
+      },
+      "arguments": [
+        "record_id"
+      ]
+    },
+    {
+      "name": "crm_change",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/change"
+      },
+      "arguments": [
+        "action",
+        "object_type",
+        "record_id",
+        "expected_revision",
+        "fields",
+        "narrative",
+        "reason",
+        "evidence",
+        "idempotency_key",
+        "into",
+        "match"
+      ]
+    },
+    {
+      "name": "crm_history",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/history"
+      },
+      "arguments": [
+        "record_id"
+      ]
+    },
+    {
+      "name": "crm_review",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/review"
+      },
+      "arguments": [
+        "proposal_id",
+        "accept"
+      ]
+    },
+    {
+      "name": "crm_configure",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/configure"
+      },
+      "arguments": [
+        "object_type",
+        "layout",
+        "expected_version",
+        "reason"
+      ]
+    },
+    {
+      "name": "crm_bind",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/bind"
+      },
+      "arguments": [
+        "workspace",
+        "record_id",
+        "bound"
+      ],
+      "note": "ADR-0047 d6: an administrator binds a workspace to a record; members get derived grants that end with their membership. A link never grants access."
+    },
+    {
+      "name": "desktop_read",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/desk/read"
+      },
+      "arguments": [],
+      "note": "Desktop D1 (feature `desktop`, needs `crm`): the speaker's own desktop — layout, placements, pending suggestions. Dropped from the served manifest when `desktop` is off."
+    },
+    {
+      "name": "desktop_arrange",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/desk/arrange"
+      },
+      "arguments": [
+        "ops",
+        "base_version",
+        "name"
+      ],
+      "note": "Direct only for the person, or a worker with the person in the loop in their own one-person chat (regime human, not shared); everything else is refused with propose_instead. Each change is an append-only version with Undo."
+    },
+    {
+      "name": "desktop_arrange_propose",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/desk/arrange/propose"
+      },
+      "arguments": [
+        "ops",
+        "reason"
+      ],
+      "note": "Any agent turn: lands as a pending suggestion the person applies or dismisses with their own credential (POST /desk/proposal, not a tool). At most 5 pending per person, 20 per session per day, 7 days to live."
+    },
+    {
+      "name": "workspace_settings_read",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/desk/workspaces/read"
+      },
+      "arguments": [],
+      "note": "The speaker's own workspace settings (pinned, hidden, muted, notify, room order, level, collapsed) on the CRM member_of relation; only slugs they changed. Rides `desktop` (a /desk/ route): dropped from the served manifest when it is off."
+    },
+    {
+      "name": "workspace_settings_set",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/desk/workspaces/set"
+      },
+      "arguments": [
+        "workspace",
+        "settings"
+      ],
+      "note": "A partial change to the speaker's own settings for one workspace. Direct only for the person, or a worker with the person in the loop in their own one-person chat; everything else is refused with person_only and nothing changes. Grants no access."
+    },
+    {
+      "name": "card_list",
+      "shared": "allow",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/card/list"
+      },
+      "arguments": [
+        "workspace",
+        "about",
+        "state",
+        "mine",
+        "limit"
+      ],
+      "note": "Desktop D2 (feature `desktop_cards`, needs `desktop` and `crm`): cards the speaker reads — a workspace's board, their own — and the proposals waiting for their answer. Dropped from the served manifest when `desktop_cards` is off."
+    },
+    {
+      "name": "card_propose",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/card/propose"
+      },
+      "arguments": [
+        "title",
+        "workspace",
+        "about",
+        "type",
+        "parent",
+        "fields",
+        "face",
+        "reason"
+      ],
+      "note": "Any agent turn, watched or not: a proposed card (a change proposal with no record yet). A person accepts it with their own credential (crm_review): a writer of the workspace it was proposed into, or the person the agent acted for. Capped by card_proposals_pending_max / card_proposals_per_agent_per_day, expires after card_proposal_ttl_days. S5 (PRD 0.13.4 D11): with fields.Kind (commitment, approval, question, ask, invitation, policy_change) and fields.NextActor the card is made at once in its template's first stage and OFFERED to its next actor (status 'offered'): the card is the proposal, only that person's acknowledgement moves it, and the agent never moves it after. Capped by card_proposals_per_agent_per_day."
+    },
+    {
+      "name": "card_update_propose",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "crm"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/card/update/propose"
+      },
+      "arguments": [
+        "card",
+        "expected_revision",
+        "fields",
+        "face",
+        "transition",
+        "reason"
+      ],
+      "note": "A change or a stage move, always a proposal a member accepts (founder 2026-10-15, desktop ADR Q3: an agent never moves a card's stage)."
+    }
+  ],
+  "publishes_events": [
+    {
+      "event": "crm.record.changed",
+      "status": "published today",
+      "triggers": "crm_change_log v1 (a reference receipt, flows_defs/crm.py) and any person's routine on this event; since event.v2 (D8) the crm outbox seals an envelope whose audience reaches the next actor and the card's members, not only the actor"
+    }
+  ]
+}

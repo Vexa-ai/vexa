@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""zero-login-warning <supervisord.conf> — print a banner on stderr when zero-login could reach the network.
+
+Zero-login (``VEXA_TERMINAL_ZERO_LOGIN=true``, the rule in clients/terminal/src/app/api/auth/
+deploymentKey.mjs) signs every visitor of the terminal in as the instance's user. That is safe only
+while nobody but the operator can reach the port. Inside the container the terminal listens on the
+``HOST`` its ``[program:terminal]`` environment names (server.mjs defaults to 0.0.0.0); who can reach
+it from outside is decided by the host's port publish, which the container cannot see. So the banner
+fires whenever zero-login is on and the in-container bind is not loopback, and says what to check.
+
+Prints nothing when zero-login is off or the terminal listens on loopback only. Always exits 0: a
+warning never stops the container.
+"""
+import ipaddress
+import os
+import re
+import sys
+
+LOOPBACK_NAMES = {"localhost", "ip6-localhost", "ip6-loopback"}
+
+
+def zero_login(env) -> bool:
+    return str(env.get("VEXA_TERMINAL_ZERO_LOGIN", "")).strip().lower() == "true"
+
+
+def terminal_bind(conf_text: str) -> tuple[str, str]:
+    """The terminal's (HOST, PORT) from its supervisord program; server.mjs's defaults when unnamed."""
+    section = conf_text.split("[program:terminal]", 1)
+    env_line = ""
+    if len(section) == 2:
+        body = section[1].split("\n[", 1)[0]
+        m = re.search(r"^environment=(.*)$", body, re.M)
+        env_line = m.group(1) if m else ""
+    host = re.search(r'(?:^|,)HOST="([^"]*)"', env_line)
+    port = re.search(r'(?:^|,)PORT="([^"]*)"', env_line)
+    return (host.group(1).strip() if host else "") or "0.0.0.0", (port.group(1) if port else "") or "3000"
+
+
+def is_loopback(host: str) -> bool:
+    h = host.strip().strip("[]").lower()
+    if h in LOOPBACK_NAMES:
+        return True
+    try:
+        return ipaddress.ip_address(h).is_loopback
+    except ValueError:
+        return False
+
+
+def banner(host: str, port: str) -> str:
+    rule = "#" * 96
+    lines = [
+        f"WARNING: zero-login is ON and the Vexa terminal listens on {host}:{port}, not on loopback.",
+        "",
+        "Anyone who reaches this port is signed in as this instance's user (self-host@vexa.ai, or",
+        "the person VEXA_API_KEY belongs to) with no password, and can read and act as them.",
+        "",
+        f"Inside a container the host's port publish decides who can reach it. If this port is",
+        f"published beyond localhost (`docker run -p {port}:{port}` and `make -C deploy/lite up`",
+        "publish it on every interface: a LAN address, a public IP, a reverse proxy), fix it now:",
+        "  - set VEXA_TERMINAL_ZERO_LOGIN=false (visitors then sign in), or",
+        f"  - publish the port on loopback only: docker run -p 127.0.0.1:{port}:{port} ...",
+        "",
+        "https://docs.vexa.ai/deployment-lite",
+    ]
+    return "\n".join([rule, *(f"##  {l}".rstrip() for l in lines), rule]) + "\n"
+
+
+def main(argv) -> int:
+    if len(argv) != 2:
+        print("usage: zero-login-warning <supervisord.conf>", file=sys.stderr)
+        return 0
+    if not zero_login(os.environ):
+        return 0
+    try:
+        with open(argv[1], encoding="utf-8") as f:
+            host, port = terminal_bind(f.read())
+    except OSError:
+        host, port = "0.0.0.0", "3001"
+    if not is_loopback(host):
+        sys.stderr.write(banner(host, port))
+        sys.stderr.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

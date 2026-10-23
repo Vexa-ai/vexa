@@ -165,6 +165,26 @@ describe("liveMeetings store", () => {
     });
   });
 
+  it("(g) a refresh after a meeting's data is deleted marks its row deleted", async () => {
+    let deleted = false;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const u = String(input);
+      if (u.includes("/api/ws")) return jsonResp({ url: "ws://test/ws" });
+      if (u.includes("/api/meetings")) {
+        const body = meetingsPayload("completed");
+        if (deleted) body.meetings[0].data = { artifact_deletion: { state: "completed" } } as never;
+        return jsonResp(body);
+      }
+      return jsonResp({});
+    });
+    const { mod, hook } = await startStore();
+    expect(hook.result.current[0].artifacts_deleted).toBe(false);
+
+    deleted = true;
+    await act(async () => { mod.refreshMeetings(); });
+    await waitFor(() => expect(hook.result.current[0].artifacts_deleted).toBe(true));
+  });
+
   it("(d) a 'deleted' frame REMOVES the row (a retired plan never masquerades as Recorded)", async () => {
     const { hook } = await startStore();
     expect(hook.result.current.length).toBe(1);
@@ -174,5 +194,80 @@ describe("liveMeetings store", () => {
     });
 
     await waitFor(() => expect(hook.result.current.length).toBe(0));
+  });
+
+  it("(f) BINDING an id the list has never carried asks for it — exactly once — and the row lands", async () => {
+    // The founder's row 132: created mid-session by a bot the chat sent, served 200 by the gateway,
+    // and absent from this client's snapshot because nothing had re-asked since it was made.
+    let serverHasIt = false;
+    const EXTRA = { id: 777, platform: "google_meet", native_meeting_id: "edh-vofu-jxm",
+      status: "active", start_time: null, end_time: null, data: {} };
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const u = String(input);
+      if (u.includes("/api/ws")) return jsonResp({ url: "ws://test/ws" });
+      if (u.includes("/api/meetings")) {
+        const body = meetingsPayload("idle");
+        return jsonResp(serverHasIt ? { meetings: [...body.meetings, EXTRA] } : body);
+      }
+      return jsonResp({});
+    });
+
+    const { mod, hook } = await startStore();
+    expect(hook.result.current.some((m) => m.id === "777")).toBe(false);
+    const snaps = () => fetchMock.mock.calls.filter((c) => String(c[0]).includes("/api/meetings")).length;
+    const before = snaps();
+
+    serverHasIt = true;
+    await act(async () => {
+      mod.ensureMeetingKnown("777");
+      mod.ensureMeetingKnown("777");   // a re-render must never become a second request
+      mod.ensureMeetingKnown("777");
+    });
+
+    await waitFor(() => expect(hook.result.current.some((m) => m.id === "777")).toBe(true));
+    expect(snaps()).toBe(before + 1);
+
+    // …and once the row IS present, binding it again asks nothing at all.
+    const after = snaps();
+    await act(async () => { mod.ensureMeetingKnown("777"); });
+    expect(snaps()).toBe(after);
+  });
+
+  it("(g) binding a row the list ALREADY carries costs no request", async () => {
+    const { mod } = await startStore();
+    const snaps = () => fetchMock.mock.calls.filter((c) => String(c[0]).includes("/api/meetings")).length;
+    const before = snaps();
+    await act(async () => {
+      mod.ensureMeetingKnown(String(golden.meeting_id));   // by row id
+      mod.ensureMeetingKnown(NATIVE);                      // and by the native a deeplink carries
+      mod.ensureMeetingKnown("");                          // an empty ref is not a question
+    });
+    expect(snaps()).toBe(before);
+  });
+});
+
+describe("liveMeetings store · a call's name and time", () => {
+  it("carries created_at, the time of a call that never started", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const u = String(input);
+      if (u.includes("/api/meetings")) {
+        return jsonResp({ meetings: [{ ...meetingsPayload("failed").meetings[0], created_at: "2026-10-10T21:09:00Z" }] });
+      }
+      return jsonResp({});
+    });
+    const { hook } = await startStore();
+    expect(hook.result.current[0].created_at).toBe("2026-10-10T21:09:00Z");
+  });
+
+  it("a rename reaches every reader at once, and an empty name goes back to the default label", async () => {
+    const { mod, hook } = await startStore();
+    const id = String(golden.meeting_id);
+    expect(hook.result.current[0].title).not.toContain(NATIVE);       // never the native id (UI decisions 14)
+    act(() => mod.applyMeetingTitle(id, "  Acme intro  "));
+    expect(hook.result.current[0].title_custom).toBe("Acme intro");
+    expect(hook.result.current[0].title).toBe("Acme intro");
+    act(() => mod.applyMeetingTitle(id, ""));
+    expect(hook.result.current[0].title_custom).toBeUndefined();
+    expect(hook.result.current[0].title).not.toContain(NATIVE);       // never the native id (UI decisions 14)
   });
 });

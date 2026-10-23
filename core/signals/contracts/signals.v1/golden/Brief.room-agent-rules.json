@@ -1,0 +1,1 @@
+{"focus": "exchange integration decisions", "labels": [{"name": "decision", "wake": true}, {"name": "question", "wake": true}], "rules": [{"kind": "keyword", "value": "rollback", "wake": true}, {"kind": "person", "value": "Ana", "wake": true}, {"kind": "regex", "value": "INC-[0-9]{4,6}"}], "model_tier": "small", "wake_at": 1.5, "max_wait_s": 600, "version": 2}

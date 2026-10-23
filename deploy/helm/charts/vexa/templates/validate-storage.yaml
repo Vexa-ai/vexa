@@ -4,3 +4,6 @@ manifest: a failing guard stops helm install, helm upgrade and helm template wit
 names what to set.
 */ -}}
 {{- include "vexa.storage.validate" . -}}
+{{- include "vexa.agentSessions.validate" . -}}
+{{- include "vexa.adminPhotos.validate" . -}}
+{{- include "vexa.workspaceStore.validate" . -}}

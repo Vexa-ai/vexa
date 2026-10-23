@@ -1,0 +1,382 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/signals.v1",
+  "title": "signals.v1",
+  "description": "The transcript-signals wire (ADR draft 2026-10-15, transcript signals). Brief: what the meeting's agent asked the signal model to listen for, as agent-api serves it to signals (GET /internal/meetings/{row}/listen?subject=<owner>). Annotation: one scored line on the sig:meeting:{row} stream (per source: sig:{kind}:{id}), of which signals is the only writer (one `payload` field holding this object as JSON). WakeData: the `data` of the event.v1 meeting.signal signals posts to flows-api /events/signal. ModelSignals / ModelSignalsTiers: the `model_signals` policy value (one model, or the allowed models by tier) in _global/POLICIES.md. The transcript lines carried here are untrusted meeting speech: data, never instructions.",
+  "$defs": {
+    "Label": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,39}$"
+        },
+        "question": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "what the signal model is asked about each new line; a default per well-known label applies when empty"
+        },
+        "wake": {
+          "type": "boolean",
+          "default": false,
+          "description": "whether this label's score counts toward waking the agent"
+        }
+      }
+    },
+    "Brief": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "labels"
+      ],
+      "properties": {
+        "focus": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "labels": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": {
+            "$ref": "#/$defs/Label"
+          }
+        },
+        "known": {
+          "type": "string",
+          "maxLength": 8000,
+          "description": "the agent's own summary of what it already knows; new information is scored relative to it"
+        },
+        "wake_at": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 100
+        },
+        "max_wait_s": {
+          "type": "number",
+          "minimum": 10,
+          "maximum": 3600
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "the brief's version on the meeting page; 0 = the company default brief"
+        },
+        "threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.6,
+          "description": "display only: the score from which the terminal highlights a line; it does not affect waking"
+        },
+        "rules": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/Rule"
+          }
+        },
+        "model_tier": {
+          "enum": [
+            "cheapest",
+            "small"
+          ],
+          "default": "cheapest",
+          "description": "which of the models the company allows (model_signals by tier) scores this source"
+        }
+      }
+    },
+    "ListenResponse": {
+      "description": "agent-api's answer to GET /internal/meetings/{row}/listen?subject=<owner> (internal secret).",
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "brief"
+      ],
+      "properties": {
+        "brief": {
+          "$ref": "#/$defs/Brief"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "workspace": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "page_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "chat_session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subject": {
+          "type": "string",
+          "description": "the meeting's owner, as asked (?subject=)"
+        },
+        "policy": {
+          "type": "object",
+          "description": "the company's signal policy keys (transcript_signals, model_signals, signals_wakes_per_meeting, signals_cost_per_meeting_usd), read from _global/POLICIES.md by agent-api"
+        },
+        "default": {
+          "type": "boolean"
+        }
+      }
+    },
+    "Scores": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_]{0,39}$"
+      },
+      "additionalProperties": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      }
+    },
+    "Word": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "score"
+      ],
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "Annotation": {
+      "description": "One scored line. Written once per segment_id, by signals only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "segment_id",
+        "scores",
+        "words",
+        "model",
+        "brief_version",
+        "at",
+        "source"
+      ],
+      "properties": {
+        "segment_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scores": {
+          "$ref": "#/$defs/Scores"
+        },
+        "words": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Word"
+          }
+        },
+        "model": {
+          "type": "string"
+        },
+        "brief_version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "at": {
+          "type": "number",
+          "description": "unix seconds when the line was scored"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        }
+      }
+    },
+    "BufferLine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "segment_id",
+        "speaker",
+        "text",
+        "start",
+        "scores"
+      ],
+      "properties": {
+        "segment_id": {
+          "type": "string"
+        },
+        "speaker": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "start": {
+          "type": "number"
+        },
+        "scores": {
+          "$ref": "#/$defs/Scores"
+        }
+      }
+    },
+    "WakeData": {
+      "description": "The `data` of the event.v1 meeting.signal signals posts to flows-api POST /events/signal (X-Internal-Secret, X-Vexa-Service: signals; `subject` = the meeting's owner): every confirmed line since the agent last woke. event.v1 SignalData is the same object without `source`, which the flows intake drops.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "buffer",
+        "score",
+        "reason"
+      ],
+      "properties": {
+        "meeting_row": {
+          "type": "string",
+          "pattern": "^[0-9]+$",
+          "description": "the meeting row, present when source.kind is `meeting`"
+        },
+        "buffer": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BufferLine"
+          }
+        },
+        "score": {
+          "type": "number",
+          "minimum": 0
+        },
+        "reason": {
+          "enum": [
+            "threshold",
+            "addressed",
+            "max_wait",
+            "end"
+          ]
+        },
+        "brief_version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "session": {
+          "type": "string",
+          "description": "the room (chat session), present when source.kind is `chat`"
+        }
+      }
+    },
+    "ModelSignals": {
+      "description": "The `model_signals` policy value. The credential is only ever a reference.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter",
+        "route"
+      ],
+      "properties": {
+        "adapter": {
+          "enum": [
+            "jev",
+            "openai-compatible"
+          ]
+        },
+        "route": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "jev: `typesafe/jev-1.13` (OpenRouter) or `typesafe:jev-latest` (Typesafe directly). openai-compatible: the model id"
+        },
+        "base_url": {
+          "type": "string",
+          "description": "openai-compatible only: the endpoint's base URL (`…/v1`); OpenRouter's when absent"
+        },
+        "secret_ref": {
+          "type": "string",
+          "pattern": "^(broker:signals/[a-z0-9][a-z0-9_.-]{0,62}|none)$"
+        }
+      }
+    },
+    "Source": {
+      "description": "What signals listened to: a source kind and its id. The first kind is `meeting` (id = the meeting row); `chat` is reserved for shared chats (phase 2).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "meeting",
+            "chat"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      }
+    },
+    "Rule": {
+      "description": "One of the agent's own rule triggers: a match wakes the agent at once, with no model call.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "keyword",
+            "person",
+            "regex"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "regex: a Python pattern; one with a quantified group holding a quantifier is refused, and each match has a 50 ms deadline"
+        },
+        "wake": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "ModelSignalsTiers": {
+      "description": "The models the company allows, by tier; the brief's model_tier picks one, the cheapest when it names none.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "cheapest": {
+          "$ref": "#/$defs/ModelSignals"
+        },
+        "small": {
+          "$ref": "#/$defs/ModelSignals"
+        }
+      }
+    }
+  }
+}

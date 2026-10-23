@@ -92,8 +92,38 @@ def _rows(db, sql: str, params: dict) -> list[dict]:
     return [dict(zip(_COLS, r)) for r in db.execute(sql, params)]
 
 
+#: The `subject_refs` keys that name the workspace an item belongs to.
+WORKSPACE_REFS = ("workspace", "workspace_id", "workspace_slug")
+#: Workspace names that are never a room's, however a ceiling spells them: the person's own home
+#: and system tiers, and the wildcard (a ceiling, never a shared answer).
+_NEVER_ROOM = frozenset({"", "*", "_system", "personal", "desk"})
+
+
+def room_workspaces(ceiling, *, uid: str = "") -> frozenset:
+    """The workspaces a shared turn's queue may answer from: the shared ceiling's explicit list
+    (ADR-0048 decision 4: the intersection every reader can read), minus the person's own home and
+    system tiers. Anything that is not a list — `*`, nothing, a malformed answer — is the empty
+    set: a shared answer FAILS CLOSED."""
+    if not isinstance(ceiling, (list, tuple)):
+        return frozenset()
+    out = {str(w or "").strip() for w in ceiling}
+    return frozenset(w for w in out if w not in _NEVER_ROOM and w != str(uid or "").strip())
+
+
+def in_room(refs: dict, room: frozenset) -> bool:
+    """Is this item one every reader of the room may see — does it name a workspace on the room's
+    ceiling? An item that names none is the person's own (mail, calendar, their meetings) and is
+    never in a room."""
+    for key in WORKSPACE_REFS:
+        ws = str((refs or {}).get(key) or "").strip()
+        if ws and ws in room:
+            return True
+    return False
+
+
 def pending(db, *, subject: str, now: Optional[float] = None, limit: int = 50,
-            scan: int = SCAN_ROWS, identity: Optional[Callable] = None):
+            scan: int = SCAN_ROWS, identity: Optional[Callable] = None,
+            room: Optional[frozenset] = None):
     """This subject's unfinished reactions, plus the recently-absent ones. ``None`` when nobody
     answers to ``subject``.
 
@@ -133,7 +163,12 @@ def pending(db, *, subject: str, now: Optional[float] = None, limit: int = 50,
                  {"floor": now - NOT_PRESENT_WINDOW_S})
     out = []
     for r in rows:
-        if not concerns(loads(r["subject_refs"]), uid, email):
+        refs = loads(r["subject_refs"])
+        if not concerns(refs, uid, email):
+            continue
+        # A SHARED TURN'S QUEUE (friction 7): only what names a workspace every reader can read —
+        # filtered here, before a word or a count is computed from the rest.
+        if room is not None and not in_room(refs, room):
             continue
         reason = typed_reason(r["status"], r["reason"])
         # A `done` row is only here if it is a deployment fact. Anything else that finished is
@@ -317,9 +352,15 @@ def _one_absence_per_flow(items: list) -> list:
     return out
 
 
+#: What a room-scoped answer says about itself, so the agent does not read a short queue as the
+#: person's whole one.
+ROOM_NOTE = ("Only what everyone in this conversation can see: items of the workspaces it shares. "
+             "The person's own queue (their mail, calendar and meetings) is in their private chat.")
+
+
 def waiting(db, *, subject: str, flows: Optional[list] = None, now: Optional[float] = None,
             limit: int = 50, identity: Optional[Callable] = None,
-            copy: Optional[Callable] = None) -> dict:
+            copy: Optional[Callable] = None, room: Optional[frozenset] = None) -> dict:
     """THE PROJECTION the route serves. Data plus behavior's words — no product opinion here.
 
     `flows` is what this deployment could ever react to, and it is in the answer for the reason
@@ -331,13 +372,14 @@ def waiting(db, *, subject: str, flows: Optional[list] = None, now: Optional[flo
     `notices()`, which rides out on the meeting tools' results, and a filter placed there would
     silently change what an agent that never asked receives.
     """
-    rows = pending(db, subject=subject, now=now, limit=limit, identity=identity)
+    rows = pending(db, subject=subject, now=now, limit=limit, identity=identity, room=room)
+    scoped = {"scope": "room", "note": ROOM_NOTE} if room is not None else {}
     if rows is None:
         return {"subject": subject, "unresolved": True, "waiting": 0, "items": [],
-                "quiet": 0, "flows": flows or []}
+                "quiet": 0, "flows": flows or [], **scoped}
     items, quiet = _spoken(rows, copy)
     items = _one_absence_per_flow(items)
-    return {"subject": subject, "waiting": len(items), "items": items,
+    return {"subject": subject, "waiting": len(items), "items": items, **scoped,
             # COUNTED, NOT HIDDEN: an operator asking why a queue is short must be able to tell
             # "nothing is happening" from "behavior is silent about what is happening".
             "quiet": quiet, "flows": flows or []}

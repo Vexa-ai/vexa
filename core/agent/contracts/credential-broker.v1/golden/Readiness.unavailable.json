@@ -1,0 +1,5 @@
+{
+  "status": "unavailable",
+  "service": "credential-broker",
+  "store": "openbao"
+}

@@ -35,8 +35,10 @@ class BackendKind(str, Enum):
 class Resources(BaseModel):
     """The workload's resource intent. ONE value per dimension: on Kubernetes ``cpu``/``memoryMb``
     set BOTH the container's request and its limit (Guaranteed QoS) — sealed v1 models no separate
-    request/limit semantics. The floors mirror the JSON Schema's ``minimum: 0``, so a negative
-    value is rejected at parse time and never reaches a backend."""
+    request/limit semantics. A deployment may give a profile a CPU limit above its request
+    (``profiles.ProfileResources``); that is kernel config and never part of this shape. The floors
+    mirror the JSON Schema's ``minimum: 0``, so a negative value is rejected at parse time and
+    never reaches a backend."""
     model_config = {"extra": "forbid"}
     cpu: Optional[float] = Field(default=None, ge=0)
     memoryMb: Optional[int] = Field(default=None, ge=0)

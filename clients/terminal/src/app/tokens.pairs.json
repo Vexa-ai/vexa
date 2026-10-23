@@ -1,0 +1,23 @@
+{
+  "_comment": "The colour pairs the contrast gate holds (terminal design guidelines §2.1, §6 A1–A2). `text` pairs need 4.5:1 (WCAG 1.4.3); `boundary` pairs need 3:1 (WCAG 1.4.11: a control's border, the focus ring, a selected-state bar). Every pair is checked in BOTH themes, with alpha colours blended over the surface they sit on. Add a pair when a new text or boundary token meets a surface.",
+  "surfaces": ["--surface-0", "--surface-1", "--surface-2", "--surface-3"],
+  "text": [
+    { "fg": "--text-1", "on": "surfaces" },
+    { "fg": "--text-2", "on": "surfaces" },
+    { "fg": "--text-3", "on": "surfaces" },
+    { "fg": "--accent-text", "on": "surfaces" },
+    { "fg": "--danger-text", "on": "surfaces" },
+    { "fg": "--warning-text", "on": "surfaces" },
+    { "fg": "--success-text", "on": "surfaces" },
+    { "fg": "--info-text", "on": "surfaces" },
+    { "fg": "--meeting-text", "on": "surfaces" },
+    { "fg": "--text-1", "on": ["--surface-overlay"] },
+    { "fg": "--text-3", "on": ["--surface-overlay"] },
+    { "fg": "--on-accent", "on": ["--accent"] }
+  ],
+  "boundary": [
+    { "fg": "--border-control", "on": "surfaces" },
+    { "fg": "--focus-ring", "on": "surfaces" },
+    { "fg": "--accent", "on": "surfaces" }
+  ]
+}

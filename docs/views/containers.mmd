@@ -4,17 +4,19 @@ flowchart LR
     bot["bot"]
     desktop["desktop"]
     meeting_api["meeting-api"]
-    mcp["mcp"]
     transcription["transcription"]
     segments_table["transcription_segments (table)"]
   end
   subgraph agent["agent"]
     agent_api["agent-api"]
+    credentials_broker["credential-broker"]
     agent_worker["agent-worker"]
+    model_proxy["model-proxy"]
   end
   subgraph gateway_system["gateway"]
     conformance["conformance"]
     gateway["gateway"]
+    mcp["mcp"]
   end
   subgraph identity["identity"]
     admin_api["admin-api"]
@@ -32,24 +34,45 @@ flowchart LR
     redis["redis"]
     postgres["postgres"]
     object_store["object-store"]
+    livekit["livekit"]
   end
   subgraph flows["flows"]
     flows_api["flows-api"]
     flows_worker["flows-worker"]
+  end
+  subgraph crm["crm"]
+    crm_api["crm-api"]
+  end
+  subgraph signals["signals"]
+    signals_service["signals"]
   end
   slim["slim"]
   extension["extension"]
   claude_plugin["claude-plugin"]
   terminal["terminal"]
   dashboard["dashboard (deprecated)"]
+  credentials_vault["OpenBao (optional)"]
+  signal_model["signal model"]
+  model_provider["model provider"]
+  customer_webhook["customer webhook"]
   meeting_api -->|"write"| segments_table
+  bot -->|"HTTP"| meeting_api
   bot -->|"HTTPS"| transcription
   meeting_api -->|"JDBC"| postgres
   meeting_api -->|"HTTPS"| object_store
+  meeting_api -->|"HTTP"| livekit
+  agent_api -->|"HTTP"| livekit
+  bot -->|"WebSocket"| livekit
+  terminal -->|"WebSocket"| livekit
+  agent_api -->|"HTTPS"| object_store
+  admin_api -->|"HTTPS"| object_store
+  agent_api -->|"JDBC"| postgres
   meeting_api -->|"HTTPS"| runtime
   meeting_api -->|"HTTPS"| admin_api
+  meeting_api -->|"HTTPS"| admin_api
+  meeting_api -->|"HTTPS"| admin_api
   meeting_api -->|"HTTPS"| service_authority
-  meeting_api -->|"HTTP(S)"| system_webhook
+  meeting_api -->|"HTTPS"| system_webhook
   agent_api -->|"HTTPS"| runtime
   mcp -->|"HTTPS"| gateway
   gateway -->|"HTTPS"| meeting_api
@@ -59,10 +82,46 @@ flowchart LR
   admin_api -->|"JDBC"| postgres
   terminal -->|"HTTPS"| gateway
   terminal -->|"WebSocket"| gateway
+  terminal -->|"HTTP"| admin_api
+  terminal -->|"HTTP"| agent_api
+  terminal -->|"HTTP"| flows_api
   dashboard -->|""| gateway
   dashboard -->|""| gateway
   slim -->|"HTTPS"| gateway
   extension -->|"WebSocket"| gateway
-  flows_worker -->|""| agent_api
   flows_worker -->|""| gateway
-  flows_worker -->|""| admin_api
+  agent_api -->|"HTTP"| credentials_broker
+  terminal -->|"HTTP"| credentials_broker
+  credentials_broker -->|"req"| credentials_vault
+  agent_worker -->|"HTTPS"| gateway
+  mcp -->|"HTTP"| agent_api
+  agent_api -->|"HTTP"| meeting_api
+  agent_api -->|"HTTP"| admin_api
+  agent_worker -->|"HTTP"| flows_api
+  bot -->|"HTTP"| meeting_api
+  runtime -->|"HTTP"| agent_api
+  runtime -->|"HTTP"| meeting_api
+  claude_plugin -->|"HTTPS"| gateway
+  agent_api -->|"HTTP"| flows_api
+  agent_api -->|"HTTPS"| gateway
+  mcp -->|"HTTP"| flows_api
+  mcp -->|"HTTP"| meeting_api
+  mcp -->|"HTTP"| admin_api
+  crm_api -->|"JDBC"| postgres
+  crm_api -->|"HTTP"| admin_api
+  admin_api -->|"HTTP"| crm_api
+  mcp -->|"HTTP"| crm_api
+  gateway -->|"HTTP"| crm_api
+  gateway -->|"HTTP"| flows_api
+  crm_api -->|"HTTP"| agent_api
+  signals_service -->|"TCP"| redis
+  signals_service -->|"HTTP"| agent_api
+  signals_service -->|"HTTP"| flows_api
+  crm_api -->|"HTTP"| flows_api
+  signals_service -->|"HTTP"| credentials_broker
+  signals_service -->|"HTTPS"| signal_model
+  agent_worker -->|"HTTP"| model_proxy
+  model_proxy -->|"HTTP"| gateway
+  model_proxy -->|"HTTPS"| model_provider
+  agent_api -->|"HTTPS"| model_provider
+  meeting_api -->|"HTTPS"| customer_webhook

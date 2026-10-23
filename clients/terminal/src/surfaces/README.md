@@ -25,11 +25,69 @@ arriving as a surprise 409, and a write that changes what gets joined (`auto_joi
 `enabled` · a replaced `ics_url`) is followed by the per-calendar sync that reconciles
 already-imported meetings — a rename is not, because it changes nothing downstream.
 
+**Sharing a meeting** (`MeetingShare.tsx`, `meetingShareApi.ts`) is ONE Share action in the meeting
+header — the canvas tab and the minutes page header both render `MeetingShareButton`. The owner gets
+the dialog (invite by email, optionally with the meeting's workspace as view or edit; who has access,
+each with a role and Remove; a sign-in link that can be turned off; whether recipients may play and
+download the recording). A recipient gets the words "Shared with you" and nothing to press. Lists show
+the same quiet icon-and-words indicator (`SharedIndicator`), never a chip. Access is decided by the
+server; the full flow is in [`docs/docs/how-to/share-a-meeting.mdx`](../../../../docs/docs/how-to/share-a-meeting.mdx).
+
+**The model picker** (`ModelPicker.tsx`, `modelsApi.ts`) sits in the chat composer and pins THAT
+chat to one of the deployment's catalog models (ADR-0043; [`docs/docs/model-catalog.mdx`](../../../../docs/docs/model-catalog.mdx)).
+It renders exactly the list agent-api sends for the person — role visibility is the server's, and
+an empty list (no catalog) renders nothing — and it never holds an endpoint or a credential. A
+refused pick shows the server's sentence and keeps the old pick; "use for new chats" writes the
+person's Settings → Models `default_model`.
+
+**Chat attachments** (`attachments.tsx`) — files dropped anywhere on the chat panel, pasted into
+the composer, or picked with +. Each uploads on its own on `POST /api/workspace/upload` with its own
+progress; a file over 25 MB (the route's `MAX_UPLOAD_BYTES`) or of a type the picker does not offer
+is refused in the tray, and a failed upload stays there with a retry. A send never goes past a
+refused or failed file. A sent message carries its files on one mark (`attachmentPrompt`), and its
+bubble — live and after a reload — draws them with `MessageAttachments`, loaded from the session's
+`/api/sessions/{session}/attachment` route. The flow, who stores and reads the files, and why it complies:
+[`docs/docs/how-to/chat-attachments.mdx`](../../../../docs/docs/how-to/chat-attachments.mdx).
+
 **Error presentation is part of the surface contract** — surfaces render `presentError(e)`
-(`apiClient.ts`), never `e.message`: the headline is user vocabulary ("Couldn't reach the Vexa
+(`../data/apiClient.ts`), never `e.message`: the headline is user vocabulary ("Couldn't reach the Vexa
 server…", the backend's own prose reason verbatim when it sent one), while the untranslated
 plumbing string stays on the operator channels (the returned `detail` and a `console.warn`). The
 raw idiom `e instanceof Error ? e.message : String(e)` is banned from surface files by
 `__tests__/errorPresentation.guard.test.ts`. State-bearing controls (the meeting header's
 Stop/Send bot) additionally follow the live ws.v1 connection (`useLiveMeetingsConnection`):
 disconnected → indeterminate/disabled, never an actionable control derived from a stale snapshot.
+
+**A typed fault renders through `faults.ts`** — who failed, what kind, the detail, the remedy. Its
+sources and kinds are unit.v1's `Fault` (`core/agent/contracts/unit.v1`); `faultWire.ts` is GENERATED
+from it (`node core/agent/contracts/unit.v1/gen-faults.mjs`, never edited by hand) and types the label tables,
+so a kind the contract adds fails `tsc` until it has a label (`__tests__/faultContract.test.tsx`).
+
+**Transcription language has one model** (`transcriptionLanguage.ts`, picker and its homes in
+`TranscriptionLanguagePicker.tsx`). A setting is `{language, allowed_languages}` over Whisper codes in
+three modes: auto-detect (neither), one language (every window pinned), or a few languages (detection
+restricted to the list; `language`, or the first entry, is the fallback). It is edited in three places,
+all through the same picker and mapping: Settings → Models stores the person's default
+(`PUT /user/transcription`, `""`/`[]` clear it back to the deployment's); both paste-a-link senders
+(`DropBotInline`, `MeetingsList`) carry an optional per-meeting override via `languageSpawnFields`, whose
+"Default" sends nothing so the server resolves person → deployment → auto; and the live meeting header
+shows the row's `data.transcription_language` and lets the meeting's owner, or an owner/contributor of
+its bound workspace, switch it mid-meeting (`PUT /bots/{platform}/{native}/config`, the body replaces the
+setting). Readers see the language with no control. A refused switch keeps the previous value shown and
+the user's pick open, with the reason and the fix beside the control.
+
+**Layering** (Vexa-ai/vexa#1783): surfaces import `platform/`, `data/`, `contributions/` and
+`ui-kit/`, never a shell. The workbench, minutes and canvas sit above and import surfaces; what a
+surface renders from them it reaches by kind through `contributions` (the meeting tab's meeting view,
+Settings' GitHub card). `agent-window.tsx` — the conversation renderer the chat surface uses — lives
+here for that reason.
+
+**Tools that open something in this tab** (`toolUiEvents.ts`). The agent cannot open a panel or a
+microphone, so a tool whose answer carries a `ui_action` is forwarded by the chat as a window event the
+shell owns: `connection_request` opens Connections, `record_voice_note` opens the voice-note recorder.
+
+**Tool results reach the chat by `callId`** (`chatStream.ts` `onToolResult`): a `tool-result` is paired
+with the `tool-call` that asked for it. The chat uses it for one thing — a successful
+`browser_session_open` whose result says `ui_action: "open_browser_session"` raises
+`vexa:browser-session-open` (`toolUiEvents.ts` `toolResultUiEvent`), and the shell's live sign-in view
+opens on it (`../minutes/browserSession.ts`).

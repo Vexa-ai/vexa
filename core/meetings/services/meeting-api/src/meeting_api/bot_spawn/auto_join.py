@@ -51,8 +51,10 @@ from ..service_authority import (
     ServiceAuthorityDenied,
     ServiceAuthorityUnavailable,
 )
+from .auto_join_block import blocked_reason, parse_block
 from .env_flags import resolve_spawn_flag
 from .ports import MaxBotsExceeded, MeetingStopped, QuotaExceeded, SpawnFailed
+from .meeting_host import MeetingHostRefused
 from .service import DuplicateMeeting, request_bot
 
 # Sweep cadence/window env vocabulary (config.v1: all optional, sane defaults).
@@ -198,7 +200,9 @@ async def auto_join_tick(
     retry_backoff_s: float = DEFAULT_RETRY_BACKOFF_S,
     token_secret: Optional[str] = None,
     redis_url: Optional[str] = None,
+    redis_grant=None,
     allow_uncapped: bool = False,
+    deployment_block=None,
 ) -> dict:
     """One sweep: spawn every due scheduled meeting. Returns counters for observability:
     ``{"due": n, "spawned": n, "already": n, "errors": n, "skipped_uncapped": n}``.
@@ -216,7 +220,14 @@ async def auto_join_tick(
     configured — the unsafe mode is then chosen, never defaulted.
 
     ``publish_status(user_id=…, meeting_id=…, native_id=…, status=…, when=…)`` optionally fans the
-    row's frame to ``u:{user}:meetings`` after an error stamp so the terminal refreshes."""
+    row's frame to ``u:{user}:meetings`` after an error stamp so the terminal refreshes.
+
+    BLOCK LISTS (``auto_join_block``): ``deployment_block`` (the operator's ``VEXA_AUTO_JOIN_BLOCK``)
+    and the owner's ``auto_join_block`` from the bot context. A due row whose organiser, an invitee
+    or the meeting link's host matches either is NEVER spawned: it is stamped with the reason
+    (counter ``blocked``), like every other refusal here. The owner's list is read from the same
+    context the cap comes from; when that context is unavailable the row is skipped anyway, and an
+    owner's list that cannot be read refuses the spawn rather than ignoring the list."""
     now = now or datetime.now(timezone.utc)
     gate = transcribe_gate if transcribe_gate is not None else _production_transcribe_gate
 
@@ -224,7 +235,7 @@ async def auto_join_tick(
     due = due_rows(rows, now=now, lead_s=lead_s, grace_s=grace_s,
                    retry_backoff_s=retry_backoff_s)
     counters = {"due": len(due), "spawned": 0, "already": 0, "errors": 0,
-                "skipped_uncapped": 0, "skipped_live": 0, "stopped": 0}
+                "skipped_uncapped": 0, "skipped_live": 0, "stopped": 0, "blocked": 0}
     # Duplicate-dispatch guard (defense in depth behind create_meeting_guarded's dedup): a bot
     # already owning this (user, platform, native) on a DIFFERENT row means the meeting is covered.
     live = live_keys(
@@ -264,6 +275,11 @@ async def auto_join_tick(
 
     for row in due:
         user_id = row["user_id"]
+        # THE OPERATOR SAID NEVER — checked before anything else can lead to a spawn.
+        reason = blocked_reason(row, deployment_block)
+        if reason:
+            await _stamp_error(row, reason, counter="blocked", event="auto_join_blocked")
+            continue
         holder = live.get((user_id, row.get("platform"), row.get("native_meeting_id")))
         if holder is not None and holder != row.get("id"):
             # A bot is already in this room on another row — the classic shape is a manual
@@ -305,6 +321,19 @@ async def auto_join_tick(
             if ctx is None:
                 # identity configured but unreachable — skip this tick rather than spawn uncapped
                 continue
+            # THE OWNER SAID NEVER. A list identity sent but this side cannot read is a refusal,
+            # never "no list": ignoring it would send the bot exactly where the owner forbade.
+            try:
+                owner_block = parse_block(ctx.get("auto_join_block") or [],
+                                          what="auto_join_block")
+            except ValueError:
+                await _stamp_error(row, "auto-join refused: this account's block list could not be "
+                                   "read", counter="blocked", event="auto_join_blocked")
+                continue
+            reason = blocked_reason(row, owner_block)
+            if reason:
+                await _stamp_error(row, reason, counter="blocked", event="auto_join_blocked")
+                continue
 
         data = row.get("data") if isinstance(row.get("data"), dict) else {}
         # Record the ATTEMPT before making it. Written first so it survives everything the attempt
@@ -330,6 +359,7 @@ async def auto_join_tick(
                 webhook_events=ctx.get("webhook_events"),
                 token_secret=token_secret,
                 redis_url=redis_url,
+                redis_grant=redis_grant,
             )
         except DuplicateMeeting:
             # a manual "Send bot now" (or a racing sweep) already claimed it — success, not an error
@@ -358,6 +388,10 @@ async def auto_join_tick(
             continue
         except SpawnFailed as e:
             await _stamp_error(row, str(e) or "bot workload failed to start")
+            continue
+        except MeetingHostRefused as e:
+            # The link's host is not the platform's, or reaches inside the deployment's network.
+            await _stamp_error(row, str(e))
             continue
         counters["spawned"] += 1
         if data.get("auto_join_error"):

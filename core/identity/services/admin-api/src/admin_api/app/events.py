@@ -126,6 +126,9 @@ async def publish(event_type: str, source_event_id: str, subject_refs: dict,
     body = json.dumps({"event_type": event_type, "source_event_id": source_event_id,
                        "refs": subject_refs}).encode()
     headers = {"content-type": "application/json"}
+    # flows-api is a Vexa service: the publish continues the request's trace (logevent.v1).
+    from .. import obs
+    headers.update(obs.trace_headers())
     key = _flows_key()
     if key:
         # X-Flows-OPERATOR-Key: this is flows-api's own operator key (VEXA_FLOWS_API_KEY, read

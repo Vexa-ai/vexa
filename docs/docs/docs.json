@@ -29,9 +29,11 @@
           "how-to/overview",
           "how-to/calendar-sync",
           "how-to/send-a-bot",
+          "how-to/transcription-language",
           "how-to/stream-transcript",
           "how-to/custom-stt",
           "how-to/recordings",
+          "how-to/move-a-meeting",
           "n8n",
           "obsidian",
           "interactive-bots"
@@ -42,17 +44,50 @@
         "pages": [
           "flows/overview",
           "flows/authoring",
+          "flows/routines",
+          "flows/sensors",
           "flows/vocabulary",
           "flows/examples",
           "flows/developing",
-          "flows/operations"
+          "flows/operations",
+          "flows/mailbox",
+          "flows/mail-design"
+        ]
+      },
+      {
+        "group": "Minutes",
+        "pages": [
+          "minutes/overview",
+          "minutes/chats",
+          "minutes/shared-chats",
+          "minutes/rooms",
+          "minutes/notifications",
+          "minutes/nudges",
+          "minutes/pages",
+          "minutes/meetings",
+          "minutes/voice-notes",
+          "minutes/calls",
+          "minutes/workspaces",
+          "minutes/workspace-templates",
+          "minutes/self-hosted-gitlab",
+          "minutes/crm",
+          "minutes/orgs",
+          "minutes/bot-accounts",
+          "minutes/admin-account"
         ]
       },
       {
         "group": "How-to: Agents",
         "pages": [
+          "how-to/home",
+          "how-to/people",
+          "how-to/your-photo",
           "how-to/chat-workspace",
+          "how-to/paste-a-meeting-link",
+          "how-to/chat-controls",
+          "how-to/chat-attachments",
           "how-to/workspace-files",
+          "how-to/onboarding-research",
           "how-to/daily-brief",
           "how-to/email-triage"
         ]
@@ -63,6 +98,7 @@
           "how-to/plan-a-meeting",
           "how-to/live-copilot",
           "how-to/post-meeting-report",
+          "how-to/share-a-meeting",
           "chatgpt-transcript-share-links"
         ]
       },
@@ -113,10 +149,22 @@
           "deployment",
           "deployment-lite",
           "deployment-kubernetes",
+          "sign-in-oidc",
+          "meeting-canvas-isolation",
+          "deployment-helm-agent-tools",
+          "deployment-zoom-sdk",
           "configuration",
+          "connections",
+          "transcript-signals",
           "upgrade-from-minio",
+          "upgrade-from-0-12",
+          "upgrade-image-names",
           "authenticated-bots",
+          "model-catalog",
           "model-credentials-licensing",
+          "agent-web-search",
+          "workspace-identity",
+          "agent-tool-calls",
           "security-compliance",
           "troubleshooting",
           "troubleshooting/completion-reasons",
@@ -141,6 +189,7 @@
           "governance/index",
           "governance/architecture",
           "governance/arch-compliance",
+          "governance/ui-design",
           "governance/delivery",
           "governance/contributor-rights"
         ]

@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""render-supervisord <template> <output> — write the supervisor config Lite runs, with the runtime
+caller credential (read from stdin) in the environment of the programs that hold it.
+
+Every supervisord program inherits supervisord's own environment, so a secret the entrypoint exported
+would reach all of them. The runtime caller credential is therefore not exported: the template names
+it as ``@RUNTIME_API_TOKEN@`` in the ``environment=`` lines of the runtime and of its two callers, and
+this writes a copy with the value in place, readable by root only (0600 in a 0700 directory). The
+value must be at least 32 bytes of URL-safe characters (what `secrets.token_hex` and
+`openssl rand -hex` produce), so it cannot break out of the quoted ``environment=`` value. Prints
+nothing but errors.
+"""
+import os
+import re
+import sys
+
+PLACEHOLDER = "@RUNTIME_API_TOKEN@"
+MIN_BYTES = 32
+SAFE = re.compile(r"[A-Za-z0-9._~+/=-]+")
+
+
+def render(template: str, token: str) -> str:
+    if len(token.encode("utf-8")) < MIN_BYTES or not SAFE.fullmatch(token):
+        raise ValueError(
+            "RUNTIME_API_TOKEN must be at least 32 characters of A-Z a-z 0-9 . _ ~ + / = - "
+            "(openssl rand -hex 32)")
+    if PLACEHOLDER not in template:
+        raise ValueError(f"the supervisor template names no {PLACEHOLDER}")
+    return template.replace(PLACEHOLDER, token)
+
+
+def main(argv):
+    if len(argv) != 3:
+        print("usage: render-supervisord <template> <output>  (token on stdin)", file=sys.stderr)
+        return 2
+    template_path, output_path = argv[1], argv[2]
+    token = sys.stdin.read().strip()
+    try:
+        with open(template_path, encoding="utf-8") as f:
+            text = render(f.read(), token)
+    except ValueError as exc:
+        print(f"render-supervisord: {exc}", file=sys.stderr)
+        return 1
+    os.makedirs(os.path.dirname(output_path), mode=0o700, exist_ok=True)
+    fd = os.open(output_path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.chmod(output_path + ".tmp", 0o600)
+    os.replace(output_path + ".tmp", output_path)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

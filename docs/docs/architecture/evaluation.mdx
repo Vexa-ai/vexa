@@ -51,9 +51,10 @@ profiles; agent workspaces sit on a volume. Redis holds the streams and the bot 
 
 The repository models its own egress as machine-checkable architecture. In
 [`architecture.calm.json`](https://github.com/Vexa-ai/vexa/tree/main/architecture.calm.json) every
-node sits inside the tenant boundary except the transcription service, and exactly **one** edge
-crosses out — `bot → transcription`, carrying audio. A CI gate (`pnpm gate:dataflow`, `gate:calm`)
-fails the build if that changes. The rendered view is
+edge that carries tenant data to another system declares its egress posture: `bot → transcription`
+(audio), `signals → signal model` (transcript lines), `agent-worker → model provider` (agent turns),
+`agent-api → model provider` (home ranking) and `meeting-api → customer webhook` (meeting metadata). A CI gate (`pnpm gate:dataflow`,
+`gate:calm`) fails the build if that changes. The rendered view is
 [`docs/views/egress.mmd`](https://github.com/Vexa-ai/vexa/tree/main/docs/views/egress.mmd).
 
 So the honest statement is conditional, and the condition is yours to set:
@@ -67,10 +68,10 @@ So the honest statement is conditional, and the condition is yours to set:
   going. That is a fine way to evaluate and the wrong way to run a sovereignty requirement.
   **Self-hosting the control plane does not by itself make the deployment zero-egress.**
 
-Two further egress paths that the CALM model does **not** currently cover, and you should plan for
-directly: **LLM inference** for the agent plane (you supply the endpoint — an external provider or
-your own), and **webhook delivery** to whatever subscriber URL you configure. Neither is hidden;
-neither is modelled by the gate yet.
+Two of those paths are yours to point: **LLM inference** for the agent plane goes to the endpoint you
+supply (an external provider or your own gateway; a person's custom endpoint must be on
+`VEXA_MODEL_BASE_URL_ALLOW`), and **webhook delivery** goes to whatever subscriber URL you configure,
+through the outbound URL guard.
 
 ## 3. What running it costs
 

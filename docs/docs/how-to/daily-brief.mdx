@@ -1,55 +1,298 @@
 ---
 title: "Brief me every morning"
-description: "An unattended agent that runs on a schedule and commits to your workspace."
+description: "A routine of your own: a schedule and one agent turn, each run landing in the routine's own chat."
 ---
 
-A **routine** is a scheduler entry — a trigger plus a plan. The agent runs with
-no one watching, works your [workspace](/concepts#workspace), and commits; the output is replayable later.
+A **routine** is a flow of your own: a schedule and one agent turn. Each run is a turn in the
+routine's own chat thread, works your [workspace](/concepts#workspace), and has nobody watching.
 
 ## Create the routine
 
-```bash
-curl -X POST "$API_BASE/agent/routines" \
-  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d '{
-    "name":"Morning brief",
-    "cron":"0 8 * * 1-5",
-    "prompt":"Brief me from overnight activity — new meetings, decisions, and follow-ups due today. Write it to brief/today.md.",
-    "run_now":true
-  }'
-# → 201 {"routine":{...},"job_id":"job_...","ran_now":true}
+Ask your agent: *"every weekday at 8, brief me from overnight activity: new meetings, decisions and
+follow-ups due today."* It makes the routine with the `flows_submit` tool. From any MCP client you
+can call the same tool yourself:
+
+```json
+{
+  "name": "morning-brief",
+  "trigger": { "kind": "schedule", "cron": "0 8 * * 1-5" },
+  "steps": ["agent_run"],
+  "params": { "instruction": "Brief me from overnight activity — new meetings, decisions, and follow-ups due today. Write it to brief/today.md." }
+}
 ```
 
-`cron` is a standard five-field expression — `0 8 * * 1-5` is 08:00 every weekday. `run_now:true` also
-fires it once immediately so you can verify the output without waiting.
+`cron` has five fields and is read in **UTC**: `0 8 * * 1-5` is 08:00 UTC every weekday. Two fires
+are at least 15 minutes apart by default; a faster cron is refused with `quota_min_interval`.
 
-## Manage it
+## Routines that need you: mail, calendar and connections
 
-```bash
-# list
-curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/routines"
+A routine runs on its schedule with nobody present. Reading your mail or calendar, or using one of
+your connected accounts, works only when you ask in chat, so a routine that reaches for them is
+refused on every run. Your connection is fine; signing in again does not change it.
 
-# pause / resume
-curl -X PATCH "$API_BASE/agent/routines/Morning%20brief/enabled" \
-  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d '{"enabled":false}'
+**When you save it.** If the routine's prompt mentions mail or the calendar (email, inbox, Gmail,
+calendar, meeting invites, …) or names one of those tools, the routine is still saved, and it
+carries a note:
 
-# delete (by routine id)
-curl -X DELETE "$API_BASE/agent/routines/<routine_id>" -H "X-API-Key: $API_KEY"
+```json
+{"name": "Inbox watch", "needs_person": ["mail"],
+ "warning": "This routine needs your mail. A routine runs on its schedule without you present, so each run will be refused when it reaches for it. Ask in chat instead when you want it done; nothing is wrong with your connection."}
 ```
+
+`POST /agent/routines` returns `needs_person` (and `warning` when it is not empty), every card in
+`GET /agent/routines` carries the same fields, and the terminal's Routines surface shows the
+warning under the routine. The check reads only the prompt and is deliberately narrow: a routine it
+does not flag is refused at run time exactly as one it does.
+
+**When it runs.** The refused call answers `403` with one body, whichever service refused it:
+
+```json
+{"status": "refused", "reason": "human_session_required",
+ "instruction": "This session runs without a person in the loop. Record what you wanted to do and stop; do not retry it another way.",
+ "remedy": "ask_in_chat",
+ "tell_your_person": "This ran without you present (a scheduled routine, a background flow or a meeting run), and mail, calendar and connection actions only work when you ask in chat. Nothing is wrong with your connection, and signing in again will not change it."}
+```
+
+`remedy` is the stable field a program branches on. `tell_your_person` is the sentence the agent
+passes on to you as it is.
+
+**Limits.** No routine can read mail on its own today: there is no standing consent for that. The
+save-time note is a hint from the prompt's words, not a guarantee in either direction.
+
+### How it works
+
+1. A routine is saved one of two ways: `POST /agent/routines` (agent-api
+   `control_plane/routers/routines.py`), or a `routines/<name>.md` file in the workspace, which
+   `control_plane/workspace_routines.py` reconciles onto the runtime scheduler.
+2. Both read paths build the card the same way. `control_plane/routine_needs.py` reads the prompt.
+   It matches mail and calendar words, and the names of tools whose route is flagged `person` in
+   `core/agent/routes.v1.json` and lives under `/connections/`, joined through
+   `core/agent/mcp.tools.v1.json`. It sets `needs_person` and `warning`. It writes nothing.
+3. When the routine fires, the scheduler POSTs its signed `unit.v1` dispatch (`trigger:
+   scheduled`) to `/invocations`. The worker's delegation token carries regime `autonomous`
+   (`shared/delegation.py`: only `message` is a human trigger).
+4. A mail, calendar or connection tool reaches its route behind the gateway. agent-api's person
+   gate (`route_policy.PERSON_GATE` → `ceiling.require_person`), meeting-api's `regime.py` and
+   flows-api's `DELEGATED_REACH` refuse it with `identity_token.REFUSAL` before any broker or
+   provider call.
+5. The gateway MCP renders the body unchanged into the tool result (`vexa_mcp/tool_errors.py`), so
+   the agent reads `remedy` and `tell_your_person`. The dogfood rig adds both fields to its own
+   refusals on regime (`regime_refusal` in `deploy/dogfood/rig/vexa_control_mcp.py`).
+
+**One writer per datum.** The refusal body is written in one place: the canonical
+`core/gateway/contracts/gateway-identity.v1/identity_token.py`. It is copied byte for byte into the
+gateway, agent-api, meeting-api and the credential broker, and copied once into flows-api's
+`subject_auth.py`. The routine file stays the only record of a workspace routine, and the warning
+is derived on read and never stored.
+
+**Contracts and routes.** gateway-identity.v1 `REFUSAL` (two optional keys added; the first three
+are unchanged). `POST /agent/routines` and `GET /agent/routines` each gain additive response
+fields. No new route, no new configuration.
+
+### Why it complies
+
+| Rule | How | Gate |
+|---|---|---|
+| **P2** couple only through contracts | The refusal body travels as gateway-identity.v1's vendored file, never as an import across images. | `gate:isolation`; `gate:fact-parity` (facts `identity-token`, `flows-person-refusal`) |
+| **P4 / P16** additive contract change | `remedy` and `tell_your_person` are new optional keys. A reader of `status`, `reason` and `instruction` is unaffected. | `gate:contract-version` |
+| **P18** fail loud | A refusal names its remedy instead of leaving the agent to guess. The save-time note says ahead of time what will be refused. | ungated: reviewed |
+| **P23** one writer | One canonical refusal body. The warning is derived on read, never stored. | `gate:fact-parity`; ungated: reviewed for the card fields |
+| **P11** mechanism, not policy | The detector reads the route manifest's `person` flags rather than holding its own list of tools. | ungated: reviewed |
+
+**Security.**
+
+- **Who can do what.** Mail, calendar and connection verbs run only for a delegated identity whose
+  regime is `human`, or for the person's own credential. Nothing in this change widens that.
+- **Enforcement per hop.** The gateway signs the regime into the identity. agent-api's person gate
+  refuses the request before the route body runs. The credential broker is never reached. meeting-api
+  and flows-api apply the same rule to their own human-only verbs.
+- **What is refused.** Every human-only verb, for every unattended regime (`autonomous`, empty or
+  unknown). The remedy names the only way through, asking in chat. It grants nothing.
+- **Deny tests.**
+  `test_an_unattended_mail_or_calendar_call_gets_the_remedy_and_no_provider_call` and
+  `test_a_worker_without_a_person_is_refused_before_the_broker`
+  (`core/agent/tests/test_connection_routes.py`);
+  `test_the_refusal_is_the_one_every_service_answers_with`
+  (`core/flows/tests/test_subject_bearer.py`);
+  `test_regime_refusal_names_the_remedy_and_a_sentence_for_the_person`
+  (`deploy/dogfood/rig/tests/test_authorization.py`);
+  `test_the_refusal_remedy_reaches_the_agent_through_the_gateway_render`
+  (`deploy/dogfood/minutes-stack/test_agent_tools.py`). The save-time note is pinned by
+  `test_the_create_route_saves_and_warns_never_refuses`, `test_the_detector_is_conservative` and
+  `test_the_list_route_marks_workspace_and_api_routines`
+  (`core/agent/tests/test_routine_needs.py`), and the terminal by `routineNote`
+  (`clients/terminal/src/surfaces/__tests__/routinesApi.test.ts`).
+
+## When a routine keeps being refused
+
+A routine runs without you present, so anything that needs you is refused: your mail, your calendar,
+a connected account. Nothing in a run can change that. Vexa stops the loop in two places:
+
+- **Within one run.** If the agent calls the same tool and gets the same refusal a second time,
+  the tool result gains a note telling it to stop, to pass on the refusal's sentence for you, and
+  to end the run. On the third identical refusal the run ends by itself. It files one friction
+  record for the whole thing, not one per call.
+- **Across runs.** If a routine's runs are refused for the same reason **three times in a row**,
+  the routine is switched off. Its file gets `enabled: false` and a `paused_reason:` line, its
+  schedule is cancelled, and **one** item appears in what is waiting for you (`whats_waiting`). A
+  run that is not refused resets the count.
+
+The Routines surface shows the reason under the routine. To resume, switch it back on (the switch
+removes `paused_reason`), or first change it so it does not need you. A paused routine is never
+deleted, and a chat is never paused.
+
+**Limits.** The pause takes effect when the next scheduled fire arrives, because that is when the
+third run's outcome is read. A routine created through `POST /agent/routines` has no file to hold
+a paused state: it gets the one queue item and keeps its schedule. The in-run stop applies to the
+`openai-agent` harness, which runs the tool loop itself. Under a CLI harness (Claude Code, Codex)
+the tool loop runs in the CLI, so the note cannot be injected and the run is not ended early. That
+run is still counted, and the routine is still paused after three refused runs.
+
+### How it works
+
+1. **In the run.** `core/agent/llm/refusal_guard.py` counts refusals by {tool, reason}. It
+   recognises a structured refusal by `reason: human_session_required`, by
+   `status: refused` with a reason, or by a bare `refused: <reason>`, and never by an ordinary
+   error. The `openai-agent` loop (`llm/openai_agent.py`) appends the stop note on the second
+   identical refusal. On the third it answers every outstanding call, emits one `refusal-repeated`
+   event and ends the turn with `done.ok: false`.
+2. **The outcome.** `worker/engine.py` stamps the turn's `done` frame with
+   `refused: {tool, reason, count}`, read from the turn's `tool-result` summaries. This works under
+   every harness. The worker is the only writer of its unit's output stream, `unit:<id>:out`.
+   `worker/friction.py` files one `refusal_stop` record in place of the per-call ones.
+3. **The count.** Every scheduled run arrives at agent-api's `/invocations`. Before it is
+   dispatched, `control_plane/routine_refusals.py` checks the routine: only `trigger: scheduled`
+   with launcher `schedule:<routine_id>`. It reads the routine unit's `done` frames since the last
+   cursor (`Dispatcher.unit_events_since`, read-only) and updates the count in
+   `<store>/.routines/refusals/<subject>.json`.
+4. **The pause.** At three, it writes the routine file with
+   `workspace_routines.set_routine_file_enabled(enabled=False, paused_reason=…)`. This is the same
+   write `PATCH /agent/routines/{name}/enabled` makes, and an approval carries across it. Reconcile
+   then cancels the scheduler job. One `routine.paused` fact goes to flows, keyed to the pause.
+   That fire is not dispatched.
+5. **The queue item.** flows' `routine_paused` flow (`core/flows/src/flows_defs/production_agent.py`,
+   step `await_routine`) re-reads the routine file. It blocks while the file says
+   `enabled: false`, and that blocked reaction is the queue item. The words come from
+   `behavior/queue/routine_paused.human.md`. Once the routine is back on or deleted, the step
+   finishes and the item goes away.
+
+**One writer per datum.** The worker writes `unit:<id>:out`, and agent-api only reads it.
+`routine_refusals` is the only writer of the refusal count, which sits outside every workspace mount
+beside the routine approvals, so no worker can write it. The routine file stays the only record of
+whether a routine is on. flows owns the queue reaction.
+
+**Contracts and routes.** No new route. `unit.v1` `DoneFrame` takes an additive `refused` field (the
+frame is not closed to extra fields). flows.v1 gains the carrier `routine.paused` (owner `agent`,
+refs `uid`, `routine`, `reason`), declared on agent-api's `VEXA_FLOWS_API_URL` and
+`VEXA_FLOWS_API_KEY` publish edge in `control_plane/config.v1.json`. No new configuration: the
+threshold is three (`routine_refusals.THRESHOLD`).
+
+### Why it complies
+
+| Rule | How | Gate |
+|---|---|---|
+| **P23** one writer per carrier | The worker writes the out-stream, `routine_refusals` the count, the routine file stays the one record of on/off, flows the queue reaction. | `gate:dataflow`; the count file is ungated: reviewed |
+| **P4 / P16** contracts, additive | `routine.paused` is a declared carrier with a golden, `Carrier.routine-paused.json`. `done.refused` is an optional field. | `gate:schema`, `gate:config-contract` (publish edge ≡ carrier census) |
+| **P7** stateless workers | The worker only reports what it saw. The state lives in agent-api's store. | ungated: reviewed |
+| **P18** fail loud | A routine that cannot work says so once, on the queue and on its card, instead of failing silently every ten minutes. An unreadable stream counts nothing and lets the run go ahead, logged. | ungated: reviewed |
+| **P21** state from evidence | Pausing is decided from the runs' own `done` frames, never from the prompt. | ungated: reviewed |
+
+**Security.**
+
+- **No new access.** Nothing here grants a routine anything. The refusals that cause a pause are
+  unchanged.
+- **Attribution.** The routine a stream belongs to is derived from the dispatch agent-api signed
+  (`dispatch_id` of the routine's own invocation). It never comes from anything the worker says, so
+  a worker cannot pause another routine or another person's.
+- **Who can write the count.** Only agent-api. The file is under `<store>/.routines/`, which is
+  not mounted into any worker.
+- **What is never paused.** A chat (`trigger: message`), an event run, a meeting run, and a
+  scheduled dispatch whose launcher is not `schedule:<id>`.
+- **Tests.** `test_three_refused_runs_pause_the_routine_and_queue_one_card`,
+  `test_a_successful_run_resets_the_count`, `test_a_chat_or_an_event_is_never_counted_or_paused`,
+  `test_an_unreadable_stream_counts_nothing_and_the_run_goes_ahead`,
+  `test_switching_it_back_on_clears_the_pause` (`core/agent/tests/test_routine_refusals.py`);
+  `test_the_harness_injects_the_stop_on_the_second_and_ends_on_the_third`,
+  `test_a_success_or_an_ordinary_error_is_never_counted`,
+  `test_the_turn_refusal_rides_on_any_harness_s_results` (`core/agent/tests/test_refusal_guard.py`);
+  `test_a_paused_routine_blocks_which_is_the_one_queue_item`,
+  `test_a_routine_switched_back_on_or_deleted_is_not_asked_about_again`
+  (`core/flows/tests/test_routine_paused_card.py`); `pausedNote`
+  (`clients/terminal/src/surfaces/__tests__/routinesApi.test.ts`).
 
 ## Read the result
 
-```bash
-curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/workspace/file?path=brief/today.md"
-```
+The routine's thread is in your chat list, marked **routine**. Each run's answer is there, and you
+can reply; the next run sees your reply. A file the run writes is in your workspace as usual.
+
+## Manage it
+
+The **Routines board** lists your routines: the switch pauses and resumes one, delete retires it.
+You can also pause, resume or retire it from its thread, or with `flow_lifecycle`. `flow_runs`
+lists its runs.
+
+### The line at the top of its thread
+
+The routine's thread opens with one line: *Routine · every weekday 23:00 · next Thu 23:00 · ok*.
+It says when the routine runs, the next run as a date on your clock (minutes only when it is under
+an hour away), and how the last run went: *ok*, *failed*, *needs permission*, *limit reached*,
+*paused* or *not run yet*. A one-time routine reads *once, today 16:00* and shows no next run after
+it fired.
+
+Click the line to expand it:
+
+- **When / Does / Results go to** — the schedule in words, the instruction you gave, and where the
+  answer lands (this chat, and a connection it notifies, if any).
+- **May send bots: no — allow?** — what the routine may do with nobody there. *allow?* sends that
+  request in the routine's chat ("Let my routine … send bots to meetings when I'm not here."); the
+  agent records it on the routine, as only you can. Nothing is granted by the click itself.
+- A refused run as one sentence, for example *It couldn't send the bot: nobody was here to approve
+  it.* — its fix is the permission line above it.
+- **Pause** / **Resume** and **Retire** (asks first).
+- **Details** — the operator view: the flow graph, the raw schedule, run counts and limits.
+
+#### How it works
+
+The line and the expanded view are read from the routine's card (`GET /api/routines`): the trigger,
+`lifecycle`, `last_run`, `last_refusal`, `grants` and `next_run`. Times are computed on your
+browser's clock from the stored schedule (kept in UTC). *allow?* posts an ordinary chat turn; the
+agent changes the routine with its tools, and the routine's card shows the new permission.
+
+#### Why it complies
+
+The strip changes nothing by itself except Pause, Resume and Retire, which go through the routine
+routes that act on your own flow only. A permission is recorded on the routine only when you ask
+for it in the chat, and company policy (`routine_unattended_actions`) still caps it on every run.
+Gates: `gate:ui-design` (the strip's styles stay inside the terminal's style budget); the rest is
+ungated, reviewed. Tests: `clients/terminal/src/minutes/__tests__/routineStrip.test.tsx` ("Allow
+asks in the routine's chat — the agent records the permission, nothing is granted here"),
+`clients/terminal/src/ui-kit/flowGraph/__tests__/human.test.ts`. Pause, Resume and Retire reach
+flows, which acts only on the caller's own flows
+(`core/flows/tests/test_subject_bearer.py` · `test_ownership_is_checked_even_when_no_subject_argument_is_sent`,
+`test_a_subject_argument_naming_someone_else_is_refused`).
+
+## How it works
+
+Flows keeps the schedule in its database and fires each slot once. The run is a turn in the
+routine's thread in the `autonomous` regime: it may use only the connections and actions company
+policy allows for unattended runs. If it is refused for the same reason three runs in a row, the
+routine pauses and posts the reason in its chat and on the Routines board. Alerts go to that chat
+unless `params.notify` names a working connection you chose. Full detail:
+[Routines and agent messages](/flows/routines).
+
+## Why it complies
+
+- **Yours alone.** The routine is written in your scope, taken from your own credential; nobody else
+  can read, change or retire it.
+- **Nobody in the loop means less allowed.** An unattended run is refused what policy does not allow
+  for unattended runs, and a repeated refusal stops it rather than retrying forever.
+- **Bounded.** A minimum gap between fires, a daily run cap and a cap on active routines per
+  person. See [What is refused, and why](/flows/routines#what-is-refused-and-why).
 
 ## Variations
 
-Same machinery, different trigger or plan:
+Same agent, different trigger:
 
 - **On an event** — run when something happens (e.g. a new email) instead of on a clock:
   [Triage incoming email](/how-to/email-triage).
 - **After a meeting** — write a report when a call ends: [Report after every meeting](/how-to/post-meeting-report).
-
-Only the trigger changes — same agent, same isolation, same governance.

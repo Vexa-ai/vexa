@@ -1,0 +1,4 @@
+{
+  "detail": "Authorization expired; reconnect this account",
+  "reason": "reconnect_required"
+}

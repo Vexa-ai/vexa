@@ -15,7 +15,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { registerTab } from "../contributions";
 import { Icon } from "../ui-kit";
 import { useService } from "../platform";
-import { LayoutServiceId } from "../workbench/layout";
+import { LayoutServiceId } from "../platform/layout";
 import { usePreviewPinTab } from "./previewPinTab";
 import type { MeetingMock } from "./meetingModel";
 import { useLiveMeetings, fetchDurableTranscript } from "./liveMeetings";
@@ -23,7 +23,7 @@ import { groupMeetings, type MeetingGroup } from "./meetingGroups";
 import { meetingTab } from "./meeting";
 import { MeetingsOnboarding } from "./meetingsOnboarding";
 import { findBriefNote } from "./briefNote";
-import { listWorkspaceTree } from "./workspaceApi";
+import { listWorkspaceTree } from "../data/workspaceApi";
 
 // ── reviewed-recaps store (localStorage) — opening a recap retires its phrase ──────────────────
 const REVIEWED_KEY = "vexa.reviewedMeetings";
@@ -90,7 +90,8 @@ export function agendaWindow(groups: MeetingGroup[], now: Date = new Date(), wee
 export interface PastEntry { run: MeetingMock; group: MeetingGroup }
 export interface PastDay { key: string; date: Date; entries: PastEntry[] }
 
-const PAST_CAP = 8;
+const PAST_CAP = 8;       // initial past-meetings shown
+const PAST_MORE = 20;     // how many more each "Show more" reveals
 
 /** The past feed: each meeting's newest finished run, newest first, day-grouped. */
 export function pastFeed(groups: MeetingGroup[], cap: number = PAST_CAP): PastDay[] {
@@ -139,7 +140,7 @@ function useOwnWorkspaceTree(): string[] | null {
 }
 
 // ── rendering ─────────────────────────────────────────────────────────────────────────────────
-const label = (m: MeetingMock) => m.title_custom ?? (m.native_id ?? m.title).replace(/^Google Meet · /, "");
+const label = (m: MeetingMock) => m.title_custom || m.title;
 
 const toneColor = { live: "var(--green)", danger: "var(--danger)", accent: "var(--accent)" } as const;
 
@@ -159,16 +160,12 @@ function Faces({ m }: { m: MeetingMock }) {
     <span style={{ display: "inline-flex", flex: "none" }}>
       {att.map((a, i) => (
         <span key={a.email} title={a.name || a.email}
-          style={{ width: 20, height: 20, borderRadius: "50%", background: "var(--panel2)", color: "var(--t2)",
-            display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 8, fontWeight: 700,
-            border: "2px solid var(--bg)", marginLeft: i ? -6 : 0 }}>
+          className="r-full bg-3 c-2 t-xs fw-600" style={{ width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", border: "2px solid var(--bg)", marginLeft: i ? -6 : 0 }}>
           {initials(a)}
         </span>
       ))}
       {extra > 0 && (
-        <span style={{ width: 20, height: 20, borderRadius: "50%", background: "var(--panel2)", color: "var(--t3)",
-          display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 8, fontWeight: 700,
-          border: "2px solid var(--bg)", marginLeft: -6 }}>+{extra}</span>
+        <span className="r-full bg-3 c-3 t-xs fw-600 ml-0" style={{ width: 20, height: 20, display: "inline-flex", alignItems: "center", justifyContent: "center", border: "2px solid var(--bg)" }}>+{extra}</span>
       )}
     </span>
   );
@@ -182,14 +179,12 @@ function EventRow({ g, ownTree }: { g: MeetingGroup; ownTree: string[] | null })
   const dev = deviationPhrase(g, hasOwnBrief);
   return (
     <div onClick={nav.onClick} onDoubleClick={nav.onDoubleClick}
-      style={{ display: "flex", alignItems: "baseline", gap: 9, padding: "3px 2px", cursor: "pointer", flexWrap: "wrap" }}>
-      <span style={{ width: 3, height: 14, borderRadius: 2, alignSelf: "center", flex: "none",
-        background: g.phase === "live" ? "var(--green)" : "var(--panel2)" }} />
-      <span style={{ fontSize: 13.5, fontWeight: 500, color: "var(--t1)", minWidth: 0,
-        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label(m)}</span>
-      <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)", flex: "none" }}>{timeShort(m.scheduled_at)}</span>
+      className="pt-0_5 pr-0_5 pb-0_5 pl-0_5" style={{ display: "flex", alignItems: "baseline", gap: 9, cursor: "pointer", flexWrap: "wrap" }}>
+      <span className="r-sm" style={{ width: 3, height: 14, alignSelf: "center", flex: "none", background: g.phase === "live" ? "var(--green)" : "var(--panel2)" }} />
+      <span className="t-sm fw-500 c-1" style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label(m)}</span>
+      <span className="f-mono t-xs c-3" style={{ flex: "none" }}>{timeShort(m.scheduled_at)}</span>
       {dev && (
-        <span style={{ fontSize: 12, color: toneColor[dev.tone], borderBottom: `1px dotted ${toneColor[dev.tone]}`, flex: "none" }}>
+        <span className="t-xs" style={{ color: toneColor[dev.tone], borderBottom: `1px dotted ${toneColor[dev.tone]}`, flex: "none" }}>
           {dev.text}
         </span>
       )}
@@ -199,21 +194,20 @@ function EventRow({ g, ownTree }: { g: MeetingGroup; ownTree: string[] | null })
 
 function DayRow({ day, isToday, ownTree }: { day: AgendaDay; isToday: boolean; ownTree: string[] | null }) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "64px 1fr", gap: "0 14px", padding: "11px 14px",
-      borderTop: "1px dashed var(--line)" }}>
+    <div className="pt-3 pr-3 pb-3 pl-3" style={{ display: "grid", gridTemplateColumns: "64px 1fr", gap: "0 14px", borderTop: "1px dashed var(--line)" }}>
       <div style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
-        <span style={{ fontSize: 19, fontWeight: 600, color: "var(--t1)", fontVariantNumeric: "tabular-nums" }}>
+        <span className="t-xl fw-600 c-1" style={{ fontVariantNumeric: "tabular-nums" }}>
           {day.date.getDate()}
         </span>
-        <span style={{ fontSize: 10, color: "var(--t3)", lineHeight: 1.3 }}>
+        <span className="t-xs c-3 lh-tight">
           {day.date.toLocaleString(undefined, { month: "long" })}
-          {isToday && <span style={{ display: "inline-block", width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", marginLeft: 3, verticalAlign: 4 }} />}
+          {isToday && <span className="r-full bg-accent ml-0_5" style={{ display: "inline-block", width: 4, height: 4, verticalAlign: 4 }} />}
           <br />{day.date.toLocaleString(undefined, { weekday: "short" })}
         </span>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
         {day.groups.length === 0
-          ? <span style={{ fontSize: 12.5, color: "var(--t3)", padding: "2px 0" }}>No events today</span>
+          ? <span className="t-xs c-3 pt-0_5 pr-0 pb-0_5 pl-0">No events today</span>
           : day.groups.map((g) => <EventRow key={g.key} g={g} ownTree={ownTree} />)}
       </div>
     </div>
@@ -228,8 +222,7 @@ function PastLine({ m }: { m: MeetingMock }) {
     fetchDurableTranscript(m.id)
       .then((t) => {
         if (!on) return;
-        if (t.notes.length) setLine(`${t.notes.length} notes`);
-        else if (t.lines?.length) setLine(`${t.lines.length} lines`);
+        if (t.lines?.length) setLine(`${t.lines.length} lines`);
       })
       .catch(() => {});
     return () => { on = false; };
@@ -254,22 +247,21 @@ function PastRow({ e, reviewedIds }: { e: PastEntry; reviewedIds: Set<string> })
     : { text: "nothing captured", color: "var(--t3)" };
   return (
     <div onClick={open}
-      style={{ display: "grid", gridTemplateColumns: "auto 1fr auto", alignItems: "center", gap: 10,
-        padding: "6px 8px", borderRadius: 7, cursor: "pointer" }}
+      className="pt-1_5 pr-2 pb-1_5 pl-2 r-md" style={{ display: "grid", gridTemplateColumns: "auto 1fr auto", alignItems: "center", gap: 10, cursor: "pointer" }}
       onMouseEnter={(ev) => (ev.currentTarget.style.background = "var(--panel)")}
       onMouseLeave={(ev) => (ev.currentTarget.style.background = "transparent")}>
       <Faces m={run.attendees?.length ? run : e.group.current} />
       <span style={{ display: "flex", gap: 9, alignItems: "baseline", minWidth: 0, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 13, fontWeight: 500, color: "var(--t1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <span className="t-sm fw-500 c-1" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {label(run)}
         </span>
         {phrase && (
-          <span style={{ fontSize: 11.5, color: phrase.color, borderBottom: `1px dotted ${phrase.color}`, flex: "none" }}>
+          <span className="t-xs" style={{ color: phrase.color, borderBottom: `1px dotted ${phrase.color}`, flex: "none" }}>
             {phrase.text}
           </span>
         )}
       </span>
-      <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)", flex: "none" }}><PastLine m={run} /></span>
+      <span className="f-mono t-xs c-3" style={{ flex: "none" }}><PastLine m={run} /></span>
     </div>
   );
 }
@@ -280,21 +272,24 @@ function TodayView() {
   const reviewedIds = useReviewed();
   const ownTree = useOwnWorkspaceTree();
   const [weekOffset, setWeekOffset] = useState(0);
+  const [pastCap, setPastCap] = useState(PAST_CAP);
   const now = new Date();
   const groups = groupMeetings(meetings);
   const days = agendaWindow(groups, now, weekOffset);
-  const past = pastFeed(groups);
+  const past = pastFeed(groups, pastCap);
+  // Total past meetings eligible for the feed (same predicate pastFeed slices by) — drives "Show more".
+  const pastTotal = groups.filter((g) => g.pastRuns[0] && (g.pastRuns[0].has_recording || g.pastRuns[0].start_time)).length;
   const todayKey = dayKey(now);
   const empty = meetings.length === 0;
   const pager = { background: "none", border: "1px solid var(--line)", color: "var(--t2)", borderRadius: 6,
     width: 24, height: 24, cursor: "pointer", fontSize: 13, lineHeight: 1 } as const;
   return (
-    <div style={{ height: "100%", overflowY: "auto", padding: "18px 22px" }}>
+    <div className="pt-4 pr-5 pb-4 pl-5" style={{ height: "100%", overflowY: "auto" }}>
       <div style={{ maxWidth: 720 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 17, fontWeight: 700, color: "var(--t1)", flex: 1 }}>Coming up</span>
+          <span className="t-lg fw-600 c-1" style={{ flex: 1 }}>Coming up</span>
           {weekOffset > 0 && (
-            <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--t3)" }}>
+            <span className="f-mono t-xs c-3">
               {days[0]?.date.toLocaleDateString(undefined, { month: "short", day: "numeric" }) ?? ""} →
             </span>
           )}
@@ -310,9 +305,9 @@ function TodayView() {
           <>
             {/* the STANDING calendar affordance — stays while this user has no calendar connected */}
             <MeetingsOnboarding variant="slim" />
-            <div style={{ marginTop: 14, border: "1px solid var(--line)", borderRadius: 12, background: "var(--panel)" }}>
+            <div className="mt-3 bd r-lg bg-2">
               {days.length === 0
-                ? <div style={{ padding: "14px 16px", fontSize: 12.5, color: "var(--t3)" }}>Nothing this week.</div>
+                ? <div className="pt-3 pr-4 pb-3 pl-4 t-xs c-3">Nothing this week.</div>
                 : days.map((d) => <DayRow key={d.key} day={d} isToday={d.key === todayKey} ownTree={ownTree} />)}
             </div>
           </>
@@ -320,16 +315,22 @@ function TodayView() {
 
         {past.map((day) => (
           <div key={day.key}>
-            <div style={{ fontFamily: "var(--mono)", fontSize: 10, letterSpacing: ".1em", textTransform: "uppercase",
-              color: "var(--t3)", margin: "18px 0 4px" }}>
+            <div className="f-mono t-xs c-3 mt-4 mr-0 mb-1 ml-0" style={{ letterSpacing: ".1em", textTransform: "uppercase" }}>
               {day.date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
             </div>
             {day.entries.map((e) => <PastRow key={e.run.id} e={e} reviewedIds={reviewedIds} />)}
           </div>
         ))}
 
+        {pastCap < pastTotal && (
+          <button onClick={() => setPastCap((c) => c + PAST_MORE)}
+            className="bg-none bd c-2 r-md pt-1_5 pr-3 pb-1_5 pl-3 t-xs mt-3" style={{ cursor: "pointer" }}>
+            Show more ({pastTotal - pastCap} older)
+          </button>
+        )}
+
         {!empty && (
-          <div style={{ fontSize: 11.5, color: "var(--t3)", margin: "24px 2px 10px", lineHeight: 1.5 }}>
+          <div className="t-xs c-3 mt-6 mr-0_5 mb-2 ml-0_5 lh-snug">
             Older meetings live in Knowledge — ask the agent about anything that was said or decided.
           </div>
         )}

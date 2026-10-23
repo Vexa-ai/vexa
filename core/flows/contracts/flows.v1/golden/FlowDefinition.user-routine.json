@@ -1,0 +1,16 @@
+{
+  "name": "morning-brief",
+  "scope": "user:42",
+  "version": 1,
+  "trigger": {
+    "kind": "schedule",
+    "cron": "0 7 * * 1-5"
+  },
+  "steps": [
+    "agent_run"
+  ],
+  "params": {
+    "instruction": "Read my calendar for today and write the three things I must not miss into today.md."
+  },
+  "status": "active"
+}

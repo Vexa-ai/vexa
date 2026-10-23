@@ -153,6 +153,26 @@ async function main(): Promise<void> {
     check('join-error: events conform', allConform(lc.events));
   }
 
+  // ── a join error that quotes the meeting URL: the passcode never leaves the bot ──
+  {
+    const SECRET = 'TESTPASSCODE';
+    const url = `https://us05web.zoom.us/j/81234567890?pwd=${SECRET}`;
+    const lc = recordingSink();
+    const join: JoinDriver = {
+      async join() { throw new Error(`page.goto: Timeout 60000ms exceeded.\n  - navigating to "${url}", waiting until "domcontentloaded"`); },
+      onRemoval() { return () => {}; }, async leave() {}, async withdraw() {},
+    };
+    await createOrchestrator(inv({ platform: 'zoom', meetingUrl: url }), { lifecycle: lc, join, pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness() }).run();
+    const wire = JSON.stringify(lc.events);
+    check('url-secret: positive control — the thrown text carried the passcode', url.includes(SECRET));
+    check('url-secret: no emitted lifecycle event carries the passcode', !wire.includes(SECRET), wire.slice(0, 400));
+    check('url-secret: the reason keeps host and meeting id',
+      String(last(lc.events).reason ?? '').includes('us05web.zoom.us/j/81234567890?pwd=***'), String(last(lc.events).reason));
+    check('url-secret: join_evidence.detail redacted too',
+      !String(last(lc.events).join_evidence?.detail ?? '').includes(SECRET));
+    check('url-secret: events conform', allConform(lc.events));
+  }
+
   // ── admission rejected → failed(awaiting_admission/awaiting_admission_rejected) ──
   {
     const lc = recordingSink();

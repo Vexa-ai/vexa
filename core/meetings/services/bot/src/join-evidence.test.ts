@@ -157,6 +157,14 @@ const CASES: Case[] = [
                detail: 'control_plane_unreachable: control plane unreachable at boot (meeting_api_callback, redis); refused to join' },
     expect: 'navigation_failure',
   },
+  // — the page was not in English: every reading on it is untrusted —
+  {
+    name: 'a lobby "rejection" on a non-English page → ui_locale_mismatch, not the host',
+    outcome: 'error',
+    signals: { reachedLobby: true, timeInLobbyMs: 4_000, lobbyBudgetMs: BUDGET_MS,
+               detail: "ui_locale_mismatch: the google_meet page rendered in 'de' (via html-lang), not the pinned en-US, so the join layer could not read the lobby or a rejection; its reading was: Bot admission was rejected by meeting admin" },
+    expect: 'ui_locale_mismatch',
+  },
   // — honest ignorance —
   {
     name: 'a lobby timeout verdict with no measurements at all is still an awaiting_admission_timeout',
@@ -187,6 +195,7 @@ const ATTRIBUTION: Array<[JoinFailureReason, JoinFailureAttribution]> = [
   ['auth_session_missing', 'system_fault'],
   ['never_reached_lobby', 'system_fault'],
   ['navigation_failure', 'system_fault'],
+  ['ui_locale_mismatch', 'system_fault'],
   ['stopped_while_joining', 'user_action'],
   ['unknown', 'unknown'],
 ];

@@ -3,17 +3,27 @@
   "domain": "gateway",
   "owner": "core/gateway/services/gateway",
   "edge": "gateway",
-  "note": "The edge's OWN two routes, and the only ones it may declare: /health is the LB probe and /auth/me is 'who is this key'. Both are identity-only and forward nothing downstream, which is why they carry no scope \u2014 an empty `scopes` is a DECLARATION of that, never an omission.",
+  "note": "The edge's OWN three routes, and the only ones it may declare: /health is the LB probe, /auth/me is 'who is this key', and /internal/mcp/taint is where the MCP reports the privacy label of a read it made directly (D6: the edge marks the worker's session in Redis; the unit is read from the identity the edge resolved). All three are identity-only and forward nothing downstream, which is why they carry no scope \u2014 an empty `scopes` is a DECLARATION of that, never an omission. /auth/me carries `mcp_reentry`: the MCP asks it, with a worker's token on its re-entry, before it spends the deployment's operator key on an `auth: admin` tool.",
   "routes": [
     {
       "method": "GET",
       "path": "/auth/me",
-      "scopes": []
+      "scopes": [],
+      "mcp_reentry": true,
+      "shared": "allow"
+    },
+    {
+      "method": "POST",
+      "path": "/internal/mcp/taint",
+      "scopes": [],
+      "mcp_reentry": true,
+      "shared": "allow"
     },
     {
       "method": "GET",
       "path": "/health",
-      "scopes": []
+      "scopes": [],
+      "shared": "allow"
     }
   ]
 }

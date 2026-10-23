@@ -1,0 +1,75 @@
+{
+  "about": {
+    "kind": "chat",
+    "ref": "chat:pchat-1"
+  },
+  "can": {
+    "edit": true,
+    "members": true,
+    "review": true,
+    "transition": true
+  },
+  "children": {
+    "done": 0,
+    "items": [],
+    "total": 0
+  },
+  "due": null,
+  "face": [
+    {
+      "type": "stepper"
+    },
+    {
+      "type": "next"
+    },
+    {
+      "type": "waiting"
+    },
+    {
+      "type": "movement"
+    },
+    {
+      "type": "subcards"
+    },
+    {
+      "type": "people"
+    }
+  ],
+  "href": "/crm?record=509b1310-428a-4101-abbd-009b5652cc1e",
+  "id": "509b1310-428a-4101-abbd-009b5652cc1e",
+  "members": [
+    {
+      "status": "member",
+      "subject": "7"
+    }
+  ],
+  "movement": {
+    "at": "2026-10-15T18:13:25.862394+00:00",
+    "by": "7",
+    "kind": "person",
+    "what": "Made the card"
+  },
+  "new": false,
+  "next": null,
+  "parent": null,
+  "progress": null,
+  "ref": "card:509b1310-428a-4101-abbd-009b5652cc1e",
+  "revision": 1,
+  "side_states": [
+    "Dropped"
+  ],
+  "stalled": false,
+  "state": "To do",
+  "states": [
+    "To do",
+    "Doing",
+    "Done"
+  ],
+  "summary": null,
+  "title": "Renewal plan",
+  "type": "Card",
+  "waiting": null,
+  "workspaces": [
+    "sales"
+  ]
+}

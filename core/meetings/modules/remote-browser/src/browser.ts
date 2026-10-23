@@ -10,6 +10,7 @@ import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import type { BrowserContext, Page } from 'playwright';
 import { BROWSER_DATA_DIR } from './session-store';
+import { browserEnv, launchWithSandbox, NO_SANDBOX_ARGS } from './sandbox';
 
 // Anti-detection: register the stealth evasions ONCE at module load — playwright-extra's `chromium`
 // then applies them to every launchPersistentContext below. The two launch flags we already set
@@ -22,28 +23,39 @@ chromium.use(StealthPlugin());
 export interface LaunchPersistentOptions {
   /** Chromium profile dir — the durable session lives here. Defaults to BROWSER_DATA_DIR. */
   dataDir?: string;
-  /** Launch flags — getBrowserSessionArgs() (VNC) or getAuthenticatedBrowserArgs() (bot). */
+  /** Launch flags — getBrowserSessionArgs() (VNC) or getAuthenticatedBrowserArgs() (bot). Neither
+   *  turns the sandbox off; a test harness that must may pass --no-sandbox itself. */
   args: string[];
   /** Headed by default (Xvfb under VNC); pass true only for headless contexts. */
   headless?: boolean;
-  /** Pinned UI locale (#856) — sets navigator.language / Accept-Language on the
-   *  context. Defaults to BOT_UI_LOCALE (env), else en-US. Keeps the page-level
-   *  locale byte-identical to the --lang launch flag the caller passes in args. */
+  /** UI locale of the context — navigator.language / Accept-Language. Defaults to
+   *  en-US: the meeting bots' browser is pinned to English (@vexa/join's
+   *  shared/ui-locale.ts), byte-identical to the --lang launch flag the caller
+   *  passes in args. */
   locale?: string;
 }
 
+/**
+ * Chromium's sandbox stays on wherever it can start (sandbox.ts: not as root, not where the host
+ * refuses an unprivileged user namespace — then the launch says why it runs without), and the
+ * browser gets only the environment it needs (sandbox.ts browserEnv), never the bot's own.
+ */
 export async function launchPersistentBrowser(
   opts: LaunchPersistentOptions,
-): Promise<{ context: BrowserContext; page: Page }> {
+): Promise<{ context: BrowserContext; page: Page; sandboxed: boolean }> {
   const dataDir = opts.dataDir ?? BROWSER_DATA_DIR;
-  const locale = opts.locale ?? ((process.env.BOT_UI_LOCALE || '').trim() || 'en-US');
-  const context = await chromium.launchPersistentContext(dataDir, {
-    headless: opts.headless ?? false,
-    ignoreDefaultArgs: ['--enable-automation'],
-    args: opts.args,
-    viewport: null,
-    locale,
-  });
+  const locale = opts.locale ?? 'en-US';
+  const callerOff = opts.args.includes('--no-sandbox');
+  const { result: context, sandboxed } = await launchWithSandbox(opts.args, (sandbox) =>
+    chromium.launchPersistentContext(dataDir, {
+      headless: opts.headless ?? false,
+      chromiumSandbox: sandbox,
+      ignoreDefaultArgs: ['--enable-automation'],
+      args: [...(sandbox || callerOff ? [] : NO_SANDBOX_ARGS), ...opts.args],
+      env: browserEnv(),
+      viewport: null,
+      locale,
+    }));
   // Anti-detection the stealth plugin misses under playwright-extra. Measured live (with stealth
   // active) that the bot's browser still leaks the tells below; patch them on every frame/navigation.
   await context.addInitScript(() => {
@@ -83,5 +95,5 @@ export async function launchPersistentBrowser(
 
   const pages = context.pages();
   const page = pages.length > 0 ? pages[0] : await context.newPage();
-  return { context: context as BrowserContext, page: page as Page };
+  return { context: context as BrowserContext, page: page as Page, sandboxed };
 }

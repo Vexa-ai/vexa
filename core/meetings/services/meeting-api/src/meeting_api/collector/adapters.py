@@ -25,7 +25,8 @@ import secrets
 from datetime import datetime, timezone
 from typing import Optional
 
-from .ports import RedisBus, TranscriptStore
+from . import share_access
+from .ports import ARTIFACT_DELETION_FIELD, RedisBus, TranscriptStore, deletion_stamp
 
 log = logging.getLogger("meeting_api.collector.adapters")
 
@@ -51,6 +52,13 @@ def _decode_claimed(resp) -> "list[tuple[str, dict]]":
     return out
 
 
+def _owned(Meeting, user_id):
+    """The SQL of ``share_access.owns``: keyed to ``user_id`` and not a room's meeting."""
+    from sqlalchemy import and_
+
+    return and_(Meeting.user_id == user_id, Meeting.data[share_access.ROOM_PRINCIPAL].astext.is_(None))
+
+
 def _sha(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()
 
@@ -73,6 +81,9 @@ def _build_share_grant(mode: str, allowed_emails, expires_in_sec: int) -> "tuple
         "allowed_emails": list(allowed_emails or []),
         "expires_at": (_now() + timedelta(seconds=int(expires_in_sec))).isoformat(),
         "revoked": False,
+        # When it was minted: a person the owner removed is refused by any grant minted BEFORE the
+        # removal and admitted by a fresh invite minted after it (share_access.redeem_refusal).
+        "created_at": _now().isoformat(),
     }
     return grant, secret
 
@@ -139,134 +150,6 @@ def _remove_doc(docs: list[dict], path: str) -> list[dict]:
     return [d for d in docs if d.get("path") != path]
 
 
-def _merge_notes_by_id(existing: list[dict], incoming: list[dict]) -> list[dict]:
-    """Merge drained copilot notes into a processed view's ``doc['notes']`` list, keyed by note
-    ``id`` (== segment_id): a refining re-emit UPDATES its note in place (order preserved);
-    a new id appends. Notes without an id append as-is (nothing to key an upsert on)."""
-    out = [dict(n) for n in existing]
-    index = {str(n.get("id")): i for i, n in enumerate(out) if n.get("id") is not None}
-    for note in incoming:
-        nid = note.get("id")
-        if nid is not None and str(nid) in index:
-            out[index[str(nid)]].update(note)
-        else:
-            if nid is not None:
-                index[str(nid)] = len(out)
-            out.append(dict(note))
-    return out
-
-
-def _find_processed_view(data: dict, view_id: str) -> Optional[dict]:
-    """The view with ``view_id`` inside ``data['processed']['views']`` (None when absent)."""
-    processed = data.get("processed") if isinstance(data.get("processed"), dict) else {}
-    views = processed.get("views") if isinstance(processed.get("views"), list) else []
-    return next((v for v in views if isinstance(v, dict) and v.get("id") == view_id), None)
-
-
-def _upsert_processed_view(
-    data: dict, *, view_id: str, kind: str, notes: list[dict],
-    source_cursor: Optional[str], params: Optional[dict],
-) -> dict:
-    """Pure merge of drained copilot notes into the ADDRESSABLE, VERSIONED processed shape
-    (release DoD — multi-consumer, meeting-scoped today, mountable by N consumers later):
-
-        data.processed = {"views": [{id, kind, params, doc, source_cursor, updated_at}]}
-
-    Upserts the view keyed by ``id`` — other views (future per-workspace/other processings) are
-    preserved untouched; merges ``notes`` into the view's ``doc['notes']`` by note id; stamps
-    ``params`` (the processing metadata APPLIED — provider/model/pipeline, stamped by the
-    producing worker — reproducibility) only when the drain carried them, so an idle drain never
-    erases provenance; ``source_cursor`` records the stream position the view reflects.
-    Returns the new ``data`` dict (the caller persists it)."""
-    from datetime import datetime, timezone
-
-    out = dict(data)
-    processed = dict(out.get("processed")) if isinstance(out.get("processed"), dict) else {}
-    views = [dict(v) for v in processed.get("views", []) if isinstance(v, dict)] \
-        if isinstance(processed.get("views"), list) else []
-    view = next((v for v in views if v.get("id") == view_id), None)
-    if view is None:
-        view = {"id": view_id, "kind": kind, "params": {}, "doc": {"notes": []}}
-        views.append(view)
-    doc = dict(view.get("doc")) if isinstance(view.get("doc"), dict) else {}
-    existing_notes = doc.get("notes") if isinstance(doc.get("notes"), list) else []
-    doc["notes"] = _merge_notes_by_id(list(existing_notes), notes)
-    view["doc"] = doc
-    view["kind"] = kind
-    if params:
-        view["params"] = params
-    if source_cursor:
-        view["source_cursor"] = source_cursor
-    view["updated_at"] = datetime.now(timezone.utc).isoformat()
-    processed["views"] = views
-    out["processed"] = processed
-    return out
-
-
-def _merge_notes_by_id(existing: list[dict], incoming: list[dict]) -> list[dict]:
-    """Merge drained copilot notes into a processed view's ``doc['notes']`` list, keyed by note
-    ``id`` (== segment_id): a refining re-emit UPDATES its note in place (order preserved);
-    a new id appends. Notes without an id append as-is (nothing to key an upsert on)."""
-    out = [dict(n) for n in existing]
-    index = {str(n.get("id")): i for i, n in enumerate(out) if n.get("id") is not None}
-    for note in incoming:
-        nid = note.get("id")
-        if nid is not None and str(nid) in index:
-            out[index[str(nid)]].update(note)
-        else:
-            if nid is not None:
-                index[str(nid)] = len(out)
-            out.append(dict(note))
-    return out
-
-
-def _find_processed_view(data: dict, view_id: str) -> Optional[dict]:
-    """The view with ``view_id`` inside ``data['processed']['views']`` (None when absent)."""
-    processed = data.get("processed") if isinstance(data.get("processed"), dict) else {}
-    views = processed.get("views") if isinstance(processed.get("views"), list) else []
-    return next((v for v in views if isinstance(v, dict) and v.get("id") == view_id), None)
-
-
-def _upsert_processed_view(
-    data: dict, *, view_id: str, kind: str, notes: list[dict],
-    source_cursor: Optional[str], params: Optional[dict],
-) -> dict:
-    """Pure merge of drained copilot notes into the ADDRESSABLE, VERSIONED processed shape
-    (release DoD — multi-consumer, meeting-scoped today, mountable by N consumers later):
-
-        data.processed = {"views": [{id, kind, params, doc, source_cursor, updated_at}]}
-
-    Upserts the view keyed by ``id`` — other views (future per-workspace/other processings) are
-    preserved untouched; merges ``notes`` into the view's ``doc['notes']`` by note id; stamps
-    ``params`` (the processing metadata APPLIED — provider/model/pipeline, stamped by the
-    producing worker — reproducibility) only when the drain carried them, so an idle drain never
-    erases provenance; ``source_cursor`` records the stream position the view reflects.
-    Returns the new ``data`` dict (the caller persists it)."""
-    from datetime import datetime, timezone
-
-    out = dict(data)
-    processed = dict(out.get("processed")) if isinstance(out.get("processed"), dict) else {}
-    views = [dict(v) for v in processed.get("views", []) if isinstance(v, dict)] \
-        if isinstance(processed.get("views"), list) else []
-    view = next((v for v in views if v.get("id") == view_id), None)
-    if view is None:
-        view = {"id": view_id, "kind": kind, "params": {}, "doc": {"notes": []}}
-        views.append(view)
-    doc = dict(view.get("doc")) if isinstance(view.get("doc"), dict) else {}
-    existing_notes = doc.get("notes") if isinstance(doc.get("notes"), list) else []
-    doc["notes"] = _merge_notes_by_id(list(existing_notes), notes)
-    view["doc"] = doc
-    view["kind"] = kind
-    if params:
-        view["params"] = params
-    if source_cursor:
-        view["source_cursor"] = source_cursor
-    view["updated_at"] = datetime.now(timezone.utc).isoformat()
-    processed["views"] = views
-    out["processed"] = processed
-    return out
-
-
 # A relative in-meeting offset never approaches this; anything at/above is an absolute epoch.
 _EPOCH_THRESHOLD_S = 1_000_000_000  # ~2001-09-09
 
@@ -314,6 +197,75 @@ def _segment_to_api(seg: dict) -> dict:
     return out
 
 
+# The ONE definition of a durable transcript write. Two callers reach it — the db-writer's flush
+# of a live meeting's redis hash (``upsert_segments``) and the import route's
+# ``complete_transcript_import`` — and a second copy of this statement would be a second place to
+# get the segment identity wrong. Keyed on ``(meeting_id, segment_id)`` (the partial unique index
+# ``ix_transcription_meeting_segment``): a re-write lands as an UPDATE, never a duplicate row.
+_SEGMENT_UPSERT_SQL = """
+    INSERT INTO transcriptions (meeting_id, start_time, end_time, text, speaker, language, session_uid, segment_id, source, created_at)
+    VALUES (:mid, :start, :end, :text, :speaker, :lang, :uid, :segid, :source, :created)
+    ON CONFLICT (meeting_id, segment_id) WHERE segment_id IS NOT NULL
+    DO UPDATE SET text = EXCLUDED.text, speaker = EXCLUDED.speaker,
+                  start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time,
+                  language = EXCLUDED.language, source = EXCLUDED.source,
+                  created_at = EXCLUDED.created_at
+"""
+
+
+def _persisted_segment(row) -> dict:
+    """A ``transcriptions`` row → the stored-segment dict ``_segment_to_api`` maps. A durable row is
+    confirmed by construction (only completed segments are flushed)."""
+    return {
+        "start": row.start_time, "end": row.end_time, "text": row.text,
+        "language": row.language, "speaker": row.speaker,
+        "segment_id": row.segment_id, "completed": True,
+        "source": getattr(row, "source", None),
+    }
+
+
+def _segment_upsert_rows(meeting_id, segments) -> "list[dict]":
+    """Normalize a batch of segments into the bind-parameter rows ``_SEGMENT_UPSERT_SQL`` takes.
+    A segment with no ``segment_id`` is skipped (0.12 ingest guarantees one; a legacy stray is
+    skipped, not guessed) and an unparseable start/end likewise. ``source`` is carried, so a chat line
+    is still a chat line once it is durable."""
+    from datetime import datetime as _dt
+
+    rows = []
+    for seg in segments:
+        sid = seg.get("segment_id")
+        if not sid:
+            continue
+        try:
+            start = float(seg.get("start", seg.get("start_time", 0.0)) or 0.0)
+            end = float(seg.get("end", seg.get("end_time", start)) or start)
+        except (TypeError, ValueError):
+            continue
+        if end < start:
+            start, end = end, start
+        rows.append({
+            "mid": int(meeting_id), "start": start, "end": end,
+            "text": seg.get("text") or "", "speaker": seg.get("speaker"),
+            "lang": seg.get("language"), "uid": seg.get("session_uid"),
+            "segid": str(sid), "source": seg.get("source"), "created": _dt.utcnow(),
+        })
+    return rows
+
+
+async def _write_segment_rows(db, rows) -> None:
+    """Execute the upsert for every row on an ALREADY-OPEN session, committing nothing. The caller
+    owns the transaction — which is how the import writes the segments and completes the row in one."""
+    from sqlalchemy import text as sql_text  # lazy: not needed for the in-memory fakes
+
+    stmt = sql_text(_SEGMENT_UPSERT_SQL)
+    for row in rows:
+        await db.execute(stmt, row)
+
+
+
+#: The planned-call keys a room writes on its meeting row (rooms, F1).
+ROOM_PLAN_KEYS = ("room", "agenda", "calendar_event_ref", "end_at", "cancelled_at")
+
 class SqlAlchemyTranscriptStore:
     """``TranscriptStore`` over a SQLAlchemy-async ``session_factory`` (the ``meetings`` /
     ``transcriptions`` tables; recordings/notes live in ``meeting.data`` JSONB — NO separate
@@ -327,6 +279,55 @@ class SqlAlchemyTranscriptStore:
         # numeric meeting_id → (native_meeting_id, platform). The id→native map is immutable for a
         # meeting row, so cache it forever once resolved (bounded by the live meeting set).
         self._native_cache: dict[int, tuple[str, str]] = {}
+        # Meeting ids whose transcript was deleted. Deletion is one-way, so a positive answer is
+        # cached for the life of the process; a negative one never is.
+        self._erased: set[int] = set()
+
+    async def get_transcript_gaps(self, meeting_id) -> list:
+        """The stored ``meeting.data.transcript_gaps`` report of an ALREADY-AUTHORIZED row (the caller
+        resolved it through ``get_transcript``/``get_transcript_by_id``). ``[]`` when none."""
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return []
+        from sqlalchemy import select  # lazy: not needed for the in-memory fakes
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            data = (await db.execute(select(Meeting.data).where(Meeting.id == mid))).scalars().first()
+        gaps = data.get("transcript_gaps") if isinstance(data, dict) else None
+        return list(gaps) if isinstance(gaps, list) else []
+
+    async def transcript_erased(self, meeting_id) -> bool:
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return False
+        if mid in self._erased:
+            return True
+        from sqlalchemy import select  # lazy: not needed for the in-memory fakes
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            data = (await db.execute(select(Meeting.data).where(Meeting.id == mid))).scalars().first()
+        erased = isinstance(data, dict) and bool(data.get("artifact_deletion"))
+        if erased:
+            self._erased.add(mid)
+        return erased
+
+    async def erased_meeting_ids(self) -> "list[int]":
+        """Every meeting row carrying the deletion stamp, oldest first — the operator sweep's input
+        (``erased_feed_sweep``). Served by the ``data`` GIN index."""
+        from sqlalchemy import select  # lazy: not needed for the in-memory fakes
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            rows = await db.execute(
+                select(Meeting.id).where(Meeting.data.has_key("artifact_deletion")).order_by(Meeting.id))
+            return [int(mid) for mid in rows.scalars().all()]
 
     async def native_for(self, meeting_id) -> "Optional[tuple[str, str]]":
         """Resolve a NUMERIC meeting_id → (native_meeting_id, platform) from the meetings table.
@@ -384,11 +385,7 @@ class SqlAlchemyTranscriptStore:
         seg_by_id: dict = {}
         order: list = []
         for r in seg_rows:
-            s = _segment_to_api({
-                "start": r.start_time, "end": r.end_time, "text": r.text,
-                "language": r.language, "speaker": r.speaker,
-                "segment_id": r.segment_id, "completed": True,
-            })
+            s = _segment_to_api(_persisted_segment(r))
             sid = s.get("segment_id") or f"pg-{len(order)}"
             if sid not in seg_by_id:
                 order.append(sid)
@@ -424,7 +421,7 @@ class SqlAlchemyTranscriptStore:
         native-keyed read constrains ``Meeting.user_id == user_id`` in SQL, and the by-id read
         evaluates an explicit owner branch inside its authorization check. Passing the decision down
         beats re-deriving it here, where the caller's ``user_id`` is not even in scope."""
-        from .projection import project_response_data
+        from .projection import project_response_data, visible_recordings
 
         snap, seg_by_id, order = pg
         data = snap["data"]
@@ -459,7 +456,7 @@ class SqlAlchemyTranscriptStore:
             "status": snap["status"],
             "start_time": _iso_utc(snap["start_time"]),
             "end_time": _iso_utc(snap["end_time"]),
-            "recordings": data.get("recordings", []),
+            "recordings": visible_recordings(data, viewer_is_owner=viewer_is_owner),
             "notes": data.get("notes"),
             "data": project_response_data(data, viewer_is_owner=viewer_is_owner),
             "segments": segments,
@@ -474,7 +471,7 @@ class SqlAlchemyTranscriptStore:
             stmt = (
                 select(Meeting)
                 .where(
-                    Meeting.user_id == user_id,
+                    _owned(Meeting, user_id),
                     Meeting.platform == platform,
                     Meeting.platform_specific_id == native_meeting_id,
                 )
@@ -514,7 +511,7 @@ class SqlAlchemyTranscriptStore:
             deletion_state = data.get("artifact_deletion") or {}
             if deletion_state and deletion_state.get("state", "completed") == "completed":
                 return None
-            is_owner = meeting.user_id == user_id                                   # (a) owner
+            is_owner = share_access.owns(meeting.user_id, data, user_id)            # (a) owner
             authorized = (
                 is_owner
                 or user_id in (data.get("transcript_viewers") or [])                # (c) transcript-share
@@ -550,7 +547,7 @@ class SqlAlchemyTranscriptStore:
             # the list_view sort, created_at for internal enumeration) with its own top-N
             # ORDER BY/LIMIT; the outer query dedups the merged ids and re-orders.
             access = [
-                Meeting.user_id == user_id,
+                _owned(Meeting, user_id),
                 cast(Meeting.data["transcript_viewers"], JSONB).op("@>")(func.to_jsonb(user_id)),
             ]
             if member_workspaces:
@@ -654,7 +651,7 @@ class SqlAlchemyTranscriptStore:
                 # The ONE ownership decision this row makes. `shared` (the api.v1 field) and the
                 # response projection's viewer tier both read it, so a row can never claim to be the
                 # caller's while being projected as a stranger's, or the reverse.
-                is_owner = m.user_id == user_id
+                is_owner = share_access.owns(m.user_id, m.data, user_id)
                 row = {
                     "id": m.id,
                     "user_id": m.user_id,
@@ -710,7 +707,7 @@ class SqlAlchemyTranscriptStore:
         async with self._session_factory() as db:
             owned = (await db.execute(
                 select(Meeting).where(
-                    Meeting.user_id == user_id,
+                    _owned(Meeting, user_id),
                     Meeting.platform == platform,
                     Meeting.platform_specific_id == native_meeting_id,
                 ).order_by(Meeting.created_at.desc()).limit(1)
@@ -747,7 +744,7 @@ class SqlAlchemyTranscriptStore:
         async with self._session_factory() as db:
             meeting = (await db.execute(
                 select(Meeting).where(
-                    Meeting.user_id == user_id,
+                    _owned(Meeting, user_id),
                     Meeting.platform == platform,
                     Meeting.platform_specific_id == native_meeting_id,
                 ).order_by(Meeting.created_at.desc()).limit(1)
@@ -783,7 +780,7 @@ class SqlAlchemyTranscriptStore:
         async with self._session_factory() as db:
             stmt = (
                 select(Meeting).where(
-                    Meeting.user_id == user_id,
+                    _owned(Meeting, user_id),
                     Meeting.platform == platform,
                     Meeting.platform_specific_id == native_meeting_id,
                 ).order_by(Meeting.created_at.desc()).limit(1).with_for_update()
@@ -834,7 +831,7 @@ class SqlAlchemyTranscriptStore:
 
         return await self._mint_share_on(
             select(Meeting).where(
-                Meeting.user_id == user_id, Meeting.platform == platform,
+                _owned(Meeting, user_id), Meeting.platform == platform,
                 Meeting.platform_specific_id == native_meeting_id,
             ).order_by(Meeting.created_at.desc()).limit(1).with_for_update(),
             mode=mode, allowed_emails=allowed_emails, expires_in_sec=expires_in_sec)
@@ -858,7 +855,7 @@ class SqlAlchemyTranscriptStore:
             return None
         return await self._mint_share_on(
             select(Meeting).where(
-                Meeting.id == mid, Meeting.user_id == user_id,
+                Meeting.id == mid, _owned(Meeting, user_id),
             ).limit(1).with_for_update(),
             mode=mode, allowed_emails=allowed_emails, expires_in_sec=expires_in_sec)
 
@@ -890,17 +887,99 @@ class SqlAlchemyTranscriptStore:
             grant = next((g for g in data.get("share_grants", []) if g.get("secret_hash") == h), None)
             if not grant:
                 return {"error": "invalid"}
-            err = validate_transcript_grant(grant, user_email)
+            err = validate_transcript_grant(grant, user_email) or share_access.redeem_refusal(
+                data, user_id, grant)
             if err:
                 return {"error": err}
-            viewers = list(data.get("transcript_viewers", []))
-            if user_id not in viewers:
-                viewers.append(user_id)
-            data["transcript_viewers"] = viewers
+            share_access.record_redeem(data, user_id, user_email, grant)
             meeting.data = data
             flag_modified(meeting, "data")
             await db.commit()
             return {"meeting_id": mid, "ok": True}
+
+    async def stamp_share_mail(self, user_id, meeting_id, grant_id) -> None:
+        """OWNER-scoped: mark that an invite mail was handed over for this grant (`mailed_at`) — what
+        the hourly cap counts."""
+        await self._owned_row_edit(user_id, meeting_id,
+                                   lambda data, m: share_access.stamp_mail(data, str(grant_id)))
+
+    async def count_share_mails_since(self, user_id, since_iso) -> int:
+        """Invite mails this owner handed over since ``since_iso``, across all their meetings. One
+        indexed scan of the owner's own rows (``ix_meeting_user_created_at``); grants are few."""
+        from sqlalchemy import text as sql_text
+
+        async with self._session_factory() as db:
+            n = (await db.execute(sql_text(
+                "SELECT count(*) FROM meetings m, "
+                "jsonb_array_elements(COALESCE(m.data->'share_grants', '[]'::jsonb)) g "
+                "WHERE m.user_id = :uid AND (g->>'mailed_at') >= :since"),
+                {"uid": int(user_id), "since": str(since_iso)})).scalar()
+        return int(n or 0)
+
+    async def backfill_share_roster(self, user_id, meeting_id, emails) -> "Optional[dict]":
+        """OWNER-scoped, ONE-TIME per reader: name readers who redeemed before the roster existed
+        (``share_access.backfill_roster``), under the row lock, and answer the access view."""
+        return await self._owned_row_edit(
+            user_id, meeting_id,
+            lambda data, m: (share_access.backfill_roster(data, emails, owner_id=m.user_id),
+                             share_access.access_view(data, meeting_id=m.id, owner_id=m.user_id))[1])
+
+    async def _owned_row_edit(self, user_id, meeting_id, edit, *, write: bool = True):
+        """Run ``edit(data, meeting)`` on the caller's OWN row ``meeting_id`` under its row lock and
+        commit. ``None`` when the row is absent or not the caller's — the two are indistinguishable,
+        as on every owner-scoped share route. ``edit`` returns the response, or ``None`` for 404."""
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return None
+        async with self._session_factory() as db:
+            stmt = select(Meeting).where(Meeting.id == mid, _owned(Meeting, user_id)).limit(1)
+            meeting = (await db.execute(stmt.with_for_update() if write else stmt)).scalars().first()
+            if not meeting:
+                return None
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            result = edit(data, meeting)
+            if result is None or not write:
+                return result
+            meeting.data = data
+            flag_modified(meeting, "data")
+            await db.commit()
+            return result
+
+    async def get_share_access(self, user_id, meeting_id) -> "Optional[dict]":
+        """OWNER-scoped: who can read this meeting (``share_access.access_view``)."""
+        return await self._owned_row_edit(
+            user_id, meeting_id,
+            lambda data, m: share_access.access_view(data, meeting_id=m.id, owner_id=m.user_id),
+            write=False)
+
+    async def revoke_share_grant(self, user_id, meeting_id, grant_id) -> "Optional[dict]":
+        """OWNER-scoped: revoke one grant and drop whoever joined through it."""
+        def edit(data, m):
+            if not share_access.revoke_grant(data, str(grant_id)):
+                return None
+            return share_access.access_view(data, meeting_id=m.id, owner_id=m.user_id)
+        return await self._owned_row_edit(user_id, meeting_id, edit)
+
+    async def remove_share_viewer(self, user_id, meeting_id, viewer_id) -> "Optional[dict]":
+        """OWNER-scoped: remove one person's access to this meeting."""
+        def edit(data, m):
+            if not share_access.remove_viewer(data, int(viewer_id)):
+                return None
+            return share_access.access_view(data, meeting_id=m.id, owner_id=m.user_id)
+        return await self._owned_row_edit(user_id, meeting_id, edit)
+
+    async def set_share_settings(self, user_id, meeting_id, *, recording: bool) -> "Optional[dict]":
+        """OWNER-scoped: whether people this meeting is shared with may play its recording."""
+        def edit(data, m):
+            share_access.set_settings(data, recording=recording)
+            return share_access.access_view(data, meeting_id=m.id, owner_id=m.user_id)
+        return await self._owned_row_edit(user_id, meeting_id, edit)
 
     async def append_segment(self, meeting_id, segment) -> None:
         # Live segments land in the Redis hash (``meeting:{id}:segments``), flushed to Postgres by
@@ -951,85 +1030,104 @@ class SqlAlchemyTranscriptStore:
         ``ix_transcription_meeting_segment`` in the admin-api authoritative schema), exactly the
         parent db-writer's ON CONFLICT statement: idempotent, a re-flushed rewrite lands as an
         UPDATE, never a duplicate row."""
-        from datetime import datetime as _dt
-
-        from sqlalchemy import text as sql_text  # lazy: not needed for the in-memory fakes
-
-        rows = []
-        for seg in segments:
-            sid = seg.get("segment_id")
-            if not sid:
-                continue  # 0.12 ingest guarantees segment_id; a legacy stray is skipped, not guessed
-            try:
-                start = float(seg.get("start", seg.get("start_time", 0.0)) or 0.0)
-                end = float(seg.get("end", seg.get("end_time", start)) or start)
-            except (TypeError, ValueError):
-                continue
-            if end < start:
-                start, end = end, start
-            rows.append({
-                "mid": int(meeting_id), "start": start, "end": end,
-                "text": seg.get("text") or "", "speaker": seg.get("speaker"),
-                "lang": seg.get("language"), "uid": seg.get("session_uid"),
-                "segid": str(sid), "created": _dt.utcnow(),
-            })
+        rows = _segment_upsert_rows(meeting_id, segments)
         if not rows:
             return
         async with self._session_factory() as db:
-            for row in rows:
-                await db.execute(
-                    sql_text("""
-                        INSERT INTO transcriptions (meeting_id, start_time, end_time, text, speaker, language, session_uid, segment_id, created_at)
-                        VALUES (:mid, :start, :end, :text, :speaker, :lang, :uid, :segid, :created)
-                        ON CONFLICT (meeting_id, segment_id) WHERE segment_id IS NOT NULL
-                        DO UPDATE SET text = EXCLUDED.text, speaker = EXCLUDED.speaker,
-                                      start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time,
-                                      language = EXCLUDED.language, created_at = EXCLUDED.created_at
-                    """),
-                    row,
-                )
+            await _write_segment_rows(db, rows)
             await db.commit()
 
-    async def processed_view_cursor(self, meeting_id, view_id) -> Optional[str]:
-        """The ``source_cursor`` of the ``view_id`` view inside ``meeting.data['processed']['views']``
-        — the last ``proc:meeting:{id}`` stream entry already durable; the db-writer resumes after it."""
-        from sqlalchemy import select
+    async def complete_transcript_import(self, user_id, meeting_id, *, segments, started_at,
+                                        ended_at, source, session_uid) -> "Optional[dict]":
+        """Land an imported transcript on the caller's row and COMPLETE it — see
+        ``ports.complete_transcript_import`` for the contract.
 
-        from .models import Meeting
+        ONE transaction, under the same per-user advisory lock ``create_planned_meeting`` and
+        ``annotate_meeting`` take, so an import serializes against a concurrent spawn/calendar-sync
+        on the same user rather than racing it. Inside it: the row lock, the idempotency check, the
+        segment upsert, the status/window write. Either the meeting is completed WITH its words or
+        neither happened — a half-import (segments under a `scheduled` row) is exactly the shape
+        that made the founder's walk read "MEETING · UPCOMING" over a finished call.
 
-        async with self._session_factory() as db:
-            m = (await db.execute(select(Meeting).where(Meeting.id == int(meeting_id)))).scalars().first()
-            if not m or not isinstance(m.data, dict):
-                return None
-            view = _find_processed_view(m.data, view_id)
-            return view.get("source_cursor") if view else None
-
-    async def merge_processed_view(
-        self, meeting_id, *, view_id, kind, notes, source_cursor, params=None,
-    ) -> None:
-        """Persist drained copilot notes into the meeting row's ``data['processed']['views']``
-        JSONB (the documented meeting.data home — the same pattern recordings/notes/docs use; NO
-        schema change), in the ADDRESSABLE, VERSIONED multi-consumer shape (release DoD):
-        the view keyed ``view_id`` is upserted (other views preserved), its ``doc['notes']`` merged
-        by note id, ``params`` = the processing metadata APPLIED, ``source_cursor`` = the stream
-        position the view reflects. ONE ``SELECT … FOR UPDATE`` row lock."""
-        from sqlalchemy import select
+        ``start_time``/``end_time`` are written NAIVE UTC, matching the columns (an aware datetime is
+        an asyncpg DataError here — see ``bot_spawn.adapters.update_meeting_status``).
+        """
+        from sqlalchemy import bindparam, func, select, text
         from sqlalchemy.orm.attributes import flag_modified
 
-        from .models import Meeting
+        from .models import Meeting, Transcription
+        from .transcript_import import IN_FLIGHT_STATUSES
+
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return None
 
         async with self._session_factory() as db:
-            stmt = select(Meeting).where(Meeting.id == int(meeting_id)).with_for_update()
-            meeting = (await db.execute(stmt)).scalars().first()
-            if not meeting:
-                return
-            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
-            meeting.data = _upsert_processed_view(
-                data, view_id=view_id, kind=kind, notes=notes,
-                source_cursor=source_cursor, params=params,
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
             )
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == mid, _owned(Meeting, user_id))
+                .with_for_update()
+            )).scalars().first()
+            # Owner-scoped: a row that is not the caller's answers exactly like one that does not
+            # exist, so this route is no existence oracle — the rule the by-id share mint follows.
+            if meeting is None:
+                return None
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            prior = data.get("transcript_import")
+            if isinstance(prior, dict) and prior.get("session_uid") == session_uid:
+                # The SAME import, again. Nothing is written — not the segments, not the window.
+                # A second call is a no-op that reports what the first one did.
+                return {
+                    "meeting_id": mid, "imported": False, "status": meeting.status,
+                    "segments_imported": int(prior.get("segments") or 0),
+                    "start_time": _iso_utc(meeting.start_time),
+                    "end_time": _iso_utc(meeting.end_time),
+                    "session_uid": session_uid, "source": prior.get("source") or source,
+                    "imported_at": prior.get("imported_at"),
+                }
+            if meeting.status in IN_FLIGHT_STATUSES:
+                return {"error": "conflict", "status": meeting.status}
+
+            rows = _segment_upsert_rows(mid, segments)
+            await _write_segment_rows(db, rows)
+
+            meeting.status = "completed"
+            meeting.start_time = started_at.astimezone(timezone.utc).replace(tzinfo=None)
+            meeting.end_time = ended_at.astimezone(timezone.utc).replace(tzinfo=None)
+            # The provenance, not a completion_reason. `completion_reason` is a BOT fact — why a run
+            # ended — and no bot ran here; writing one would be the double claiming to be a
+            # recording. `transcript_import` says what actually happened, and any reader can tell an
+            # imported meeting from a captured one by asking for it.
+            data["transcript_import"] = {
+                "source": source, "session_uid": session_uid, "segments": len(rows),
+                "started_at": _iso_utc(meeting.start_time),
+                "ended_at": _iso_utc(meeting.end_time),
+                "imported_at": _now().isoformat().replace("+00:00", "Z"),
+            }
+            # The same delivery marker a terminal transition writes (#807), counted the same way —
+            # SELECT COUNT over the durable rows, so it reports what is really in the table rather
+            # than what this call believes it wrote.
+            data["segments_captured"] = (await db.execute(
+                select(func.count()).select_from(Transcription).where(Transcription.meeting_id == mid)
+            )).scalar() or 0
+            meeting.data = data
             flag_modified(meeting, "data")
             await db.commit()
+            await db.refresh(meeting)
+            return {
+                "meeting_id": mid, "imported": True, "status": meeting.status,
+                "segments_imported": len(rows),
+                "segments_captured": data["segments_captured"],
+                "start_time": _iso_utc(meeting.start_time),
+                "end_time": _iso_utc(meeting.end_time),
+                "platform": meeting.platform,
+                "native_meeting_id": meeting.platform_specific_id,
+                "session_uid": session_uid, "source": source,
+                "imported_at": data["transcript_import"]["imported_at"],
+            }
 
     async def processed_view_cursor(self, meeting_id, view_id) -> Optional[str]:
         """The ``source_cursor`` of the ``view_id`` view inside ``meeting.data['processed']['views']``
@@ -1085,7 +1183,7 @@ class SqlAlchemyTranscriptStore:
             stmt = (
                 select(Meeting)
                 .where(
-                    Meeting.user_id == user_id,
+                    _owned(Meeting, user_id),
                     Meeting.platform == platform,
                     Meeting.platform_specific_id == native_meeting_id,
                 )
@@ -1127,7 +1225,7 @@ class SqlAlchemyTranscriptStore:
             stmt = (
                 select(Meeting)
                 .where(
-                    Meeting.user_id == user_id,
+                    _owned(Meeting, user_id),
                     Meeting.platform == platform,
                     Meeting.platform_specific_id == native_meeting_id,
                 )
@@ -1187,7 +1285,7 @@ class SqlAlchemyTranscriptStore:
                                      calendar_source=None,
                                      workspace_source=None, attendees=None,
                                      auto_join_last_attempt=None,
-                                     auto_join_error=None) -> dict:
+                                     auto_join_error=None, room_plan=None) -> dict:
         """Insert a PLANNED row (intent status, no bot). Takes the SAME per-user advisory lock as
         ``bot_spawn.create_meeting_guarded`` so planned-create serializes with concurrent spawns
         and calendar sync; the unique partial index remains the DB-level backstop (→ duplicate).
@@ -1225,6 +1323,11 @@ class SqlAlchemyTranscriptStore:
             data["auto_join_last_attempt"] = auto_join_last_attempt
         if auto_join_error:
             data["auto_join_error"] = auto_join_error
+        # A ROOM'S PLANNED CALL (rooms, F1): the room that owns it, its agenda page and the calendar
+        # event that is its time's source of truth — data the owner's flows and the room read.
+        for key, value in (room_plan or {}).items():
+            if key in ROOM_PLAN_KEYS and value:
+                data[key] = value
         status = "scheduled" if scheduled_at else "idle"
 
         async with self._session_factory() as db:
@@ -1234,7 +1337,7 @@ class SqlAlchemyTranscriptStore:
             if native_meeting_id is not None:
                 dup = (await db.execute(
                     select(Meeting.id).where(
-                        Meeting.user_id == user_id,
+                        Meeting.user_id == user_id,      # the active-row index is per account, room rows too
                         Meeting.platform == platform,
                         Meeting.platform_specific_id == native_meeting_id,
                         Meeting.status.notin_(("completed", "failed")),
@@ -1274,7 +1377,7 @@ class SqlAlchemyTranscriptStore:
                 text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
             )
             meeting = (await db.execute(
-                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                select(Meeting).where(Meeting.id == meeting_id, _owned(Meeting, user_id))
                 .with_for_update()
             )).scalars().first()
             if meeting is None:
@@ -1297,6 +1400,8 @@ class SqlAlchemyTranscriptStore:
     # the same string: an index on to_tsvector('english', text) is invisible to a query that says
     # to_tsvector('simple', text), and the failure is silent — correct answers, seq scan, no error.
     FTS_CONFIG = "english"
+    # Bound on each lock wait of the concurrent FTS index build (ensure_fts_index).
+    FTS_INDEX_LOCK_TIMEOUT_MS = 5000
 
     async def search_transcripts(self, user_id, query, *, limit=20, offset=0,
                                  platform=None, native_meeting_id=None,
@@ -1336,7 +1441,7 @@ class SqlAlchemyTranscriptStore:
             FROM transcriptions t
             JOIN meetings m ON m.id = t.meeting_id,
                  websearch_to_tsquery('{cfg}', :q) AS qq
-            WHERE m.user_id = :uid
+            WHERE m.user_id = :uid AND m.data->>'room_principal' IS NULL
               AND to_tsvector('{cfg}', t.text) @@ qq
               -- Explicit casts: asyncpg cannot infer a bind parameter's type when it appears
               -- only in `IS NULL` ("could not determine data type of parameter $3"), so an
@@ -1374,10 +1479,17 @@ class SqlAlchemyTranscriptStore:
         whose absence makes every list request fail.
 
         Handles the one real trap: a failed CONCURRENTLY build leaves an INVALID index behind that
-        Postgres silently never uses. We detect it via ``pg_index.indisvalid``, drop it, and let
-        the next call rebuild.
+        Postgres silently never uses. We detect it via ``pg_index.indisvalid``, drop it, and rebuild.
+
+        Every wait is bounded by ``FTS_INDEX_LOCK_TIMEOUT_MS``: the build first waits for each
+        transaction already open, and a long-open one fails the build in seconds instead of holding
+        SHARE UPDATE EXCLUSIVE on ``transcriptions`` (which queues every DDL on the table) for as
+        long as it stays open. A failed build tries to drop its own INVALID leftover (the drop waits
+        on the same transactions, so it may fail too) and returns ``{"status": "failed"}``; the
+        next boot drops whatever is left and builds again.
         """
         from sqlalchemy import text as sql_text
+        from sqlalchemy.exc import DBAPIError
 
         name = "ix_transcription_text_fts"
         # AUTOCOMMIT: CREATE/DROP INDEX CONCURRENTLY cannot run in a transaction block.
@@ -1386,24 +1498,39 @@ class SqlAlchemyTranscriptStore:
         if engine is None:
             return {"status": "skipped", "reason": "no engine handle"}
 
+        valid_sql = sql_text(
+            "SELECT i.indisvalid FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid "
+            "WHERE c.relname = :n")
+        drop_sql = sql_text(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
+        create_sql = (f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} ON transcriptions "
+                      f"USING gin (to_tsvector('{self.FTS_CONFIG}', text))")
         async with engine.connect() as conn:
             conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
-            state = (await conn.execute(sql_text(
-                "SELECT i.indisvalid FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid "
-                "WHERE c.relname = :n"), {"n": name})).scalar()
+            state = (await conn.execute(valid_sql, {"n": name})).scalar()
             if state is True:
                 return {"status": "present", "index": name}
-            if state is False:
-                # A previous CONCURRENTLY build failed. The leftover is INVALID and unusable —
-                # Postgres will not error on it, it will simply never use it. Drop and rebuild.
-                await conn.execute(sql_text(f"DROP INDEX CONCURRENTLY IF EXISTS {name}"))
-            await conn.execute(sql_text(
-                f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} ON transcriptions "
-                f"USING gin (to_tsvector('{self.FTS_CONFIG}', text))"))
-            return {"status": "created", "index": name}
+            await conn.execute(sql_text(f"SET lock_timeout = '{int(self.FTS_INDEX_LOCK_TIMEOUT_MS)}ms'"))
+            try:
+                if state is False:
+                    # A previous CONCURRENTLY build failed. The leftover is INVALID and unusable —
+                    # Postgres will not error on it, it will simply never use it. Drop and rebuild.
+                    await conn.execute(drop_sql)
+                await conn.execute(sql_text(create_sql))
+                return {"status": "created", "index": name}
+            except DBAPIError as e:
+                reason = str(getattr(e, "orig", e)).strip().splitlines()[0]
+                try:
+                    if (await conn.execute(valid_sql, {"n": name})).scalar() is False:
+                        await conn.execute(drop_sql)
+                except DBAPIError:
+                    pass
+                return {"status": "failed", "index": name, "reason": reason,
+                        "by_hand": f"DROP INDEX CONCURRENTLY IF EXISTS {name}; {create_sql}"}
+            finally:
+                await conn.execute(sql_text("RESET lock_timeout"))
 
     async def annotate_meeting(self, user_id, meeting_id, *, title=None,
-                               metadata=None) -> "Optional[dict]":
+                               metadata=None, notes=None) -> "Optional[dict]":
         """Caller-owned annotations on a row in ANY status (see ports.annotate_meeting).
 
         Modelled on ``attach_calendar_source``, not on ``update_planned_meeting``: nothing written
@@ -1418,7 +1545,7 @@ class SqlAlchemyTranscriptStore:
                 text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
             )
             meeting = (await db.execute(
-                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                select(Meeting).where(Meeting.id == meeting_id, _owned(Meeting, user_id))
                 .with_for_update()
             )).scalars().first()
             if meeting is None:
@@ -1458,6 +1585,13 @@ class SqlAlchemyTranscriptStore:
                     return {"error": "metadata_too_large", "detail": reason}
                 data["metadata"] = merged
 
+            if notes is not None:
+                touched = True
+                if notes:
+                    data["notes"] = str(notes)[:200000]
+                else:
+                    data.pop("notes", None)
+
             if touched:
                 meeting.data = data
                 flag_modified(meeting, "data")
@@ -1480,7 +1614,7 @@ class SqlAlchemyTranscriptStore:
                 text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
             )
             meeting = (await db.execute(
-                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                select(Meeting).where(Meeting.id == meeting_id, _owned(Meeting, user_id))
                 .with_for_update()
             )).scalars().first()
             if meeting is None:
@@ -1495,7 +1629,7 @@ class SqlAlchemyTranscriptStore:
                 if new_native is not None:
                     dup = (await db.execute(
                         select(Meeting.id).where(
-                            Meeting.user_id == user_id,
+                            _owned(Meeting, user_id),
                             Meeting.platform == new_platform,
                             Meeting.platform_specific_id == new_native,
                             Meeting.status.notin_(("completed", "failed")),
@@ -1540,6 +1674,12 @@ class SqlAlchemyTranscriptStore:
                     data["attendees"] = updates["attendees"]
                 else:
                     data.pop("attendees", None)
+            for key in ROOM_PLAN_KEYS:
+                if key in updates:
+                    if updates[key]:
+                        data[key] = updates[key]
+                    else:
+                        data.pop(key, None)
             if "auto_join" in updates:
                 data["auto_join"] = bool(updates["auto_join"])
             # The USER's own auto-join choice, marked so calendar sync stops deriving the flag
@@ -1585,7 +1725,7 @@ class SqlAlchemyTranscriptStore:
 
         async with self._session_factory() as db:
             meeting = (await db.execute(
-                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                select(Meeting).where(Meeting.id == meeting_id, _owned(Meeting, user_id))
                 .with_for_update()
             )).scalars().first()
             if meeting is None:
@@ -1606,7 +1746,7 @@ class SqlAlchemyTranscriptStore:
 
         async with self._session_factory() as db:
             meeting = (await db.execute(
-                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                select(Meeting).where(Meeting.id == meeting_id, _owned(Meeting, user_id))
                 .with_for_update()
             )).scalars().first()
             if meeting is None:
@@ -1619,13 +1759,9 @@ class SqlAlchemyTranscriptStore:
                 prior and prior.get("state", "completed") == "completed"
             )
             if not already_deleted:
-                data["artifact_deletion"] = {
-                    "state": "pending",
-                    "requested_at": prior.get("requested_at")
-                    or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                    "scope": "primary_transcript_and_recording_storage",
-                    "backup_residuals": "expire_under_deployment_retention_policy",
-                }
+                data[ARTIFACT_DELETION_FIELD] = deletion_stamp(
+                    "pending", prior=prior,
+                    at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
                 meeting.data = data
                 flag_modified(meeting, "data")
                 await db.commit()
@@ -1634,6 +1770,45 @@ class SqlAlchemyTranscriptStore:
                 "recordings": list(data.get("recordings") or []),
                 "already_deleted": already_deleted,
             }
+
+    async def mark_delete_when_ended(self, user_id, meeting_id) -> "Optional[dict]":
+        from datetime import datetime, timezone
+
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+        from .ports import DELETE_WHEN_ENDED_FIELD
+
+        async with self._session_factory() as db:
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == meeting_id, _owned(Meeting, user_id))
+                .with_for_update()
+            )).scalars().first()
+            if meeting is None:
+                return None
+            if meeting.status in ("completed", "failed"):
+                return {"terminal": True}
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            if not data.get(DELETE_WHEN_ENDED_FIELD):
+                data[DELETE_WHEN_ENDED_FIELD] = {
+                    "requested_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
+                meeting.data = data
+                flag_modified(meeting, "data")
+                await db.commit()
+            return {"platform": meeting.platform, "native_meeting_id": meeting.platform_specific_id}
+
+    async def delete_when_ended_requested(self, user_id, meeting_id) -> bool:
+        from sqlalchemy import select
+
+        from .models import Meeting
+        from .ports import DELETE_WHEN_ENDED_FIELD
+
+        async with self._session_factory() as db:
+            data = (await db.execute(
+                select(Meeting.data).where(Meeting.id == meeting_id, _owned(Meeting, user_id))
+            )).scalars().first()
+            return bool(isinstance(data, dict) and data.get(DELETE_WHEN_ENDED_FIELD))
 
     async def finalize_completed_artifact_deletion(self, user_id, meeting_id) -> "Optional[bool]":
         from datetime import datetime, timezone
@@ -1645,7 +1820,7 @@ class SqlAlchemyTranscriptStore:
 
         async with self._session_factory() as db:
             meeting = (await db.execute(
-                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                select(Meeting).where(Meeting.id == meeting_id, _owned(Meeting, user_id))
                 .with_for_update()
             )).scalars().first()
             if meeting is None:
@@ -1656,12 +1831,8 @@ class SqlAlchemyTranscriptStore:
             data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
             for key in ("recordings", "processed", "notes", "share_grants", "transcript_viewers"):
                 data.pop(key, None)
-            data["artifact_deletion"] = {
-                "state": "completed",
-                "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "scope": "primary_transcript_and_recording_storage",
-                "backup_residuals": "expire_under_deployment_retention_policy",
-            }
+            data[ARTIFACT_DELETION_FIELD] = deletion_stamp(
+                "completed", at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
             meeting.data = data
             flag_modified(meeting, "data")
             await db.commit()
@@ -1669,9 +1840,9 @@ class SqlAlchemyTranscriptStore:
         # The DB tombstone makes this retryable: if Redis cleanup fails, a repeat reaches this same
         # terminal row and tries the cache/stream cleanup again without resurrecting durable data.
         if self._redis is not None:
-            await self._redis.delete(
-                f"meeting:{meeting_id}:segments", f"proc:meeting:{meeting_id}"
-            )
+            from .ports import erased_meeting_cache_keys
+
+            await self._redis.delete(*erased_meeting_cache_keys(meeting_id))
             await self._redis.srem("active_meetings", str(meeting_id))
         return True
 
@@ -1792,6 +1963,13 @@ class RedisStreamBus:
         """Append one entry to a redis STREAM under the ``payload`` field — the native transcript feed
         ``tc:meeting:{native}`` the collector owns as single writer (P23)."""
         return await self._client.xadd(stream, {"payload": json.dumps(payload)})
+
+    async def settle_chat_send(self, request_id, *, meeting_id, posted, reason=None):
+        """``RedisBus.settle_chat_send`` over the same Redis the chat-send route records in."""
+        from ..chat_delivery import ChatDeliveryLedger
+
+        return await ChatDeliveryLedger(self._client).settle(
+            request_id, meeting_id=meeting_id, posted=posted, reason=reason)
 
 
 def build_production_app(

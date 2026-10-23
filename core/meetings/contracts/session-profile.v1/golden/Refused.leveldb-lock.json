@@ -1,0 +1,11 @@
+{
+  "why": "a LevelDB LOCK file is not session data",
+  "body": {
+    "files": [
+      {
+        "path": "Default/Local Storage/leveldb/LOCK",
+        "data": ""
+      }
+    ]
+  }
+}

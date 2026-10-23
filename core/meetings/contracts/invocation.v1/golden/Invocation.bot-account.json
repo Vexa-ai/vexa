@@ -1,0 +1,13 @@
+{
+  "platform": "teams",
+  "meetingUrl": "https://teams.microsoft.com/l/meetup-join/xxx",
+  "botName": "Vexa",
+  "token": "MEETING_TOKEN_PLACEHOLDER",
+  "connectionId": "sess-uid",
+  "meeting_id": 43,
+  "redisUrl": "redis://vexa-bot-sess-uid:REDIS_PASSWORD_PLACEHOLDER@redis:6379",
+  "meetingApiCallbackUrl": "http://meeting-api:8080/runtime/callback",
+  "authenticated": true,
+  "sessionRestoreUrl": "http://meeting-api:8080/internal/browser-session/sess-uid",
+  "sessionWritebackUrl": "http://meeting-api:8080/internal/browser-session/sess-uid"
+}

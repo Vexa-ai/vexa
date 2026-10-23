@@ -1,0 +1,24 @@
+{
+  "generated_at": 1792100000,
+  "needs": [
+    {"id": "failed:flow:morning-brief", "kind": "failed", "workspace": "personal", "text": "Morning brief failed: no access to the calendar", "at": 1792099000,
+     "act": {"label": "Retry", "kind": "retry-routine", "routine": "flow:morning-brief", "reaction": "rx-41"}},
+    {"id": "proposal:p-0123456789abcdef", "kind": "proposal", "workspace": "client-x", "text": "Review: Weekly sync notes", "at": 1792098000,
+     "act": {"label": "Review", "kind": "accept-proposal", "source": "call", "proposal": "p-0123456789abcdef", "session": "s-0a1b2c"}},
+    {"id": "mention:n-7", "kind": "mention", "workspace": "client-x", "text": "Ana mentioned you in “Launch plan”", "at": 1792097000,
+     "act": {"label": "Open", "kind": "open-session", "session": "s-0a1b2c", "notification": "n-7"}},
+    {"id": "upcoming:601", "kind": "upcoming", "workspace": "client-x", "text": "Kickoff · in 3h", "at": 1792110800,
+     "act": {"label": "Prepare", "kind": "prepare", "path": "kg/entities/meeting/2026-10-16-kickoff.md", "slug": "client-x", "meeting": "601"}}
+  ],
+  "workspaces": {
+    "personal": {"needs": [{"id": "failed:flow:morning-brief", "kind": "failed", "workspace": "personal", "text": "Morning brief failed: no access to the calendar", "at": 1792099000,
+                            "act": {"label": "Retry", "kind": "retry-routine", "routine": "flow:morning-brief", "reaction": "rx-41"}}],
+                 "working": [{"kind": "routine", "label": "Morning brief", "state": "failed", "when": "16m ago", "at": 1792099000, "ref": "agent:flow:morning-brief"}],
+                 "rooms_active": 0, "live_call": null, "last": "You changed Pricing notes"},
+    "client-x": {"needs": [], "working": [{"kind": "call", "label": "Weekly sync", "state": "live", "when": "5m ago", "at": 1792099700, "ref": "meeting:41", "meeting": "41", "session": "pchat-call"},
+                                          {"kind": "room", "label": "Launch plan", "state": "live", "when": "16m ago", "at": 1792099000, "ref": "chat:s-0a1b2c", "session": "s-0a1b2c"}],
+                 "rooms_active": 1,
+                 "live_call": {"platform": "vexa_call", "session": "pchat-call", "meeting": "41", "line": "Weekly sync", "people": 2, "since": 1792099700},
+                 "last": "Ana changed Launch plan"}
+  }
+}

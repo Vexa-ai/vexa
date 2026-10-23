@@ -46,10 +46,12 @@ Most day-to-day iteration is the second kind: prompt and cadence changes, zero d
 | Endpoint | Does |
 |---|---|
 | `GET /flows` | every version (image + api), plus the step vocabulary |
-| `POST /flows` | submit `{name, on_event, steps, params, activate}` — validated, auto-versioned |
-| `POST /flows/{name}/{v}/activate` · `…/retire` | runtime activation — in-flight reactions keep their stamped version |
+| `POST /flows` | submit `{name, trigger, steps, params, scope, activate}` — validated, auto-versioned per scope. `trigger` is `{kind: "event", on_event}` or `{kind: "schedule", cron}`; a bare `on_event` still works |
+| `POST /flows/{name}/{v}/activate` · `…/retire` · `…/pause` · `…/resume` | runtime activation, with `?scope=` — in-flight reactions keep their stamped version |
+| `GET /flows/runs` | the runs of your own flows, newest first, with their receipts |
+| `GET /flows/pages` | the generated flow pages for one scope (`instance`, or `user:<you>`) |
 | `GET /reactions?status=…` | the operator projection: what happened, why, what's waiting |
-| `POST /reactions/{id}/retry` · `resume` · `cancel` | the signal verbs — audited rows, never shell surgery |
+| `POST /reactions/{id}/retry` · `resume` · `cancel` · `wake` | the signal verbs — audited rows, never shell surgery |
 | `GET /queue/waiting` | what is waiting for **one person**, each item naming its flow and typed reason |
 | `GET /queue/notices` | the standing notices only — the sentences, and nothing else |
 | `POST /friction` | file a friction report: what did not work |
@@ -63,9 +65,26 @@ Auth is two tiers, because two different callers reach this API:
   `X-API-Key`). The subject is taken from that credential, so you see and steer your own reactions
   and nobody else's — this is what makes those tools work from your own Claude Code over the MCP
   endpoint. A `subject` argument naming somebody else is refused.
-- **Changing the machine** — `POST /flows`, `POST /flows/{name}/{v}/{action}`, `POST /events` and
-  `POST /events/batch` take the operator key `X-Flows-Operator-Key` and nothing else (`X-Flows-Admin-Key` still works for one release — it named admin-api's token, which it never was). The operator key
-  also opens everything above, unscoped, which is the admin console's view.
+- **Your own flows** — `POST /flows`, `POST /flows/{name}/{v}/{action}` and `GET /flows/runs` take
+  your own credential too, and the scope comes from it: you write, steer and see the runs of flows in
+  `user:<you>` only. The instance's flows need the deployment's admin account (its own credential or
+  its chat) or the operator key. See [Routines and agent messages](/flows/routines).
+- **Changing the machine** — `POST /events` and `POST /events/batch` take the operator key
+  `X-Flows-Operator-Key` and nothing else (`X-Flows-Admin-Key` still works for one release — it named
+  admin-api's token, which it never was). The operator key also opens everything above, and must name
+  the person a subject-scoped read is about.
+
+### Authoring from a chat
+
+`flows_submit`, `flow_lifecycle` and `flow_runs` carry your own credential to flows-api; the MCP
+spends no operator key on them. From an everyday account's chat they write and steer flows in
+`user:<you>`, and asking for `scope: instance` answers `403 not_your_scope`.
+
+The instance's flows are part of the company layer, so the deployment's **admin account** sets them
+up ([The admin account](/minutes/workspaces#the-admin-account)). Sign in as the admin account and ask
+in its chat: its agent's `flows_submit` and `flow_lifecycle` with `scope: instance` write and steer
+the instance's flows, and it can write flow pages in `_global/flows/`. Every other account and
+its chat is refused the instance scope, and `_global` is read-only there.
 
 New events always select the **newest active version** of each flow; running reactions are never
 migrated.
@@ -145,3 +164,26 @@ release and then removed — send a JSON body.
 Your own filed reports, newest first. `?since=` takes an epoch or an ISO-8601 instant (empty means
 everything); `?limit=` defaults to 40 and caps at 200. Answers `{subject, count, reports}`. The
 whole-instance dump and the close-out verb stay operator-side.
+
+## How it works
+
+1. A call reaches flows-api with a credential: a person's API key, a chat worker's delegation token
+   (`vxd_…`) forwarded by the MCP, or the operator key.
+2. For anything but the operator key, flows-api asks identity (`/internal/validate`) who holds it.
+   For an API key identity answers `admin_account`. For a delegation token it first verifies the
+   token's signature and revocation, then answers `person_admin_account` for the person the token
+   names; the worker's own `admin_account` is always false.
+3. flows-api decides the scope from that answer only: the operator key may write `instance` or a
+   named person; the admin account, directly or through its chat, may write `instance`; everyone
+   else writes `user:<their uid>`. A worker with nobody in the loop (regime not `human`) is refused
+   `POST /flows` and the lifecycle verbs before the scope is decided.
+4. A worker whose answer lost its delegation is never treated as the admin account.
+
+## Why it complies
+
+| Rule | How it is met | Enforced by |
+|---|---|---|
+| P20 (authorize every access) | the scope comes from identity's answer for the caller's own credential, never from the request; another person's scope and, for everyone but the admin account, the instance scope are refused | `core/flows/tests/test_user_flows_api.py` · `test_the_admin_accounts_chat_writes_the_instance`, `test_an_everyday_accounts_chat_is_refused_the_instance`, `test_an_everyday_account_is_refused_the_instance`, `test_a_worker_answer_without_its_delegation_is_never_the_admin_account`, `test_nobody_names_another_persons_scope`, `test_a_worker_with_nobody_in_the_loop_cannot_author_a_flow` |
+| P23 (one resolver) | flows-api is a second caller of identity's one resolver; the admin-account bit is computed by identity from the verified delegation, and a worker is never the account itself | `core/identity/services/admin-api/tests/test_internal_validate_wire.py` · `test_the_admin_accounts_worker_is_never_the_account_its_person_is` |
+| Operator key spent for the admin account only | the MCP sends the deployment's flows key only on admin tools, and only for the admin account | `core/gateway/services/mcp/tests/test_tool_auth.py` · `test_an_admin_tool_spends_the_deployments_key_for_the_admin_account_only`, `test_the_admin_check_never_reads_what_the_caller_says_about_itself` |
+| The company layer has one writer | `_global/flows/` pages are written only by the admin account | `core/agent/tests/test_admin_account.py` · `test_an_everyday_account_writes_no_door_of_the_company_layer` |

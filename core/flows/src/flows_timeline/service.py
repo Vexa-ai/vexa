@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import time
 from typing import Callable, Optional
+from urllib.parse import quote as _q
 
 from flows_timeline.model import (Event, concerns, event_from_meeting, event_from_receipt,
                                   events_from_reaction, iso, loads, merge, to_epoch)
@@ -163,7 +164,46 @@ def read_flows(db, *, uid: str = "", email: str = "", since: float, until: float
 # proper would mean inventing a description for a shape that already has its own reader.
 
 _FRICTION_COLS = ("reaction_id", "subject_refs", "created_at")
+_FIX_COLS = ("subject_refs",)
+
+
+def _fixed_friction_ids(db, ids: set, *, scan: int = SCAN_ROWS) -> set:
+    """Every `friction_id` a `friction.fixed` row names (#1510's C3) — a set, since the read side
+    only needs OPEN vs FIXED, not which fix or how many. Scanned rather than joined by id: there is
+    no index on a JSON field in this store (same reasoning `_rows`'s other callers already accept),
+    and this read is already bounded by `scan` the way `friction_for_subject`'s own report scan is.
+    """
+    if not ids:
+        return set()
+    rows = _rows(db, f"""SELECT {", ".join(_FIX_COLS)} FROM reaction
+                         WHERE event_type = :et ORDER BY created_at DESC LIMIT {int(scan)}""",
+                {"et": "friction.fixed"}, _FIX_COLS)
+    fixed = set()
+    for r in rows:
+        fid = loads(r["subject_refs"]).get("friction_id")
+        if fid in ids:
+            fixed.add(fid)
+    return fixed
 #: The refs this row renders as named fields; everything else is passed through under `context`.
+def _friction_occurrences(db, ids: set) -> dict:
+    """`{friction_id: (occurrences, last_seen_epoch)}` from `friction_occurrence` — the repeat
+    counter `POST /friction` keeps when the same report is filed again inside one UTC hour
+    (`flows_integrations.friction_dedup`, its one writer). Summed across hour buckets folded into
+    the same id. A report with no counter row was filed once: the caller defaults it to 1. READ
+    ONLY, by id, so the cost is bounded by the page of reports already read."""
+    wanted = sorted({str(i) for i in ids if i})
+    if not wanted:
+        return {}
+    names = {f"f{n}": v for n, v in enumerate(wanted)}
+    rows = db.execute("SELECT friction_id, occurrences, last_seen FROM friction_occurrence "
+                      f"WHERE friction_id IN ({', '.join(':' + k for k in names)})", names)
+    out: dict = {}
+    for fid, count, last in rows:
+        n, seen = out.get(fid, (0, 0.0))
+        out[fid] = (n + int(count or 0), max(seen, to_epoch(last) or 0.0))
+    return out
+
+
 _FRICTION_RENDERED = ("uid", "session", "friction_id", "severity", "what_i_tried", "what_happened")
 #: What a session-less report reads as. `POST /friction` stopped requiring `session` in F-D27 —
 #: prod refused a report for not having one, and the report it refused was about that refusal. So a
@@ -175,11 +215,14 @@ NO_SESSION = "no session"
 def friction_for_subject(db, *, subject: str = "", since: float = 0.0, limit: int = 40,
                          scan: int = SCAN_ROWS,
                          identity: Optional[Callable] = None) -> Optional[list[dict]]:
-    """Every `friction.reported` row at or after `since`, newest first. ``None`` when `subject`
-    was given and nobody answers to it (mirrors `list_reactions`'s contract). `subject=""` reads
-    every subject's reports — the whole-instance view stays behind the caller's own authorization
-    (an operator, in `flows_api.friction_so_far`); this function does not gate it itself, the same
-    division `list_reactions` already draws between scoping and authorizing.
+    """Every `friction.reported` row at or after `since`, newest first, each carrying a `status`
+    (`open` or `fixed`, #1510's C3 — folded from any matching `friction.fixed` row, keyed on
+    `friction_id`; "recurring" is not resurrected here, see that carrier's own census entry).
+    ``None`` when `subject` was given and nobody answers to it (mirrors `list_reactions`'s
+    contract). `subject=""` reads every subject's reports — the whole-instance view stays behind
+    the caller's own authorization (an operator, in `flows_api.friction_so_far`); this function
+    does not gate it itself, the same division `list_reactions` already draws between scoping and
+    authorizing.
     """
     rows = _rows(db, f"""SELECT {", ".join(_FRICTION_COLS)} FROM reaction
                          WHERE event_type = :et AND created_at >= :since
@@ -190,8 +233,12 @@ def friction_for_subject(db, *, subject: str = "", since: float = 0.0, limit: in
         if not uid and not email:
             return None
         rows = [r for r in rows if concerns(loads(r["subject_refs"]), uid, email)]
+    rows = rows[:max(1, int(limit))]
+    ids = {loads(r["subject_refs"]).get("friction_id") or r["reaction_id"] for r in rows}
+    fixed_ids = _fixed_friction_ids(db, ids, scan=scan)
+    counts = _friction_occurrences(db, ids)
     out = []
-    for r in rows[:max(1, int(limit))]:
+    for r in rows:
         refs = loads(r["subject_refs"])
         at = to_epoch(r["created_at"]) or 0.0
         # EVERYTHING THE REPORT CARRIED, minus the fields this row renders in its own right. A
@@ -202,8 +249,9 @@ def friction_for_subject(db, *, subject: str = "", since: float = 0.0, limit: in
         ctx = {k: v for k, v in refs.items()
               if k not in _FRICTION_RENDERED and v not in (None, "", {}, [])}
         sess = str(refs.get("session") or "").strip()
+        fid = refs.get("friction_id") or r["reaction_id"]
         out.append({
-            "id": refs.get("friction_id") or r["reaction_id"],
+            "id": fid,
             "at": iso(at), "at_epoch": round(at, 3),
             "subject": refs.get("uid", ""),
             # `session` is the HUMAN field and says "no session" when there is none; `session_id`
@@ -213,25 +261,69 @@ def friction_for_subject(db, *, subject: str = "", since: float = 0.0, limit: in
             "severity": refs.get("severity", ""),
             "tried": refs.get("what_i_tried", ""), "happened": refs.get("what_happened", ""),
             "context": ctx,
+            "status": "fixed" if fid in fixed_ids else "open",
+            # HOW MANY TIMES THIS WAS FILED. Identical repeats inside one UTC hour are folded into
+            # the first report rather than admitted as rows of their own; `last_seen` is the newest
+            # of them. A report filed once reads `occurrences: 1`, `last_seen` == `at`.
+            "occurrences": max(1, counts.get(fid, (1, at))[0]),
+            "last_seen": iso(max(at, counts.get(fid, (1, at))[1])),
         })
+    return out
+
+
+#: The statuses a report can be in, and the one value that means "either".
+FRICTION_STATUSES = ("open", "fixed")
+
+
+def _scrubbed(value):
+    """Every string inside `value` with credential-shaped runs masked — dicts and lists walked."""
+    from flows_timeline.redaction import redact
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, dict):
+        return {k: _scrubbed(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_scrubbed(v) for v in value]
+    return value
+
+
+def friction_sink(db, *, since: float = 0.0, kind: str = "", subject: str = "", status: str = "",
+                  limit: int = 50, scan: int = SCAN_ROWS,
+                  identity: Optional[Callable] = None) -> Optional[list[dict]]:
+    """THE WHOLE SINK, for the deployment's admin account (founder ruling 2026-10-11: *"friction
+    reading from sink"*). Every subject's reports unless `subject` narrows it to one person (a uid
+    or an address — `None` when nobody answers to it, as `friction_for_subject`); `kind` matches
+    the reporter's own word case-insensitively; `status` is `open`, `fixed` or empty for both.
+
+    SCRUBBED ON THE WAY OUT. The sink stores a report as it was sent (F-D26), and a report filed
+    over MCP never passed the worker's scrubber — so a pasted token would otherwise reach whoever
+    reads everybody's reports. Every free-text field, `context` included, goes through the same
+    shape-based scrubber agent-api uses (`redaction.py`, byte-identical to `git_redaction.py`).
+
+    This function authorizes nothing; the route in front of it is operator-gated."""
+    rows = friction_for_subject(db, subject=subject, since=since, limit=scan, scan=scan,
+                                identity=identity)
+    if rows is None:
+        return None
+    want_kind = (kind or "").strip().lower()
+    want_status = (status or "").strip().lower()
+    out = []
+    for r in rows:
+        if want_status and r.get("status") != want_status:
+            continue
+        if want_kind and str((r.get("context") or {}).get("kind") or "").strip().lower() != want_kind:
+            continue
+        out.append(_scrubbed(r))
+        if len(out) >= max(1, int(limit)):
+            break
     return out
 
 
 # ── the meetings half ────────────────────────────────────────────────────────────────────────────
 #
 # The meetings table lives in another service's database, so it is reached the way every step
-# reaches it: over HTTP, with the person's own key. The key is CACHED per process — the preamble
-# asks for a timeline on every dispatch (behind its own 60 s cache) and minting a fresh API token
-# per ask would leave a token per person per minute in the identity database forever.
-
-_KEY_CACHE: dict[str, str] = {}
-
-
-def _user_key(uid: str) -> str:
-    if uid not in _KEY_CACHE:
-        from flows_steps.common import user_api_key
-        _KEY_CACHE[uid] = user_api_key(str(uid))
-    return _KEY_CACHE[uid]
+# reaches it: over HTTP, through the gateway's service door, naming the person as the subject. The
+# door signs the person's identity onto the hop; flows holds no token of theirs.
 
 
 def fetch_meetings(uid: str) -> list[dict]:
@@ -247,9 +339,9 @@ def fetch_meetings(uid: str) -> list[dict]:
         # READ whose contract is already "degrade, never empty", an absent domain and an
         # unreachable one produce the same honest answer (no meetings in the window). The
         # distinction that matters is on the WRITE side, where a step must not knock at all.
-        _st, body = http("GET", f"{meetings_door()}/meetings", {"X-API-Key": _user_key(uid)})
+        from flows_steps.common import door_headers
+        _st, body = http("GET", f"{meetings_door()}/meetings", door_headers(uid))
     except Exception:  # noqa: BLE001 — see docstring
-        _KEY_CACHE.pop(uid, None)          # a rejected key is the likeliest cause; re-mint next call
         return []
     if isinstance(body, dict):
         rows = body.get("meetings", [])
@@ -277,15 +369,15 @@ def resolve_identity(subject: str, lookup: Optional[Callable[[str], dict]] = Non
     email = subject.lower() if "@" in subject else ""
     if lookup is None:
         def lookup(path: str) -> dict:
-            from flows_steps.common import ADMIN_API, http, require_admin_key
-            _st, body = http("GET", f"{ADMIN_API}{path}",
-                             {"X-Admin-API-Key": require_admin_key()})
+            from flows_steps.common import ADMIN_API, door_headers, http
+            _st, body = http("GET", f"{ADMIN_API}{path}", door_headers())
             return body if isinstance(body, dict) else {}
     try:
         if uid and not email:
-            email = str((lookup(f"/admin/users/{uid}") or {}).get("email") or "").lower()
+            email = str((lookup(f"/internal/users/{_q(uid, safe='')}/email") or {}).get("email")
+                        or "").lower()
         elif email and not uid:
-            got = (lookup(f"/admin/users/email/{email}") or {}).get("id")
+            got = (lookup(f"/internal/users/by-email/{_q(email, safe='')}") or {}).get("id")
             uid = str(got) if got not in (None, "") else ""
     except Exception:  # noqa: BLE001 — see docstring
         pass

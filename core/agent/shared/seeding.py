@@ -10,23 +10,22 @@ seeding in the seed-consolidation phase.)
 from __future__ import annotations
 
 import os
-import shutil
-import subprocess
 from pathlib import Path
 
-from shared.gitenv import scrubbed_git_env
+from shared.gitexec import run_git
+from workspaces.shared import workspace_paths as wpaths
 
 # A folder may serve as a workspace seed only if it carries these — the minimum a workspace needs to be
 # governable. CLAUDE.md is the auto-loaded root memory/contract every turn reads; without it the
 # workspace has no governance root.
 REQUIRED_SEED_PATHS = ("CLAUDE.md",)
 
-# The seeds ROOT is a registry of named templates — one validated seed per subdir
-# (``workspace-seeds/<name>/``). Flavors today: ``default`` (the default — a LIGHT, ready-to-go scaffold
-# whose README is the onboarding-dashboard the user first sees) and ``finos`` (the default scaffold PLUS a
-# pre-loaded FINOS-ecosystem knowledge graph, selectable via ``VEXA_DEFAULT_TEMPLATE=finos`` or an explicit
-# ``VEXA_WORKSPACE_SEED_DIR``). Adding a flavor is a new subdir, no code change. ``resolve_seed_dir`` is the
-# single selection seam.
+# ONE seed (``workspace-seeds/default/``): a light scaffold whose README is the dashboard the user
+# first sees, whose kg/ ships empty (entity SHAPES live in kg/templates/), and whose flows/ carries
+# the scaffolding conversations — the flow read at setup is chosen by WHY the workspace is being
+# created (personal | shared | global), not by which tree was copied. Flavors were removed
+# deliberately: variation lives in flows and content written after seeding, never in parallel
+# template trees that drift. ``VEXA_WORKSPACE_SEED_DIR`` remains for tests/special deploys.
 DEFAULT_TEMPLATE = "default"
 DEFAULT_SEEDS_ROOT = "/app/workspace-seeds"
 
@@ -38,13 +37,17 @@ def resolve_seed_dir(template: "str | None" = None, *, seeds_root: "str | Path |
        overrides selection entirely.
     2. ``<seeds_root>/<template>`` — pick a named template out of the registry root. ``seeds_root``
        falls back to ``VEXA_WORKSPACE_SEEDS_DIR`` then ``/app/workspace-seeds``; ``template`` falls back
-       to ``default``.
+       to ``VEXA_DEFAULT_TEMPLATE`` then ``default``.
+
+    A WORKER reads the template from ``VEXA_DEFAULT_TEMPLATE``, which agent-api stamps into every
+    dispatch from its own setting, so the skills a turn loads and any workspace the worker seeds come
+    from the template the deployment chose — resolved against the worker's own seeds root.
     """
     explicit = os.environ.get("VEXA_WORKSPACE_SEED_DIR")
     if explicit:
         return Path(explicit)
     root = Path(seeds_root or os.environ.get("VEXA_WORKSPACE_SEEDS_DIR", DEFAULT_SEEDS_ROOT))
-    return root / (template or DEFAULT_TEMPLATE)
+    return root / (template or os.environ.get("VEXA_DEFAULT_TEMPLATE") or DEFAULT_TEMPLATE)
 
 
 def list_templates(seeds_root: "str | Path | None" = None) -> list[str]:
@@ -64,6 +67,43 @@ def validate_seed(seed: Path) -> list[str]:
             for rel in REQUIRED_SEED_PATHS if not (seed / rel).is_file()]
 
 
+# ── what a NEW DESK does NOT start with ──────────────────────────────────────────────────────────
+# ⚠ 2026-09-02. A new user signed in and the right panel rendered his desk's README as a page:
+#     "# (unset) — this workspace has not been set up yet … Purpose (unset) … Objective (unset)"
+# That file is a TEMPLATE. It shipped in the seed, was copied into every desk as ordinary content,
+# and the panel — correctly, by its own rules — rendered the first document it found. The founder
+# saw a form he had never filled in, presented as his workspace. "not happy about that."
+#
+# A desk starts EMPTY of pages. The agent writes the README when it has something to put in it (the
+# company-setup chat did exactly that for the admin's desk, and it read well because it was written,
+# not filled in). Index pages are the same shape of defect one level down: `kg/index.md` and
+# `kg/entities/*/index.md` are scaffolding for a graph with no entities in it yet.
+#
+# MACHINERY IS NOT CONTENT and stays: CLAUDE.md (the agent's conventions for this repo), flows/,
+# skills/, routines/, views/, and kg/templates/ — the agent READS those; a person never opens them
+# as a page. Dropping them would change how every desk behaves, which is a bigger change than the
+# defect asks for.
+_SEED_PAGES_NOT_COPIED = frozenset({
+    "README.md",                     # the "(unset)" page the founder was shown
+    "kg/index.md",
+    "kg/entities/index.md",
+    "kg/entities/person/index.md",
+    "kg/entities/company/index.md",
+    "kg/entities/meeting/index.md",
+})
+
+
+def _seed_pairs(seed_dir: Path):
+    """(source, workspace-relative path) for every seed file that should actually be copied."""
+    for src in sorted(seed_dir.rglob("*")):
+        if src.is_dir():
+            continue
+        rel = src.relative_to(seed_dir).as_posix()
+        if rel in _SEED_PAGES_NOT_COPIED:
+            continue
+        yield src, rel
+
+
 def seed_workspace(ws: Path, seed_dir: "Path | None") -> Path:
     """Initialize `ws` as a git repo seeded from `seed_dir` (the validated template). Idempotent: a
     workspace that already has `.git` is returned untouched. Copies the template tree, then `git init`
@@ -72,17 +112,23 @@ def seed_workspace(ws: Path, seed_dir: "Path | None") -> Path:
         return ws
     ws.mkdir(parents=True, exist_ok=True)
     if seed_dir and seed_dir.exists():
-        for item in seed_dir.iterdir():
-            dst = ws / item.name
-            if item.is_dir():
-                shutil.copytree(item, dst, dirs_exist_ok=True)
-            else:
-                shutil.copy2(item, dst)
-    # scrubbed_git_env: a hook-exported GIT_DIR would otherwise re-point init/add/commit at the
-    # HOOK's repo (with `ws` as its work tree) and rewrite that repo's branch — see shared/gitenv.py.
-    env = scrubbed_git_env()
+        # File-by-file rather than copytree, so the page exclusions above are actually applied —
+        # a directory copy cannot skip one document inside a tree it is copying wholesale.
+        # Each write is nofollow (`workspace_paths`): a tree without `.git` can still hold what a
+        # tool put there, and a link in it is replaced at a file or refused at a directory — the
+        # template is never written through it as root.
+        for src, rel in _seed_pairs(seed_dir):
+            try:
+                wpaths.copy_file_inside(src, ws, rel)
+            except wpaths.PathRefused:
+                continue
+        # `kg/entities/` must EXIST and be empty: the agent writes entities into it, and a missing
+        # directory is a different failure from an empty one.
+        os.close(wpaths.dir_fd_inside(ws, ("kg", "entities"), create=True))
+    # run_git: nothing the repository could name runs, and a hook-exported GIT_DIR cannot re-point
+    # init/add/commit at another repo — see shared/gitexec.py.
     for args in (("init", "-q"), ("config", "user.email", "agent@vexa"), ("config", "user.name", "vexa-agent")):
-        subprocess.run(["git", *args], cwd=str(ws), check=True, capture_output=True, text=True, env=env)
-    subprocess.run(["git", "add", "-A"], cwd=str(ws), check=True, capture_output=True, text=True, env=env)
-    subprocess.run(["git", "commit", "-q", "-m", "seed", "--allow-empty"], cwd=str(ws), check=True, capture_output=True, text=True, env=env)
+        run_git(ws, *args, check=True)
+    run_git(ws, "add", "-A", check=True)
+    run_git(ws, "commit", "-q", "-m", "seed", "--allow-empty", check=True)
     return ws

@@ -7,6 +7,8 @@ Proves, in isolation from the conformance contract layer, the load-bearing carve
   * verbatim body + status passthrough on success,
   * identity headers injected downstream; client-supplied identity headers stripped.
 """
+import json
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -71,6 +73,22 @@ def test_auth_me_unavailable_is_503_not_401():
     r = TestClient(app).get("/auth/me", headers=AUTH)
     assert r.status_code == 503
     assert r.json()["detail"] != "Invalid API key"
+
+
+def test_auth_unavailable_names_vexa_as_the_source_in_a_typed_body():
+    """2026-10-13: a deploy restarted admin-api, a Gmail read answered this 503, and the agent told
+    the person "Gmail is saying your account is temporarily unavailable … a problem on Google's
+    side". The words were ours. The body now says whose service failed, as typed fields a tool
+    result renders first (`reason: message`), and keeps the old `detail` for existing clients."""
+    client, _ = _client(authorizer=UnavailableAuthorizer())
+    for r in (client.get("/bots/status", headers=AUTH), client.get("/auth/me", headers=AUTH)):
+        body = r.json()
+        assert r.status_code == 503
+        assert body["detail"] == "Authentication temporarily unavailable, retry"
+        assert body["code"] == "auth_unavailable" and body["reason"] == "vexa_sign_in_unavailable"
+        assert body["source"] == "vexa" and body["retry_after"] == 1
+        assert body["message"].startswith("Vexa's own sign-in service")
+        assert "not Google or Microsoft" in body["message"] and "retry" in body["message"].lower()
 
 
 def test_insufficient_scope_is_403():
@@ -203,12 +221,12 @@ def test_internal_tier_header_is_stripped_from_a_public_request():
         "x-internal-secret": "vexa-internal-secret",   # the value that shipped in docker-compose.yml
         "x-vexa-internal-api-secret": "vexa-internal-secret",
         "x-admin-api-key": "changeme",
-        "x-gateway-verified": "1",                     # VEXA_REQUIRE_GATEWAY_IDENTITY's own marker
+        "x-vexa-identity": "v1.forged.forged",         # gateway-identity.v1's signature header
     })
     assert r.status_code == 200
     fwd = downstream.last["headers"]
     for spoofed in ("x-internal-secret", "x-vexa-internal-api-secret",
-                    "x-admin-api-key", "x-gateway-verified"):
+                    "x-admin-api-key", "x-vexa-identity"):
         assert spoofed not in fwd, f"{spoofed} reached the downstream from a public request"
     # The strip is by FAMILY, not by a list that rots: a header nobody has invented yet, spelled
     # inside one of the internal families, is stripped for free.
@@ -221,7 +239,7 @@ def test_authority_header_families_are_recognised_by_prefix():
 
     for name in ("x-internal-secret", "X-Internal-Secret", "x-internal-anything-new",
                  "x-vexa-internal-api-secret", "x-user-id", "x-user-invented-tomorrow",
-                 "x-admin-api-key", "x-gateway-verified"):
+                 "x-admin-api-key", "x-vexa-identity"):
         assert _is_authority_header(name), name
     for name in ("x-api-key", "content-type", "x-trace-id", "authorization", "mcp-session-id"):
         assert not _is_authority_header(name), name
@@ -300,6 +318,35 @@ def test_native_chat_read_forwards_to_meeting_api():
     assert r.status_code == 200
     assert downstream.last["method"] == "GET"
     assert downstream.last["url"].endswith("/bots/google_meet/abc-defg-hij/chat")
+
+
+def test_native_chat_send_forwards_to_meeting_api_with_its_body():
+    """#1089: POST /bots/{platform}/{native}/chat reaches meeting-api's chat_send publisher with the
+    caller's body intact and the RESOLVED identity — a client-asserted x-user-id never rides the
+    hop. The edge adds no chat logic of its own."""
+    client, downstream = _client()
+    r = client.post("/bots/google_meet/abc-defg-hij/chat",
+                    headers={**AUTH, "x-user-id": "999"}, json={"text": "hello room"})
+    assert r.status_code == 200
+    assert downstream.last["method"] == "POST"
+    assert downstream.last["url"].endswith("/bots/google_meet/abc-defg-hij/chat")
+    assert "meeting-api" in downstream.last["url"]
+    assert json.loads(downstream.last["content"]) == {"text": "hello room"}
+    assert downstream.last["headers"]["x-user-id"] == "7"
+
+
+def test_native_chat_send_status_forwards_to_meeting_api():
+    """GET /bots/{platform}/{native}/chat/{request_id} reaches meeting-api's delivery-status read for
+    that send, path for path, with the resolved identity. The edge adds no chat logic of its own."""
+    client, downstream = _client()
+    r = client.get("/bots/google_meet/abc-defg-hij/chat/0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+                   headers={**AUTH, "x-user-id": "999"})
+    assert r.status_code == 200
+    assert downstream.last["method"] == "GET"
+    assert downstream.last["url"].endswith(
+        "/bots/google_meet/abc-defg-hij/chat/0f1e2d3c4b5a69788796a5b4c3d2e1f0")
+    assert "meeting-api" in downstream.last["url"]
+    assert downstream.last["headers"]["x-user-id"] == "7"
 
 
 def test_native_participants_read_forwards_to_meeting_api():
@@ -413,8 +460,12 @@ def test_calendar_id_dot_segments_cannot_walk_up_the_downstream_path():
     assert downstream.last["url"] == "http://admin-api/user/calendars/%2E%2E"
     assert httpx.URL(downstream.last["url"]).path == "/user/calendars/.."
 
-    client.post("/user/calendars/%2E%2E/sync", headers=AUTH)
-    assert downstream.last["url"] == "http://meeting-api/user/calendars/%2E%2E/sync"
+    # The sync verb is a meetings row: a dot-only id is refused there, as on every meetings row
+    # (`_meeting_target`), rather than re-encoded.
+    downstream.last = None
+    r = client.post("/user/calendars/%2E%2E/sync", headers=AUTH)
+    assert r.status_code == 400
+    assert downstream.last is None
 
 
 def test_calendar_id_with_control_character_is_4xx_not_500():

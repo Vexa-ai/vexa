@@ -955,6 +955,13 @@ stated as *honestly unclaimed*; a hidden gap is an incident.
    to every reporter. · *Proof: the guarantee block is machine-generated from run results.*
 10. **Pointers moved honestly.** `:v012` only after all of the above; `:latest` only by
     explicit ruling; the 0.10 line never touched. · *Proof: promote's constitutional guards.*
+11. **Bank-ready = bank profile green on the exact release sha.** The restricted reference
+    environment (`deploy/bank-profile`: a non-superuser Postgres on both role paths, `restricted-v2`
+    non-root Pods, egress only to declared endpoints, a corporate CA, OIDC without
+    `email_verified`, no Anthropic endpoint) installs as a namespace-scoped deployer and runs
+    sign-in → workspace → chat turn → meeting bot, every row green. A release not run on it is not
+    called bank-ready. · *Proof: `make bank-profile IMAGE_TAG=<release>` (`gate:bank-profile`,
+    operator-run), its report attached to the release.*
 
 ## The two choke points
 

@@ -10,13 +10,41 @@ flowchart LR
   style recording_blob stroke-dasharray: 5 5,stroke-width:3px
   userdata_blob[("userdata bucket (blob)")]
   style userdata_blob stroke-dasharray: 5 5,stroke-width:3px
+  model_routes[("mproxy:route:{id} + mproxy:unit-route:{unit} (redis keys)")]
+  model_grants[("mproxy:grant:{sha256} + mproxy:count:{sha256} (redis keys)")]
+  style model_grants stroke-dasharray: 5 5,stroke-width:3px
+  llm_unreported_spend[("vexa:llm:unreported:{payer}:{unit} + its indexes (redis keys)")]
+  style llm_unreported_spend stroke-dasharray: 5 5,stroke-width:3px
   bm_status[("bm:meeting:{id}:status (pubsub)")]
   u_meetings[("u:{user}:meetings (pubsub)")]
   bot_commands[("bot_commands:meeting:{id} (pubsub)")]
   unit_in[("unit:{id}:in (stream)")]
   va_chat[("va:meeting:{id}:chat (pubsub)")]
-  identity_db[("identity (users/api_tokens)")]
+  identity_db[("identity (users/api_tokens/orgs)")]
   flows_rows[("flows-rows")]
+  credentials_store[("broker state (metadata.sqlite, secrets.sqlite)")]
+  imports_status[("<store>/.imports/{subject}/ (files)")]
+  onboarding_research_state[("<store>/.onboarding-research/{sha256(workspace)}/ (files)")]
+  rail_order[("agent:rail-order:{subject} (redis key)")]
+  rail_marks[("agent:rail-marks:{subject} (redis hash)")]
+  signin_link_redeemed[("vexa:signin-link:redeemed:{jti} (redis key)")]
+  redis_acl_users[("Redis ACL users (vexa-unit-*, vexa-bot-*)")]
+  style redis_acl_users stroke-dasharray: 5 5,stroke-width:3px
+  acl_units_index[("vexa:acl:units (redis hash)")]
+  delegation_revoked[("vexa:delegation:revoked:{jti} (redis key)")]
+  session_store[("sessions: metadata in agent-api's database, transcript versions in object storage")]
+  delegation_live[("vexa:delegation:live:{jti} (redis key)")]
+  delegation_records[("vexa:delegation:units + vexa:delegation:unit:{id} (redis set + hash)")]
+  delegation_current[("vexa:delegation:current:{id} (redis key)")]
+  unit_delegation[("unit:{id}:delegation (redis key)")]
+  unit_fault[("unit:{id}:fault (redis key)")]
+  acl_bots_index[("vexa:acl:bots (redis hash)")]
+  routine_state[("<store>/.routines/ (files)")]
+  meeting_bundle_file[("meeting bundle (portable file)")]
+  meeting_bundle_parts[("meeting bundle parts (workspace tree + notes page)")]
+  crm_records[("crm_* tables")]
+  sig_annotations[("sig:meeting:{row} | sig:chat:{session} (streams)")]
+  signals_state[("sig:state|seen|lease|live:*")]
   bot -->|write| segments_stream
   bot -->|write| tc_mutable
   meeting_api -.->|read| segments_stream
@@ -28,7 +56,8 @@ flowchart LR
   terminal -.->|read| tc_stream
   terminal -.->|read| out_stream
   bot -->|write| recording_blob
-  bot -.->|read-write| userdata_blob
+  bot -.->|read| userdata_blob
+  meeting_api -->|write| userdata_blob
   remote_browser -->|write| userdata_blob
   gateway -.->|read| recording_blob
   bot -.->|read| bot_commands
@@ -44,7 +73,41 @@ flowchart LR
   gateway -.->|read| bm_status
   gateway -.->|read| u_meetings
   gateway -.->|read| va_chat
+  meeting_api -->|write| va_chat
   admin_api -->|write| identity_db
   flows_worker -->|write| flows_rows
   flows_api -->|write| flows_rows
   flows_api -.->|read| flows_rows
+  credentials_broker -->|write| credentials_store
+  agent_api -->|write| imports_status
+  agent_api -->|write| onboarding_research_state
+  agent_api -->|write| rail_order
+  agent_api -->|write| rail_marks
+  admin_api -->|write| signin_link_redeemed
+  agent_api -->|write| unit_in
+  agent_api -->|write| redis_acl_users
+  meeting_api -->|write| redis_acl_users
+  agent_api -->|write| acl_units_index
+  agent_api -->|write| delegation_revoked
+  agent_api -->|write| delegation_live
+  admin_api -.->|read| delegation_live
+  admin_api -.->|read| delegation_revoked
+  agent_api -->|write| delegation_records
+  agent_api -->|write| delegation_current
+  agent_api -->|write| unit_delegation
+  agent_worker -.->|read| unit_delegation
+  agent_api -->|write| unit_fault
+  meeting_api -->|write| acl_bots_index
+  agent_api -->|write| routine_state
+  meeting_api -->|write| meeting_bundle_file
+  meeting_api -.->|read| meeting_bundle_file
+  agent_api -->|write| meeting_bundle_parts
+  meeting_api -.->|read| meeting_bundle_parts
+  agent_api -.->|read| meeting_bundle_file
+  agent_api -->|write| model_routes
+  agent_api -->|write| model_grants
+  model_proxy -.->|read| model_routes
+  model_proxy -->|write| model_grants
+  model_proxy -->|write| llm_unreported_spend
+  agent_api -->|write| llm_unreported_spend
+  model_proxy -.->|read| delegation_current

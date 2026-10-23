@@ -23,7 +23,8 @@ async function run() {
     throw new TranscriptionError('payment_required', 402, 'Insufficient balance. Available: 0.00 minutes', false);
   };
   const sink: TranscriptSink = { segment: (s) => segments.push(s), draft: () => {}, finalize: () => {} };
-  const pipe = createGmeetPipeline({ transcribe, sink, onError: (e) => faults.push(e) });
+  // A backend that refuses every request: the final pass retries it, then gives up at its deadline.
+  const pipe = createGmeetPipeline({ transcribe, sink, onError: (e) => faults.push(e), finalPassMs: 300 });
 
   const ONE_SEC = new Float32Array(16000).fill(0.1);
   pipe.feedAudio(0, 'Alice', ONE_SEC, 0);

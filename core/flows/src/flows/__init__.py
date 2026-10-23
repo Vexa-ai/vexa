@@ -1,17 +1,22 @@
 """core/flows front door (P6): import from here, never a deep module path."""
 from .admission import admit
 from .clock import Clock, FakeClock, SystemClock
-from .db import db_from_url, postgres_db
+from .db import db_from_url, pg_engine, postgres_db
+from . import keyed, triggers  # noqa: F401 — ADR-0050 triggers and keyed schedules
 from .loop import claim, effect_key, tick
 from .model import Block, Done, NotPresent, Reaction, Receipt, StepCtx, StepError, Wait
 from .projection import status, waiting
 from .reconciler import escalate, reclaim
+from . import retention  # noqa: F401 — captured facts expire (`retention.purge`)
 from .registry import EventType, Flow, Registry
 from .signals import cancel, resume, retry, wake
+from . import tickets  # noqa: F401 — subject tickets the running step presents
+from .tickets import current as current_tickets
 
 __all__ = [
-    "admit", "Clock", "FakeClock", "SystemClock", "postgres_db", "db_from_url",
+    "admit", "Clock", "FakeClock", "SystemClock", "postgres_db", "db_from_url", "pg_engine",
     "claim", "effect_key", "tick", "Block", "Done", "NotPresent", "Reaction", "Receipt",
     "StepCtx", "StepError", "Wait", "status", "waiting", "escalate", "reclaim",
-    "EventType", "Flow", "Registry", "cancel", "resume", "retry", "wake",
+    "EventType", "Flow", "Registry", "cancel", "resume", "retry", "wake", "tickets",
+    "current_tickets",
 ]

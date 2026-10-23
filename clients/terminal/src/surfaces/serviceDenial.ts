@@ -15,7 +15,7 @@
  *  Billing is not the open product's business (Vexa-ai/vexa#1548).
  *
  *  Same rendering as the MCP surface's `render_tool_error`
- *  (core/meetings/services/mcp/src/vexa_mcp/tool_errors.py):
+ *  (core/gateway/services/mcp/src/vexa_mcp/tool_errors.py):
  *    · line 1  — `<reason>: <message>` when the decider authored a message; the bare `reason` when
  *                it did not; `HTTP <status> <code>` when it said neither.
  *    · line 2  — `HTTP <status> <code>`, the machine-readable half, always.
@@ -27,7 +27,7 @@
  *
  *  Deliberately free of React and of network access.
  */
-import { ApiError, presentError } from "./apiClient";
+import { ApiError, presentError } from "../data/apiClient";
 
 export const SERVICE_NOT_ALLOWED_CODE = "service_not_allowed";
 export const SERVICE_AUTHORITY_UNAVAILABLE_CODE = "service_authority_unavailable";

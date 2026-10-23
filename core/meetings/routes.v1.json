@@ -3,155 +3,352 @@
   "domain": "meetings",
   "owner": "core/meetings",
   "edge": "gateway",
-  "note": "Bots, meeting records, transcripts, recordings \u2014 and the two calendar SYNC verbs, which run against the feed meeting-api owns even though the connection itself is identity's.",
+  "note": "Bots, bot accounts (saved signed-in browser profiles and the sign-in sessions that make them, ADR-0049), meeting records, transcripts, recordings \u2014 and the two calendar SYNC verbs, which run against the feed meeting-api owns even though the connection itself is identity's. A row with `mcp_reentry` is one the MCP's own meeting tools call back into (core/gateway/services/mcp/src/vexa_mcp/app.py): a worker's token is admitted there on the MCP's re-entry, and on no other row. A row with `upstream` is forwarded to that path on meeting-api rather than its own; meeting-api reads this file to check, for each of its routes, the scopes of the rows that reach it (meeting_api/route_scopes.py). `GET /voice-notes/{native_meeting_id}/stream` is a WebSocket: the row is its upgrade request, and the edge relays the socket to the same path on meeting-api. The sign-in session's live-view websocket (`/bot-accounts/sessions/{session_id}/vnc`) is not a row, because routes.v1 declares HTTP verbs: the edge relays it to the same path on meeting-api and holds it to the scopes of `GET /bot-accounts/sessions/{session_id}`.",
   "presence_env": "MEETING_API_URL",
   "routes": [
+    {
+      "method": "GET",
+      "path": "/bot-accounts",
+      "scopes": [
+        "bot"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/bot-accounts/sessions",
+      "scopes": [
+        "bot"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "DELETE",
+      "path": "/bot-accounts/sessions/{session_id}",
+      "scopes": [
+        "bot"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/bot-accounts/sessions/{session_id}",
+      "scopes": [
+        "bot"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/bot-accounts/sessions/{session_id}/view/{path:path}",
+      "scopes": [
+        "bot"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "DELETE",
+      "path": "/bot-accounts/{account_id}",
+      "scopes": [
+        "bot"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/bot-accounts/{account_id}/verify",
+      "scopes": [
+        "bot"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
     {
       "method": "GET",
       "path": "/bots",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/bots",
       "scopes": [
         "bot"
-      ]
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
     },
     {
       "method": "GET",
       "path": "/bots/status",
       "scopes": [
         "bot"
-      ]
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "DELETE",
       "path": "/bots/{platform}/{native_meeting_id}",
       "scopes": [
         "bot"
-      ]
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "GET",
       "path": "/bots/{platform}/{native_meeting_id}/chat",
       "scopes": [
         "bot"
-      ]
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/bots/{platform}/{native_meeting_id}/chat",
+      "scopes": [
+        "bot"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/bots/{platform}/{native_meeting_id}/chat/{request_id}",
+      "scopes": [
+        "bot"
+      ],
+      "shared": "refuse"
     },
     {
       "method": "PUT",
       "path": "/bots/{platform}/{native_meeting_id}/config",
       "scopes": [
         "bot"
-      ]
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/bots/{platform}/{native_meeting_id}/speak",
       "scopes": [
         "bot"
-      ]
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/voice-notes/{native_meeting_id}/stream",
+      "scopes": [
+        "bot"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/voice-notes/recorder",
+      "scopes": [
+        "bot"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "GET",
       "path": "/meetings",
       "scopes": [
         "tx"
-      ]
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/meetings",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/meetings/import",
+      "scopes": [
+        "tx"
+      ],
+      "shared": "refuse"
     },
     {
       "method": "DELETE",
       "path": "/meetings/{meeting_id}",
       "scopes": [
         "tx"
-      ]
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "GET",
       "path": "/meetings/{meeting_id}",
       "scopes": [
         "tx"
-      ]
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "PATCH",
       "path": "/meetings/{meeting_id}",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/meetings/{meeting_id}/export",
+      "scopes": [
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/meetings/{meeting_id}/export",
+      "scopes": [
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/meetings/{meeting_id}/ics",
+      "scopes": [
+        "tx"
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/meetings/{meeting_id}/annotate",
       "scopes": [
         "tx"
-      ]
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/meetings/{meeting_id}/access",
+      "scopes": [
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "PATCH",
+      "path": "/meetings/{meeting_id}/access",
+      "scopes": [
+        "tx"
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/meetings/{meeting_id}/share",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "DELETE",
+      "path": "/meetings/{meeting_id}/share/{grant_id}",
+      "scopes": [
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "DELETE",
+      "path": "/meetings/{meeting_id}/viewers/{viewer_id}",
+      "scopes": [
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/meetings/{meeting_id}/transcript-import",
+      "scopes": [
+        "tx"
+      ],
+      "shared": "refuse"
     },
     {
       "method": "DELETE",
       "path": "/meetings/{platform}/{native_meeting_id}",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "PATCH",
       "path": "/meetings/{platform}/{native_meeting_id}",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/meetings/{platform}/{native_meeting_id}/annotate",
       "scopes": [
         "tx"
-      ]
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "PUT",
       "path": "/meetings/{platform}/{native_meeting_id}/intent",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
       "path": "/meetings/{platform}/{native_meeting_id}/participants",
       "scopes": [
         "tx"
-      ]
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/meetings/{platform}/{native_meeting_id}/share",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/meetings/{platform}/{native_meeting_id}/workspace",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -159,14 +356,17 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "DELETE",
       "path": "/recordings/{recording_id}",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -174,7 +374,9 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -182,7 +384,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -190,7 +393,9 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "upstream": "/recordings/{recording_id}/media/{media_file_id}/raw",
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -198,70 +403,93 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
       "path": "/transcripts/by-id/{meeting_id}",
       "scopes": [
         "tx"
-      ]
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
+    },
+    {
+      "method": "POST",
+      "path": "/transcripts/by-id/{meeting_id}/share",
+      "scopes": [
+        "tx"
+      ],
+      "upstream": "/meetings/{meeting_id}/share",
+      "shared": "refuse"
     },
     {
       "method": "GET",
       "path": "/transcripts/search",
       "scopes": [
         "tx"
-      ]
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/transcripts/share/accept",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
       "path": "/transcripts/{platform}/{native_meeting_id}",
       "scopes": [
         "tx"
-      ]
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
     },
     {
       "method": "POST",
       "path": "/transcripts/{platform}/{native_meeting_id}/share",
       "scopes": [
         "tx"
-      ]
+      ],
+      "upstream": "/meetings/{platform}/{native_meeting_id}/share",
+      "shared": "refuse"
     },
     {
       "method": "GET",
       "path": "/user/calendar/sync",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/user/calendar/sync",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
       "path": "/user/calendars/{calendar_id}/sync",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/user/calendars/{calendar_id}/sync",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -269,7 +497,9 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "upstream": "/webhooks/deliveries",
+      "shared": "refuse"
     }
   ]
 }

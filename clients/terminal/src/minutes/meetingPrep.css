@@ -1,0 +1,14 @@
+/* Prep in a planned meeting's panel and the ticks on Home's next-meeting row (features `meeting_prep`,
+   `home_prepare`). Layout only: colours and type come from the kit and `.vx-mv-meta`. */
+.vx-prep { display: flex; flex-direction: column; gap: 16px; margin-bottom: 24px; }
+.vx-prep-head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.vx-prep-row { display: flex; gap: 8px; align-items: center; }
+.vx-prep-tick { display: inline-flex; gap: 4px; align-items: center; }
+.vx-prep-ticks { display: inline-flex; gap: 8px; }
+.vx-prep-ticks .vx-prep-tick { gap: 3px; }
+.vx-prep-line { margin: 6px 0 0; }
+.vx-prep-note { margin: 4px 0 0; }
+.vx-prep-form { display: flex; gap: 8px; margin-top: 6px; }
+.vx-prep-chips { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.vx-prep-material { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.vx-prep-agenda { margin: 6px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }

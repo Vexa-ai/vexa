@@ -463,10 +463,10 @@ def test_post_bots_twice_same_meeting_is_409():
     assert len([m for m in repo._meetings.values() if m["native_meeting_id"] == "dup-1"]) == 1
 
 
-def test_delete_bots_then_delete_again_404():
-    """DELETE marks the meeting `stopping`; a second DELETE finds no ACTIVE meeting → 404.
-    Idempotency observation: the stop trigger is one-shot, the redelivery is a clean 404 (no 500,
-    no double-publish)."""
+def test_delete_bots_then_delete_again_is_an_idempotent_success():
+    """DELETE marks the meeting `stopping`; a second DELETE answers 200 `already_stopping`.
+    Idempotency: the stop trigger is one-shot — the redelivery succeeds with the meeting's state
+    and never double-publishes. Only a meeting that never existed is a 404."""
     repo, pub = InMemoryMeetingRepo(), InMemoryCommandPublisher()
     c = _client(repo=repo, publisher=pub)
     # seed an active meeting via POST /bots
@@ -477,8 +477,8 @@ def test_delete_bots_then_delete_again_404():
     assert r1.json()["status"] == "stopping"
     n_published = len(pub.published)
     r2 = c.delete("/bots/google_meet/stop-1", headers=HEADERS)
-    assert r2.status_code == 404, r2.text
-    _assert_error_envelope(r2)
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["status"] == "already_stopping"
     # The second DELETE did NOT re-publish a leave command (no double-stop side-effect).
     assert len(pub.published) == n_published
 

@@ -2,6 +2,7 @@
 import type { CSSProperties } from "react";
 
 const PATHS: Record<string, string> = {
+  trash: "M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7",
   radio: "M16.2 7.8a6 6 0 0 1 0 8.4M19.1 4.9a10 10 0 0 1 0 14.2M7.8 16.2a6 6 0 0 1 0-8.4M4.9 19.1a10 10 0 0 1 0-14.2M12 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4",
   msg: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
   panel: "M3 3h18v18H3zM9 3v18",
@@ -37,9 +38,15 @@ const PATHS: Record<string, string> = {
   moon: "M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z",
   info: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20M12 16v-4M12 8h.01",
   refresh: "M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6",
+  // The front-page header (Vexa-ai/vexa#1634 design spec): the last-change row's clock, the
+  // icon-only History act beside it, and the outline mark on the company layer's policy pill.
+  clock: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20M12 6.5V12l3.5 2",
+  history: "M3.1 9A9 9 0 1 1 3 12M3 4v5h5M12 7.5V12l3.5 2",
+  shield: "M12 22s8-4 8-10V5.5L12 2.5 4 5.5V12c0 6 8 10 8 10z",
   alert: "M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01",
   key: "M21 2l-2 2m-7.6 7.6a5.5 5.5 0 1 1-7.8 7.8 5.5 5.5 0 0 1 7.8-7.8zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3-3.5 3.5",
   copy: "M8 8h12v12H8zM16 8V4H4v12h4",
+  code: "M16 18l6-6-6-6M8 6l-6 6 6 6",
   upload: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12",
   github: "M9 19c-5 1.5-5-2.5-7-3m14 6v-3.9a3.4 3.4 0 0 0-.9-2.6c3.1-.3 6.4-1.5 6.4-7A5.4 5.4 0 0 0 20 4.8 5 5 0 0 0 19.9 1S18.7.7 16 2.5a13.4 13.4 0 0 0-7 0C6.3.7 5.1 1 5.1 1A5 5 0 0 0 5 4.8a5.4 5.4 0 0 0-1.5 3.7c0 5.4 3.3 6.6 6.4 7a3.4 3.4 0 0 0-.9 2.6V22",
   gear: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z",
@@ -48,7 +55,7 @@ const PATHS: Record<string, string> = {
 export function Icon({ name, size = 18, style }: { name: string; size?: number; style?: CSSProperties }) {
   return (
     <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor"
-      strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" style={{ flex: "none", ...style }}
+      strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className="vx-icon" style={style}
       aria-hidden="true">
       <path d={PATHS[name] ?? ""} />
     </svg>
@@ -84,3 +91,58 @@ export function Checkbox({ checked, onChange, disabled = false, label, title, si
     </span>
   );
 }
+
+// ── layout and primitives (terminal design guidelines §3–§4). The ONE front door (P6): surfaces
+//    import these from "ui-kit", never from the files below.
+export { shellLayout, shellMode, BREAKPOINTS, MODES, STRIP_W, EDGE_W, DRAWER_W, SHEET_MAX, DEFAULT_PREFS, clampWidth } from "./layout/shellLayout";
+export type { ShellLayout, ShellMode, ShellPrefs, StoredWidths, RailKind, PagesKind, Pane, Bounds } from "./layout/shellLayout";
+export { useShellLayout, readShellStore, writeShellStore, SHELL_KEY } from "./layout/useShellLayout";
+export type { ShellControls, ShellStore } from "./layout/useShellLayout";
+export { Splitter, splitterKey, SPLITTER_STEP, SPLITTER_BIG_STEP } from "./layout/Splitter";
+export { Sheet } from "./layout/Sheet";
+export type { SheetForm } from "./layout/Sheet";
+export { Drawer } from "./layout/Drawer";
+export { Menu } from "./primitives/Menu";
+export type { MenuItem, MenuProps } from "./primitives/Menu";
+export { KeyValue, kvValue, humanizeKey, isEmptyValue } from "./primitives/KeyValue";
+export type { KeyValueItem } from "./primitives/KeyValue";
+export { Truncate, displayUrl, splitForMiddle } from "./primitives/Truncate";
+export { DateText } from "./primitives/DateText";
+export { Identity, IdentityStack, AvatarStack, registerPersonPhotos, personPhoto } from "./Identity";
+export type { IdentityProps, IdentityItem } from "./Identity";
+export { Fold, FOLD_AT } from "./primitives/Fold";
+export type { FoldAt } from "./primitives/Fold";
+export { OverflowStrip } from "./primitives/OverflowStrip";
+export type { StripItem } from "./primitives/OverflowStrip";
+export { formatDate, fullDate, isoDate, parseDate, looksLikeDate } from "./format/date";
+export { Button, IconButton } from "./primitives/Button";
+export type { ButtonVariant } from "./primitives/Button";
+export { Spinner, StatusDot, Kbd } from "./primitives/Spinner";
+export type { Tone } from "./primitives/Spinner";
+export { Badge, Tag, Chip, EntityChip } from "./primitives/Chip";
+export { Switch } from "./primitives/Switch";
+export { SectionLabel } from "./primitives/SectionLabel";
+export { ChipRow } from "./primitives/ChipRow";
+export { Input, Textarea } from "./primitives/Field";
+export { Select } from "./primitives/Select";
+export { Tabs } from "./primitives/Tabs";
+export type { TabItem } from "./primitives/Tabs";
+export { Breadcrumb } from "./primitives/Breadcrumb";
+export type { Crumb } from "./primitives/Breadcrumb";
+export { ListRow, RowCell, RowActions, PanelHeader, Card } from "./primitives/ListRow";
+export type { RowCellWidth } from "./primitives/ListRow";
+export { Dialog, ConfirmDialog, useConfirm } from "./primitives/Dialog";
+export type { ConfirmRequest } from "./primitives/Dialog";
+export { EmptyState, Skeleton, ErrorState, Tooltip, Popover } from "./primitives/Feedback";
+export { ExternalLink, Code, SecretReveal, isSafeHref } from "./primitives/Links";
+export { SourceList, titleHasDate } from "./primitives/SourceList";
+export type { Source } from "./primitives/SourceList";
+export { Toaster, toast } from "./primitives/Toast";
+export { contrastRatio, parseColor } from "./format/contrast";
+export { parseTokens } from "./format/tokens";
+export { extractSources, mergeSources, parseSourceItem, readSources } from "./format/sources";
+// blocks.v1 — the one renderer for the home, page fences and chat replies (#1783)
+export { Avatar, BlocksView, BlocksProvider, CardView, KIND_LABEL, PagePeekPanel, Peek, PersonChip, VexaFence, useBlocksHandlers } from "./blocks/Blocks";
+export type { BlocksHandlers, PeekContent, Reason } from "./blocks/Blocks";
+export { BLOCKS_SPEC, FENCE_LANG, HOME_SPEC, KINDS, LIMITS, cardPeople, clip, homeFirstVisit, parseVexaFence, sanitizeFence, sanitizeHome, shownCards, patchHome, peekFromMarkdown, STATES } from "./blocks/spec";
+export type { Action as BlockAction, Block, Card as BlockCard, CheckItem, Fence, HomeDoc, HomeKind, IconName, ItemState, Person as BlockPerson, Refs as BlockRefs, Row as BlockRow } from "./blocks/spec";

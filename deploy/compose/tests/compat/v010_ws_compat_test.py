@@ -94,12 +94,12 @@ def test_20_ws_transcript_stream_xapikey_header(stack):
         assert ack and ack.get("meetings"), f"no `subscribed` ack for {native_id}: {ack}"
 
         seg_id = f"v010-seg-{uuid.uuid4().hex[:8]}"
-        stack.redis_cli("XADD", "transcription_segments", "*", "payload", json.dumps({
+        stack.xadd_segment_entry(json.dumps({
             "type": "transcription", "meeting_id": meeting_id,
             "segments": [{"segment_id": seg_id, "start": 90.0, "end": 92.0,
                           "text": "v010 compat live segment", "language": "en",
                           "speaker": "Compat", "completed": True}],
-        }))
+        }), meeting_id)
 
         frame = None
         deadline = time.time() + 30

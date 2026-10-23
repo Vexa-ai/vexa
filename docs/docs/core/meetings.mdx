@@ -104,6 +104,13 @@ prep workflow one motion — prepare context in a workspace, invite the people y
 the meeting itself rides along. See [Plan and share a meeting](/how-to/plan-a-meeting).
 (Independent one-off transcript share links exist too — no workspace required.)
 
+### Move — export a meeting, import it anywhere
+
+A meeting you own can leave this deployment as one file: open it and click **Export** once it has
+ended. To bring that file into another Vexa deployment, **drop it into any chat** there — the chat
+recognises a meeting bundle and imports it as a call of yours, then links its transcript. See
+[Move a meeting between deployments](/how-to/move-a-meeting).
+
 ## From transcript to knowledge
 
 1. The bot captures audio; transcription produces a real-time `transcript.v1` stream.
@@ -112,4 +119,35 @@ the meeting itself rides along. See [Plan and share a meeting](/how-to/plan-a-me
    - **Before the meeting** — prepare a briefing in the bound workspace; attendees see it live.
    - **After the meeting** — a dispatch writes notes, decisions, and action items as workspace files.
    - **During the meeting** — a live dispatch surfaces proactive cards (new person, action item,
-     decision); see [Meeting copilot](/how-to/live-copilot).
+     decision); see [Follow a live meeting](/how-to/live-copilot).
+
+## How it works
+
+1. **Plan.** `POST /meetings`, or the calendar sweep (`CALENDAR_SYNC_INTERVAL_S`), writes a planned
+   row in meeting-api.
+2. **Join.** You send a bot, or the auto-join sweep sends one for a due row. Either way the spawn claims
+   the same row and moves it to `requested`.
+3. **Spawn.** meeting-api asks the [runtime](/core/runtime) for a bot workload over `runtime.v1` and
+   hands the bot a MeetingToken for this meeting only (`invocation.v1`).
+4. **Status.** The bot reports its status to meeting-api over `lifecycle.v1`. meeting-api moves the
+   row only along legal transitions.
+5. **Transcript.** The bot signs every entry it appends to the `transcription_segments` stream with its
+   MeetingToken. meeting-api's collector admits an entry only when the token names that meeting, stores
+   the segment in Postgres and writes it to the meeting's feed (`tc:meeting:{id}`).
+6. **Read.** Clients read through the gateway (`api.v1`); the live view follows the feed.
+
+## Why it complies
+
+- **P4 sealed contracts.** `transcript.v1`, `lifecycle.v1` and `invocation.v1` are sealed;
+  `gate:schema` and `gate:contract-version` enforce it.
+- **P8 the shipped API matches its contract.** `gate:contract-conformance` checks meeting-api's routes
+  against `api.v1` in both directions.
+- **Meetings stands alone.** `gate:domain-doors` fails when the meetings domain calls a door other than
+  its own, identity's or the runtime's, unless that call is declared as an optional capability.
+- **P23 one writer.** meeting-api is the only writer of the meeting feed; `gate:dataflow` checks the
+  chart in `architecture.calm.json`.
+- **P20 and the stream.** Deny tests under `gate:python`, in
+  `core/meetings/services/meeting-api/tests/`: `test_segment_entry_auth.py`
+  (`test_a_bot_cannot_write_another_meetings_transcript`), `test_collector_api.py`
+  (`test_get_transcript_other_user_is_404`), `test_lifecycle_machine.py` (`test_illegal_edges`).
+- **P22 teardown.** Stopping a bot is guaranteed by the meeting-lifecycle eval under `gate:python`.

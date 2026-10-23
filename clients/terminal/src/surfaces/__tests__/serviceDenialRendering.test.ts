@@ -16,7 +16,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { ApiError } from "../apiClient";
+import { ApiError } from "../../data/apiClient";
 import {
   isAccessError,
   resolveJoinError,

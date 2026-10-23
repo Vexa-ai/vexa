@@ -6,7 +6,9 @@
  *     JSON is `{ type: 'transcription', ...segment }`;
  *   • that payload round-trips a transcript.v1-VALID TranscriptSegment (ajv against the published
  *     transcript.schema.json — same pattern as orchestrator.test.ts);
- *   • PUBLISH hits `tc:meeting:{meetingId}:mutable` with `{ type: 'transcript', meeting:{id}, segment }`.
+ *   • PUBLISH hits `tc:meeting:{meetingId}:mutable` with `{ type: 'transcript', meeting:{id}, segment }`;
+ *   • with the session token, every stream entry carries `auth` (the token's header.payload) and
+ *     `sig` (HMAC-SHA256 of the payload keyed with the token) — the vector the collector pins too.
  * Run: npx tsx src/adapters/transcript-redis.test.ts
  */
 import Ajv2020, { type ValidateFunction } from 'ajv/dist/2020.js';
@@ -14,7 +16,8 @@ import addFormats from 'ajv-formats';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRedisTranscriptSink, TRANSCRIPTION_STREAM, mutableChannel, type RedisTranscriptClient } from './transcript-redis.js';
+import { createHmac } from 'node:crypto';
+import { createRedisTranscriptSink, entryAuth, TRANSCRIPTION_STREAM, mutableChannel, type RedisTranscriptClient } from './transcript-redis.js';
 import type { TranscriptSegment } from '../contracts.js';
 
 let failed = 0;
@@ -27,6 +30,7 @@ const check = (name: string, cond: boolean, detail = '') => {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TX_SCHEMA = join(HERE, '..', '..', '..', '..', 'contracts', 'transcript.v1', 'transcript.schema.json');
 const txSchema = JSON.parse(readFileSync(TX_SCHEMA, 'utf8'));
+const SIGNED_ENTRY_VECTOR = JSON.parse(readFileSync(join(HERE, '..', '..', '..', '..', 'contracts', 'transcript.v1', 'golden', 'SignedEntryVector.meeting-42.json'), 'utf8'));
 const ajv = new Ajv2020({ strict: false, allErrors: true });
 addFormats(ajv);
 ajv.addSchema(txSchema);
@@ -183,6 +187,60 @@ async function main(): Promise<void> {
     const last = snapshots[snapshots.length - 1];
     check('interleave: the surviving pending set is the fresh draft alone',
       last.pending.length === 1 && last.pending[0].segment_id === fresh.segment_id, JSON.stringify(last?.pending));
+  }
+
+  // ── the session signs every stream entry; the collector pins the same vector ──
+  {
+    // The fixture token is read from the contract's golden vector rather than repeated here as a
+    // token-shaped literal (it is not a minted token; see golden/README.md).
+    const token: string = SIGNED_ENTRY_VECTOR.token;
+    const vector = entryAuth(token, '{"type":"transcription","meeting_id":42}');
+    check('entryAuth: auth is the token without its signature', vector.auth === 'eyJhbGciOiJIUzI1NiJ9.eyJtZWV0aW5nX2lkIjo0Mn0', vector.auth);
+    check('entryAuth: the pinned signature vector',
+      vector.sig === 'ea8b616bd36e85dbc3f3c5aeb36f7bc2391f6a759d425355abfef2430516963d', vector.sig);
+    check('entryAuth: no token, no fields', Object.keys(entryAuth(undefined, '{}')).length === 0);
+    check('entryAuth: a malformed token, no fields', Object.keys(entryAuth('not-a-jwt', '{}')).length === 0);
+
+    const { client, xadds } = fakeClient();
+    const sink = createRedisTranscriptSink({ client, meetingId: 42, token });
+    await sink.publish(seg);
+    await sink.retract!(['sess-uid:s1:0']);
+    for (const [i, call] of xadds.entries()) {
+      const fields = call.fields;
+      check(`signed entry ${i}: payload, auth and sig`, JSON.stringify(Object.keys(fields).sort()) === JSON.stringify(['auth', 'payload', 'sig']), JSON.stringify(Object.keys(fields)));
+      check(`signed entry ${i}: sig covers this payload`,
+        fields.sig === createHmac('sha256', token).update(fields.payload!).digest('hex'), fields.sig);
+      check(`signed entry ${i}: the token itself is not in the entry`, !JSON.stringify(fields).includes('c2lnbmF0dXJl'));
+    }
+  }
+
+  // ── progress: a signed stream entry the collector forwards, never a segment ──
+  {
+    const { client, xadds } = fakeClient();
+    const token = 'eyJhbGciOiJIUzI1NiJ9.eyJtZWV0aW5nX2lkIjo1fQ.c2lnbmF0dXJl';
+    const sink = createRedisTranscriptSink({ client, meetingId: 5, token });
+    await sink.progress!({ backlog_s: 31.5, silence_s: 0.2, finishing: true });
+    const p = JSON.parse(xadds[0]?.fields.payload ?? '{}');
+    check('progress: one signed entry on the transcription stream', xadds.length === 1 && xadds[0].key === TRANSCRIPTION_STREAM && !!xadds[0].fields.sig, JSON.stringify(xadds));
+    check('progress: type, meeting and numbers', p.type === 'transcription_progress' && p.meeting_id === 5 && p.backlog_s === 31.5 && p.silence_s === 0.2 && p.finishing === true, JSON.stringify(p));
+  }
+
+  // ── chat_send_result: the outcome of one chat send, signed on the same stream, nothing live ──
+  {
+    const { client, xadds, pubs: publishes } = fakeClient();
+    const token = 'eyJhbGciOiJIUzI1NiJ9.eyJtZWV0aW5nX2lkIjo1fQ.c2lnbmF0dXJl';
+    const sink = createRedisTranscriptSink({ client, meetingId: 5, token });
+    await sink.chatSendResult({ id: 'req-1', posted: false, reason: 'not_landed' });
+    await sink.chatSendResult({ id: 'req-2', posted: true });
+    const [a, b] = xadds.map((x) => JSON.parse(x.fields.payload ?? '{}'));
+    check('chat_send_result: two signed entries on the transcription stream',
+      xadds.length === 2 && xadds.every((x) => x.key === TRANSCRIPTION_STREAM
+        && x.fields.sig === createHmac('sha256', token).update(x.fields.payload!).digest('hex')), JSON.stringify(xadds));
+    check('chat_send_result: a failure carries its reason',
+      JSON.stringify(a) === JSON.stringify({ type: 'chat_send_result', meeting_id: 5, id: 'req-1', posted: false, reason: 'not_landed' }), JSON.stringify(a));
+    check('chat_send_result: a posted line carries no reason',
+      JSON.stringify(b) === JSON.stringify({ type: 'chat_send_result', meeting_id: 5, id: 'req-2', posted: true }), JSON.stringify(b));
+    check('chat_send_result: nothing on the live channel', publishes.length === 0, JSON.stringify(publishes));
   }
 
   if (failed) { console.error(`\n❌ transcript-redis (L3): ${failed} check(s) FAILED.`); process.exit(1); }

@@ -1,0 +1,32 @@
+{
+  "contract": "routes.v1",
+  "domain": "meetings",
+  "owner": "core/meetings",
+  "edge": "gateway",
+  "presence_env": "MEETING_API_URL",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/bots",
+      "scopes": [
+        "bot"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "GET",
+      "path": "/transcripts/{platform}/{native_meeting_id}",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/transcripts/{platform}/{native_meeting_id}/share",
+      "scopes": [
+        "tx"
+      ],
+      "upstream": "/meetings/{platform}/{native_meeting_id}/share"
+    }
+  ]
+}

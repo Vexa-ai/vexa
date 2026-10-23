@@ -1,0 +1,26 @@
+{
+  "validation": {
+    "user_id": 42,
+    "scopes": [
+      "bot",
+      "tx"
+    ],
+    "max_concurrent": 3,
+    "email": "jane@example.com",
+    "is_admin": false
+  },
+  "signed": {
+    "typ": "vexa-identity",
+    "sub": "42",
+    "email": "jane@example.com",
+    "scopes": [
+      "bot",
+      "tx"
+    ],
+    "limits": 3,
+    "iat": 1767225600,
+    "exp": 1767225660
+  },
+  "admitted": false,
+  "what": "the bearer is an API key: re-entry exists only for a delegation token, and a key needs none"
+}

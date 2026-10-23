@@ -14,18 +14,26 @@ This carve splits that into a pure, explicitly-driven core:
     ``ingest`` each → ``ack``). No background loop: the eval calls this explicitly, like the
     runtime scheduler's ``tick()`` — same in ⇒ same out.
 
+A ``source:'chat'`` segment is additionally published as a ws.v1 ``chat_message`` frame on
+``va:meeting:{id}:chat`` (``chat.py``).
+
 The ``:mutable`` payload mirrors the bot's live publisher
 (``services/vexa-bot_new/src/adapters/transcript-redis.ts``):
 ``{type:"transcript", meeting:{id}, speaker, confirmed, pending, ts}``.
 """
 from __future__ import annotations
 
+import base64
+import hmac
 import json
 import os
+import re
 import socket
 from datetime import datetime, timezone
 from typing import Optional
 
+from . import segment_entry
+from .chat import chat_channel, chat_frame, is_chat
 from .ports import RedisBus, TranscriptStore
 
 # Stream / consumer-group defaults (parent ``collector/config.py``).
@@ -147,6 +155,90 @@ async def _resolve_native(store: TranscriptStore, meeting_id: int) -> Optional["
         return None
 
 
+# ── who wrote an entry ──────────────────────────────────────────────────────────────────────────
+#
+# Every bot appends to the one ``transcription_segments`` stream, so the stream itself cannot say
+# which meeting an entry may speak for. Each entry therefore carries, beside its ``payload``:
+#
+#   * ``auth`` — the ``header.payload`` part of the bot's session MeetingToken (its claims, which
+#     name the meeting); and
+#   * ``sig``  — HMAC-SHA256 of the ``payload`` string, keyed with the whole token, hex.
+#
+# The collector rebuilds the token from ``auth`` with the secret that minted it (``ADMIN_TOKEN``),
+# so the bearer itself never enters Redis, then admits the entry only when the signature holds, the
+# token is valid, and the payload's ``meeting_id`` is the token's. Anything else is acknowledged and
+# dropped. The check sits on the stream-facing paths (``consume_segments``, ``reclaim_segments``);
+# ``ingest`` stays the pure per-message step.
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+# The signer is transcript.v1's (``segment_entry.py``, vendored byte for byte): the bot's sink
+# (``transcript-redis.ts`` ``entryAuth``) in Python, for the tools that publish to the stream the way a
+# bot does. Re-exported here, where those tools import it from.
+signed_entry = segment_entry.signed_entry
+
+
+#: The one encoded form a ``sig`` has: an HMAC-SHA256 hexdigest, lowercase, as both signers write it
+#: (``signed_entry`` here, ``createHmac(...).digest('hex')`` in the bot's sink).
+_SIG_FORM = re.compile(r"[0-9a-f]{64}")
+
+
+def _admitted(fields: dict) -> bool:
+    """Whether a stream entry was written by a session whose MeetingToken names the meeting the
+    entry speaks for. Never raises: an entry that cannot be parsed or verified is refused, and the
+    callers acknowledge a refused entry like any other — a malformed one must not abort the batch
+    and come back on every reclaim."""
+    try:
+        if _verify_entry(fields):
+            return True
+        # A 0.12 bot still running across the upgrade writes unsigned entries; admitted only for the
+        # meetings it was spawned for and only inside the hand-off window (legacy_unsigned.py).
+        from .legacy_unsigned import WINDOW
+        return WINDOW.admits(fields)
+    except Exception:  # noqa: BLE001 — any fault reading an entry is a refusal, never a stalled batch
+        return False
+
+
+def _verify_entry(fields: dict) -> bool:
+    from ..meeting_token import sign, verify_meeting_token
+
+    auth, sig, payload = fields.get("auth"), fields.get("sig"), fields.get("payload")
+    secret = os.environ.get("ADMIN_TOKEN")
+    if not (isinstance(auth, str) and isinstance(sig, str) and isinstance(payload, str) and secret):
+        return False
+    if not _SIG_FORM.fullmatch(sig):
+        return False
+    if auth.count(".") != 1:
+        return False
+    # The entry carries the token's header.payload only; its signature is recomputed under the
+    # MeetingToken key (derived from ADMIN_TOKEN, meeting_token.sign), never the admin secret itself.
+    token = f"{auth}.{_b64url(sign(auth.encode('ascii', 'replace'), secret))}"
+    try:
+        claims = verify_meeting_token(token, secret=secret)
+        data = json.loads(payload)
+        meeting_id = int(data.get("meeting_id"))
+        token_meeting = int(claims.get("meeting_id"))
+    except (ValueError, TypeError, AttributeError):
+        return False
+    expected = segment_entry.signature(token, payload)
+    # Both sides are ASCII hex by now; compared as bytes, as compare_digest requires for anything else.
+    signed = hmac.compare_digest(expected.encode("ascii"), sig.encode("ascii"))
+    return signed and meeting_id == token_meeting
+
+
+def _log_refused(message_id: str) -> None:
+    try:
+        from ..obs import log_event
+
+        log_event("segment_entry_refused", audience="system", level="warning",
+                  span="collector.ingest", fields={"message_id": message_id})
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _log_publish_failure(meeting_id: int, e: Exception) -> None:
     try:
         from ..obs import log_event
@@ -157,6 +249,25 @@ def _log_publish_failure(meeting_id: int, e: Exception) -> None:
         pass
 
 
+async def _erased(store: TranscriptStore, meeting_id: int) -> bool:
+    """Whether ``meeting_id``'s transcript was deleted by its owner, so nothing for it is ingested.
+
+    A lookup that fails answers "not erased": refusing would drop the segment for good (the batch is
+    acked either way), and every transcript reader checks the deletion stamp itself, so what an
+    outage can cost here is retention of a late segment, never its exposure."""
+    try:
+        return bool(await store.transcript_erased(meeting_id))
+    except Exception as e:  # noqa: BLE001 — never abort the batch on the check
+        try:
+            from ..obs import log_event
+
+            log_event("segment_erased_check_failed", audience="system", level="warning",
+                      span="collector.ingest", fields={"meeting_id": meeting_id, "error": str(e)})
+        except Exception:  # noqa: BLE001
+            pass
+        return False
+
+
 async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
     """Process ONE ``transcription_segments`` stream message.
 
@@ -164,7 +275,8 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
     appends each valid segment to ``store``, then publishes one ``:mutable`` update per meeting
     so the gateway ``/ws`` fan-in forwards it live. Returns the count of persisted segments.
 
-    Trusted internal stream (the bot is the producer): ``meeting_id`` comes from the payload.
+    ``meeting_id`` comes from the payload; the stream-facing callers admit an entry only when its
+    session's MeetingToken names that meeting (``_admitted``).
     """
     payload_raw = message.get("payload")
     if not payload_raw:
@@ -179,18 +291,18 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
         # P23/P0: the collector owns tc:meeting:{meeting_id} (the numeric ROW id, cross-tenant safe) —
         # emit the session_end marker the copilot worker + terminal SSE read off it (the agent relay used
         # to do this; the agent now only consumes). Key the marker by the numeric row id (never the
-        # native id, which collides across users/rows). The wire ``uid`` stays the native/session id for
-        # display. When no numeric id is present (an older bot that only sent a native/uid) there is no
+        # native id, which collides across users/rows). The marker's ``session_uid`` stays the native/session
+        # id for display — the field name transcript.v1's SessionEnd seals, the same one a segment carries. When no numeric id is present (an older bot that only sent a native/uid) there is no
         # row to key on → skip; the copilot reaps on idle anyway.
         mid_raw = data.get("meeting_id")
         try:
             meeting_id = int(mid_raw) if mid_raw is not None else None
         except (TypeError, ValueError):
             meeting_id = None
-        if meeting_id is not None:
+        if meeting_id is not None and not await _erased(store, meeting_id):
             uid = data.get("native_meeting_id") or data.get("uid") or data.get("session_uid") or str(meeting_id)
             try:
-                await redis.xadd(_transcript_stream(meeting_id), {"type": "session_end", "uid": uid})
+                await redis.xadd(_transcript_stream(meeting_id), {"type": "session_end", "session_uid": uid})
             except Exception as e:  # noqa: BLE001 — best-effort; never abort the batch
                 _log_publish_failure(meeting_id, e)
         return 0
@@ -206,6 +318,8 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
         seg_ids = data.get("segment_ids")
         if meeting_id is None or not isinstance(seg_ids, list) or not seg_ids:
             return 0
+        if await _erased(store, meeting_id):
+            return 0
         ids = [str(s) for s in seg_ids if s]
         try:
             await store.delete_segments(meeting_id, ids)
@@ -220,6 +334,48 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
         except Exception as e:  # noqa: BLE001 — best-effort live fan-out
             _log_publish_failure(meeting_id, e)
         return 0
+    if msg_type == "transcription_progress":
+        # How far transcription is behind capture (backlog_s), how long the speaker has been quiet
+        # (silence_s), and whether the bot is finishing its final pass. Nothing is persisted: it rides
+        # the row-scoped feed so the terminal can say "catching up" instead of "no words".
+        try:
+            meeting_id = int(data.get("meeting_id"))
+        except (TypeError, ValueError):
+            return 0
+        if await _erased(store, meeting_id):
+            return 0
+
+        def _num(v):
+            return round(float(v), 1) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+        try:
+            await redis.xadd(_transcript_stream(meeting_id), {
+                "type": "progress", "backlog_s": _num(data.get("backlog_s")),
+                "silence_s": _num(data.get("silence_s")), "finishing": bool(data.get("finishing")),
+            })
+        except Exception as e:  # noqa: BLE001 — best-effort, like every live marker
+            _log_publish_failure(meeting_id, e)
+        return 0
+    if msg_type == "chat_send_result":
+        # The bot's outcome for one chat send (`chat_delivery.py`): it settles only a send that is
+        # still `queued` and was sent into the meeting this entry's token names. Nothing is persisted
+        # beyond that record, nothing is fanned out, and a fault never aborts the batch.
+        try:
+            meeting_id = int(data.get("meeting_id"))
+        except (TypeError, ValueError):
+            return 0
+        request_id, posted = data.get("id"), data.get("posted")
+        if not isinstance(request_id, str) or not isinstance(posted, bool):
+            return 0
+        reason = data.get("reason")
+        try:
+            await redis.settle_chat_send(
+                request_id, meeting_id=meeting_id, posted=posted,
+                reason=reason if isinstance(reason, str) else None,
+            )
+        except Exception as e:  # noqa: BLE001 — best-effort, like every typed bus message
+            _log_publish_failure(meeting_id, e)
+        return 0
     if msg_type not in ("transcription", "transcript"):
         # session_start / speaker events are out of scope for this segment unit.
         return 0
@@ -231,6 +387,10 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
 
     raw_segments = data.get("segments")
     if not isinstance(raw_segments, list):
+        return 0
+    # A meeting whose owner deleted its transcript takes nothing more: no live hash, no
+    # active_meetings entry, no tc:meeting feed, no mutable publish.
+    if await _erased(store, meeting_id):
         return 0
 
     persisted: list[dict] = []
@@ -254,11 +414,15 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
         # PREFER the native id the producer STAMPED on the segment (P23: one writer, no re-derivation —
         # and no DB lookup that can miss, which left tc:meeting:{native} empty and the copilot starved).
         # Fall back to the store mapping only for older bots that don't stamp it.
+        # The bot stamps the native id but not the platform, so the platform comes from the store's
+        # (cached, immutable-per-row) mapping whenever the producer did not stamp it.
         native_id = data.get("native_meeting_id")
         platform_native = data.get("platform")
-        if not native_id:
+        if not native_id or not platform_native:
             pair = await _resolve_native(store, meeting_id)
-            native_id, platform_native = pair if pair else (None, None)
+            if pair:
+                native_id = native_id or pair[0]
+                platform_native = platform_native or pair[1]
         # FAULT-ISOLATED (P18): the segments are already persisted (durable). A transient redis blip on
         # the live publish must NOT propagate out of ingest() — that would abort the batch BEFORE
         # consume_segments acks it. Surface it and return the persisted count.
@@ -276,6 +440,21 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
             )
         except Exception as e:  # noqa: BLE001 — publish is best-effort; persistence already succeeded
             _log_publish_failure(meeting_id, e)
+        # Each captured chat line also goes out as a ws.v1 `chat_message` frame on
+        # va:meeting:{id}:chat — the channel the gateway /ws subscribes per meeting. The collector is
+        # its one producer, for the same reason it is the transcript feed's: it is where a chat
+        # segment is first known to be durable. Best-effort, like the publish above.
+        for seg in persisted:
+            if not is_chat(seg):
+                continue
+            try:
+                await redis.publish(
+                    chat_channel(meeting_id),
+                    json.dumps(chat_frame(seg, meeting_id=meeting_id, native_id=native_id,
+                                          platform=platform_native)),
+                )
+            except Exception as e:  # noqa: BLE001 — persistence already succeeded
+                _log_publish_failure(meeting_id, e)
         # P23/P0: the collector is the SINGLE writer of the transcript feed tc:meeting:{meeting_id}
         # (the numeric ROW id — cross-tenant safe; the native id collided across users/rows). Append each
         # persisted segment (confirmed + pending, in order) for the copilot worker + terminal SSE. Written
@@ -303,13 +482,17 @@ async def consume_segments(
     consumer: str = CONSUMER_NAME,
     count: int = 10,
 ) -> int:
-    """Drain ONE batch from the bus: read → ingest each → ack. Returns the total segments
-    persisted across the batch. No background loop — the caller drives it (eval ``tick``)."""
+    """Drain ONE batch from the bus: read → admit → ingest each → ack. An entry its session did not
+    sign for its own meeting is acknowledged and dropped. Returns the total segments persisted
+    across the batch. No background loop — the caller drives it (eval ``tick``)."""
     batch = await redis.read_segments(group=group, consumer=consumer, stream=stream, count=count)
     total = 0
     acked: list[str] = []
     for message_id, fields in batch:
-        total += await ingest(store, redis, fields)
+        if _admitted(fields):
+            total += await ingest(store, redis, fields)
+        else:
+            _log_refused(message_id)
         acked.append(message_id)
     if acked:
         await redis.ack(group=group, stream=stream, message_ids=acked)
@@ -344,7 +527,10 @@ async def reclaim_segments(
     total = 0
     acked: list[str] = []
     for message_id, fields in reclaimed:
-        total += await ingest(store, redis, fields)
+        if _admitted(fields):
+            total += await ingest(store, redis, fields)
+        else:
+            _log_refused(message_id)
         acked.append(message_id)
     if acked:
         await redis.ack(group=group, stream=stream, message_ids=acked)

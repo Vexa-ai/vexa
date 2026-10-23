@@ -62,13 +62,30 @@ function harness(config?: { callbackStampedFrames?: boolean }, spacingMs = 2 * F
   h.mgr.removeAll();
 }
 
-// ── B: feeders that do not opt in keep the force-flush (contiguous frames, as Google Meet feeds) ──
+// ── B: Google Meet (no flag) with no covering transcript takes the same cut instead of dropping ──
+// A slow STT holds the window's request in flight for tens of seconds, so a Meet turn reaches the
+// cap with no transcript (or a stale one). The force-flush used to reset the buffer and drop the
+// whole 30 s silently; the cap now finalizes it from its own request, exactly like the stamped feeder.
 {
   const h = harness(undefined, FRAME_MS);
   h.feed(N);
   await h.trySubmit();
-  ok(h.requests.length === 0 && h.confirmed.length === 0,
-    'without the flag the cap force-flushes as before (no request, nothing to emit)');
+  ok(h.requests.length === 1 && h.requests[0] === QUIET,
+    `without the flag and without a transcript the cap sends the window up to its quietest frame (${JSON.stringify(h.requests)} frames)`);
+  h.mgr.handleTranscriptionResult(h.SID, 'the capped meet window', 28.7, [{ text: 'the capped meet window', start: 0, end: 28.7 }], 'en');
+  ok(h.confirmed.length === 1 && h.confirmed[0].text === 'the capped meet window', 'its answer is the confirmed segment');
+  ok(h.mgr.coverage().droppedSec === 0, `nothing is dropped (${JSON.stringify(h.mgr.coverage())})`);
+  h.mgr.removeAll();
+}
+
+// ── C: a covering transcript still force-flushes at once (no extra request) ──────────────────
+{
+  const h = harness(undefined, FRAME_MS);
+  h.feed(N);
+  h.mgr.handleTranscriptionResult(h.SID, 'covering text', 30, [{ text: 'covering text', start: 0, end: 30 }], 'en');
+  await h.trySubmit();
+  ok(h.requests.length === 0 && h.confirmed.length === 1 && h.confirmed[0].text === 'covering text',
+    'a transcript that covers the buffer is published by the force-flush, unchanged');
   h.mgr.removeAll();
 }
 

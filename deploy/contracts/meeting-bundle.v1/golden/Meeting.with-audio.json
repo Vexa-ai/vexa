@@ -1,0 +1,20 @@
+{
+  "end_time": "2026-10-01T14:00:15Z",
+  "media": [
+    {
+      "duration_seconds": 15.0,
+      "format": "webm",
+      "path": "media/recording-1-audio.webm",
+      "type": "audio"
+    }
+  ],
+  "native_meeting_id": "bundle-golden-room",
+  "participants": [
+    "Ada",
+    "Grace"
+  ],
+  "platform": "jitsi",
+  "start_time": "2026-10-01T14:00:00Z",
+  "status": "completed",
+  "title": "Release sync"
+}

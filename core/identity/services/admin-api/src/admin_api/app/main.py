@@ -8,9 +8,9 @@ exercises:
     - user    : `X-API-Key` resolves to an APIToken with a valid scope       → /user/* self-serve
     - internal: `X-Internal-Secret` == INTERNAL_API_SECRET, FAIL-CLOSED      → /internal/validate
 
-  /internal/validate (the gateway's authz oracle): returns user_id + scopes + max_concurrent +
-  email, plus webhook_url/secret/events from user.data; rejects expired tokens; bumps
-  last_used_at; FAILS CLOSED when INTERNAL_API_SECRET is unset (503) and on a bad secret (403).
+  /internal/validate (the gateway's authz oracle) lives in `validate.py`, the platform-settings door
+  in `platform_settings.py`, and the internal tier's checks in `internal_tier.py`; this module
+  assembles them with the routes below.
 
   Token mint: scoped {bot,tx,browser}. Scopes via JSON body `{"scopes":["bot","tx"]}` or
   query `?scopes=bot,tx` / `?scope=bot` (body wins when present). Optional `name` /
@@ -18,24 +18,51 @@ exercises:
   is refused (422) — never silently dropped (#922).
 """
 import hmac
+import logging
 import os
+import socket
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, Security, status
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel, Field, field_serializer, model_validator
-from sqlalchemy import func
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
+from sqlalchemy import delete, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..schema.models import APIToken, PlatformSetting, User
+from ..schema.models import (APIToken, Meeting, MeetingSession, PersonPhoto, PlatformSetting,
+                             Transcription, User)
 from ..token_scope import VALID_SCOPES, generate_prefixed_token
+from .. import obs
 from .db import get_db
 from . import events as events_mod
 from . import person_settings as person_settings_mod
+from . import notification_policy as notification_policy_mod
+from . import person_doors as person_doors_mod
+from . import workspace_registry as workspace_registry_mod
+from . import person_photo_doors as person_photo_doors_mod
+from . import photo_storage as photo_storage_mod
+from . import profile_doors as profile_doors_mod
+from . import orgs as orgs_mod
+from . import claim_code
+from . import admin_account
+from . import signin_allow
+from . import signin_wire
+from . import platform_settings as platform_settings_mod
+from . import provider_subjects as provider_subjects_mod
+from . import signin_links as signin_links_mod
+from . import validate as validate_mod
+from . import transcription_language as transcription_language_mod
+from .platform_settings import (MODELS_FIELDS, TRANSCRIPTION_FIELDS, apply_config_update,
+                                read_platform_setting, validate_config_fields)
+from .internal_tier import check_internal, check_internal_no_dev_bypass
+
+claim_log = logging.getLogger("admin_api.claim")
+logger = logging.getLogger("admin_api")
 
 ADMIN_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False)
 USER_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -43,10 +70,6 @@ USER_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 def _admin_token() -> Optional[str]:
     return os.getenv("ADMIN_API_TOKEN")
-
-
-def _internal_secret() -> str:
-    return os.environ.get("INTERNAL_API_SECRET", "")
 
 
 def normalise_email(email: str) -> str:
@@ -67,10 +90,6 @@ def normalise_email(email: str) -> str:
     case its person typed, mail already goes there, and a migration that rewrote every address to
     chase an index would be changing data to suit a query plan."""
     return (email or "").strip().lower()
-
-
-def _dev_mode() -> bool:
-    return os.getenv("DEV_MODE", "false").lower() == "true"
 
 
 async def verify_admin_token(admin_api_key: str = Security(ADMIN_KEY_HEADER)):
@@ -112,7 +131,69 @@ async def get_current_user_for_update(
     ).scalar_one()
 
 
+#: The most people one `/internal/presence` read answers — a desktop's members, bounded.
+PRESENCE_IDS_MAX = 200
+
+
+#: What a worker with nobody in the loop is told when it tries to change one of its person's settings.
+UNWATCHED_SETTING_REFUSAL = ("a setting changes only while the person is in the chat — ask them, "
+                             "and change it on their next turn")
+
+
+#: The one body every service answers a turn other people read with (gateway-identity.v1).
+SHARED_REFUSAL = {
+    "status": "refused",
+    "reason": "shared_conversation",
+    "instruction": "Other people read this conversation, so its answer may use only what every one "
+                   "of them can read. Say you cannot use it here, and offer to answer in the "
+                   "person's private chat; do not retry it another way.",
+}
+
+
+async def get_current_person(request: Request,
+                             api_key: str = Security(USER_KEY_HEADER),
+                             db: AsyncSession = Depends(get_db)) -> User:
+    """The person behind the settings door: their own API key, OR a worker's delegation token acting
+    for them (Vexa-ai/vexa#1783).
+
+    The chat's agent reaches `settings` and `workspace_regime` through the one MCP, which carries the
+    worker's `vxd_…` token back through the gateway. A token-table lookup alone answered every such
+    call `403 Invalid API Key`. The token is verified exactly as `/internal/validate` verifies it
+    (signature, expiry, live record, account still exists). Reads are open to any worker for its
+    person; a CHANGE needs the person in the loop (regime `human`).
+
+    Only the settings and workspace-regime routes use this; the rest of `/user/*` keeps
+    `get_current_user`."""
+    if api_key and validate_mod.delegation_mod.is_delegation_token(api_key):
+        ident = await validate_mod._validate_delegation(api_key, db)
+        dlg = ident.get("delegation") or {}
+        if dlg.get("shared") is True or dlg.get("principal_kind") == "workspace":
+            # D3 / BL-3: a turn other people read (a room's or a shared chat's, or a WORKSPACE
+            # principal) reaches none of a person's settings, regime or profile — the gateway
+            # refuses it first (routes.v1 `shared: refuse`); this is the same answer here.
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail=SHARED_REFUSAL)
+        regime = (ident.get("delegation") or {}).get("regime")
+        if request.method not in ("GET", "HEAD") and regime != "human":
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail=UNWATCHED_SETTING_REFUSAL)
+        user = (await db.execute(select(User).where(User.id == int(ident["user_id"])))).scalars().first()
+        if not user:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid delegation: no such user")
+        return user
+    return await get_current_user(api_key, db)
+
+
+async def get_current_person_for_update(
+    user: User = Depends(get_current_person),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    return await get_current_user_for_update(user, db)
+
+
 # --- request/response models ---
+class EmailVerifiedRequest(BaseModel):
+    """The terminal's word that the account's address was proven at sign-in."""
+    via: str = Field(..., max_length=48, description="magic_link, or oidc:<provider>")
+
 class UserCreate(BaseModel):
     email: str
     name: Optional[str] = None
@@ -168,12 +249,26 @@ class UserResponse(BaseModel):
     data: Dict[str, Any] = Field(default_factory=dict)
 
     @field_serializer("data")
-    def omit_webhook_secret(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            key: value
-            for key, value in data.items()
-            if key != "webhook_secret"
-        }
+    def omit_stored_secrets(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """The account's data with no stored credential in it — this is every `/admin/users*` read.
+        The webhook secret is left out; the model key and the transcription token become
+        ``<field>_set`` plus the masked tail ``/user/webhook`` shows; a calendar feed URL becomes
+        ``ics_url_set`` plus its masked form. The internal-tier routes are where services read them."""
+        out = {key: value for key, value in data.items() if key != "webhook_secret"}
+        for key, field in (("model_prefs", "api_key"), ("transcription_prefs", "token")):
+            prefs = out.get(key)
+            if isinstance(prefs, dict) and field in prefs:
+                prefs = dict(prefs)
+                secret = prefs.pop(field)
+                prefs[f"{field}_set"] = bool(secret)
+                prefs[field] = _mask_secret(secret if isinstance(secret, str) else None)
+                out[key] = prefs
+        if isinstance(out.get("calendar_connections"), list):
+            out["calendar_connections"] = [_masked_feed(c) if isinstance(c, dict) else c
+                                           for c in out["calendar_connections"]]
+        if "calendar_ics_url" in out:
+            out.update(_masked_feed({"ics_url": out.pop("calendar_ics_url")}, prefix="calendar_"))
+        return out
 
     model_config = {"from_attributes": True}
 
@@ -225,6 +320,9 @@ class CalendarUpdate(BaseModel):
     ics_url: Optional[str] = None
     auto_join: Optional[bool] = None
     bot_name: Optional[str] = None
+    # Domains / addresses auto-join must never join (organiser, invitee or meeting-link host).
+    # ``[]`` clears; absent leaves it as it is.
+    auto_join_block: Optional[List[str]] = None
 
 
 class CalendarCreate(BaseModel):
@@ -246,78 +344,99 @@ class CalendarPatch(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-# ── model + transcription config (per-user prefs and the platform-wide defaults) ──
-# One vocabulary everywhere: a MODELS config is {mode, model, meeting_model, base_url, api_key}
-# (mode "subscription" = the deployment's brokered credential — the mounted Claude Code
-# subscription or a deployment API key; mode "custom" = a user/operator-supplied
-# Anthropic-/OpenAI-compatible endpoint + key, e.g. a LiteLLM/OpenRouter gateway in front of an
-# open-source model). A TRANSCRIPTION config is {url, token} — the STT service the bot invocation
-# rides. Per-user copies live in users.data["model_prefs"] / ["transcription_prefs"]; the
-# platform defaults live in platform_settings rows "models" / "transcription". Effective config
-# resolves FIELD-BY-FIELD user > platform; the process env stays the bottom fallback downstream
-# (dispatch/bot_spawn only override what is set here).
-MODEL_MODES = ("subscription", "custom")
-_MODELS_FIELDS = ("mode", "model", "meeting_model", "base_url", "api_key", "effort")
-_TRANSCRIPTION_FIELDS = ("url", "token")
-# "setup" tracks the admin first-run wizard: per-step state ("done" / "skipped") + overall
-# completion — the terminal re-surfaces the wizard until it reads completed. Plain strings,
-# no secrets, admin-gated like the other keys.
-_SETUP_FIELDS = ("models", "transcription", "completed")
-# "diagnostics" carries the operator kill switches for capture-side telemetry. Today one field:
-# capture_signal — whether a spawned bot tees its raw captured-signal.v1 stream to durable storage
-# (the offline-replay fixture tape). It is the ONLY control-plane knob on fixture collection, and it
-# is a KILL switch, not an enable switch: absence means ON everywhere (see _resolve_capture_signal).
-# Written as a STRING like every other settings field ("false" to disable, "" to clear back to the
-# default) because _validate_config_fields' one rulebook is string-only.
-_DIAGNOSTICS_FIELDS = ("capture_signal",)
-# "global_setup" is THE INSTANCE GATE (PRD S9 decision 17; founder 2026-09-02: "global needs to be
-# setup by admin, it just should not let him start the service before that"). `state` is "completed"
-# once an admin has written and committed the thin company layer into `_global`; ABSENT-OR-ANYTHING-
-# ELSE means missing, because this value is read FAIL-CLOSED by everything that can SEND. A fresh
-# instance, a cleared row and a half-written value therefore all mean the same thing: this Vexa
-# serves nobody yet. `company` is the company name the layer opens with -- evidence of WHAT was
-# accepted, never a second source of truth -- and `completed_at` is when. The only writer is
-# agent-api's verifier (POST /api/global/ready), which reads the files and the commit before it
-# flips anything: nothing may mark itself ready.
-_GLOBAL_SETUP_FIELDS = ("state", "company", "completed_at")
-SETTING_KEYS = {"models": _MODELS_FIELDS, "transcription": _TRANSCRIPTION_FIELDS,
-                "setup": _SETUP_FIELDS, "diagnostics": _DIAGNOSTICS_FIELDS,
-                "global_setup": _GLOBAL_SETUP_FIELDS}
+# ── the sign-in admission wire, sealed as core/identity/contracts/signin.v1 ─────────────────────────
+# The reason vocabularies are GENERATED from that schema (`signin_wire.py`, the terminal's
+# `signinWire.ts`), so a reason this service returns is one the terminal knows, and one the schema
+# does not know fails the response here instead of reading as a refusal there.
 
-# One vocabulary for the gate, so no caller invents its own spelling of "not ready".
-GLOBAL_SETUP_COMPLETED = "completed"
-GLOBAL_SETUP_MISSING = "missing"
-
-# The one sentence a refused visitor sees, spelled once. Every service that refuses on this gate
-# quotes THIS wording; a paraphrase in one client is how a person learns to distrust the product.
-GATE_SENTENCE = "This Vexa is being set up by its administrator."
+class SigninAdmissionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str = Field(max_length=signin_wire.EMAIL_MAX_LENGTH)
+    claim_code: Optional[str] = Field(default=None, max_length=signin_wire.CLAIM_CODE_MAX_LENGTH)
+    via_invite: bool = False
 
 
-def global_setup_state(value: dict) -> str:
-    """Read the gate out of the stored `global_setup` row -- FAIL-CLOSED.
+class SigninAdmissionResponse(BaseModel):
+    admitted: bool
+    why: signin_wire.SigninReason
 
-    Anything that is not exactly "completed" is "missing": an absent row, a cleared field, a typo,
-    a value half-written by a crashed run. The expensive direction of this decision is a flow
-    mailing strangers on behalf of a company nobody has described yet; the cheap direction is
-    showing an admin a wizard they have already finished."""
-    if isinstance(value, dict) and str(value.get("state", "")).strip() == GLOBAL_SETUP_COMPLETED:
-        return GLOBAL_SETUP_COMPLETED
-    return GLOBAL_SETUP_MISSING
+    @model_validator(mode="after")
+    def _reason_matches_verdict(self):
+        if self.admitted != (self.why in signin_wire.ADMITTED_REASONS):
+            raise ValueError(f"admitted={self.admitted} cannot carry why={self.why!r}")
+        return self
+
+
+class AdminClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    user_id: int | str
+    claim_code: Optional[str] = Field(default=None, max_length=signin_wire.CLAIM_CODE_MAX_LENGTH)
+
+
+class AdminClaimResponse(BaseModel):
+    claimed: bool
+    admin_exists: bool
+    why: signin_wire.ClaimReason
+
+
+class ProviderSubjectBindRequest(BaseModel):
+    """signin.v1 ``ProviderSubjectBindRequest``."""
+    model_config = {"extra": "forbid"}
+
+    subject: str = Field(pattern=provider_subjects_mod.SUBJECT_RE.pattern)
+
+
+class ClaimCodeCheckRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    claim_code: str = Field(max_length=signin_wire.CLAIM_CODE_MAX_LENGTH)
+
+
+class ClaimCodeCheckResponse(BaseModel):
+    valid: bool
+
+
+class InstanceState(BaseModel):
+    admin_exists: bool
 
 
 class ModelPrefsUpdate(BaseModel):
     """Partial update — only fields the caller SENDS change; an empty string clears a field."""
     mode: Optional[str] = None
     model: Optional[str] = None
-    meeting_model: Optional[str] = None
     base_url: Optional[str] = None
     api_key: Optional[str] = None
+    # extra_body was already in `MODELS_FIELDS` — so the platform setting carried it and the
+    # effective-config resolution returned it — but it was NOT in this model, so no per-USER
+    # write could ever set it. A field that resolves and cannot be written is a field only the
+    # deployment has, silently. It is load-bearing for exactly the case per-user config exists
+    # for: a self-hosted vLLM/Qwen endpoint returns no valid JSON at all without
+    # {"chat_template_kwargs": {"enable_thinking": false}}.
+    extra_body: Optional[str] = None
     effort: Optional[str] = None  # claude-code reasoning-effort pin (low|medium|high|xhigh); empty = unset
+    runner: Optional[str] = None  # the harness that runs workspace turns; empty = the deployment's
+    # the model-catalog id (ADR-0043) new and unpicked chats run on; empty = the organisation's
+    # default, else the catalog's
+    default_model: Optional[str] = None
 
 
 class TranscriptionPrefsUpdate(BaseModel):
     url: Optional[str] = None
     token: Optional[str] = None
+    # The person's default transcription language (transcription-language.v1 UserPreferenceUpdate):
+    # a code, or "" to clear; a list of codes, or [] to clear. Typed loosely on purpose — the
+    # contract's rulebook (`transcription_language.apply`) refuses with a message naming the fix.
+    language: Optional[Any] = None
+    allowed_languages: Optional[Any] = None
+
+
+def _masked_feed(connection: dict, *, prefix: str = "") -> dict:
+    """A calendar connection with its feed URL (a credential) replaced by whether one is set and the
+    masked form the calendar routes show (host and the last four characters)."""
+    out = {k: v for k, v in connection.items() if k != "ics_url"}
+    url = connection.get("ics_url") if isinstance(connection.get("ics_url"), str) else ""
+    out[f"{prefix}ics_url_set"] = bool(url)
+    out[f"{prefix}ics_url_masked"] = f"{urlparse(url).hostname or ''}/…{url[-4:]}" if url else None
+    return out
 
 
 def _mask_secret(secret: Optional[str]) -> Optional[str]:
@@ -328,43 +447,6 @@ def _mask_secret(secret: Optional[str]) -> Optional[str]:
     return "********" + (secret[-4:] if len(secret) > 8 else "")
 
 
-def _validate_config_fields(update: dict, *, kind: str) -> dict:
-    """Shared field validation for both the per-user prefs and the platform settings writers
-    (one rulebook, whichever tier writes). Returns the cleaned update dict."""
-    from urllib.parse import urlparse
-
-    cleaned: dict = {}
-    for field, raw in update.items():
-        value = (raw or "").strip() if isinstance(raw, str) else raw
-        if value in (None, ""):
-            cleaned[field] = ""  # explicit clear
-            continue
-        if not isinstance(value, str) or len(value) > 2048:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
-                                detail=f"{field} must be a string under 2048 chars")
-        if field == "mode" and value not in MODEL_MODES:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
-                                detail=f"mode must be one of {sorted(MODEL_MODES)}")
-        if field in ("base_url", "url"):
-            parsed = urlparse(value)
-            if parsed.scheme not in ("http", "https") or not parsed.hostname:
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
-                                    detail=f"{field} must be an http(s) URL")
-        cleaned[field] = value
-    return cleaned
-
-
-def _apply_config_update(stored: dict, cleaned: dict) -> dict:
-    """Overlay a cleaned partial update onto a stored config: set non-empty, drop cleared."""
-    out = dict(stored or {})
-    for field, value in cleaned.items():
-        if value == "":
-            out.pop(field, None)
-        else:
-            out[field] = value
-    return out
-
-
 def _resolve_effective(user_cfg: dict, platform_cfg: dict, fields: tuple) -> dict:
     """FIELD-BY-FIELD user > platform. Only set fields appear — env fallback stays downstream."""
     out: dict = {}
@@ -372,6 +454,26 @@ def _resolve_effective(user_cfg: dict, platform_cfg: dict, fields: tuple) -> dic
         value = user_cfg.get(field) or platform_cfg.get(field)
         if value:
             out[field] = value
+    return out
+
+
+#: The models fields that belong to an endpoint: its credential and its server-specific request
+#: fields. They follow the endpoint's owner, never the field-by-field merge.
+_ENDPOINT_BOUND_MODEL_FIELDS = ("api_key", "extra_body")
+
+
+def _effective_models(user_cfg: dict, platform_cfg: dict) -> dict:
+    """The person's effective Settings → Models: user over platform, field by field — except that a
+    person who names their OWN endpoint (``base_url``) brings that endpoint's credential and request
+    fields too. Those are never filled from the platform record, which holds the operator's for the
+    operator's endpoint; the same rule bot-context applies to a person's transcription URL."""
+    out = _resolve_effective(user_cfg, platform_cfg, MODELS_FIELDS)
+    if str(user_cfg.get("base_url") or "").strip():
+        for field in _ENDPOINT_BOUND_MODEL_FIELDS:
+            if user_cfg.get(field):
+                out[field] = user_cfg[field]
+            else:
+                out.pop(field, None)
     return out
 
 
@@ -399,23 +501,106 @@ def _as_flag(value) -> Optional[bool]:
     return None
 
 
-def _resolve_capture_signal(user_data: dict, platform_diagnostics: dict) -> bool:
-    """Whether this user's bots tee the captured-signal tape: user > platform_settings > DEFAULT ON.
+#: The deployment's default for the captured-signal tape, the last tier below. meeting-api reads
+#: the same key for the case where it gets no answer from here. The Helm chart sets it to false.
+CAPTURE_SIGNAL_DEFAULT_ENV = "VEXA_CAPTURE_SIGNAL_DEFAULT"
 
-    DEFAULT ON is the product decision, not an accident of config: prod meetings are the fixture
-    source, so absence of any flag means capture. The flag exists to STOP collection fleet-wide with
-    no redeploy (``PUT /internal/settings/diagnostics {"capture_signal": "false"}``), and per-user
-    (``users.data["diagnostics"]["capture_signal"]``) for an account that must not be taped.
+
+def capture_signal_default(raw: Optional[str] = None) -> bool:
+    """``VEXA_CAPTURE_SIGNAL_DEFAULT`` as a boolean: unset or empty is ``True`` (compose and Lite,
+    unchanged); a recognized value is honoured; anything else raises ``ValueError``, which the boot
+    turns into a refusal (``__main__``). ``raw`` is the test seam."""
+    value = os.getenv(CAPTURE_SIGNAL_DEFAULT_ENV) if raw is None else raw
+    if value is None or not value.strip():
+        return True
+    flag = _as_flag(value)
+    if flag is None:
+        raise ValueError(f"{CAPTURE_SIGNAL_DEFAULT_ENV}={value!r} is not a recognized boolean "
+                         f"({'/'.join(_FLAG_TRUE)} / {'/'.join(_FLAG_FALSE)})")
+    return flag
+
+
+def _resolve_capture_signal(user_data: dict, platform_diagnostics: dict,
+                            deployment_default: Optional[bool] = None) -> bool:
+    """Whether this user's bots tee the captured-signal tape: user > platform_settings > the
+    deployment default (``VEXA_CAPTURE_SIGNAL_DEFAULT``; unset = ON).
+
+    ON where nothing is configured is the product decision for compose and Lite: prod meetings are
+    the fixture source. The Helm chart ships the deployment default OFF, so an enterprise install
+    tapes nothing unless an operator turns it on. The flags exist to change collection fleet-wide
+    with no redeploy (``PUT /internal/settings/diagnostics {"capture_signal": "false"}``), and
+    per-user (``users.data["diagnostics"]["capture_signal"]``) for one account.
+    ``deployment_default`` is the test seam; ``None`` reads the environment.
     """
     for source in (user_data.get("diagnostics") or {}, platform_diagnostics or {}):
         flag = _as_flag(source.get("capture_signal") if isinstance(source, dict) else None)
         if flag is not None:
             return flag
-    return True
+    return capture_signal_default() if deployment_default is None else deployment_default
+
+
+# ── the admin claim, at module level so the boot hook can issue a code before any request ─────────
+#: The app-wide advisory-lock key every admin-claim write serializes under.
+ADMIN_CLAIM_LOCK = 0x5EC4_AD31
+
+
+async def admin_claimed(db: AsyncSession) -> bool:
+    """Has the admin ROLE been claimed on a user row? (VEXA_ADMIN_EMAILS is the other half of "is
+    there an admin"; the instance state joins them.)"""
+    row = (await db.execute(
+        select(User.id).where(User.data["is_admin"].astext == "true").limit(1)
+    )).first()
+    return row is not None
+
+
+async def _claim_record(db: AsyncSession) -> dict:
+    row = await db.get(PlatformSetting, claim_code.ROW_KEY)
+    return dict(row.value) if row is not None and isinstance(row.value, dict) else {}
+
+
+async def _write_claim_record(db: AsyncSession, value: dict) -> None:
+    """Stage the claim row (the caller commits). Clearing writes `{}` — a consumed code."""
+    row = await db.get(PlatformSetting, claim_code.ROW_KEY)
+    if row is None:
+        row = PlatformSetting(key=claim_code.ROW_KEY, value=value)
+    else:
+        row.value = value
+    db.add(row)
+
+
+async def issue_admin_claim_code(db: AsyncSession, *, host: str, now: datetime,
+                                 force: bool = False) -> "tuple[Optional[str], str]":
+    """Issue the one-time admin claim code for an unclaimed instance — (code, note), code None when
+    none was issued and the note says why. Under the claim lock, so a boot never races a claim.
+
+    No code while VEXA_ADMIN_EMAILS names the admins or a user holds the role (any stale code is
+    retired). A code another replica issued moments ago is kept unless `force` (an explicit release
+    of the role asks for a new one)."""
+    from sqlalchemy import text as sa_text
+    await db.execute(sa_text("SELECT pg_advisory_xact_lock(:key)"), {"key": ADMIN_CLAIM_LOCK})
+    admins, _ = signin_allow.admin_emails()
+    rec = await _claim_record(db)
+    if admins or await admin_claimed(db):
+        if claim_code.is_live(rec):
+            await _write_claim_record(db, {})
+        await db.commit()
+        return None, ("VEXA_ADMIN_EMAILS names the administrators" if admins
+                      else "an administrator has claimed this instance")
+    holder = None if force else claim_code.held_elsewhere(rec, host=host, now=now)
+    if holder:
+        await db.commit()
+        return None, f"replica {holder} issued the claim code moments ago — it is in that replica's log"
+    code = claim_code.generate()
+    await _write_claim_record(db, claim_code.record(code, host=host, now=now))
+    await db.commit()
+    return code, "issued"
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Vexa Admin API (v0.12)")
+    # logevent.v1 trace (#1783): read/mint X-Trace-Id, bind it, echo it, log received/completed.
+    # The only middleware on this app, so it is outermost and wraps every route.
+    app.add_middleware(obs.TraceMiddleware)
 
     # --- liveness probe (gate:health): process-up, no DB dependency. Readiness (DB reachable)
     # is a separate concern — keeping /health a pure liveness check makes it green without a
@@ -471,6 +656,13 @@ def create_app() -> FastAPI:
         u = User(email=normalise_email(user_in.email), name=user_in.name,
                  max_concurrent_bots=user_in.max_concurrent_bots)
         u.data = {**(u.data or {}), "onboarding_completed_at": time.time()}
+        # THE ADMIN ACCOUNT IS BORN HERE OR NOWHERE (app/admin_account.py). A NEW row for an address
+        # VEXA_ADMIN_ACCOUNT names is created as the deployment's dedicated admin account, in this
+        # transaction. The existing-row branch above never reaches this line, so an everyday account
+        # is never promoted into one — naming its address changes nothing about it.
+        u.data = admin_account.stamp_for_new_row(u.email, u.data)
+        if admin_account.is_stamped(u.data):
+            u.max_concurrent_bots = admin_account.MAX_CONCURRENT_BOTS
         db.add(u)
         try:
             await db.commit()
@@ -534,6 +726,17 @@ def create_app() -> FastAPI:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
         return UserResponse.model_validate(user)
 
+    # TEST USERS (#1783, app.dev tooling): the accounts on the reserved `example.test` domain, for the
+    # terminal's "Test users…" — which exists only where VEXA_DEV_TEST_USERS=1. Declared before
+    # `/admin/users/{user_id}` so the path is not read as an id.
+    @app.get("/admin/users/test-users", response_model=List[UserResponse],
+             dependencies=[Depends(verify_admin_token)])
+    async def list_test_users(db: AsyncSession = Depends(get_db)):
+        rows = (await db.execute(
+            select(User).where(func.lower(User.email).like("%@example.test")).order_by(User.id).limit(200)
+        )).scalars().all()
+        return [UserResponse.model_validate(u) for u in rows]
+
     @app.get("/admin/users/{user_id}", response_model=UserResponse,
              dependencies=[Depends(verify_admin_token)])
     async def get_user_by_id(user_id: int, db: AsyncSession = Depends(get_db)):
@@ -564,6 +767,88 @@ def create_app() -> FastAPI:
         await db.refresh(user)
         return UserResponse.model_validate(user)
 
+    @app.put("/admin/users/{user_id}/models", dependencies=[Depends(verify_admin_token)])
+    async def set_user_models_as_admin(user_id: int, update: ModelPrefsUpdate,
+                                       db: AsyncSession = Depends(get_db)):
+        """Set ANOTHER user's model config — the admin-tier twin of ``PUT /user/models``.
+
+        The self-serve route takes the caller's own identity, which is exactly right for a person
+        editing their own Settings and exactly wrong for the one caller that has to bind a config
+        to somebody else: the rehearsal harness (PRD decision 38) pins a scratch subject under the
+        test domain to a runner and an endpoint, and it must be able to do that WITHOUT holding
+        that subject's credential and WITHOUT touching the deployment-wide platform setting, which
+        would change the model for every person on the instance.
+
+        Same validation, same partial semantics, same masking as the self-serve route — one
+        rulebook, two tiers. An empty string clears a field.
+        """
+        user = (await db.execute(
+            select(User).where(User.id == user_id).with_for_update()
+        )).scalar_one_or_none()
+        if not user:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        await _put_user_prefs(update.model_dump(exclude_unset=True), "model_prefs", user, db)
+        prefs = (user.data or {}).get("model_prefs") or {}
+        return {"mode": prefs.get("mode"), "model": prefs.get("model"),
+                "base_url": prefs.get("base_url"),
+                "effort": prefs.get("effort"), "runner": prefs.get("runner"),
+                "extra_body": prefs.get("extra_body"), "default_model": prefs.get("default_model"),
+                "api_key_set": bool(prefs.get("api_key")),
+                "api_key": _mask_secret(prefs.get("api_key"))}
+
+    @app.delete("/admin/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT,
+                dependencies=[Depends(verify_admin_token)])
+    async def delete_user_by_id(user_id: int, db: AsyncSession = Depends(get_db)):
+        """DELETE one person and everything keyed to them. Irreversible.
+
+        WHY IT HAS TO EXIST. There was no per-user delete anywhere in the product, so the only way
+        to remove somebody was `blank-instance.sh`, which deletes EVERY person on the stack — the
+        instrument for "reset one test subject" was a wipe of the whole instance. PRD decision 38.3
+        (`subject_reset`) is the caller that needs it: a state re-entered in seconds, the instance
+        never blanked.
+
+        IT DELETES EXPLICITLY, IN FK ORDER, because the cascade does not exist: `meetings.user_id`
+        is a plain Integer with no ForeignKey to `users`, so removing the row alone would leave
+        that person's meetings, sessions and transcripts behind, owned by an id that no longer
+        names anybody — the ghost-identity failure the rig hit on 2026-09-02, one layer down. The
+        order is the one `blank-instance.sh` documents: transcriptions → meeting_sessions →
+        meetings → api_tokens → the user.
+
+        It does NOT touch the workspace volume, redis, or the flows lanes: those stores belong to
+        other services, and a route that reached into them would be this service writing three
+        surfaces it does not own. `subject_reset` clears them through their own owners. The one
+        exception is an individual account's personal CRM: identity asks crm-api to erase it through
+        crm-api's own door (`orgs.erase_personal`), then removes the org of one it owns.
+        """
+        user = (await db.execute(
+            select(User).where(User.id == user_id).with_for_update()
+        )).scalar_one_or_none()
+        if not user:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        meeting_ids = [row[0] for row in (await db.execute(
+            select(Meeting.id).where(Meeting.user_id == user_id))).all()]
+        if meeting_ids:
+            await db.execute(delete(Transcription).where(
+                Transcription.meeting_id.in_(meeting_ids)))
+            await db.execute(delete(MeetingSession).where(
+                MeetingSession.meeting_id.in_(meeting_ids)))
+            await db.execute(delete(Meeting).where(Meeting.id.in_(meeting_ids)))
+        # An individual's org of one and their whole personal CRM go with the account — the CRM's
+        # rows through the CRM's own erase door, FIRST: if it cannot confirm, nothing is deleted.
+        await orgs_mod.erase_personal(db, user)
+        await db.execute(delete(APIToken).where(APIToken.user_id == user_id))
+        await db.execute(delete(PersonPhoto).where(PersonPhoto.user_id == user_id))
+        await db.delete(user)
+        await db.commit()
+        # Their photos' bytes live in the object store (`photo_storage.py`): removed with them.
+        photos = photo_storage_mod.from_env()
+        if photos is not None:
+            try:
+                photos.delete_person(user_id)
+            except Exception:  # noqa: BLE001 — the row is gone; say so loudly, the objects need a sweep
+                logger.error("user %s deleted but their photo objects were not (person-photos/%s/)", user_id, user_id)
+        return None
+
     @app.post("/admin/users/{user_id}/tokens", response_model=TokenResponse,
               status_code=status.HTTP_201_CREATED, dependencies=[Depends(verify_admin_token)])
     async def create_token_for_user(
@@ -593,13 +878,21 @@ def create_app() -> FastAPI:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 detail=f"Invalid scope(s): {invalid}. Valid: {sorted(VALID_SCOPES)}")
         token_name = body.name if body.name is not None else name
+        from . import sessions as sessions_mod  # noqa: PLC0415
+        if (token_name or "").strip().lower() == sessions_mod.DEFAULT_NAME and sessions_mod.login_name_reserved():
+            # the sign-in's own name: with sessions on, the sign-in mints a session, never a key
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail=f"the key name {sessions_mod.DEFAULT_NAME!r} is reserved for sign-in")
         token_expires_in = body.expires_in if body.expires_in is not None else expires_in
         token_value = generate_prefixed_token(scope_list[0])
         expires_at = None
         if token_expires_in is not None and token_expires_in > 0:
             expires_at = datetime.utcnow() + timedelta(seconds=token_expires_in)
+        # Always a KEY (D13): this door has no parameter that reaches `kind`; a session is minted
+        # only by `POST /internal/sessions` (app/sessions.py).
         tok = APIToken(token=token_value, user_id=user_id, scopes=scope_list,
-                       name=token_name, created_at=datetime.utcnow(), expires_at=expires_at)
+                       name=token_name, created_at=datetime.utcnow(), expires_at=expires_at,
+                       kind="key")
         db.add(tok)
         await db.commit()
         await db.refresh(tok)
@@ -630,11 +923,33 @@ def create_app() -> FastAPI:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # --- user tier: webhook self-serve (writes to user.data JSONB) ---
-    @app.put("/user/webhook", response_model=UserResponse)
+    def _webhook_view(data: dict) -> dict:
+        """The webhook config as both the read and the write answer it: the URL, the events, and
+        whether a secret is set (masked to its last 4 chars). Nothing else in ``users.data`` — a key
+        scoped to bots or transcripts reads its own webhook here, never the account's stored model
+        key, transcription token or calendar feed URLs."""
+        secret = data.get("webhook_secret")
+        return {
+            "webhook_url": data.get("webhook_url"),
+            "webhook_secret_set": bool(secret),
+            "webhook_secret": _mask_secret(secret),
+            "webhook_events": data.get("webhook_events"),
+        }
+
+    @app.put("/user/webhook")
     async def set_user_webhook(webhook_update: WebhookUpdate,
                                user: User = Depends(get_current_user_for_update),
                                db: AsyncSession = Depends(get_db)):
         from sqlalchemy.orm import attributes
+        from .ssrf import SSRFError, validate_url
+        url = webhook_update.webhook_url.strip()
+        if url:
+            # Refused here as well as at delivery: a destination this deployment will never POST to
+            # is a configuration error the person should see when they save it.
+            try:
+                validate_url(url, what="webhook_url", resolve=False)
+            except SSRFError as exc:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
         data = dict(user.data or {})
         data["webhook_url"] = webhook_update.webhook_url
         if webhook_update.webhook_secret:
@@ -646,29 +961,24 @@ def create_app() -> FastAPI:
         db.add(user)
         await db.commit()
         await db.refresh(user)
-        return UserResponse.model_validate(user)
+        # 0.12 answered this with the user record (`UserResponse`), and callers parse it; 0.13 adds
+        # the webhook view at the top level. The record's `data` goes through the same serializer as
+        # every /admin/users read, so no stored credential (webhook secret, model key, transcription
+        # token, calendar feed URL) is in it.
+        record = UserResponse.model_validate(user).model_dump(mode="json")
+        return {**record, **_webhook_view(user.data if isinstance(user.data, dict) else {})}
 
     @app.get("/user/webhook")
     async def get_user_webhook(user: User = Depends(get_current_user)):
         """Read back the caller's webhook config. The secret NEVER leaves in the clear —
         it is masked to its last 4 chars (`********abcd`), enough to recognize which secret
         is set without disclosing it."""
-        data = user.data if isinstance(user.data, dict) else {}
-        secret = data.get("webhook_secret")
-        masked = None
-        if secret:
-            masked = "********" + (secret[-4:] if len(secret) > 8 else "")
-        return {
-            "webhook_url": data.get("webhook_url"),
-            "webhook_secret_set": bool(secret),
-            "webhook_secret": masked,
-            "webhook_events": data.get("webhook_events"),
-        }
+        return _webhook_view(user.data if isinstance(user.data, dict) else {})
 
     # --- user tier: calendar-sync self-serve (writes to user.data JSONB, like webhook) ---
     from .calendars import (MAX_CALENDAR_CONNECTIONS, connections_from_data,
                             masked_connection, new_connection, store_connections,
-                            validate_bot_name, validate_ics_url)
+                            validate_auto_join_block, validate_bot_name, validate_ics_url)
 
     async def _save_calendar_connections(user: User, db: AsyncSession,
                                          connections: list[dict]) -> None:
@@ -787,6 +1097,16 @@ def create_app() -> FastAPI:
                     current["deleted"] = True
         if calendar_update.auto_join is not None and current is not None:
             current["auto_join"] = bool(calendar_update.auto_join)
+        if "auto_join_block" in calendar_update.model_fields_set:
+            data = dict(user.data or {})
+            block = validate_auto_join_block(calendar_update.auto_join_block or [])
+            if block:
+                data["auto_join_block"] = block
+            else:
+                data.pop("auto_join_block", None)
+            from sqlalchemy.orm import attributes
+            user.data = data
+            attributes.flag_modified(user, "data")
         await _save_calendar_connections(user, db, connections)
         return await get_user_calendar(user)  # the masked read-back shape
 
@@ -802,15 +1122,18 @@ def create_app() -> FastAPI:
             "ics_url_masked": masked["ics_url_masked"] if masked else None,
             "auto_join": masked["auto_join"] if masked else True,
             "bot_name": data.get("calendar_bot_name") or "Vexa",
+            "auto_join_block": list(data.get("auto_join_block") or []),
         }
 
     # --- user tier: model + transcription self-serve prefs (users.data JSONB, like webhook) ---
     async def _put_user_prefs(update_fields: dict, data_key: str, user: User,
-                              db: AsyncSession) -> dict:
+                              db: AsyncSession, *, language_fields: Optional[dict] = None) -> dict:
         from sqlalchemy.orm import attributes
-        cleaned = _validate_config_fields(update_fields, kind=data_key)
+        cleaned = validate_config_fields(update_fields)
         data = dict(user.data or {})
-        data[data_key] = _apply_config_update(data.get(data_key) or {}, cleaned)
+        data[data_key] = apply_config_update(data.get(data_key) or {}, cleaned)
+        if language_fields:
+            data[data_key] = transcription_language_mod.apply(data[data_key], language_fields)
         if not data[data_key]:
             data.pop(data_key, None)  # fully cleared → back to platform/env defaults
         user.data = data
@@ -845,9 +1168,10 @@ def create_app() -> FastAPI:
         return {
             "mode": prefs.get("mode"),
             "model": prefs.get("model"),
-            "meeting_model": prefs.get("meeting_model"),
             "base_url": prefs.get("base_url"),
             "effort": prefs.get("effort"),
+            "runner": prefs.get("runner"),
+            "default_model": prefs.get("default_model"),
             "api_key_set": bool(prefs.get("api_key")),
             "api_key": _mask_secret(prefs.get("api_key")),
         }
@@ -856,8 +1180,29 @@ def create_app() -> FastAPI:
     async def set_user_transcription(update: TranscriptionPrefsUpdate,
                                      user: User = Depends(get_current_user_for_update),
                                      db: AsyncSession = Depends(get_db)):
-        """Set the caller's transcription backend override. ``token`` is a SECRET — masked on read."""
-        await _put_user_prefs(update.model_dump(exclude_unset=True), "transcription_prefs", user, db)
+        """Set the caller's transcription backend override. ``token`` is a SECRET — masked on read.
+
+        A person's own endpoint is a destination this deployment's bots send meeting audio to, so it
+        is held to the outbound URL guard: an internal or private address is refused here (422) and
+        by the bot at every request. The deployment's own STT (env or platform setting) is not."""
+        url = (update.url or "").strip()
+        if url:
+            from .ssrf import SSRFError, validate_url
+            try:
+                validate_url(url, what="url", resolve=False)
+            except SSRFError as exc:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+        fields = update.model_dump(exclude_unset=True)
+        language_fields = {k: fields.pop(k) for k in ("language", "allowed_languages") if k in fields}
+        if language_fields:
+            # Checked against the WHOLE stored default before anything is written, so a change to
+            # one half that breaks the rule with the other half is refused, not half-applied.
+            stored = (user.data if isinstance(user.data, dict) else {}).get("transcription_prefs") or {}
+            try:
+                transcription_language_mod.apply(stored, language_fields)
+            except transcription_language_mod.Refused as refused:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(refused))
+        await _put_user_prefs(fields, "transcription_prefs", user, db, language_fields=language_fields)
         return await get_user_transcription(user)
 
     @app.get("/user/transcription")
@@ -868,101 +1213,24 @@ def create_app() -> FastAPI:
             "url": prefs.get("url"),
             "token_set": bool(prefs.get("token")),
             "token": _mask_secret(prefs.get("token")),
+            **transcription_language_mod.read(prefs),
         }
 
-    # --- internal tier: the gateway's authz oracle (FAIL-CLOSED) ---
-    @app.post("/internal/validate", include_in_schema=False)
-    async def validate_token(request: Request, payload: dict, db: AsyncSession = Depends(get_db)):
-        secret = _internal_secret()
-        # Fail closed: no secret configured → reject unless dev mode.
-        if not _dev_mode() and not secret:
-            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
-                                detail="INTERNAL_API_SECRET not configured")
-        if secret:
-            provided = request.headers.get("X-Internal-Secret", "")
-            if not hmac.compare_digest(provided, secret):
-                raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid internal secret")
+    # The person's OWN settings and workspace regime, and identity's MCP tool manifest
+    # (Vexa-ai/vexa#1783) — `person_doors.py`.
+    app.include_router(person_doors_mod.build_router(get_current_person, get_current_person_for_update))
+    # THE WORKSPACE REGISTRY (MIGRATION-0009, PRD 0.13.4 D5): workspaces, memberships and invites,
+    # identity their one writer, agent-api their caller over the internal tier — `workspace_registry.py`.
+    app.include_router(workspace_registry_mod.build_router())
+    # A person's photo (UI 15g): their own upload/remove, the sign-in capture, the bytes for agent-api.
+    app.include_router(person_photo_doors_mod.build_router(get_current_person))
+    # PUBLIC PROFILES (R4, `public_profile.py`): the one writer of a person's public profile, the
+    # directory and the internal doors crm-api reads live; all refused unless `public_profiles` is on.
+    app.include_router(profile_doors_mod.build_router(get_current_person, get_current_person_for_update))
+    profile_doors_mod.gate(app)
 
-        token = payload.get("token", "")
-        if not token:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Missing token")
-
-        row = (await db.execute(
-            select(APIToken, User).join(User, APIToken.user_id == User.id)
-            .where(APIToken.token == token)
-        )).first()
-        if not row:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-        api_token, user = row
-
-        if api_token.expires_at is not None and api_token.expires_at < datetime.utcnow():
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Token expired")
-
-        api_token.last_used_at = datetime.utcnow()
-        await db.commit()
-
-        scopes = list(api_token.scopes) if api_token.scopes else ["legacy"]
-        resp = {
-            "user_id": user.id,
-            "scopes": scopes,
-            "max_concurrent": user.max_concurrent_bots,
-            "email": user.email,
-            # DB-backed admin role (bootstrap-claimed on a fresh instance) — the terminal's
-            # admin gate reads THIS, with its VEXA_ADMIN_EMAILS allowlist kept as an override.
-            "is_admin": (user.data or {}).get("is_admin") is True if isinstance(user.data, dict) else False,
-        }
-        data_blob = user.data if isinstance(user.data, dict) else {}
-        if data_blob.get("webhook_url"):
-            resp["webhook_url"] = data_blob["webhook_url"]
-            if data_blob.get("webhook_secret"):
-                resp["webhook_secret"] = data_blob["webhook_secret"]
-            if data_blob.get("webhook_events"):
-                resp["webhook_events"] = data_blob["webhook_events"]
-        # Lane A: the caller's shared-workspace membership ids (from the derived users.data.memberships[]),
-        # so the gateway can inject x-user-workspaces → meeting-api authorizes a member's transcript subscribe.
-        memberships = data_blob.get("memberships")
-        if isinstance(memberships, list):
-            resp["workspaces"] = [m["workspace_id"] for m in memberships
-                                  if isinstance(m, dict) and m.get("workspace_id")]
-        return resp
-
-    # --- internal tier: workspace membership index (Lane M) — the DERIVED users.data.memberships[]
-    #     mirror of the authoritative policy/members.json in each shared workspace's git repo. agent-api
-    #     (no DB) POSTs mirror updates here over the same X-Internal-Secret internal edge as /internal/
-    #     validate. The git file is the source of truth (Q6): this index is a rebuildable listing cache.
-    def _check_internal(request: Request) -> None:
-        secret = _internal_secret()
-        if not _dev_mode() and not secret:
-            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
-                                detail="INTERNAL_API_SECRET not configured")
-        if secret:
-            provided = request.headers.get("X-Internal-Secret", "")
-            if not hmac.compare_digest(provided, secret):
-                raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid internal secret")
-
-    def _check_internal_no_dev_bypass(request: Request) -> None:
-        """The internal check WITHOUT the dev-mode escape — for a door that reads or writes ONE
-        NAMED PERSON'S data by path id.
-
-        `_check_internal` lets `DEV_MODE=true` with no `INTERNAL_API_SECRET` through unauthenticated.
-        For the doors it was written for — `/internal/validate`, the membership index — that is a
-        local-development convenience over data the caller could get anyway. For a route shaped
-        `/internal/users/{id}/…` it is not the same thing: the id is supplied by the CALLER, so the
-        bypass is a cross-user read (or write) of somebody's private preferences with no credential
-        at all. The two cases have opposite blast radii and had one check, which is how the weaker
-        one ended up guarding the stronger door.
-
-        Dev mode still works; it simply has to name a secret first — a one-line change to a compose
-        file against a route that otherwise answers for any person on the instance."""
-        secret = _internal_secret()
-        if not secret:
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=("INTERNAL_API_SECRET not configured — this door reads/writes one named "
-                        "person's settings and is never open, dev mode included"))
-        provided = request.headers.get("X-Internal-Secret", "")
-        if not hmac.compare_digest(provided, secret):
-            raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid internal secret")
+    app.include_router(validate_mod.router)  # POST /internal/validate — the gateway's authz oracle
+    app.include_router(signin_links_mod.router)  # POST /internal/signin-links/redeem — a link signs in once
 
     async def _load_user(
         user_id: str,
@@ -982,79 +1250,293 @@ def create_app() -> FastAPI:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown user")
         return user
 
-    # --- internal tier: instance identity — admin existence + the first-sign-in admin claim.
-    #     A fresh install has NO admin; the login surface (via the terminal, which fronts this
-    #     edge) shows a one-time "set up your instance" claim screen, and the first successful
-    #     sign-in becomes the admin. The claim is race-safe: a pg advisory xact lock serializes
-    #     concurrent first sign-ins so exactly ONE claims the role. ---
-    _BOOTSTRAP_ADMIN_LOCK = 0x5EC4_AD31  # arbitrary app-wide advisory-lock key for the claim
+    # --- internal tier: the org (MIGRATION-0008) — an account's home org and role, read-only.
+    app.include_router(orgs_mod.build_router(_load_user))
 
-    async def _admin_exists(db: AsyncSession) -> bool:
-        row = (await db.execute(
-            select(User.id).where(User.data["is_admin"].astext == "true").limit(1)
-        )).first()
-        return row is not None
+    # --- internal tier: the workspace principal (PRD 0.13.4 D2, MIGRATION-0009).
+    from . import principals as principals_mod  # noqa: PLC0415
+    app.include_router(principals_mod.build_router())
+
+    # --- internal tier + the terminal's second secret: the `session` credential (D13, MIGRATION-0010).
+    from . import sessions as sessions_mod  # noqa: PLC0415
+    app.include_router(sessions_mod.build_router())
+
+    # --- internal tier: instance identity — admin existence + the admin claim.
+    #     A fresh install has NO admin unless VEXA_ADMIN_EMAILS names them; the login surface (via
+    #     the terminal, which fronts this edge) shows a one-time "set up your instance" claim
+    #     screen. Who may claim is `signin_allow.may_claim`, decided here and nowhere else. The claim
+    #     is race-safe: a pg advisory xact lock serializes concurrent claims so exactly ONE wins. ---
+    _BOOTSTRAP_ADMIN_LOCK = ADMIN_CLAIM_LOCK
+    _admin_exists = admin_claimed
 
     async def _instance_state(db: AsyncSession) -> dict:
-        """THE INSTANCE GATE, computed in exactly ONE place.
+        """THE INSTANCE STATE, computed in exactly ONE place: does this instance have an admin — a
+        claimed one, or the addresses VEXA_ADMIN_EMAILS names? It used to carry the company-layer
+        gate as well; that gate is gone (founder ruling 2026-10-08)."""
+        admins, _ = signin_allow.admin_emails()
+        return {"admin_exists": bool(admins) or await _admin_exists(db)}
 
-        Every other service (the terminal, agent-api, the flows engine) reads the gate through one
-        of the two doors below -- never by reaching into platform_settings itself. One source of
-        truth, one reader function per service, is the whole design: a surface with two readers of
-        a lifecycle value does not error when they disagree, it just behaves differently in two
-        places and nobody can say which is right."""
-        row = await db.get(PlatformSetting, "global_setup")
-        value = dict(row.value) if row is not None and isinstance(row.value, dict) else {}
-        return {
-            "admin_exists": await _admin_exists(db),
-            "global_setup": global_setup_state(value),
-            "company": value.get("company") or None,
-        }
+    async def _effective_allow(db: AsyncSession) -> list:
+        """The sign-in allow-list in force: VEXA_SIGNIN_ALLOW plus the admin-edited `signin` row."""
+        env_valid, _ = signin_allow.env_entries()
+        return signin_allow.effective(
+            env_valid,
+            (await read_platform_setting(signin_allow.SETTING_KEY, db)).get(
+                signin_allow.SETTING_FIELD, ""))
 
-    @app.get("/internal/instance", include_in_schema=False)
+    @app.get("/internal/instance", include_in_schema=False, response_model=InstanceState)
     async def instance_status(request: Request, db: AsyncSession = Depends(get_db)):
-        _check_internal(request)
-        return {"admin_exists": await _admin_exists(db)}
+        check_internal(request)
+        return await _instance_state(db)
 
     @app.get("/admin/instance", include_in_schema=False,
              dependencies=[Depends(verify_admin_token)])
-    async def instance_status_admin(db: AsyncSession = Depends(get_db)):
-        """The SAME instance state over the admin-key door. The flows engine holds an admin key and
-        no internal secret (see flows_steps/common.py), so without this door it would have to infer
-        the gate from something else -- and a service that infers the gate IS a second source of
-        truth. Same body, same computation, different transport."""
-        return await _instance_state(db)
+    async def instance_status_v012(db: AsyncSession = Depends(get_db)):
+        """UPGRADE COMPATIBILITY for a 0.12 flows engine kept beside this tier. That engine gates
+        every reaction on this read (admin key, fail-closed) and opens only on
+        `global_setup == "completed"`. The answer is the 0.12 document, computed by the 0.12 rule
+        from the `global_setup` row the instance already stores: an upgraded instance keeps exactly
+        the gate it had, a fresh one (no row) reads `missing`. Nothing in 0.13 writes that row."""
+        value = await read_platform_setting("global_setup", db)
+        state = "completed" if str(value.get("state", "")).strip() == "completed" else "missing"
+        return {"admin_exists": (await _instance_state(db))["admin_exists"],
+                "global_setup": state, "company": value.get("company") or None}
 
-    @app.post("/internal/bootstrap-admin", include_in_schema=False)
-    async def bootstrap_admin(payload: dict, request: Request,
+    @app.post("/internal/bootstrap-admin", include_in_schema=False, response_model=AdminClaimResponse)
+    async def bootstrap_admin(payload: AdminClaimRequest, request: Request,
                               db: AsyncSession = Depends(get_db)):
-        """Claim the admin role for `user_id` IF no admin exists yet. Idempotent and race-safe:
-        under the advisory lock the first caller claims, every later caller gets claimed=False.
-        A user who already IS the admin re-claims harmlessly (claimed=False, admin_exists=True)."""
+        """Claim the admin role for `user_id` IF `signin_allow.may_claim` allows it — which needs
+        the one-time claim code (`claim_code`) unless VEXA_ADMIN_EMAILS already names the admins.
+        Race-safe: under the advisory lock the first permitted caller claims and the code is retired
+        in the same transaction, so every later caller gets claimed=False.
+
+        Answers {"claimed", "admin_exists", "why"}; `why` is `claimed`, `admin-exists` (somebody
+        holds the role, or VEXA_ADMIN_EMAILS names the admins), `bad-code` (no code, a wrong one, or
+        one already used) or `not-allowed` (an allow-list is configured and this address is not on
+        it)."""
         from sqlalchemy import text as sa_text
         from sqlalchemy.orm import attributes
 
-        _check_internal(request)
+        check_internal_no_dev_bypass(request)
         user = await _load_user(
-            str(payload.get("user_id", "")),
+            str(payload.user_id),
             db,
             for_update=True,
         )
         await db.execute(sa_text("SELECT pg_advisory_xact_lock(:key)"),
                          {"key": _BOOTSTRAP_ADMIN_LOCK})
-        if await _admin_exists(db):
-            return {"claimed": False, "admin_exists": True}
+        admins, _ = signin_allow.admin_emails()
+        claimed_already = await _admin_exists(db)
+        code_ok = claim_code.matches(payload.claim_code, await _claim_record(db))
+        allowed, why = signin_allow.may_claim(
+            user.email, admin_claimed=claimed_already, admins=admins,
+            allow=await _effective_allow(db), code_ok=code_ok)
+        if not allowed:
+            return {"claimed": False, "admin_exists": claimed_already or bool(admins), "why": why}
         data = dict(user.data or {})
         data["is_admin"] = True
         user.data = data
         attributes.flag_modified(user, "data")
         db.add(user)
+        await _write_claim_record(db, {})          # the code works once
         await db.commit()
-        return {"claimed": True, "admin_exists": True}
+        return {"claimed": True, "admin_exists": True, "why": why}
 
+    @app.post("/internal/signin-admission", include_in_schema=False,
+              response_model=SigninAdmissionResponse)
+    async def signin_admission(payload: SigninAdmissionRequest, request: Request,
+                               db: AsyncSession = Depends(get_db)):
+        """MAY THIS ADDRESS SIGN IN? Asked by every terminal sign-in door BEFORE anything is created
+        or sent (Vexa-ai/vexa#1783). Decided here because this service owns every input: the user
+        rows, the claimed admin, VEXA_ADMIN_EMAILS, the `signin` settings row, and the
+        VEXA_SIGNIN_ALLOW seed. The rule itself is `signin_allow.decide`; the terminal holds no part
+        of it.
+
+        Answers `SigninAdmissionResponse` (signin.v1). The caller must read `admitted` as POSITIVE
+        evidence — only a literal true admits — so an older admin-api with no such route (404), an
+        unreachable one, or a malformed body all refuse. That is the fail-closed direction.
+
+        Internal tier WITHOUT the dev-mode escape: the answer says whether an address has an account
+        here, which is exactly the enumeration the sign-in form is built not to reveal, so this door
+        is never open without the secret, dev mode included."""
+        check_internal_no_dev_bypass(request)
+        email = signin_allow.normalize_email(payload.email)
+        if not signin_allow.is_address(email):
+            return {"admitted": False, "why": signin_allow.WHY_NOT_ALLOWED}
+        user = (await db.execute(
+            select(User).where(func.lower(User.email) == email).limit(1)
+        )).scalars().first()
+        data = user.data if user is not None and isinstance(user.data, dict) else {}
+        admins, _ = signin_allow.admin_emails()
+        allow = await _effective_allow(db)
+        # The claim-code door is only consulted when nothing else could admit and it is open at all
+        # (nobody claimed, nothing configured) — two queries fewer on the common path.
+        admin_claimed_now, code_ok = True, False
+        if user is None and not admins and not allow:
+            admin_claimed_now = await _admin_exists(db)
+            if not admin_claimed_now:
+                code_ok = claim_code.matches(payload.claim_code, await _claim_record(db))
+        admitted, why = signin_allow.decide(
+            email,
+            user_exists=user is not None,
+            is_admin=data.get("is_admin") is True,
+            admins=admins,
+            admin_claimed=admin_claimed_now,
+            allow=allow,
+            claim_code_ok=code_ok,
+            admin_accounts=admin_account.designated()[0],
+            invited=bool(payload.via_invite),
+            invites_admit=signin_allow.invites_admit(),
+        )
+        return {"admitted": admitted, "why": why}
+
+    @app.post("/internal/admin-claim/check", include_in_schema=False,
+              response_model=ClaimCodeCheckResponse)
+    async def admin_claim_check(payload: ClaimCodeCheckRequest, request: Request,
+                                db: AsyncSession = Depends(get_db)):
+        """Is this the live admin claim code? The terminal's claim screen asks before it lets a code
+        ride a sign-in, so a typo is answered at once rather than as a sign-in that never arrives.
+        True only while the claim is open (nobody claimed, VEXA_ADMIN_EMAILS empty)."""
+        check_internal(request)
+        admins, _ = signin_allow.admin_emails()
+        valid = (not admins and not await _admin_exists(db)
+                 and claim_code.matches(payload.claim_code, await _claim_record(db)))
+        return {"valid": bool(valid)}
+
+    # --- GET /internal/users/by-email/{email} → JUST the id, for the internal tier ---
+    # The post-meeting run mounts the desks of the people who were in the meeting, and it starts
+    # from the invite's ATTENDEE addresses. agent-api therefore has to turn an address into a
+    # subject, and until this route existed it had only two ways to do it, both wrong:
+    #
+    #   * `GET /admin/users/email/{email}`, which is gated by `verify_admin_token` — a credential
+    #     that can also CREATE and PATCH users. Handing agent-api an admin token so it can ask one
+    #     read-only question is a permanent over-grant for a temporary need.
+    #   * guessing the subject from a speaker's display name, which mounts the WRONG HUMAN'S desk.
+    #     Not a risk worth carrying at any price.
+    #
+    # So: the narrowest possible door. Same internal-secret tier the gateway's authz oracle already
+    # uses, and the response is ONLY the id. Never name, never email, never scopes, never `data` —
+    # the caller already knows the address it asked about, and everything else would be a new
+    # disclosure this question does not need. A route that answers exactly one question cannot be
+    # repurposed into a directory.
+    #
+    # 404 for an unknown address is deliberate and safe here: the caller is already inside the
+    # internal tier, so this leaks nothing to anyone who was not trusted with far more. The mount
+    # path treats it as "no subject yet — skip this desk", and the drop step creates it afterwards.
+    @app.get("/internal/users/by-email/{email}", include_in_schema=False)
+    async def internal_user_id_by_email(email: str, request: Request,
+                                        db: AsyncSession = Depends(get_db)):
+        check_internal_no_dev_bypass(request)
+        # Case-folded (R-B08) — the mount path reads this one, so an exact match here silently
+        # drops a mixed-case signup out of every meeting room they are actually in.
+        user = (await db.execute(
+            select(User).where(func.lower(User.email) == email.lower())
+        )).scalars().first()
+        if not user:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        return {"id": user.id}
+
+    # The reverse of the door above: a subject's verified address, for meeting-api to name the
+    # people a meeting is shared with on its OWNER's access list (Vexa-ai/vexa#1801). Readers who
+    # redeemed a share before meeting-api kept a roster carry only an id; this is how that roster is
+    # backfilled. Internal tier only, like every route on this prefix — an owner's view never
+    # reaches identity directly, and a subject with no address answers 404.
+    @app.get("/internal/users/{user_id}/email", include_in_schema=False)
+    async def internal_user_email(user_id: int, request: Request,
+                                  db: AsyncSession = Depends(get_db)):
+        # NO DEV-MODE BYPASS: this reads one named person's address by path id (R1801-9).
+        check_internal_no_dev_bypass(request)
+        user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+        if not user or not user.email:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        return {"id": user.id, "email": user.email}
+
+    # The flows tier's way to put a person on the platform (an invite's organiser, a meeting's
+    # attendees, an allow-listed sender) WITHOUT the admin key: the admin key also mints any user's
+    # tokens and patches any account, and flows holds no credential that can do either. Same
+    # creation as POST /admin/users — one point a person enters, one onboarding fact — and an
+    # answer of exactly the id and the address, so the door cannot be read as a directory.
+    @app.post("/internal/users", include_in_schema=False)
+    async def internal_ensure_user(request: Request, response: Response,
+                                   payload: Dict[str, Any] = Body(...),
+                                   db: AsyncSession = Depends(get_db)):
+        check_internal_no_dev_bypass(request)
+        email = str((payload or {}).get("email") or "").strip()
+        if "@" not in email:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="email required")
+        name = (payload or {}).get("name")
+        made = await create_user(UserCreate(email=email, name=str(name) if name else None),
+                                 response, db)
+        return {"id": made.id, "email": made.email}
+
+    # A person's identity as the edge would stamp it for their own key, minus the scopes: the
+    # gateway's service door signs it, with the fixed scopes the door grants, onto the meetings calls
+    # the flows tier makes for that person — so flows never holds a token of theirs. A workspace
+    # principal is not a person and has none.
+    @app.get("/internal/users/{user_id}/identity", include_in_schema=False)
+    async def internal_user_identity(user_id: str, request: Request,
+                                     db: AsyncSession = Depends(get_db)):
+        check_internal_no_dev_bypass(request)
+        user = await _load_user(user_id, db)
+        from . import principals as principals_mod  # noqa: PLC0415
+        if principals_mod.is_principal_account(user):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown user")
+        is_admin = signin_allow.is_admin(user.email, user.data, signin_allow.admin_emails()[0])
+        return validate_mod.identity_of(user, scopes=[], is_admin=is_admin)
+
+    @app.get("/internal/users/{user_id}/is-admin", include_in_schema=False)
+    async def user_is_admin(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+        """Is THIS subject the instance admin? The role oracle agent-api asks before it mounts the
+        organisation tier read-write. It exists because the admin is CLAIMED at first sign-in — long
+        after any deployment env was written — so an env allow-list could never have been the
+        definition of who may rewrite how every agent in the company behaves."""
+        check_internal_no_dev_bypass(request)
+        user = await _load_user(user_id, db)
+        # `admin_account` is the question agent-api actually asks before it lets anybody write
+        # `_global`: is this the deployment's dedicated admin account (app/admin_account.py)? It is
+        # NOT `is_admin` — the instance admin is a person, and a person's chats read `_global` only.
+        return {"user_id": user.id, "email": user.email,
+                "is_admin": signin_allow.is_admin(user.email, user.data, signin_allow.admin_emails()[0]),
+                "admin_account": admin_account.is_admin_account(user.email, user.data)}
+
+    @app.post("/internal/release-admin", include_in_schema=False)
+    async def release_admin(payload: dict, request: Request, db: AsyncSession = Depends(get_db)):
+        """RELEASE the admin role from a user so the instance can be claimed again — with a fresh
+        claim code, which this answers (`claim_code`) and logs whenever no admin remains.
+
+        The counterpart of bootstrap-admin, and it exists for one honest reason: an instance whose
+        admin is a leftover TEST IDENTITY cannot rehearse first-run, and the alternative was hand
+        surgery on a jsonb column by whoever remembered the query. A named route is auditable; a
+        one-off UPDATE in somebody's shell is not. Internal-tier only, and it deliberately does NOT
+        delete the user or anything they own — role, and only role."""
+        from sqlalchemy.orm import attributes
+        check_internal_no_dev_bypass(request)
+        user = await _load_user(str(payload.get("user_id", "")), db, for_update=True)
+        data = dict(user.data or {})
+        had = data.pop("is_admin", None) is True
+        user.data = data
+        attributes.flag_modified(user, "data")
+        db.add(user)
+        await db.commit()
+        body = {"user_id": user.id, "email": user.email, "released": had,
+                **(await _instance_state(db))}
+        # An instance handed back to first run needs a claim code to be claimed again. The caller
+        # holds the internal secret, so it is given the code as well as the log.
+        if not body["admin_exists"]:
+            code, _ = await issue_admin_claim_code(
+                db, host=socket.gethostname(), now=datetime.now(timezone.utc), force=True)
+            if code:
+                claim_log.warning(claim_code.announcement(code))
+                body["claim_code"] = code
+        return body
+
+    # --- internal tier: workspace membership index (Lane M) — the DERIVED users.data.memberships[]
+    #     mirror of the authoritative policy/members.json in each shared workspace's git repo. agent-api
+    #     (no DB) POSTs mirror updates here over the same X-Internal-Secret internal edge as /internal/
+    #     validate. The git file is the source of truth (Q6): this index is a rebuildable listing cache.
     @app.get("/internal/users/{user_id}/memberships", include_in_schema=False)
     async def list_memberships(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-        _check_internal(request)
+        check_internal_no_dev_bypass(request)
         user = await _load_user(user_id, db)
         data = user.data if isinstance(user.data, dict) else {}
         return {"memberships": data.get("memberships", [])}
@@ -1063,7 +1545,7 @@ def create_app() -> FastAPI:
     async def upsert_membership(user_id: str, payload: dict, request: Request,
                                 db: AsyncSession = Depends(get_db)):
         """Upsert {workspace_id, role, added_at} into the user's memberships[] (idempotent per ws)."""
-        _check_internal(request)
+        check_internal_no_dev_bypass(request)
         from sqlalchemy.orm import attributes
         user = await _load_user(user_id, db, for_update=True)
         ws_id = payload.get("workspace_id")
@@ -1084,7 +1566,7 @@ def create_app() -> FastAPI:
     @app.delete("/internal/users/{user_id}/memberships/{workspace_id}", include_in_schema=False)
     async def remove_membership(user_id: str, workspace_id: str, request: Request,
                                 db: AsyncSession = Depends(get_db)):
-        _check_internal(request)
+        check_internal_no_dev_bypass(request)
         from sqlalchemy.orm import attributes
         user = await _load_user(user_id, db, for_update=True)
         data = dict(user.data or {})
@@ -1101,7 +1583,7 @@ def create_app() -> FastAPI:
     #     secret URL crosses ONLY this internal hop (never a user-facing response). ---
     @app.get("/internal/calendar-configs", include_in_schema=False)
     async def list_calendar_configs(request: Request, db: AsyncSession = Depends(get_db)):
-        _check_internal(request)
+        check_internal_no_dev_bypass(request)
         from sqlalchemy import or_
         from .calendars import internal_connections
         rows = (await db.execute(select(User).where(or_(
@@ -1114,14 +1596,6 @@ def create_app() -> FastAPI:
             configs.extend(internal_connections(data, u.id))
         return {"configs": configs}
 
-    # --- internal tier: per-user spawn context — the auto-join sweep's stand-in for the headers
-    #     the gateway injects on POST /bots (X-User-Limits + webhook config from /internal/validate).
-    #     Same shape /internal/validate returns for those fields, keyed by user id. ---
-    async def _platform_setting(key: str, db: AsyncSession) -> dict:
-        row = await db.get(PlatformSetting, key)
-        return dict(row.value) if row is not None and isinstance(row.value, dict) else {}
-
-
     @app.get("/internal/users/{user_id}/settings", include_in_schema=False)
     async def get_user_settings_internal(user_id: str, request: Request,
                                          db: AsyncSession = Depends(get_db)):
@@ -1132,13 +1606,42 @@ def create_app() -> FastAPI:
         and "defaults for somebody who does not" are opposite facts, and the second one means a flow
         is about to mail a person who is not there.
 
-        NO DEV-MODE BYPASS (see `_check_internal_no_dev_bypass`): the person is named in the PATH by
+        NO DEV-MODE BYPASS (see `check_internal_no_dev_bypass`): the person is named in the PATH by
         the caller, so an unauthenticated dev-mode answer here is a cross-user read of somebody's
         private preferences."""
-        _check_internal_no_dev_bypass(request)
+        check_internal_no_dev_bypass(request)
         user = await _load_user(user_id, db)
-        return person_settings_mod.read_person_facts(
-            user.data if isinstance(user.data, dict) else {})
+        data = user.data if isinstance(user.data, dict) else {}
+        # + the notification policy the delivery gate reads (PRD 0.13.4 D15, S6): one read, the
+        # same door, so flows never has to ask twice before it decides whether to mail somebody.
+        return {**person_settings_mod.read_person_facts(data),
+                notification_policy_mod.KEY: notification_policy_mod.read(data)}
+
+    @app.get("/internal/presence", include_in_schema=False)
+    async def get_presence_internal(request: Request, ids: str = "",
+                                    db: AsyncSession = Depends(get_db)):
+        """Each named person's own `presence` choice, for agent-api composing a desktop or the
+        home's people strip: ``{"presence": {"<id>": true | false | null}}``. ``null`` is "never
+        chosen" (shown by default) — agent-api needs that once, to carry an opt-out recorded before
+        this setting existed without overriding a later choice. An unknown id, or one that is not
+        an id, is ABSENT and never defaulted; the caller treats absence as hidden.
+
+        One read answers at most ``PRESENCE_IDS_MAX`` people. NO DEV-MODE BYPASS: it names other
+        people's choices."""
+        check_internal_no_dev_bypass(request)
+        wanted = []
+        for part in (ids or "").split(","):
+            part = part.strip()
+            if part.isdigit() and int(part) not in wanted:
+                wanted.append(int(part))
+        if len(wanted) > PRESENCE_IDS_MAX:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail=f"at most {PRESENCE_IDS_MAX} ids per read")
+        if not wanted:
+            return {"presence": {}}
+        rows = (await db.execute(select(User).where(User.id.in_(wanted)))).scalars().all()
+        return {"presence": {str(u.id): person_settings_mod.presence_choice(
+            u.data if isinstance(u.data, dict) else {}) for u in rows}}
 
     @app.put("/internal/users/{user_id}/settings", include_in_schema=False)
     async def put_user_settings_internal(user_id: str, payload: dict, request: Request,
@@ -1161,7 +1664,7 @@ def create_app() -> FastAPI:
         `users.data.calendar_bot_name` this service stores). Accepting it on the PERSON's settings
         door would be a second name for one fact. The one-shot importer below still carries it into
         that store, which is what a migration off the old file has to do."""
-        _check_internal_no_dev_bypass(request)
+        check_internal_no_dev_bypass(request)
         if not isinstance(payload, dict):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 detail="body must be an object of settings to change")
@@ -1186,6 +1689,59 @@ def create_app() -> FastAPI:
         await db.refresh(user)
         return person_settings_mod.read_person_facts(
             user.data if isinstance(user.data, dict) else {})
+
+    @app.put("/internal/users/{user_id}/provider-subject", include_in_schema=False)
+    async def put_provider_subject(user_id: str, payload: ProviderSubjectBindRequest, request: Request,
+                                   db: AsyncSession = Depends(get_db)):
+        """BIND this account to the OAuth identity signing in to it (signin.v1
+        ``ProviderSubjectBindRequest``; rule in ``app/provider_subjects.py``). The terminal asks on
+        every Google or Microsoft sign-in, after the account is found or created and before a token
+        is minted: the first sign-in through a provider records its stable subject, a later one
+        with the same subject passes, and one with another subject is refused with 409 and changes
+        nothing. Internal tier without the dev-mode escape: it writes one named person's account."""
+        check_internal_no_dev_bypass(request)
+        from sqlalchemy.orm import attributes
+
+        user = await _load_user(user_id, db, for_update=True)
+        data = user.data if isinstance(user.data, dict) else {}
+        try:
+            new_data, bound = provider_subjects_mod.bind(data, payload.subject)
+        except provider_subjects_mod.Mismatch as m:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                detail=f"this account is bound to another {m.args[0]} identity")
+        if bound == "first":
+            user.data = new_data
+            attributes.flag_modified(user, "data")
+            db.add(user)
+            await db.commit()
+        return {"bound": bound}
+
+    @app.put("/internal/users/{user_id}/email-verified", include_in_schema=False)
+    async def put_email_verified(user_id: str, payload: EmailVerifiedRequest, request: Request,
+                                 db: AsyncSession = Depends(get_db)):
+        """RECORD that this account's address was proven at sign-in: the terminal asks after an
+        emailed sign-in link was redeemed (`magic_link`) or an identity provider vouched for the
+        address (`oidc:<provider>`). A direct login without proof of the inbox never calls it. It is
+        what lets a company domain be verified through an admin email on it (`public_profile`).
+        Internal tier without the dev-mode escape: it writes one named person's account."""
+        check_internal_no_dev_bypass(request)
+        from sqlalchemy.orm import attributes
+        from . import public_profile as public_profile_mod
+
+        user = await _load_user(user_id, db, for_update=True)
+        data = user.data if isinstance(user.data, dict) else {}
+        try:
+            new_data = public_profile_mod.record_email_verified(data, str(user.email or ""), via=payload.via)
+        except public_profile_mod.Refused as r:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=r.detail)
+        user.data = new_data
+        try:
+            attributes.flag_modified(user, "data")
+        except Exception:  # noqa: BLE001 — a plain object in the offline tests
+            pass
+        db.add(user)
+        await db.commit()
+        return {"verified": new_data[public_profile_mod.EMAIL_VERIFIED_KEY]["email"]}
 
     @app.post("/admin/users/{user_id}/settings/import", include_in_schema=False,
               dependencies=[Depends(verify_admin_token)])
@@ -1230,21 +1786,30 @@ def create_app() -> FastAPI:
         }
 
 
+    # --- internal tier: per-user spawn context — the auto-join sweep's stand-in for the headers
+    #     the gateway injects on POST /bots (X-User-Limits + webhook config from /internal/validate).
+    #     Same shape /internal/validate returns for those fields, keyed by user id. ---
     @app.get("/internal/users/{user_id}/bot-context", include_in_schema=False)
     async def get_bot_context(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-        _check_internal(request)
+        check_internal_no_dev_bypass(request)
         user = await _load_user(user_id, db)
         data = user.data if isinstance(user.data, dict) else {}
         resp: dict = {
-            "max_concurrent": user.max_concurrent_bots,
+            # The admin account launches no bot, whatever its row says (app/admin_account.py).
+            "max_concurrent": (admin_account.MAX_CONCURRENT_BOTS
+                               if admin_account.is_admin_account(user.email, data)
+                               else user.max_concurrent_bots),
             "bot_name": data.get("calendar_bot_name") or "Vexa",
+            # The owner's auto-join block list, enforced by meeting-api's sweep. Always stated, so
+            # the sweep never has to tell "no list" from "an older identity".
+            "auto_join_block": list(data.get("auto_join_block") or []),
         }
         # Fixture collection (O-TEL-1): whether this spawn tapes its raw captured-signal stream.
         # ALWAYS present in the response — a missing key downstream is indistinguishable from an
         # unreachable identity, and bot_spawn must default ON in BOTH cases, so it is stated here
         # rather than inferred there.
         resp["capture_signal"] = _resolve_capture_signal(
-            data, await _platform_setting("diagnostics", db)
+            data, await read_platform_setting("diagnostics", db)
         )
         if data.get("webhook_url"):
             resp["webhook_url"] = data["webhook_url"]
@@ -1256,22 +1821,27 @@ def create_app() -> FastAPI:
         # its env-derived TRANSCRIPTION_SERVICE_URL/TOKEN with this when present. The token crosses
         # ONLY this internal hop.
         user_transcription = data.get("transcription_prefs") or {}
-        platform_transcription = await _platform_setting("transcription", db)
+        platform_transcription = await read_platform_setting("transcription", db)
         if user_transcription.get("url"):
             # Selecting a customer endpoint changes the credential owner too. Never fill a
             # missing customer token/model from the platform record: that would disclose a Vexa
             # provider credential to an arbitrary customer-controlled host.
             transcription = {
                 key: user_transcription[key]
-                for key in _TRANSCRIPTION_FIELDS
+                for key in TRANSCRIPTION_FIELDS
                 if user_transcription.get(key) not in (None, "")
             }
         else:
             transcription = _resolve_effective(
                 user_transcription,
                 platform_transcription,
-                _TRANSCRIPTION_FIELDS,
+                TRANSCRIPTION_FIELDS,
             )
+        # The person's default transcription language (transcription-language.v1 user tier), only
+        # when they set one; meetings decides its precedence against the request and the deployment.
+        language = transcription_language_mod.for_bot_context(user_transcription)
+        if language:
+            resp["transcription_language"] = language
         if transcription:
             # Ownership follows the URL that will actually serve this spawn. This non-secret
             # discriminator crosses only the internal bot-context edge; the URL/token remain
@@ -1282,49 +1852,19 @@ def create_app() -> FastAPI:
             resp["transcription"] = transcription
         return resp
 
-    # --- internal tier: platform-wide settings (the DB layer under per-user prefs) — written by
-    #     the terminal's ADMIN-GATED settings editor over this edge, read by agent-api/meeting-api.
-    @app.get("/internal/settings/{key}", include_in_schema=False)
-    async def get_platform_setting(key: str, request: Request, db: AsyncSession = Depends(get_db)):
-        _check_internal(request)
-        if key not in SETTING_KEYS:
-            raise HTTPException(status.HTTP_404_NOT_FOUND,
-                                detail=f"Unknown setting key. Known: {sorted(SETTING_KEYS)}")
-        return {"key": key, "value": await _platform_setting(key, db)}
-
-    @app.put("/internal/settings/{key}", include_in_schema=False)
-    async def put_platform_setting(key: str, payload: dict, request: Request,
-                                   db: AsyncSession = Depends(get_db)):
-        """Partial update, same field rules + clear semantics as the user-tier writers."""
-        _check_internal(request)
-        fields = SETTING_KEYS.get(key)
-        if fields is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND,
-                                detail=f"Unknown setting key. Known: {sorted(SETTING_KEYS)}")
-        update = {f: payload.get(f) for f in fields if f in payload}
-        cleaned = _validate_config_fields(update, kind=key)
-        row = await db.get(PlatformSetting, key)
-        merged = _apply_config_update(dict(row.value) if row is not None else {}, cleaned)
-        if row is None:
-            row = PlatformSetting(key=key, value=merged)
-        else:
-            row.value = merged
-        db.add(row)
-        await db.commit()
-        return {"key": key, "value": merged}
+    app.include_router(platform_settings_mod.router)  # GET/PUT /internal/settings/{key}
 
     # --- internal tier: the dispatch-time model config — agent-api resolves the subject's
     #     effective model setup (user pref > platform setting) in ONE call. Secrets (api_key)
     #     cross ONLY this internal hop, straight into the worker's brokered env.
     @app.get("/internal/users/{user_id}/model-config", include_in_schema=False)
     async def get_model_config(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-        _check_internal(request)
+        check_internal_no_dev_bypass(request)
         user = await _load_user(user_id, db)
         data = user.data if isinstance(user.data, dict) else {}
-        return {"models": _resolve_effective(
+        return {"models": _effective_models(
             data.get("model_prefs") or {},
-            await _platform_setting("models", db),
-            _MODELS_FIELDS,
+            await read_platform_setting("models", db),
         )}
 
     @app.get("/")

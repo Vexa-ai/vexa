@@ -1,0 +1,693 @@
+---
+title: "Workspaces and connections"
+description: "A workspace's front page, adding members and invite links, links to workspace pages, attaching a repository, and connecting your accounts."
+---
+
+A workspace is a shared folder of pages with a roster. Your **personal workspace** is yours; a **shared workspace**
+has members; the **company** workspace (`_global`) is read by everyone and written only by the
+deployment's **admin account**. This page covers the admin account, the front page of a workspace, how people join one, links into it,
+attaching an existing repository, and the **Connections** page where you connect your own accounts.
+
+A workspace holds knowledge: pages, files and their history. It holds no chat. Every conversation is
+kept in the session store, apart from all workspaces, your private `_system` included, so sharing a
+workspace never shares a chat and sharing a chat never shares a workspace
+([Shared chats](/minutes/shared-chats)).
+
+## What you can do
+
+### Read a workspace's front page
+
+Open a workspace's `README.md` (or a `/w/<workspace>` link) and its header shows:
+
+- **What it is:** *Your personal workspace*, *Shared workspace* or *Company layer*, with its title.
+- **Who is in it:** for a shared workspace, up to two names with *you* first ("you, … and 2 more");
+  for your personal workspace, whether agents read it for your meetings; for the company workspace, who reads and
+  who writes it. A reader who may not see the roster sees *you and the other members*.
+- **What is in it:** the page count, and what the workspace is bound to (a meeting series, or where it
+  came from).
+- **What changed last:** *… changed the … page …*, with a link when one page changed, or *Nothing
+  written here yet*.
+
+The buttons depend on your role:
+
+| You are | Buttons |
+|---|---|
+| a member who is not an owner | **History** only |
+| owner of a shared workspace | **Add a member**, **Connect a repo** (or **Sync**), **History** |
+| owner of your personal workspace | **Connect a repo** (or **Sync**), **History** |
+| the admin account, on the company workspace | **Set up policies**, **History** |
+
+Every button except History starts a conversation in the chat; none opens a form.
+
+**History** opens *People*, *Repo* and *History* (and *Meetings* for a shared workspace):
+
+- **People** lists members and roles. Owners can **Change role**, **Remove** and **Add a member…**.
+  Members who are not contributors or owners see their own role only.
+- **Repo** shows the attached remote, branch, and how far ahead or behind it is. Owners get
+  **Sync now**, **Pull**, **Push** and **Detach**; Pull, Push and Detach ask you to confirm. Detaching
+  stops syncing and leaves the files as they are.
+- **History** lists commits ten at a time, for the workspace or *This page only*.
+
+### Create and share a workspace from the chat
+
+Say it in one sentence: *"create a workspace called eugenia - dmitry and share it with
+ana@example.com"*. The agent creates it, invites the address and confirms in one line.
+
+- The new workspace is addressed by its name: "eugenia - dmitry" becomes `eugenia-dmitry`
+  (`eugenia-dmitry-2` if you already have one).
+- It starts private. The first invite makes it shared, with you as owner.
+- An invite with no role makes the person a **contributor**. Say "as reader" or "as owner" to choose,
+  or change it afterwards.
+- Name any workspace the way the Files pane shows it ("Eugenia - Dmitry", "biz", "Personal"). If two
+  workspaces answer one name, the agent asks which.
+- If two of your workspaces share a name and one is empty, the agent offers to delete the empty one,
+  and deletes it only after you say yes.
+
+### Forget something
+
+Say *"delete that document and everything from it"* or *"forget this"*. The agent tells you in one
+line what will be removed, and removes it only after you say yes:
+
+- The files leave the workspace and its git history. History is rewritten and old copies are
+  pruned, so no commit still holds them.
+- Text you name, and the document's own identifiers, are replaced with `[removed]` in every
+  version of every page and in the stored transcripts of your chats. The turns themselves stay.
+- They are dropped from your recently-opened list.
+
+The agent then says what was removed and what could not be. Copies already sent by email, or
+downloaded, are out of reach. A repository the workspace syncs with keeps its copy until you agree
+to a force-push. Your private `_system` workspace keeps an audit line: what kind of item, how many
+files and commits, who asked. It never keeps the content.
+
+Files you drop into a chat stay in the chat's drawer (`uploads/`) and are never committed to the
+workspace's history. A page never holds a government id, a passport, card or bank account number,
+or a credential: a write carrying one is refused, and such values are removed before a turn
+commits.
+
+### Choose where new chats write
+
+A chat's header says where it writes ("Writes to Personal", "Writes to Biz"). To have every new chat
+start in one workspace, open that menu in a chat that writes there and pick **Make default for new
+chats**. The menu then reads **Default for new chats**; elsewhere it shows the current default beside
+the entry. Pick it from a chat that writes to Personal to go back to Personal.
+
+- A new chat starts on the default: the workspace is added to the chat and becomes where it writes.
+- Chats that already exist keep where they write.
+- The default is checked again for every new chat. If you can no longer write there (you were
+  removed, the workspace was deleted, or your role is now reader), the new chat writes to Personal
+  and the workspace is not named.
+- The default is kept on the server, per person, so it follows you to every device.
+
+### The admin account
+
+The company workspace has exactly one writer: the deployment's **admin account**. It is a dedicated
+account, not anybody's everyday one. It writes `_global` — its pages, `POLICIES.md` and the flows —
+and it does nothing else: it has no desk, no shared workspaces and no meetings. Every other account,
+including the person who administers Settings, reads `_global` and never writes it.
+
+**Get one (operator).**
+
+1. Pick a fresh address that has never signed in to this deployment — for example
+   `admin@example.com`, or a plus-address such as `you+admin@example.com`.
+2. Set it as `VEXA_ADMIN_ACCOUNT` on admin-api (compose `.env`, Helm `adminApi.adminAccount`, or
+   `docker run -e VEXA_ADMIN_ACCOUNT=…` for Lite) and restart admin-api.
+3. Sign in with that address, the same way anyone signs in (the emailed link, or Google or Microsoft
+   for that address). The address is admitted even on a closed instance.
+
+An address that already belongs to an everyday account is **never** turned into the admin account;
+admin-api says so in its log at boot. Pick another address. Removing the address from
+`VEXA_ADMIN_ACCOUNT` takes the role away at the next restart. With the key empty there is no admin
+account and nobody writes `_global`.
+
+**What you see, signed in as the admin account.** The terminal shows one workspace: **Company**. Every
+chat writes there; there is no desk, no `+` menu, and no meetings list to fill. The first sign-in
+opens the company setup; after that an empty chat offers four areas — **Flows & mail**,
+**Templates**, **Friction** and **Workspace**. [Admin account](/minutes/admin-account) covers each.
+Sign out and back in with your everyday account for everything else.
+
+### Add a member
+
+1. Press **Add a member** (or ask in the chat).
+2. The agent asks for their email address and a role, and confirms in one sentence:
+   - **owner** — writes the workspace and can add or remove members;
+   - **contributor** — writes the workspace;
+   - **reader** — reads it and does not write it.
+3. The agent creates an invite link for that address. If the person has no account here, the link is
+   emailed to them; otherwise it waits in their notifications in the app.
+4. To bring someone straight into a room, invite them from the room (or name it): the email says
+   `<room> in <workspace>` and the link opens that room.
+
+The invite email is a fixed template: who invited them, to which workspace or room, as what, and one
+link. It never carries a message, a page or anything said in a chat. The workspace and room names in
+it are one line of at most 60 characters; a name that contains a web address, an email address or a
+domain is not said (the email uses the workspace's short name, or leaves the room out), so a name
+cannot make the email point anyone somewhere. A dot after an abbreviation is not a domain: names
+such as `St.Louis office`, `J.R.R. Tolkien` or `Dr. Smith's lab` are said as typed, while `acme.at`,
+`Evil.Com` or `T.Co` are not.
+
+Changing a role and removing someone work the same way, from **People** or in the chat. A workspace
+always keeps at least one owner.
+
+An invite never gives more than its sender has: a contributor can invite contributors and readers, a
+reader cannot invite above reader. Only an owner makes another owner, and only by inviting that one
+address; a link never makes an owner. An invite lasts at most a year and admits at most 1000 people.
+If its sender is later demoted or removed, the invite stops granting anything above what they hold.
+
+### Join from an invite
+
+1. Open the link (`/join?i=…`). The page says who invited you, to which workspace or room, and as what.
+2. **From the invite email, with no account yet:** press **Join**. One click signs you in as the
+   address the invite was sent to and opens the room (or the workspace). The link does this once.
+3. Otherwise, sign in with Google, Microsoft or an emailed sign-in link. If the invite names one
+   address, that address is filled in and cannot be changed. Then press **Join**.
+4. If you were already signed in, the page still shows the workspace, the role and who sent it, and
+   waits for **Join**; **Not now** leaves without joining. Joining never changes where your chats write.
+
+Opening the link changes nothing by itself. Mail scanners and link previews that open it (Outlook,
+Teams, Defender) leave it unused; only your press on **Join** uses it. On a phone the page fits the
+screen, with **‹ Back** at the top.
+
+An invite link works for **one person, for seven days**, and only for the address it names. Invites made
+by the agent during a chat turn stay valid after the turn ends. Once an invite has expired, been used
+or been withdrawn, its link says only that; it no longer shows the workspace, who sent it, or the
+address it was for.
+
+### Share a workspace by link
+
+Ask in the chat: *"make a link to this workspace for up to 5 people"*. The agent calls
+`workspace_invite_link_create` and gives you a link like `https://<your app>/join/<token>`, once.
+
+- Anyone who opens it signs in (Google, Microsoft or an emailed link) and joins as a **contributor**
+  (or a **reader**, if you said so). Someone already in it spends no use.
+- It works for the number of people you set (default 10) until it expires (default 7 days) or you
+  revoke it (*"stop that link"*, `workspace_invite_link_revoke`). `workspace_invite_links` lists your
+  links with how many people used each; a link's address is shown only when it is made.
+- Each time someone joins, you get a notification: *"Bea joined “DNA” via your link"*.
+- People you share a workspace with appear when you type **@** and in people search.
+- To invite people to a meeting, ask the agent to create the calendar event: it adds a Google Meet
+  link, the attendees and `info@` (Vexa), puts the workspace link in the description, and asks Google
+  to send the invitations. The link in the event is how the meeting is filed into that workspace.
+
+A used-up, expired or revoked link says so, and nothing more.
+
+### Link to a page
+
+Every workspace has a permanent id. A link `/w/<id>/<path>` (or `/w/<name>/<path>`) opens that page in
+Minutes; with no path it opens the front page. Links made with the id keep working after the workspace
+is renamed. Reloading the page reopens the same page. Only the workspace's owner, or an administrator,
+can rename it.
+
+### Attach an existing repository
+
+Choose **Attach existing repo…** in the chat bar's **+** menu, **Attach a repo…** on the front page, or
+**Attach repository as a workspace** under Connections → Git repositories.
+
+1. Enter the **Repository** address (for example `git@github.com:<org>/<repo>.git`) and the **Branch**
+   (`main` by default). The repository always becomes a **new workspace**; your personal workspace and other
+   workspaces are unchanged.
+2. Press **Attach**. Large repositories can take several minutes; the dialog shows progress.
+3. When it is done (*Cloned … into …*), press **Open workspace**.
+
+Access uses your saved token for the repository's git provider, or a **deploy key**: under Connections,
+press **Use this deploy key**, then **Add it on …** (the provider's deploy-key page) and add the public key to the repository *with write access*. Vexa
+generates the key; you never paste a private key, and the private half never leaves the server.
+
+### Repositories on GitLab or another self-hosted server
+
+A repository on your company's own git server attaches the same way, once your operator has added
+that server as a **git provider** ([Use a self-hosted GitLab](/minutes/self-hosted-gitlab)).
+
+**The address can be nested.** GitLab keeps projects in groups and subgroups, so paste the full address:
+`https://git.example.com/platform/tools/notes.git` or `git@git.example.com:platform/tools/notes.git`.
+Any depth up to 22 segments (a group, 20 subgroups and the project) is accepted. On a GitHub provider
+the address is still exactly `owner/repo`.
+
+**The credential.** Use one of these:
+
+- **A deploy key** (recommended). Paste the `git@…` address, press **Use this deploy key**, and add the
+  public key in the project under *Settings → Repository → Deploy keys* with **Grant write
+  permissions**. For a configured provider, Vexa links you straight to that page.
+- **Your saved token for that provider**, saved once in Connections → Git. Each provider has its own
+  token, and a saved token is only ever sent to its own provider.
+- **An access token typed for this one call.** A GitLab personal, project or group access token with
+  `read_repository` (and `write_repository` to push). Type it as `oauth2:<token>`, or as
+  `<username>:<token>` for a server that wants a named account; a bare token works on a configured
+  provider.
+
+**Publishing a new repository to GitLab.** Ask the chat, or use **Publish to …** in the workspace's
+Repository section: pick the provider and type the group (`platform/tools`, nested groups included).
+The project is created there and the workspace pushed. Details, token scopes and errors:
+[Use a self-hosted GitLab](/minutes/self-hosted-gitlab).
+
+### Sync with the repository
+
+Press **Sync** on a workspace's front page, or ask the chat ("is this ahead of the repository?"). The
+agent first calls `workspace_status`, which fetches from the repository and tells you what is **ahead**
+(only here) and **behind** (only on the remote), with the commits on each side and any uncommitted files. Looking
+changes nothing in the workspace. The agent then asks you before it pulls (`workspace_pull`) or pushes
+(`workspace_push`).
+
+### Connect your accounts
+
+Open **Connections** from your account menu (bottom of the rail). An agent can also ask you to connect
+something, which opens the same page.
+
+| Card | Lets your agents |
+|---|---|
+| **Git repositories** | save a token for each git provider (GitHub, your GitLab), or attach a repository |
+| **Gmail** | read email and save drafts (Minutes does not send mail). A draft you wrote yourself is replaced only after you press **Replace my draft** on the card the agent shows, naming that draft and the recipient; one press replaces only the draft the card names, once |
+| **Google Calendar** | read calendar events |
+| **Custom secret** | use a secret, optionally against one HTTPS address you name |
+
+- You can connect several accounts of one kind: give each a **Connection label** ("Personal",
+  "Work") and press **Add another … account**.
+- Google consent opens in a pop-up. Allow pop-ups for Minutes.
+- A custom secret names the exact HTTPS address, the header, the value format and the one method it may
+  be used with. You confirm the destination host by typing it; an unknown host is flagged.
+- **Disconnect** stops use and keeps the connection; **Delete** removes it (audit history is kept).
+
+How an operator runs the credential broker behind this page is in [Connections](/connections).
+
+## Limits and errors
+
+| You see | Why | What to do |
+|---|---|---|
+| *This invite has expired.* · *…has already been used.* · *…was withdrawn.* | invites last seven days and work once | ask for a new one |
+| *This invite was sent to a different address…* | you signed in with another address | sign in with the invited address |
+| *This invite link is not valid.* | the link does not match any invite | ask for a new one |
+| *This invite could not be checked just now.* | the service did not answer | try again |
+| an owner-only refusal from the agent | only owners add, remove or change members | ask an owner |
+| *cannot remove the last owner* | a workspace needs an owner | add another owner first |
+| *That page is in …, a workspace you do not have access to.* · *That link points at a workspace that is no longer here.* | a `/w/` link you cannot open; Minutes never shows your personal workspace instead | ask for access |
+| *Repository access failed. Check the repository URL and credential.* | the clone was refused | check the address, token or deploy key |
+| *That is not a repository. Use https://github.com/owner/repo, …* | the address has an empty segment, `.`/`..`, a GitLab page path (`/-/…`), more than 22 segments, or more than `owner/repo` on `github.com` | paste the project's clone address |
+| *Vexa can create a repository on this deployment's git providers: …* (`422`) | publish was asked to create on a provider that is not configured | use a listed provider, or create it there and publish with `remote_url` |
+| *… rejected the token (HTTP 401)* (`422`, `token_rejected`) | the provider refused the token | save a new token for that provider in Connections → Git |
+| *GitLab on … rejected the token (HTTP 401)* · *GitLab group … was not found, or the token cannot see it* | the token lacks the `api` scope, or the group path is wrong | check the token's scopes and the `org` group path |
+| *Import interrupted. Check the workspace before retrying.* | the import stopped part-way | check what arrived, then retry |
+| *Allow popups for Minutes, then try again.* · *Authorization was not completed.* | Google consent did not finish | allow pop-ups and retry |
+| *Connections unavailable. Please try again.* | the credential service did not answer | try again; an operator checks the broker |
+| *only the admin account may edit _global* (or *write…*, *reset…*, *accept…*) | you are on an everyday account | sign in as the admin account |
+| *the admin account works on the company layer (_global) only…* | the admin account has no desk, workspaces or meetings | sign in with your everyday account |
+| the agent says the workspace has **no git home** (`no_remote`) | nothing is attached or published | attach or publish a repository |
+| the agent says **the repository refused us** (`no_credential`) | no deploy key or token works for it | add the deploy key it shows you, or save a token |
+| the agent says **the repository could not be reached** (`network`) | the fetch failed | try again; it also says when the last good look was |
+
+The private tier is never shared. The company workspace is written only by the admin account. A connection label is at most 80 characters.
+
+## How it works
+
+### Flow
+
+1. **Front page.** The terminal reads, in parallel: the workspace record, its tree, its last change, its
+   remote status, and for a shared workspace its members and meetings. All go through the gateway to
+   agent-api.
+2. **Invite.** The agent calls its `workspace_invite` tool, which reaches
+   `POST /api/workspace/invite`. When the workspace is one of your own private ones, agent-api first
+   makes it shared and records you as its owner (the same step as `share-enable`); your personal
+   workspace is never shared this way. A missing role is `contributor`. agent-api checks that you own the workspace, mints an invite
+   restricted to that address and valid once, and builds the link from `VEXA_UI_URL`. For an address
+   with no account, it publishes a `workspace.invited` event, and the flows service sends the email.
+3. **Join.** `/join` previews the invite (`GET /api/join/preview`, which grants nothing), you sign in,
+   and the terminal accepts it (`POST /api/workspace/invites/accept`). agent-api checks the
+   gateway-verified email against the invite and adds you to the roster.
+4. **Join links.** `workspace_invite_link_create` reaches `POST /api/workspace/invite-link`. agent-api
+   checks you own the workspace (making your own private one shared first, as for an invite) and
+   mints an *open* invite in the same store: a random 32-byte token, of which only its SHA-256 is
+   kept, with `max_uses` and an expiry. `/join/<token>` redirects to `/join?i=<token>`, so it is
+   previewed and accepted exactly like an invite. Each new member counts one use; on each, agent-api
+   records the `workspace_joined_via_link` notification for whoever made the link and publishes
+   `workspace.joined_via_link` to flows, where the company's `workspace_joined` mail kind can pick it
+   up. Chats use the same tokens (`/api/join-links`), once the chat domain declares who may link one.
+5. **Links.** `/w/<id>` is resolved by `GET /api/workspaces/{id}` (or `by-slug`), which always answers
+   `readable`, `not-yours` or `gone`. `not-yours` names nothing: the chip is greyed and untitled, and
+   the chat header never shows that workspace. The header says "Writes to X" only when the server
+   says you can write X; otherwise it shows Personal. A group can be switched on in your active set
+   only while you are a member of it.
+   What the browser keeps (an open workspace, a pending meeting, layout) is stored per signed-in
+   account, so a second account on the same browser starts from its own state.
+   **Default for new chats.** "Make default for new chats" calls `PUT /api/chat/default-target`, which
+   accepts only a workspace you can write (the same check as a chat's own target, `POST
+   /api/chat/target`) and stores it per person. Each new chat reads `GET /api/chat/default-target`,
+   which runs that check again and answers `null` (Personal, nothing named) when it fails. The
+   terminal then mounts the workspace in the new chat and sets its target, through the same two
+   calls a `focus` from the agent uses. No existing chat reads it.
+5. **Attach.** `POST /api/workspace/import` starts an import and returns an operation id; the terminal
+   polls `GET /api/workspace/import/{op}/status`. Deploy keys are `GET`/`POST
+   /api/workspace/{slug}/deploy-key`; the saved token is `GET`/`POST /api/workspace/git-token` (only a
+   masked value comes back).
+   - The address is checked first, before any git process exists: the terminal's `repoRef.ts` and
+     agent-api's `control_plane/repo_ref.py` accept the same shapes, nested GitLab paths included, and
+     refuse the same ones; agent-api also refuses a host only it could reach.
+   - The credential is resolved in `control_plane/workspace_credentials.py`: the workspace's deploy key
+     for an `ssh` address, else a token typed for this call, else the person's saved token for the git
+     provider the address is on (one per provider, in the credential broker).
+   - A token is written into the clone, pull or push URL in exactly one place,
+     `shared/token_destination.py`, and only for an `https` address. The shape of that userinfo comes
+     from `shared/git_provider.py`: the token as typed when it names an account (`oauth2:…`,
+     `<user>:…`), else by the configured provider (`oauth2:` for GitLab), else GitHub's bare form. After a clone the
+     stored `origin` is reset to the token-free address.
+6. **Publish.** `POST /api/workspace/publish` decides where a new repository would be created before it
+   reads any credential (`resolve_provider` in `control_plane/workspace_publish.py`): a configured git
+   provider, by name (`shared/git_provider.py`); anything else answers `422`. On GitLab it resolves the group with
+   `GET /api/v4/namespaces/<group path>` and creates the project with `POST /api/v4/projects`, sending
+   the token only in the `PRIVATE-TOKEN` header and refusing redirects, then pushes over the same
+   token-scrubbed remote as every other push.
+7. **Sync.** The agent's `workspace_status` tool reaches `POST /api/workspace/status`. agent-api
+   resolves the workspace as it does for a pull (your own, or a shared one you are a member of), picks
+   the same credential a pull would (the workspace's deploy key, or your saved token over `https`),
+   and fetches the branch into its remote-tracking ref only (`refs/remotes/<home>/<branch>`). The
+   working tree, the index and the local branch are not touched. It answers with the branch, upstream,
+   ahead and behind counts, up to 50 commits on each side (sha, subject, number of files), a summary of
+   uncommitted and untracked paths, and `fetched_at` / `previous_fetch_at`. `workspace_pull` and
+   `workspace_push` stay separate and are the only verbs that change the branch or the repository.
+8. **Connections.** The terminal's `/api/connections/*` routes call the credential broker as the
+   signed-in person. Agents use their own `connection_request` route, which can request a setup but
+   never read a credential.
+9. **The admin account.** Identity decides it and nothing else does:
+   - **Designation.** admin-api reads `VEXA_ADMIN_ACCOUNT`. When a named address signs in for the first
+     time, `POST /admin/users` creates its row with `users.data.account = "admin"` and a bot cap of 0,
+     in the same transaction. No other code path sets that field, and an existing row is never
+     changed, so an everyday account cannot become the admin account. An account is the admin
+     account only while it has the field **and** the address is still named.
+   - **The answer.** admin-api reports `admin_account` on `POST /internal/validate` (identity.v1; for
+     a worker, `person_admin_account`) and on `GET /internal/users/{id}/is-admin`. The gateway reports
+     it on `/auth/me`; the terminal's `/api/auth/me` passes it to the page. agent-api reads it in one
+     function, `global_layer.is_admin_account`, which answers *no* when identity is unreachable or
+     the field is missing.
+   - **Writing `_global`.** The dispatch mounts `_global` read-write only for the admin account, and
+     the file, page, reset, acceptance and chat-target routes ask the same function. The MCP spends
+     flows' operator key on `flows_submit` and `flow_lifecycle` only when `/auth/me` says
+     `admin_account: true`.
+   - **Having nothing else.** For the admin account the dispatch mounts `_global` and `_system` only
+     and makes `_global` the working directory; it seeds no desk. agent-api's workspace door
+     (`_read_target`) resolves no other workspace for it, an app-level dependency
+     (`admin_account_scope.REFUSED`) refuses the routes that create, import, activate or join a
+     workspace and every meeting route, and `GET /api/workspace/active` answers `_global` with
+     `admin_account: true`. Its bot cap of 0 makes meeting-api refuse any bot it asks for.
+
+### Who writes what
+
+| Data | Single writer | Where |
+|---|---|---|
+| Workspace files | agent-api | the workspace's git repository |
+| Roster, visibility, connections, invites (hashes only) | admin-api, asked by agent-api | the identity database (`workspaces`, `memberships`, `invites`); without admin-api, agent-api's files `.policy/` and `.invites/` beside the workspaces, outside every workspace. A read-only mirror of the roster, visibility and connections is committed to `policy/` in the workspace |
+| Workspace policy rules | agent-api, platform only | `policy/rules.json` in the workspace's git repository |
+| Workspace ids and names | agent-api | `.vexa/workspace.json` in each workspace, plus a registry that can be rebuilt from it |
+| Membership index, users by email | admin-api | the identity database |
+| Which account is the admin account (`users.data.account`) | admin-api, when it creates the row | the identity database |
+| The company workspace `_global` | the admin account's chats and routes, through agent-api | `_global`'s git repository; every change is a commit by its author |
+| Import status | agent-api | outside every workspace |
+| Your default for new chats | agent-api | its session index, per person; re-checked on every read |
+| Git tokens and deploy keys | the credential broker (agent-api's `git` role) | its encrypted store |
+| Connections, consent state, audit | the credential broker | its encrypted store |
+
+### Membership and policy
+
+The roster, a workspace's visibility (open or closed), its connections and its invites are **who may
+enter a workspace**. Since 0.13.4 they are rows in the identity database: `workspaces`, `memberships`
+(an account × `workspace:<id>` or, for a closed room, `room:<id>` × a role) and `invites` (only each
+token's SHA-256). admin-api is their one writer; agent-api reads and writes them through its port,
+`/internal/registry/*` on the internal tier. A person is their CRM record; a membership names their
+account. Git keeps a workspace's content, and its `policy/` rule files stay platform-only.
+
+A deployment without admin-api keeps the same records in files beside the workspaces
+(`.policy/<workspace>/`, `.invites/`), outside every workspace. Either way they go through one
+interface (`PolicyStore` in `control_plane/workspace_membership.py`), and no agent turn reaches them:
+the runtime mounts one folder per workspace and never the folder above them.
+
+1. **Reading a role.** Every membership check (`is_member`, `require_role`) reads the registry. The
+   workspace's own `policy/members.json` is a mirror the platform writes with each change, committed
+   with the person who decided as author. Nothing reads the mirror to decide access.
+2. **Writing in a workspace.** `policy/` is a reserved folder for every caller route
+   (`workspace_paths.RESERVED_DIRS`): the page editor, uploads, moves and links refuse it. The page
+   editor answers `403`. Only the membership and policy code writes it, and only the mirror.
+3. **Syncing with a repository.** A pull whose remote side changes anything under `policy/` is refused
+   before anything is merged, and the workspace stays as it was.
+4. **Changing policy.** Opening or closing a workspace and connecting or disconnecting another
+   workspace go through the policy evaluator (`control_plane/policy_decide.py`, also served inside the
+   deployment as `POST /internal/policy/decide`). It answers `{decision, rule}`, where `rule` is the
+   deciding rule's id and the hash of its rule set. Platform rules come first, then the workspace's
+   own rules (`policy/rules.json`, platform-only). A deny beats any allow, and nothing allowing is a
+   deny. A policy change is applied only for the workspace's **owner in a browser session**; an agent,
+   even one its owner is watching, and an API key without the browser scope cannot change policy
+   directly.
+5. **Agents change policy with permission.** An agent (or a contributor) proposes a change —
+   visibility, connecting or disconnecting a workspace, a member's role or removal, or the rule file —
+   with `POST /api/workspace/policy/proposals` (`workspace`, `session`, `change`, `value`, `reason`).
+   The proposal is recorded in the session proposal store, owned by the workspace's owner, and
+   nothing changes. The owner sees it in `GET /api/workspace/policy/proposals` and approves
+   (`…/{id}/approve`) or declines (`…/{id}/decline`) from the app. On approval the platform applies
+   it through the evaluator and the registry (or writes `policy/rules.json`), and the policy commit
+   carries `Approved-by: <account> (proposal <id>)` and `On-behalf-of: <proposer>`. A decline changes
+   nothing. A later release's signed policy card wraps this same proposal.
+6. **Failing closed.** A registry that does not answer, or a record that cannot be read, refuses
+   (`503 policy_unreadable`): it never reads as "no members" or "open". An unreadable visibility is closed; an unreadable rule set
+   refuses every policy decision.
+7. **Migration.** When agent-api starts, it copies every workspace's existing records into the
+   registry, once: its `.policy/` files if it has them (a room of two's hidden workspace stays
+   hidden), else its `policy/members.json`, `visibility.json` and `connections.json`, and its
+   invites from `.invites/` (or an old `policy/invites.json`). This is also what happens the first
+   time a Helm or lite install starts agent-api with identity wired (`VEXA_ADMIN_API_URL`): the
+   file store it ran on before is copied in. The workspaces' own `policy/*.json` files are read by that
+   start-up copy and nowhere else: once it copied everything, the store records it
+   (`.policy/_tree_adoption.json`) and no later read and no later start reads an in-workspace policy
+   file again, so a file planted in a workspace afterwards grants nothing. A start that could not
+   reach the registry records nothing and the next start copies again; meanwhile that workspace's
+   members are refused. Old `.policy/` files are still copied on first read. After that the
+   registry alone answers, and agent-api asks it on every access decision (it keeps a workspace's
+   rows no longer than one request), so a member removed by any writer is refused at once. `VEXA_POLICY_LEGACY_READ=0` on agent-api copies nothing at all.
+   Un-sharing or deleting a workspace removes its rows (and any old files).
+
+### Invites by email (0.13.4)
+
+1. **Mint.** `workspace_invite` (`POST /api/workspace/invite`, optional `room`) mints an invite
+   restricted to the one address, at most one use, seven days. A `room` must be a room of that
+   workspace that the inviter is in.
+2. **Mail.** An address with no account here is published to flows as `workspace.invited`; flows
+   renders the fixed `workspace-invite` template (`behavior/mail/workspace-invite.md`: inviter, place,
+   role, the role's sentence) and appends the link as the last line. The refs carry no field a
+   message could travel in.
+3. **The link signs in, only when we mailed it.** When the deployment says it delivers mail
+   (`GET /mail/delivery` → `delivered`), the invite gets a sign-in window — the company policy line
+   `invite_signin_days` in `_global/POLICIES.md` (default 7, at most 30; `0` turns it off), never past
+   the invite's expiry — and the link is **not** returned to the inviter or their agent. A link handed back
+   to the inviter (captured mail, no mail, an internal address) never signs anybody in.
+4. **The click.** The join page's **Join** is a plain form POST to the terminal's
+   `/api/join/accept`. Same-origin only and counted per client address, it asks agent-api
+   `POST /internal/invites/signin-claim` (internal tier) to spend the sign-in half once, asks admin-api
+   to admit the address `via_invite`, finds or creates the account, accepts the invite as that person
+   through the gateway, joins the room, and answers 303 to `/r/chat/<room>` or `/w/<workspace>` with
+   the session cookies. A spent or expired sign-in falls back to the page's emailed sign-in link.
+5. **Nothing on GET.** The page, `GET /api/join/preview`, `GET` and `HEAD` of `/api/join/accept` are
+   reads. The emailed sign-in link is the same: `GET /api/auth/redeem` asks, `POST` signs in.
+6. **No token at rest in a notice.** An invite notification stores `invite:<workspace>/<id>`; the
+   act resolves it on the server, still bound to the invitee's verified address. Rows written before
+   0.13.4 are rewritten when agent-api starts.
+7. **Nobody off the list.** With `VEXA_MAIL_RECIPIENT_ALLOW` set, every message to a recipient not
+   on it — invite, sign-in link, nudge, digest, recap, RSVP — is diverted to the capture double and
+   logged `mail_diverted` with no content.
+8. **Shared limits.** Link requests, the invite preview and the join POST are counted in admin-api's
+   Redis (`POST /internal/rate/take`) for every terminal replica, falling back to a local count if
+   Redis does not answer. Redeems, sign-in claims and roster writes take a Redis lock per workspace
+   (`vexa:ws-lock:<workspace>`) as well as the process lock.
+
+### Routes
+
+| Browser calls (terminal) | Goes to |
+|---|---|
+| `GET /api/workspaces/{id}`, `/api/workspaces/by-slug/{slug}`, `/api/workspace/members`, `/api/workspaces/{slug}/git/last-change`, `/api/workspace/git-remote-status` | agent-api, through the gateway's `/agent/*` |
+| `GET /api/join/preview` | agent-api `/api/workspace/invites/preview` (no user key) |
+| `POST /api/join/accept` (form `i`) | agent-api `/internal/invites/signin-claim` (internal tier), admin-api `/internal/signin-admission` (`via_invite`), then the invite accept through the gateway as the new session |
+| `POST /api/workspace/invites/accept` | agent-api, through the gateway |
+| `POST /api/workspace/import`, `GET /api/workspace/import/{op}/status` | agent-api, through the gateway |
+| `GET`, `POST /api/workspace/{slug}/deploy-key`, `/api/workspace/git-token` | agent-api, through the gateway |
+| `POST /api/workspace/publish` `{ …, host? }`, `POST /api/workspace/push`, `POST /api/workspace/pull` | agent-api, through the gateway; agent-api then calls the git host (and GitLab's `/api/v4` for a create) |
+| `GET /api/connections/list`, `POST /api/connections/…` | the credential broker, as the person |
+| agent tools `workspace_invite`, `workspace_membership` | agent-api `/api/workspace/invite`, membership routes |
+| agent tools `workspace_invite_link_create`, `workspace_invite_links`, `workspace_invite_link_revoke` | agent-api `/api/workspace/invite-link`, `/invite-links`, `/invite-link/revoke` |
+| `/join/<token>` | the terminal redirects to `/join?i=<token>`: the preview and accept rows above. agent-api also serves `GET /api/join-links/preview` and `POST /api/join-links/redeem` inside the deployment; they are not on the gateway's edge |
+| agent tools `workspace_status`, `workspace_pull`, `workspace_push` | agent-api `/api/workspace/status`, `/pull`, `/push` |
+
+### Configuration
+
+`VEXA_UI_URL` on agent-api (no invite is made without it). Outbound mail is per install: flows'
+`VEXA_MAIL_SMTP_HOST`, `_PORT`, `_USER`, `_FROM` and the password by reference,
+`VEXA_MAIL_SMTP_PASSWORD_REF=broker:mail/<name>` (stored once with
+`python -m credential_broker.mail_secret put <name>` in the broker container; see
+[Configuration](/configuration)). `VEXA_SIGNIN_INVITES_ADMIT` on admin-api (default `1`): `0` stops a
+mailed invite from admitting a new address. `VEXA_POLICY_LEGACY_READ` on agent-api
+(default `1`): old in-workspace policy files are copied once at the first start and then never read;
+`0` copies nothing (see Membership and policy). `VEXA_GIT_PROVIDERS` on agent-api (Helm
+`agentApi.gitProviders`) registers self-hosted git hosts; it is validated when agent-api starts.
+`VEXA_ADMIN_ACCOUNT` on admin-api names the admin account (compose `.env`, Helm
+`adminApi.adminAccount`, Lite `-e`); see [Configuration](/configuration). agent-api's old
+`VEXA_GLOBAL_ADMIN_SUBJECTS` is retired and ignored. The terminal's connections routes read
+`VEXA_CONNECTIONS_BROKER_URL`, `VEXA_CONNECTIONS_HUMAN_KEY_FILE` and `VEXA_CONNECTIONS_PUBLIC_ORIGIN`;
+the broker itself is set up as in [Connections](/connections).
+
+## Why it complies
+
+### Architecture
+
+Workspace names: `control_plane/workspace_names.py` lists every workspace a person has (personal,
+private, shared) under the names the Files pane uses, returned as `all` by `GET /api/workspace/shared`
+(the `workspaces` tool). A middleware in agent-api resolves a name to its slug for every workspace
+argument (`slug`, `workspace_id`, `to_slug`, `credential_workspace`, and `DELETE /api/workspace/{slug}`)
+before routing, so access is still checked on the slug. Two matches answer `409` with both.
+Covered by `core/agent/tests/test_new_person_and_sharing.py`.
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| **P2** contracts · **P6** one front door | the browser calls only the terminal; the terminal reaches agent-api through the gateway, and the broker through its contract | `gate:isolation`, `gate:exports`, `gate:domain-doors` |
+| **P4** published schemas | the broker's API is the sealed `credential-broker.v1`; the agent tools are in `mcp.tools.v1` | `gate:schema`, `gate:contract-version` |
+| **P15** secrets protected by default | credentials live in the broker, never in a workspace, a log or the browser | ungated: reviewed; the broker's deny tests below |
+| **P18** fail loud | each invite and link refusal is its own sentence; broker failures are typed `broker_fault`s; an interrupted import says so | ungated: reviewed |
+| **P20** authorize every access | roles are checked on every membership and repository route; invites check the verified email; switching a group on in your active set checks the roster, and a `not-yours` answer carries no name | deny tests below; `core/agent/tests/test_workspace_non_member_refusals.py` |
+| **P20** authorize every access (sync) | `workspace_status` resolves the workspace exactly as a pull does; a non-member is refused before any fetch | deny test below |
+| **P21** state from evidence | an import is done only when it reports `completed`; a connection request is not a connected account | ungated: reviewed |
+| **P23** one writer per carrier | agent-api writes rosters, invites and import status; the broker writes credentials; admin-api alone decides the admin account, and agent-api, the gateway and the terminal only read its answer | `gate:dataflow`; the admin account: ungated: reviewed |
+| **P14** config is a validated contract | `VEXA_GIT_PROVIDERS` is declared in agent-api's `config.v1.json`, surfaced on Helm and Compose, and parsed at boot by `shared/config.py`, which refuses a malformed entry | `gate:config-contract` |
+| **P15** secrets (git tokens) | a token is put into a URL only by `token_destination.embed_token`, only over `https`, and never persisted: the clone's `origin` and the push remote are reset token-free; the GitLab API gets it in a header, never a URL; errors are scrubbed of the token, its password half and the URL form it took | ungated: reviewed; deny tests below |
+| **P18** fail loud | a host publish cannot create on is a typed `UnsupportedHostError` (`422`) naming the host and the alternative; a bad provider map stops the boot; GitLab answers are translated into named refusals (taken name, rejected token, missing group, redirect) | ungated: reviewed |
+| no duplication | the address rule lives in `repo_ref.py` with one twin in the terminal, held to the same cases by both test suites; the token shape lives only in `git_provider.py` | ungated: reviewed |
+| **P6** one front door (the admin account) | agent-api learns the admin account through admin-api's existing internal route; the terminal learns it through `/auth/me`; no service keeps its own list | ungated: reviewed |
+| **P14** validate at boot | a malformed `VEXA_ADMIN_ACCOUNT` (a domain, `*`, more than five addresses) stops admin-api from starting; a named address that already has an everyday account is logged at boot | `admin-api tests/test_admin_account.py` |
+| **P23** one writer per carrier (join links) | agent-api alone writes the invite store, the host's `workspace_joined_via_link` notice and the `workspace.joined_via_link` flows carrier; flows only consumes the carrier | `gate:dataflow`, `gate:schema` |
+| **P4** published schemas (join links) | the carrier is declared in the sealed `flows.v1`, the notice kind in the sealed `ws.v1`, the three tools in `mcp.tools.v1` and `routes.v1` | `gate:schema`, `gate:contract-version` |
+
+### Membership and policy
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| **P20** authorize every access | a role is read only from the policy store outside every workspace; `policy/` is reserved for every caller route; a remote sync cannot change it; an invite never outranks its sender, an owner is made only by an owner's invite to a named address, and an invite is checked again against its sender's role when redeemed | deny tests below |
+| **P23** one writer per carrier | admin-api is the one writer of the registry tables; agent-api's membership code is their only caller and the only writer of the `policy/` mirror; every other route is refused, and a pull is refused | deny tests below; `core/identity/services/admin-api/tests/test_workspace_registry_pg.py`; `gate:dataflow` |
+| **P2** contracts · **P6** one front door | agent-api has no database: it reaches the registry only through admin-api's internal tier (`AdminApiPolicyStore`), as it already does for the membership index | `test_the_http_port_maps_the_registry_doors`, `test_every_registry_door_needs_the_internal_secret` |
+| **P18** fail loud | an unreadable store answers `503 policy_unreadable`; an unreadable rule set answers `refuse`; a refused pull names the files | `test_an_unreadable_store_refuses_instead_of_answering_empty`, `test_an_unreadable_rule_set_refuses` |
+| **R7** a person decides | joining needs a click on a page that shows the workspace, the role and the sender; joining never moves where the person's chats write; an agent's policy change is a proposal the owner approves from a browser session, recorded as `Approved-by` / `On-behalf-of` | deny tests below |
+
+Deny tests, all passing:
+
+- **C3 / deny 5** `core/agent/tests/test_sec_deny_policy_taint.py` ·
+  `test_contributor_cannot_write_policy_files[members, visibility, connections]`,
+  `test_contributors_watched_agent_cannot_write_policy_files`,
+  `test_contributor_cannot_become_owner_through_the_page_route`.
+- **C3 / deny 6** `test_contributor_cannot_mint_owner_invite`,
+  `test_invite_uses_and_expiry_are_capped[max_uses, expires_in_sec]`.
+- **H4 / deny 15 (server half)** `test_invite_accept_does_not_change_write_target`; the client half
+  is `clients/terminal/src/app/__tests__/join.test.tsx` · *asks a signed-in visitor to confirm*.
+- **Deny 28** `core/agent/tests/test_s1a_policy_store.py` ·
+  `test_deny_28_a_pull_that_changes_policy_is_refused`.
+- **Deny 20 (evaluator)** `test_an_unreadable_rule_set_refuses`, `test_deny_beats_allow_across_levels`,
+  `test_owner_session_may_change_policy_and_nobody_else`; the routes:
+  `core/agent/tests/test_r1_rooms.py` · `test_only_an_open_workspace_connects_and_only_its_owner_opens_it`.
+- **Policy with permission** `test_an_agent_proposal_changes_nothing_until_the_owner_approves`,
+  `test_approval_by_a_non_owner_or_a_non_browser_credential_is_refused`, `test_a_decline_changes_nothing`,
+  `test_a_direct_agent_write_is_still_refused`, `test_rules_land_in_git_with_the_trailers`.
+- **Migration** `test_legacy_roster_is_read_and_adopted_into_the_store`,
+  `test_after_adoption_a_tree_edit_confers_nothing`, `test_writing_one_file_migrates_the_others_first`,
+  `test_legacy_read_off_ignores_unmigrated_trees`,
+  `test_boot_moves_trees_interim_files_and_invites_into_the_registry`, `test_a_down_registry_refuses`.
+
+### Invites by email
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| **R7** a person decides | the link is spent only by a POST from the join page's button; a GET, a HEAD or a preview changes nothing, so a mail scanner cannot use it | `test_a_mail_scanner_opening_the_link_changes_nothing`; `clients/terminal/src/app/api/join/__tests__/accept.test.ts` · *a mail scanner opening the link changes nothing*; `join.test.tsx` · *opening the page posts nothing* |
+| **P20** authorize every access | the sign-in half exists only on an invite this deployment mailed to its one address; the inviter never receives that link; it is spent once under the workspace lock; the accept still checks the verified address | `test_a_mailed_invite_signs_in_and_the_inviter_never_holds_that_link`, `test_the_sign_in_half_is_spent_once`, `test_captured_mail_never_signs_in`, `test_a_link_handed_to_the_inviter_never_signs_in`, `test_the_sign_in_window_closes` |
+| **D15 / M4** template-only mail | the invite mail is a fixed template; refs carry no message field and the step reads only declared fields | `core/flows/tests/test_workspace_invite_mail.py` · `test_s2_no_message_content_can_reach_the_mail`, `test_s2_template_names_the_room_role_and_inviter_and_carries_one_link` |
+| **P14** secrets by reference | the relay password is `broker:mail/<name>`, read by flows with its broker key, audited by name, never logged | `core/flows/tests/test_mail_secret_ref.py`; `core/agent/services/credential-broker/tests/test_mail_credential.py` |
+| **M2** no token at rest | an invite notification stores the invite id; old rows are rewritten at start | `test_an_invite_notification_stores_the_invite_id_not_the_token`, `test_old_rows_holding_a_token_are_rewritten` |
+| **M6** shared limits | rate counts in admin-api's Redis; a Redis lock per workspace | `core/identity/services/admin-api/tests/test_rate_take.py`; `test_the_redis_lock_serialises_two_holders_and_is_taken_once_per_thread`; `linkRateLimit.test.ts` · *the shared count* |
+
+Still open, and named: a watched agent can still mint invites up to its person's role
+(`test_watched_agent_cannot_mint_invite`, H3, lands with the session credential).
+
+### Security
+
+**Who can do what.** Owners add, remove and change members and manage the repository. Contributors
+write. Readers read. Only the owner or an administrator renames a workspace. The private tier cannot be
+shared, and only the admin account writes the company workspace. The admin account has no desk, no
+shared workspaces and no meetings.
+
+**A default for new chats is a pointer, never a grant.** It is stored only after the same writable
+check a chat's target gets, and checked again on every read, so being removed, a deleted workspace or
+a role lowered to reader turns it back into Personal without naming the workspace
+(`core/agent/tests/test_chat_default_target.py`). The company workspace is never an everyday default.
+
+**A join link is a capability with limits.** The token is unguessable (32 random bytes) and stored
+only as its hash, so a copy of the store opens nothing. Only the workspace's owner mints one; it
+grants at most `max_uses` new members, the role it was minted with (never owner), and nothing after
+it expires or is revoked. Redeeming counts uses under a per-workspace lock, so concurrent opens cannot
+exceed the limit. Every join notifies the link's maker, so a link that travelled further than meant
+is visible at once and can be revoked. Deny tests: `core/agent/tests/test_join_links.py` ·
+`test_only_the_owner_mints_a_link`, `test_revoked_and_expired_links_refuse`,
+`test_three_uses_then_a_calm_refusal_and_a_member_reopening_spends_nothing`,
+`test_a_link_is_a_join_url_with_an_unguessable_token_stored_only_as_its_hash`; a delegated run is
+held to its ceiling on all three link routes by `core/agent/tests/test_delegation_ceiling_verbs.py` ·
+`test_a_workspace_outside_the_ceiling_is_refused_and_nothing_changes`.
+
+**Protections.**
+
+- Invite tokens are random, shown once, and stored only as a hash. They expire, can be withdrawn, and
+  are used once under a lock, so two people cannot redeem the same invite.
+- A restricted invite is checked against the email the gateway verified, not one the browser sends.
+- The invite preview grants nothing and does not say whether a workspace exists.
+- A repository address is a whitelist: plain path segments only, never empty, `.`, `..` or `-`, at
+  most 22 deep, exactly two on `github.com`; a host only agent-api could reach is refused, nested path
+  or not.
+- A saved token goes only to `https://github.com/`. A token for another host is typed for one call and
+  travels only over `https`. Publish sends a token to an API only on `github.com` or a host the operator
+  registered as GitLab, and never follows a redirect with it.
+- Deploy keys are generated server-side; the private half is kept in the credential broker and written
+  to a permission-`0600` file only for the length of one git operation.
+- **Looking at the repository changes nothing.** `workspace_status` fetches into the remote-tracking ref
+  only; the working tree, the index and the local branch stay as they were, which a test checks
+  byte for byte. Because it changes nothing a person sees, it is allowed in the background regime
+  (no person watching); a pull and a push still need a person. Any member may look, a viewer
+  included; a pull needs contributor because it rewrites the tree. The agent never runs git: its
+  sandbox cannot write `.git`, so these three verbs are the only way it syncs.
+- Connection routes accept only the deployment's own origin and a closed set of actions. The terminal
+  holds the person's broker key; agent workers hold none.
+- Consent pop-ups follow only Google's authorization address or the address the setup declared, and
+  report a status, never a credential, back to the page.
+- The admin account is decided by admin-api, which every other service asks. Both conditions must
+  hold: the row was created as the admin account, and the address is still named. With nothing
+  configured, with identity unreachable, or with an older identity that does not send the field,
+  nobody writes `_global`.
+- An everyday account is never promoted: the admin field is written only when admin-api creates the
+  row.
+- The admin account is confined three ways: its mounts, the workspace door, and a list of refused
+  routes that `admin_account_scope.assert_served` checks at boot, so a renamed route cannot leave a
+  gap unnoticed.
+
+**Deny tests.**
+
+| Test | Proves |
+|---|---|
+| `core/agent/tests/test_workspace_membership.py` · `test_mint_stores_only_hash_and_returns_token_once`, `test_accept_expired_invite_fails`, `test_revoked_invite_rejected`, `test_cannot_remove_last_owner`, `test_api_role_gating_viewer_cannot_invite_owner_can`, `test_api_restricted_invite_checks_x_user_email`, `test_concurrent_accept_max_uses_one_grants_exactly_one`, `test_an_unsigned_identity_is_refused_before_the_role_gate` | invites and roles |
+| `core/agent/tests/test_membership_acts.py` · `test_only_an_owner_may_change_who_is_in_a_workspace`, `test_the_private_tier_is_refused_for_everybody_including_the_admin`, `test_the_invite_is_restricted_to_the_address_it_names`, `test_no_ui_url_means_no_invite_rather_than_a_link_to_nowhere` | the agent's membership verbs |
+| `core/agent/tests/test_invite_link.py` · `test_preview_of_an_open_invite_discloses_no_address`, `test_preview_of_a_token_that_matches_nothing_is_404` | the preview |
+| `core/agent/tests/test_turn_writeback_keeps_platform_writes.py` · `test_an_invite_minted_mid_turn_is_still_redeemable_after_the_turn` | invites survive the turn |
+| `core/agent/tests/test_workspace_ids.py` · `test_a_mere_member_may_not_rename_a_group`, `test_a_desk_owner_may_not_rename_their_desk_but_an_admin_may` | renaming |
+| `core/agent/tests/test_workspace_id_api.py` · `test_resolve_by_id_reports_access_per_reader`, `test_a_link_written_before_a_rename_still_resolves_after_it` | links |
+| `core/agent/tests/test_deploy_keys.py` · `test_the_private_half_is_kept_by_the_broker_and_nowhere_here`, `test_ssh_env_materializes_a_0600_key_only_for_the_length_of_the_op` | deploy keys |
+| `core/agent/tests/test_workspace_status.py` · `test_a_non_member_is_refused_and_nothing_is_fetched`, `test_status_fetches_and_reports_both_sides_without_moving_the_branch_or_the_tree`, `test_a_member_sees_what_is_behind_and_the_workspace_is_unchanged`, `test_an_unreachable_remote_is_a_typed_network_refusal_and_changes_nothing` | the look-only sync verb |
+| `core/agent/tests/test_connection_routes.py` · `test_a_worker_without_a_person_is_refused_before_the_broker`, `test_a_caller_without_the_gateway_signature_never_reaches_the_broker` | the agent's connection route |
+| `core/agent/services/credential-broker/tests/test_connection_setup.py` · `test_reuse_cannot_move_existing_secret_to_another_destination`, `test_invalid_spec_and_foreign_owner_refused`; `test_forwarded_identity.py` · `test_a_signature_for_another_person_is_refused`; `test_contract_conformance.py` · `test_each_route_refuses_roles_it_does_not_grant` | the broker |
+| `clients/terminal/src/app/api/connections/__tests__/routes.test.ts` · "refuses cross origin and caller-chosen identity" | the terminal's connection routes |
+| `clients/terminal/src/app/__tests__/join.test.tsx` · "says an unknown token is not valid, without saying whether the workspace exists" | the join page |
+| `clients/terminal/src/minutes/__tests__/workspaceStrip.test.tsx` · "gives a READER the one act that is theirs, and no others"; `memberActs.test.tsx` · "renders no membership control for somebody who is not an owner here" | the front page's buttons |
+| `clients/terminal/src/minutes/__tests__/workspaceDeepLink.test.ts` · "never falls back to the desk — a refusal carries no page at all" | `/w/` links |
+| `core/agent/tests/test_admin_account.py` · `test_an_everyday_account_writes_no_door_of_the_company_layer` (files, flow pages, company pages, reset, acceptance, chat target, membership; the instance admin included), `test_nothing_configured_means_nobody_writes_the_company_layer`, `test_the_admin_account_opens_no_desk_no_workspace_and_no_meeting`, `test_the_workspace_door_resolves_nothing_but_the_company_layer_for_it`, `test_the_admin_account_aims_a_chat_nowhere_else`, `test_the_admin_accounts_mount_table_is_the_company_layer_and_its_system_tier`, `test_the_retired_subject_list_grants_nothing`, `test_identity_unreachable_or_unconfigured_means_nobody` | the admin account, in agent-api |
+| `core/identity/services/admin-api/tests/test_admin_account.py` · `test_unconfigured_means_nobody`, `test_both_halves_are_required`, `test_an_everyday_account_is_never_promoted`, `test_the_named_account_is_created_as_the_admin_account_and_launches_no_bot`, `test_removing_the_address_revokes_the_account`; `test_internal_validate_wire.py` · `test_the_admin_accounts_worker_is_never_the_account_its_person_is` | the admin account, in identity |
+| `core/gateway/services/gateway/tests/test_delegated_mcp.py` · `test_auth_me_says_whether_the_key_is_the_admin_account_and_nothing_else_is`; `core/gateway/services/mcp/tests/test_tool_auth.py` · `test_an_admin_tool_spends_the_deployments_key_for_the_admin_account_only`; `core/flows/tests/test_user_flows_api.py` · `test_the_admin_accounts_chat_writes_the_instance`, `test_an_everyday_accounts_chat_is_refused_the_instance`, `test_an_everyday_account_is_refused_the_instance`, `test_a_worker_answer_without_its_delegation_is_never_the_admin_account` | instance flows are the admin account's (its own key or its chat) |
+| `clients/terminal/src/minutes/__tests__/globalTarget.test.tsx` · "the admin account's header is the company layer and nothing else", "an everyday account is never offered Company"; `app/api/auth/__tests__/me.test.ts` · "says whether this is the ADMIN ACCOUNT…" | the terminal |
+| `clients/terminal/src/minutes/__tests__/attachRepo.test.tsx` · "rejects credentials pasted into the repository field before sending" | attach |
+| `core/agent/tests/test_git_gitlab_remotes.py` · `test_a_path_that_is_not_a_plain_nested_name_is_refused`, `test_the_deepest_gitlab_path_is_accepted_and_one_deeper_is_not`, `test_a_nested_path_still_passes_the_host_gate`; `clients/terminal/src/surfaces/__tests__/repoRef.test.ts` · "refuses %s, which is not a plain nested name" | nested paths |
+| `core/agent/tests/test_git_gitlab_remotes.py` · `test_no_provider_puts_a_token_on_a_cleartext_or_ssh_url`, `test_a_clone_presents_oauth2_and_persists_no_credential`, `test_a_push_error_never_carries_any_spelling_of_the_token`, `test_a_malformed_provider_map_stops_the_boot` | token shapes |
+| `core/agent/tests/test_git_gitlab_remotes.py` · `test_create_on_an_unregistered_host_is_refused_by_name`, `test_create_never_aims_at_a_deployment_internal_or_malformed_host`, `test_publish_to_an_unsupported_host_touches_nothing`, `test_gitlab_create_resolves_the_nested_group_and_sends_the_token_only_in_a_header`, `test_gitlab_create_does_not_follow_a_redirect`, `test_the_publish_route_refuses_an_unsupported_host_before_reading_a_credential`; `test_saved_token_destination.py` · `test_the_saved_token_goes_nowhere_else` | publish |
+
+## Related
+
+- [Workspaces](/core/workspaces) · [Browse, upload, and swap the workspace](/how-to/workspace-files) · [Connections (operator)](/connections) · [Pages](/minutes/pages)

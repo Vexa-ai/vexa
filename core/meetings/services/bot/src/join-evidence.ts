@@ -51,6 +51,9 @@ export type JoinFailureReason =
   | 'never_reached_lobby'
   /** We never got as far as the meeting page (navigation error, off-origin redirect, closed target). */
   | 'navigation_failure'
+  /** The meeting page rendered in a language other than the bot's pinned English (a signed-in
+   *  account's own language), so the join layer could not read the lobby or a rejection. */
+  | 'ui_locale_mismatch'
   /** The USER stopped the run while the bot was still knocking. Not a failure. */
   | 'stopped_while_joining'
   /** The signals do not support a verdict. `detail` carries what was observed. */
@@ -110,6 +113,9 @@ const NAVIGATION_MARKERS = [
   'control_plane_unreachable',
 ];
 
+/** The reason code @vexa/join's UiLocaleMismatchError message starts with. */
+const UI_LOCALE_MISMATCH_MARKER = 'ui_locale_mismatch';
+
 /** Markers that identify a PLATFORM-POLICY refusal (not a human's decision) → exogenous. */
 const PLATFORM_POLICY_MARKERS = [
   'zoom_requires_rtms',
@@ -138,6 +144,7 @@ const ATTRIBUTION_BY_REASON: Record<JoinFailureReason, JoinFailureAttribution> =
   auth_session_missing: 'system_fault',
   never_reached_lobby: 'system_fault',
   navigation_failure: 'system_fault',
+  ui_locale_mismatch: 'system_fault',
   stopped_while_joining: 'user_action',
   unknown: 'unknown',
 };
@@ -185,6 +192,9 @@ export function classifyJoinFailure(
 
     const detail = cleanDetail(signals.detail);
     if (matches(detail, NAVIGATION_MARKERS)) return 'navigation_failure';
+    // The join layer's own typed verdict that the page was not in English: every reading it made
+    // on that page (a timeout, a "rejection") is untrusted, so this outranks the outcome.
+    if (matches(detail, [UI_LOCALE_MISMATCH_MARKER])) return 'ui_locale_mismatch';
 
     // A typed denial (or a bot-detection block, which is the platform refusing us just as flatly)
     // is a verdict, not an inference — it outranks any timing.

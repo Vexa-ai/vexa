@@ -1,7 +1,8 @@
 # Third-party licenses — baked artifacts outside the dependency gate
 
 `gate:licenses` (ADR-0004, `scripts/gates.mjs`) scans the resolved **npm** dependency
-tree (`pnpm licenses list --json`) and the Python tree grows into `pip-licenses`. Neither
+tree (`pnpm licenses list --json`) and every **Python** package an image installs
+(`python-licenses.json`, `scripts/check-python-licenses.mjs`). Neither half
 sees **non-dependency artifacts baked into the images** — model weights pulled from a model
 hub, or a service binary built from source at image-build time. This file is the
 packaging-side complement: every such artifact is recorded here with its license, mirrored
@@ -37,6 +38,29 @@ and keeps Lite off both jammy apt's stale Redis 6.0.16 and source-available Redi
 > exception, only that the notice be preserved — which this file and the in-image
 > `/usr/local/share/valkey/LICENSE` satisfy.
 
+## Vendored files
+
+| Artifact | Version | License | Source | Shipped in | In-image path |
+| --- | --- | --- | --- | --- | --- |
+| `seccomp/default.json` (modified) | Docker Engine `29.6.2` | Apache-2.0 | [github.com/moby/profiles](https://github.com/moby/profiles) | `vexaai/vexa-runtime`, `vexaai/vexa-lite`; installed on Kubernetes nodes by the chart | `/app/src/runtime_kernel/seccomp-userns.json` (runtime), `/app/runtime/src/runtime_kernel/seccomp-userns.json` (Lite), each with `seccomp-userns.LICENSE.txt` beside it |
+
+**`seccomp-userns.json`** — the seccomp profile meeting bots run under:
+[`core/runtime/src/runtime_kernel/seccomp-userns.json`](core/runtime/src/runtime_kernel/seccomp-userns.json)
+is Docker Engine 29.6.2's default profile (the Moby project's `seccomp/default.json`, as vendored
+in that release), **modified**: one rule is added, commented in the file itself, letting a process
+without `CAP_SYS_ADMIN` call `clone`/`unshare` for new namespaces and `chroot` (the kernel still
+asks for the capability inside the caller's own namespace), which Chromium's sandbox needs.
+Lite runs its container under it, the docker backend runs each bot's own container under it, and
+the Helm chart writes it to the nodes for bot Pods. The licence is the Apache License 2.0, the
+same as Vexa's; moby/profiles ships no NOTICE file. Full text:
+[`licenses/moby-profiles.LICENSE.txt`](licenses/moby-profiles.LICENSE.txt), copied beside the
+file in the runtime package (`seccomp-userns.LICENSE.txt`; the parity fact
+`moby-profiles-licence` keeps the two copies identical).
+
+> Apache-2.0 is a Category-A (permissive) license under ADR-0004; vendoring a modified file
+> requires no exception, only the licence text, a statement that it was changed, and the
+> attribution — which this file, the repository NOTICE and the in-image licence copy satisfy.
+
 ## Baked model weights
 
 | Artifact | Version (revision) | License | Source | Baked into | In-image path |
@@ -55,3 +79,21 @@ text: [`licenses/onnx-community-pyannote-segmentation-3.0.LICENSE.txt`](licenses
 > MIT is a Category-A (permissive) license under ADR-0004; baking it requires no exception,
 > only that the copyright + permission notice be preserved — which this file and the baked
 > `/opt/hf-cache/LICENSE.*` satisfy.
+
+| Artifact | Version | License | Source | Shipped in | In-image path |
+| --- | --- | --- | --- | --- | --- |
+| MediaPipe selfie segmenter (`selfie_segmenter.tflite`, float16) | `1` (sha256 `191ac9529ae506ee0beefa6b2c945a172dab9d07d1e802a290a4e4038226658b`) | Apache-2.0 | [storage.googleapis.com/mediapipe-models](https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/1/selfie_segmenter.tflite) | `vexaai/vexa-terminal`, `vexaai/vexa-lite` | `/app/public/mediapipe/selfie_segmenter.tflite` (terminal), `/app/terminal/public/mediapipe/` (Lite), each with `selfie_segmenter.LICENSE.txt` beside it |
+
+**MediaPipe selfie segmenter** — the terminal's in-call background blur
+(`@livekit/track-processors` over `@mediapipe/tasks-vision`) segments the person from the
+background with this model in the browser. It is vendored at
+[`clients/terminal/vendor/mediapipe/`](clients/terminal/vendor/mediapipe/) and served by the
+terminal itself at `/mediapipe/`, so no call fetches it from Google. Google's model card
+("Model Card MediaPipe Selfie Segmentation", 2021-05-06) licenses it under the Apache License
+2.0; the preserved text is the MediaPipe project's `LICENSE` at tag `v0.10.14` (the
+`@mediapipe/tasks-vision` version in use, which declares `Apache-2.0` and ships no licence file).
+Full text: [`licenses/mediapipe-selfie-segmenter.LICENSE.txt`](licenses/mediapipe-selfie-segmenter.LICENSE.txt).
+
+> Apache-2.0 is a Category-A (permissive) license under ADR-0004; shipping the unmodified model
+> requires no exception, only the licence text and attribution — which this file and the
+> licence copy served beside the model satisfy.

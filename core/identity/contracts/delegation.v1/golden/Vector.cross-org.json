@@ -1,0 +1,33 @@
+{
+  "secret": "delegation.v1-published-test-vector-key",
+  "now": 1767225600,
+  "subject": "42",
+  "regime": "human",
+  "workspaces": [
+    "team-ws"
+  ],
+  "shared": true,
+  "audience": "cross_org",
+  "ttl_sec": 3600,
+  "jti": "vec-crossorg-0001",
+  "header": {
+    "alg": "HS256",
+    "typ": "vxdlg"
+  },
+  "claims": {
+    "aud": "vexa-mcp",
+    "exp": 1767229200,
+    "iat": 1767225600,
+    "jti": "vec-crossorg-0001",
+    "scope": {
+      "audience": "cross_org",
+      "regime": "human",
+      "shared": true,
+      "workspaces": [
+        "team-ws"
+      ]
+    },
+    "sub": "42"
+  },
+  "token": "vxd_eyJhbGciOiJIUzI1NiIsInR5cCI6InZ4ZGxnIn0.eyJhdWQiOiJ2ZXhhLW1jcCIsImV4cCI6MTc2NzIyOTIwMCwiaWF0IjoxNzY3MjI1NjAwLCJqdGkiOiJ2ZWMtY3Jvc3NvcmctMDAwMSIsInNjb3BlIjp7ImF1ZGllbmNlIjoiY3Jvc3Nfb3JnIiwicmVnaW1lIjoiaHVtYW4iLCJzaGFyZWQiOnRydWUsIndvcmtzcGFjZXMiOlsidGVhbS13cyJdfSwic3ViIjoiNDIifQ.j3_xXIyoP-buN1rypV-VXj6eDuIdK-vE6VmmZbD5i-A"
+}

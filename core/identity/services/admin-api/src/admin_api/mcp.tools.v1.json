@@ -1,0 +1,76 @@
+{
+  "contract": "mcp.tools.v1",
+  "domain": "identity",
+  "source": "oss",
+  "owner": "core/identity",
+  "base_url_env": "ADMIN_API_URL",
+  "served_at": "/.well-known/mcp-tools.json",
+  "depends_on": [],
+  "forward": {
+    "edge_prefix": "/user/",
+    "upstream_prefix": "/user/"
+  },
+  "note": "Identity's cut at the assembled edge (Vexa-ai/vexa#1783): the person's own settings and workspace regime. The gateway fronts these routes (`core/identity/routes.v1.json`), so `forward` sends each tool call back through the gateway, carrying the identity it signed, rather than to admin-api directly.",
+  "tools": [
+    {
+      "name": "settings",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/user/settings"
+      },
+      "note": "How Vexa behaves for THIS person \u2014 every setting and what each means. Call it before changing one."
+    },
+    {
+      "name": "settings_set",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity"
+      ],
+      "route": {
+        "method": "PUT",
+        "path": "/user/settings"
+      },
+      "arguments": [
+        "setting",
+        "value"
+      ],
+      "note": "CHANGE ONE of the person's settings when they ask for something that is one; never edit a flow to achieve it. Unknown settings are refused with the list. Tell them what changed, in one line."
+    },
+    {
+      "name": "workspace_regime",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/user/workspace-regime"
+      },
+      "note": "Where the person's OWN workspace lives: `cloud` (server-side, default) or `local` (a directory on their machine)."
+    },
+    {
+      "name": "workspace_regime_set",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity"
+      ],
+      "route": {
+        "method": "PUT",
+        "path": "/user/workspace-regime"
+      },
+      "arguments": [
+        "mode",
+        "local_path"
+      ],
+      "note": "MOVE the person's own workspace when they ask: `local` with an ABSOLUTE `local_path`, or back to `cloud`. Group workspaces stay server-side either way."
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "id": "cp1", "kind": "create", "card": null, "title": "Follow up on the pricing call", "workspace": "client-x-4f2a91",
+  "fields": {"Next": "Send the revised numbers"}, "reason": "You said you would follow up by Friday",
+  "author_kind": "agent", "at": "2026-10-15T10:00:00Z",
+  "preview": {"title": "Follow up on the pricing call", "state": "To do", "states": ["To do", "Doing", "Done"]}
+}

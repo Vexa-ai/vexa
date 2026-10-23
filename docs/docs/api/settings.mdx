@@ -58,8 +58,8 @@ This is the cheapest way to check that a key is live and which scopes it holds. 
 
 ## Model configuration
 
-The account's LLM settings, used by the [agent control plane](/api/agent) and meeting-time
-summarization.
+The account's LLM settings, used by the [agent control plane](/api/agent). There is one model —
+the agent's — so there is one model dial.
 
 ```bash GET /user/models
 curl "$API_BASE/user/models" -H "X-API-Key: $API_KEY"
@@ -69,8 +69,10 @@ curl "$API_BASE/user/models" -H "X-API-Key: $API_KEY"
 {
   "mode": "custom",
   "model": "gpt-4o",
-  "meeting_model": "gpt-4o-mini",
   "base_url": "https://api.example.com/v1",
+  "effort": "medium",
+  "runner": "claude-code",
+  "default_model": "qwen3-32b",
   "api_key_set": true,
   "api_key": "********1f4c"
 }
@@ -93,22 +95,55 @@ Returns the same masked shape as the read, with **200 OK**.
   returns **422**. See [Model credentials & licensing](/model-credentials-licensing).
 </ParamField>
 <ParamField body="model" type="string">
-  Model name for general agent work.
-</ParamField>
-<ParamField body="meeting_model" type="string">
-  Model name for meeting-time work, when it should differ from `model`.
+  Model name for agent work. A name outside the deployment's allowlist is dropped back to the
+  deployment default at dispatch time rather than rejected here.
 </ParamField>
 <ParamField body="base_url" type="string">
   OpenAI-compatible endpoint. Must be an `http` or `https` URL with a hostname, or the request
   returns **422**.
 </ParamField>
 <ParamField body="api_key" type="string">
-  Credential for that endpoint. Stored, never echoed in the clear.
+  Credential for that endpoint. Stored, never echoed in the clear. On the `claude-code` harness a
+  custom `base_url` needs it: without a key of your own the endpoint is not used, your turns run on
+  the deployment's route, and the refusal is recorded. `openai-agent` runs on a keyless endpoint.
+  Your own `base_url` is always paired with your own `api_key` and `extra_body`. They are never
+  filled from the organisation's settings, which belong to the organisation's endpoint.
 </ParamField>
+<ParamField body="extra_body" type="string">
+  Request fields the OpenAI dialect cannot express, as a JSON string — a self-hosted vLLM/Qwen
+  endpoint returns no valid JSON until thinking is disabled with
+  `{"chat_template_kwargs": {"enable_thinking": false}}`. Write-only: it is stored and applied, and
+  the read-back above does not echo it. With a custom `base_url`, this is the only extra body sent
+  there: the deployment's own is not.
+</ParamField>
+<ParamField body="effort" type="string">
+  The reasoning-effort pin — `low`, `medium`, `high` or `xhigh`. Unset leaves the harness's own
+  default.
+</ParamField>
+<ParamField body="runner" type="string">
+  Which harness runs this account's workspace turns: `claude-code`, `codex` or `openai-agent`. Stored
+  as an opaque slug — an unknown one is dropped back to the deployment default at dispatch, not
+  refused here.
+</ParamField>
+<ParamField body="default_model" type="string">
+  The [model catalog](/model-catalog) id that new chats, and chats you have not picked a model for,
+  run on. Stored as an id and not checked against the catalog here. At dispatch, an id that is gone
+  from the catalog, or is not open to you, is skipped in favour of the organisation's default, then
+  the catalog's. A value that is not shaped like a catalog id (lowercase letters, digits, `.`, `_`,
+  `-`) returns **422**. The organisation's default is the same field on the admin's platform
+  settings. With a catalog declared, the other fields here (`mode`, `base_url`, `api_key`,
+  `model`, `runner`, `effort`) route nothing: every turn runs on a model the catalog names.
+</ParamField>
+
+Only four things return **422** on this write: a `mode` outside `subscription`/`custom`, a `base_url`
+that is not an `http(s)` URL with a hostname, a `default_model` that is not shaped like a catalog id,
+and any field over 2,048 characters. `effort` and
+`runner` are not validated against a list at this tier, and an unrecognized field name is ignored
+rather than refused.
 
 The update is **partial**: only the fields present in the body change. Sending a field as an empty
 string clears it, and a cleared field falls back to the deployment default. Clearing every field
-removes the account override entirely. String fields longer than 2,048 characters return **422**.
+removes the account override entirely.
 
 ## Transcription backend
 
@@ -123,7 +158,9 @@ curl "$API_BASE/user/transcription" -H "X-API-Key: $API_KEY"
 {
   "url": "https://stt.example.com",
   "token_set": true,
-  "token": "********9a2b"
+  "token": "********9a2b",
+  "language": "de",
+  "allowed_languages": ["de", "en"]
 }
 ```
 
@@ -134,10 +171,24 @@ curl -X PUT "$API_BASE/user/transcription" \
 ```
 
 <ParamField body="url" type="string">
-  Transcription endpoint. Must be an `http` or `https` URL with a hostname.
+  Transcription endpoint. Must be an `http` or `https` URL with a hostname, on a public address:
+  your bots send meeting audio to it, so a loopback, private, link-local or metadata address, or a
+  host name only this deployment resolves, is refused with `422` — and a bot refuses it too, at
+  every request. A deployment's own transcription service (its environment or platform setting)
+  may be private.
 </ParamField>
 <ParamField body="token" type="string">
   Credential for that endpoint. Masked on every read-back, exactly like the model credential.
+</ParamField>
+
+<ParamField body="language" type="string">
+  Your default transcription language for the bots you send (e.g. `de`); `""` clears it. With
+  `allowed_languages` it must be one of them. A meeting can still override it. See
+  [Transcription language](/how-to/transcription-language).
+</ParamField>
+<ParamField body="allowed_languages" type="string[]">
+  Your default list of languages detection is restricted to (e.g. `["de","en"]`); `[]` clears it.
+  Read back as-is (not a secret). A refused value is `422`.
 </ParamField>
 
 Same partial-update and clearing rules as [model configuration](#model-configuration).
@@ -187,8 +238,10 @@ curl -X PUT "$API_BASE/user/webhook" \
   default.
 </ParamField>
 
-The write returns the account record with **200 OK**; the stored secret is omitted from it. Read it
-back with `GET /user/webhook`, where it appears masked.
+The write answers **200 OK** with the same webhook fields `GET /user/webhook` returns (the secret
+masked) alongside the account record 0.12 returned (`id`, `email`, `name`, `max_concurrent_bots`,
+`data`); `data` never carries a stored credential. A `webhook_url` naming a loopback, private, link-local or
+metadata address, or a host name only this deployment resolves, is refused with **422**.
 
 ### Delivery history
 
@@ -242,7 +295,10 @@ curl -X PATCH "$ADMIN/admin/users/1" \
   -d '{"max_concurrent_bots": 5}'
 ```
 
-Returns the updated account with **200 OK**; an unknown id returns **404**. A body that changes
+Returns the updated account with **200 OK**; an unknown id returns **404**. No admin read of an
+account carries a stored credential: the model key and the transcription token appear as
+`api_key_set` / `token_set` with the masked tail `GET /user/webhook` shows, and a calendar feed as
+`ics_url_set` with its masked form. Writing a masked value back to a key changes nothing. A body that changes
 nothing returns **422** — the patch requires at least one field. Unrecognized fields are refused
 rather than dropped.
 
@@ -250,6 +306,35 @@ The same patch also accepts a `data` object of platform-billing fields, which th
 deployment's billing integration writes. A self-hosted deployment does not need it.
 
 Creating accounts and minting keys are covered in [Authentication](/authentication).
+
+## How it works
+
+1. **Gateway.** `/user/models`, `/user/transcription` and `/user/webhook` are rows in
+   `core/identity/routes.v1.json` with scopes `bot` + `tx`. The gateway forwards them to admin-api.
+2. **Whose settings.** admin-api looks up the key itself and loads its account. A key with neither
+   `bot` nor `tx` is refused.
+3. **Validate.** One rulebook (`validate_config_fields` in admin-api's `platform_settings.py`) checks
+   every model and transcription field: `mode`, `http(s)` URLs, 2,048 characters. A masked value sent
+   back is skipped, so echoing a read changes nothing. Transcription and webhook URLs also pass the
+   outbound URL guard.
+4. **Store.** The values live in the account's `users.data`: `model_prefs`, `transcription_prefs` and
+   the webhook keys. A fully cleared section is removed, which returns it to the deployment default.
+5. **Read back.** Every read masks the stored secret to its last four characters.
+6. **Delivery history.** `GET /user/webhook/deliveries` is forwarded to meeting-api, which records
+   each attempt and answers only for the caller's own account.
+
+## Why it complies
+
+| Rule | How this design meets it | Enforced by |
+|---|---|---|
+| P23 — one writer per carrier | admin-api alone writes the identity database, including `users.data`. | `gate:dataflow` (`identity-db`) |
+| P4 — sealed contracts | Each route and its scopes is a row in a domain `routes.v1.json`. | `gate:schema`, `gate:contract-version`; `test_scope_matrix.py` |
+| P15 — secrets protected | No read returns a stored credential in the clear, from the user tier or the admin tier. | `test_user_webhook_response.py`: `test_a_narrow_key_reads_back_the_webhook_and_no_stored_credential`; `test_admin_user_secrets.py`: `test_no_admin_user_read_returns_a_stored_credential`; `test_model_settings.py`: `test_user_models_set_masked_readback_and_clear` |
+| Outbound URLs | An internal webhook or transcription address is refused when saved. | `test_an_internal_webhook_destination_is_refused_when_saved`, `test_an_internal_transcription_endpoint_is_refused_when_saved` |
+| P20 — authorize every access | Delivery history is scoped to its owner and never carries the URL or secret. | meeting-api `test_webhook_ledger.py`: `test_delivery_history_is_owner_scoped`, `test_ledger_sanitizes_url_and_secret_even_if_a_caller_passes_them` |
+| Own endpoint, own key | A person's `base_url` never inherits the organisation's credential. | `test_a_persons_own_endpoint_never_inherits_the_platform_credential` |
+
+admin-api tests are in `core/identity/services/admin-api/tests/`.
 
 ## What is not configurable through the API
 
@@ -272,7 +357,7 @@ These have no settings endpoint today. They are listed so you can stop looking f
 | `401` | all | API key missing, unknown, or revoked. |
 | `403` | all | The key does not carry a scope this route accepts. |
 | `404` | admin patch | No account with that id. |
-| `422` | model, transcription, webhook writes, admin patch | Invalid `mode`, a non-`http(s)` URL, a string over 2,048 characters, an out-of-range `limit`, or an unrecognized field. |
+| `422` | model, transcription, webhook writes, admin patch | Invalid `mode`, a non-`http(s)` URL, a string over 2,048 characters, an out-of-range `limit`, or a field the admin patch does not recognize. |
 | `503` | all | Identity resolution is unavailable — the key was not rejected, it could not be checked. |
 
 See the full [error reference](/api/errors).

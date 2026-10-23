@@ -18,6 +18,10 @@ export interface LazyConnectable {
   connect(): Promise<unknown>;
   quit(): Promise<unknown>;
   readonly isOpen: boolean;
+  /** node-redis: the socket is connected and authenticated. Open but not ready = reconnecting. */
+  readonly isReady?: boolean;
+  /** node-redis: drop the socket now and reject every queued command (no QUIT round-trip). */
+  disconnect?(): Promise<unknown>;
 }
 
 export interface LazyConnect {
@@ -25,7 +29,10 @@ export interface LazyConnect {
   ensure(): Promise<void>;
   /** Settle any in-flight connect first (so quit never races a half-open socket), then quit()
    *  iff the socket is actually open. Resets the memo so a later ensure() can reconnect.
-   *  The settle wait is BOUNDED — see `quitSettleMs`. */
+   *  The settle wait is BOUNDED — see `quitSettleMs`. A client that is open but not ready
+   *  (reconnecting — e.g. its credential was revoked) is disconnected instead: node-redis queues
+   *  the QUIT until the socket is ready, which may be never. A QUIT that does not answer within
+   *  `quitSettleMs` is abandoned the same way. */
   quit(): Promise<void>;
 }
 
@@ -67,7 +74,22 @@ export function makeLazyConnect(
           }),
         ]);
       }
-      if (client.isOpen) await client.quit();
+      if (client.isOpen) {
+        if (client.isReady === false && client.disconnect) {
+          await client.disconnect().catch(() => { /* already closed */ });
+        } else {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const answered = await Promise.race([
+            Promise.resolve(client.quit()).then(() => true, () => true),
+            new Promise<false>((resolve) => {
+              timer = setTimeout(() => resolve(false), quitSettleMs);
+              (timer as unknown as { unref?: () => void }).unref?.();
+            }),
+          ]);
+          if (timer) clearTimeout(timer);
+          if (!answered && client.disconnect) await client.disconnect().catch(() => { /* already closed */ });
+        }
+      }
       connecting = null;
     },
   };

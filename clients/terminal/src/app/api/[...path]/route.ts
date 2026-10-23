@@ -6,8 +6,8 @@
  *      where meeting-api is fronted.
  *    • everything else (chat · sessions · routines · workspace · models · …) → the gateway's /agent/*
  *      prefix, where agent-api is fronted.
- *  BOTH carry the per-user X-API-Key (cookie token → VEXA_API_KEY → VEXA_BOT_API_KEY). The gateway
- *  resolves it → user and injects X-User-Id downstream, so agent-api derives `subject` from identity
+ *  BOTH carry the per-user X-API-Key (the cookie token; nothing for an anonymous request unless
+ *  zero-login is on). The gateway resolves it → user and injects X-User-Id downstream, so agent-api derives `subject` from identity
  *  (the client never sends one — P20 scope). The terminal never reaches agent-api directly.
  *
  *  Carries through: the path after /api/, the query string, the request body, and the upstream
@@ -22,6 +22,13 @@ export const dynamic = "force-dynamic";
 
 const GATEWAY_URL = (process.env.GATEWAY_URL || "http://127.0.0.1:18056").replace(/\/$/, "");
 
+/** Image types the proxy passes through as bytes. Never SVG (it can carry script). */
+/** The one route whose SVG may reach the browser as an image: a workspace's image, which agent-api
+ *  rebuilt from an allowlist (no script, handlers, foreignObject or external references) before
+ *  storing it. Still served under the sandbox CSP below. */
+const SANITISED_SVG_ROUTE = /^workspaces\/[^/]+\/identity\/icon$/;
+const RASTER_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/x-icon", "image/vnd.microsoft.icon"]);
+
 // Two domains behind ONE authenticated edge (the gateway):
 //   • meetings · transcripts · bots  → the gateway ROOT (/meetings, …) — meeting-api behind it.
 //   • everything else (chat · sessions · routines · workspace · models · …) → the gateway's /agent/*
@@ -31,7 +38,8 @@ const GATEWAY_URL = (process.env.GATEWAY_URL || "http://127.0.0.1:18056").replac
 // MEETINGS_DOMAIN (the meetings-vs-agent split) lives in ../proxyMode — shared with the meetings-only gate.
 
 /** Resolve the upstream URL + headers for a captured /api/<path...> request. Every call carries the
- *  per-user X-API-Key (cookie token → VEXA_API_KEY → VEXA_BOT_API_KEY) to the single gateway edge. */
+ *  per-user X-API-Key (the cookie token; nothing for an anonymous request unless zero-login is on)
+ *  to the single gateway edge. */
 async function upstreamFor(path: string, search: string): Promise<{ url: string; headers: HeadersInit }> {
   const base = MEETINGS_DOMAIN.test(path) ? `${GATEWAY_URL}/${path}` : `${GATEWAY_URL}/agent/${path}`;
   return { url: `${base}${search}`, headers: { "X-API-Key": await resolveApiKey() } };
@@ -47,6 +55,8 @@ async function forward(req: NextRequest, params: Promise<{ path: string[] }>): P
   }
   const { url, headers } = await upstreamFor(joined, req.nextUrl.search);
 
+  const range = req.headers?.get("range");
+  if (range && joined.startsWith("recordings/")) (headers as Record<string, string>)["Range"] = range;
   const init: RequestInit = { method: req.method, headers: { ...headers }, cache: "no-store" };
   if (req.method !== "GET" && req.method !== "DELETE") {
     const body = await req.text();
@@ -75,6 +85,37 @@ async function forward(req: NextRequest, params: Promise<{ path: string[] }>): P
     // which would land in the catch below and turn a successful DELETE into a 502.
     if (upstream.status === 204 || upstream.status === 205 || upstream.status === 304) {
       return new Response(null, { status: upstream.status, headers: { "Cache-Control": "no-cache" } });
+    }
+
+    // A browser session's live view: the noVNC web client (HTML/JS/CSS/images), bytes and type as sent.
+    if (/^bot-accounts\/sessions\/[a-f0-9]{32}\/view\//.test(joined)) {
+      const viewHeaders = new Headers({ "Cache-Control": "private, no-store" });
+      const value = upstream.headers.get("Content-Type");
+      if (value) viewHeaders.set("Content-Type", value);
+      return new Response(upstream.body, { status: upstream.status, headers: viewHeaders });
+    }
+
+    if (/^recordings\/[^/]+\/media\/[^/]+\/raw$/.test(joined)) {
+      const mediaHeaders = new Headers({ "Cache-Control": "private, no-store" });
+      // Content-Disposition carries a `?download=1` save (the server names the file).
+      for (const name of ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Content-Disposition"]) {
+        const value = upstream.headers.get(name);
+        if (value) mediaHeaders.set(name, value);
+      }
+      return new Response(upstream.body, { status: upstream.status, headers: mediaHeaders });
+    }
+
+    // AN IMAGE THE SERVER ANSWERS (a person's photo, a workspace image, a company logo — UI 15g)
+    // goes through as the same bytes. Read as text it would be mangled. Raster types only — an SVG
+    // can carry script — except a workspace's image, which agent-api sanitised (SANITISED_SVG_ROUTE). Cached privately — a
+    // shared cache never holds a face.
+    const imageType = contentType.split(";")[0].trim().toLowerCase();
+    if (upstream.ok && (RASTER_TYPES.has(imageType) || (imageType === "image/svg+xml" && SANITISED_SVG_ROUTE.test(joined)))) {
+      const imageHeaders = new Headers({ "Content-Type": imageType, "Cache-Control": "private, max-age=30",
+        "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox" });
+      const etag = upstream.headers.get("ETag");
+      if (etag) imageHeaders.set("ETag", etag);
+      return new Response(await upstream.arrayBuffer(), { status: upstream.status, headers: imageHeaders });
     }
 
     return new Response(await upstream.text(), {

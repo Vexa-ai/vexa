@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/contracts/subject-ticket.v1",
+  "title": "subject-ticket.v1 — the producer-signed evidence that a person's own event or grant caused a flows call",
+  "description": "A ticket is \"st1.\" + base64url(claims JSON, keys sorted, no whitespace) + \".\" + base64url(Ed25519 signature, by the issuer's private key, over \"st1.\" + base64url(claims JSON)). The issuer is the service that produced the person's fact: meeting-api (`meetings`), agent-api (`agent`), the flows mail intake (`mail`) or the gateway itself (`gateway`). Each signs with its own key; the gateway's service door holds only the public halves (one `<issuer>.pem` per issuer in VEXA_SUBJECT_TICKET_KEYS_DIR; its own identity key for `gateway`). Tickets ride a fact's refs as `_tickets` through flows and reach the door in X-Vexa-Subject-Ticket (several joined with \",\"). The door forwards a person-bound call only when one ticket verifies, is unexpired, lists the call's class, was issued by an issuer allowed that class, and names the call's subject (and, where the call addresses one, its meeting); otherwise 403 subject_ticket_required / subject_ticket_refused / ticket_replayed. The signature is checked before any claim is believed. Issuer policy and lifetime caps are in the canonical module (`ISSUER_CLASSES`, `MAX_LIFETIME`) and restated in README.md and validate.mjs.",
+  "$defs": {
+    "Issuer": { "enum": ["meetings", "agent", "mail", "gateway"] },
+    "Class": {
+      "enum": ["transcript.read", "bot.dispatch", "chat.autonomous", "desk.write", "room.bills_to", "routine.turn"],
+      "description": "transcript.read: a meeting's transcript or a share link to it. bot.dispatch: send or stop a bot, plan a meeting row. chat.autonomous: an autonomous agent turn in the person's session. desk.write: write, create or reset a person's desk. room.bills_to: name who pays for a room. routine.turn: a routine's turn, message or notice in the person's chat."
+    },
+    "Claims": {
+      "type": "object",
+      "required": ["v", "iss", "kind", "sub", "cls", "evt", "iat", "exp", "jti"],
+      "additionalProperties": false,
+      "properties": {
+        "v": { "const": "subject-ticket.v1" },
+        "iss": { "$ref": "#/$defs/Issuer" },
+        "kind": { "enum": ["event", "grant"], "description": "event: one fact's consequences, short. grant: a routine the person turned on, presented on every run." },
+        "sub": { "type": "string", "description": "the platform user id the ticket is about; empty only on a `mail` ticket that names `addr`" },
+        "cls": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/Class" }, "description": "the call classes it opens, sorted; each must be one its issuer may grant" },
+        "evt": { "type": "string", "description": "the fact or routine it was issued for (the source event id, `user:<uid>/<routine>`)" },
+        "iat": { "type": "integer", "description": "issued at, unix seconds" },
+        "exp": { "type": "integer", "description": "expires at, unix seconds; exp - iat is capped per (iss, kind)" },
+        "jti": { "type": "string", "minLength": 1, "description": "the ticket's id; the door records it on a 2xx for a class in `once`" },
+        "mid": { "type": "string", "minLength": 1, "description": "a meeting id: a call that addresses a meeting by id must address this one" },
+        "native": { "type": "string", "pattern": "^[^/]+/.+$", "description": "`<platform>/<native_meeting_id>`: a call that addresses a meeting by its native id must address this one" },
+        "addr": { "type": "string", "minLength": 1, "description": "an authenticated mail address (lower-case): the subject's own address must be this one" },
+        "peers": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" }, "description": "addresses the fact names besides the subject (an invite's attendees), lower-case and sorted: a desk.write call may act for a person whose address is one of them" },
+        "once": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/Class" }, "description": "classes the ticket may be USED for once" }
+      }
+    },
+    "Vector": {
+      "type": "object",
+      "description": "A signing vector: minting `claims` at `now` with the RFC 8032 section 7.1 TEST 1 key must produce `token` (Ed25519 is deterministic), and `public_key` is that key's public half. No vector carries a signing key.",
+      "required": ["what", "public_key", "now", "ttl_sec", "claims", "token"],
+      "additionalProperties": false,
+      "properties": {
+        "what": { "type": "string" },
+        "public_key": { "type": "string", "pattern": "^-----BEGIN PUBLIC KEY-----\\n" },
+        "now": { "type": "integer" },
+        "ttl_sec": { "type": "integer", "minimum": 1 },
+        "claims": { "$ref": "#/$defs/Claims" },
+        "token": { "type": "string", "pattern": "^st1\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$" }
+      }
+    },
+    "Refusal": {
+      "type": "object",
+      "description": "A token a verifier holding `public_key` for every issuer except `crm` must refuse at `now` with `reason` (subject_ticket.TicketError.reason).",
+      "required": ["what", "public_key", "now", "token", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "what": { "type": "string" },
+        "public_key": { "type": "string", "pattern": "^-----BEGIN PUBLIC KEY-----\\n" },
+        "now": { "type": "integer" },
+        "token": { "type": "string" },
+        "reason": { "enum": ["malformed", "unknown_issuer", "bad_signature", "lifetime_too_long", "not_yet_valid", "expired", "issuer_not_allowed"] }
+      }
+    }
+  }
+}

@@ -1,0 +1,975 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/blocks.v1",
+  "title": "blocks.v1",
+  "description": "THE shared block vocabulary (#1783): the same blocks draw in the new-chat home (home-card.v1 is its envelope), in a workspace page (a ```vexa fence holding a Fence) and in an agent's chat reply. Primitives: title, text, person, row, list, evidence, checklist, action; layouts: group (collapsible, with a summary) and attach (a card in a card). No HTML, no markdown inside: plain text. An action sends a prompt, opens a chat or page by id, messages a person, asks the agent to expand that spot, or starts a call with Vexa. Consumers drop unknown blocks and props and cap text at x-limits; nesting stops at depth 3. Progressive disclosure is the renderer's: peek (a person or entity opens an anchored panel), collapse, show more (a list shows 3 rows first), expand in place. The card-face profile (desktop D2) adds FaceBlock/Face (stored, field-bound) and FaceResolvedBlock (one viewer's view); FaceCases is the case table both languages are held to.",
+  "x-limits": {
+    "cards": 7,
+    "phoneCards": 5,
+    "blocks": 12,
+    "rows": 6,
+    "items": 6,
+    "actions": 4,
+    "depth": 3,
+    "people": 40,
+    "short": 60,
+    "text": 240,
+    "prompt": 600,
+    "showRows": 3
+  },
+  "$defs": {
+    "Kind": {
+      "enum": [
+        "meeting",
+        "waiting",
+        "suggestion",
+        "try",
+        "result",
+        "continue"
+      ],
+      "description": "A label for ranking and feedback weights only; it does not choose a component."
+    },
+    "Icon": {
+      "enum": [
+        "calendar",
+        "mail",
+        "chat",
+        "clock",
+        "repeat",
+        "folder",
+        "doc",
+        "plane",
+        "bot",
+        "spark",
+        "people",
+        "mic"
+      ]
+    },
+    "Key": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._:@+-]{1,120}$"
+    },
+    "Person": {
+      "type": "object",
+      "required": [
+        "name",
+        "vexa"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "initials": {
+          "type": "string",
+          "maxLength": 3
+        },
+        "role": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "last": {
+          "type": "string",
+          "maxLength": 60,
+          "description": "last contact, in words"
+        },
+        "reach": {
+          "type": "string",
+          "maxLength": 60,
+          "description": "how this person is reached (Direct chat, Email, Discord)"
+        },
+        "vexa": {
+          "type": "boolean",
+          "description": "an account on this Vexa; Message opens the 1:1 shared chat"
+        },
+        "account_id": {
+          "$ref": "#/$defs/Key"
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 255
+        },
+        "avatar": {
+          "type": "string",
+          "pattern": "^g:[0-9a-f]{32}$",
+          "description": "media key: a picture agent-api fetches and caches (GET /agent/home/media/<key>); the browser never asks a third party"
+        },
+        "logo": {
+          "type": "string",
+          "pattern": "^d:[a-z0-9.-]{3,253}$",
+          "description": "media key: the person's company site icon"
+        },
+        "presence": {
+          "enum": [
+            "now",
+            "today"
+          ],
+          "description": "a colleague on Vexa, active in a chat you share; absent when they turned presence off"
+        }
+      }
+    },
+    "Action": {
+      "type": "object",
+      "required": [
+        "type",
+        "label"
+      ],
+      "properties": {
+        "type": {
+          "const": "action"
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "primary": {
+          "type": "boolean"
+        },
+        "needs_go": {
+          "type": "boolean",
+          "description": "an external send: the agent drafts, the person's explicit go sends"
+        },
+        "prompt": {
+          "type": "string",
+          "maxLength": 600
+        },
+        "open": {
+          "type": "object",
+          "properties": {
+            "chat": {
+              "$ref": "#/$defs/Key"
+            },
+            "page": {
+              "type": "string",
+              "maxLength": 200
+            }
+          }
+        },
+        "message": {
+          "$ref": "#/$defs/Key",
+          "description": "a key into people: open a message to them"
+        },
+        "expand": {
+          "const": true,
+          "description": "ask the agent to elaborate this card or section; the answer is inserted in place"
+        },
+        "call": {
+          "const": true,
+          "description": "start a call with Vexa: a new chat with a one-person call; it becomes a page with its transcript"
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "prompt"
+          ]
+        },
+        {
+          "required": [
+            "open"
+          ]
+        },
+        {
+          "required": [
+            "message"
+          ]
+        },
+        {
+          "required": [
+            "expand"
+          ]
+        },
+        {
+          "required": [
+            "call"
+          ]
+        }
+      ]
+    },
+    "Row": {
+      "type": "object",
+      "required": [
+        "type",
+        "text"
+      ],
+      "properties": {
+        "type": {
+          "const": "row"
+        },
+        "icon": {
+          "$ref": "#/$defs/Icon"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "meta": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "age": {
+          "type": "string",
+          "maxLength": 12
+        },
+        "hot": {
+          "type": "boolean"
+        },
+        "person": {
+          "$ref": "#/$defs/Key"
+        },
+        "action": {
+          "$ref": "#/$defs/Action"
+        }
+      }
+    },
+    "Block": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "text"
+          ],
+          "properties": {
+            "type": {
+              "const": "title"
+            },
+            "text": {
+              "type": "string",
+              "maxLength": 240
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "text"
+          ],
+          "properties": {
+            "type": {
+              "const": "text"
+            },
+            "text": {
+              "type": "string",
+              "maxLength": 240
+            },
+            "tone": {
+              "enum": [
+                "why",
+                "plain",
+                "ok",
+                "warn"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "people"
+          ],
+          "properties": {
+            "type": {
+              "const": "person"
+            },
+            "people": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Key"
+              },
+              "maxItems": 6
+            },
+            "extra": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 30
+              },
+              "maxItems": 3
+            }
+          }
+        },
+        {
+          "$ref": "#/$defs/Row"
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "rows"
+          ],
+          "properties": {
+            "type": {
+              "const": "list"
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Row"
+              },
+              "maxItems": 6
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "items"
+          ],
+          "properties": {
+            "type": {
+              "const": "evidence"
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 6,
+              "items": {
+                "type": "object",
+                "required": [
+                  "text",
+                  "source"
+                ],
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "maxLength": 240
+                  },
+                  "source": {
+                    "type": "string",
+                    "maxLength": 24
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "items"
+          ],
+          "properties": {
+            "type": {
+              "const": "checklist"
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 6,
+              "items": {
+                "type": "object",
+                "required": [
+                  "text"
+                ],
+                "properties": {
+                  "id": {
+                    "$ref": "#/$defs/Key"
+                  },
+                  "text": {
+                    "type": "string",
+                    "maxLength": 240
+                  },
+                  "meta": {
+                    "type": "string",
+                    "maxLength": 24
+                  },
+                  "checked": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "action": {
+              "$ref": "#/$defs/Action"
+            }
+          }
+        },
+        {
+          "$ref": "#/$defs/Action"
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "blocks"
+          ],
+          "properties": {
+            "type": {
+              "const": "group"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 60
+            },
+            "blocks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Block"
+              }
+            },
+            "collapsed": {
+              "type": "boolean"
+            },
+            "summary": {
+              "type": "string",
+              "maxLength": 240
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "card"
+          ],
+          "properties": {
+            "type": {
+              "const": "attach"
+            },
+            "card": {
+              "$ref": "#/$defs/Card"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "flow"
+          ],
+          "description": "A flow drawn read-only as a small graph: trigger, steps, outputs. Definition only.",
+          "properties": {
+            "type": {
+              "const": "flow"
+            },
+            "flow": {
+              "type": "object",
+              "required": [
+                "name",
+                "trigger",
+                "steps"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "trigger": {
+                  "type": "object",
+                  "required": [
+                    "kind"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "schedule",
+                        "event"
+                      ]
+                    },
+                    "cron": {
+                      "type": "string"
+                    },
+                    "event": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "steps": {
+                  "type": "array",
+                  "maxItems": 8,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_.]{0,59}$"
+                  }
+                },
+                "instruction": {
+                  "type": "string"
+                },
+                "notify": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Card": {
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "kind",
+        "blocks"
+      ],
+      "properties": {
+        "type": {
+          "const": "card"
+        },
+        "id": {
+          "$ref": "#/$defs/Key"
+        },
+        "kind": {
+          "$ref": "#/$defs/Kind"
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "meta": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "tone": {
+          "enum": [
+            "default",
+            "suggested",
+            "try",
+            "muted"
+          ]
+        },
+        "wide": {
+          "type": "boolean"
+        },
+        "controls": {
+          "type": "boolean",
+          "description": "dismiss + snooze; false for a card the person cannot refuse (a meeting about to start)"
+        },
+        "person": {
+          "$ref": "#/$defs/Key",
+          "description": "whose card this is, for per-person feedback weights"
+        },
+        "rank": {
+          "type": "object",
+          "required": [
+            "pos",
+            "score"
+          ],
+          "properties": {
+            "pos": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "score": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "signal": {
+              "type": "string",
+              "maxLength": 60
+            }
+          }
+        },
+        "blocks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": {
+            "$ref": "#/$defs/Block"
+          }
+        },
+        "collapsed": {
+          "type": "boolean",
+          "description": "drawn folded to one line (summary, else the title) that opens in place"
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "state": {
+          "enum": [
+            "open",
+            "acted",
+            "in_progress",
+            "prepared",
+            "live",
+            "ended",
+            "follow_up",
+            "replied",
+            "done"
+          ],
+          "description": "where the item got to, advanced by evidence (home_item_update, a prep chat that exists, a meeting that started), never by a click alone"
+        },
+        "result": {
+          "type": "object",
+          "properties": {
+            "chat": {
+              "$ref": "#/$defs/Key"
+            },
+            "page": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          "description": "the chat or page the work lives in; the card's first action continues it"
+        },
+        "refs": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "$ref": "#/$defs/Key"
+            },
+            "meeting": {
+              "$ref": "#/$defs/Key"
+            },
+            "entities": {
+              "type": "array",
+              "maxItems": 4,
+              "items": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "pages": {
+              "type": "array",
+              "maxItems": 4,
+              "items": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "urls": {
+              "type": "array",
+              "maxItems": 3,
+              "items": {
+                "type": "string",
+                "pattern": "^https://"
+              }
+            }
+          },
+          "description": "what the card is about, as quick links: the chat, the meeting, entity and workspace pages, outside links"
+        }
+      }
+    },
+    "Fence": {
+      "type": "object",
+      "required": [
+        "blocks"
+      ],
+      "description": "what a ```vexa fence in a workspace page or an agent's chat reply carries: plain JSON, so the file stays readable markdown in git and to an agent",
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "people": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/Key"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/Person"
+          }
+        },
+        "blocks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": {
+            "$ref": "#/$defs/Block"
+          }
+        }
+      }
+    },
+    "FaceBlock": {
+      "description": "The card-face profile (desktop D2): one STORED block of a card's face. Structural blocks carry no value and draw from the card as its viewer reads it; data blocks NAME a card field and never carry a value, so a face shows nothing its viewer could not read on the record. There is no literal-text block: to say something on a face, put it in a field (Next, Summary) and show that field. Sanitised by card_face.py (canonical beside this schema, vendored into crm-api): unknown blocks and keys dropped, at most 8, labels 40 characters.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "stepper",
+                "people",
+                "movement",
+                "waiting",
+                "next",
+                "subcards",
+                "ref",
+                "status"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "field"
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "metric",
+                "text",
+                "progress",
+                "due",
+                "checklist",
+                "list"
+              ]
+            },
+            "field": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 40
+            }
+          }
+        }
+      ]
+    },
+    "Face": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "$ref": "#/$defs/FaceBlock"
+      },
+      "description": "A card's stored face; empty means the type's default (stepper, next, waiting, movement, subcards, people)."
+    },
+    "FaceResolvedBlock": {
+      "description": "One face block as one viewer receives it (crm.v1 CardFaceBlock is the same shape): structural blocks as stored, data blocks filled from the fields the viewer reads, `locked` where they may not read the field.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "stepper",
+                "people",
+                "movement",
+                "waiting",
+                "next",
+                "subcards",
+                "ref",
+                "status"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ],
+          "properties": {
+            "type": {
+              "const": "metric"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "value": {
+              "type": "string",
+              "maxLength": 24
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "text"
+          ],
+          "properties": {
+            "type": {
+              "const": "text"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "text": {
+              "type": "string",
+              "maxLength": 160
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ],
+          "properties": {
+            "type": {
+              "const": "progress"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "value": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "at"
+          ],
+          "properties": {
+            "type": {
+              "const": "due"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "at": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "items"
+          ],
+          "properties": {
+            "type": {
+              "const": "checklist"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 10,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "text",
+                  "done"
+                ],
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "done": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "rows"
+          ],
+          "properties": {
+            "type": {
+              "const": "list"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "rows": {
+              "type": "array",
+              "maxItems": 4,
+              "items": {
+                "type": "string",
+                "maxLength": 80
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "label"
+          ],
+          "properties": {
+            "type": {
+              "const": "locked"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 64
+            }
+          }
+        }
+      ]
+    },
+    "FaceCases": {
+      "type": "array",
+      "minItems": 1,
+      "description": "The case table card_face.py (Python, crm-api) and the terminal's client sanitiser are both held to (ADR-0044 rule 3): a stored face, the fields and readable field names of one viewer, and the resolved face they must see.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "face",
+          "fields",
+          "readable",
+          "expect"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "face": {},
+          "fields": {
+            "type": "object"
+          },
+          "readable": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "formats": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "expect": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "$ref": "#/$defs/FaceResolvedBlock"
+            }
+          }
+        }
+      }
+    }
+  }
+}

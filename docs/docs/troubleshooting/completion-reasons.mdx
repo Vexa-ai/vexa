@@ -102,6 +102,57 @@ value does not yet distinguish them. Tracked in
 [`Vexa-ai/vexa#1058`](https://github.com/Vexa-ai/vexa/issues/1058) — open. Until it is split,
 treat a `join_failure` as "the bot did not get in", not as a specific diagnosis.
 
+One `join_failure` is yours to fix: a reason text (`data.reason`) that starts with
+`teams_prejoin_blocked`. See the next section.
+
+### A name Teams refuses (`teams_prejoin_blocked`)
+
+Microsoft Teams accepts only letters, numbers, spaces and `- ' . _ @` in a guest's display name.
+With any other character, such as parentheses, it keeps **Join now** disabled. The bot stops on
+the pre-join screen in under half a minute with `join_failure`, `failure_stage: joining`, and a
+reason text that starts with `teams_prejoin_blocked`, quotes Teams' rule and lists the refused
+characters. Rename the bot: [Bot participant name](/configuration#bot-participant-name).
+
+**How it works.**
+
+1. The bot fills its display name on the Teams pre-join. A name outside Teams' rule only logs a
+   warning; the warning decides nothing.
+2. The bot then reads whether the live **Join now** button is enabled, for up to 10 s, and
+   dismisses the audio/video confirmation dialog between reads, because that dialog can also hold
+   the button disabled.
+3. An enabled button is clicked and the join continues to the lobby as before.
+4. A button that stays disabled is never clicked. The bot reads Teams' validation line from the
+   page and ends the join with a typed error, so the admission wait never runs and the run is
+   never reported as `awaiting_admission`.
+5. The bot emits its terminal `failed` lifecycle event (`lifecycle.v1`) with `join_failure` and the
+   error text as `reason`. meeting-api stores it on the meeting as `data.reason` (and
+   `data.last_error.reason` on `GET /meetings/{id}`).
+
+The join module only reads the page. The bot is the single writer of the terminal event, and
+meeting-api the single writer of the meeting record. No contract changes. The display name comes
+from the request's `bot_name`, a calendar connection's bot name, or `DEFAULT_BOT_NAME` on
+meeting-api (`meetingApi.defaultBotName` in Helm). The 10 s budget is a constant, not a setting.
+
+**Why it complies** ([architecture principles](/governance/architecture)).
+
+- **P2, couple only through contracts:** the check lives inside the join module and imports
+  nothing outside it. Gate: `gate:isolation`.
+- **P6, one front door:** its symbols are exported only through the module's `src/index.ts`.
+  Gate: `gate:exports`.
+- **P18, fail loud and attributable:** a click error that used to be discarded is now a typed fault
+  that carries Teams' own text. Gate: `gate:node` (`prejoin-blocked.test.ts`).
+- **P21, report state from evidence:** `awaiting_admission` is reported only after a real click.
+  Gate: `gate:node` (`prejoin-blocked.test.ts`, "the admission wait never ran").
+- **No duplication:** reuses the existing dialog dismissal and terminal path. Ungated: reviewed.
+
+**Security.** No new route, input or access path. The check reads only the pre-join of the meeting
+the bot was sent to. The error carries the operator-chosen name and Teams' public rule text, and no
+URL, passcode or query string, so the passcode redaction tested in `join-passcode.test.ts` still
+holds. Who may send a bot is unchanged and enforced upstream. Tests in `prejoin-blocked.test.ts`:
+"the disabled button was never clicked", "the admission wait never ran (no waiting-room verdict
+was logged)", "a valid name still joins", "a button that enables a moment late is not a refusal". Module notes:
+[`msteams/README.md`](https://github.com/Vexa-ai/vexa/blob/main/core/meetings/modules/join/src/msteams/README.md).
+
 ### `left_alone` is a silence verdict, not a headcount
 
 The bot decides it is alone from the audio reaching it, not from a participant list. A meeting

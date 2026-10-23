@@ -12,6 +12,8 @@ from fastapi.testclient import TestClient
 from runtime_kernel import CallbackQueue, Runtime
 from runtime_kernel.api import create_app
 
+from _caller import TOKEN, caller_client
+
 
 def test_queue_retries_until_ack():
     codes = iter([500, 500, 200])
@@ -68,8 +70,8 @@ def test_api_delivers_lifecycle_event_durably():
 
     queue = CallbackQueue(poster=poster)
     rt = Runtime(profiles={"test": ["sleep", "30"]}, grace_sec=2.0)
-    app = create_app(rt, callback_queue=queue)
-    client = TestClient(app)
+    app = create_app(rt, callback_queue=queue, caller_token=TOKEN)
+    client = caller_client(app)
 
     # Create with a callbackUrl → emits starting+running events; deliveries 500 (attempts 1,2).
     r = client.post(

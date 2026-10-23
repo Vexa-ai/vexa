@@ -7,9 +7,10 @@
 # Build context: the v0.12 carve root (compose `context: ../..`) — wider than its own dir because the
 # sealed contracts (transcript.v1 / workspace.v1 / unit.v1 / …) are loaded BY PATH at import; those frozen
 # files are vendored under /app so the walk-up resolves repo_root == /app.
-FROM python:3.12-slim
+# python:3.12-slim (Debian 13), pinned by digest; uv past its advisories (fixed in 0.11.15).
+FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
 
-RUN pip install --no-cache-dir uv==0.9.22
+RUN pip install --no-cache-dir uv==0.11.33
 
 ENV UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
@@ -25,34 +26,79 @@ COPY core/agent/pyproject.toml core/agent/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-default-groups
 
-# Claude Code (the unit's model+tooling runtime) + git (the governance git ops). node 20 via nodesource
-# so claude-code resolves; the subscription credentials are bind-mounted read-only at runtime (P15).
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl gnupg && \
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y --no-install-recommends nodejs && \
-    npm install -g @anthropic-ai/claude-code && \
-    apt-get purge -y curl gnupg && apt-get autoremove -y && apt-get clean && rm -rf /var/lib/apt/lists/*
+# Claude Code + Codex (selectable model/tooling runtimes) and git (governance git ops). Subscription
+# credentials are bind-mounted read-only at runtime; pin Codex because app-server is a versioned protocol.
+# Pin Claude Code too: the launch passes --setting-sources (llm/claude_code.py), which 2.1.197 lacks,
+# and an unpinned global install is whatever the build cache or npm happened to hold. Node 22: the
+# pinned CLI declares engines.node >= 22.
+# Node comes from the official image, pinned by digest (the same one clients/terminal builds on), not
+# from a remote setup script run as root.
+COPY --from=node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa \
+     /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa \
+     /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
+    ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx && \
+    apt-get update && apt-get install -y --no-install-recommends git ca-certificates && \
+    npm install -g @anthropic-ai/claude-code@2.1.293 @openai/codex@0.146.0 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+# No hook runs in a worker, from any scope: the managed settings file is read whatever
+# --setting-sources says (the launch also passes the same key with --settings). Nor does the CLI
+# call its vendor for anything but the model (telemetry, error reports, update checks): a worker
+# reaches only the endpoints the operator declared (P24).
+RUN mkdir -p /etc/claude-code && \
+    printf '%s\n' '{"disableAllHooks": true, "env": {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}}' > /etc/claude-code/managed-settings.json
+# The user the model's tools run as (llm/ports.py TOOLS_USER). The worker runs as root where the
+# substrate lets it and starts every harness CLI as this user, so the model's Bash cannot read the
+# worker's environment through /proc or write the worker's code; the worker hands it, by group, only
+# the workspaces a turn may write. Git runs under both users on the same repositories, so neither
+# refuses the other's: safe.directory is system-wide.
+RUN groupadd --system --gid 10001 vexa-tools && \
+    useradd --system --uid 10001 --gid 10001 --home-dir /tmp --no-create-home --shell /usr/sbin/nologin vexa-tools && \
+    git config --system safe.directory '*'
 
 # The worker's own packages (NO control_plane): worker + llm + shared + contracts, copied to /app so
 # `PYTHONPATH=/app` resolves them as top-level imports. llm/ is the provider-agnostic ports module
-# (completion adapters + the claude-code harness adapter the npm install above serves).
+# (completion adapters + the claude-code/codex harness adapters the npm install above serves).
 COPY core/agent/worker ./worker
 COPY core/agent/llm ./llm
 COPY core/agent/shared ./shared
 COPY core/agent/contracts ./contracts
+# The portable workspace primitives (workspace_id/workspace_paths/entities/links), moved out of
+# core/agent/shared into their own domain (PRD decision 47, step 2). worker/engine.py imports them
+# as `workspaces.shared.<module>` — a plain __init__.py (no FastAPI/pydantic) is enough to make
+# `workspaces` a package under PYTHONPATH=/app.
+COPY core/workspaces/__init__.py ./workspaces/__init__.py
+COPY core/workspaces/shared ./workspaces/shared
+# WS-S3: the s3 workspace backend (agent-api: the store; worker: the stdlib client)
+COPY core/workspaces/store ./workspaces/store
 # The registry of per-person workspace templates the worker seeds new workspaces from (Phase 3) +
-# the tool registry. workspace-seeds/<name>/ — one validated seed per subdir (today: default, finos).
-COPY core/agent/workspace-seeds ./workspace-seeds
+# the tool registry. workspace-seeds/<name>/ — one validated seed per subdir (the repo ships `default`).
+COPY behavior/workspaces ./workspace-seeds
 COPY core/agent/tools-seed ./tools-seed
 
 # The sealed contracts loaded BY PATH at import (walk-up resolves repo_root == /app).
 COPY core/meetings/contracts/transcript.v1/transcript.schema.json  ./meetings/contracts/transcript.v1/transcript.schema.json
-COPY core/agent/contracts/workspace.v1/workspace.schema.json       ./agent/contracts/workspace.v1/workspace.schema.json
+COPY core/workspaces/contracts/workspace.v1/workspace.schema.json  ./workspaces/contracts/workspace.v1/workspace.schema.json
 COPY core/agent/contracts/invoke.v1/invoke.schema.json             ./agent/contracts/invoke.v1/invoke.schema.json
 COPY core/agent/contracts/unit.v1/unit.schema.json                 ./agent/contracts/unit.v1/unit.schema.json
 COPY core/agent/contracts/routine.v1/routine.schema.json           ./agent/contracts/routine.v1/routine.schema.json
 COPY core/agent/contracts/event.v1/event.schema.json               ./agent/contracts/event.v1/event.schema.json
 COPY core/agent/contracts/tool.v1/tool.schema.json                 ./agent/contracts/tool.v1/tool.schema.json
+
+# A WRITABLE HOME, because the UID is not ours to choose. Under OpenShift's `restricted-v2`
+# SCC (and any PSA-restricted namespace) admission assigns a random per-namespace UID that
+# exists in no /etc/passwd. With no HOME in the image the runtime falls back to `/` (and the
+# harness code to "/root"), neither of which that UID can write — so harness prepare dies at
+# the very first step: llm/claude_code.py:616 mkdirs $HOME/.claude and llm/codex.py:174 mkdirs
+# $HOME/.codex, both OUTSIDE their try/except, and `git config --global` cannot lock
+# $HOME/.gitconfig. /tmp is mode 1777, so it is writable by every UID without knowing which one.
+# See vexa-delivery docs/engineering/openshift-parity.mdx — "HOME=/tmp is the one-variable fix".
+ENV HOME=/tmp
+# The Codex home ($HOME/.codex): Codex keeps its state there, so it exists in the image writable by
+# any UID. No credential is ever placed in it: a codex turn reaches its model through the model proxy
+# with its turn's token (H5/W1).
+RUN mkdir -p -m 1777 /tmp/.codex
 
 # The runtime kernel spawns this image with this command (profiles.py "agent" profile).
 CMD ["python", "-m", "worker"]

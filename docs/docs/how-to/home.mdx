@@ -1,0 +1,467 @@
+---
+title: "The home"
+description: "What a new chat shows: one ranked stream of meetings, replies waiting, suggestions, results and next steps."
+---
+
+A new chat opens on **the home**: a greeting with the day's state and up to seven cards, ranked for
+this moment. There are no fixed sections. A meeting about to start, a reply someone is waiting for,
+a call that just ended with follow-ups proposed, a suggestion with its evidence, a feature worth
+trying, a routine's result, a chat to pick up again: each appears only when it is worth showing,
+and a grey line says which kinds were left out. On a phone the same stream is one column, cut at
+five cards.
+
+Every button sends a prompt to the agent, in the chat in front of you, so the work stays visible in
+a conversation. Nothing on the home acts on its own.
+
+## Use it
+
+- **Act on a card.** Press its button: *Prepare*, *Send bot*, *Review follow-ups*, *Draft*. The
+  prompt goes into the new chat and the agent does it there.
+- **Say no.** `✕` asks why: *wrong*, *done already* or *not now*. **Snooze** (the clock) hides a
+  card for a day. A reply someone is waiting on can be pushed down by your answers but never hidden
+  for good: it comes back after a day.
+- **Message a person.** Hover (or tap) any person on a card: their name, role, last contact and
+  whether they are on Vexa, with **Message** and **Open page**.
+  - Someone **on Vexa**: Message opens the one direct chat the two of you share (it is created the
+    first time). Minutes stays quiet in it unless you `@mention` it.
+  - Someone **external**: Message opens an agent chat addressed to them. The agent only drafts;
+    nothing is sent until you give your explicit go on the final text.
+- **Ask the agent.** *"What did you suggest last week and what came of it?"* (`home_history`) and
+  *"What does Vexa know about me?"* (`customer_profile`). You can correct anything it says
+  (`customer_correct`); your correction wins.
+
+## A dashboard of work in progress
+
+Each card shows where its work has got to. A meeting moves from *prepare* to *prepared* (its prep
+chat exists), *live*, *ended* and *follow-up*; a reply leaves the home once it is sent; a suggestion
+you acted on shows *In progress*. When a chat already exists for an item, its first button is
+**Continue** and opens that chat; a new chat starts only when nothing exists yet. Small links on a
+card go to the meeting, the entity and workspace pages, and outside links it is about.
+
+The state comes from evidence, not clicks alone: a prep chat that exists, a meeting that started,
+and the agent itself, which records where the work reached with `home_item_update` when it finishes
+(each prompt a card sends names its item). Open homes update in place over the live connection,
+marked *updated just now*. A new ranking is applied only when the pointer is off the home, so cards
+never reorder under the cursor.
+
+People are first-class: a direct chat a colleague moved, who shared what with you, calls started in
+chats you are in. Pictures are colleagues' own photos ([Your photo](/how-to/your-photo)) and company logos; a green dot means a colleague
+is active now in a chat you share (anyone can turn their dot off). The home also proposes:
+
+- **Automations**: something you started by hand three times in two weeks becomes a routine
+  draft (schedule, instruction, where it reports), showing what it costs against your daily runs.
+- **Connections**: a tool you mention that is not connected yet, and what connecting it would unlock.
+- **How-tos** tied to your own work, each ending in *Try it*. Never more than two at once.
+
+## Look closer without leaving
+
+The same blocks draw on the home, in workspace pages and in agent replies, so they behave the same
+everywhere:
+
+- **Peek**: click a person or a linked page to see a summary, key details and its own blocks.
+  *Open* goes there; `Esc` or `×` closes it. On a phone it is a bottom sheet.
+- **Collapse**: fold any card or labelled section to one line, and open it again in place. Long
+  lists show three rows and *Show more*.
+- **Expand**: the ⤢ on a card asks the agent to elaborate on that card alone. The answer appears
+  under it; on a page you can keep it.
+
+In a page or a reply, blocks are a fenced block in plain markdown, so the file stays readable in
+git and to an agent:
+
+````markdown
+```vexa
+{"v":1,"blocks":[{"type":"title","text":"Pilot: open items"},{"type":"list","rows":[{"type":"row","text":"SSO list","meta":"due Fri"}]}]}
+```
+````
+
+## Getting started is the same page
+
+For a new person the home **is** the onboarding. The first visit shows the first steps of the
+company's onboarding curriculum (connect your calendar, send the bot to a meeting, connect your
+email, and later a voice note, a workspace, a shared chat, a routine, an `@mention`, a company
+record). At most two steps show at a time, each only after the steps it needs. A step is done when
+your **usage** shows it, never because you clicked its card. A step dismissed as wrong or done is
+not offered again; a snoozed one comes back the next day. Later steps appear as *Try* cards once
+you are settled.
+
+The curriculum is a file the administrator edits: `_global/onboarding.md`, one `## <step>` per
+capability with its label, why, prompt, prerequisites and `done when` evidence. The next
+composition reads it.
+
+## Lifecycle is the organizing axis
+
+What the home is for depends on your **stage**, decided from usage by the company's playbook,
+`_global/lifecycle.md`. Stages are checked from the top of the file down; each has entry criteria
+(for example `meetings >= 5`), a goal, the home's **purpose mix** (work, people, automation,
+connections, teaching), the onboarding steps in scope, caps on nudges and a success metric. The
+seeded stages are *new* (mostly teaching and connections), *activating* (first real work), *active*
+(work, plus what saves time next), *power* (automation and high-leverage moves), *drifting* and
+*dormant* (what moved while you were away, and one reason to come back). When there is room the home
+always shows at least one card that is not routine work, and never more than two how-tos.
+
+Edit the playbook and the next composition follows it. Every change of stage is recorded with its
+evidence, and every composition records its mix and why, so the weights can be tuned from outcomes.
+
+Other parts of Vexa can add cards: a source registers with the home composer
+(`home_sources.register_source`) and returns candidates as `blocks.v1` cards with a stable item id.
+
+## How it works
+
+- **Composed in the background, read on view.** A system flow, `home_compose`, composes your home
+  when it goes stale: a meeting started or ended, a routine ran, a notification arrived, a meeting
+  is within the hour, or the work behind a card moved (`home_item_update`); otherwise at most every
+  two hours while you use Vexa. Staleness is noticed when the home is read or a card's work moves,
+  so someone who does not open Vexa costs nothing. It collects candidates from what Vexa already holds — your meetings
+  (upcoming and just finished), what is waiting on you (`whats_waiting`, including unanswered mail
+  your routines found), your notifications, your chats and routine runs, and the onboarding
+  curriculum — and ranks them. Opening a new chat **reads the stored result**; no model is called
+  per view. The very first visit composes once on the spot without a model, so it is never blank.
+- **One cheap model call at most.** Ranking uses a deterministic score (urgency, your stage, and
+  what you acted on or dismissed before, per kind and per person). The cheapest model in the
+  operator's catalog — `VEXA_HOME_MODEL`, or the first small-tier model (haiku, mini, flash, nano,
+  small, lite) — may then reorder the top, mark a card wide, nest a suggestion in a card and word
+  the greeting. It only orders cards it was given by id; it never writes a card. An Opus-class
+  model is never used. With no eligible model the deterministic order stands.
+- **Expected cost.** For an active person, about 6–10 compositions a day, so 6–10 small-model
+  calls (capped at 14 a day per person; past the cap, ranking is deterministic). Nothing for
+  someone who does not open Vexa. Composition runs are system flows: they **do not count against
+  your routine quota**.
+- **Cards are data.** A card is a small tree of primitives from the `blocks.v1` contract —
+  title, text, person, row, list, evidence, checklist, action, plus group and attach. The home's
+  envelope is `home-card.v1`. Both agent-api and the app drop anything else and cap all text before
+  it is drawn. Expanding a card makes one call to the same small model, using only what the card
+  says (at most 40 a day per person).
+- **Pictures through Vexa.** A colleague's photo is the one identity keeps for them, shown only to
+  people who share a workspace or chat with them ([Your photo](/how-to/your-photo)). Nobody else's
+  face is looked up anywhere. Company site icons are
+  fetched by agent-api through the same guarded fetcher page pictures use: no private or internal
+  addresses, every redirect re-checked, images only (no SVG), at most 256 KB, cached for a week. The
+  browser asks only Vexa. `external_images: off` in `_global/POLICIES.md` turns this off, and
+  initials are shown instead.
+- **Nothing is overwritten.** Every composition is appended, with its trigger, model, a summary
+  of its inputs (source ids only) and its cards, and every card's outcome is an event: shown,
+  clicked, sent into which chat, dismissed and why, snoozed. Beside each composition is
+  `home-customer.v1`, what Vexa has learned about you as a customer — stage and why, capabilities
+  adopted, jobs, patterns, preferences, friction, open loops, health, next-best-actions with the
+  hypothesis behind each and how success is measured, and the experiment log. Each field carries
+  its evidence ids, a confidence and when it changed; the next composition reads it and records
+  what changed and why. It is never drawn as cards.
+
+## Why it complies
+
+- **Yours alone.** Compositions, events and the customer profile are rows keyed to you in
+  agent-api's own tables. No route takes another person's id; nothing is shared across people.
+- **Ids, not content.** The history holds ids, titles and short reasons — never mail, transcript
+  or page text.
+- **Retention is policy.** `home_history_retention_days` in `_global/POLICIES.md` (default
+  `forever`, like transcripts) drops your rows older than that many days.
+- **Background reads follow the connection policy.** The home does not read Gmail or Calendar in
+  the background unless `connection_actions_unattended` allows it (default: it does not); mail
+  reaches the home through what your routines already found.
+- **No send without your go.** Messages to external people are drafts; a draft's commitments are
+  listed and sending is your explicit act.
+- **Presence stays inside shared chats.** A colleague's dot reflects only activity in chats you
+  both belong to. Anyone can switch it off. On [the desktop](#the-desktop), the company's
+  `presence_visibility` key decides it.
+- **You can see and correct it.** Ask the agent what Vexa knows about you; a correction wins over
+  anything inferred.
+
+## The desktop
+
+With the `desktop` feature on, the home is your **desktop**. It has four sections, in an order you
+choose: **Workspaces** (every workspace you can open), **Agents** (the routines and chats you put
+there), **Files** (the pages you put there) and, with `desktop_cards` on, [**Cards**](#cards).
+
+- **A workspace tile** shows the workspace's name, whether it is private, shared or the company's, your
+  role there (a read-only one says "reader"), its last change ("Valeriia changed Pricing notes"), the
+  people in it (up to three faces and "+n") and its last call or a live call with **Join**. A call is
+  any meeting kind: a Meet, Teams, Zoom or Jitsi meeting with a bot, or a Vexa call.
+- **An agent tile** shows what the routine does, whether it is running, idle, paused or failed, its
+  last and next run, and where it works. **A chat tile** shows the chat's title, when it was last
+  active and where it works. Clicking either opens the chat.
+- **A file tile** shows the page's title, its workspace and its last change. Clicking it opens the
+  page.
+- **Something you can no longer open** shows as "no longer available" with **Remove**.
+
+### Open a workspace
+
+Click a workspace tile (or press Enter on it) to open its README as a page. A workspace with no README
+opens its file tree, which offers **Create README**. Cmd-click, Ctrl-click or middle-click opens it in a
+new tab. The last call, **Join** and the faces on the tile are their own buttons and do not open the
+workspace. The tile's **…** has **Open**, **Open in a new tab** and **Hide**.
+
+### Put things on it
+
+- **Add to desktop** is in the **…** of every chat and routine in the chat list, of the chat header,
+  of a file in Files, of an open page, and of a page listed in a chat's files. Once something is on
+  the desktop, the same menu says **Remove from desktop**.
+- **Drag** a chat or routine from the chat list onto Agents, or a file from Files onto Files.
+- **Reorder** by dragging a tile onto another tile in its section, or a section by its title. A
+  section's **…** also has **Move up**, **Move down**, **Move to the top** and **Hide**; a hidden
+  section comes back from the desktop's own **…**. The arrow beside a section's title collapses it.
+- Every change shows a toast with **Undo**, which puts back the arrangement and what was placed.
+
+### Ask your agent to arrange it
+
+Ask in words: "put my agents above the workspaces", "hide files", "put my pricing notes on the
+desktop", "save this as Monday review" and later "restore Monday review". In your own chat, in the
+turn where you asked, the agent changes the desktop and says what changed in one line. Anywhere else
+(a routine, an event, a chat other people share) it can only **suggest**: the suggestion waits above
+the sections with its reason, **Apply** and **Not now**, and expires after seven days unless your
+company set a shorter time. A filter the agent set shows as a chip; its **×** clears it.
+
+### Hidden workspaces
+
+**Hide** in a workspace tile's **…** hides that workspace for you only: it leaves the desktop, Files
+and new chats, and for a shared workspace nothing changes for the other members. Your personal
+workspace and company workspaces cannot be hidden. The desktop ends with **Hidden workspaces (n)**:
+open it and press **Show again** on any of them ([workspace states](/core/workspaces#workspace-states-active-inactive-hidden)).
+
+### Presence
+
+A small dot on a colleague's face means they were active in that workspace in the last ten minutes
+("now") or the last day ("today"). Whether colleagues see yours is your own switch, an account
+setting that is on by default.
+
+### Turn it on (operators)
+
+`VEXA_FEATURES` must name `desktop` (or `all`); it is off by default, it is decided by the install
+alone, and it needs [the CRM](/minutes/crm#turn-it-on-operators), which stores each person's desktop.
+`desktop_cards` adds cards and needs `crm` and `desktop`. On an existing CRM database, `crm-init`
+creates the desktop's tables on the next start; rows already there are untouched. The company narrows
+the desktop in `_global/POLICIES.md`:
+
+| Key | Default | What it limits |
+|---|---|---|
+| `presence_visibility` | `workspace_members` | Who sees presence: `workspace_members` (members of the workspace), `shared_chats` (only people who share a chat), `off` (nobody) |
+| `desk_placements_max` | `50` | Things one person can place on their desktop |
+| `card_proposals_pending_max` | `5` | Agent suggestions waiting for one person at a time (`0` switches suggestions off) |
+| `card_proposals_per_agent_per_day` | `20` | Suggestions one agent session can make in a day (`0` switches them off) |
+| `card_proposal_ttl_days` | `7` | Days an unanswered suggestion waits before it is dropped (at least 1) |
+
+These keys only narrow: a value above the default, or one that is not a whole number, is applied as
+the default, and a `presence_visibility` value that cannot be read is applied as `off`. A desktop
+already above a lowered limit keeps its items and can be rearranged, but cannot grow. Changes apply
+within 30 seconds.
+
+### How it works
+
+- **Read fresh each time.** When the desktop opens, the app asks crm-api for what you placed and how
+  you arranged it, and agent-api (`POST /api/desktop/sections`) for what each thing is now. The tiles
+  are not stored anywhere, and the browser keeps nothing.
+- **Your arrangement is kept by crm-api, per person.** Each change, by hand or by your agent, is a
+  short list of operations (order, move, place, remove, hide, show, collapse, filter, save, restore
+  and section order) saved as a new numbered version. Undo restores an earlier version as a new one.
+  A change made from an older version than the current one is refused, so two tabs never overwrite
+  each other silently.
+- **From the records that already exist.** Workspace names come from the same listing as Files, the
+  last change from the workspace's history, calls from your own meetings list and the calls held in
+  your chats, and an agent's status and runs from the routine engine. A paused agent is paused because
+  its routine is paused.
+- **Presence.** agent-api applies `presence_visibility` and then each person's own switch every time
+  the desktop is drawn, and keeps each person's switch for at most 30 seconds.
+- **Bounded.** One read looks at the history of at most 12 workspaces and 30 files, the chats of at
+  most 40 colleagues and your 40 newest chats for calls, so the page stays fast.
+
+### Why it complies
+
+- **Your own state, kept by crm-api.** What you placed and how you arranged it are rows keyed to you in
+  crm-api's own tables; no route names another person. Each version records who made it (you, or an
+  agent on your behalf), and every desktop call is in crm-api's audit log.
+- **Arranging never changes a thing.** Placing, moving or hiding a tile never creates, edits or shares
+  a file, a chat or a card. Taking a card off your desktop leaves the card as it is.
+- **Agents never write your desktop without you.** crm-api decides from the credential, not from what
+  the agent says: only you, or your agent in a turn you typed in your own one-person chat, change it
+  directly. Anything else is refused and may only suggest.
+- **Nothing is composed by a model.** The desktop is drawn from existing records and costs no model
+  call.
+- **Only what you can already open.** A file tile resolves through the same check as opening the
+  file, a chat or routine only against your own, and a call only from your own meetings list. Anything
+  else shows as unavailable and says nothing about what it was. A shared workspace's roster is shown
+  to its contributors and owner only, as in its sharing panel.
+- **Presence is coarse and narrow-only.** It is "now" or "today", never a time, never about yourself,
+  and never about someone who switched theirs off. The company can only narrow it; when settings
+  cannot be read, nobody is shown as active.
+- **Your sign-in only.** The sections are served to your own app; an agent is refused and reads only
+  your arrangement, through crm-api.
+
+## Cards
+
+With the `desktop_cards` feature on (it needs `crm` and `desktop`), the desktop's last section is
+**Cards**: the CRM cards you are a member of or placed there. A card is one shared record, like a
+card on a board: a title, what it is about (a page, a chat, a workspace, a meeting or a record), a
+stage on its type's lifecycle (`To do > Doing > Done`, or `Dropped`, by default), what is next and
+who it is waiting on, a description, sub-cards, members and its activity. Everyone on a card sees the
+same card; nothing is copied.
+
+Each card shows how it is moving: its stage on a stepper, what is next and who it waits on, the latest
+movement (who did what, and when), "Stalled" once nothing has moved for longer than such a card
+usually goes, how many sub-cards are done, and who is on it. A field you cannot read shows as
+"Request access". Open a card to see its description, sub-cards, members and full activity; move its
+stage (only to a stage its type declares) and add a member there.
+
+Make a card with **Make a card** on a chat's **…**, a page's **…** or a file's **…** in Files. It is
+titled as the chat or page and is about it, and it joins that workspace's board when you can write
+there. **Take off my desktop** removes it from your desktop only; the card stays for its other
+members.
+
+What waits for your word is a quiet row above the sections: **Vexa suggests: (the card) · Add · Not
+now**, with why, when an agent proposed a card; **(someone) added you to (the card) · Accept · Decline**
+when someone put you on a card.
+
+### How it works
+
+- **Cards are CRM records.** crm-api owns them, their lifecycle, members and sub-cards. The desktop
+  reads them with the rest of your desk (`/crm/desk/read`), and the card's own verbs (`read`,
+  `create`, `update`, `members`, `membership`, `list`, and `review` for proposals) go to crm-api
+  through the app's own server with your own sign-in. The app stores nothing about a card.
+- **The face is declarative.** A card's face is a short list of blocks from one vocabulary (stage,
+  next, waiting, movement, sub-cards, people, and a field shown as a number, text, progress, a date,
+  a checklist or a list). crm-api resolves it for you and the app checks it again: unknown blocks are
+  dropped, sizes are capped, and it is plain text only.
+- **Agents propose.** An agent can only propose a card or a change (`card_propose`,
+  `card_update_propose`). A proposed card becomes a card when a person adds it; a stage move by an
+  agent always waits for a person.
+
+### Why it complies
+
+- **Membership never opens what a card is about.** Being on a card lets you read the card's own
+  fields; opening the page, chat or workspace it is about still needs your own access there.
+- **Per-viewer faces.** Two members can see the same card with different fields: a field one of
+  them cannot read shows as "Request access", never as its value.
+- **Nothing lands on your desktop by itself.** Someone adding you to a card is an invite you accept
+  or decline; an agent's card is a proposal you add or dismiss. Taking a card off your desktop never
+  changes the card.
+- **Your sign-in only.** Every card action from the app is sent with your own credential, never with
+  a deployment key, and only from the app's own page.
+
+## What needs you
+
+With the `home2` feature on (it needs `desktop`), each workspace on the home carries a status card:
+what needs you there, what is working there, how many rooms were active in the last two hours, a
+call that is live now, and the last change. The Now strip at the top shows what needs you across all
+of them, most pressing first.
+
+Something needs you when:
+
+- **a proposal is waiting for you**: a job an agent put on your short list, or a change proposed after
+  a call you own (Accept, or Review);
+- **you were mentioned** in a chat you can still read and have not read it yet (Open);
+- **a card is waiting on you**: you are on the card and its "waiting on" names you (Open);
+- **a call starts within 24 hours** (Prepare opens its note when it has one; Join when it is about to
+  start);
+- **a routine of yours failed** its last run (Retry).
+
+A failed routine and a waiting proposal come first, then mentions, then cards, then calls (the
+soonest first); among equals, the newest first. The same order every time you look.
+
+### How it works
+
+Your app asks agent-api for the attention home each time it draws it. agent-api reads each fact from
+the one place that already holds it: your short list, the proposals recorded after calls, your
+notifications, your meetings list, your routines' last runs, the chats you are in and each
+workspace's history. The cards come from the CRM, passed in by your app. Each item carries the action
+it offers as a pointer to the place that owns it, so clicking Accept, Open or Retry goes there,
+never through the home. References in a README (`[[room:…]]`, `[[person:…]]`, `[[file:…]]` and the
+like) are resolved the same way, one call for the whole page.
+
+### Why it complies
+
+- **No model, nothing stored.** The home is a set of fixed rules over data that already exists; it
+  keeps no copy, so it cannot drift from the real state, and the same state always gives the same
+  answer.
+- **You only ever see what you can open.** Only workspaces you can open appear; an item that belongs
+  anywhere else is left out rather than moved. A mention from a chat you left disappears, a card that
+  names a workspace you cannot open is dropped whatever your app sends, and another person's routines
+  never appear.
+- **A reference you cannot see says nothing.** It resolves to "not visible", the same answer as one
+  that does not exist, with no name, no title and no hint of what is inside.
+- **Your app only.** Both reads are served to your own sign-in; a delegated agent is refused.
+
+## Your workspace settings
+
+With the `desktop` feature on, each workspace on your home carries your own settings: **pinned** to
+the top, **hidden** from your home (it stays open to you), **muted**, which notifications reach you
+(**all**, **mentions** or **none**), the order of its rooms, a level for its agent, and which of its
+sections you collapsed. Ask in words ("mute Growth", "pin Product planning to the top", "hide Old
+archive from my home") and the agent changes it and says so in one line.
+
+### How it works
+
+- **One record of your relation to the workspace.** Your settings live on the CRM's `member_of`
+  relation between you and the workspace (`crm_member_settings`), in your own organisation's CRM.
+  A workspace you never changed has no row and reads as the defaults.
+- **crm-api is the only writer.** The agent uses `workspace_settings_read` and
+  `workspace_settings_set`; the app uses `/crm/desk/workspaces/read` and `/crm/desk/workspaces/set`
+  with your own sign-in. A change names only the keys it changes.
+- **Only on your word.** The agent changes them directly only in a turn you typed in your own
+  one-person chat. A routine, an event or a chat other people share is refused (`person_only`) and
+  nothing changes.
+
+### Why it complies
+
+- **Private to you.** A read answers only your own rows; nobody else, and no workspace, sees them.
+- **No access.** Settings grant nothing and reveal nothing: setting one for a workspace never opens
+  it, and the answer says nothing about the workspace or its members.
+- **One place, never the browser.** They are stored server-side in your CRM, not in browser storage
+  and not in a second copy elsewhere, so they follow you to every device and are removed with your
+  CRM data.
+
+## The workspace page
+
+With `home2` on, clicking a workspace's card points your home's composer at it (unless you can only
+read it) and opens the **workspace page** on the right. Documents and pages always open on the right;
+the centre stays your home or a conversation.
+
+The page has a section for each kind of thing, and a section with nothing in it is not shown: **Now**
+(a live call, the next one), **Needs you**, **Rooms** (with unread counts and a lock on closed ones),
+**Your chats here**, **Agents and routines** (their last runs, and Run now), **Calls**, **Cards**
+(a board by stage; dragging a card asks before moving it), **Files and pages** (the README first),
+**People**, **Activity** (the workspace's history) and **Metrics** (when the README names a figures
+file with `metrics:`, or there is a `kpis.json`). Fold any section; Expand widens the panel to two
+columns. A workspace you can only read shows no actions.
+
+### How it works
+
+The page draws from the same read as your status cards, asked for one workspace (rooms, your chats,
+routines with their run history, calls), plus the workspace's own file list and history, and the
+cards on your desk. A room's unread count is what others wrote since you last read it; reading the
+room yourself clears it, and an agent reading it for you does not. Which sections you folded and the
+order of the rooms are your own settings (above).
+
+### Why it complies
+
+- **Only what you can open**, from each fact's one owner; nothing is copied for the page.
+- **Every action is yours.** Run now, Move, Accept and Invite go through the owning service as you,
+  and anything that reaches other people (running a routine, moving a shared card) asks first.
+
+## Making a workspace
+
+"+ New workspace" on the home asks for a name, what it is for, an optional site, and who can see it:
+**Private** (only you) or **Shared** (people you invite, from any organisation). **Open** (anyone can
+find and read it) is shown only where open workspaces are switched on.
+
+1. The workspace is made, its README is written from what you said, and it appears on your home as a
+   card your composer points at.
+2. Vexa **proposes** its image: the site's logo when you gave one, otherwise a mark it designs. The
+   proposal waits on the new card with a preview; **Use** makes it the workspace's image, **Decline**
+   drops it.
+3. For a shared workspace you can invite people straight away: Vexa drafts the invitation emails in
+   your chat, with a join link, for you to send. Members appear on the card as they join.
+
+### How it works
+
+The app uses the existing doors: `POST /api/workspace/new` (private) or `/api/workspace/shared/new`
+(shared), a page write for the README, `PUT /api/workspaces/{slug}/identity/icon` with
+`propose: true` for the image (the server finds the site's logo itself; with no site the agent is
+asked to design one and propose it the same way), and `POST /api/workspace/invite-link` for the
+invitation link. The proposal is a "needs you" item for the workspace's owner, answered through
+`POST /api/workspaces/{slug}/identity/proposal`.
+
+### Why it complies
+
+- **Nothing is set behind your back.** The image is only a proposal until you choose it; only the
+  owner answers it, and an agent never accepts its own proposal.
+- **Nothing is sent.** Invitations are drafts in your chat; you send them.
+- **No image is hot-linked.** A found logo is fetched once through the outbound guard and stored in the
+  workspace.

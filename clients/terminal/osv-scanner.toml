@@ -1,0 +1,7 @@
+# OSV-Scanner allow list for this directory's package-lock.json (the scanner reads the config beside
+# each lockfile). Same entry, same reason, as the root osv-scanner.toml; see security/known-advisories.md.
+
+[[IgnoredVulns]]
+id = "GHSA-238p-pmpm-9mq7"
+ignoreUntil = 2026-12-31
+reason = "katex 0.16.47 (LOW): a trust bypass that needs prototype pollution to exist already. Reached through mermaid in the terminal's diagram rendering; the fix is in 0.18.2, outside mermaid 11's ^0.16 range, so it waits for mermaid."

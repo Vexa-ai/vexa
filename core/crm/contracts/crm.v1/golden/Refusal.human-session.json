@@ -1,0 +1,5 @@
+{
+  "status": "refused",
+  "reason": "human_session_required",
+  "instruction": "This session runs without a person in the loop. Record what you wanted to do and stop; do not retry it another way."
+}

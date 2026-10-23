@@ -1,0 +1,1 @@
+{"type": "notification", "notification": {"id": "n-2123456789abcdef", "kind": "bot_joined", "actor": {"id": "vexa", "name": "Vexa"}, "object": {"kind": "meeting", "id": "42", "name": "Weekly sync"}, "text": "Vexa joined “Weekly sync”", "created": 1760360000.0, "read": false, "actions": ["open"]}}

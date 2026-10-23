@@ -9,7 +9,7 @@ control-plane background loops alongside the HTTP app via the FastAPI lifespan:
   * **db-writer** — the RESTORED parent flush loop (0.10 ``process_redis_to_postgres``): each tick
     moves immutable live segments from the redis hash ``meeting:{id}:segments`` into the
     ``transcriptions`` table (upsert on segment identity; redis trimmed only after the confirmed
-    write) and drains the copilot's ``proc:meeting:{id}`` notes into ``meeting.data`` JSONB.
+    write).
   * **webhook retry-drain** — one ``drain_retry_queue`` sweep per interval over the redis retry
     queue (failed ``meeting.status_change`` deliveries are retried with backoff).
 
@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 
 log = logging.getLogger("meeting_api.entrypoint")
@@ -40,7 +41,7 @@ def _database_url() -> str:
     port = os.getenv("DB_PORT", "5432")
     name = os.getenv("DB_NAME", "vexa")
     user = os.getenv("DB_USER", "postgres")
-    password = os.getenv("DB_PASSWORD", "postgres")
+    password = os.getenv("DB_PASSWORD", "")  # required: the boot preflight refuses unset
     return f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{name}"
 
 
@@ -49,15 +50,135 @@ def _require_config(env: "os._Environ | dict | None" = None) -> None:
 
     ``config.v1.json`` (next to this module) declares every env key the service consumes; the
     vendored shared preflight raises ``ConfigError`` (a ``RuntimeError``) naming every missing
-    *required-explicit* key — today ADMIN_TOKEN, which HS256-signs the MeetingToken every spawn
-    mints (invocation.mint_meeting_token) AND the recordings-upload verifier checks; unset, the
-    deploy would 500 every POST /bots, so it refuses to boot instead. Capability tri-states
+    *required-explicit* key — e.g. ADMIN_TOKEN, the admin secret the MeetingToken key is derived from,
+    which every spawn mints with and the lifecycle callback and the uploads verify with (meeting_token); unset, the deploy would 500
+    every POST /bots, so it refuses to boot instead. Capability tri-states
     (stt · object_storage, incl. the STT live auth probe) are logged here and exposed on
     ``/health``; they never block boot.
     """
     from .config_preflight import preflight
 
     preflight(env)
+
+
+# What a meeting bot connects to Redis as. The accepted values are the ones agent-api's settings
+# validate (`redis_workload_acl`, pattern ^(per-workload|shared)$ in core/agent/shared/config.py) —
+# one switch across both services, held equal by the parity fact `redis-workload-acl-modes`.
+_REDIS_WORKLOAD_ACL = re.compile(r"^(per-workload|shared)$")
+
+
+def _redis_workload_acl(env: "os._Environ | dict | None" = None) -> str:
+    """``REDIS_WORKLOAD_ACL``, or refuse the boot (S51).
+
+    Unset or empty is the default, ``per-workload``. Any other value that is not one of the two modes
+    raises — a typo must not quietly read as the default, which is what agent-api already refuses and
+    what this service used to do: it compared the value to ``"shared"`` and treated everything else,
+    ``Shared`` and ``share`` included, as ``per-workload``."""
+    from .config_preflight import ConfigError
+
+    env = os.environ if env is None else env
+    raw = env.get("REDIS_WORKLOAD_ACL")
+    value = (raw or "per-workload").strip()
+    if not _REDIS_WORKLOAD_ACL.match(value):
+        raise ConfigError(
+            f"REDIS_WORKLOAD_ACL={raw!r} is not a mode meeting-api knows — set `per-workload` (each "
+            "meeting bot its own Redis user, the default) or `shared` (the service connection)")
+    return value
+
+
+def _auth_session_at_boot(env: "os._Environ | dict | None" = None) -> None:
+    """The authenticated-bot storage, checked once at boot (P14) with the same reading the spawn and
+    the session write-back apply (`bot_spawn.auth_session.auth_session_config`). With
+    ``BOT_AUTHENTICATED`` on, an incomplete userdata store or a bots' key pair that reuses a storage
+    root key refuses the boot, naming the variables and never a value. Off, nothing is checked."""
+    from .bot_spawn.auth_session import auth_session_config
+    from .bot_spawn.ports import AuthSessionNotConfigured
+    from .config_preflight import ConfigError
+
+    try:
+        auth_session_config(env)
+    except AuthSessionNotConfigured as e:
+        raise ConfigError(f"meeting-api refuses to boot: {e}") from None
+
+
+def _capture_signal_default_at_boot(env: "os._Environ | dict | None" = None) -> bool:
+    """``VEXA_CAPTURE_SIGNAL_DEFAULT``, read once at boot (P18). An unrecognized value refuses the
+    boot naming the key: whether meetings are taped is a data-protection decision, and neither side
+    of it may be picked for the operator by a typo."""
+    from .bot_spawn.env_flags import InvalidDeploymentFlag, capture_signal_default
+    from .config_preflight import ConfigError
+
+    env = os.environ if env is None else env
+    try:
+        return capture_signal_default(env.get("VEXA_CAPTURE_SIGNAL_DEFAULT") or "")
+    except InvalidDeploymentFlag as e:
+        raise ConfigError(f"meeting-api refuses to boot: {e}") from None
+
+
+def _calendar_feed_allow_at_boot(env: "os._Environ | dict | None" = None):
+    """``VEXA_CALENDAR_FEED_ALLOW``, parsed once at boot (P14/P18). A bad entry — a wildcard, a
+    network overlapping loopback or cloud metadata, a malformed name — refuses the boot naming it."""
+    from .calendar_sync.adapters import FEED_ALLOW_ENV, feed_allowance
+    from .config_preflight import ConfigError
+
+    env = os.environ if env is None else env
+    try:
+        return feed_allowance(env.get(FEED_ALLOW_ENV) or "")
+    except ValueError as e:
+        raise ConfigError(f"meeting-api refuses to boot: {e}") from None
+
+
+def _meeting_host_allow_at_boot(env: "os._Environ | dict | None" = None):
+    """``VEXA_MEETING_HOST_ALLOW``, parsed once at boot. A bad entry — a wildcard, a network
+    overlapping loopback or cloud metadata, a malformed name — refuses the boot naming it."""
+    from .bot_spawn.meeting_host import MEETING_HOST_ALLOW_ENV, meeting_host_allowance
+    from .config_preflight import ConfigError
+
+    env = os.environ if env is None else env
+    try:
+        return meeting_host_allowance(env.get(MEETING_HOST_ALLOW_ENV) or "")
+    except ValueError as e:
+        raise ConfigError(f"meeting-api refuses to boot: {e}") from None
+
+
+def _auto_join_block_at_boot(env: "os._Environ | dict | None" = None):
+    """``VEXA_AUTO_JOIN_BLOCK``, parsed once at boot. A bad entry refuses the boot naming it: a
+    block list that silently matched nothing would send bots where the operator forbade them."""
+    from .bot_spawn.auto_join_block import BLOCK_ENV, deployment_block
+    from .config_preflight import ConfigError
+
+    env = os.environ if env is None else env
+    try:
+        return deployment_block(env.get(BLOCK_ENV) or "")
+    except ValueError as e:
+        raise ConfigError(f"meeting-api refuses to boot: {e}") from None
+
+
+def _transcription_language_at_boot(env: "os._Environ | dict | None" = None) -> None:
+    """The deployment's default transcription language, checked once at boot (P14, P18) with the
+    reading every spawn applies (`bot_spawn.transcription_language.deployment_tier`). A value
+    transcription-language.v1 refuses stops the boot naming the variable and the fix, instead of
+    being found by the first spawn."""
+    from .bot_spawn.transcription_language import LanguageRefused, deployment_tier
+    from .config_preflight import ConfigError
+
+    try:
+        deployment_tier(env)
+    except LanguageRefused as e:
+        raise ConfigError(f"meeting-api refuses to boot: {e}") from None
+
+
+def _identity_key():
+    """gateway-identity.v1 — the gateway's Ed25519 public key, or a refused boot. A file that is
+    unreadable, or is anything but an Ed25519 public key (the private key included: a verifier that
+    holds it could sign), stops the boot naming the fault, never the key."""
+    from . import identity_token
+    from .config_preflight import ConfigError
+
+    try:
+        return identity_token.read_verify_key(os.environ.get("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", ""))
+    except identity_token.KeyUnavailable as e:
+        raise ConfigError(f"meeting-api refuses to boot: VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE — {e}") from None
 
 
 # How many users a calendar sweep syncs at once. Users are independent, so the tick's wall time
@@ -97,22 +218,35 @@ async def _sync_user_calendars(store, redis_client, user_id: int, configs: list,
 def build_production_app():
     """Wire the unified meeting-api with the real adapters + the lifespan-driven loops."""
     _require_config()  # A4: refuse to boot a misconfigured deploy (no ADMIN_TOKEN → every spawn 500s).
+    workload_acl = _redis_workload_acl()  # S51: an unknown mode refuses the boot, as agent-api's does
+    _auth_session_at_boot()  # S64: a broken authenticated-bot store refuses the boot, not the first spawn
+    _capture_signal_default_at_boot()  # a typo in the tape switch refuses the boot, never guesses
+    _calendar_feed_allow_at_boot()  # a malformed internal-feed allowance refuses the boot
+    _auto_join_block_at_boot()  # a malformed auto-join block list refuses the boot
+    _meeting_host_allow_at_boot()  # a malformed meeting-host allowance refuses the boot
+    _transcription_language_at_boot()  # a refused default language stops the boot, not the first spawn
+    from .compat_switches import warn_at_boot
+
+    warn_at_boot()  # an open 0.12 compatibility switch is printed at every boot, with its removal release
 
     import redis.asyncio as aioredis
+
+    from .voice_notes import RedisAudioStreamWriter
+    from .calls import Calls
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
     from . import create_app
     from .db import build_engine
-    from .bot_spawn.adapters import HttpRuntimeClient, SqlAlchemyMeetingRepo
+    from .bot_spawn.adapters import HttpRuntimeClient, SqlAlchemyMeetingRepo, runtime_caller_headers
     from .collector.adapters import RedisStreamBus, SqlAlchemyTranscriptStore
     from .recordings.adapters import S3Storage, SqlAlchemyRecordingRepo
 
     database_url = _database_url()
     redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
     runtime_api_url = os.getenv("RUNTIME_API_URL", "http://runtime:8090")
-    # MeetingToken is HS256-signed (mint) AND verified (recordings upload) with the SAME secret =
-    # ADMIN_TOKEN, exactly like main. (INTERNAL_API_SECRET is for the gateway↔admin-api internal
-    # validation only — a different concern.) None → the recordings verifier falls back to ADMIN_TOKEN.
+    # ADMIN_TOKEN is the admin secret the MeetingToken key is derived from (meeting_token.signing_key):
+    # spawns mint with that key; the lifecycle callback and the uploads admit a bot's token with it. _require_config() refused a boot without it.
+    # INTERNAL_API_SECRET is a different credential, the internal tier (internal_secret below).
     token_secret = os.getenv("ADMIN_TOKEN") or None
 
     engine = build_engine(database_url)  # #635: env-steered pool (pool_pre_ping preserved in the helper)
@@ -132,9 +266,26 @@ def build_production_app():
     segment_bus = RedisStreamBus(redis_client)
     meeting_repo = SqlAlchemyMeetingRepo(session_factory)
 
+    # Each bot connects to Redis as its session's own user (bot_spawn.workload_redis) unless the
+    # deployment chose REDIS_WORKLOAD_ACL=shared. A user outlives no MeetingToken: past its TTL (+1h)
+    # it is removed on the next spawn.
+    bot_redis = None
+    if workload_acl == "shared":
+        log.warning("REDIS_WORKLOAD_ACL=shared — every meeting bot connects to Redis with the "
+                    "service credential")
+    else:
+        from .bot_spawn.workload_redis import BotRedisUsers
+
+        bot_redis = BotRedisUsers(
+            redis_client, redis_url, secret=token_secret or "",
+            max_age_sec=float(os.getenv("MEETING_TOKEN_TTL_SECONDS") or 18000) + 3600,
+        )
+
     import httpx
 
-    runtime_http = httpx.AsyncClient(timeout=30.0)
+    # Every runtime.v1 call carries the runtime caller credential (required-explicit; the runtime
+    # answers 401 to anything else).
+    runtime_http = httpx.AsyncClient(timeout=30.0, headers=runtime_caller_headers())
     runtime_client = HttpRuntimeClient(runtime_http, runtime_api_url)
     from .service_authority import build_service_authority_from_env
 
@@ -154,10 +305,11 @@ def build_production_app():
     # dials the validated IP (preserving Host + TLS SNI), closing the DNS-rebinding TOCTOU window
     # between submit-time validate_webhook_url and the actual socket connect.
     from .webhooks import RetryQueue, WebhookSink
-    from .webhooks.ssrf import build_pinned_transport
+    from .webhooks.stored_url_policy import pinned_transport_for
 
     async def _webhook_transport(url: str, body: bytes, headers: dict):
-        async with httpx.AsyncClient(timeout=10.0, transport=build_pinned_transport()) as client:
+        # VEXA_WEBHOOK_STORED_URL_POLICY: a URL stored before 0.13 may dial under the 0.12 guard.
+        async with httpx.AsyncClient(timeout=10.0, transport=pinned_transport_for()) as client:
             return await client.post(url, content=body, headers=headers)
 
     webhook_sink = WebhookSink(_webhook_transport, queue=RetryQueue(redis_client))
@@ -224,7 +376,15 @@ def build_production_app():
         from .calendar_sync import read_stamp
         return await read_stamp(redis_client, user_id, calendar_id)
 
+    # Bot accounts (ADR-0049): the credential broker's `bots` role when VEXA_BOT_ACCOUNTS_BROKER_URL +
+    # VEXA_BOT_ACCOUNTS_KEY_FILE are set (an unusable key file refuses the boot), browser sessions in
+    # this Redis, workloads over the same runtime.
+    from .bot_accounts import build_bot_accounts_from_env
+
+    bot_accounts = build_bot_accounts_from_env(runtime_client, redis_client)
+
     app = create_app(
+        bot_accounts=bot_accounts,
         transcript_store=transcript_store,
         redis=segment_bus,
         meeting_repo=meeting_repo,
@@ -233,8 +393,9 @@ def build_production_app():
         recording_repo=recording_repo,
         storage=storage,
         token_secret=token_secret,
-        # The user-stop route (DELETE /bots) publishes the bot's `leave` command on redis pub/sub.
-        # redis.asyncio's client satisfies the CommandPublisher port directly (async publish()).
+        # The user-stop (DELETE /bots), config (PUT …/config) and chat-send (POST …/chat) routes
+        # publish acts.v1 commands on redis pub/sub. redis.asyncio's client satisfies the
+        # CommandPublisher port directly (async publish()).
         command_publisher=redis_client,
         webhook_sink=webhook_sink,
         system_webhook_sink=system_webhook_sink,
@@ -242,10 +403,20 @@ def build_production_app():
         transcript_finalizer=_transcript_finalizer,
         calendar_sync_now=_calendar_sync_now,
         calendar_sync_status=_calendar_sync_status,
+        # gateway-identity.v1: the door for x-user-*, holding the gateway's PUBLIC key — this service
+        # verifies the gateway's signature and cannot make one. _require_config() refused a boot
+        # without the path; _identity_key() refuses one whose file is not that key.
+        identity_key=_identity_key(),
+        internal_secret=os.environ.get("INTERNAL_API_SECRET", ""),
+        bot_redis=bot_redis,
+        runtime_callback_token=os.environ.get("RUNTIME_API_TOKEN", ""),
+        voice_note_writer=RedisAudioStreamWriter(redis_client),
+        calls=Calls.from_env(),
     )
 
     _attach_background_loops(
         app, transcript_store, segment_bus, redis_client, meeting_repo, runtime_client,
+        bot_redis=bot_redis,
         service_authority=service_authority,
         system_webhook_sink=system_webhook_sink,
         session_factory=session_factory,
@@ -266,6 +437,7 @@ def _minio_endpoint_url() -> str:
 def _attach_background_loops(
     app, transcript_store, segment_bus, redis_client, meeting_repo=None, runtime=None,
     service_authority=None, system_webhook_sink=None, session_factory=None, storage=None,
+    bot_redis=None,
 ) -> None:
     """Register the FastAPI lifespan that starts/stops the control-plane poll loops.
 
@@ -359,11 +531,57 @@ def _attach_background_loops(
     # PEL) → /health degrades + 503. Default headroom over one in-flight batch (count=10 default).
     app.state.pipeline_pending_alarm = int(os.getenv("PIPELINE_PENDING_ALARM", "100"))
 
+    # Browser sessions and verify checks past their expiry: close the record and stop the workload
+    # (bot_accounts.BotAccounts.reap). Started only on a deployment with the bot-account store.
+    bot_accounts = getattr(app.state, "bot_accounts", None)
+    bot_accounts_live = bool(getattr(bot_accounts, "configured", False))
+
+    async def _bot_accounts_reaper_loop() -> None:
+        interval = float(os.getenv("BOT_ACCOUNTS_REAPER_INTERVAL_S", "30"))
+        while True:
+            try:
+                reaped = await bot_accounts.reap()
+                if reaped:
+                    log.info("closed %d expired browser session(s)/check(s)", reaped)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("bot-accounts reaper failed")
+            await asyncio.sleep(interval)
+
+    async def _bot_redis_restore_loop() -> None:
+        # Redis keeps no ACL user across a restart; a live bot's user is defined again from the index
+        # (the password is derived, so the bot's own URL is valid again unchanged).
+        interval = float(os.getenv("BOT_REDIS_RESTORE_INTERVAL_S", "1"))
+        while True:
+            try:
+                restored = await bot_redis.restore_if_restarted()
+                if restored:
+                    log.warning("redis lost %d bot user(s) (a restart?) — defined again", restored)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("bot redis restore failed")
+            await asyncio.sleep(interval)
+
     async def _segment_consumer_loop() -> None:
         # Drain the transcription_segments stream → persist + publish tc:…:mutable.
+        from .collector import legacy_unsigned
+
+        # Upgrade hand-off: a 0.12 bot still in a meeting writes unsigned entries; admit them for the
+        # meetings spawned before 0.13, for a bounded window (collector/legacy_unsigned.py).
+        try:
+            await legacy_unsigned.open_from_db(session_factory)
+        except Exception:
+            log.exception("legacy segment hand-off: could not read in-flight meetings")
         tick_n = 0
         while True:
             try:
+                if tick_n % 60 == 0:
+                    try:
+                        await legacy_unsigned.refresh_from_db(session_factory)
+                    except Exception:
+                        log.exception("legacy segment hand-off: refresh failed")
                 await consume_segments(transcript_store, segment_bus)
                 # #636: every N ticks, reclaim any ORPHANED (crashed-replica) un-acked batch idle
                 # past RECLAIM_MIN_IDLE_MS and drain it through the same ingest→ack path. Bounded to
@@ -383,7 +601,7 @@ def _attach_background_loops(
     async def _db_writer_loop() -> None:
         # The RESTORED parent db-writer (0.10 process_redis_to_postgres): each tick, flush every
         # active meeting's IMMUTABLE redis-hash segments into the transcriptions table (upsert on
-        # (meeting_id, segment_id)) and drain its processed-notes stream into meeting.data JSONB.
+        # (meeting_id, segment_id)).
         # Redis is trimmed only AFTER the confirmed durable write. Without this loop nothing ever
         # moved segments to Postgres — the transcriptions table stayed EMPTY and a redis eviction
         # was unrecoverable transcript loss (the 0.12 release blocker).
@@ -418,14 +636,14 @@ def _attach_background_loops(
         import httpx
 
         from .webhooks.retry import drain_retry_queue
-        from .webhooks.ssrf import build_pinned_transport
+        from .webhooks.stored_url_policy import pinned_transport_for
 
         # The injected Transport: POST the signed envelope; return the response (its .status_code
         # drives the retry/permanent decision in retry._deliver_one). WH2: IP-pinned at connect
         # (re-resolve + re-validate + dial the validated IP) so a rebinding flip can't slip an
         # internal target into a retry sweep either.
         async def _transport(url: str, body: bytes, headers: dict):
-            async with httpx.AsyncClient(timeout=10.0, transport=build_pinned_transport()) as client:
+            async with httpx.AsyncClient(timeout=10.0, transport=pinned_transport_for()) as client:
                 return await client.post(url, content=body, headers=headers)
 
         async def _tick():
@@ -552,6 +770,7 @@ def _attach_background_loops(
     # self-host opt-in that chooses the uncapped mode (never defaulted).
     from .bot_spawn.env_flags import env_flag
     auto_join_allow_uncapped = env_flag("AUTO_JOIN_ALLOW_UNCAPPED", default=False)
+    auto_join_block = _auto_join_block_at_boot()
 
     async def _auto_join_loop() -> None:
         if meeting_repo is None or runtime is None or not hasattr(meeting_repo, "list_scheduled_meetings"):
@@ -580,7 +799,9 @@ def _attach_background_loops(
                 retry_backoff_s=auto_join_backoff,
                 token_secret=os.getenv("ADMIN_TOKEN") or None,
                 redis_url=os.getenv("REDIS_URL"),
+                redis_grant=bot_redis.grant if bot_redis is not None else None,
                 allow_uncapped=auto_join_allow_uncapped,
+                deployment_block=auto_join_block,
             )
 
         while True:
@@ -707,17 +928,25 @@ def _attach_background_loops(
         Single-flighted like the other sweeps (not because a concurrent build corrupts anything —
         ``CREATE INDEX CONCURRENTLY IF NOT EXISTS`` is itself safe under a race — but so
         ``replicaCount>1`` does not have every replica open its own AUTOCOMMIT connection and hold
-        it for the full build). ``hasattr`` guards a fake/Lite transcript_store the same way
-        ``upsert_segments``/``create_planned_meeting`` are guarded above — this branch's only real
-        store is ``SqlAlchemyTranscriptStore``, but eval/test doubles that construct this function
-        with something else must not crash on a method they were never given.
+        it for the full build). The guard holds its lock outside any transaction
+        (``PgAdvisoryLock``), so the build never waits on its own guard. ``hasattr`` guards a
+        fake/Lite transcript_store the same way ``upsert_segments``/``create_planned_meeting`` are
+        guarded above — this branch's only real store is ``SqlAlchemyTranscriptStore``, but eval/test
+        doubles that construct this function with something else must not crash on a method they
+        were never given.
         """
         if not hasattr(transcript_store, "ensure_fts_index"):
             return
 
         async def _tick():
             result = await transcript_store.ensure_fts_index()
-            log.info("transcript FTS index: %s", result)
+            if isinstance(result, dict) and result.get("status") == "failed":
+                log.error(
+                    "transcript FTS index NOT built (%s); search uses a sequential scan until the "
+                    "next boot retries it. By hand: %s", result.get("reason"), result.get("by_hand"),
+                )
+            else:
+                log.info("transcript FTS index: %s", result)
 
         try:
             await _guarded("ensure-fts-index", _tick)
@@ -743,6 +972,10 @@ def _attach_background_loops(
             asyncio.create_task(_auto_join_loop(), name="auto-join"),
             asyncio.create_task(_calendar_sync_loop(), name="calendar-sync"),
             asyncio.create_task(_signal_tape_janitor_loop(), name="signal-tape-janitor"),
+            *([asyncio.create_task(_bot_redis_restore_loop(), name="bot-redis-restore")]
+              if bot_redis is not None else []),
+            *([asyncio.create_task(_bot_accounts_reaper_loop(), name="bot-accounts-reaper")]
+              if bot_accounts_live else []),
             asyncio.create_task(_ensure_fts_index_once(), name="ensure-fts-index"),
         ]
         log.info("meeting-api background loops started: %s", [t.get_name() for t in tasks])

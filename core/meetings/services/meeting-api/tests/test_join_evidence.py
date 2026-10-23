@@ -157,6 +157,14 @@ _CLASSIFY_CASES = [
         JoinFailureReason.NAVIGATION_FAILURE,
     ),
     (
+        "a join that failed on a non-English page is ui_locale_mismatch, whatever the lobby said",
+        dict(completion_reason="join_failure", stage="awaiting_admission", reached_lobby=True,
+             time_in_lobby_ms=4_000, lobby_budget_ms=BUDGET_MS,
+             detail="ui_locale_mismatch: the google_meet page rendered in 'de' (via html-lang), not the "
+                    "pinned en-US, so the join layer could not read the lobby or a rejection"),
+        JoinFailureReason.UI_LOCALE_MISMATCH,
+    ),
+    (
         "reaped IN the lobby with no timings at all: the stage is still evidence",
         dict(completion_reason="join_failure", stage="awaiting_admission"),
         JoinFailureReason.AWAITING_ADMISSION_TIMEOUT,
@@ -203,6 +211,7 @@ _ATTRIBUTION_CASES = [
     (JoinFailureReason.AUTH_SESSION_MISSING, JoinFailureAttribution.SYSTEM_FAULT),
     (JoinFailureReason.NEVER_REACHED_LOBBY, JoinFailureAttribution.SYSTEM_FAULT),
     (JoinFailureReason.NAVIGATION_FAILURE, JoinFailureAttribution.SYSTEM_FAULT),
+    (JoinFailureReason.UI_LOCALE_MISMATCH, JoinFailureAttribution.SYSTEM_FAULT),
     (JoinFailureReason.STOPPED_WHILE_JOINING, JoinFailureAttribution.USER_ACTION),
     (JoinFailureReason.UNKNOWN, JoinFailureAttribution.UNKNOWN),
 ]
@@ -347,7 +356,7 @@ def test_reason_lands_at_the_top_level_of_meeting_data():
     because the reason was only ever projected into ``last_error.reason``. It is now a top-level key.
     """
     repo, meeting = _repo_with_meeting()
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     _drive(
         client,
         {"connection_id": "sess-evidence", "status": "joining"},
@@ -362,7 +371,7 @@ def test_reason_lands_at_the_top_level_of_meeting_data():
 
 def test_join_evidence_lands_on_the_meeting_row():
     repo, meeting = _repo_with_meeting()
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     _drive(
         client,
         {"connection_id": "sess-evidence", "status": "joining"},
@@ -389,7 +398,7 @@ def test_evidence_is_derived_when_the_bot_sends_none():
     """A bot too old to classify (or any producer that omits the block) must still leave an
     evidenced row — otherwise the instrument has a hole exactly where the legacy fleet is."""
     repo, meeting = _repo_with_meeting()
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     _drive(
         client,
         {"connection_id": "sess-evidence", "status": "joining"},
@@ -410,7 +419,7 @@ def test_reached_lobby_is_derived_from_history_not_the_payload():
     saw a lobby. The record's own history decides, so a stale payload cannot launder a
     never-reached-lobby into an admission timeout."""
     repo, meeting = _repo_with_meeting()
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     _drive(
         client,
         {"connection_id": "sess-evidence", "status": "joining"},
@@ -462,7 +471,7 @@ def test_no_join_evidence_for_a_failure_after_admission():
     """A bot that reached ``active`` was admitted; whatever killed it later is not a join failure.
     The taxonomy stays silent rather than filing it under ``unknown``."""
     repo, meeting = _repo_with_meeting()
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     _drive(
         client,
         {"connection_id": "sess-evidence", "status": "joining"},
@@ -602,6 +611,20 @@ _FIXTURES = [
         ("navigation_failure", "system_fault"),
     ),
     (
+        "meet-page-not-in-english",
+        ["joining", "awaiting_admission"],
+        {"status": "failed", "exit_code": 1, "completion_reason": "join_failure",
+         "reason": "ui_locale_mismatch: the google_meet page rendered in 'de' (via html-lang), not the "
+                   "pinned en-US, so the join layer could not read the lobby or a rejection; its reading "
+                   "was: the join ended without admission (awaiting_admission)",
+         "join_evidence": {
+             "reason": "ui_locale_mismatch", "attribution": "system_fault", "source": "bot",
+             "stage": "awaiting_admission",
+             "detail": "ui_locale_mismatch: the google_meet page rendered in 'de' (via html-lang)",
+             "timings": {"time_to_lobby_ms": 9_000, "time_in_lobby_ms": 30_000, "total_ms": 39_000}}},
+        ("ui_locale_mismatch", "system_fault"),
+    ),
+    (
         "user-stopped-in-the-lobby",
         ["joining", "awaiting_admission"],
         {"status": "failed", "exit_code": 0, "completion_reason": "stopped",
@@ -634,7 +657,7 @@ def test_control_plane_unreachable_abort_is_a_system_fault():
 def test_failure_class_fixture_replays_deterministically(name, prefix, terminal, expected):
     expected_reason, expected_attribution = expected
     repo, meeting = _repo_with_meeting()
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     events = [{"connection_id": "sess-evidence", "status": s} for s in prefix]
     # A bot that never emitted `joining` (the control-plane-unreachable abort) still has to land its
     # terminal — the FSM's entry edge is None → joining, so this exercises the rehydrate path too.
@@ -694,7 +717,7 @@ def test_reconcile_sweep_stamps_typed_evidence(status, expected_reason, expected
     carry the typed axes. It holds no timings (it never saw the platform), so it emits none and
     labels itself ``reconcile`` rather than inventing first-hand measurements."""
     repo, meeting = _repo_with_meeting(status=status)
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     assert _run_sweep(client, repo) == 1
 
@@ -730,7 +753,7 @@ def test_a_row_stuck_at_requested_still_cannot_be_reconciled_at_all():
 def test_reconcile_sweep_reason_carries_the_probes_own_answer():
     """ATTRIBUTE, never manufacture: the persisted detail is the note the sweep actually wrote."""
     repo, meeting = _repo_with_meeting(status="awaiting_admission")
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     _run_sweep(client, repo)
     data = _stored_data(repo, meeting["id"])
     assert "reconciled to failed at awaiting_admission" in data["reason"]
@@ -744,7 +767,7 @@ def test_runtime_destroy_terminal_stamps_typed_evidence():
 
     repo, meeting = _repo_with_meeting(status="awaiting_admission")
     asyncio.run(repo.set_bot_container(meeting_id=meeting["id"], bot_container_id="wl-1"))
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
 
     async def _drive_terminal(body: dict):
         return client.post(ENDPOINT, json=body).status_code
@@ -775,7 +798,7 @@ def test_a_hostile_evidence_payload_never_breaks_the_terminal(hostile):
     and the meeting still reaches the SAME terminal state, with the SAME 200 at the callback. Only
     the report degrades."""
     repo, meeting = _repo_with_meeting()
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     _drive(client, {"connection_id": "sess-evidence", "status": "joining"})
     r = client.post(ENDPOINT, json={
         "connection_id": "sess-evidence", "status": "failed", "exit_code": 1,
@@ -813,7 +836,7 @@ def test_evidence_capture_survives_a_broken_taxonomy(monkeypatch):
 
     monkeypatch.setattr(je, "evidence_from_event", _boom)
     repo, meeting = _repo_with_meeting()
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     _drive(client, {"connection_id": "sess-evidence", "status": "joining"})
     r = client.post(ENDPOINT, json={
         "connection_id": "sess-evidence", "status": "failed", "exit_code": 1,

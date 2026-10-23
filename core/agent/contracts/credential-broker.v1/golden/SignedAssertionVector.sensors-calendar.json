@@ -1,0 +1,17 @@
+{
+  "key": "fixture-sensors-key-not-a-deployment-secret-01",
+  "claims": {
+    "role": "sensors",
+    "actor": "42",
+    "session": "sensor-calendar-42",
+    "at": 1760000000,
+    "nonce": "6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a",
+    "method": "POST",
+    "path": "/api/internal/sensor/calendar-changes",
+    "body": "d542895f719bf7a8427852ee840309478de2324fbfbaf5d7fa9570ef278ec2bc"
+  },
+  "request_body": "{\"owner\":\"42\",\"cursor\":\"CPDAlvWDx70CEPDAlvWDx70CGAU=\"}",
+  "encoded": "eyJyb2xlIjoic2Vuc29ycyIsImFjdG9yIjoiNDIiLCJzZXNzaW9uIjoic2Vuc29yLWNhbGVuZGFyLTQyIiwiYXQiOjE3NjAwMDAwMDAsIm5vbmNlIjoiNmQ1ZTRmM2EyYjFjMGQ5ZThmN2E2YjVjNGQzZTJmMWEiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii9hcGkvaW50ZXJuYWwvc2Vuc29yL2NhbGVuZGFyLWNoYW5nZXMiLCJib2R5IjoiZDU0Mjg5NWY3MTliZjdhODQyNzg1MmVlODQwMzA5NDc4ZGUyMzI0ZmJmYmFmNWQ3ZmE5NTcwZWYyNzhlYzJiYyJ9",
+  "signature": "ff231b7e60448ab78f29821aa0c4861db2b11333cea105181f149c91e75eb012",
+  "header": "eyJyb2xlIjoic2Vuc29ycyIsImFjdG9yIjoiNDIiLCJzZXNzaW9uIjoic2Vuc29yLWNhbGVuZGFyLTQyIiwiYXQiOjE3NjAwMDAwMDAsIm5vbmNlIjoiNmQ1ZTRmM2EyYjFjMGQ5ZThmN2E2YjVjNGQzZTJmMWEiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii9hcGkvaW50ZXJuYWwvc2Vuc29yL2NhbGVuZGFyLWNoYW5nZXMiLCJib2R5IjoiZDU0Mjg5NWY3MTliZjdhODQyNzg1MmVlODQwMzA5NDc4ZGUyMzI0ZmJmYmFmNWQ3ZmE5NTcwZWYyNzhlYzJiYyJ9.ff231b7e60448ab78f29821aa0c4861db2b11333cea105181f149c91e75eb012"
+}

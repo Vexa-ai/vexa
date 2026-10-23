@@ -1,0 +1,65 @@
+{
+  "accents": [
+    {
+      "id": "clay",
+      "name": "Clay",
+      "dark": "#d8855c",
+      "light": "#ad5d35"
+    },
+    {
+      "id": "blue",
+      "name": "Blue",
+      "dark": "#5b9cf5",
+      "light": "#2f66c9"
+    },
+    {
+      "id": "indigo",
+      "name": "Indigo",
+      "dark": "#8f90f7",
+      "light": "#4f46e5"
+    },
+    {
+      "id": "violet",
+      "name": "Violet",
+      "dark": "#b08cf0",
+      "light": "#7445c8"
+    },
+    {
+      "id": "teal",
+      "name": "Teal",
+      "dark": "#3fbfb0",
+      "light": "#0f766e"
+    },
+    {
+      "id": "green",
+      "name": "Green",
+      "dark": "#5cc28a",
+      "light": "#21744b"
+    },
+    {
+      "id": "amber",
+      "name": "Amber",
+      "dark": "#e0a94a",
+      "light": "#8f5d0f"
+    },
+    {
+      "id": "rose",
+      "name": "Rose",
+      "dark": "#ec7a9b",
+      "light": "#b8325b"
+    },
+    {
+      "id": "graphite",
+      "name": "Graphite",
+      "dark": "#b9bcc4",
+      "light": "#3f4450"
+    }
+  ],
+  "page": {
+    "dark": "#1a1b20",
+    "light": "#ffffff"
+  },
+  "white": "#ffffff",
+  "black": "#000000",
+  "darkInk": "#141008"
+}

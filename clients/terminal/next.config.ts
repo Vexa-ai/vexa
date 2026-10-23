@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
 import path from "path";
 
 /**
@@ -11,12 +12,22 @@ import path from "path";
  * NOTE: `/ws` is intentionally NOT rewritten here — Next.js rewrites proxy HTTP only and do not
  * carry the WebSocket upgrade. The custom server (server.mjs) handles the `/ws` upgrade directly,
  * proxying it to the gateway with the server-side api_key. A rewrite here would shadow that path.
+ *
+ * The image optimizer is off: the terminal renders no `next/image`, so `/_next/image` answers 404,
+ * the server never loads `sharp`, and the optimizer's decode path (GHSA-2xp9-vwfh-vxw4) is
+ * unreachable. src/app/__tests__/imageOptimizerOff.test.ts holds it off.
+ *
+ * DEVELOPMENT-ONLY ROUTES ARE NOT BUILT. A route file named `route.dev.ts` (the local-dev minutes
+ * seams, src/app/api/minutes/) is a route only to the development server: `pageExtensions` names
+ * `dev.ts` there and nowhere else, so `next build` compiles no such route and a production server
+ * has nothing at that path to switch on. src/app/__tests__/devOnlyRoutes.test.ts holds it.
  */
 const VEXA_API_URL = process.env.VEXA_API_URL;
 
 const nextConfig: NextConfig = {
   ...(process.env.BUILD_STANDALONE === "1" ? { output: "standalone" } : {}),
   turbopack: { root: path.resolve(__dirname) },
+  images: { unoptimized: true },
   async rewrites() {
     return VEXA_API_URL
       ? [
@@ -26,4 +37,13 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+/** Next's default page extensions, and the development server's extra ones. */
+export const PAGE_EXTENSIONS = ["tsx", "ts", "jsx", "js"];
+export const DEV_ONLY_PAGE_EXTENSIONS = ["dev.tsx", "dev.ts"];
+
+export default function config(phase: string): NextConfig {
+  return {
+    ...nextConfig,
+    pageExtensions: phase === PHASE_DEVELOPMENT_SERVER ? [...DEV_ONLY_PAGE_EXTENSIONS, ...PAGE_EXTENSIONS] : PAGE_EXTENSIONS,
+  };
+}

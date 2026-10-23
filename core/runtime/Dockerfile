@@ -5,20 +5,25 @@
 # DOCKER_NETWORK. The K8sBackend (RUNTIME_BACKEND=k8s, used by deploy/helm) shells out to `kubectl`,
 # which is why the static binary below is bundled — inert for the docker/process paths.
 # Build context: runtime/ (pyproject.toml + uv.lock + src/).
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
 
-# kubectl — only invoked by the K8sBackend (RUNTIME_BACKEND=k8s). Pinned static binary; harmless for
-# the default docker/process backends. Arch-aware so the image builds on amd64 and arm64 hosts.
-ARG KUBECTL_VERSION=v1.31.4
+# kubectl — only invoked by the K8sBackend (RUNTIME_BACKEND=k8s). Pinned static binary, verified against
+# the release's published SHA-256; harmless for the default docker/process backends. Arch-aware so the
+# image builds on amd64 and arm64 hosts. A supported release built with a supported Go (1.35.9: Go 1.26):
+# the K8sBackend uses only `create -f -`, `get pod` and `delete pod`, core v1 calls every cluster serves.
+ARG KUBECTL_VERSION=v1.35.9
 RUN set -eux; \
     apt-get update && apt-get install -y --no-install-recommends ca-certificates curl; \
     arch="$(dpkg --print-architecture)"; case "$arch" in amd64) karch=amd64;; arm64) karch=arm64;; *) karch="$arch";; esac; \
-    curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${karch}/kubectl" -o /usr/local/bin/kubectl; \
+    base="https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${karch}/kubectl"; \
+    curl -fsSL "$base" -o /usr/local/bin/kubectl; \
+    echo "$(curl -fsSL "$base.sha256")  /usr/local/bin/kubectl" | sha256sum -c -; \
     chmod +x /usr/local/bin/kubectl; \
     apt-get purge -y curl; apt-get autoremove -y; rm -rf /var/lib/apt/lists/*
 
-# uv via PyPI (ghcr.io is unreachable in this build env) — pinned for deterministic resolves.
-RUN pip install --no-cache-dir uv==0.9.22
+# uv via PyPI (ghcr.io is unreachable in this build env) — pinned for deterministic resolves, at a
+# release past the advisories fixed in 0.11.15.
+RUN pip install --no-cache-dir uv==0.11.33
 
 ENV UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
@@ -29,13 +34,10 @@ ENV UV_LINK_MODE=copy \
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
-# --no-dev: the dev group (pytest) is host-side test tooling, not a runtime dep.
+# --no-dev: the dev group (pytest) is host-side test tooling, not a runtime dep. The production group is
+# the ASGI server, locked like every other package: nothing is installed outside uv.lock.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev
-
-# Production-only: the ASGI server (fastapi/httpx/redis are already pinned in pyproject).
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install "uvicorn[standard]==0.34.0"
+    uv sync --frozen --no-install-project --no-dev --group production
 
 COPY src ./src
 

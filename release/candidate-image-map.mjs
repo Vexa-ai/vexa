@@ -4,15 +4,29 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
+import {
+  SERVICES,
+  imageFor,
+  legacyImageFor,
+  legacyRepositoryFor,
+  repositoryFor,
+  serviceOf,
+} from "./image-names.mjs";
+
+// Image names come from ONE place: release/image-names.mjs. Schema 1-3 packets were frozen under
+// the `vexaai/v012-<service>` names and keep validating against them; schema 4 (v0.13.3+) names the
+// same images `vexaai/vexa-<service>`.
+const L = legacyImageFor;
+
 export const REQUIRED_IMAGES = [
-  "vexaai/v012-admin-api",
-  "vexaai/v012-runtime",
-  "vexaai/v012-agent-worker",
-  "vexaai/v012-agent-api",
-  "vexaai/v012-meeting-api",
-  "vexaai/v012-gateway",
-  "vexaai/v012-mcp",
-  "vexaai/v012-terminal",
+  L("admin-api"),
+  L("runtime"),
+  L("agent-worker"),
+  L("agent-api"),
+  L("meeting-api"),
+  L("gateway"),
+  L("mcp"),
+  L("terminal"),
   "vexaai/vexa-bot",
   "vexaai/vexa-lite",
 ];
@@ -22,21 +36,33 @@ export const REQUIRED_IMAGES = [
 // services. Frozen schema-1 packets keep validating against the ten; a v0.12.27+ map must name
 // eleven. Production runs its own derivative (vexaai/vexa-flows-platform), so the OSS image is
 // oss_only.
-export const FLOWS_IMAGE = "vexaai/v012-flows";
+export const FLOWS_IMAGE = L("flows");
 export const REQUIRED_IMAGES_V2 = [...REQUIRED_IMAGES, FLOWS_IMAGE];
-export const CURRENT_SCHEMA_VERSION = 2;
-export const CURRENT_REQUIRED_IMAGES = REQUIRED_IMAGES_V2;
+
+// schema_version 3 (v0.13.2+): Connections ships the credential broker as its own image
+// (core/agent/services/credential-broker, ADR-0040) — compose and the chart run it beside
+// agent-api. Frozen schema-1 and schema-2 packets keep validating against ten and eleven; a
+// v0.13.2+ map must name twelve. Hosted production does not deploy it yet, so it is oss_only.
+export const CREDENTIAL_BROKER_IMAGE = L("credential-broker");
+export const REQUIRED_IMAGES_V3 = [...REQUIRED_IMAGES_V2, CREDENTIAL_BROKER_IMAGE];
+
+// schema_version 4 (v0.13.3+): the same twelve images under their `vexaai/vexa-<service>` names.
+// v0.13.3 also pushes each under its v012- name with the same digest (image-names.mjs).
+const RENAME = new Map(SERVICES.map((s) => [legacyImageFor(s), imageFor(s)]));
+export const REQUIRED_IMAGES_V4 = REQUIRED_IMAGES_V3.map((i) => RENAME.get(i) || i);
+export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_REQUIRED_IMAGES = REQUIRED_IMAGES_V4;
 
 export function requiredImagesFor(doc) {
   if (!doc) return CURRENT_REQUIRED_IMAGES;
+  if (doc.schema_version === 4) return REQUIRED_IMAGES_V4;
+  if (doc.schema_version === 3) return REQUIRED_IMAGES_V3;
   return doc.schema_version === 2 ? REQUIRED_IMAGES_V2 : REQUIRED_IMAGES;
 }
 
+const PROD_DEPLOYED_SERVICES = ["admin-api", "runtime", "meeting-api", "gateway"];
 export const PROD_DEPLOYED_IMAGES = new Set([
-  "vexaai/v012-admin-api",
-  "vexaai/v012-runtime",
-  "vexaai/v012-meeting-api",
-  "vexaai/v012-gateway",
+  ...PROD_DEPLOYED_SERVICES.flatMap((s) => [legacyImageFor(s), imageFor(s)]),
   "vexaai/vexa-bot",
 ]);
 
@@ -44,46 +70,62 @@ export const PROD_DEPLOYED_IMAGES = new Set([
 // root .dockerignore because changing it changes which bytes Docker receives.
 // Narrow contexts name their whole context. Lite uses Dockerfile.lite.dockerignore
 // instead of the root ignore file.
-export const RUNTIME_INPUTS_BY_IMAGE = {
-  "vexaai/v012-admin-api": [
+const RUNTIME_INPUTS_BY_SERVICE = {
+  "admin-api": [
     "core/identity/services/admin-api",
   ],
-  "vexaai/v012-runtime": [
+  "runtime": [
     "core/runtime",
   ],
-  "vexaai/v012-agent-worker": [
+  "agent-worker": [
     ".dockerignore",
     "core/agent",
     "core/meetings/contracts/transcript.v1/transcript.schema.json",
   ],
-  "vexaai/v012-agent-api": [
+  "agent-api": [
     ".dockerignore",
     "core/agent",
     "core/meetings/contracts/transcript.v1/transcript.schema.json",
   ],
-  "vexaai/v012-meeting-api": [
+  "meeting-api": [
     ".dockerignore",
     "core/meetings/services/meeting-api",
+    "core/meetings/mcp.tools.v1.json",
     "core/meetings/contracts/invocation.v1/invocation.schema.json",
     "core/meetings/contracts/lifecycle.v1/lifecycle.schema.json",
     "core/meetings/contracts/webhook.v1/webhook.schema.json",
     "core/runtime/contracts/runtime.v1/runtime.schema.json",
     "core/runtime/contracts/schedule.v1/schedule.schema.json",
   ],
-  "vexaai/v012-gateway": [
+  "gateway": [
     ".dockerignore",
     "core/gateway/services/gateway",
     "core/meetings/routes.v1.json",
-    "core/meetings/services/mcp/routes.v1.json",
+    "core/gateway/services/mcp/routes.v1.json",
     "core/identity/routes.v1.json",
     "core/agent/routes.v1.json",
   ],
-  "vexaai/v012-mcp": [
-    "core/meetings/services/mcp",
+  "mcp": [
+    "core/gateway/services/mcp",
   ],
-  "vexaai/v012-terminal": [
+  "terminal": [
     "clients/terminal",
   ],
+  "flows": [
+    ".dockerignore",
+    "core/flows",
+    "behavior",
+  ],
+  "credential-broker": [
+    "core/agent/services/credential-broker",
+  ],
+};
+
+export const RUNTIME_INPUTS_BY_IMAGE = {
+  ...Object.fromEntries(SERVICES.flatMap((s) => [
+    [legacyImageFor(s), RUNTIME_INPUTS_BY_SERVICE[s]],
+    [imageFor(s), RUNTIME_INPUTS_BY_SERVICE[s]],
+  ])),
   "vexaai/vexa-bot": [
     ".dockerignore",
     "core",
@@ -93,11 +135,6 @@ export const RUNTIME_INPUTS_BY_IMAGE = {
     "tsconfig.base.json",
     "turbo.json",
     "licenses",
-  ],
-  "vexaai/v012-flows": [
-    ".dockerignore",
-    "core/flows",
-    "behavior",
   ],
   "vexaai/vexa-lite": [
     "deploy/lite",
@@ -113,67 +150,80 @@ export const RUNTIME_INPUTS_BY_IMAGE = {
   ],
 };
 
-export const BUILD_MATRIX_BY_IMAGE = {
-  "vexaai/v012-admin-api": {
-    name: "admin-api",
-    repository: "v012-admin-api",
+const BUILD_BY_SERVICE = {
+  "admin-api": {
     context: "core/identity/services/admin-api",
     dockerfile: "core/identity/services/admin-api/Dockerfile",
   },
-  "vexaai/v012-runtime": {
-    name: "runtime",
-    repository: "v012-runtime",
+  "runtime": {
     context: "core/runtime",
     dockerfile: "core/runtime/Dockerfile",
   },
-  "vexaai/v012-agent-worker": {
-    name: "agent-worker",
-    repository: "v012-agent-worker",
+  "agent-worker": {
     context: ".",
     dockerfile: "core/agent/worker/Dockerfile",
   },
-  "vexaai/v012-agent-api": {
-    name: "agent-api",
-    repository: "v012-agent-api",
+  "agent-api": {
     context: ".",
     dockerfile: "core/agent/services/agent-api/Dockerfile",
   },
-  "vexaai/v012-meeting-api": {
-    name: "meeting-api",
-    repository: "v012-meeting-api",
+  "meeting-api": {
     context: ".",
     dockerfile: "core/meetings/services/meeting-api/Dockerfile",
   },
-  "vexaai/v012-gateway": {
-    name: "gateway",
-    repository: "v012-gateway",
+  "gateway": {
     context: ".",
     dockerfile: "core/gateway/services/gateway/Dockerfile",
   },
-  "vexaai/v012-mcp": {
-    name: "mcp",
-    repository: "v012-mcp",
-    context: "core/meetings/services/mcp",
-    dockerfile: "core/meetings/services/mcp/Dockerfile",
+  "mcp": {
+    context: "core/gateway/services/mcp",
+    dockerfile: "core/gateway/services/mcp/Dockerfile",
   },
-  "vexaai/v012-terminal": {
-    name: "terminal",
-    repository: "v012-terminal",
+  "terminal": {
     context: "clients/terminal",
     dockerfile: "clients/terminal/Dockerfile",
+    // THE VARIANT THIS LINE SHIPS. NEXT_PUBLIC_TERMINAL_MODE is baked into the Next.js bundle at
+    // build time (clients/terminal/Dockerfile:33,78; src/platform/mode.ts:25) — it cannot be switched
+    // by a runtime env var, so the release matrix is the only place that decides which terminal
+    // the channel publishes. Until this line existed the matrix passed NO build args at all, so
+    // the published terminal:<tag> was the full workbench while the demo the pilot was shown
+    // (app.dev.vexa.ai) was the minutes lane — the same variant/tag mismatch the Dockerfile's own
+    // note at :85-95 records from 2026-09-02, one layer up. The published image records the
+    // outcome in LABEL ai.vexa.terminal.mode, which release-validate asserts on both the amd64
+    // and arm64 identity legs; the packet (candidate-images.json) pins digests and knows nothing
+    // about variant, so that label assertion is the only thing standing between this line and a
+    // full-terminal publish.
+    build_args: "NEXT_PUBLIC_TERMINAL_MODE=minutes",
   },
+  "flows": {
+    context: ".",
+    dockerfile: "core/flows/Dockerfile",
+  },
+  // Narrow context: the broker's signer is vendored into its own src/, so nothing outside its
+  // directory enters the image.
+  "credential-broker": {
+    context: "core/agent/services/credential-broker",
+    dockerfile: "core/agent/services/credential-broker/Dockerfile",
+  },
+};
+
+// A frozen schema 1-3 packet keeps building under the name it was frozen with. A current-name row
+// also carries `legacy_repository` while the dual push lasts: release-images.yml pushes the one
+// build under both tags, so both names hold the same digest.
+export const BUILD_MATRIX_BY_IMAGE = {
+  ...Object.fromEntries(SERVICES.flatMap((s) => [
+    [legacyImageFor(s), { name: s, repository: legacyRepositoryFor(s), ...BUILD_BY_SERVICE[s] }],
+    [imageFor(s), {
+      name: s, repository: repositoryFor(s), legacy_repository: legacyRepositoryFor(s),
+      ...BUILD_BY_SERVICE[s],
+    }],
+  ])),
   "vexaai/vexa-lite": {
     name: "lite",
     repository: "vexa-lite",
     context: ".",
     dockerfile: "deploy/lite/Dockerfile.lite",
     free_disk: true,
-  },
-  "vexaai/v012-flows": {
-    name: "flows",
-    repository: "v012-flows",
-    context: ".",
-    dockerfile: "core/flows/Dockerfile",
   },
 };
 
@@ -191,7 +241,7 @@ const fail = (message) => {
 
 export function validateCandidateMap(doc, expectedVersion) {
   if (!doc || typeof doc !== "object" || Array.isArray(doc)) fail("map must be an object");
-  if (doc.schema_version !== 1 && doc.schema_version !== 2) fail("schema_version must be 1 or 2");
+  if (![1, 2, 3, 4].includes(doc.schema_version)) fail("schema_version must be 1, 2, 3 or 4");
   if (!VERSION.test(doc.release)) fail(`invalid stable release: ${doc.release}`);
   if (expectedVersion && doc.release !== expectedVersion) {
     fail(`map release ${doc.release} does not match requested ${expectedVersion}`);
@@ -382,6 +432,10 @@ export function candidateBuildPlanFromChangedImages(doc, changedImages) {
       })),
     build_bot: selected.includes("vexaai/vexa-bot"),
     base_candidate_tag: doc?.candidate_tag || null,
+    // The base candidate's service images under the names it was frozen with (schema 1-3:
+    // vexaai/v012-<service>; schema 4: vexaai/vexa-<service>). A delta leg pulls these, not
+    // today's names, and retags them to today's names for compose.
+    base_service_images: doc ? requiredImagesFor(doc).filter((image) => serviceOf(image)) : [],
   };
 }
 

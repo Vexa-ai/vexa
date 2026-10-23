@@ -1,0 +1,13 @@
+{
+  "type": "done",
+  "reply": "Here is what I found.",
+  "sessionId": "s1",
+  "ok": false,
+  "fault": {
+    "source": "vexa-tools",
+    "kind": "access_expired",
+    "status": 401,
+    "detail": "This turn ran past its tool access, which expired at 10:30:00 UTC; the Vexa tool calls it made after that were refused, so its answer may be missing what they would have returned.",
+    "remedy": "Send it again: the next turn starts with fresh tool access."
+  }
+}

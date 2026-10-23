@@ -135,6 +135,7 @@ class DownstreamClient(Protocol):
         headers: Optional[dict] = None,
         params: Optional[dict] = None,
         content: Optional[bytes] = None,
+        timeout: Optional[object] = None,
     ) -> AsyncContextManager[StreamedResponse]:
         """Open a streaming downstream request and expose its HEAD before the body is read::
 
@@ -146,7 +147,9 @@ class DownstreamClient(Protocol):
         JSON error, or a session-handshake refusal, and the gateway must relay whichever it is
         without buffering (a silent SSE stream never completes) and without rewriting the status.
         Transport failures on the OPEN (unreachable / connect timeout) raise, so the app can type
-        them 502/504 exactly as the buffered forward does."""
+        them 502/504 exactly as the buffered forward does. ``content`` may be an async iterator
+        (a request body relayed as it arrives); ``timeout`` replaces the leg's own deadline for
+        this request only."""
         ...
 
 

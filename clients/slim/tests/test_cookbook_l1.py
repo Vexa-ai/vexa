@@ -20,7 +20,6 @@ class Wire:
     def __init__(self) -> None:
         self.seen: list[httpx.Request] = []
         self._routes = {
-            ("POST", "/agent/meeting/process"): {"ok": True, "on": True},
             ("GET", "/agent/workspace/file"): {"content": "FILE"},
             ("GET", "/agent/workspace/tree"): {"files": ["CLAUDE.md", "agents/meeting.md"]},
             ("POST", "/agent/workspace/init"): {"ok": True, "seeded": True},
@@ -66,11 +65,11 @@ def slim() -> Slim:
 
 
 async def test_agent_on_meeting_wire(wire, slim):
+    """ONE call on the wire: the bot. The second — POST /agent/meeting/process, the copilot's
+    on-switch — went with the pipeline PRD decision 34 removed, and that endpoint now 404s."""
     await cb.agent_on_meeting(slim, "abc", meet_url="https://meet/x")
     paths = [(r.method, r.url.path) for r in wire.seen]
-    assert paths == [("POST", "/bots"), ("POST", "/agent/meeting/process")]
-    import json
-    assert json.loads(wire.seen[-1].content)["on"] is True       # start_processing → on=True
+    assert paths == [("POST", "/bots")]
 
 
 async def test_schedule_routine_wire(wire, slim):

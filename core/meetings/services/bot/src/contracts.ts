@@ -63,6 +63,17 @@ export interface LifecycleEvent {
    *  Additive on lifecycle.v1 exactly as `infra_fault`/`stt_fault` are — the sealed contract
    *  ingests liberally, so no schema bump is needed to carry it. The control plane persists it at
    *  `meeting.data.join_evidence`; a bot that omits it still gets a derived verdict there. */
+  /** Every stretch of captured audio the lanes will never transcribe, on the TERMINAL event only
+   *  (prod-cutover R4). Additive on lifecycle.v1 exactly as `stt_fault` is; meeting-api persists it
+   *  at `meeting.data.transcript_gaps`. Times are epoch seconds + ISO, like transcript.v1. */
+  transcript_gaps?: Array<{
+    start: number;
+    end: number;
+    absolute_start_time: string;
+    absolute_end_time: string;
+    speaker?: string;
+    reason: string;
+  }>;
   join_evidence?: {
     reason: string;
     attribution: string;
@@ -104,7 +115,7 @@ export type Act =
   | { action: 'speak'; text: string; voice?: string }
   | { action: 'speak_audio'; url?: string; audioBase64?: string }
   | { action: 'speak_stop' }
-  | { action: 'chat_send'; text: string }
+  | { action: 'chat_send'; text: string; id?: string }
   | { action: 'chat_read' }
   | { action: 'screen_show'; imageUrl?: string; text?: string }
   | { action: 'screen_stop' }

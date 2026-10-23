@@ -1,0 +1,12 @@
+{
+  "type": "error",
+  "message": "the terminal could not reach the Vexa gateway.",
+  "status": 502,
+  "fault": {
+    "source": "gateway",
+    "kind": "unreachable",
+    "status": null,
+    "detail": "the terminal could not reach the Vexa gateway",
+    "remedy": "Send it again in a moment; if it persists, the gateway is down."
+  }
+}

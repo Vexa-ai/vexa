@@ -3,13 +3,71 @@
 # Vexa Lite — meeting-bot launcher (process backend)
 # =============================================================================
 # The runtime kernel (RUNTIME_BACKEND=process) execs this once per meeting via the
-# meeting-bot profile (BOT_COMMAND). Unlike the bot's own container entrypoint, it does
-# NOT bring up Xvfb / PulseAudio — supervisord already owns those for the whole container
-# (one shared display, like 0.10.6 lite). The bot's full constructor arrives in the
-# inherited env as VEXA_BOT_CONFIG (invocation.v1); we just run the worker.
+# meeting-bot profile (BOT_COMMAND). Like the bot's own container entrypoint, it brings up the
+# bot's display and audio, then runs the worker. The bot's full constructor arrives in the
+# inherited env as VEXA_BOT_CONFIG (invocation.v1).
+#
+# The runtime starts each bot as a uid of its own (never root, no supplementary group) with a
+# private HOME. Everything this bot touches is its own:
+#  * its OWN X display: an Xvfb run as this uid on a display number it picks itself, with access
+#    control on and a fresh cookie in this HOME (bin/bot-display cookie), so no other bot, no agent
+#    worker and no service can open it — see, record or drive it. Before the bot runs, both of the
+#    display's sockets are checked to be this Xvfb's (bin/bot-display check); if the display dies,
+#    the bot's whole process group goes with it;
+#  * its OWN PulseAudio daemon, socket in its HOME (0700), with the tts_sink → virtual_mic graph the
+#    bot's speak path expects (the same graph the bot image's entrypoint builds), muted, and no module
+#    loading once it is up — no other bot can reach it, and no bot's audio reaches another's mic;
+#  * its checkpoint screenshots: the join module writes /app/storage/screenshots, a link in the image
+#    to /proc/self/fd/9, which is this bot's own $HOME/screenshots;
+#  * its captured-signal recording, in its HOME.
+# The display, its window manager and the audio daemon are in the bot's process group, so the
+# runtime's group teardown ends them with the bot.
 set -u
 
-export DISPLAY="${DISPLAY:-:99}"
+home="${HOME:-/tmp}"
+export VEXA_CAPTURE_SIGNAL_DIR="${VEXA_CAPTURE_SIGNAL_DIR:-$home/captured-signal}"
+
+x11_dir="$home/x11"
+mkdir -p -m 0700 "$x11_dir"
+export XAUTHORITY="$x11_dir/Xauthority"
+/usr/local/bin/bot-display cookie "$XAUTHORITY" || exit 1
+rm -f "$x11_dir/ready" "$x11_dir/xvfb.pid"
+mkfifo -m 0600 "$x11_dir/ready" || exit 1
+(
+    Xvfb -displayfd 3 -screen 0 1920x1080x24 -auth "$XAUTHORITY" -nolisten tcp +extension GLX +render -noreset \
+        3>"$x11_dir/ready" &
+    echo "$!" > "$x11_dir/xvfb.pid"
+    wait "$!"
+    kill -KILL 0
+) &
+display=""
+read -r -t 20 display < "$x11_dir/ready"
+case "$display" in
+    ""|*[!0-9]*) echo "[vexa-bot-launch] the bot's X display did not start" >&2; exit 1;;
+esac
+for _ in $(seq 1 50); do [ -s "$x11_dir/xvfb.pid" ] && break; sleep 0.1; done
+/usr/local/bin/bot-display check "$display" "$(cat "$x11_dir/xvfb.pid")" || exit 1
+export DISPLAY=":$display"
+fluxbox >/dev/null 2>&1 &
+
+pulse_dir="$home/pulse"
+mkdir -p -m 0700 "$pulse_dir"
+export XDG_RUNTIME_DIR="$pulse_dir"
+export PULSE_SERVER="unix:$pulse_dir/native"
+pulseaudio --daemonize=no --exit-idle-time=-1 --disallow-exit -n --use-pid-file=no --system=no \
+    --realtime=no --high-priority=no --log-target=stderr --log-level=error \
+    --load="module-native-protocol-unix socket=$pulse_dir/native" \
+    --load="module-null-sink sink_name=tts_sink sink_properties=device.description=TTSAudioSink" \
+    --load="module-remap-source master=tts_sink.monitor source_name=virtual_mic source_properties=device.description=VirtualMicrophone" \
+    --disallow-module-loading &
+for _ in $(seq 1 50); do pactl info >/dev/null 2>&1 && break; sleep 0.1; done
+pactl set-default-source virtual_mic 2>/dev/null || true
+pactl set-sink-mute tts_sink 1 2>/dev/null || true
+pactl set-source-mute virtual_mic 1 2>/dev/null || true
+
+screenshots="$home/screenshots"
+mkdir -p "$screenshots"
+exec 9<"$screenshots"
 
 # Run from the bot package dir so its relative schema path (src→../../../contracts) and the
 # pnpm-linked workspace deps resolve, exactly like the bot's container entrypoint does. The

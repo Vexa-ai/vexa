@@ -29,8 +29,11 @@ import {
   type Processor,
   type Tensor,
 } from '@huggingface/transformers';
+import { describeOnnxThreads, onnxSessionOptions, resolveOnnxThreads } from './onnx-threads.js';
 
 const SAMPLE_RATE = 16_000;
+/** The chosen ORT thread count is logged once per process, not per segmenter. */
+let loggedOnnxThreads = false;
 const PYANNOTE_MODEL_ID = 'onnx-community/pyannote-segmentation-3.0';
 const WINDOW_SAMPLES = 10 * SAMPLE_RATE;            // 160_000
 const DEFAULT_INFER_INTERVAL_MS = 500;
@@ -70,6 +73,14 @@ function speakerSetChanges(prev: ReadonlyArray<number>, cur: ReadonlyArray<numbe
   if (prev.length !== cur.length) return true;
   for (const s of cur) if (!prev.includes(s)) return true;
   return false;
+}
+
+function boundaryKind(prevSet: ReadonlyArray<number>, curSet: ReadonlyArray<number>): BoundaryEvent['kind'] {
+  if (prevSet.length === 0) return 'silence→speaker';
+  if (curSet.length === 0) return 'speaker→silence';
+  if (curSet.length > prevSet.length) return 'overlap-onset';
+  if (curSet.length < prevSet.length) return 'overlap-offset';
+  return 'speaker→speaker';
 }
 
 /** 3-tap median filter to suppress single-frame argmax spikes. */
@@ -148,6 +159,8 @@ export class PyannoteSegmenter {
    *  drop duplicates when overlapping inference windows re-detect the
    *  same boundary. */
   private lastEmittedBoundaryMs = -Infinity;
+  /** The speaker set the emitted edges leave the stream in (silence before the first edge). */
+  private emittedSet: ReadonlyArray<number> = [];
 
   /** pack-msteams-diarization-cutover (#394): rolling list of absolute
    *  time ranges [startMs, endMs] where pyannote classified 2+ speakers
@@ -166,7 +179,17 @@ export class PyannoteSegmenter {
 
   static async create(cfg: PyannoteSegmenterConfig = {}): Promise<PyannoteSegmenter> {
     const inst = new PyannoteSegmenter(cfg);
-    inst.model = await AutoModel.from_pretrained(PYANNOTE_MODEL_ID, { device: 'cpu' });
+    // Cap onnxruntime's thread pool to the container's CPU allowance — by default it spawns one
+    // thread per HOST core, which starves the bot under a Kubernetes CPU limit.
+    const threads = resolveOnnxThreads();
+    if (!loggedOnnxThreads) {
+      loggedOnnxThreads = true;
+      console.log(describeOnnxThreads(threads));
+    }
+    inst.model = await AutoModel.from_pretrained(PYANNOTE_MODEL_ID, {
+      device: 'cpu',
+      session_options: onnxSessionOptions(threads),
+    });
     inst.processor = await AutoProcessor.from_pretrained(PYANNOTE_MODEL_ID);
     return inst;
   }
@@ -178,7 +201,15 @@ export class PyannoteSegmenter {
     this.ringBaseTsMs = 0;
     this.samplesSinceLastInfer = 0;
     this.lastEmittedBoundaryMs = -Infinity;
+    this.emittedSet = [];
     this.overlapIntervals = [];
+  }
+
+  private emit(ev: BoundaryEvent, set: ReadonlyArray<number>, batch: BoundaryEvent[]): void {
+    batch.push(ev);
+    this.lastEmittedBoundaryMs = ev.tMs;
+    this.emittedSet = set;
+    this.onBoundary?.(ev);
   }
 
   /** Append a frame of audio to the ring buffer + advance inference cadence.
@@ -309,22 +340,29 @@ export class PyannoteSegmenter {
       const lastEverEmitted = this.lastEmittedBoundaryMs;
       if (tMs - lastInBatch <= 50) continue;
       if (tMs - lastEverEmitted <= 100) continue;
-      const prevSet = SPEAKERS_BY_CLASS[prev];
-      const curSet = SPEAKERS_BY_CLASS[cur];
-      const kind: BoundaryEvent['kind'] = prevSet.length === 0
-        ? 'silence→speaker'
-        : curSet.length === 0
-          ? 'speaker→silence'
-          : (curSet.length > prevSet.length ? 'overlap-onset'
-            : (curSet.length < prevSet.length ? 'overlap-offset' : 'speaker→speaker'));
+      const kind = boundaryKind(SPEAKERS_BY_CLASS[prev], SPEAKERS_BY_CLASS[cur]);
       const ev: BoundaryEvent = { tMs, kind, confidence: frameConfidence[f] };
       // DEBUG (oversegmentation): show speaker→speaker cuts with the smoothed-class
       // context around the cut frame — a brief flip back (e.g. 1112221 = wobble) vs
       // a sustained relabel (1112222222 = real handoff) tells us whether to suppress.
       if (process.env.VEXA_SEG_DEBUG && (kind === 'speaker→speaker' || kind === 'overlap-onset' || kind === 'overlap-offset')) console.log(`[seg] ${kind} @${(tMs / 1000).toFixed(1)}s ${prev}→${cur} ctx[${smoothed.slice(Math.max(0, f - 8), f + 9).join('')}]`);
-      events.push(ev);
-      this.lastEmittedBoundaryMs = tMs;
-      this.onBoundary?.(ev);
+      this.emit(ev, SPEAKERS_BY_CLASS[cur], events);
+    }
+
+    // The edges emitted so far must describe the speaker set the model sees at the live edge. An
+    // edge is the only thing that opens a turn downstream, and two cases never produce one on their
+    // own: speech already in progress at the stream's first frame (frame 0 has no predecessor), and
+    // a resumption the dedup floors above swallowed (a pause shorter than them). Under unbroken
+    // speech the next natural edge can be minutes away, and every second until then is never
+    // transcribed. So when the live state disagrees with the emitted one, emit the edge into the
+    // live run where it began — strictly after the last edge, so the stream stays ordered.
+    const liveClass = smoothed[scanEnd - 1];
+    if (scanEnd > 0 && speakerSetChanges(this.emittedSet, SPEAKERS_BY_CLASS[liveClass])) {
+      let runStart = scanEnd - 1;
+      while (runStart > 0 && smoothed[runStart - 1] === liveClass) runStart--;
+      const tMs = Math.max(windowStartMs + runStart * frameMs, this.lastEmittedBoundaryMs + 1);
+      const kind = boundaryKind(this.emittedSet, SPEAKERS_BY_CLASS[liveClass]);
+      this.emit({ tMs, kind, confidence: frameConfidence[runStart] }, SPEAKERS_BY_CLASS[liveClass], events);
     }
 
     // pack-msteams-diarization-cutover (#394): record overlap intervals

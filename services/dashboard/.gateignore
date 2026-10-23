@@ -1,0 +1,2 @@
+# The hosted dashboard, to be retired (RETIRING.md): this tree, and only this tree, is out of the
+# per-dir gates, as ADR-0007 records. Everything else under services/ is gated. See scripts/gates.mjs walkDirs().

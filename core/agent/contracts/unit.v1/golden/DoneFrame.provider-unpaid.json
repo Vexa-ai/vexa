@@ -1,0 +1,16 @@
+{
+  "type": "done",
+  "reply": "The model provider (openrouter.ai) is out of credit (402). It said: Insufficient credits. Add more using https://openrouter.ai/settings/credits Add credit at openrouter.ai, or choose another model under Settings → Models.",
+  "sessionId": "5b0e2f4c-8a51-4c1e-9d2a-3f6b7e1c0a94",
+  "ok": false,
+  "detail": "API Error: 402 Insufficient credits.",
+  "fault": {
+    "source": "model-provider",
+    "kind": "unpaid",
+    "provider": "openrouter.ai",
+    "model": "anthropic/claude-sonnet-4",
+    "status": 402,
+    "detail": "Insufficient credits. Add more using https://openrouter.ai/settings/credits",
+    "remedy": "Add credit at openrouter.ai, or choose another model under Settings → Models."
+  }
+}

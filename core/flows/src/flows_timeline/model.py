@@ -21,7 +21,9 @@ Three sources, one list:
 
 A failure is never machinery: any receipt in state `failed` becomes a `reaction.failed` event
 whatever its step, because the one thing an agent must not do is talk about a report it never
-delivered.
+delivered. NEITHER IS AN ABSENT DOMAIN (F-D20): a step the engine answered for is a CONFIRMED
+receipt, so it used to read as the effect it never had — `process_meeting` on a deployment with no
+agent rendered `report.written`. `event_from_receipt` reads the outcome, not only the state.
 """
 from __future__ import annotations
 
@@ -268,18 +270,33 @@ def event_from_receipt(row: dict, refs: dict, flow: str = "") -> Optional[Event]
         kind = "reaction.failed"
     if not kind:
         return None
-    if result.get("skipped"):
+    # A DOMAIN THIS DEPLOYMENT DOES NOT RUN (F-D20). Both engine answers for an absent domain are
+    # written as CONFIRMED receipts — deliberately, so a redelivery of the same fact cannot re-run
+    # the step — and status was derived from the STATE alone. `STEP_KINDS` maps `process_meeting`
+    # to `report.written`, so a report nobody wrote rendered `report.written / done`; and `done` is
+    # one of the statuses `render.line` HIDES, so the timeline of a no-agents deployment did not
+    # merely mislabel the moment, it said nothing at all was unusual about it. That is the same
+    # claim `receipts.fail` exists to stop on the other terminal branch.
+    #
+    # The domain is named in the status rather than left to `detail`, because `line` renders the
+    # status and does not render the detail: a reader must not have to open the JSON to learn that
+    # the report they are being shown does not exist.
+    domain = str(result.get("domain") or "")
+    if result.get("outcome") in ("not_present", "skipped") and domain:
+        status = f"skipped ({domain}:not_present)"
+    elif result.get("skipped"):
         status = "skipped"
     elif result.get("coalesced"):
         status = "coalesced"
     else:
         status = _RECEIPT_STATUS.get(state, state or "unknown")
+    detail = str(result.get("skipped") or result.get("detail") or "")[:300] or None
     return Event(at=confirmed if (confirmed and state == "confirmed") else at,
                  kind=kind, title=_title(refs, step), status=status,
                  meeting_id=_meeting_id(refs, result),
                  produced=_produced(result, str(row.get("provider_ref") or "")),
                  flow=flow or None, source="receipt",
-                 detail=(str(result.get("skipped") or "")[:300] or None))
+                 detail=detail)
 
 
 # A meeting row is HELD once it can no longer happen again — the platform's own terminal statuses.

@@ -1,0 +1,23 @@
+{
+  "user_id": 42,
+  "scopes": [
+    "bot",
+    "tx"
+  ],
+  "max_concurrent": 3,
+  "email": "jane@example.com",
+  "is_admin": false,
+  "delegation": {
+    "regime": "autonomous",
+    "workspaces": [
+      "acme-account",
+      "standup-notes"
+    ],
+    "target": "acme-account",
+    "unit": "agent-42-scheduled-0a1b2c3d4e"
+  },
+  "person_is_admin": true,
+  "admin_account": false,
+  "person_admin_account": false,
+  "credential_class": "delegation"
+}

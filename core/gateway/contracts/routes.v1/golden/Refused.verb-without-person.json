@@ -1,0 +1,20 @@
+{
+  "why": "a verbs row states person true or false; a missing flag is one nobody can read the same way twice",
+  "manifest": {
+    "contract": "routes.v1",
+    "domain": "agent",
+    "owner": "core/agent",
+    "edge": "gateway",
+    "forward": {
+      "edge_prefix": "/agent/",
+      "upstream_prefix": "/api/"
+    },
+    "routes": [],
+    "verbs": [
+      {
+        "method": "DELETE",
+        "path": "/agent/workspace/x"
+      }
+    ]
+  }
+}

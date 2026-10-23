@@ -19,9 +19,12 @@ talk directly — they meet **here**, over published contracts (`api.v1`, `ws.v1
 | Direction | Neighbour | Via | What crosses |
 |---|---|---|---|
 | **calls** | `admin-api` | HTTP `POST /internal/validate` | `x-api-key` token → `{user_id, scopes, max_concurrent, webhook_*}` (fail-closed 401) |
-| **calls** | `meeting-api` | HTTP proxy `/bots · /meetings · /transcripts · /recordings` | client request + injected `x-user-id`/`x-user-scopes`/`x-user-limits`; body + status returned verbatim |
-| **calls** | `meeting-api` | HTTP `POST /ws/authorize-subscribe` | `/ws` subscribe authorization → `{authorized[], errors[]}` |
+| **calls** | `meeting-api` | HTTP proxy `/bots · /meetings · /transcripts · /recordings` | client request + injected `x-user-id`/`x-user-scopes`/`x-user-limits`, signed as `X-Vexa-Identity` with the Ed25519 key in `VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE` (gateway-identity.v1); body + status returned verbatim |
+| **calls** | `meeting-api` | HTTP `POST /ws/authorize-subscribe` | `/ws` subscribe authorization → `{authorized[], errors[]}` — at subscribe, and again every 15 s for each open socket's subscriptions (`subscription_revoked` on a refusal) |
+| **calls** | `admin-api` | HTTP `POST /internal/validate`, every 15 s per open socket | the socket's key RE-RESOLVED: a key that no longer resolves closes the socket (`4401`); a changed membership re-derives its workspace status channels |
+| **calls** | `meeting-api` | WS `/bot-accounts/sessions/{session_id}/vnc` (`src/gateway/vnc_relay.py`) | a bot-account sign-in session's live view (ADR-0049): the client's frames relayed verbatim both ways, opened with the same signed identity headers an HTTP forward stamps |
 | **consumes** | `redis` (producers: meeting-api + collector) | sub `tc:meeting:{id}:mutable` · `bm:meeting:{id}:status` · `va:meeting:{id}:chat` | raw transcript / status / chat payloads, forwarded unchanged to the socket |
+| **consumes** | `redis` stream (producer: signals) | read `sig:meeting:{id}` (only for a subscription that named `streams:["signals"]`, for the row the authorize hop granted) | transcript-signal annotations, sent as `meeting.signals` frames |
 | **produces** | clients (dashboard, SDKs) | WS `/ws` (`ws.v1`) | `subscribed`/`unsubscribed`/`pong`/`error` control + type-tagged live data frames |
 | **produces** | clients | HTTP `/bots`, `/meetings`, `/transcripts`, `/recordings`, `/auth/me`, `/health` (`api.v1`) | the frozen public REST surface |
 | **publishes** | log sink | stdout, one JSON line per log | `logevent.v1` envelopes (auth + proxy spans) carrying the `X-Trace-Id` |
@@ -33,6 +36,53 @@ talk directly — they meet **here**, over published contracts (`api.v1`, `ws.v1
 `contracts.seal.json`.
 **Consumes:** its own `api.v1`/`ws.v1` shapes by-path at the edge; admin-api's `/internal/validate`
 and meeting-api's `/ws/authorize-subscribe` are HTTP hops, not `*.v1` contracts.
+
+## Route table and policy
+Assembled at boot from each deployed domain's `routes.v1.json` (`src/gateway/routes_manifest.py`);
+the edge declares only its own `/health` and `/auth/me`. A row carries its scopes and, with
+`"delegation": true`, admits a worker's own delegation token (the MCP front door and the agent's
+friction report; `src/gateway/delegation.py`); with `"mcp_reentry": true` it admits that token
+only on the MCP's re-entry — the rows the MCP's tools call back into, and no others. A domain
+fronted wholesale (the agent) declares `forward` — `{"edge_prefix": "/agent/", "upstream_prefix":
+"/api/"}` — and the edge registers its rows from the manifest without naming any of them: the
+catch-all, and a route of its own for every other row (literal, or with whole-segment `{name}`
+parameters re-encoded like any path parameter). A meetings row is forwarded to its own path on
+meeting-api, or to the `"upstream"` it names (`/user/webhook/deliveries` is meeting-api's
+`/webhooks/deliveries`); the three meeting-bundle rows (`GET`/`POST /meetings/{meeting_id}/export`,
+`POST /meetings/import`) are relayed as streams in both directions under their own deadline
+(`BUNDLE_TIMEOUT`), every other meetings row through the buffered forward; every `{name}` in that target is filled under the same rule as a forwarded
+row (`paths.forwarded_param`), and `{platform}` must be an api.v1 `Platform`. meeting-api reads the
+same rows to check, on the route a request matched, the scopes this edge checked
+(`meeting_api/route_scopes.py`). `mcp_reentry` is refused on a `{path:path}` catch-all. A meetings
+row may end in one (the sign-in session's live-view files, `/bot-accounts/sessions/{session_id}/view/{path:path}`):
+its tail is forwarded under the catch-all rule (`paths.tail_path`). The live view's websocket is not a
+row — routes.v1 declares HTTP verbs — and is held to the scopes of `GET /bot-accounts/sessions/{session_id}`.
+
+## The service door (flows)
+
+Where `VEXA_FLOWS_SERVICE_KEY` is set, `python -m gateway` also serves `service_door.py` on
+`VEXA_GATEWAY_SERVICE_DOOR_PORT` (8002), a listener no deploy surface publishes. It is the flows
+tier's one way into the other domains: `FLOWS_OUTBOUND` lists every call flows makes, and the door
+forwards those to agent-api, admin-api and crm-api over the internal tier, and to meeting-api with
+the subject's identity signed here (scopes `bot`, `tx`). Anything else is `403`. Its `/to-flows`
+leg takes the internal tier's calls into flows-api (`FLOWS_INBOUND`) and forwards them with the
+flows key, so flows never holds `INTERNAL_API_SECRET`. Tests: `tests/test_service_door.py`.
+
+## The validate hop when admin-api is unavailable
+**How it works.** `AdminApiAuthorizer.resolve` (`src/gateway/adapters.py`) POSTs each credential to
+admin-api `/internal/validate` with a 5 s budget. A hop that could not connect (`ConnectError`,
+`ConnectTimeout`) never reached admin-api, so it is sent again after 0.5 s and then 1.5 s
+(`VALIDATE_CONNECT_RETRY_BACKOFF`): an admin-api restart costs a request about 2 s instead of a 503.
+Any other failure is answered at once: a read timeout means admin-api has the request and is slow,
+and a pool timeout is this edge's own saturation, so neither is repeated. After the last retry, or
+on any of those, the edge answers 503, never 401: no verdict was reached on the key.
+
+**Why it complies.** Only a request admin-api never received is repeated, so no verdict is asked for
+twice and a slow identity service gets no extra load. The edge stays fail-closed: no path admits a
+credential without a 200 from `/internal/validate`. Tests: `tests/test_adapters_resolve.py`
+(`test_a_connect_failure_that_recovers_resolves_the_key`,
+`test_a_persistent_connect_failure_still_answers_unavailable`,
+`test_a_hop_that_reached_admin_api_or_hit_this_edges_pool_is_not_retried`).
 
 ## Isolated evaluation
 `tests/` holds unit evals (L2) over `create_app` with in-process fakes injected via `conftest.py`
@@ -50,4 +100,5 @@ uv run pytest -q        # L2 unit; uv manages this package's own venv/deps
 - ✅ delivered — REST proxy to meeting-api (verbatim body+status; 502/504 on upstream fault)
 - ✅ delivered — `/ws` multiplex (subscribe/unsubscribe/ping, downstream authorize, redis fan-in over `tc:`/`bm:`/`va:` channels)
 - ✅ delivered — `/auth/me`, `/health`, per-user request rate limit (429), `logevent.v1` tracing
+- ✅ delivered — bot accounts (ADR-0049): the `/bot-accounts` rows forwarded to meeting-api, and the sign-in session's live-view websocket relayed (key resolved as `/ws`; 4401 / 4403 / 4404 refusals)
 - ⬜ planned — add a user scope to `/ws` (auto-subscribe `u:{user_id}:*` on auth) forwarding `meetings.changed` / `workspace.committed` / `routine.status`

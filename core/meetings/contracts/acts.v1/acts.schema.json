@@ -15,7 +15,11 @@
     "Speak": { "type": "object", "additionalProperties": false, "required": ["action", "text"], "properties": { "action": { "const": "speak" }, "text": { "type": "string" }, "voice": { "type": "string" } } },
     "SpeakAudio": { "type": "object", "additionalProperties": false, "required": ["action"], "properties": { "action": { "const": "speak_audio" }, "url": { "type": "string" }, "audioBase64": { "type": "string" } } },
     "SpeakStop": { "type": "object", "additionalProperties": false, "required": ["action"], "properties": { "action": { "const": "speak_stop" } } },
-    "ChatSend": { "type": "object", "additionalProperties": false, "required": ["action", "text"], "properties": { "action": { "const": "chat_send" }, "text": { "type": "string" } } },
+    "ChatSend": {
+      "description": "Type `text` into the meeting chat. `id` names the send: the bot reports whether the line posted as a `chat_send_result` carrying that id on its signed `transcription_segments` stream (transcript.v1 `ChatSendResult`). Without an id the bot reports nothing.",
+      "type": "object", "additionalProperties": false, "required": ["action", "text"],
+      "properties": { "action": { "const": "chat_send" }, "text": { "type": "string" }, "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$" } }
+    },
     "ChatRead": { "type": "object", "additionalProperties": false, "required": ["action"], "properties": { "action": { "const": "chat_read" } } },
     "ScreenShow": { "type": "object", "additionalProperties": false, "required": ["action"], "properties": { "action": { "const": "screen_show" }, "imageUrl": { "type": "string" }, "text": { "type": "string" } } },
     "ScreenStop": { "type": "object", "additionalProperties": false, "required": ["action"], "properties": { "action": { "const": "screen_stop" } } },
