@@ -41,8 +41,8 @@ global:
   # Who runs as root: gateway, admin-api, meeting-api (and the migrations Job), mcp, terminal and
   # flows run as uid 10001 — their Dockerfile USER — and their pods also set runAsNonRoot with that
   # uid (`vexa.nonRootPodSecurityContext`). The credential broker runs as 10001 and the dashboard as
-  # its own user. The runtime and agent-api run as root: the runtime holds the container engine and,
-  # in the process backend, starts each workload as a distinct uid; agent-api moves workspace trees
+  # its own user. The runtime runs as 10001 on the k8s backend (it only calls the API server) and as
+  # root on the docker backend, which holds the container engine. agent-api runs as root: it moves workspace trees
   # that root-run workers and per-subject uids write. Agent workers start as root and run every tool
   # as the tools uid. scripts/image-user.test.mjs holds each Dockerfile to this.
   #

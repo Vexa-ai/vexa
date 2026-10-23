@@ -2413,4 +2413,14 @@ if command -v openssl >/dev/null 2>&1; then
   tb "subjectTickets.<issuer>.signingKey pins the pair across renders (helm template / GitOps)" '[ -n "$(st_pem "$(doc ConfigMap vexa-vexa-subject-ticket-verify-keys "$st_a")" agent)" ] && [ "$(st_pem "$(doc ConfigMap vexa-vexa-subject-ticket-verify-keys "$st_a")" agent)" = "$(st_pem "$(doc ConfigMap vexa-vexa-subject-ticket-verify-keys "$st_b")" agent)" ] && [ "$(st_pem "$(doc ConfigMap vexa-vexa-subject-ticket-verify-keys "$st_a")" agent)" = "$(printf "%s\n" "$ST_PIN" | openssl pkey -pubout 2>/dev/null)" ]'
   unset NOT_ED OWN_PUB ST_PIN
 fi
+# P24: the runtime on the k8s backend only calls the API server, so it runs as the chart's
+# unprivileged uid; the docker backend keeps the image's root to open the engine's socket, and the
+# OpenShift profile leaves every context to the SCC.
+RT_POD() { awk 'BEGIN{RS="\n---\n"} /kind: Deployment/ && /component: runtime\n/' | awk '/^    spec:/{p=1} p && /^      securityContext:/{s=1; next} s && /^        /{print; next} s{exit}'; }
+tb "runtime (k8s backend, the default) runs as uid 10001, non-root" \
+  'ctx="$(RT_POD <<< "$RENDER")"; grep -qx "        runAsNonRoot: true" <<< "$ctx" && grep -qx "        runAsUser: 10001" <<< "$ctx"'
+tb "runtime (control): the docker backend keeps the image's root" \
+  '! RT_POD <<< "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set runtime.backend=docker)" | has runAsNonRoot'
+tb "runtime: the OpenShift profile renders no runtime securityContext" \
+  '[ -z "$(RT_POD <<< "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" -f "$CHART/values-openshift.yaml" --set agentApi.workspaces.storageClassName=rwx-class)")" ]'
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }
