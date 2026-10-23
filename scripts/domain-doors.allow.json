@@ -203,6 +203,14 @@
       "ruling": "PRD decision 46 — clients reach ONE edge with a bearer. The terminal's own auth routes call admin-api directly; the entry closes when the identity routes are bound at the gateway and the client reads only GATEWAY_URL."
     },
     {
+      "path": "clients/terminal/src/app/api/auth/adminApi.ts",
+      "door": "VEXA_ADMIN_API_URL",
+      "line": 97,
+      "from": "terminal",
+      "to": "identity",
+      "ruling": "PRD decision 46 — clients reach ONE edge with a bearer. Sign-out ends the session it signed in with (POST /internal/sessions/end, #1868), over the same internal tier and the same direct door as /internal/validate beside it; it closes with its siblings when the identity routes are bound at the gateway and the client reads only GATEWAY_URL."
+    },
+    {
       "path": "clients/terminal/src/app/api/stt/route.ts",
       "door": "TRANSCRIPTION_SERVICE_URL",
       "line": 28,
