@@ -1,6 +1,8 @@
 # ADR 0051 — Transit keys: identity issues pass-through access, the target asks identity
 
-**Status:** proposed (draft, no code) · 2026-10-23 · builds on ADR-0041 (the edge signs identity),
+**Status:** accepted and implemented · 2026-10-23 (founder approved the design the same day) ·
+identity: admin-api `app/transit.py`, MIGRATION-0016 · vexa-platform: transcription-gateway
+`transit_client.py` · builds on ADR-0041 (the edge signs identity),
 subject-ticket.v1 (car 57), admin-api MIGRATION-0013/0014 · founder ruling 2026-10-23 (#1868):
 *no hardcoded per-service scope like `tx`; a service that needs pass-through access gets a transit
 key issued by the authorization module, different transit keys per downstream service when needed;
@@ -81,7 +83,20 @@ reader is one more place the storage format is load-bearing.
 - **Rename `tx` on the OSS gateway?** Out of scope here: renaming a gateway scope breaks every
   integrator's keys. Leave `tx` as the OSS meetings/transcripts scope.
 
-## Not decided here
+## As built (differences from the proposal above)
 
-Code. This ADR is a draft for the founder's review; nothing in this branch implements it beyond the
-hash-at-rest and credential-class groundwork (MIGRATION-0013/0014) it builds on.
+- **Signed answer: HMAC-SHA256, not Ed25519.** Registering a target issues it a credential
+  (`POST /admin/transit-targets/{name}/secret`, answered once, stored sealed with `at_rest.py`).
+  The target authenticates its calls with it, and identity signs each answer with it, so the
+  target knows the answer came from identity. This needs no new signing key or public-key
+  distribution. An Ed25519 answer remains possible later; the claims would not change.
+- **Doors:** `POST /transit/validate`, and `/transit/keys` (mint, list, revoke on the calling
+  target). The proposal's `/internal/validate-transit` became `/transit/validate`, authenticated
+  by the target credential and not the deployment-wide internal secret.
+- **Registry:** a table (`transit_targets`) written by the admin door. The open question resolved
+  that way so an operator can add a target without a release.
+- **Legacy keys:** the rule is data, `legacy_prefixes` on the target. `transcription` is
+  registered once with the prefixes transcription-gateway honoured (`tx`, `user`, `admin`, none).
+- **Bot path:** unchanged. Bots keep `TRANSCRIPTION_SERVICE_API_TOKEN`; per-dispatch transit keys
+  are still open.
+

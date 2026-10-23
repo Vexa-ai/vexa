@@ -109,7 +109,7 @@ async def get_current_user(api_key: str = Security(USER_KEY_HEADER),
     if not api_key:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Missing API Key")
     row = (await db.execute(select(APIToken).where(token_matches(APIToken, api_key)))).scalars().first()
-    if not row:
+    if not row or row.audience is not None:   # a transit key opens only its target (ADR-0051)
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid API Key")
     token_scopes = set(row.scopes) if row.scopes else set()
     if not token_scopes & VALID_SCOPES:
@@ -311,6 +311,9 @@ class TokenInfo(BaseModel):
     credential_class: str = Field(default="key", validation_alias="kind")
     #: `vxa_bot_…AbCd` — the prefix and last four characters, all a list ever shows of a key.
     token_hint: Optional[str] = None
+    #: A transit key's target and what it may do there (ADR-0051); null on every other key.
+    audience: Optional[str] = None
+    actions: Optional[List[str]] = None
     created_at: Optional[datetime] = None
     last_used_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
@@ -1282,6 +1285,8 @@ def create_app() -> FastAPI:
     # --- internal tier + the terminal's second secret: the `session` credential (D13, MIGRATION-0010).
     from . import sessions as sessions_mod  # noqa: PLC0415
     app.include_router(sessions_mod.build_router())
+    from . import transit as transit_mod  # noqa: PLC0415
+    app.include_router(transit_mod.build_router(verify_admin_token))  # ADR-0051 transit keys
 
     # --- internal tier: instance identity — admin existence + the admin claim.
     #     A fresh install has NO admin unless VEXA_ADMIN_EMAILS names them; the login surface (via

@@ -395,6 +395,10 @@ async def validate_token(payload: ValidateRequest, request: Request,
     if not row:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=INVALID_TOKEN)
     api_token, user = row
+    if api_token.audience is not None:
+        # A transit key opens only its target, which asks identity itself (ADR-0051): it reaches
+        # no gateway route.
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=INVALID_TOKEN)
     # A WORKSPACE PRINCIPAL's account (D2) is never a key holder: nothing mints one, and a row that
     # somehow carries one is refused rather than answered as a person.
     from . import principals as principals_mod  # noqa: PLC0415

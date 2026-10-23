@@ -24,6 +24,7 @@ expire: nothing can authenticate with them, and nobody is shown them.
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -37,10 +38,15 @@ def hash_token(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+_TRANSIT_PATTERN = re.compile(r"^(vxt_[a-z][a-z0-9-]*_)")
+
+
 def token_hint(value: str) -> str:
-    """What a list shows for a key: ``vxa_bot_…AbCd``, or ``…AbCd`` for a key with no prefix."""
+    """What a list shows for a key: ``vxa_bot_…AbCd``, ``vxt_transcription_…AbCd`` for a transit
+    key, or ``…AbCd`` for a key with no prefix."""
     m = TOKEN_PATTERN.match(value)
-    prefix = f"vxa_{m.group(1)}_" if m else ""
+    t = _TRANSIT_PATTERN.match(value)
+    prefix = f"vxa_{m.group(1)}_" if m else (t.group(1) if t else "")
     return f"{prefix}…{value[-4:]}"
 
 

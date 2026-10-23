@@ -478,6 +478,27 @@ def _seal_webhook_secrets(conn: Connection):
         logger.info("schema-sync (MIGRATION-0015): %d webhook secret(s) sealed at rest", sealed)
 
 
+# MIGRATION-0016 — transit keys (ADR-0051). The convergence adds `api_tokens.audience/actions` and
+# the `transit_targets` table. It registers one target, once, because keys that already exist depend
+# on it: `transcription`, with the prefixes transcription-gateway has always honoured (`tx`, `user`,
+# `admin`, and keys with no prefix), so every existing transcription key reads as a transit key on
+# it. ON CONFLICT DO NOTHING: an operator's later edit of the target is never overwritten. It has no
+# credential until the operator issues one (`POST /admin/transit-targets/transcription/secret`).
+LEGACY_TRANSCRIPTION_TARGET = {"name": "transcription", "actions": ["audio.transcribe"],
+                               "legacy_prefixes": ["tx", "user", "admin", ""],
+                               "description": "the hosted transcription API (transcription-gateway)"}
+
+
+def _register_legacy_transit_target(conn: Connection):
+    if conn.dialect.name != "postgresql" or "transit_targets" not in set(inspect(conn).get_table_names()):
+        return
+    conn.execute(text(
+        "INSERT INTO transit_targets (name, actions, legacy_prefixes, description, created_at) "
+        "VALUES (:name, :actions, :legacy_prefixes, :description, now() AT TIME ZONE 'utc') "
+        "ON CONFLICT (name) DO NOTHING"
+    ), LEGACY_TRANSCRIPTION_TARGET)
+
+
 def _sync_functions(conn: Connection):
     conn.execute(text(_MEETING_EVENT_TIME_FN))
 
@@ -515,6 +536,7 @@ def _ensure_schema_sync(conn: Connection, base, deferred: list | None = None):
     _hash_api_tokens(conn)                             # MIGRATION-0013 keys held as SHA-256
     _classify_and_sweep_keys(conn)                     # MIGRATION-0014 hidden credentials end and go
     _seal_webhook_secrets(conn)                        # MIGRATION-0015 webhook secrets sealed at rest
+    _register_legacy_transit_target(conn)              # MIGRATION-0016 existing tx keys stay valid
     _sync_indexes(conn, base, deferred)                # additive indexes (non-unique: deferred)
 
 

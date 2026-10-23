@@ -462,6 +462,8 @@
   },
   "core/identity/services/admin-api/src/admin_api/schema/models.py": {
     "api_tokens": {
+      "actions": "Column(ARRAY(Text), nullable=True)",
+      "audience": "Column(String(64), nullable=True, index=True)",
       "created_at": "Column(DateTime, server_default=func.now())",
       "expires_at": "Column(DateTime, nullable=True)",
       "id": "Column(Integer, primary_key=True, index=True)",
@@ -568,6 +570,15 @@
       "speaker": "Column(String(255), nullable=True)",
       "start_time": "Column(Float, nullable=False)",
       "text": "Column(Text, nullable=False)"
+    },
+    "transit_targets": {
+      "actions": "Column(ARRAY(Text), nullable=False, server_default=text(\"'{}'::text[]\"))",
+      "created_at": "Column(DateTime, server_default=func.now())",
+      "description": "Column(Text, nullable=False, server_default='')",
+      "legacy_prefixes": "Column(ARRAY(Text), nullable=False, server_default=text(\"'{}'::text[]\"))",
+      "name": "Column(String(64), primary_key=True)",
+      "secret": "Column(String(255), nullable=True)",
+      "secret_rotated_at": "Column(DateTime, nullable=True)"
     },
     "users": {
       "created_at": "Column(DateTime, server_default=func.now(), default=func.now())",
