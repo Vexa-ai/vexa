@@ -18,10 +18,16 @@
  *    `styleNonceBootstrap` (below) — a script that runs is already trusted by `script-src`, and the
  *    appearance tokens, sonner, CodeMirror and mermaid all write `<style>` elements at run time. A
  *    `<style>` that arrives as markup (a page's HTML, an injected fragment) has no nonce and does
- *    not apply. Style ATTRIBUTES stay 'unsafe-inline' (`style-src-attr`): React renders `style`
- *    props into the server's HTML, and CSP has no nonce for an attribute. What an attribute can
- *    reach is bounded by `img-src` and `font-src` below, so it cannot send anything off this origin.
- *    The one foreign stylesheet is Google Fonts', for the fonts a person can pick
+ *    not apply.
+ *  - A style ATTRIBUTE applies nowhere (`style-src-attr 'none'`). A style a running script sets
+ *    through the CSSOM (`el.style.…`, which is how React writes a `style` prop on the client) is not
+ *    an attribute and applies. So what the SERVER renders carries none: every page's first frame is
+ *    classes (the gate's blank frame, the join card, /mdx-demo, the 404), and pages that only
+ *    draw after they mount render a blank frame there. mermaid, which writes attributes while it
+ *    draws and in the SVG text it returns, draws through the CSSOM (ui-kit/docDiagrams.tsx). A
+ *    `style="…"` that arrives as markup is refused. `scripts/style-attr-sweep.mjs` holds the pages to
+ *    zero refusals in a real browser.
+ *  - The one foreign stylesheet is Google Fonts', for the fonts a person can pick
  *    (platform/appearance.ts).
  *  - Connections are this origin (REST, `/ws`, the event streams), plus the deployment's LiveKit
  *    server when calls are on (`LIVEKIT_URL`, the address meeting-api and agent-api hand the
@@ -112,7 +118,7 @@ export function contentSecurityPolicy(nonce: string, sources: PolicySources = po
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'wasm-unsafe-eval'${development ? " 'unsafe-eval'" : ""}`,
     `style-src ${styles}`,
     `style-src-elem ${styles}`,
-    "style-src-attr 'unsafe-inline'",
+    "style-src-attr 'none'",
     "font-src 'self' https://fonts.gstatic.com",
     `connect-src ${connect.join(" ")}`,
     `img-src ${img.join(" ")}`,

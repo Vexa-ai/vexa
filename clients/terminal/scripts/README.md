@@ -26,6 +26,18 @@ without its overflow control. Needs Playwright, which is not a terminal dependen
 sweep runner (bbb) with `NODE_PATH` pointing at an install. `MEASURE` is exported so the same
 measurement can run in any browser console.
 
+## style-attr-sweep.mjs
+
+The pages' `style-src-attr 'none'` proof (app/contentSecurityPolicy.ts): opens every key page of a
+running production terminal (sign-in, the shell, a held, a live and a planned meeting, settings, a
+meeting and a workspace URL, join, decide, a profile, the 404, the design catalogue, /mdx-demo with
+a mermaid diagram) in both themes, and fails on any `securitypolicyviolation` or a page whose policy
+still admits style attributes. It answers `/api/*` itself (a signed-in person, three meetings), so
+it needs no backend; the catalogue needs `VEXA_TERMINAL_DESIGN_CATALOGUE=1`. `--shots <dir>` saves a
+full-page screenshot per page and theme, `--compare <a> <b>` diffs two such directories pixel by
+pixel, and `--attr-none` measures a build that still admits attributes. Needs Playwright, on bbb
+with `NODE_PATH` pointing at an install.
+
 ## overlay-hit.mjs
 
 The overlay hit-test (guidelines §3.5, §4.11): opens the catalogue's Dialog, ConfirmDialog and

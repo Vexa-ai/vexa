@@ -35,7 +35,7 @@ describe("the terminal pages' policy", () => {
     expect(d["img-src"]).toEqual(["'self'", "data:", "blob:"]);
     expect(d["style-src"]).toEqual(["'self'", "'nonce-abc'", "https://fonts.googleapis.com"]);
     expect(d["style-src-elem"]).toEqual(["'self'", "'nonce-abc'", "https://fonts.googleapis.com"]);
-    expect(d["style-src-attr"]).toEqual(["'unsafe-inline'"]);
+    expect(d["style-src-attr"]).toEqual(["'none'"]);
     expect(d["font-src"]).toEqual(["'self'", "https://fonts.gstatic.com"]);
     expect(d["media-src"]).toEqual(["'self'"]);
     expect(d["worker-src"]).toEqual(["'self'", "blob:"]);
@@ -90,6 +90,18 @@ describe("the terminal pages' policy", () => {
     expect(directives(contentSecurityPolicy("abc", {}, true))["script-src"]).toContain("'unsafe-eval'");
   });
 
+  it("a style ATTRIBUTE applies nowhere: the server renders none, and markup that carries one is refused", () => {
+    for (const dev of [false, true]) {
+      const d = directives(contentSecurityPolicy("abc", { livekitUrl: "wss://lk.example.test", gaMeasurementId: "G-X" }, dev));
+      expect(d["style-src-attr"]).toEqual(["'none'"]);
+      // and no directive it falls back to admits one either
+      for (const k of ["style-src-attr", "style-src", "default-src"]) {
+        expect(d[k] ?? [], k).not.toContain("'unsafe-inline'");
+        expect(d[k] ?? [], k).not.toContain("'unsafe-hashes'");
+      }
+    }
+  });
+
   it("the policy a production server sends carries no 'unsafe-eval'", () => {
     const before = process.env.NODE_ENV;
     try {
@@ -99,6 +111,7 @@ describe("the terminal pages' policy", () => {
         expect(csp, path).not.toMatch(/'unsafe-eval'/);
         expect(csp, path).toMatch(/style-src-elem [^;]*'nonce-/);
         expect(csp, path).not.toMatch(/style-src-elem [^;]*'unsafe-inline'/);
+        if (!path.startsWith("/canvas-frame")) expect(csp, path).toMatch(/style-src-attr 'none'(;|$)/);
       }
     } finally {
       (process.env as Record<string, string | undefined>).NODE_ENV = before;
