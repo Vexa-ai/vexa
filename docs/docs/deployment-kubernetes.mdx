@@ -1065,7 +1065,30 @@ same option is `docker compose --profile dashboard up -d` (port 13001).
 
 This section collects what a corporate cluster needs beyond the defaults: the rights the person who
 runs `helm install` must hold, the database privileges on your own Postgres, the OpenShift profile, a TLS-inspecting proxy, sign-in through your
-own identity provider, and the settings that change behaviour on upgrade.
+own identity provider, and the settings that change behaviour on upgrade. It starts with the
+restricted environment every bank-ready release is tested against.
+
+### What we test against
+
+This is what we test against. Every release that is called bank-ready has passed the **bank profile**
+([`deploy/bank-profile`](https://github.com/Vexa-ai/vexa/tree/main/deploy/bank-profile)) on its exact
+commit: a cluster set up the way a bank's platform team sets one up, with the chart installed by
+someone who holds only the rights listed under [Required permissions](#required-permissions).
+
+| Constraint | In the profile |
+|---|---|
+| The database user is not a superuser | Your own Postgres 16. Run twice: the user holds only `CREATEROLE`, and the DB team pre-creates the roles while the user holds no role privilege (both ways under [Database privileges](#database-privileges-on-an-external-postgres)). |
+| Non-root Pods under a restricted policy | Pod Security `restricted`, enforced, plus OpenShift `restricted-v2` behaviour: a random uid from the namespace's range, no privilege escalation, every capability dropped, seccomp `RuntimeDefault`, a read-only root filesystem where the chart sets one. The chart runs with `values-openshift.yaml`. |
+| No egress except declared endpoints | A CNI that enforces NetworkPolicy, a namespace default-deny, and the chart's policies with every public address excepted: only DNS, the release's own Pods, the database, object storage, the model, STT, the identity provider and (for the runtime) the Kubernetes API. |
+| A corporate CA | `global.extraCA`. The model, STT and identity provider present certificates only that CA issued. |
+| Sign-in without `email_verified` | An ADFS-like OIDC provider, `requireEmailVerified: "0"`, the OIDC door only. |
+| No Anthropic endpoint | An OpenAI-compatible model inside the cluster (`models.runner: openai-agent`) and an in-cluster STT. |
+
+On it we run: `helm install --wait`, first sign-in through the identity provider, a workspace, one
+chat turn answered by the in-cluster model, and a meeting bot that reaches `active` and writes a
+transcript segment. What it does not cover: it emulates `restricted-v2` on Kubernetes rather than
+running OpenShift; it has one node, so the workspace store is `ReadWriteOnce`; its meeting bot is a
+stand-in, so a real browser join and real audio through your STT are not part of it; flows is off.
 
 ### What Vexa requires of your platform
 
@@ -1163,6 +1186,7 @@ The person or pipeline that runs `helm install` / `helm upgrade` needs, **in the
 | `""` | `secrets` | `get`, `list`, `create`, `update`, `patch`, `delete` | Helm keeps its release record in Secrets; the chart creates the generated Secrets (gateway identity key, admin token, CRM fact-seal key, database password) and reads them back with `lookup` on every upgrade so they stay the same. |
 | `""` | `configmaps`, `services`, `persistentvolumeclaims`, `serviceaccounts` | `get`, `list`, `create`, `update`, `patch`, `delete` | The public-key ConfigMaps, every Service, the workspace, Redis and broker volumes, and the runtime's ServiceAccount. |
 | `apps` | `deployments`, `statefulsets`, `daemonsets` | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` | Every service; the in-chart Postgres; the bot seccomp installer (only with `runtime.botSandbox.installer.enabled`). |
+| `apps` | `replicasets` | `get`, `list`, `watch` | `helm install --wait` and `helm upgrade --wait` read a Deployment's ReplicaSets to decide it is ready; without them the upgrade fails with `replicasets.apps is forbidden`. |
 | `batch` | `jobs` | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` | The migration and schema Jobs. Helm deletes a hook Job before it runs it again, and an upgrade prunes the previous hashed-name Job. |
 | `rbac.authorization.k8s.io` | `roles`, `rolebindings` | `get`, `list`, `create`, `update`, `patch`, `delete` | The runtime's Role (below), and on an upgrade that rotates a published database password, a short-lived hook Role. |
 | `policy` | `poddisruptionbudgets` | `get`, `list`, `create`, `update`, `patch`, `delete` | The control plane's disruption budgets. |

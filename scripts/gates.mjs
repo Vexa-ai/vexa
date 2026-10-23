@@ -5,7 +5,8 @@
  * Usage: node scripts/gates.mjs [readme|isolation|isolation-py|exports|graph|graph-py|schema|
  *                                contract-version|config-contract|python|stack|node|health|access|
  *                                tracing|replay|telemetry|eval|licenses|compose|execution-env|
- *                                lite-makefile|domain-doors|fact-parity|vendor-payload|host-demands|ui-design|calm|all]
+ *                                lite-makefile|domain-doors|fact-parity|vendor-payload|host-demands|ui-design|calm|
+ *                                bank-profile|all]
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -1878,7 +1879,25 @@ function gateCalm() {
   return true;
 }
 
-const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, "docs-links": gateDocsLinks, dataflow: gateDataflow, calm: gateCalm, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance, "domain-doors": gateDomainDoors, "fact-parity": gateFactParity, "vendor-payload": gateVendorPayload, "host-demands": gateHostDemands, "ui-design": gateUiDesign };
+// gate:bank-profile (P24 at P19 altitude) — the restricted reference environment: a kind cluster with
+// Calico, Pod Security `restricted` plus a restricted-v2 SCC emulation, an egress allowlist, a
+// corporate CA, an OIDC provider without email_verified, the bank's own non-superuser Postgres (both
+// role paths) and no Anthropic endpoint; helm install as a namespace-scoped deployer, then sign-in →
+// workspace → chat turn → meeting bot. bank-ready = this green on the exact release sha. OPERATOR-RUN
+// release gate (a cluster and ~6 GB of images): OPT-IN, green-or-skip in `all`; runs ONLY when
+// BANK_PROFILE=1 and IMAGE_TAG names the release's locally present images.
+function gateBankProfile() {
+  if (process.env.BANK_PROFILE !== "1") {
+    console.log("  ✓ gate:bank-profile — opt-in release gate (BANK_PROFILE=1 + IMAGE_TAG=<release images>) → skip");
+    return true;
+  }
+  if (!process.env.IMAGE_TAG) return fail(["gate:bank-profile — BANK_PROFILE=1 needs IMAGE_TAG (the release's vexaai/* images and vexaai/mock-bot at that tag)"]);
+  const r = spawnSync(join(ROOT, "deploy", "bank-profile", "run.sh"), ["all"], { cwd: ROOT, stdio: "inherit" });
+  if (r.status !== 0) return fail([`gate:bank-profile — the bank profile is red (exit ${r.status}); the report is in the run's output above`]);
+  console.log("  ✓ gate:bank-profile — bank profile green: install, posture, sign-in, workspace, chat and meeting on both database paths");
+  return true;
+}
+const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, "docs-links": gateDocsLinks, dataflow: gateDataflow, calm: gateCalm, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "bank-profile": gateBankProfile, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance, "domain-doors": gateDomainDoors, "fact-parity": gateFactParity, "vendor-payload": gateVendorPayload, "host-demands": gateHostDemands, "ui-design": gateUiDesign };
 // gate:docs-links — every docs page compiles and every internal link resolves. `mint broken-links`
 // EXITS 0 when it cannot parse a page ("Unable to parse <page> - … Expected a closing tag for <ext>")
 // and then checks nothing, so its exit code alone proved nothing: a page with a bare `<placeholder>`
