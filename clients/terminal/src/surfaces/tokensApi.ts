@@ -3,13 +3,17 @@
  *  client never sends a user_id (P20). Fail-loud via the shared apiClient (P18). */
 import { getJson } from "../data/apiClient";
 
-export const TOKEN_SCOPES = ["bot", "tx", "browser"] as const;
+/** The scopes a new key can carry. `browser` is not one: no route requires it, so it granted nothing
+ *  (identity `token_scope.py`). A key that already carries it keeps it and keeps working. */
+export const TOKEN_SCOPES = ["bot", "tx"] as const;
 export type TokenScope = (typeof TOKEN_SCOPES)[number];
 
 export interface TokenInfo {
   id: number;
   scopes: string[];
   name?: string | null;
+  /** `vxa_bot_…AbCd`: all of a key a list ever shows (identity stores only its hash). */
+  token_hint?: string | null;
   created_at?: string | null;
   last_used_at?: string | null;
   expires_at?: string | null;

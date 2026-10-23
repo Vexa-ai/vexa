@@ -24,7 +24,7 @@ const EXPIRIES: Array<{ label: string; seconds?: number }> = [
 const fmtDate = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString() : null);
 
 // Scopes speak CAPABILITIES to the user (the raw scope id rides in the tooltip + the API).
-const SCOPE_LABELS: Record<string, string> = { bot: "Join meetings", tx: "Read transcripts", browser: "Browse web" };
+const SCOPE_LABELS: Record<string, string> = { bot: "Join meetings", tx: "Read transcripts", browser: "Browser (grants nothing)" };
 const scopeLabel = (s: string) => SCOPE_LABELS[s] ?? s;
 
 function TokenRow({ token, onRevoke }: { token: TokenInfo; onRevoke: (id: number) => void }) {
@@ -37,6 +37,7 @@ function TokenRow({ token, onRevoke }: { token: TokenInfo; onRevoke: (id: number
       <div className="lh-tight" style={{ minWidth: 0, flex: 1 }}>
         <div className="c-1" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {token.name || `token #${token.id}`}
+          {token.token_hint ? <span className="c-3 f-mono"> {token.token_hint}</span> : null}
         </div>
         <div className="t-xs c-3">
           {token.scopes.map(scopeLabel).join(" · ")}{created ? ` · created ${created}` : ""}{expires ? ` · expires ${expires}` : ""}
@@ -70,7 +71,7 @@ function MintedTokenCard({ minted, onDismiss }: { minted: MintedToken; onDismiss
 }
 
 function CreateTokenForm({ onCreated }: { onCreated: (t: MintedToken) => void }) {
-  const [scopes, setScopes] = useState<TokenScope[]>(["bot", "tx", "browser"]);
+  const [scopes, setScopes] = useState<TokenScope[]>(["bot", "tx"]);
   const [name, setName] = useState("");
   const [expiryIdx, setExpiryIdx] = useState(0);
   const [busy, setBusy] = useState(false);
