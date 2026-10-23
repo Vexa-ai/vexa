@@ -204,8 +204,13 @@
         },
         {
           "path": "core/meetings/services/meeting-api/src/meeting_api/bot_accounts/broker_assertion.py"
-        }, {"path": "core/flows/src/flows_sensors/broker_assertion.py"},
-        {"path": "core/signals/src/meeting_signals/broker_assertion.py"}
+        },
+        {
+          "path": "core/flows/src/flows_sensors/broker_assertion.py"
+        },
+        {
+          "path": "core/signals/src/meeting_signals/broker_assertion.py"
+        }
       ]
     },
     {
@@ -466,6 +471,32 @@
       ]
     },
     {
+      "id": "subject-ticket",
+      "fact": "subject-ticket.v1 — the producer-signed ticket that binds a flows door call to the person whose event or grant caused it",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/gateway/contracts/subject-ticket.v1/subject_ticket.py",
+      "how_to_agree": "edit the canonical copy in the contract and vendor it VERBATIM into each package that mints, carries or verifies a ticket",
+      "why": "The producers (meeting-api, agent-api, the flows mail intake) mint, flows carries and the gateway's service door verifies, in separately-built images that may not import each other (P2). A claim or class table that drifted between a producer and the door would refuse every legitimate flows call, or open a class the issuer may not grant.",
+      "sites": [
+        {
+          "path": "core/gateway/contracts/subject-ticket.v1/subject_ticket.py"
+        },
+        {
+          "path": "core/gateway/services/gateway/src/gateway/subject_ticket.py"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/subject_ticket.py"
+        },
+        {
+          "path": "core/agent/control_plane/subject_ticket.py"
+        },
+        {
+          "path": "core/flows/src/flows_steps/subject_ticket.py"
+        }
+      ]
+    },
+    {
       "id": "identity-header",
       "fact": "the header the gateway's signed identity travels in (gateway-identity.v1 X-Vexa-Identity)",
       "kind": "header",
@@ -643,7 +674,7 @@
       "fact": "the refusal a worker whose turn other people read gets from flows-api (gateway-identity.v1 SHARED_REFUSAL, shared_conversation)",
       "kind": "prose",
       "enforced": true,
-      "canonical": "core/gateway/contracts/gateway-identity.v1/identity_token.py \u2014 SHARED_REFUSAL",
+      "canonical": "core/gateway/contracts/gateway-identity.v1/identity_token.py — SHARED_REFUSAL",
       "how_to_agree": "change the contract's SHARED_REFUSAL (and its vendored copies, fact identity-token) and flows-api's copy in one change",
       "why": "agent-api, the credential broker and meeting-api answer a shared worker with the vendored identity_token.SHARED_REFUSAL; flows-api resolves its caller through identity and holds a copy. A reworded copy would teach a worker two instructions for one rule.",
       "sites": [
