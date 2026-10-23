@@ -4,7 +4,10 @@ crm-api never holds the instance's admin credential and runs no DDL. The migrati
 `crm-init`, the Helm `crm-schema` Job — runs this module with that credential and:
 
 1. creates (or re-asserts) a LOGIN role, by default ``vexa_crm``, with no admin power and the
-   password it is given;
+   password it is given. Before anything else it checks that the credential may do that
+   (``plan_role``) and otherwise stops, naming the grant the database team has to run: CREATEROLE
+   to create the role; on Postgres 16+ also the ADMIN option on a role it did not create; or a
+   role pre-created with the password it is given, which then needs no role privilege at all;
 2. creates the ``crm_*`` tables and the append-only triggers on revisions, card layouts, the audit
    and desk layout versions, and
    records the schema version. The audit is append-only for as long as it is kept: a row older
@@ -41,6 +44,10 @@ from . import schema as s
 from .schema import SCHEMA_VERSION, metadata, schema_version
 
 DEFAULT_ROLE = 'vexa_crm'
+DOCS = 'https://docs.vexa.ai/deployment-kubernetes#database-privileges-on-an-external-postgres'
+#: The role attributes the CRM's role must not hold, as ``pg_roles`` columns → the keyword.
+_POWERS = (('rolsuper', 'SUPERUSER'), ('rolcreatedb', 'CREATEDB'), ('rolcreaterole', 'CREATEROLE'),
+           ('rolreplication', 'REPLICATION'), ('rolbypassrls', 'BYPASSRLS'))
 _ROLE = re.compile(r'^[a-z_][a-z0-9_]{2,62}$')
 _PASSWORD = re.compile(r'^[A-Za-z0-9._~-]{24,256}$')
 _RESERVED = {'postgres', 'root', 'admin', 'rdsadmin', 'azure_superuser', 'cloudsqlsuperuser'}
@@ -274,6 +281,58 @@ class SchemaNotReady(RuntimeError):
     """crm-api must not serve: no schema yet, an unknown version, or a superuser login."""
 
 
+class PrivilegeMissing(ValueError):
+    """The migration credential may not make or re-assert the CRM's role. The message names the
+    statement the database team runs; nothing has been written when it is raised."""
+
+
+def plan_role(c, role, logs_in=None):
+    """What the migration credential does to the CRM's role, decided before anything is written:
+    ``'create'``; ``'reassert'`` (a superuser sets every limit and the password again); ``'alter'``
+    (LOGIN, NOINHERIT and the password only); or ``'keep'`` (a role the database team pre-created,
+    whose password already logs in). Raises ``PrivilegeMissing`` naming the grant otherwise.
+
+    A non-superuser may not name SUPERUSER, REPLICATION or BYPASSRLS in ALTER ROLE at all, even to
+    switch them off (Postgres 16+ adds CREATEDB), and from Postgres 16 CREATEROLE reaches only roles
+    the credential holds the ADMIN option on, which it gets on the roles it creates."""
+    me = c.execute(text("SELECT current_user, rolsuper, rolcreaterole, current_setting('server_version_num')::int "
+                        'FROM pg_roles WHERE rolname = current_user')).first()
+    if me is None:
+        raise PrivilegeMissing("cannot read the migration credential's own role in pg_roles")
+    user, superuser, createrole, version = me[0], bool(me[1]), bool(me[2]), int(me[3])
+    target = c.execute(text('SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls, '
+                            'rolinherit, rolcanlogin FROM pg_roles WHERE rolname = :r'), {'r': role}).first()
+    if superuser:
+        return 'create' if target is None else 'reassert'
+    q, u = f'"{role}"', f'"{user}"'
+    if target is None:
+        if createrole:
+            return 'create'
+        raise PrivilegeMissing(
+            f"database user {u} may not create the CRM's role {q}: it lacks CREATEROLE. Have the "
+            f'database team run `ALTER ROLE {u} CREATEROLE;`, or pre-create the role with the password '
+            f"in the CRM's Secret: `CREATE ROLE {q} LOGIN NOINHERIT PASSWORD '<that password>';`. See {DOCS}")
+    powers = [kw for (_, kw), on in zip(_POWERS, target) if on]
+    if powers:
+        raise PrivilegeMissing(
+            f"role {q} holds {', '.join(powers)}; the CRM refuses a role with admin power and database "
+            f"user {u} may not remove it. Have the database team run "
+            f"`ALTER ROLE {q} {' '.join('NO' + p for p in powers)};`. See {DOCS}")
+    admin = version < 160000 or bool(c.execute(
+        text("SELECT pg_has_role(current_user, :r, 'MEMBER WITH ADMIN OPTION')"), {'r': role}).first()[0])
+    if createrole and admin:
+        return 'alter'
+    if target[6] and not target[5] and logs_in is not None and logs_in():
+        return 'keep'
+    need = ' and '.join(([f'`ALTER ROLE {u} CREATEROLE;`'] if not createrole else [])
+                        + ([f'`GRANT {q} TO {u} WITH ADMIN OPTION;`'] if not admin else []))
+    why = 'Postgres 16+ needs CREATEROLE and the ADMIN option on it' if version >= 160000 else 'it lacks CREATEROLE'
+    raise PrivilegeMissing(
+        f"database user {u} may not change role {q} ({why}), and the CRM's password does not log in "
+        f'as a LOGIN NOINHERIT {q}. Have the database team run {need}, or set the role to the '
+        f"Secret's password: `ALTER ROLE {q} LOGIN NOINHERIT PASSWORD '<that password>';`. See {DOCS}")
+
+
 def check_role(role):
     if not _ROLE.fullmatch(role or '') or role in _RESERVED or role.startswith('pg_'):
         raise ValueError('not a role name the CRM may use')
@@ -391,22 +450,28 @@ def migrate(engine, *, audit_days=AUDIT_RETENTION_DEFAULT_DAYS):
         _functions(c, audit_days)
 
 
-def init(engine, *, role, password, database, audit_days=AUDIT_RETENTION_DEFAULT_DAYS):
+def init(engine, *, role, password, database, audit_days=AUDIT_RETENTION_DEFAULT_DAYS, logs_in=None):
     """With the admin credential. Idempotent: re-asserts the role's limits and password, creates
-    what is missing, re-grants."""
+    what is missing, re-grants. Checks first that the credential may make or re-assert the role
+    (``plan_role``) and writes nothing when it may not."""
     role = check_role(role)
     audit_days = audit_retention_days({'CRM_AUDIT_RETENTION_DAYS': str(audit_days)})
     if not _PASSWORD.fullmatch(password or ''):
         raise ValueError("the CRM's database password must be 24-256 URL-safe characters")
     if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_-]{0,62}', database or ''):
         raise ValueError('not a database name')
+    with engine.connect() as c:
+        plan = plan_role(c, role, logs_in)
     migrate(engine, audit_days=audit_days)
     q = f'"{role}"'
+    limits = 'LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS'
     with engine.begin() as c:
-        if c.execute(text('SELECT 1 FROM pg_roles WHERE rolname = :r'), {'r': role}).first() is None:
-            c.execute(text(f'CREATE ROLE {q}'))
-        c.execute(text(f"ALTER ROLE {q} WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT "
-                       f"NOREPLICATION NOBYPASSRLS PASSWORD '{password}'"))
+        if plan == 'create':
+            c.execute(text(f"CREATE ROLE {q} WITH {limits} PASSWORD '{password}'"))
+        elif plan == 'reassert':
+            c.execute(text(f"ALTER ROLE {q} WITH {limits} PASSWORD '{password}'"))
+        elif plan == 'alter':
+            c.execute(text(f"ALTER ROLE {q} WITH LOGIN NOINHERIT PASSWORD '{password}'"))
         c.execute(text(f'GRANT CONNECT ON DATABASE "{database}" TO {q}'))
         c.execute(text(f'GRANT USAGE ON SCHEMA public TO {q}'))
         tables = [t.name for t in metadata.sorted_tables]
@@ -442,6 +507,29 @@ def _admin_url():
         os.environ.get('DB_HOST', 'localhost'), os.environ.get('DB_PORT', '5432') or '5432', os.environ.get('DB_NAME', 'vexa'))
 
 
+def _logs_in(role, password):
+    url = 'postgresql+pg8000://{}:{}@{}:{}/{}'.format(
+        quote(role, safe=''), quote(password, safe=''), os.environ.get('DB_HOST', 'localhost'),
+        os.environ.get('DB_PORT', '5432') or '5432', os.environ.get('DB_NAME', 'vexa'))
+    engine = create_engine(url)
+    try:
+        with engine.connect():
+            return True
+    except Exception:  # noqa: BLE001 — a wrong password, no LOGIN, no such role
+        return False
+    finally:
+        engine.dispose()
+
+
+def _pg_message(exc):
+    """pg8000 carries the server's fields as a dict (``M`` the message, ``C`` the SQLSTATE)."""
+    orig = getattr(exc, 'orig', exc)
+    arg = orig.args[0] if orig.args else None
+    if isinstance(arg, dict) and arg.get('M'):
+        return f"{arg['M']} ({arg.get('C', '')})"
+    return type(orig).__name__
+
+
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else ''
     if cmd == 'init':
@@ -464,9 +552,12 @@ def main(argv):
         try:
             audit_days = audit_retention_days()
             init(engine, role=role, password=password, database=os.environ.get('DB_NAME', 'vexa'),
-                 audit_days=audit_days)
+                 audit_days=audit_days, logs_in=lambda: _logs_in(role, password))
         except ValueError as exc:
             print(f'[crm-schema] STOP: {exc}', flush=True)
+            return 1
+        except Exception as exc:  # noqa: BLE001 — a refusal from Postgres, in its own words
+            print(f'[crm-schema] STOP: Postgres refused: {_pg_message(exc)}. See {DOCS}', flush=True)
             return 1
         from .bootstrap import bootstrap_org, upgrade_card_definition
         created = bootstrap_org(engine, org, os.environ.get('CRM_ORG_NAME', '') or org)

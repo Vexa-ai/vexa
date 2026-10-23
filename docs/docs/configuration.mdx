@@ -200,7 +200,7 @@ scripts are fine. How the check works and why it complies:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DB_NAME` / `DB_USER` | `vexa` / `postgres` | Postgres database and user (metadata). |
+| `DB_NAME` / `DB_USER` | `vexa` / `postgres` | Postgres database and user (metadata). On an external Postgres the user also creates the session store's and the CRM's own roles, which needs `CREATEROLE`, or roles your database team creates: see [Database privileges on an external Postgres](/deployment-kubernetes#database-privileges-on-an-external-postgres). |
 | `DB_PASSWORD` | none | The Postgres password. Compose's `postgres` service and the Lite entrypoint refuse an unset value or one published in this repository (`postgres` included); `make up` / `make all` / `make lite` mint one into `.env`. The Helm chart (`database.password`) generates one at install and keeps it across upgrades; an explicit value must be 32+ bytes and not a published one. |
 | `POSTGRES_HOST_PORT` | `5458` | Host port mapped to Postgres. |
 | `DB_POOL_SIZE` | `5` | SQLAlchemy async-engine `pool_size` — persistent connections **per pod** — read by admin-api and meeting-api and applied to each service's engine. |

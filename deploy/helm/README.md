@@ -146,7 +146,9 @@ named.
   limitation of the convenience path, not of the chart: **set `postgres.enabled: false`** and
   point `database.*` at a managed/operator-run Postgres (CloudNativePG or the Crunchy operator
   in most OpenShift estates), with `postgres.credentialsSecretName` naming a pre-existing
-  Secret; add `pgbouncer.enabled: true` if that database has a fixed connection budget.
+  Secret; add `pgbouncer.enabled: true` if that database has a fixed connection budget. That
+  database's user needs `CREATEROLE`, or the session store's and the CRM's roles created for it
+  ([Database privileges on an external Postgres](https://docs.vexa.ai/deployment-kubernetes#database-privileges-on-an-external-postgres)).
   Swapping in a UID-agnostic image (bitnami / Red Hat `postgresql`) would also work and is
   deliberately **not** done here — changing the database image under existing installs is a
   data-durability decision, not a packaging one.

@@ -1000,7 +1000,7 @@ same option is `docker compose --profile dashboard up -d` (port 13001).
 ## Enterprise and OpenShift installs
 
 This section collects what a corporate cluster needs beyond the defaults: the rights the person who
-runs `helm install` must hold, the OpenShift profile, a TLS-inspecting proxy, sign-in through your
+runs `helm install` must hold, the database privileges on your own Postgres, the OpenShift profile, a TLS-inspecting proxy, sign-in through your
 own identity provider, and the settings that change behaviour on upgrade.
 
 ### Required permissions
@@ -1034,6 +1034,93 @@ Nothing in the chart is cluster-scoped: no ClusterRole, no CRD, no namespace. Th
 installer DaemonSet is the one Pod that needs a namespace admitting `hostPath` (Pod Security
 `privileged`); set `runtime.botSandbox.installer.namespace` to a separate namespace for it, or turn
 the installer off and install the profile on the nodes yourself (below).
+
+### Database privileges on an external Postgres
+
+With an external Postgres (`postgres.enabled: false`), every Job runs as the user in `database.user`
+(the examples call it `vexa`). That user should own the application database (`database.name`): it
+creates the tables and grants on them, and from Postgres 15 only the owner may create tables in the
+`public` schema. Vexa also needs two login roles of its own, and a third you add yourself:
+
+| Role | Who makes it, and when | Why it exists |
+|---|---|---|
+| `vexa_agent_sessions` (`agentApi.sessions.dbUser`) | The `agent-sessions-schema` Job, on install and on every upgrade that changes it. On with the session store. | agent-api logs in as this role and never holds `database.user`. It may read and write only the `agent_session*` tables, so a session's SQL cannot reach accounts, API tokens, meetings or another service's tables. |
+| `vexa_crm` (`crm.dbUser`) | The `crm-schema` Job, likewise. Only with `crm.enabled`. | crm-api's login, limited to the `crm_*` tables and the CRM's own functions. |
+| `vexa_reporting` | You, with `dashboards/reporting-role.sql` from the chart. Only with the adoption panel. | Grafana's login, which can read only the columns the panel shows. |
+
+The Jobs create each role as `LOGIN NOINHERIT` with no admin power (`NOSUPERUSER NOCREATEDB
+NOCREATEROLE NOREPLICATION NOBYPASSRLS`) and the password from its Secret
+(`<release>-agent-sessions-db` and `<release>-crm-db`, key `password`, unless you name your own in
+`agentApi.sessions.existingSecret` and `crm.existingSecret`). On every later run they set the
+password again and re-grant. They refuse a role that holds an admin power.
+
+The database team picks one of two ways.
+
+**Vexa creates the roles.** Give the user `CREATEROLE`:
+
+```sql
+-- Postgres 16 and later
+ALTER ROLE vexa CREATEROLE;
+```
+
+From Postgres 16, `CREATEROLE` reaches only the roles that user created, or holds the `ADMIN` option
+on. If a role already exists because someone else created it, also run, for that role:
+
+```sql
+-- Postgres 16 and later, only for a role vexa did not create
+GRANT vexa_agent_sessions TO vexa WITH ADMIN OPTION;
+GRANT vexa_crm TO vexa WITH ADMIN OPTION;
+```
+
+```sql
+-- Postgres 15 and earlier
+ALTER ROLE vexa CREATEROLE;
+```
+
+Up to Postgres 15, `CREATEROLE` lets the user change any role that is not a superuser and grant
+membership in any role. If your policy does not allow that, use the second way.
+
+**The database team creates the roles.** The user then needs no role privilege. Choose each
+password yourself (24 or more characters; `openssl rand -hex 32` fits), put it in a Secret under
+`password`, name the Secret in the values, and create the role with the same password:
+
+```bash
+kubectl -n vexa create secret generic vexa-sessions-db --from-literal=password="$SESSIONS_PW"
+kubectl -n vexa create secret generic vexa-crm-db --from-literal=password="$CRM_PW"
+# values: agentApi.sessions.existingSecret=vexa-sessions-db, crm.existingSecret=vexa-crm-db
+```
+
+```sql
+-- any Postgres version
+CREATE ROLE vexa_agent_sessions LOGIN NOINHERIT PASSWORD '<SESSIONS_PW>';
+CREATE ROLE vexa_crm LOGIN NOINHERIT PASSWORD '<CRM_PW>';   -- only with crm.enabled
+```
+
+The Job checks that the password logs in, leaves the role as it is, and grants it its tables. To
+change the password later, change it in the Secret and on the role together. If your database team
+has revoked `CONNECT` on the database from `PUBLIC`, also grant `CONNECT` to each role.
+
+**When a privilege is missing**, the Job stops before it writes anything, and its log names the
+statement to run:
+
+```text
+[session-schema] STOP: database user "vexa" may not create the session store's role "vexa_agent_sessions": it lacks CREATEROLE. Have the database team run `ALTER ROLE "vexa" CREATEROLE;`, or pre-create the role with the password in the session store's Secret: ...
+[session-schema] STOP: database user "vexa" may not change role "vexa_agent_sessions" (Postgres 16+ needs CREATEROLE and the ADMIN option on it), and the session store's password does not log in as a LOGIN NOINHERIT "vexa_agent_sessions". Have the database team run `GRANT "vexa_agent_sessions" TO "vexa" WITH ADMIN OPTION;`, ...
+[crm-schema] STOP: database user "vexa" may not create the CRM's role "vexa_crm": it lacks CREATEROLE. ...
+```
+
+Until the Job succeeds, agent-api stays in its `session-schema` init container, and after
+`VEXA_SESSIONS_WAIT_SEC` (600 seconds) that container fails with
+`[session-schema] not ready: cannot log in as the session store's role (...)`. Until then agent-api
+does not start, so no agent session or workspace can be created. crm-api waits the same way in
+`crm-schema-ready`. Read
+the Job's log (`kubectl -n vexa logs job/<the Job>`), run the statement, and delete the failed Job;
+the next `helm upgrade` runs it again.
+
+The flows tables live in their own database, `flows.databaseName` (`flows`), unless you set it to
+`database.name`. The flows Pods' `ensure-db` init container creates that database, which needs
+`CREATEDB`. Without it, have the database team create the database with `vexa` as its owner, or set
+`flows.databaseName` to `database.name`.
 
 ### OpenShift
 
