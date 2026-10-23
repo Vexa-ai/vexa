@@ -148,6 +148,65 @@ Deny tests:
 | Runtime callback signature | `core/meetings/services/meeting-api/tests/test_runtime_callback_signature.py` | `test_the_verifier_matches_the_runtimes_signer`, `test_an_unsigned_forged_stale_misdirected_or_replayed_callback_is_refused`, `test_a_refused_callback_moves_no_meeting` |
 | The runtime's side | `core/runtime/tests/test_caller_auth.py` | `test_every_control_route_refuses_a_caller_without_the_credential`, `test_production_boot_refuses_without_a_token`, `test_the_signature_covers_the_time_the_url_and_the_event`, `test_every_callback_carries_the_runtimes_signature_and_never_its_token` |
 
+## How keys and secrets are stored
+
+API keys, the credentials services hold on a person's behalf, and the secrets Vexa signs with are
+each stored so that a copy of the database, or of a backup, opens nothing.
+
+### How it works
+
+1. **An API key is stored as its SHA-256, never as itself.** admin-api keeps `token_hash` (the
+   SHA-256 of the key) and `token_hint` (`vxa_bot_…AbCd`: the prefix and last four characters).
+   Every lookup hashes the presented key. The key is in the mint answer once and nowhere else; a
+   list shows the hint. A lost key cannot be recovered: mint a new one. Keys that existed before
+   were hashed in place on upgrade and kept working (MIGRATION-0013).
+2. **A person sees only the keys they made.** Each key has a class:
+   - `key`: one the person made, including the connect button's `mcp-connect`;
+   - `session`: the terminal's signed-in browser;
+   - `system`: a credential Vexa mints for itself, such as a sign-in cookie's key.
+
+   The key list shows `key` rows only. A `system` key always ends, within 30 days. Expired
+   `session` and `system` rows are deleted on every mint and every admin-api boot. Sign-out ends
+   the credential the cookie carried (`POST /internal/sessions/end`), not only the cookie
+   (MIGRATION-0014).
+3. **A service that acts on a key gets a transit key, and asks identity.** A transit key names
+   the one registered service it opens and the actions it allows there. Identity alone mints
+   one. The service authenticates with its own credential (issued once at registration, stored
+   sealed) and asks identity whether a key opens it (`POST /transit/validate`). The answer is
+   HMAC-SHA256 signed under that credential; the service checks the signature, that the answer
+   names it, its 60-second expiry and the action. The service never reads the key table. Keys
+   made before transit keys existed open the hosted transcription API under the rule it always
+   applied (ADR-0051, MIGRATION-0016).
+4. **Secrets Vexa must present onward are sealed.** A webhook signing secret signs every
+   delivery, so it cannot be hashed. It is stored AES-256-GCM sealed (`at_rest.py`) on the
+   person, on each meeting and in the webhook retry queue. The key is `VEXA_AT_REST_KEY_FILE`, a
+   file mounted into admin-api and meeting-api only, apart from the database, and generated at
+   install (MIGRATION-0015). Third-party credentials (OAuth tokens, provider keys, git tokens)
+   live in the credential broker's store, AES-256-GCM sealed under its own store key file
+   ([Connections](/connections)).
+5. **Backups hold ciphertext only.** The broker's scheduled snapshot copies its SQLite stores
+   with SQLite's backup API, on its own volume. It never mounts or reads the store key; keep the
+   key apart from the snapshots.
+6. **The key stops at the gateway.** The gateway resolves a key and forwards the identity it
+   resolved to, Ed25519-signed (gateway-identity.v1). meeting-api, agent-api and the credential
+   broker receive no key or bearer. Three still receive the key, each for a stated reason: the
+   MCP calls back as the caller, and identity and crm authenticate the key themselves
+   (`CREDENTIAL_CARRIED_TO` in the gateway's `app.py`).
+7. **No secret in a log.** A credential is logged by its presence or length, never its value or
+   any slice of it. `gate:secret-logs` fails on a log call that interpolates a key, token,
+   secret or password.
+
+### Why it complies
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| No credential readable from the database | keys hashed; presentable secrets sealed with a key outside the database | `gate:python` (`test_key_hashing_pg.py`, `test_webhook_secret_at_rest_pg.py`) |
+| A person controls what is theirs and only that | the list holds the person's keys; product credentials end and are deleted | `gate:python` (`test_key_classes.py`, `test_key_classes_pg.py`) |
+| P20: every access is checked | a transit key opens one target, for named actions, on identity's signed answer | `gate:python` (`test_transit_keys_pg.py`, `test_transit_answer.py`) |
+| The credential stays at the edge | forwards carry the signed identity; three declared exceptions | `gate:python` (`test_key_stays_at_edge.py`) |
+| No secret in logs | log calls never interpolate a credential | `gate:secret-logs` |
+| No unreviewed DB change | the hash, hint, audience and actions columns and `transit_targets` are sealed | `gate:db-schema` |
+
 ## Agent workers
 
 An agent worker acts for one person with a **delegation token** that agent-api mints for each
@@ -572,8 +631,10 @@ is the guided read of that table — what each artifact proves, what it does not
 
 ## Known gaps (honest)
 
-At-rest encryption for workspaces, transcripts, and tokens is **planned, not shipped** — today
-you bring your own disk/volume encryption. Mid-call bot control endpoints are not wired in the
+At-rest encryption for workspaces and transcripts is **planned, not shipped**. Today you bring
+your own disk/volume encryption. (API keys are stored hashed, and webhook signing secrets sealed:
+see [How keys and secrets are stored](#how-keys-and-secrets-are-stored).) The MCP, identity and
+crm still receive the caller's key from the gateway. Mid-call bot control endpoints are not wired in the
 open-core stack. Track both on the [status page](/roadmap/status).
 
 ## Reporting a vulnerability
