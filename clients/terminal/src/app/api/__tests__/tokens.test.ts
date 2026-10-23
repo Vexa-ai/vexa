@@ -138,7 +138,6 @@ describe("/api/tokens — self-serve, always scoped to the VALIDATED auth-cookie
     login();
     const calls = stubAdminApi();
     expect((await createRoute(makeReq({ scopes: ["root"] }))).status).toBe(400);
-    expect((await createRoute(makeReq({ scopes: ["bot", "browser"] }))).status).toBe(400);   // grants nothing
     expect((await createRoute(makeReq({ scopes: [] }))).status).toBe(400);
     expect(calls.some((c) => c.startsWith("POST") && c.includes("/admin/users/"))).toBe(false);
   });

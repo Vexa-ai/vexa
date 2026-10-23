@@ -12,9 +12,7 @@ import { currentUser } from "./currentUser";
 export const dynamic = "force-dynamic";
 
 const NO_STORE = { "Cache-Control": "no-store, no-cache, must-revalidate" } as const;
-// A person's new key: `bot` and `tx`. `browser` grants no route (identity `token_scope.py`), so a new
-// key is not given it; keys that already carry it keep working.
-const VALID_SCOPES = new Set(["bot", "tx"]);
+const VALID_SCOPES = new Set(["bot", "tx", "browser"]);
 
 export async function GET() {
   const me = await currentUser();

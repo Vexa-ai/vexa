@@ -71,6 +71,7 @@ function MintedTokenCard({ minted, onDismiss }: { minted: MintedToken; onDismiss
 }
 
 function CreateTokenForm({ onCreated }: { onCreated: (t: MintedToken) => void }) {
+  // `browser` grants nothing (identity `token_scope.py`): a new key starts without it.
   const [scopes, setScopes] = useState<TokenScope[]>(["bot", "tx"]);
   const [name, setName] = useState("");
   const [expiryIdx, setExpiryIdx] = useState(0);

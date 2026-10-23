@@ -3,9 +3,9 @@
  *  client never sends a user_id (P20). Fail-loud via the shared apiClient (P18). */
 import { getJson } from "../data/apiClient";
 
-/** The scopes a new key can carry. `browser` is not one: no route requires it, so it granted nothing
- *  (identity `token_scope.py`). A key that already carries it keeps it and keeps working. */
-export const TOKEN_SCOPES = ["bot", "tx"] as const;
+/** The scopes a key may carry (fact-parity `token-scopes`). `browser` grants nothing (no route requires
+ *  it, identity `token_scope.py`), so a new key's form leaves it unticked. */
+export const TOKEN_SCOPES = ["bot", "tx", "browser"] as const;
 export type TokenScope = (typeof TOKEN_SCOPES)[number];
 
 export interface TokenInfo {

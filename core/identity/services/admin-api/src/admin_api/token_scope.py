@@ -16,7 +16,7 @@ TOKEN_PATTERN = re.compile(r"^vxa_([a-z]+)_(.+)$")
 #: test_scope_matrix.py::test_browser_only_key_reaches_no_route_at_all`), and "is this a person at a
 #: keyboard" is the credential class (`session`), never a scope. It stays valid so the keys and
 #: sessions that carry it keep validating and the sign-in clients that still send it are not refused.
-#: Nothing new should ask for it; the terminal's key page no longer offers it.
+#: Nothing new should ask for it; the terminal's key form leaves it unticked.
 VALID_SCOPES: Set[str] = {"bot", "tx", "browser"}
 
 
