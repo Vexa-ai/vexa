@@ -20,6 +20,8 @@ from test_stack_admin_api import ADMIN_TOKEN, INTERNAL_SECRET, _admin, _dispose_
 
 pytestmark = requires_docker
 
+SESSION_SECRET = "pg-test-terminal-session-secret-0123456789abcdef"
+
 NOW = datetime.utcnow().replace(microsecond=0)
 
 
@@ -61,6 +63,7 @@ def client(pg_url, pg_async_url, monkeypatch):
     monkeypatch.setenv("ADMIN_API_TOKEN", ADMIN_TOKEN)
     monkeypatch.setenv("INTERNAL_API_SECRET", INTERNAL_SECRET)
     monkeypatch.setenv("DEV_MODE", "false")
+    monkeypatch.setenv("VEXA_TERMINAL_SESSION_SECRET", SESSION_SECRET)
     app_db.configure(pg_async_url)
     with TestClient(create_app(), raise_server_exceptions=False) as c:
         c.pg_url = pg_url
@@ -129,3 +132,21 @@ def test_every_mint_sweeps_that_persons_dead_hidden_credentials(client):
     assert _kind(c.pg_url, "vxa_bot_othersDeadSystem") is not None    # another person's waits for a boot
     assert _kind(c.pg_url, r.json()["token"])[0] == "system"
     assert "webapp-login" not in _listed(c)
+
+
+def test_sign_out_ends_a_session_and_never_a_persons_key(client):
+    c = client
+    minted = c.post("/internal/sessions", json={"user_id": c.uid},
+                    headers={"X-Internal-Secret": INTERNAL_SECRET, "X-Terminal-Session-Secret": SESSION_SECRET})
+    assert minted.status_code == 201, minted.text
+    session = minted.json()["token"]
+    own = c.post(f"/admin/users/{c.uid}/tokens", headers=_admin(), json={"scopes": ["bot"], "name": "mine"}).json()["token"]
+    end = lambda tok, secret=INTERNAL_SECRET: c.post("/internal/sessions/end", json={"token": tok},
+                                                     headers={"X-Internal-Secret": secret})
+    assert end(session, "wrong").status_code == 403
+    assert _validates(c, session)
+    assert end(session).status_code == 204
+    assert not _validates(c, session) and _kind(c.pg_url, session) is None
+    assert end(own).status_code == 204                   # same answer, nothing deleted
+    assert _validates(c, own)
+    assert end("vxa_bot_never_existed").status_code == 204

@@ -12,8 +12,8 @@
  *  Note: this drops the app session only. The OAuth *provider* (Google/Microsoft) keeps its own session
  *  — `prompt=select_account` (see authOptions) is what lets the user then choose a different account. */
 import { NextResponse } from "next/server";
-import { headers } from "next/headers";
-import { AUTH_COOKIE, USER_INFO_COOKIE } from "../adminApi";
+import { cookies, headers } from "next/headers";
+import { AUTH_COOKIE, USER_INFO_COOKIE, endSignInCredential } from "../adminApi";
 import { COMPANY_TOKEN_ID_COOKIE, PERSON_COOKIE, PERSON_INFO_COOKIE } from "../companyMode";
 
 export const dynamic = "force-dynamic";
@@ -65,6 +65,15 @@ function expireCookie(name: string, secure: boolean, domain?: string): string {
 }
 
 export async function POST() {
+  // End the credentials themselves, not only the cookies that carry them: a cleared cookie left the
+  // session valid for the rest of its 30 days. Both the sign-in's and, in company mode, the person's
+  // own session beside it.
+  const jar = await cookies();
+  await Promise.all([AUTH_COOKIE, PERSON_COOKIE]
+    .map((name) => jar.get(name)?.value)
+    .filter((v): v is string => !!v)
+    .map((v) => endSignInCredential(v)));
+
   const host = (await headers()).get("host") || "";
   const httpsDeploy = isSecureRequest();
   const res = NextResponse.json({ success: true }, { headers: { "Cache-Control": "no-store" } });

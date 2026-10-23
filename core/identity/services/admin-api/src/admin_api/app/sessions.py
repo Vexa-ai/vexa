@@ -33,11 +33,12 @@ import os
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy import delete
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..key_store import KIND_KEY, KIND_SESSION, expired_hidden, stored_fields
+from ..key_store import HIDDEN_KINDS, KIND_KEY, KIND_SESSION, expired_hidden, stored_fields, token_matches
 from ..schema.models import APIToken, User
 from ..schema.sync import LOGIN_LIFETIME_SECONDS
 from ..token_scope import generate_prefixed_token
@@ -62,6 +63,11 @@ class SessionMintRequest(BaseModel):
     user_id: int = Field(..., ge=1)
     name: Optional[str] = Field(default=None, max_length=255)
     expires_in: Optional[int] = Field(default=None, gt=0)
+
+
+class SessionEndRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    token: str = Field(..., min_length=1, max_length=512)
 
 
 def login_name_reserved() -> bool:
@@ -112,5 +118,16 @@ def build_router() -> APIRouter:
         await db.refresh(tok)
         return {"token": value, "id": tok.id, "user_id": user.id, "scopes": list(SESSION_SCOPES),
                 "credential_class": KIND_SESSION}
+
+    @router.post("/internal/sessions/end", include_in_schema=False, status_code=status.HTTP_204_NO_CONTENT)
+    async def end_session(body: SessionEndRequest, request: Request, db: AsyncSession = Depends(get_db)):
+        """Sign-out: the holder of a sign-in credential ends it by presenting it. Only a `session`
+        or `system` row ends here — a key a person made is theirs to revoke on their key page. The
+        answer is 204 whatever was found, so the door says nothing about a value it is handed."""
+        check_internal_no_dev_bypass(request)
+        await db.execute(delete(APIToken).where(token_matches(APIToken, body.token),
+                                                APIToken.kind.in_(HIDDEN_KINDS)))
+        await db.commit()
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     return router

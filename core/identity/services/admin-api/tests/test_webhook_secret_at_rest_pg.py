@@ -22,6 +22,8 @@ from test_stack_admin_api import ADMIN_TOKEN, INTERNAL_SECRET, _admin, _dispose_
 
 pytestmark = requires_docker
 
+SESSION_SECRET = "pg-test-terminal-session-secret-0123456789abcdef"
+
 LEGACY = "whsec_set_by_the_customer_last_year"
 
 
@@ -57,6 +59,7 @@ def client(pg_url, pg_async_url, monkeypatch, tmp_path):
     monkeypatch.setenv("ADMIN_API_TOKEN", ADMIN_TOKEN)
     monkeypatch.setenv("INTERNAL_API_SECRET", INTERNAL_SECRET)
     monkeypatch.setenv("DEV_MODE", "false")
+    monkeypatch.setenv("VEXA_TERMINAL_SESSION_SECRET", SESSION_SECRET)
     app_db.configure(pg_async_url)
     with TestClient(create_app(), raise_server_exceptions=False) as c:
         c.pg_url = pg_url

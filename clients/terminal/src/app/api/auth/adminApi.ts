@@ -90,6 +90,27 @@ export type ValidatedUser =
       credentialClass?: "session" | "key" | "delegation" | null }
   | { ok: false; status: number; error: string };
 
+/** Sign-out ends the credential the cookie carried (admin-api `POST /internal/sessions/end`): the
+ *  holder presents it and identity deletes it if it is a session or a system key. Best-effort — the
+ *  cookie is cleared either way, and an unended credential still expires with it. */
+export async function endSignInCredential(token: string): Promise<boolean> {
+  const url = (process.env.VEXA_ADMIN_API_URL || "").replace(/\/$/, "");
+  const secret = process.env.VEXA_INTERNAL_API_SECRET || "";
+  if (!url || !secret || !token) return false;
+  try {
+    const res = await fetch(`${url}/internal/sessions/end`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Internal-Secret": secret },
+      body: JSON.stringify({ token }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(5000),
+    });
+    return res.status === 204;
+  } catch {
+    return false;
+  }
+}
+
 export async function validateAuthToken(token: string): Promise<ValidatedUser> {
   const url = (process.env.VEXA_ADMIN_API_URL || "").replace(/\/$/, "");
   const secret = process.env.VEXA_INTERNAL_API_SECRET || "";
