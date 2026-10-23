@@ -245,8 +245,12 @@ door does not list.
    meeting that started, ended or was shared; agent-api for a routine the person turned on from
    their own session and for a message to a person; the mail intake for an authenticated invite or
    reply; the gateway itself for a person's own sign-in presented to flows-api. Each producer holds
-   its own Ed25519 private key; the door holds only the public halves, so flows cannot make a
-   ticket. A call without a valid ticket for that person (and, where it names one, that meeting) is
+   its own Ed25519 private key; the door holds only the public halves. flows-api, the flows process
+   that answers requests, holds no ticket key and cannot make a ticket. The mail intake is the
+   exception inside flows: mail is read by the flows-mailbox lane and by the mailbox sensor in
+   flows-worker, each signs the ticket in the step that authenticated the message, so both hold the
+   `mail` issuer's key. A `mail` ticket (an invite's bot, transcript, turn and desk; a reply's turn
+   and desk) is therefore only as safe as those two processes. A call without a valid ticket for that person (and, where it names one, that meeting) is
    `403 subject_ticket_required` or `subject_ticket_refused`; an invite's bot can be sent once
    (`403 ticket_replayed`). Lookups and settings reads name no person and need none.
 6. **The internal secret never reaches flows.** The signals service's wake and the terminal's

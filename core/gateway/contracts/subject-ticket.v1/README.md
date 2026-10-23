@@ -26,6 +26,15 @@ the checks injected. It is vendored byte for byte into the door (gateway), the p
 | `mail` | the flows mail intake (flows-mailbox) and the worker's mailbox sensor | `VEXA_FLOWS_MAIL_TICKET_KEY_FILE` | an authenticated invite (`addr` = the DMARC-authenticated organizer, `native` = its meeting, `peers` = its attendees, `once` = `bot.dispatch`) or reply |
 | `gateway` | the gateway (its identity key) | `VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE` | answered on a successful `/identity/internal/validate` relay: the person's own bearer, presented to flows-api |
 
+**The `mail` key is held by two processes, not one.** Mail is read in two places: the flows-mailbox
+lane (the deployment's mailbox) and the `mailbox` sensor kind (ADR-0050), which runs in
+flows-worker's sensor pool. Each signs in the same step that authenticated the message (the DMARC
+verdict, the organizer, the allow-list), so both mount `VEXA_FLOWS_MAIL_TICKET_KEY_FILE`; flows-api
+never does (compose and chart tests hold this). Confining the key to flows-mailbox would need a
+signing channel from the worker to it, and flows-mailbox serves no port: that is a new trust seam,
+not a mount change. The `mail` issuer's key is therefore exactly as confined as flows-worker, which
+also runs every flow's steps.
+
 **The verifier is the door.** It holds the producers' PUBLIC keys only, one SubjectPublicKeyInfo
 PEM per issuer in `VEXA_SUBJECT_TICKET_KEYS_DIR/<issuer>.pem` (`meetings.pem`, `agent.pem`,
 `mail.pem`), and verifies `gateway` tickets with its own key's public half. Nothing the door, flows
