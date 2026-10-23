@@ -113,6 +113,23 @@ def test_no_key_arms_the_routine_without_a_grant(world, flows, monkeypatch, capl
                for m in caplog.messages)
 
 
+def test_only_a_session_press_is_recorded_as_an_arm(world, flows, key):
+    """agent-api's own record of a press (`record_arm`) is what a later re-issue of the grant
+    rests on: a session creating a routine on, or turning one on, writes it; a draft does not; the
+    person switching it off takes it out."""
+    client, _, root = world
+    client.post("/api/routines", headers=_session(),
+                json={"name": "Morning brief", "cron": "0 8 * * *", "prompt": "brief me"})
+    client.post("/api/routines", headers=_as(),
+                json={"name": "Draft one", "cron": "0 8 * * *", "prompt": "x"})
+    assert rf.recorded_arms(root, "7") == {"Morning-brief"}
+    client.patch("/api/routines/Draft-one/enabled", headers=_session(), json={"enabled": True})
+    assert rf.recorded_arms(root, "7") == {"Morning-brief", "Draft-one"}
+    client.patch("/api/routines/Morning-brief/enabled", headers=_session(),
+                 json={"enabled": False})
+    assert rf.recorded_arms(root, "7") == {"Draft-one"}
+
+
 # ── the wire: what FlowsClient puts on flows-api's door ────────────────────────────────────────
 class _Resp:
     status = 200

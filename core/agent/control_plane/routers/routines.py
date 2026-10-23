@@ -110,6 +110,8 @@ def build(**d) -> APIRouter:
         except routine_flows.FlowsError as e:
             raise _flows_refusal(e)
         _inherit_scope(request, str(subject), made)
+        if not proposed:
+            routine_flows.record_arm(wsr.root, subject, made["name"])
         card = routine_flows.card_from_flow(subject, {
             "name": made["name"], "version": made["version"], "scope": made["scope"],
             "trigger": made.get("trigger"), "status": made.get("status"),
@@ -172,9 +174,12 @@ def build(**d) -> APIRouter:
                 grant=grant)
         except routine_flows.FlowsError as e:
             raise _flows_refusal(e)
-        # switching a routine on clears why it was paused; switching it off is the person's own act
-        routine_flows.set_paused_reason(
-            wsr.root, subject, flow["name"], None if body.enabled else "paused by you")
+        # switching a routine on is this service's record of the person's press (and clears why it
+        # was paused); switching it off is the person's own act
+        if body.enabled:
+            routine_flows.record_arm(wsr.root, subject, flow["name"])
+        else:
+            routine_flows.set_paused_reason(wsr.root, subject, flow["name"], "paused by you")
         thread = routine_flows.routine_thread(flow.get("scope") or f"user:{subject}", flow["name"],
                                               flow.get("params"))
         if body.enabled:

@@ -1514,12 +1514,19 @@ def _build_production_app() -> FastAPI:
         interval_sec=settings.routine_reconcile_interval_sec,
         store=getattr(app.state, "session_store", None),
     )
+    from control_plane.routine_flows import start_grant_adoption  # noqa: PLC0415
+    app.state.routine_grants = start_grant_adoption(
+        workspaces_dir=settings.workspaces_dir,
+        interval_sec=settings.routine_reconcile_interval_sec,
+        store=getattr(app.state, "session_store", None),
+    )
 
     @app.on_event("shutdown")
     def _stop_routine_migration() -> None:
-        handle = getattr(app.state, "routine_migration", None)
-        if handle is not None:
-            handle.stop()
+        for attr in ("routine_migration", "routine_grants"):
+            handle = getattr(app.state, attr, None)
+            if handle is not None:
+                handle.stop()
 
     # The in-process meetings Integration (replaces the standalone bridge container): a daemon thread
     # tails transcription_segments → registers the live meeting on activity.
