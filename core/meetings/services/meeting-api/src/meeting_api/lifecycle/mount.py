@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Optional
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from .. import at_rest
 from .. import events as _flows_events
 from .. import meeting_token
 from .machine import LifecycleSink
@@ -547,7 +548,8 @@ def mount_lifecycle(
                         continue
                     try:
                         result = await webhook_sink.deliver(
-                            url, env, data.get("webhook_secret"),
+                            url, env, at_rest.unseal(data.get("webhook_secret"),
+                                                     at_rest.WEBHOOK_SECRET_PURPOSE),
                             events_config=data.get("webhook_events"),
                             label=f"meeting:{meeting_row.get('id')}",
                         )

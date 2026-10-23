@@ -171,8 +171,19 @@ def build_production_app():
         await _announce_admin_claim()
         await _warn_stored_open_signin()
         await _warn_admin_account_state()
+        _warn_at_rest_key()
 
     return app
+
+
+def _warn_at_rest_key() -> None:
+    """Say at boot when webhook signing secrets are stored as written (no VEXA_AT_REST_KEY_FILE)."""
+    from . import at_rest  # noqa: PLC0415
+
+    if not at_rest.key_configured():
+        logger.error("%s is not set: webhook signing secrets are stored unsealed in the database "
+                     "(MIGRATION-0015). Mount a 64-hex-character key file in admin-api and meeting-api.",
+                     at_rest.KEY_FILE_ENV)
 
 
 async def _warn_admin_account_state() -> None:

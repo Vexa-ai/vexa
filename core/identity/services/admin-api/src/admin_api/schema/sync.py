@@ -445,6 +445,39 @@ def _classify_and_sweep_keys(conn: Connection):
                     "credential(s) deleted", classified.rowcount, swept.rowcount)
 
 
+# MIGRATION-0015 — a webhook signing secret is stored sealed (`at_rest.py`), never as written.
+#
+# With `VEXA_AT_REST_KEY_FILE` set, every `webhook_secret` still in plaintext — on a person
+# (`users.data`) or carried on a meeting (`meetings.data`, for the post-meeting webhook) — is sealed
+# in place with AES-256-GCM. The secret itself is unchanged, so every subscriber keeps verifying
+# signatures. Idempotent: a sealed value starts `vxe1:` and is never read again. With no key, nothing
+# is touched and admin-api says so at boot.
+def _seal_webhook_secrets(conn: Connection):
+    from .. import at_rest  # noqa: PLC0415 — at_rest imports nothing from here
+
+    if conn.dialect.name != "postgresql" or not at_rest.key_configured():
+        return
+    tables = set(inspect(conn).get_table_names())
+    sealed = 0
+    for table in ("users", "meetings"):
+        if table not in tables:
+            continue
+        rows = conn.execute(text(
+            f"SELECT id, data->>'webhook_secret' FROM {table} "
+            "WHERE data ? 'webhook_secret' AND jsonb_typeof(data->'webhook_secret') = 'string' "
+            "AND data->>'webhook_secret' <> '' AND data->>'webhook_secret' NOT LIKE 'vxe1:%'"
+        )).all()
+        if not rows:
+            continue
+        conn.execute(text(
+            f"UPDATE {table} SET data = jsonb_set(data, '{{webhook_secret}}', to_jsonb(CAST(:v AS text))) "
+            "WHERE id = :id"
+        ), [{"id": r[0], "v": at_rest.seal(r[1], at_rest.WEBHOOK_SECRET_PURPOSE)} for r in rows])
+        sealed += len(rows)
+    if sealed:
+        logger.info("schema-sync (MIGRATION-0015): %d webhook secret(s) sealed at rest", sealed)
+
+
 def _sync_functions(conn: Connection):
     conn.execute(text(_MEETING_EVENT_TIME_FN))
 
@@ -481,6 +514,7 @@ def _ensure_schema_sync(conn: Connection, base, deferred: list | None = None):
     _bound_sign_in_credentials(conn)                   # MIGRATION-0011 sign-in credentials end
     _hash_api_tokens(conn)                             # MIGRATION-0013 keys held as SHA-256
     _classify_and_sweep_keys(conn)                     # MIGRATION-0014 hidden credentials end and go
+    _seal_webhook_secrets(conn)                        # MIGRATION-0015 webhook secrets sealed at rest
     _sync_indexes(conn, base, deferred)                # additive indexes (non-unique: deferred)
 
 

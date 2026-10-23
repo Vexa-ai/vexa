@@ -36,7 +36,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..schema.models import (APIToken, Meeting, MeetingSession, PersonPhoto, PlatformSetting,
                              Transcription, User)
-from .. import key_store
+from .. import at_rest, key_store
+from ..at_rest import WEBHOOK_SECRET_PURPOSE
 from ..key_store import stored_fields, token_matches
 from ..token_scope import VALID_SCOPES, generate_prefixed_token
 from .. import obs
@@ -947,7 +948,7 @@ def create_app() -> FastAPI:
         whether a secret is set (masked to its last 4 chars). Nothing else in ``users.data`` — a key
         scoped to bots or transcripts reads its own webhook here, never the account's stored model
         key, transcription token or calendar feed URLs."""
-        secret = data.get("webhook_secret")
+        secret = at_rest.unseal(data.get("webhook_secret"), WEBHOOK_SECRET_PURPOSE)
         return {
             "webhook_url": data.get("webhook_url"),
             "webhook_secret_set": bool(secret),
@@ -972,7 +973,9 @@ def create_app() -> FastAPI:
         data = dict(user.data or {})
         data["webhook_url"] = webhook_update.webhook_url
         if webhook_update.webhook_secret:
-            data["webhook_secret"] = webhook_update.webhook_secret
+            # Stored sealed under the at-rest key (MIGRATION-0015): it is presented onward to sign
+            # every webhook, so it cannot be hashed.
+            data["webhook_secret"] = at_rest.seal(webhook_update.webhook_secret, WEBHOOK_SECRET_PURPOSE)
         if webhook_update.webhook_events is not None:
             data["webhook_events"] = webhook_update.webhook_events
         user.data = data
@@ -1832,8 +1835,9 @@ def create_app() -> FastAPI:
         )
         if data.get("webhook_url"):
             resp["webhook_url"] = data["webhook_url"]
-            if data.get("webhook_secret"):
-                resp["webhook_secret"] = data["webhook_secret"]
+            secret = at_rest.unseal(data.get("webhook_secret"), WEBHOOK_SECRET_PURPOSE)
+            if secret:
+                resp["webhook_secret"] = secret
             if data.get("webhook_events"):
                 resp["webhook_events"] = data["webhook_events"]
         # The effective transcription backend (user pref > platform setting) — bot_spawn overrides

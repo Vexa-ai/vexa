@@ -30,6 +30,7 @@ from typing import Any, Awaitable, Callable, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from ..config_preflight import CONFIG_FAULT_KINDS, cached_probe_verdict
+from .. import at_rest
 from ..obs import log_event
 from ..service_authority import (
     AllowAllServiceAuthority,
@@ -837,7 +838,8 @@ async def request_bot(
         if webhook_url:
             meeting_data["webhook_url"] = webhook_url
             if webhook_secret:
-                meeting_data["webhook_secret"] = webhook_secret
+                # sealed at rest (MIGRATION-0015); the lifecycle callback unseals it to sign
+                meeting_data["webhook_secret"] = at_rest.seal(webhook_secret, at_rest.WEBHOOK_SECRET_PURPOSE)
             if webhook_events:
                 meeting_data["webhook_events"] = webhook_events
         try:

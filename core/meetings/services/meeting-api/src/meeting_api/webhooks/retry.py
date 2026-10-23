@@ -33,6 +33,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from .. import at_rest
 from .delivery import build_headers
 
 RETRY_QUEUE_KEY = "webhook:retry_queue"
@@ -95,7 +96,8 @@ class RetryQueue:
         entry = {
             "url": url,
             "payload": envelope,
-            "webhook_secret": webhook_secret,
+            # sealed under the at-rest key (MIGRATION-0015): the queue lives in Redis, at rest
+            "webhook_secret": at_rest.seal(webhook_secret, at_rest.WEBHOOK_SECRET_PURPOSE),
             "label": label,
             "attempt": 0,
             "next_retry_at": ts + BACKOFF_SCHEDULE[0],  # first retry after the 1st backoff
@@ -118,7 +120,7 @@ async def _deliver_one(entry: dict, transport: Transport) -> tuple[bool, Optiona
     """
     url = entry["url"]
     envelope = entry["payload"]
-    secret = entry.get("webhook_secret")
+    secret = at_rest.unseal(entry.get("webhook_secret"), at_rest.WEBHOOK_SECRET_PURPOSE)
     payload_bytes = json.dumps(envelope).encode()
     ts = str(int(time.time()))
     headers = build_headers(secret, payload_bytes, timestamp=ts)

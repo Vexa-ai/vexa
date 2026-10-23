@@ -37,6 +37,7 @@ from sqlalchemy.future import select
 
 from .. import delegation as delegation_mod
 from .. import obs
+from .. import at_rest
 from ..key_store import token_matches
 from ..schema.models import APIToken, User
 from . import delegation_revocation as revocation
@@ -166,8 +167,9 @@ def identity_of(user: User, *, scopes: List[str], is_admin: bool) -> Dict[str, A
     }
     if data_blob.get("webhook_url"):
         resp["webhook_url"] = data_blob["webhook_url"]
-        if data_blob.get("webhook_secret"):
-            resp["webhook_secret"] = data_blob["webhook_secret"]
+        secret = at_rest.unseal(data_blob.get("webhook_secret"), at_rest.WEBHOOK_SECRET_PURPOSE)
+        if secret:
+            resp["webhook_secret"] = secret
         if data_blob.get("webhook_events"):
             resp["webhook_events"] = data_blob["webhook_events"]
     memberships = data_blob.get("memberships")
