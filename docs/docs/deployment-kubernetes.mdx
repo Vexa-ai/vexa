@@ -1088,7 +1088,7 @@ are the chart's own `values.yaml`; "opt-in" means off until you set it.
 
 | ID | Requirement | Who needs it | Why | Strictly needed? | How to avoid it |
 |---|---|---|---|---|---|
-| X1 | The runtime and agent-api run as root; the runtime joins the socket's group (`DOCKER_GID`, default `0`) | Compose | The runtime drives the Docker socket (F3) | Root: no, the socket's group is enough | Set `DOCKER_GID` to the socket's group. To remove: a non-root runtime on Compose (size S). |
+| X1 | agent-api runs as root (K7); the runtime runs as uid 10001 and joins the Docker socket's group (`DOCKER_GID`: `mint-dev-env.sh` writes the socket's group on Linux; `0`, the socket's group on Docker Desktop, otherwise) | Compose | The runtime drives the Docker socket (F3) | The socket's group: yes. Root: no | Nothing to avoid beyond F3. Lite has no socket: its runtime starts processes (X3). |
 | X2 | Three one-shot key generators run as `0:0` with no network, then exit | Compose | They write keys owned by uid 10001 | Yes, briefly | — |
 | X3 | One container running as root inside; `--shm-size=2g` and a seccomp profile that allows user namespaces | Lite | supervisord starts every service as its own non-root uid; Chromium's sandbox | Yes, for that design | Without the profile, bots run without the browser sandbox. |
 

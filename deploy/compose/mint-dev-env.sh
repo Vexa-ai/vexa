@@ -111,3 +111,22 @@ for key in INTERNAL_API_SECRET RUNTIME_API_TOKEN DB_PASSWORD REDIS_PASSWORD VEXA
     echo "kept ${key}"
   fi
 done
+# The Docker socket's group: the runtime runs as uid 10001 and reaches the socket through it
+# (group_add). On Linux it is the socket's own group (`docker`); a value an operator set to anything
+# but the old default 0 is kept. Docker Desktop's socket belongs to group 0 inside its VM, and its
+# host-side path says nothing about that, so elsewhere the value is left as it is.
+docker_sock="${DOCKER_SOCK:-/var/run/docker.sock}"
+if [ "$(uname -s)" = Linux ] && [ -S "$docker_sock" ]; then
+  gid="$(stat -c %g "$docker_sock")"
+  old="$(env_value DOCKER_GID || true)"   # absent: grep finds nothing
+  if [ -z "$old" ] || [ "$old" = 0 ]; then
+    if grep -qE "^DOCKER_GID=" "$env_file"; then
+      sed -i.bak "s|^DOCKER_GID=.*|DOCKER_GID=${gid}|" "$env_file" && rm -f "$env_file.bak"
+    else
+      echo "DOCKER_GID=${gid}" >> "$env_file"
+    fi
+    echo "DOCKER_GID=${gid} (the group of ${docker_sock})"
+  else
+    echo "kept DOCKER_GID"
+  fi
+fi

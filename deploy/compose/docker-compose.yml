@@ -445,7 +445,11 @@ services:
       dockerfile: Dockerfile
     image: vexaai/vexa-runtime:${IMAGE_TAG:-dev}
     # The runtime spawns bot containers via the host Docker socket (DockerBackend → socket API,
-    # requests_unixsocket — no docker CLI in the image, like main).
+    # requests_unixsocket — no docker CLI in the image, like main). It runs as the unprivileged uid
+    # and reaches the socket through the socket's group, DOCKER_GID: mint-dev-env.sh writes the
+    # group of /var/run/docker.sock on Linux (`docker` there); 0 is the socket's group on Docker
+    # Desktop. The socket itself stays root-equivalent on the host (requirements row F3).
+    user: "10001:10001"
     group_add:
       - "${DOCKER_GID:-0}"
     ports:

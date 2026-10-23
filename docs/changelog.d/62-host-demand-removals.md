@@ -9,3 +9,8 @@
   instead of to any address. `values-openshift.yaml` selects `openshift-dns` on 53 and 5353. A
   cluster whose DNS runs elsewhere (NodeLocal DNSCache, a custom label) sets `networkPolicy.dns.to`
   and `networkPolicy.dns.ports`; an empty `to` restores the old rule.
+- **Compose: the runtime no longer runs as root.** It runs as uid 10001 and reaches the Docker
+  socket through the socket's group. `mint-dev-env.sh` (which `make up` runs) now writes that group
+  into `DOCKER_GID` on Linux, replacing the old default `0`; a value you set is kept. If the runtime
+  logs `permission denied` on the socket after upgrading, set `DOCKER_GID` to
+  `stat -c %g /var/run/docker.sock`.

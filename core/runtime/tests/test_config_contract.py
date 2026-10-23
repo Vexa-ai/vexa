@@ -8,6 +8,7 @@ All offline: file probes run against tmp_path; env-level tri-state tests pass ex
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -181,3 +182,21 @@ def test_every_forwarded_worker_setting_is_declared():
 
     declared = {k["key"] for k in cp.load_declaration()["keys"]}
     assert set(WORKER_FORWARD_ENV) <= declared, sorted(set(WORKER_FORWARD_ENV) - declared)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads through any mode")
+def test_file_probe_does_not_fail_a_file_the_runtime_may_not_read(tmp_path):
+    """The Compose runtime runs as uid 10001 (requirements row X1) and the host keeps ~/.claude to its
+    owner: a permission error is not the missing-file signature. The probe says it could not look,
+    and neither crashes nor marks the capability misconfigured."""
+    d = tmp_path / "host-claude"
+    d.mkdir()
+    (d / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": "tok"}}))
+    d.chmod(0)
+    try:
+        spec = {**cp.load_declaration()["capabilities"]["model_inference"]["probe"]["file"],
+                "fallback_paths": [str(d / ".credentials.json")]}
+        out = cp._file_probe(spec, {"HOST_CLAUDE_CREDENTIALS": "/home/user/.claude/.credentials.json"}, 2)
+    finally:
+        d.chmod(0o700)
+    assert out["ok"] is True and "permission denied" in out["unverified"], out

@@ -23,7 +23,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 /** Images that run as root, each with the reason it must. */
 const ROOT_BY_DESIGN = {
   "core/runtime/Dockerfile":
-    "holds the container engine (docker.sock) and, in the process backend, starts each workload as its own uid",
+    "the chart's docker backend holds the container engine as root; Compose and the chart's k8s backend run it as uid 10001 (Compose through the socket's group)",
   "core/agent/services/agent-api/Dockerfile":
     "moves and re-homes workspace trees that root-run workers and per-subject uids write in the shared store",
   "core/agent/worker/Dockerfile":

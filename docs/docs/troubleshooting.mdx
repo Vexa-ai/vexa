@@ -372,8 +372,9 @@ with the provider, kind, status and model.
 
 The [runtime](/core/runtime) spawns bot and agent containers via the Docker socket.
 
-- The runtime needs access to the host Docker socket and the right group — set `DOCKER_GID` to the host's
-  docker group id.
+- The runtime runs as uid 10001 and reaches the host Docker socket through the socket's group,
+  `DOCKER_GID`. `mint-dev-env.sh` sets it on Linux; check it equals `stat -c %g /var/run/docker.sock`.
+  A `permission denied` on the socket in the runtime's log means the group is wrong.
 - The meeting bot (`BROWSER_IMAGE`) is **built from source** (`make bot`) and the runtime spawns it
   **without pulling** — it must exist locally first. Confirm it's there (`docker image inspect "$BROWSER_IMAGE"`);
   the published `vexaai/vexa-bot:dev` is the old 0.10 line and is incompatible. `AGENT_IMAGE` is built by

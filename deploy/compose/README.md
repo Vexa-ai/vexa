@@ -104,7 +104,7 @@ Chromium's sandbox requires; each bot logs `Chromium runs with its sandbox`, or 
 ## Usage
 
 ```bash
-./deploy/compose/mint-dev-env.sh   # seeds .env, mints the secrets the services refuse to boot without; then edit ports/DOCKER_GID
+./deploy/compose/mint-dev-env.sh   # seeds .env, mints the secrets the services refuse to boot without; sets DOCKER_GID on Linux; then edit ports
 docker compose -f deploy/compose/docker-compose.yml build
 docker compose -f deploy/compose/docker-compose.yml up -d
 # poll until healthy, then:
