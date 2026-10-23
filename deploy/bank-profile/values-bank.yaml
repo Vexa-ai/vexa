@@ -105,12 +105,20 @@ podDisruptionBudgets:
   agentApi: {enabled: false}
 
 # ── egress: none but the declared endpoints ──────────────────────────────────────────────────────
-# The chart's control-plane policy allows 0.0.0.0/0 minus egressExcept. Excepting the whole address
-# space (two halves: an `except` must be a strict subset) leaves DNS, the release's own Pods and the
-# extraEgress below. Spawned workloads get the same through privateCidrs.
+# The chart's control-plane policies reach an endpoint whose address they are not given (the object
+# store, the database, the API server) at 0.0.0.0/0 minus egressExcept, on its port. Excepting the
+# whole address space (two halves: an `except` must be a strict subset) leaves DNS, the release's own
+# Pods and the extraEgress below. Spawned workloads get the same through privateCidrs.
 networkPolicy:
   enabled: true
   defaultDeny: {enabled: true}
+  # This cluster's DNS is kind's kube-dns; values-openshift.yaml points DNS at openshift-dns, which
+  # a kind node does not run, so without this every name lookup is refused.
+  dns:
+    to:
+      - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+        podSelector: {matchLabels: {k8s-app: kube-dns}}
+    ports: [53]
   controlPlane:
     egressExcept:
       ipv4: [0.0.0.0/1, 128.0.0.0/1]
