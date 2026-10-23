@@ -411,6 +411,40 @@ def _hash_api_tokens(conn: Connection):
                 len(rows))
 
 
+# MIGRATION-0014 — a person sees only the keys they made; the product's own credentials end and go.
+#
+# Rows from before the `system` class are classified once more on every boot (idempotent: it reads
+# only `kind = 'key'` rows that match):
+#   * a key named for a sign-in surface (`key_store.SIGN_IN_KEY_NAMES`) is the key a cookie carried;
+#   * an unnamed key that lived a day or less is one flows minted for itself (15 minutes each).
+# Each becomes `system`; one with no end gets its cookie's (`created_at` + 30 days). Then every
+# expired `session` and `system` row is deleted: nothing authenticates with it, nobody is shown it.
+# Unnamed keys with no end are NOT touched: they cannot be told apart from a key a person made, and
+# whether to retire them is the founder's call (identity PRD, "старые бессрочные ключи").
+def _classify_and_sweep_keys(conn: Connection):
+    from ..key_store import HIDDEN_KINDS, SIGN_IN_KEY_NAMES, SYSTEM_KEY_LIFETIME_SECONDS  # noqa: PLC0415
+
+    if conn.dialect.name != "postgresql":
+        return
+    inspector = inspect(conn)
+    if "api_tokens" not in set(inspector.get_table_names()):
+        return
+    classified = conn.execute(text(
+        "UPDATE api_tokens SET kind = 'system', "
+        "expires_at = COALESCE(expires_at, COALESCE(created_at, now() AT TIME ZONE 'utc') "
+        "+ make_interval(secs => :life)) "
+        "WHERE kind = 'key' AND (lower(name) = ANY(:names) OR (name IS NULL AND expires_at IS NOT NULL "
+        "AND created_at IS NOT NULL AND expires_at - created_at <= interval '1 day'))"
+    ), {"life": SYSTEM_KEY_LIFETIME_SECONDS, "names": sorted(SIGN_IN_KEY_NAMES)})
+    swept = conn.execute(text(
+        "DELETE FROM api_tokens WHERE kind = ANY(:kinds) AND expires_at IS NOT NULL "
+        "AND expires_at < now() AT TIME ZONE 'utc'"
+    ), {"kinds": list(HIDDEN_KINDS)})
+    if classified.rowcount or swept.rowcount:
+        logger.info("schema-sync (MIGRATION-0014): %d key(s) classified system; %d expired session/system "
+                    "credential(s) deleted", classified.rowcount, swept.rowcount)
+
+
 def _sync_functions(conn: Connection):
     conn.execute(text(_MEETING_EVENT_TIME_FN))
 
@@ -446,6 +480,7 @@ def _ensure_schema_sync(conn: Connection, base, deferred: list | None = None):
     _ensure_default_org(conn)                          # MIGRATION-0008 the default org row
     _bound_sign_in_credentials(conn)                   # MIGRATION-0011 sign-in credentials end
     _hash_api_tokens(conn)                             # MIGRATION-0013 keys held as SHA-256
+    _classify_and_sweep_keys(conn)                     # MIGRATION-0014 hidden credentials end and go
     _sync_indexes(conn, base, deferred)                # additive indexes (non-unique: deferred)
 
 

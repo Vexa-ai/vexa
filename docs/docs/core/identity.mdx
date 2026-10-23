@@ -227,6 +227,21 @@ the `workspace.v1` contract shape in [Stage 0](/roadmap/stages).
 
 ---
 
+## API keys: who sees which
+
+Every credential in `api_tokens` has a class (`kind`):
+
+| Class | What it is | In the person's key list | Ends |
+|---|---|---|---|
+| `key` | A key the person made: on their key page, with the connect button (`mcp-connect`), or one an operator made for them | yes | when its creator chose |
+| `session` | The terminal's signed-in browser | no | 30 days |
+| `system` | A credential Vexa mints for itself, such as the key a sign-in cookie carries | no | always, at most 30 days |
+
+`GET /admin/users/{id}/tokens` lists `key` rows only (`?include_hidden=true` is the operator's full
+view). Expired `session` and `system` rows are deleted on every mint and every admin-api boot.
+A service mints a system key with `credential_class=system`; a key named `terminal-login`,
+`webapp-login` or `dashboard-login` is always one. (admin-api MIGRATION-0014.)
+
 ## How it works
 
 1. **Resolve.** The gateway sends the bearer (an API key, or a worker's `vxd_…` delegation token) to

@@ -23,7 +23,7 @@ import os
 import socket
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import urlparse
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, Security, status
@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..schema.models import (APIToken, Meeting, MeetingSession, PersonPhoto, PlatformSetting,
                              Transcription, User)
+from .. import key_store
 from ..key_store import stored_fields, token_matches
 from ..token_scope import VALID_SCOPES, generate_prefixed_token
 from .. import obs
@@ -291,6 +292,10 @@ class TokenCreate(BaseModel):
     scopes: Optional[List[str]] = None
     name: Optional[str] = None
     expires_in: Optional[int] = Field(default=None, gt=0)
+    #: `key` (the default) — a person's key, listed to them; `system` — a credential a service
+    #: mints for itself (a sign-in cookie's key): never listed, always ends, deleted once it has.
+    #: A session is never minted here (`/internal/sessions`).
+    credential_class: Optional[Literal["key", "system"]] = None
 
     model_config = {"extra": "forbid"}
 
@@ -301,6 +306,8 @@ class TokenInfo(BaseModel):
     user_id: int
     scopes: List[str]
     name: Optional[str] = None
+    #: `key`, `session` or `system` (MIGRATION-0014). A person's list holds only `key`.
+    credential_class: str = Field(default="key", validation_alias="kind")
     #: `vxa_bot_…AbCd` — the prefix and last four characters, all a list ever shows of a key.
     token_hint: Optional[str] = None
     created_at: Optional[datetime] = None
@@ -860,6 +867,7 @@ def create_app() -> FastAPI:
         scopes: Optional[str] = Query(None),
         name: Optional[str] = Query(None),
         expires_in: Optional[int] = Query(None),
+        credential_class: Optional[Literal["key", "system"]] = Query(None),
         db: AsyncSession = Depends(get_db),
     ):
         user = await db.get(User, user_id)
@@ -887,14 +895,19 @@ def create_app() -> FastAPI:
                                 detail=f"the key name {sessions_mod.DEFAULT_NAME!r} is reserved for sign-in")
         token_expires_in = body.expires_in if body.expires_in is not None else expires_in
         token_value = generate_prefixed_token(scope_list[0])
+        now = datetime.utcnow()
+        # A KEY or a SYSTEM key, never a session (D13): a session is minted only by
+        # `POST /internal/sessions` (app/sessions.py). A sign-in name is always a system key.
+        kind = key_store.class_for_mint(body.credential_class or credential_class, token_name)
         expires_at = None
         if token_expires_in is not None and token_expires_in > 0:
-            expires_at = datetime.utcnow() + timedelta(seconds=token_expires_in)
-        # Always a KEY (D13): this door has no parameter that reaches `kind`; a session is minted
-        # only by `POST /internal/sessions` (app/sessions.py).
+            expires_at = now + timedelta(seconds=token_expires_in)
+        if kind == key_store.KIND_SYSTEM:
+            expires_at = key_store.system_expiry(token_expires_in, now)
+        # Every mint clears this person's dead hidden credentials: nothing authenticates with them.
+        await db.execute(key_store.expired_hidden(APIToken, now).where(APIToken.user_id == user_id))
         tok = APIToken(**stored_fields(token_value), user_id=user_id, scopes=scope_list,
-                       name=token_name, created_at=datetime.utcnow(), expires_at=expires_at,
-                       kind="key")
+                       name=token_name, created_at=now, expires_at=expires_at, kind=kind)
         db.add(tok)
         await db.commit()
         await db.refresh(tok)
@@ -903,15 +916,19 @@ def create_app() -> FastAPI:
     # --- GET /admin/users/{user_id}/tokens → the user's tokens, metadata only (no secret values).
     # Added for the terminal's token self-serve surface: it lists on the user's behalf (admin tier,
     # scoped server-side to the logged-in user) and verifies ownership before forwarding a revoke.
+    # The person's own keys only (`kind = 'key'`): sessions and system keys are the product's, not
+    # theirs (founder ruling 2026-10-23, #1868). `include_hidden=true` is the operator's full view.
     @app.get("/admin/users/{user_id}/tokens", response_model=List[TokenInfo],
              dependencies=[Depends(verify_admin_token)])
-    async def list_tokens_for_user(user_id: int, db: AsyncSession = Depends(get_db)):
+    async def list_tokens_for_user(user_id: int, include_hidden: bool = Query(False),
+                                   db: AsyncSession = Depends(get_db)):
         user = await db.get(User, user_id)
         if not user:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
-        rows = (await db.execute(
-            select(APIToken).where(APIToken.user_id == user_id).order_by(APIToken.id)
-        )).scalars().all()
+        stmt = select(APIToken).where(APIToken.user_id == user_id)
+        if not include_hidden:
+            stmt = stmt.where(APIToken.kind == key_store.KIND_KEY)
+        rows = (await db.execute(stmt.order_by(APIToken.id))).scalars().all()
         return [TokenInfo.model_validate(t) for t in rows]
 
     @app.delete("/admin/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT,

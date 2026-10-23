@@ -58,7 +58,16 @@ class _Session:
         return self.users.get(ident) if model is User else None
 
     async def execute(self, stmt):
-        params = list(stmt.compile().params.values())
+        sql = str(stmt.compile())
+        bound = stmt.compile().params
+        if sql.startswith("DELETE"):
+            return _Result()
+        if "api_tokens.user_id =" in sql and "token_hash" not in sql.split("WHERE")[1]:
+            rows = [t for t in dict.values(self.tokens) if t.user_id == bound["user_id_1"]]
+            if "api_tokens.kind =" in sql:
+                rows = [t for t in rows if t.kind == bound["kind_1"]]
+            return _Result(rows=rows)
+        params = list(bound.values())
         key = next((v for v in params if isinstance(v, str)), None)
         if key is not None:
             tok = self.tokens.get(key)

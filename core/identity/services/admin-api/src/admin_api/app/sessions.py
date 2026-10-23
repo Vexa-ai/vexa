@@ -37,15 +37,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..key_store import stored_fields
+from ..key_store import KIND_KEY, KIND_SESSION, expired_hidden, stored_fields
 from ..schema.models import APIToken, User
 from ..schema.sync import LOGIN_LIFETIME_SECONDS
 from ..token_scope import generate_prefixed_token
 from .db import get_db
 from .internal_tier import check_internal_no_dev_bypass
 
-KIND_KEY = "key"
-KIND_SESSION = "session"
 #: What a session may do at the edge — the same reach the terminal's login key always had.
 SESSION_SCOPES = ("bot", "tx", "browser")
 #: The prefix a session token carries (`vxa_browser_…`): the existing `vxa_<scope>_` shape, so
@@ -104,6 +102,7 @@ def build_router() -> APIRouter:
                                 detail="a workspace principal holds no session")
         lifetime = min(body.expires_in, SESSION_LIFETIME_SECONDS) if body.expires_in else SESSION_LIFETIME_SECONDS
         expires_at = datetime.utcnow() + timedelta(seconds=lifetime)
+        await db.execute(expired_hidden(APIToken, datetime.utcnow()).where(APIToken.user_id == user.id))
         value = generate_prefixed_token(SESSION_PREFIX_SCOPE)
         tok = APIToken(**stored_fields(value), user_id=user.id,
                        scopes=list(SESSION_SCOPES), name=body.name or DEFAULT_NAME,

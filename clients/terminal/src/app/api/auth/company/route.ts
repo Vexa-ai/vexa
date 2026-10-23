@@ -90,6 +90,7 @@ export async function POST(req: Request) {
     if (!found.ok || !found.data) continue;
     const minted = await mintUserToken(found.data.id, {
       scopes: ["bot", "tx", "browser"], name: `company:${me.userId}`, expiresIn: COMPANY_TOKEN_SECONDS,
+      credentialClass: "system",
     });
     if (!minted.ok || !minted.data?.token) continue;
     // Positive evidence: the oracle must say this token IS the admin account.
