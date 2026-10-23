@@ -73,7 +73,7 @@
     "postcss": ">=8.5.23",
     "nanoid": "^3.3.18",
     "sharp": "$sharp",
-    "undici": "^7.29.1",
+    "undici": "^7.30.1",
     "source-map-js": "^1.2.2",
     "dompurify": "^3.4.17"
   }
