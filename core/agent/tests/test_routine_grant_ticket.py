@@ -159,3 +159,10 @@ def test_resume_carries_the_grant_in_the_body_and_the_header(wire):
     rf.FlowsClient(base="http://flows", key="op").set_status("7", "brief", 2, "pause")
     assert wire[1]["body"] is None
     assert ticket_mint.GRANT_HEADER.lower() not in wire[1]["headers"]
+
+
+def test_a_converted_routine_file_runs_under_a_grant_only_when_a_person_stood_behind_it(key):
+    """The migration turns a legacy routine on only on agent-api's own evidence that a person stood
+    behind the file; that is the evidence its grant rests on. A paused conversion carries none."""
+    _assert_grant(_claims(rf._migration_grant("7", "daily", True), key), "daily")
+    assert rf._migration_grant("7", "daily", False) == ""

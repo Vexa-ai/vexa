@@ -546,6 +546,16 @@ def migrate_subject_files(subject: str, *, client: "FlowsClient", workspaces_dir
         _write_marker(workspaces_dir, subject, marker)
 
 
+def _migration_grant(subject, name: str, on: bool) -> str:
+    """The routine grant a converted file runs under. Only when it is turned on, and only on this
+    service's own evidence that a person stood behind the file (`_stood_behind`, read from the
+    workspace here) — never on anything flows reports."""
+    if not on:
+        return ""
+    from .ticket_mint import routine_grant  # noqa: PLC0415
+    return routine_grant(subject, name)
+
+
 def _convert(subject, parsed: ParsedFile, path: Path, digest, *, client, flows: dict,
              workspaces_dir, counts: MigrationCounts, store) -> dict:
     """One file into one flow: merged into the flow with its intent, or a new flow — active when
@@ -558,9 +568,10 @@ def _convert(subject, parsed: ParsedFile, path: Path, digest, *, client, flows: 
             if parsed.mtime > _created(twin) and parsed.cron != cron:
                 # a newer schedule nobody stood behind is filed as a draft beside the live one,
                 # never swapped into it (D24): the person's running routine keeps its own cron
+                on = twin.get("status") == "active" and stood
                 made = client.submit(subject, twin["name"], parsed.cron,
                                      (twin.get("params") or {}).get("instruction") or parsed.prompt,
-                                     activate=twin.get("status") == "active" and stood)
+                                     activate=on, grant=_migration_grant(subject, twin["name"], on))
                 flows[twin["name"]] = {**twin, **made}
             counts.files_merged += 1
             post_to_routine_chat(store, subject, twin["name"],
@@ -571,7 +582,8 @@ def _convert(subject, parsed: ParsedFile, path: Path, digest, *, client, flows: 
                                     else "") + ". The file is retired; a copy is kept.")
             return {"outcome": "merged", "flow": twin["name"]}
         run = parsed.enabled and stood
-        made = client.submit(subject, parsed.name, parsed.cron, parsed.prompt, activate=run)
+        made = client.submit(subject, parsed.name, parsed.cron, parsed.prompt, activate=run,
+                             grant=_migration_grant(subject, parsed.name, run))
     except FlowsError as e:
         if 400 <= e.status < 500:
             reason = (e.detail or {}).get("refused") if isinstance(e.detail, dict) else None
