@@ -282,6 +282,14 @@ Everything runs inside your perimeter: gateway + services + redis/postgres/stora
 recordings in your object storage. A bundled STT unit means the audio path never calls out — the
 posture the regulated verticals ask for.
 
+Two calls leave the host unless you switch them off: agent-api reads public model prices from
+`openrouter.ai` once a day (`VEXA_MODEL_PRICES_URL=off` in `deploy/compose/.env` uses the snapshot
+bundled with the release), and the Claude Code and Codex CLIs inside agent workers may contact their
+vendors for telemetry, error reports and update checks (block them at your egress proxy). Every
+requirement Vexa places on a host is listed in the
+[platform requirements](/deployment-kubernetes#what-vexa-requires-of-your-platform) table, Compose
+and Lite differences included.
+
 We have not run an install on a genuinely disconnected network, so we do not claim one: what a
 procurement review can hold us to is self-hosted with no egress, not a certified air gap. On
 **Kubernetes** the chart does not yet expose `TRANSCRIPTION_MODEL` as a value — see
