@@ -87,7 +87,7 @@ most coding agents).
 
 - [How Vexa governs itself](https://docs.vexa.ai/governance/index.md): the full map — two constitutions, protocols, surfaces, actors
 - [Delivery](https://docs.vexa.ai/governance/delivery.md): the D-book + the whole loop (roadmap · PREPARE · TAKE · validation · merge bar · ship bar · enforcement map)
-- [Architecture](https://docs.vexa.ai/governance/architecture.md): the P-book (P1–P23) + [compliance](https://docs.vexa.ai/governance/arch-compliance.md)
+- [Architecture](https://docs.vexa.ai/governance/architecture.md): the P-book (P1–P24) + [compliance](https://docs.vexa.ai/governance/arch-compliance.md)
 - [Roadmap status](https://docs.vexa.ai/roadmap/status.md): honest capability truth tables · [approach](https://docs.vexa.ai/roadmap/approach.md) · [stages](https://docs.vexa.ai/roadmap/stages.md)
 
 ## Optional

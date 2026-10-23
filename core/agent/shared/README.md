@@ -37,4 +37,4 @@ nothing here starts a server.
 | `terms` | the words a meeting said that are worth a chip, and which already have a page |
 | `page_images` · `asset_source` | an image on a page: checking its address, the guarded fetch that brings a remote one into the workspace, and the index of where it came from |
 
-_Governed by `docs/docs/governance/architecture.mdx` (P1–P23)._
+_Governed by `docs/docs/governance/architecture.mdx` (P1–P24)._

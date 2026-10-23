@@ -5,7 +5,7 @@
  * Usage: node scripts/gates.mjs [readme|isolation|isolation-py|exports|graph|graph-py|schema|
  *                                contract-version|config-contract|python|stack|node|health|access|
  *                                tracing|replay|telemetry|eval|licenses|compose|execution-env|
- *                                lite-makefile|domain-doors|fact-parity|vendor-payload|ui-design|calm|all]
+ *                                lite-makefile|domain-doors|fact-parity|vendor-payload|host-demands|ui-design|calm|all]
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -20,6 +20,7 @@ import { createHash } from "node:crypto";
 import { checkDomainDoors, ALLOW_PATH as DOORS_ALLOW } from "./check-domain-doors.mjs";
 import { checkParity, MANIFEST_PATH as PARITY_MANIFEST } from "./check-parity.mjs";
 import { checkVendorPayload, NATIVE_DIR } from "./check-vendor-payload.mjs";
+import { checkHostDemands, LEDGER_PATH as HOST_DEMANDS_LEDGER, TABLE_DOC as HOST_DEMANDS_TABLE } from "./check-host-demands.mjs";
 import { checkPythonLicenses, INDEX_FILE as PY_LICENSE_INDEX } from "./check-python-licenses.mjs";
 import { collectPinnedImages, trackedFiles, isDockerfile } from "./pinned-images.mjs";
 import { npmLockInventory } from "./npm-locks.mjs";
@@ -1877,7 +1878,7 @@ function gateCalm() {
   return true;
 }
 
-const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, "docs-links": gateDocsLinks, dataflow: gateDataflow, calm: gateCalm, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance, "domain-doors": gateDomainDoors, "fact-parity": gateFactParity, "vendor-payload": gateVendorPayload, "ui-design": gateUiDesign };
+const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, "docs-links": gateDocsLinks, dataflow: gateDataflow, calm: gateCalm, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance, "domain-doors": gateDomainDoors, "fact-parity": gateFactParity, "vendor-payload": gateVendorPayload, "host-demands": gateHostDemands, "ui-design": gateUiDesign };
 // gate:docs-links — every docs page compiles and every internal link resolves. `mint broken-links`
 // EXITS 0 when it cannot parse a page ("Unable to parse <page> - … Expected a closing tag for <ext>")
 // and then checks nothing, so its exit code alone proved nothing: a page with a bare `<placeholder>`
@@ -1933,6 +1934,22 @@ function gateVendorPayload() {
   catch (e) { return fail([`vendor-payload: the checker itself failed — ${errText(e).slice(0, 800)}`]); }
   if (res.errs.length) return fail([`vendor-payload (P17, ADR-0039) — the optional native runtime leaked into what Vexa ships:`, ...res.errs.map((e) => "   " + e)]);
   console.log(`  ✓ gate:vendor-payload — ${res.tracked} tracked file(s), no native payload · ${NATIVE_DIR}/ denies by default in .gitignore and both build contexts (${res.probes} probes ignored, ${res.reincluded} source file(s) re-included) · ${res.scanned} stock file(s) and ${res.installers} manifest(s) name no native path · linked ${res.linked.join(", ") || "nothing"}, each logged`);
+  return true;
+}
+
+// gate:host-demands (P24 — least demand on the host, fewest primitives) — every host-level demand an
+// install makes of the operator's platform (a hostPath, a host namespace, root, an added capability,
+// the container engine's socket, a DaemonSet or ClusterRole, a database superuser/CREATEDB/CREATEROLE/
+// extension) is a scripts/host-demands.json entry pointing at a row of the platform-requirements table
+// the operator reads. A new demand fails until it is either made unnecessary or listed with its reason;
+// an entry whose demand is gone fails too, so the list only shrinks. The rule lives in
+// scripts/check-host-demands.mjs.
+function gateHostDemands() {
+  let res;
+  try { res = checkHostDemands(ROOT); }
+  catch (e) { return fail([`host-demands: the checker or ${HOST_DEMANDS_LEDGER} itself failed — ${errText(e).slice(0, 800)}`]); }
+  if (res.errs.length) return fail([`host-demands (P24, least demand on the host) — a demand on the operator's platform that the requirements table does not carry:`, ...res.errs.map((e) => "   " + e)]);
+  console.log(`  ✓ gate:host-demands — ${res.files} install file(s) scanned · ${res.sites} (file, demand) pair(s), each listed in ${HOST_DEMANDS_LEDGER} against one of ${res.rows} rows of ${HOST_DEMANDS_TABLE}`);
   return true;
 }
 
