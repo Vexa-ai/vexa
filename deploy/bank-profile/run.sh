@@ -99,6 +99,7 @@ networking:
 nodes:
   - role: control-plane
 YAML
+    rm -f "$WORK/scc-uid"     # a new cluster draws a new uid range, as a new OpenShift project does
     KIND_EXPERIMENTAL_DOCKER_NETWORK="$NET" kind create cluster --name "$CLUSTER" \
       --config "$WORK/kind.yaml" --kubeconfig "$ADMIN_KC" --wait 0s
   fi

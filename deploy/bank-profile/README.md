@@ -39,6 +39,13 @@ IMAGE_TAG=$TAG BANK_CLUSTER=bank-profile deploy/bank-profile/run.sh all
 # or: make bank-profile IMAGE_TAG=$TAG
 ```
 
+The mock bot must be built from a tree whose `Dockerfile.mock` carries `@vexa/join/url-redaction`
+(`90e666ff39`, on `land-0134/stack-56-57`); before it, the mock dies at import and the meeting row
+stays `requested`.
+
+On bbb (2026-10-23) a full run took 24 minutes, about 10 of them loading ~6 GB of images into the
+node; the node held 9.7 GB of images and idled at 1.4 GiB of memory, capped at 8 CPUs and 24 GiB.
+
 `run.sh` with no argument lists the steps (`up`, `db a|b`, `install a|b`, `check`, `journey`,
 `uninstall`, `down`). `KEEP=1` leaves the cluster up for debugging. It checks that its docker subnet
 and the Pod/Service ranges are free before it creates anything, and `down` removes only its own
