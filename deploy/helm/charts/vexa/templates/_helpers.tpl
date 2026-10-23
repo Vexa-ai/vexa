@@ -617,6 +617,21 @@ securityContext:
 {{- end -}}
 {{- end -}}
 
+{{/*
+The pod securityContext for a third-party image the chart runs as it ships (postgres, redis,
+pgbouncer): only the seccomp profile of global.podSecurityContext (RuntimeDefault by default), so a
+uid or fsGroup an operator sets for Vexa's own images never reaches an upstream entrypoint. Same
+`deliver` gate; renders nothing when the profile is unset.
+*/}}
+{{- define "vexa.seccompPodSecurityContext" -}}
+{{- $p := (.Values.global.podSecurityContext | default dict).seccompProfile -}}
+{{- if and $p (eq (include "vexa.securityContextDeliver" .) "true") -}}
+securityContext:
+  seccompProfile:
+    {{- toYaml $p | nindent 4 }}
+{{- end -}}
+{{- end -}}
+
 {{- define "vexa.containerSecurityContext" -}}
 {{- if eq (include "vexa.securityContextDeliver" .) "true" -}}
 {{- $sc := omit (.Values.global.securityContext | default dict) "deliver" -}}

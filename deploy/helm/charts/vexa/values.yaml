@@ -34,7 +34,13 @@ global:
   #       topologyKey: kubernetes.io/hostname
   #       whenUnsatisfiable: ScheduleAnyway
   topologySpreadConstraints: []
-  podSecurityContext: {}
+  # Every Pod the chart renders runs under the container runtime's default seccomp profile, which
+  # Pod Security `restricted` requires (the requirements table, row K5). Third-party images
+  # (postgres, redis, pgbouncer) take only this profile from here, never a uid. Set
+  # `seccompProfile: null` to leave the choice to the node.
+  podSecurityContext:
+    seccompProfile:
+      type: RuntimeDefault
   # Hardened defaults: block privilege escalation, drop all caps. Override per-component only if a
   # workload genuinely needs a cap back.
   #

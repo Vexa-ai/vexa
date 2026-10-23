@@ -182,6 +182,7 @@ spec:
         {{- with include "vexa.extraCA.initContainer" . }}{{ . | trim | nindent 8 }}{{ end }}
       {{- if ne .Values.flows.databaseName .Values.database.name }}
         - name: ensure-db
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
           image: {{ include "vexa.flowsImage" . | quote }}
           command: ["python", "-c"]
           args:
@@ -262,6 +263,7 @@ spec:
       {{- end }}
       containers:
         - name: flows-worker
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
           image: {{ include "vexa.flowsImage" . | quote }}
           # Composes VEXA_FLOWS_DB_URL from secretKeyRef-sourced parts (F-D5 item 1) rather than
           # a literal DSN in the Secret — see the file header. sslmode threads from database.sslMode
@@ -430,6 +432,7 @@ spec:
         {{- with include "vexa.extraCA.initContainer" . }}{{ . | trim | nindent 8 }}{{ end }}
       {{- if ne .Values.flows.databaseName .Values.database.name }}
         - name: ensure-db
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
           image: {{ include "vexa.flowsImage" . | quote }}
           command: ["python", "-c"]
           args:
@@ -498,6 +501,7 @@ spec:
       {{- end }}
       containers:
         - name: flows-mailbox
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
           image: {{ include "vexa.flowsImage" . | quote }}
           # See flows-worker above (F-D5) — same DSN-composition wrapper, same reasoning.
           command: ["/bin/sh", "-c"]
@@ -659,6 +663,7 @@ spec:
         {{- with include "vexa.extraCA.initContainer" . }}{{ . | trim | nindent 8 }}{{ end }}
       {{- if ne .Values.flows.databaseName .Values.database.name }}
         - name: ensure-db
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
           image: {{ include "vexa.flowsImage" . | quote }}
           command: ["python", "-c"]
           args:
@@ -727,6 +732,7 @@ spec:
       {{- end }}
       containers:
         - name: flows-api
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
           image: {{ include "vexa.flowsImage" . | quote }}
           # See flows-worker above (F-D5) — same DSN-composition wrapper, same reasoning.
           command: ["/bin/sh", "-c"]

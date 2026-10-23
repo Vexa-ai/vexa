@@ -2423,4 +2423,36 @@ tb "runtime (control): the docker backend keeps the image's root" \
   '! RT_POD <<< "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set runtime.backend=docker)" | has runAsNonRoot'
 tb "runtime: the OpenShift profile renders no runtime securityContext" \
   '[ -z "$(RT_POD <<< "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" -f "$CHART/values-openshift.yaml" --set agentApi.workspaces.storageClassName=rwx-class)")" ]'
+# P24 / K5: every Pod the chart renders, with every optional component on, runs under a seccomp
+# profile (RuntimeDefault, or the bots' Localhost one), as Pod Security `restricted` requires; the
+# third-party datastores take the profile and nothing else; OpenShift (deliver: false) renders none.
+ALL_ON=(-f "$CHART/values-test.yaml" --set crm.enabled=true --set crm.orgId=org1 --set signals.enabled=true
+  --set dashboard.enabled=true --set livekit.enabled=true --set livekit.url=wss://calls.example
+  --set migrations.enabled=true --set pgbouncer.enabled=true --set flows.enabled=true --set flows.mail.enabled=true)
+seccomp_check() { python3 -c '
+import sys, yaml
+mode = sys.argv[1]
+bad, n = [], 0
+for d in yaml.safe_load_all(sys.stdin):
+    if not d or d.get("kind") not in ("Deployment", "StatefulSet", "DaemonSet", "Job"): continue
+    spec = d["spec"]["template"]["spec"]; n += 1
+    psc = spec.get("securityContext") or {}
+    if mode == "none":
+        if psc: bad.append(d["metadata"]["name"])
+        continue
+    pod = (psc.get("seccompProfile") or {}).get("type")
+    cs = spec.get("containers", []) + spec.get("initContainers", [])
+    ok = pod in ("RuntimeDefault", "Localhost") or all(((c.get("securityContext") or {}).get("seccompProfile") or {}).get("type") in ("RuntimeDefault", "Localhost") for c in cs)
+    if not ok: bad.append(d["metadata"]["name"])
+    if mode == "datastores" and d["metadata"]["name"].rsplit("-", 1)[-1] in ("postgres", "redis", "pgbouncer") and set(psc) != {"seccompProfile"}:
+        bad.append(d["metadata"]["name"] + " (more than the profile)")
+if bad or not n: print(bad); sys.exit(1)
+print(n)
+' "$1"; }
+tb "K5: every chart Pod (all components on) runs under a seccomp profile" \
+  'helm template vexa "$CHART" -n vexa "${ALL_ON[@]}" | seccomp_check all >/dev/null'
+tb "K5: postgres, redis and pgbouncer take the seccomp profile and no uid, even when global.podSecurityContext sets one" \
+  'helm template vexa "$CHART" -n vexa "${ALL_ON[@]}" --set global.podSecurityContext.runAsUser=1234 | seccomp_check datastores >/dev/null'
+tb "K5 (control): the OpenShift profile renders no pod securityContext at all" \
+  'helm template vexa "$CHART" -n vexa "${ALL_ON[@]}" -f "$CHART/values-openshift.yaml" --set agentApi.workspaces.storageClassName=rwx-class | seccomp_check none >/dev/null'
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

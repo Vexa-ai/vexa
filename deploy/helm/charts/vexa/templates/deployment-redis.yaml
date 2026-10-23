@@ -40,6 +40,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- include "vexa.seccompPodSecurityContext" . | nindent 6 }}
       containers:
         - name: redis
           image: "{{ .Values.redis.image }}"
