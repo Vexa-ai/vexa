@@ -8,7 +8,8 @@ a version so a credential that was rotated mid-operation is never mixed with its
   and version bound as associated data so a ciphertext cannot be replayed under another name. The
   rows live in their own SQLite file beside the broker's metadata; the key comes from a file the
   deployment supplies and never touches the state volume. Removed rows are overwritten on disk
-  (``secure_delete``).
+  (``secure_delete``), and every write folds and truncates the write-ahead log so no earlier copy
+  of a destroyed version stays in it.
 * `OpenBaoStore` (optional): the OpenBao/Vault KV v2 HTTP API, for operators who already run one.
   Its path layout is the one the 0.13.2 development harness used, so a deployment that ran the
   harness keeps its stored credentials when it moves to this service. Its address is https, or
@@ -39,6 +40,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from . import sqlite_db
 from .obs import log_event
 
 _PATH = re.compile(r"^[A-Za-z0-9_.-]{1,160}(/[A-Za-z0-9_.-]{1,160}){0,3}$")
@@ -110,6 +112,7 @@ class LocalEncryptedStore:
         self._lock = threading.Lock()
         try:
             with closing(self._connect()) as c:
+                sqlite_db.open_wal(c)
                 c.execute(
                     "CREATE TABLE IF NOT EXISTS secret_versions (path TEXT NOT NULL, version INTEGER NOT NULL,"
                     " nonce BLOB NOT NULL, ciphertext BLOB NOT NULL, key_id TEXT NOT NULL, created REAL NOT NULL,"
@@ -119,7 +122,7 @@ class LocalEncryptedStore:
             raise StoreUnavailable("config") from None
 
     def _connect(self) -> sqlite3.Connection:
-        c = sqlite3.connect(self._db, timeout=10, isolation_level=None)
+        c = sqlite_db.connect(self._db, isolation_level=None)
         c.execute("PRAGMA secure_delete=ON")   # a destroyed version is overwritten, not left in free pages
         return c
 
@@ -153,6 +156,7 @@ class LocalEncryptedStore:
                         c.execute("ROLLBACK")
                         raise
                     c.execute("COMMIT")
+                    _drop_wal(c)
             except sqlite3.Error:
                 raise StoreUnavailable("transport") from None
         return Record(data=data, version=version, receipt=uuid.uuid4().hex)
@@ -194,6 +198,7 @@ class LocalEncryptedStore:
             try:
                 with closing(self._connect()) as c:
                     c.execute("DELETE FROM secret_versions WHERE path=?", (path,))
+                    _drop_wal(c)
             except sqlite3.Error:
                 raise StoreUnavailable("transport") from None
 
@@ -204,6 +209,15 @@ class LocalEncryptedStore:
             return True
         except sqlite3.Error:
             return False
+
+
+def _drop_wal(c: sqlite3.Connection) -> None:
+    """Fold the write-ahead log into the database and truncate it. A destroyed version is then
+    overwritten in the database file (``secure_delete``) and no earlier copy of it stays in the
+    log. It does not wait: a reader holding the log open leaves it for the next write, which is not
+    an error (the connection is closed right after)."""
+    c.execute("PRAGMA busy_timeout=0")
+    c.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
 
 
 def address_allowed(address: str) -> bool:

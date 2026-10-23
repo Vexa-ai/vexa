@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request
 
-from . import assertion, identity_token, metadata, providers, sensor_grants
+from . import assertion, identity_token, metadata, providers, sensor_grants, sqlite_db
 from .obs import log_event
 from .settings import Settings, google_client
 from .reasons import store_unavailable
@@ -94,8 +94,10 @@ class Broker:
         self.root.mkdir(parents=True, exist_ok=True)
         self.db_path = self.root / "metadata.sqlite"
         self.lock = threading.RLock()
-        with closing(self.db()) as c, c:
-            metadata.open_schema(c)
+        with closing(self.db()) as c:
+            sqlite_db.open_wal(c)
+            with c:
+                metadata.open_schema(c)
         self.hmac_key = metadata.state_key(self.root / "state-hmac.key")
         self._owners_sealed = False
         try:
@@ -108,7 +110,7 @@ class Broker:
 
     # ── storage ───────────────────────────────────────────────────────────────────────────
     def db(self) -> sqlite3.Connection:
-        c = sqlite3.connect(self.db_path, timeout=10)
+        c = sqlite_db.connect(self.db_path)
         c.row_factory = sqlite3.Row
         return c
 

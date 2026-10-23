@@ -24,10 +24,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 COPY src ./src
 
-# An unprivileged user owns the one writable path. The deploy surfaces mount the state volume
-# there and the role and store keys read-only from a secret; the root filesystem can be read-only.
+# An unprivileged user owns the writable paths. The deploy surfaces mount the state volume at
+# /state and the role and store keys read-only from a secret; the root filesystem can be read-only.
+# /backup is where the state backup (`python -m credential_broker.backup`) writes its snapshots,
+# a separate volume that a fresh named volume inherits this ownership for.
 RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin broker \
- && mkdir -p /state && chown 10001:10001 /state && chmod 0700 /state
+ && mkdir -p /state /backup && chown 10001:10001 /state /backup && chmod 0700 /state /backup
 USER 10001
 VOLUME ["/state"]
 

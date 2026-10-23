@@ -37,7 +37,8 @@ def test_cas_refuses_a_racing_writer(local):
 
 def test_no_plaintext_at_rest(tmp_path, local):
     local.put("abc", {"value": "PLAINTEXT-CANARY-VALUE"})
-    assert b"PLAINTEXT-CANARY-VALUE" not in (tmp_path / "secrets.sqlite").read_bytes()
+    files = list(tmp_path.glob("secrets.sqlite*"))      # the database and its write-ahead log
+    assert files and all(b"PLAINTEXT-CANARY-VALUE" not in f.read_bytes() for f in files)
 
 
 def test_wrong_key_and_tampering_are_integrity_faults_not_absence(tmp_path, local):

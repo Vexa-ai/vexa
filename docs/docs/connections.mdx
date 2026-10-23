@@ -22,6 +22,7 @@ token typed for one Git operation still works.
 | The broker | `credential-broker` | `<release>-credential-broker` Deployment (one replica) |
 | Its state | the `connections-state` volume | the `<release>-credential-broker-state` PVC |
 | Keys | generated once by `connections-keys` into four volumes | the `<release>-credential-broker-keys` Secret, generated once |
+| State snapshots | `credential-broker-backup` into the `connections-backup` volume | a `state-backup` container in the broker's Pod, into the `<release>-credential-broker-backup` PVC |
 | Who can reach it | agent-api and the terminal, on the internal `connections` network | agent-api and terminal Pods, by NetworkPolicy |
 
 The broker answers two probes without a key: `GET /health` (the process is up) and `GET /ready`,
@@ -83,6 +84,39 @@ kubectl create secret generic vexa-connections-keys \
 
 and set `credentialBroker.existingSecret: vexa-connections-keys`. Add `google-client-secret` to the
 same Secret if you use Google. The NetworkPolicy needs a network plugin that enforces policies.
+
+## Backup and restore
+
+The broker's state is snapshotted on a schedule, **on by default**: every 6 hours a consistent copy
+of `metadata.sqlite` (connections, grants, audit) and `secrets.sqlite` (the encrypted credentials)
+is written into a volume of its own, and the newest 28 are kept (7 days). The copy is taken with
+SQLite's online backup API while the broker runs, never as a file copy of a live database, and each
+snapshot is checked before it is kept. It is on by default because what it holds is ciphertext and
+metadata, and without it a damaged state volume means every person reconnects every connection.
+
+The snapshot job mounts **no key**. A snapshot is unreadable without the store key, so keep a copy
+of the key (`connections-store-key`, or `store.key` in the keys Secret) somewhere else, and copy the
+snapshots off the host or cluster as well: both volumes live on the same storage.
+
+| | Compose | Helm |
+|---|---|---|
+| Interval, retention | `VEXA_CONNECTIONS_BACKUP_INTERVAL_S` (21600), `VEXA_CONNECTIONS_BACKUP_KEEP` (28) | `credentialBroker.backup.intervalSeconds`, `.keep` |
+| Where | the `connections-backup` volume | the `<release>-credential-broker-backup` PVC (`.size`, `.storageClassName`) |
+| Off | `docker compose up -d --scale credential-broker-backup=0` | `credentialBroker.backup.enabled: false` |
+
+Each snapshot is a directory `snapshot-<UTC time>/` holding the two files. To restore one:
+
+1. Stop the broker: `docker compose stop credential-broker credential-broker-backup`, or
+   `kubectl scale deploy/<release>-credential-broker --replicas=0`.
+2. With the state volume mounted somewhere (a one-off container, or a Pod mounting both claims),
+   remove `metadata.sqlite*` and `secrets.sqlite*` (including the `-wal` and `-shm` files) from it.
+3. Copy `metadata.sqlite` and `secrets.sqlite` from the snapshot into it, owned by uid 10001, mode 0600.
+4. Start the broker with the **same store key** the snapshot was written under. `GET /ready` answers
+   200 once the store opens; a wrong key shows as `store_unavailable` (`integrity`).
+
+Consents that were in flight when the snapshot was taken have to be started again. Connections made
+after the snapshot are not in it and are reconnected. The full commands are in the broker's
+[README](https://github.com/Vexa-ai/vexa/blob/main/core/agent/services/credential-broker/README.md#backup-and-restore).
 
 ## Google consent
 

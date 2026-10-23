@@ -53,8 +53,8 @@ def test_the_local_store_keeps_two_versions_and_deletes_all(tmp_path):
         ciphertexts = [r[0] for r in c.execute("SELECT ciphertext FROM secret_versions WHERE path='abc'")]
     local.delete("abc")
     assert local.get("abc") is None
-    raw = db.read_bytes()
-    assert all(ct not in raw for ct in ciphertexts)       # overwritten on disk, not left in free pages
+    raw = b"".join(f.read_bytes() for f in tmp_path.glob("secrets.sqlite*"))   # database + its log
+    assert all(ct not in raw for ct in ciphertexts)       # overwritten on disk, not left in free pages or the log
 
 
 def test_openbao_delete_destroys_the_key_and_its_versions(tmp_path):
