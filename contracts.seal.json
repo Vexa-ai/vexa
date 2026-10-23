@@ -41,7 +41,7 @@
   "core/runtime/contracts/schedule.v1": "6f2c0277d3d186ca2a9333342930f135ea66bfd931135c451bd12b05ff862648",
   "core/signals/contracts/signals.v1": "a9de6a55356bca13e60a1c95f8919e18ea6ecc7b335813c2aa98a8e5def66401",
   "core/workspaces/contracts/workspace.v1": "4069d5a747914765ba2d4f2d4cf0968916be1208137f845a3f1691a241f7f20f",
-  "deploy/contracts/config.v1": "eb48fc953750b7d983ac87b0588fb2f15580a9b642d6ee77701e8bed9157d0e9",
+  "deploy/contracts/config.v1": "05a47f52ce26525e87a438e2a5982217f6a42b3160a390d1f96255b703355e97",
   "deploy/contracts/execution-targets.v1": "0c644571b7823024aa2e7ec6a135a55202233155c6c60eef79f1f4ec063e6375",
   "deploy/contracts/meeting-bundle.v1": "6cd9ce8b13aba4bd52a77d0341498ca9655af2c21bbb7c5c9cf5bc0cb21e11b9",
   "deploy/contracts/outbound-url.v1": "d4e99c1afa5ea8287185e7a47a92d12ba09a7a64a0d19816b8dfba6183cfd3b1"
