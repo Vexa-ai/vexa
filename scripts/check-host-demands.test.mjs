@@ -71,7 +71,7 @@ test("a stale entry is red: the ledger only shrinks", () => {
   finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("SQL in a service: CREATE ROLE and SUPERUSER are demands, NOSUPERUSER and comments are not", () => {
+test("SQL in a service: a role statement granting SUPERUSER or CREATEDB is a demand; NOSUPERUSER, a keyword table, prose and comments are not", () => {
   const root = fixture({
     "core/x/src/x/schema.py": [
       "# CREATE ROLE is explained here, in a comment",
@@ -79,12 +79,15 @@ test("SQL in a service: CREATE ROLE and SUPERUSER are demands, NOSUPERUSER and c
       "conn.run('CREATE ROLE r LOGIN')",
       "conn.run('ALTER ROLE app SUPERUSER')",
       "conn.run('CREATE EXTENSION vector')",
+      "_POWERS = (('rolsuper', 'SUPERUSER'), ('rolcreatedb', 'CREATEDB'), ('rolcreaterole', 'CREATEROLE'))",
+      "    A non-superuser may not name SUPERUSER or CREATEDB in ALTER ROLE at all.",
+      "conn.run('ALTER USER app CREATEDB')",
     ].join("\n"),
     "core/x/tests/test_schema.py": "conn.run('CREATE DATABASE t')\n",
   });
   try {
     const found = [...demandSites(root).values()].map((s) => `${s.demand}@${s.lines.join(",")}`).sort();
-    assert.deepEqual(found, ["db-createrole@3", "db-extension@5", "db-superuser@4"]);
+    assert.deepEqual(found, ["db-createdb@8", "db-createrole@3", "db-extension@5", "db-superuser@4"]);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

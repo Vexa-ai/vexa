@@ -19,9 +19,10 @@
  *   unconfined          a seccomp or AppArmor profile switched off
  *   cluster-rbac        a ClusterRole / ClusterRoleBinding
  *   daemonset           a DaemonSet (one Pod on every node)
- *   db-superuser        SUPERUSER (NOSUPERUSER is the opposite and is not a demand)
- *   db-createdb         CREATE DATABASE / CREATEDB
- *   db-createrole       CREATE ROLE / CREATEROLE
+ *   db-superuser        a role statement granting SUPERUSER (NOSUPERUSER, or the keyword named
+ *                       outside a role statement, is not a demand)
+ *   db-createdb         CREATE DATABASE, or a role statement granting CREATEDB
+ *   db-createrole       CREATE ROLE, or a role statement granting CREATEROLE
  *   db-extension        CREATE EXTENSION
  * Full-line comments are skipped: naming a demand in prose is not making it.
  *
@@ -56,9 +57,11 @@ export const DEMANDS = {
   "unconfined": /(seccomp|apparmor)[=:]\s*["']?unconfined/,
   "cluster-rbac": /\bkind:\s*ClusterRole(Binding)?\b/,
   "daemonset": /\bkind:\s*DaemonSet\b/,
-  "db-superuser": /(?<![A-Za-z])SUPERUSER\b/,
-  "db-createdb": /\bCREATE\s+DATABASE\b|(?<![A-Za-z])CREATEDB\b/,
-  "db-createrole": /\bCREATE\s+ROLE\b|(?<![A-Za-z])CREATEROLE\b/,
+  // A role attribute is a demand when a role statement grants it; the bare keyword is also how code
+  // names the attributes it refuses or switches off (NOSUPERUSER, a pg_roles column → keyword table).
+  "db-superuser": /\b(CREATE|ALTER)\s+(ROLE|USER)\b[^;]*?(?<![A-Za-z])SUPERUSER\b/,
+  "db-createdb": /\bCREATE\s+DATABASE\b|\b(CREATE|ALTER)\s+(ROLE|USER)\b[^;]*?(?<![A-Za-z])CREATEDB\b/,
+  "db-createrole": /\bCREATE\s+ROLE\b|\b(CREATE|ALTER)\s+(ROLE|USER)\b[^;]*?(?<![A-Za-z])CREATEROLE\b/,
   "db-extension": /\bCREATE\s+EXTENSION\b/,
 };
 
