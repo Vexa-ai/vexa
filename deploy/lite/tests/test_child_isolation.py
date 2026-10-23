@@ -239,7 +239,7 @@ def test_there_is_no_vnc_view():
     for name in ("x11vnc", "novnc", "websockify"):
         assert name not in packages, name
     assert "VEXA_LITE_VNC" not in ENTRYPOINT and "/run/vexa/vnc" not in ENTRYPOINT
-    assert "EXPOSE 8056 3001 8100\n" in DOCKERFILE
+    assert "EXPOSE 8056 3001 8100 3002\n" in DOCKERFILE
 
 
 def test_only_the_credential_file_is_mounted_into_a_root_only_directory():
