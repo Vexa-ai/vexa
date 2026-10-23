@@ -879,6 +879,14 @@ class SessionStore:
                            (workspace,)).fetchall()
         return [{"id": r[0], "title": r[1], "owner": r[2], "last_active": float(r[3])} for r in rows]
 
+    def closed_rooms(self, workspace: str) -> list[str]:
+        """The ids of the rooms of ``workspace`` whose members are explicit rows (closed, direct)."""
+        with self._lock:
+            rows = self._x("SELECT session_id FROM agent_session_room "
+                           "WHERE visibility <> 'open' AND workspace = ? ORDER BY session_id",
+                           (workspace,)).fetchall()
+        return [r[0] for r in rows]
+
     def hand_on(self, session_id: str, actor: str, to: str) -> None:
         """The owner hands the session on to another human member (rooms): they become its owner,
         the old owner a member. Refused unless ``actor`` owns it and ``to`` is a human member."""

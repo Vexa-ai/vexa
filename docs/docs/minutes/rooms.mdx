@@ -18,8 +18,10 @@ The people beside the room's name open the **members panel**:
 - **Invited, not on Vexa yet**: people invited from this room, and when the invite runs out.
 - **In the workspace, not here** (closed rooms): each workspace member who is not in the room, with **Add**.
 
-An **open room** includes every member of its workspace. Leaving the workspace takes you out of its
-open rooms. A **closed room** has only the people added to it.
+An **open room** includes every member of its workspace. A **closed room** has only the people added to
+it. Leaving the workspace, or being removed from it, takes you out of all its rooms, closed ones included.
+If you rejoin the workspace, its open rooms come back. A closed room comes back when one of its members
+adds you again.
 
 ### Tag someone with @
 
@@ -159,7 +161,10 @@ answers each access check:
   its owner while they are in the workspace.
 - **Closed room**: explicit `room:<session id>` rows in the identity registry's `memberships` table,
   written through admin-api's `/internal/registry/rooms/{id}/members` doors. Without identity, the file
-  backend keeps `<root>/.rooms/<id>.json`, outside every workspace mount.
+  backend keeps `<root>/.rooms/<id>.json`, outside every workspace mount. A person's row counts only
+  while they are a member of the room's workspace, so the access check reads the workspace roster too.
+  When the roster changes, the rows of people it no longer has are dropped. If the owner was dropped,
+  the room passes to the remaining member who was added first.
 - **Migration**: a closed room with no registry rows yet adopts, once, the rows the file backend kept
   for it (`.rooms/<id>.json`), else its participant rows, while `VEXA_POLICY_LEGACY_READ` is on.
 - **Fail closed**: a roster or row set that cannot be read means no membership.

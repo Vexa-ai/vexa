@@ -1186,12 +1186,18 @@ def create_app(
     except Exception as _exc:  # noqa: BLE001 — never block boot; an unadopted workspace refuses its members
         logging.getLogger(__name__).warning("policy store migration at start failed: %s", _exc)
     # A roster change reaches every running unit that mounts the workspace at once (M2-b): the
-    # audience its worker's commit hold reads is re-read from the store (mount_audience).
+    # audience its worker's commit hold reads is re-read from the store (mount_audience). And a person
+    # the workspace no longer has leaves its closed rooms (D36): their registry rows go.
     from control_plane import mount_audience as _mount_audience  # noqa: PLC0415
+    from control_plane import room_membership as _rooms_follow  # noqa: PLC0415
 
-    membership_mod.set_roster_listener(
-        lambda _root, _ws: _mount_audience.refresh(dispatcher._redis(), _root, _ws)
-        if hasattr(dispatcher, "_redis") else None)
+    def _on_roster_change(_root, _ws):
+        if session_store is not None and hasattr(session_store, "closed_rooms"):
+            _rooms_follow.follow_workspace(session_store, _root, _ws)
+        if hasattr(dispatcher, "_redis"):
+            _mount_audience.refresh(dispatcher._redis(), _root, _ws)
+
+    membership_mod.set_roster_listener(_on_roster_change)
     # M2: notification rows written before 0.13.4 hold the invite TOKEN in their link; rewrite them to
     # the invite's id once, at start (idempotent).
     if notifier is not None:

@@ -7,7 +7,12 @@ ONE AUTHORITY, TWO SHAPES:
   row anywhere to forget. The room's maker stays its owner while they are in the workspace.
 * a CLOSED room's members are EXPLICIT rows ``room:<session id>`` in the identity registry's
   ``memberships`` table (S1-A's store, ``workspace_membership.room_store_*``; the file backend keeps
-  ``<root>/.rooms/<id>.json`` without identity). Nothing derives them.
+  ``<root>/.rooms/<id>.json`` without identity). Nothing derives them, but a person's row counts
+  only while they are a member of the room's workspace: out of the workspace is out of every room in
+  it, closed ones included. ``follow_workspace`` drops the rows of people the workspace no longer
+  has, so the members panel and the ring list never name them; the check in ``resolve_role`` is the
+  authority and holds in the moment before that runs. Coming back to the workspace brings back its
+  open rooms; a closed room takes them back when one of its members adds them again.
 
 A room of two (FD4) is an OPEN room in its hidden two-member pair workspace, so its two people are
 derived like any open room's, and a third person is refused at the workspace (``pair_rooms``).
@@ -120,8 +125,30 @@ def resolve_role(store, session_id: str, principal: str, row_role: Optional[str]
         return ROOM_ROLE_OF_WS.get(m.normalize_role(ws_role), "viewer")
     for r in explicit_rows(store, root, session_id):
         if str(r.get("subject")) == str(principal):
+            if not _in_workspace(root, room, r):
+                return None                                    # out of the workspace: out of its rooms
             return str(r.get("role") or "member")
     return None
+
+
+def _in_workspace(root: Path, room: dict, row: dict, roster: Optional[set] = None) -> bool:
+    """Whether a closed room's row still counts: its person is a member of the room's workspace. An
+    agent's row and a room with no workspace are the rows' own. Raises when the roster cannot be
+    read (FD3: the caller answers no membership)."""
+    ws = str(room.get("workspace") or "")
+    if not ws or (row.get("kind") or "human") != "human":
+        return True
+    who = str(row.get("subject") or "")
+    if roster is not None:
+        return who in roster
+    return m.is_member(root, ws, who) is not None
+
+
+def _roster(root: Path, room: dict) -> Optional[set]:
+    ws = str(room.get("workspace") or "")
+    if not ws:
+        return None
+    return {str(x.get("subject")) for x in m.read_members(root, ws) if isinstance(x, dict) and x.get("subject")}
 
 
 def members(store, root: Path, session_id: str) -> list[dict]:
@@ -153,7 +180,10 @@ def members(store, root: Path, session_id: str) -> list[dict]:
                 out.append({"principal": who, "role": p["role"], "kind": "agent", "derived": False,
                             "added": p.get("added"), "opened": None})
         return out
+    roster = _roster(root, room) if room else None
     for r in explicit_rows(store, root, session_id):
+        if room and not _in_workspace(root, room, r, roster):
+            continue
         who = str(r["subject"])
         out.append({"principal": who, "role": str(r.get("role") or "member"), "kind": r.get("kind") or "human",
                     "derived": False, "added": (rows.get(who) or {}).get("added"), "opened": _opened(who),
@@ -218,6 +248,58 @@ def set_owner(store, root: Path, session_id: str, old: str, new: str) -> None:
     m.room_store_put(root, session_id, rows)
 
 
+def follow_workspace(store, root: Path, workspace: str) -> list[tuple[str, str]]:
+    """Drop, from every closed room of ``workspace``, the rows of people who are no longer its members
+    (registry first, then the projection) — told after the workspace's roster changed. A room whose
+    owner went passes to its longest-standing remaining member, as when an owner leaves. Returns the
+    ``(room, person)`` pairs dropped. A roster that cannot be read drops nothing: ``resolve_role``
+    already answers no membership for anyone it cannot place."""
+    root = Path(root)
+    if store is None or not workspace:
+        return []
+    try:
+        roster = {str(x.get("subject")) for x in m.read_members(root, workspace)
+                  if isinstance(x, dict) and x.get("subject")}
+        rooms_ = store.closed_rooms(workspace)
+    except Exception as exc:  # noqa: BLE001 — the authority check still holds; only the tidy-up waits
+        log.warning("closed rooms of %s not reconciled (%s)", workspace, type(exc).__name__)
+        return []
+    dropped: list[tuple[str, str]] = []
+    for sid in rooms_:
+        room = {"workspace": workspace}
+        try:
+            rows = explicit_rows(store, root, sid)
+            keep = [r for r in rows if _in_workspace(root, room, r, roster)]
+            gone = [str(r["subject"]) for r in rows if r not in keep]
+            if not gone:
+                continue
+            heir = ""
+            if any(str(r.get("role")) == "owner" for r in rows if r not in keep) and \
+                    not any(str(r.get("role")) == "owner" for r in keep):
+                humans_left = sorted((r for r in keep if (r.get("kind") or "human") == "human"),
+                                     key=lambda r: str(r.get("added_at") or ""))
+                if humans_left:
+                    heir = str(humans_left[0]["subject"])
+                    for r in keep:
+                        if str(r["subject"]) == heir:
+                            r["role"] = "owner"
+            m.room_store_put(root, sid, keep)
+            with store._tx():
+                for who in gone:
+                    store._x("DELETE FROM agent_session_participant WHERE session_id = ? AND principal = ?",
+                             (sid, who))
+                if heir:
+                    store._x("UPDATE agent_session_participant SET role = 'owner' "
+                             "WHERE session_id = ? AND principal = ?", (sid, heir))
+                    store._x("UPDATE agent_session SET owner = ? WHERE id = ?", (heir, sid))
+            dropped.extend((sid, who) for who in gone)
+            log.info("room %s: %d member(s) left with workspace %s%s", sid, len(gone), workspace,
+                     f"; handed on to {heir}" if heir else "")
+        except Exception as exc:  # noqa: BLE001 — one room failing never stops the rest
+            log.warning("closed room %s not reconciled (%s)", sid, type(exc).__name__)
+    return dropped
+
+
 def ringable(store, root: Path, session_id: str, *, exclude: str = "", now: Optional[float] = None) -> list[str]:
     """WHO A ROOM CALL RINGS (sharing-tagging §7, D36): every member of a closed room; in an open room
     the derived members who opened it within ``ring_derived_days`` (the tuning line). Never ``exclude``
@@ -252,5 +334,5 @@ def install(store, root_of: Callable[[], Path]) -> None:
     store._room_members = lambda sid: members(store, Path(root_of()), sid)
 
 
-__all__ = ["add", "explicit_rows", "forget", "humans", "install", "is_open", "members", "remove",
+__all__ = ["add", "explicit_rows", "follow_workspace", "forget", "humans", "install", "is_open", "members", "remove",
            "resolve_role", "ring_derived_days", "ringable", "seed", "set_owner"]
