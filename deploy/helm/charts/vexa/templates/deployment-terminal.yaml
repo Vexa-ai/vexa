@@ -85,8 +85,8 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
-            # Mints the signed-in browser's SESSION credential (D13). Optional: without it sign-in
-            # falls back to an ordinary key and session-only decisions are refused.
+            # Mints the signed-in browser's SESSION credential (D13). The chart generates it; an
+            # existing Secret without the key starts no terminal (server.mjs refuses, naming it).
             - name: VEXA_TERMINAL_SESSION_SECRET
               valueFrom:
                 secretKeyRef:

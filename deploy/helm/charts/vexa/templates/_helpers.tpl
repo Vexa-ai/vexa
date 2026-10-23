@@ -1010,3 +1010,21 @@ Pods — is no oracle for a short value. A Secret the operator brings (secrets.e
 {{- $root := first . -}}
 {{- toJson (list ($root.Values.secrets.internalApiSecret | default "") (rest .)) | sha256sum -}}
 {{- end -}}
+
+{{/* MIGRATION-0015: the Secret holding at-rest.key (64 hex characters), the AES-256-GCM key admin-api
+and meeting-api seal per-user webhook signing secrets with. Generated once (secret-at-rest-key.yaml)
+or the operator's own (atRest.existingSecret). */}}
+{{- define "vexa.atRestKeySecret" -}}
+{{- (.Values.atRest).existingSecret | default (include "vexa.componentName" (list . "at-rest-key")) -}}
+{{- end -}}
+
+{{/* The pod volume both consumers mount at /run/vexa-at-rest (the file `key`). Not optional: a Pod
+whose key Secret is missing does not start, rather than writing secrets it cannot seal. */}}
+{{- define "vexa.atRestKey.volume" -}}
+- name: at-rest-key
+  secret:
+    secretName: {{ include "vexa.atRestKeySecret" . }}
+    defaultMode: 0440
+    items:
+      - { key: at-rest.key, path: key }
+{{- end -}}

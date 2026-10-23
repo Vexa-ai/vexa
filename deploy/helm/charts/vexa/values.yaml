@@ -197,7 +197,7 @@ secrets:
   terminalSessionSecret: ""         # D13: the terminal's second secret — identity mints the signed-in
                                     # browser's SESSION credential only with it. Generated at install like
                                     # the one above; with existingSecretName, carry VEXA_TERMINAL_SESSION_SECRET
-                                    # (optional: without it sign-in uses an ordinary key).
+                                    # (required: admin-api and the terminal refuse to start without it).
   crmPublishKey: ""                 # the crm outbox's publish key on flows (VEXA_FLOWS_CRM_PUBLISH_KEY, 32+
                                     # bytes): POST /events for the CRM's own facts, no other flows route.
                                     # Empty → kept from this release's Secret, else generated; with
@@ -1037,6 +1037,16 @@ signals:
   # may reach — an on-prem model server — as VEXA_SIGNALS_MODEL_ALLOW. Empty: public addresses only.
   modelAllow: ""
   resources: {}
+# MIGRATION-0015: the at-rest sealing key admin-api and meeting-api seal per-user webhook signing
+# secrets with (AES-256-GCM, VEXA_AT_REST_KEY_FILE). Empty existingSecret: the chart generates it on
+# first install and keeps it across upgrades and uninstall (lookup + resource-policy keep). With
+# `helm template` pipelines (GitOps) lookup sees nothing and would mint a new key every render —
+# create the Secret yourself (key `at-rest.key`, `openssl rand -hex 32`) and name it here. Never
+# replace the key on an existing install: values sealed under the old key can no longer be opened.
+# Keep it apart from your database backups.
+atRest:
+  existingSecret: ""
+
 credentialBroker:
   enabled: true                 # takes effect only with agentApi.enabled
   image:
@@ -1058,6 +1068,22 @@ credentialBroker:
     # One replica writes it, so the Deployment is pinned to replicas: 1 with Recreate.
     size: 1Gi
     storageClassName: ""
+  # Scheduled snapshots of the state volume (python -m credential_broker.backup): a `state-backup`
+  # container beside the broker in its Pod writes a consistent SQLite copy (online backup API) of
+  # metadata.sqlite and secrets.sqlite every intervalSeconds into ITS OWN PVC, keeping the newest
+  # `keep`. On by default: the copy is ciphertext and metadata, and without one a lost or damaged
+  # state volume means every person reconnects every connection. It mounts no key: a snapshot is
+  # unreadable without store.key, which you keep separately. Copy the backup PVC off-cluster
+  # (a VolumeSnapshot or your volume backup tool); restore: the broker's README.
+  backup:
+    enabled: true
+    intervalSeconds: 21600      # 6 h
+    keep: 28                    # 7 days at the default interval
+    size: 1Gi
+    storageClassName: ""
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits:   { cpu: 200m, memory: 128Mi }
   openbao:                      # backend=openbao only: an OpenBao/Vault KV v2 you run
     address: ""                 # https://openbao.example:8200 (https across hosts)
     mount: connections

@@ -112,6 +112,10 @@ spec:
             # below). This service verifies the gateway's signature and cannot make one.
             - name: VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE
               value: /run/vexa-identity/public/key.pem
+            # MIGRATION-0015: the at-rest sealing key for webhook signing secrets (meetings.data and
+            # the webhook retry queue). The same Secret admin-api mounts.
+            - name: VEXA_AT_REST_KEY_FILE
+              value: /run/vexa-at-rest/key
             {{- if .Values.flows.enabled }}
             # subject-ticket.v1: meeting-api's OWN Ed25519 private key (issuer `meetings`, the
             # subject-ticket-meetings-key Secret, mounted below and by no other workload). Its meeting
@@ -316,6 +320,9 @@ spec:
             - name: identity-public-key
               mountPath: /run/vexa-identity/public
               readOnly: true
+            - name: at-rest-key
+              mountPath: /run/vexa-at-rest
+              readOnly: true
             {{- if .Values.flows.enabled }}
             - name: subject-ticket-key
               mountPath: /run/vexa-subject-ticket
@@ -335,6 +342,7 @@ spec:
             {{- toYaml .Values.meetingApi.resources | nindent 12 }}
       volumes:
         {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{ end }}
+        {{- include "vexa.atRestKey.volume" . | nindent 8 }}
         - name: s3-client
           configMap:
             name: {{ include "vexa.componentName" (list . "s3-client") }}

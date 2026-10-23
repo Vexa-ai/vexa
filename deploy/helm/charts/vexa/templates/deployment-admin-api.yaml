@@ -83,8 +83,8 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
-            # POST /internal/sessions (D13): the terminal's second secret. Optional, so an existing
-            # Secret without the key keeps working — sessions are then simply not minted (503).
+            # POST /internal/sessions (D13): the terminal's second secret. The chart generates it; an
+            # existing Secret without the key boots no admin-api (the preflight refuses, naming it).
             - name: VEXA_TERMINAL_SESSION_SECRET
               valueFrom:
                 secretKeyRef:
@@ -171,13 +171,20 @@ spec:
                   name: {{ include "vexa.flowsApiKeySecretName" . }}
                   key: VEXA_FLOWS_API_KEY
             {{- end }}
+            # MIGRATION-0015: the at-rest sealing key (AES-256-GCM) for per-user webhook signing
+            # secrets in users.data and meetings.data. The same Secret meeting-api mounts; a file
+            # apart from the database, never in it and never in a database backup.
+            - name: VEXA_AT_REST_KEY_FILE
+              value: /run/vexa-at-rest/key
             {{- with .Values.adminApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- $xcaMounts := include "vexa.extraCA.mounts" . | trim }}
-          {{- if or $photos $oidcCa $xcaMounts }}
           volumeMounts:
             {{- with $xcaMounts }}{{ . | nindent 12 }}{{ end }}
+            - name: at-rest-key
+              mountPath: /run/vexa-at-rest
+              readOnly: true
             {{- if $photos }}
             - name: s3-client
               mountPath: /etc/vexa/s3
@@ -193,7 +200,6 @@ spec:
               mountPath: /etc/vexa-oidc/ca
               readOnly: true
             {{- end }}
-          {{- end }}
           startupProbe:
             httpGet:
               path: /health
@@ -218,9 +224,9 @@ spec:
           resources:
             {{- toYaml .Values.adminApi.resources | nindent 12 }}
       {{- $xcaVolumes := include "vexa.extraCA.volumes" . | trim }}
-      {{- if or $photos $oidcCa $xcaVolumes }}
       volumes:
         {{- with $xcaVolumes }}{{ . | nindent 8 }}{{ end }}
+        {{- include "vexa.atRestKey.volume" . | nindent 8 }}
         {{- if $photos }}
         - name: s3-client
           configMap:
@@ -260,7 +266,6 @@ spec:
               - { key: {{ .key | default "ca.crt" | quote }}, path: ca.pem }
         {{- end }}
         {{- end }}
-      {{- end }}
       {{- with .Values.global.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
