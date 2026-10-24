@@ -28,7 +28,7 @@ const PANE = 'vexa-home'
 const SERVER_KEY = 'vexa'
 const HOSTED_URL = 'https://api.cloud.vexa.ai'
 const EMPTY: Meeting = {
-  connection: 'connecting', url: '', platform: '', nativeId: '', dbId: 0, attachedTo: '', offers: { calendar: false, workspaces: false, demo: false, requests: false }, title: '', isDemo: false,
+  connection: 'connecting', url: '', platform: '', nativeId: '', dbId: 0, attachedTo: '', offers: { calendar: false, workspaces: false, demo: false, requests: false, webPanel: false }, title: '', isDemo: false,
   status: 'idle', nextIndex: 0, liveCursor: '', liveFeed: true, segments: [], error: '',
 }
 const MEETING = { plugin: 'vexa', key: 'meeting' } as const
@@ -143,6 +143,8 @@ const CALIBRATE = 'listener_calibrate'
 const CONFIGURE_TOOL = 'mcp__vexa__listener_configure'
 const CALIBRATE_TOOL = 'mcp__vexa__listener_calibrate'
 const PROJECT_APP = '.vexa/app'
+const BROWSER_SERVER = 'Claude_Browser'
+const BROWSER_TOOL = 'mcp__Claude_Browser__preview_start'
 const MIN_PATCH = 299
 const LIVE_WAIT_MS = 1200
 
@@ -248,6 +250,9 @@ async function connect($: any): Promise<void> {
       workspaces: names.has(`${prefix}workspace_list`),
       demo: names.has(`${prefix}start_demo_meeting`),
       requests: names.has(`${prefix}claude_requests_next`),
+      // Our web panel opens in Claude's browser pane, signed in by a one-time link, when the server
+      // mints those links and this Claude has the browser pane (the desktop app).
+      webPanel: names.has(`${prefix}panel_link`) && names.has(BROWSER_TOOL),
     }
     await update($, x => ({ ...x, connection: 'ready', offers, error: '' }))
     if (was !== 'ready') { quiet(loadCalls($)); if (offers.workspaces) quiet(loadWorkspaces($)) }
@@ -1258,6 +1263,27 @@ const ASKS = [
 const LIVE = 'success'
 const PLATFORM: Record<string, string> = { google_meet: 'Meet', teams: 'Teams', zoom: 'Zoom', jitsi: 'Jitsi', vexa_call: 'Vexa call' }
 
+// The one app: our web panel in Claude's browser pane. panel_link answers a single-use sign-in
+// link (≤120 s) for this account landing on `next`; it is opened at once and never kept, shown or
+// logged. Without it (no browser pane, or a Vexa that doesn't mint links) the plugin's own pane.
+async function openPanel($: any, next: string, fallback: ViewName): Promise<void> {
+  const m = await read($)
+  if (m.connection === 'ready' && m.offers.webPanel) {
+    try {
+      const r = await call($, 'panel_link', { next })
+      if (r?.url) {
+        await $.mcp.call(BROWSER_SERVER, 'preview_start', { url: String(r.url) })
+        return
+      }
+    } catch { /* the plugin's own pane below */ }
+  }
+  await go($, fallback)
+}
+
+function panelPath(m: Meeting): string {
+  return m.nativeId ? `/panel/meeting/${encodeURIComponent(m.platform)}/${encodeURIComponent(m.nativeId)}` : '/panel'
+}
+
 async function go($: any, v: ViewName): Promise<void> {
   await updateView($, () => ({ name: v }))
   await $.ui.open({ id: PANE, title: app.pane.title })
@@ -1646,8 +1672,10 @@ export const register: Register = (on, options) => {
       const [a, b, c] = v.split(/[.-]/).map(Number)
       if (a === 2 && b === 1 && Number(c) < MIN_PATCH) $.ui.toast(`Vexa's pane needs Claude Code 2.1.${MIN_PATCH} or newer (this is ${v}). Run «claude update».`)
     } catch { /* older engines have no version call: the README says what they need */ }
-    void $.ui.open({ id: PANE, title: app.pane.title })
     await connect($)
+    // Where the web panel can open in the browser pane, it is the app (opened with /vexa); the
+    // plugin's own pane opens at start only where it can't.
+    if (!(await read($)).offers.webPanel) void $.ui.open({ id: PANE, title: app.pane.title })
     if (!polling) {
       polling = true
       $.clock.every(1500, () => quiet((async () => { await poll($); await findLive($) })()))
@@ -1678,11 +1706,11 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'vexa' }, async $ => {
     await connect($)
-    await go($, 'home')
+    await openPanel($, '/panel', 'home')
     return { text: 'Vexa opened.' }
   })
   on('command.run', { command: 'vexa-meeting' }, async $ => {
-    await go($, 'meeting')
+    await openPanel($, panelPath(await read($)), 'meeting')
     return { text: 'Vexa meeting opened.' }
   })
   on('command.run', { command: 'vexa-calls' }, async $ => {
@@ -1719,6 +1747,8 @@ export const register: Register = (on, options) => {
     if (!e.tool.startsWith(prefix)) return next(e)
     if (next.origin.plugin === $.plugin.name) return { decision: 'allow', reason: 'Vexa pane button' }
     const name = e.tool.slice(prefix.length)
+    // A sign-in link is a credential: only the plugin opens it, straight into the browser pane.
+    if (name === 'panel_link') return { decision: 'deny', reason: 'panel_link is opened by the Vexa plugin itself (/vexa), never by a model call.' }
     if (READ_ONLY.has(name)) return { decision: 'allow', reason: 'Vexa read-only tool' }
     if (ASK_PERSON[name]) return { decision: 'ask', reason: ASK_PERSON[name] }
     return next(e)
