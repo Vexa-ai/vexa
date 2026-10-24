@@ -880,7 +880,7 @@
    "unique-id": "claude-plugin",
    "node-type": "webclient",
    "name": "claude-plugin",
-   "description": "claude-plugin \u2014 client (Claude Code plugin: manifest, skills, hosted MCP config; no code)",
+   "description": "claude-plugin \u2014 client (Claude Code plugin: manifest, skills, hosted MCP config with OAuth, the Vexa pane mod)",
    "metadata": [
     {
      "path": "clients/claude-plugin"
@@ -4457,7 +4457,7 @@
      }
     }
    },
-   "description": "the plugin's HTTP MCP server entry: Claude Code calls the gateway's /mcp with the person's Vexa API key; the plugin itself runs no code",
+   "description": "the plugin's HTTP MCP server entry: Claude Code calls hosted /mcp with the OAuth token from the person's Vexa sign-in; the plugin's pane mod calls the same server through Claude Code ($.mcp.call), never directly",
    "protocol": "HTTPS",
    "metadata": [
     {

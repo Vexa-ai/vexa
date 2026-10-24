@@ -1,3 +1,3 @@
 # setup
 
-Skill: where the Vexa API key comes from (hosted account page, self-hosted `make all`, or the door at vexa.ai/connect), the hosted vs self-hosted MCP URL, and how to check the connection. See `SKILL.md`.
+Skill: signing in to hosted Vexa through OAuth (no API key), what a new account gets, the Vexa pane and the demo, connecting a self-hosted stack, and how to check the connection. See `SKILL.md`.

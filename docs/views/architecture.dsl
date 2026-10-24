@@ -238,7 +238,7 @@ edges:
   agent-api -write-> rail-order  # SET/GET the chat rail order
   agent-api -write-> rail-marks  # HSET/HDEL/HGETALL a person's rail pins and hides
   admin-api -write-> signin-link-redeemed  # SET NX with the link's own expiry (at most an hour) when a terminal redeems an emailed sign-in link; a write that cannot be made refuses the sign-in
-  claude-plugin -req-> gateway  # the plugin's HTTP MCP server entry: Claude Code calls the gateway's /mcp with the person's Vexa API key; the plugin itself runs no code
+  claude-plugin -req-> gateway  # the plugin's HTTP MCP server entry: Claude Code calls hosted /mcp with the OAuth token from the person's Vexa sign-in; the plugin's pane mod calls the same server through Claude Code ($.mcp.call), never directly
   agent-api -write-> unit-in  # XADD the person's next message to a warm unit, signed with the unit's key
   agent-api -write-> redis-acl-users  # ACL SETUSER/DELUSER a worker's own user per dispatch; restore after a Redis restart
   meeting-api -write-> redis-acl-users  # ACL SETUSER/DELUSER a bot's own user per session; restore after a Redis restart
