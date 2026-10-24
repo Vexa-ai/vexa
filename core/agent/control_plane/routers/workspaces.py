@@ -241,6 +241,26 @@ def build(**d) -> APIRouter:
             return {"files": wsr.tree_at(_read_target(request, slug), hidden=hidden)}
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid subject")
+    @router.get("/api/workspace/search")
+    def ws_search(request: Request,
+                  q: str = Query(..., min_length=1, max_length=200,
+                                 description="Words to find. A page matches when every word occurs in "
+                                             "its path or its text, ignoring case."),
+                  slug: Optional[str] = Query(None, description="The workspace to search: a shared "
+                                              "workspace's slug, or 'personal'. Omitted: the caller's own."),
+                  folder: Optional[str] = Query(None, max_length=200, description="Only pages under this "
+                                                "folder, e.g. kg/entities/meeting."),
+                  limit: int = Query(20, ge=1, le=100, description="Most pages returned (default 20).")):
+        """Find pages in one workspace by the words in them — the verb behind `workspace_search`.
+
+        Reads the same files `workspace_tree` lists, under the same read rules, and answers
+        `{query, results: [{path, title, snippet, matches}], scanned, truncated}`, best first:
+        pages whose path or title carries the words, then by how often they occur."""
+        from control_plane import workspace_search as search_mod  # noqa: PLC0415
+        try:
+            return search_mod.search(wsr, _read_target(request, slug), q, limit=limit, path_prefix=folder)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid subject")
     @router.post("/api/workspace/upload")
     async def ws_upload(request: Request, files: list[UploadFile] = File(...),
                         session: str = Query(default="", max_length=128)):

@@ -51,6 +51,26 @@
       "note": "Read one file's content by its relative path. `slug` selects a shared workspace; omitted, it is the caller's own."
     },
     {
+      "name": "workspace_search",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/workspace/search"
+      },
+      "arguments": [
+        "q",
+        "slug",
+        "folder",
+        "limit"
+      ],
+      "note": "Find pages by the words in them, in the caller's own workspace or a shared one named by `slug`; `folder` narrows it to one folder (kg/entities/meeting). A page matches when every word occurs in its path or text. Read a hit whole with workspace_read."
+    },
+    {
       "name": "workspace_write",
       "identity": "user",
       "auth": "subject",

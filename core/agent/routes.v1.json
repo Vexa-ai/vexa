@@ -961,6 +961,16 @@
       "shared": "allow"
     },
     {
+      "method": "GET",
+      "path": "/agent/workspace/search",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
+    },
+    {
       "method": "DELETE",
       "path": "/agent/{path:path}",
       "scopes": [

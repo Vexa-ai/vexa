@@ -150,3 +150,32 @@ def test_a_persons_own_pin_carries_no_agent_trailer(world, monkeypatch):
     r = client.post("/api/pins", headers=_h("alice"), json={"workspace": "team", "ref": f"[[chat:{chat['id']}]]"})
     assert r.status_code == 200, r.text
     assert_persons(root / "team", "pin [[chat:")
+
+
+# ── an API key is a program writing for its person (a person's own MCP client, a script) ─────────
+
+KEY_OF_ALICE = {"X-User-Id": "alice", "x-user-credential-class": "key"}
+SESSION_OF_ALICE = {"X-User-Id": "alice", "x-user-credential-class": "session"}
+
+
+def test_a_page_written_with_an_api_key_is_attributed_to_an_agent(world):
+    client, _s, _c, _sp, root, _d = world
+    slug, ws = _created(client, root, _h("alice"), name="Key notes")
+    r = client.put("/api/workspace/file", headers=KEY_OF_ALICE,
+                   json={"path": "notes/by-key.md", "content": "# By key\n", "slug": slug})
+    assert r.status_code == 200, r.text
+    rev = _git(ws, "log", "-1", "--format=%H", "--", "notes/by-key.md").strip()
+    assert trailer(ws, "On-behalf-of", rev) == "alice"
+    assert trailer(ws, "Written-by", rev) == "agent"
+    assert trailer(ws, "Agent-unit", rev) == ""
+
+
+def test_a_page_written_in_the_persons_session_carries_no_agent_trailer(world):
+    client, _s, _c, _sp, root, _d = world
+    slug, ws = _created(client, root, _h("alice"), name="Session notes")
+    r = client.put("/api/workspace/file", headers=SESSION_OF_ALICE,
+                   json={"path": "notes/by-hand.md", "content": "# By hand\n", "slug": slug})
+    assert r.status_code == 200, r.text
+    rev = _git(ws, "log", "-1", "--format=%H", "--", "notes/by-hand.md").strip()
+    for key in ("On-behalf-of", "Written-by", "Agent-unit"):
+        assert trailer(ws, key, rev) == "", key

@@ -5156,6 +5156,78 @@
         "summary": "Ws Rename"
       }
     },
+    "/api/workspace/search": {
+      "get": {
+        "description": "Find pages in one workspace by the words in them \u2014 the verb behind `workspace_search`.\n\nReads the same files `workspace_tree` lists, under the same read rules, and answers\n`{query, results: [{path, title, snippet, matches}], scanned, truncated}`, best first:\npages whose path or title carries the words, then by how often they occur.",
+        "parameters": [
+          {
+            "description": "Words to find. A page matches when every word occurs in its path or its text, ignoring case.",
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "description": "Words to find. A page matches when every word occurs in its path or its text, ignoring case.",
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The workspace to search: a shared workspace's slug, or 'personal'. Omitted: the caller's own.",
+            "in": "query",
+            "name": "slug",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The workspace to search: a shared workspace's slug, or 'personal'. Omitted: the caller's own.",
+              "title": "Slug"
+            }
+          },
+          {
+            "description": "Only pages under this folder, e.g. kg/entities/meeting.",
+            "in": "query",
+            "name": "folder",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only pages under this folder, e.g. kg/entities/meeting.",
+              "title": "Folder"
+            }
+          },
+          {
+            "description": "Most pages returned (default 20).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Most pages returned (default 20).",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "summary": "Ws Search"
+      }
+    },
     "/api/workspace/shared": {
       "get": {
         "description": "EVERY workspace the person has, under `all`: `slug`, the `name` the Files pane shows,\n`kind` (`personal` \u00b7 `private` \u00b7 `shared`), `role`, and for a private one `empty` and any\n`same_name_as` \u2014 call a workspace by that name when talking to the person (their own one is\n\"Personal\", never its slug). Every workspace verb accepts the name as well as the slug; two\nworkspaces answering one name are refused with both, so ask which. When two of their own\nshare a name and one is `empty`, offer to delete the empty one (`workspace_remove`, after\nthey say yes). `memberships` is the \"workspaces shared with me\" listing, reconciled across\nBOTH membership stores. Each row carries its `state` (`active` \u00b7 `inactive` \u00b7 `hidden`);\nworkspaces the person HID are left out unless `hidden=true` \u2014 do not mention them unless\nasked (Vexa-ai/vexa#1783).\n\n``users.data.memberships[]`` (the index) is the fast, cross-host read; ``policy/members.json``\nis the authoritative one (Q6). Reading ONLY the mirror made every grant on this host invisible\nwhenever the internal edge to admin-api was unreachable \u2014 the route answered 200 with an empty\nlist, so a 403 on that hop rendered in the UI as \"you have no shared workspaces\" rather than as\nan error. It is now a UNION, never a subtraction: an index row with no local dir is a workspace\nthat lives on another host and must still be listed, so the git store only ever ADDS rows the\nindex is missing. ``index_degraded`` says out loud when the mirror could not be read.",
