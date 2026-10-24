@@ -245,6 +245,13 @@ export function runs(segs: readonly Seg[]): { speaker: string; time: string; tex
   return out
 }
 
+// A segment's time in the person's own clock, as the call's meta line shows it.
+function clockTime(t: unknown): string {
+  if (t === undefined || t === null || t === '') return ''
+  const d = new Date(typeof t === 'number' ? t : String(t))
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
 // The live feed's events, as the app's live view applies them: a `transcript` event upserts its
 // segment by id (a draft, `completed: false`, is revised in place), `retract` drops ids.
 export function applyLive(old: readonly Seg[], events: readonly any[]): Seg[] {
@@ -256,7 +263,7 @@ export function applyLive(old: readonly Seg[], events: readonly any[]): Seg[] {
     } else if (ev?.type === 'transcript' && String(ev.text ?? '').trim()) {
       const seg: Seg = {
         id: String(ev.id ?? ''), speaker: String(ev.speaker ?? '—'), text: String(ev.text).trim(),
-        time: ev.tsMs ? new Date(ev.tsMs).toISOString().slice(11, 16) : '', pending: ev.completed === false,
+        time: clockTime(ev.tsMs), pending: ev.completed === false,
       }
       const i = seg.id ? out.findIndex(o => o.id === seg.id) : -1
       if (i >= 0) out[i] = seg; else out.push(seg)
@@ -275,7 +282,7 @@ async function readConfirmed($: any, since: number, status: string): Promise<str
     id: String(s.segment_id ?? s.id ?? ''),
     speaker: String(s.speaker ?? s.speaker_name ?? '—'),
     text: String(s.text ?? '').trim(),
-    time: String(s.absolute_start_time ?? s.start_time ?? '').slice(11, 16),
+    time: clockTime(s.absolute_start_time ?? s.start_time),
     pending: s.completed === false,
   })).filter(s => s.text)
   // Ask again from the first draft next time, so its final version replaces it.
