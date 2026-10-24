@@ -527,7 +527,7 @@ async function findLive($: any): Promise<void> {
   if (!l.app.pane.offerListening || l.isOn || l.offer || now - lastOfferCheck < OFFER_EVERY_MS) return
   lastOfferCheck = now
   if (m.nativeId && m.status === 'active' && !l.declined.includes(roomKey(m))) {
-    await updateListener($, x => ({ ...x, offer: { platform: m.platform, nativeId: m.nativeId, title: m.title || m.nativeId } }))
+    await updateListener($, x => ({ ...x, offer: { platform: m.platform, nativeId: m.nativeId, title: m.title || m.nativeId, dbId: m.dbId } }))
     return
   }
   try {
@@ -537,6 +537,7 @@ async function findLive($: any): Promise<void> {
       platform: String(r.platform ?? ''),
       nativeId: String(r.native_meeting_id ?? r.native_id ?? ''),
       title: String(r.data?.title ?? r.title ?? r.native_meeting_id ?? 'Your meeting'),
+      dbId: Number(r.id ?? r.meeting_db_id ?? 0),
     })).find(r => r.platform && r.nativeId && !l.declined.includes(roomKey(r)))
     if (live) await updateListener($, x => (x.isOn || x.offer ? x : { ...x, offer: live }))
   } catch { /* offering is best effort; the next check tries again */ }
@@ -550,7 +551,7 @@ async function listen($: any): Promise<void> {
   if (!room) return
   const m = await read($)
   if (m.platform !== room.platform || m.nativeId !== room.nativeId) {
-    await update($, x => ({ ...x, platform: room.platform, nativeId: room.nativeId, title: room.title, isDemo: false, status: 'active', segments: [], nextIndex: 0, liveCursor: '', liveFeed: true }))
+    await update($, x => ({ ...x, platform: room.platform, nativeId: room.nativeId, dbId: room.dbId ?? 0, attachedTo: '', title: room.title, isDemo: false, status: 'active', segments: [], nextIndex: 0, liveCursor: '', liveFeed: true }))
     await poll($)
   }
   const heard = (await read($)).segments.filter(s => s.id).map(s => s.id)
@@ -569,7 +570,7 @@ async function listen($: any): Promise<void> {
 async function listenToPane($: any): Promise<void> {
   const m = await read($)
   if (!m.nativeId) return
-  await updateListener($, x => ({ ...x, offer: { platform: m.platform, nativeId: m.nativeId, title: m.title || m.nativeId } }))
+  await updateListener($, x => ({ ...x, offer: { platform: m.platform, nativeId: m.nativeId, title: m.title || m.nativeId, dbId: m.dbId } }))
   await listen($)
 }
 

@@ -109,6 +109,7 @@ test('after Listen, a new line the filter flags wakes the main Claude once; the 
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   await ui.press({ key: 'listen' })
   expect(seen.prompts.at(-1)).toMatch(/pressed Listen/)
+  expect(seen.annotations.at(-1)).toMatchObject({ listener_state: 'listening' })
   expect(seen.model.length).toBe(0)
   lines = [...lines, seg('2', 'Ann', 'We decided to go with the annual plan.')]
   await clock.advance(1_500)

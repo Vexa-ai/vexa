@@ -42,7 +42,7 @@ export type Brief = {
   rules: Rule[]
 }
 
-export type Room = { platform: string; nativeId: string; title: string }
+export type Room = { platform: string; nativeId: string; title: string; dbId?: number }
 export type Line = { speaker: string; text: string }
 export type Wake = { at: string; reason: string }
 
