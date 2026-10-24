@@ -92,7 +92,7 @@ test('a live meeting is offered; nothing is listened to before Listen', async ($
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await clock.advance(31_500)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect((await ui.find({ type: 'Text', text: /^Not listening$/ }))?.text).toBe('Not listening')
+  expect((await ui.find({ type: 'Text', text: /Not listening$/ }))?.text).toBe('Acme pricing call · Not listening')
   expect(await ui.find({ type: 'Text', text: /Claude/ })).toBeFalsy()
   expect(seen.tools).not.toContain('get_meeting_transcript')
   expect(seen.model.length).toBe(0)
@@ -225,7 +225,7 @@ test('while listening, the live map upserts people and companies into personal a
   expect(kinds).toEqual(['person:Ann Lee', 'company:Acme'])
   expect(seen.upserts[0]).toMatchObject({ slug: 'personal', fields: { role: 'Procurement lead', company: 'Acme' }, connections: [{ name: 'Acme', relation: 'works at' }] })
   expect(seen.upserts.every(u => /meeting 41/.test(u.source))).toBe(true)
-  const r: any = await $.tool.call({ tool: 'mcp__vexa__listener_configure', models: { writer: 'haiku' } } as any)
+  const r: any = { result: JSON.parse(((await $.tool.call({ tool: 'mcp__vexa__listener_configure', models: { writer: 'haiku' } } as any)) as any).result) }
   expect(r.result.models).toEqual({ filter: 'haiku', writer: 'haiku', triage: 'sonnet' })
   expect(r.result.spend.writer).toMatchObject({ calls: 1, input: 900, output: 300 })
   await ui.unmount()
@@ -238,10 +238,10 @@ test('an offer whose meeting ended goes away instead of staying on the band', as
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await clock.advance(31_500)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text: /^Not listening$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /Not listening$/ })).toBeTruthy()
   endedLive.value = true
   await clock.advance(31_500)
-  expect(await ui.find({ type: 'Text', text: /^Not listening$/ })).toBeFalsy()
+  expect(await ui.find({ type: 'Text', text: /Not listening$/ })).toBeFalsy()
   expect(await ui.find({ type: 'Text', text: /^engine$/ })).toBeTruthy()
   await ui.unmount()
 })
@@ -281,7 +281,7 @@ test('listener_configure: plain rules, triggers and presets; it cannot start lis
   mock.clock(on)
   engine(on, () => [])
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const r: any = await $.tool.call({ tool: 'mcp__vexa__listener_configure', rules: 'Wake on any price.', triggers: [{ kind: 'keyword', value: 'discount' }] } as any)
+  const r: any = { result: JSON.parse(((await $.tool.call({ tool: 'mcp__vexa__listener_configure', rules: 'Wake on any price.', triggers: [{ kind: 'keyword', value: 'discount' }] } as any)) as any).result) }
   expect(r.result.listening).toBe(false)
   expect(r.result.brief.focus).toBe('Wake on any price.')
   expect(r.result.brief.rules[0].value).toBe('discount')
@@ -309,7 +309,7 @@ test('first run seeds ~/.vexa/apps/<name>; an update keeps edited files and land
   expect(seen.written[`${dir}/listener/default.json`]).toBeUndefined()
   expect(seen.written[`${dir}/listener/default.json.upstream`]).toBe('{"focus":"new default rules"}')
   expect(seen.written[`${dir}/.upstream/vexa-app.json`]).toBe(manifest('0.3.0'))
-  const r: any = await $.tool.call({ tool: 'mcp__vexa__listener_configure' } as any)
+  const r: any = { result: JSON.parse(((await $.tool.call({ tool: 'mcp__vexa__listener_configure' } as any)) as any).result) }
   expect(r.result.appFolder).toBe(dir)
   expect(r.result.brief.focus).toBe('my own rules')
 })
