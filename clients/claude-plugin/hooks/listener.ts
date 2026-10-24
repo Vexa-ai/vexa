@@ -149,12 +149,13 @@ export function ruleHit(rules: readonly Rule[], lines: readonly Line[]): string 
   return null
 }
 
-// The attention filter: one small-model call per change in the transcript tail, wake or not. This
-// is the dogfood listener's prompt, calibrated on a labelled call (precision 0.67, recall 0.80,
-// p50 1.4 s with haiku); `listener_calibrate` replays a fixture through it.
+// The attention filter: one small-model call per change in the transcript tail, one letter back
+// (W wake, S skip). This is the dogfood listener's prompt: instructions and rules lead and are
+// cached, so each call sends only the few transcript lines. `listener_calibrate` replays a
+// labelled fixture through it.
 export const DECIDE_SYSTEM = 'You are an attention filter for an assistant listening to a live meeting transcript '
-  + '(any language, with speech-recognition errors). Decide whether the NEW lines need the assistant now. Reply '
-  + 'with one line of JSON only: {"wake":true|false,"reason":"<= 12 words"}.'
+  + '(any language, with speech-recognition errors). Decide whether the NEW lines need the assistant now. Answer '
+  + 'with exactly one letter: W = wake the assistant, S = skip. No other text.'
 
 // The brief as the filter reads it: its focus is the plain-language rules; label questions and
 // what is already known are added to them.
@@ -169,15 +170,16 @@ export function rulesText(brief: Brief): string {
 }
 
 export function decidePrompt(context: readonly string[], fresh: readonly string[]): string {
-  return `Earlier lines (context only):\n${context.join('\n') || '(none)'}\n\nNEW lines:\n${fresh.join('\n')}`
+  return `Context:\n${context.join('\n') || '-'}\nNEW:\n${fresh.join('\n')}`
 }
 
 export function parseDecision(text: string): { wake: boolean; reason: string } {
-  try {
-    const j = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1))
-    return { wake: Boolean(j.wake), reason: String(j.reason ?? '') }
-  } catch { return { wake: false, reason: text.slice(0, 80) } }
+  const wake = text.trim().toUpperCase().startsWith('W')
+  return { wake, reason: wake ? 'matched the rules' : 'no match' }
 }
+
+// One wake per thought: the same words (a draft and its final version, a repeat) wake once.
+export const norm = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
 
 // Addressing the assistant by name (with the usual mis-hearings) lets a wake through the gap,
 // and the speaker's next lines within FOLLOW_MS are the rest of the request.

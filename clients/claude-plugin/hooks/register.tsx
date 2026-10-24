@@ -1,6 +1,7 @@
-// Vexa pane: opens beside the chat at session start and drives the plugin's own `vexa` MCP server.
-// Not signed in → a «Sign in» state; signed in → paste a link or try the demo, then the live
-// transcript follows, drafts in place until they are final.
+// Vexa pane: ONE pane beside the chat, opened at session start, driving the plugin's own `vexa` MCP
+// server. Not signed in → a «Sign in» state; signed in → views switched by a row of buttons at its
+// top (Home, Meeting, Calls, Calendar, Workspaces), since the engine cannot bring an already-open
+// tab to the front. The live transcript follows with drafts in place until they are final.
 //
 // Permissions: the pane's own calls and Vexa's read-only tools run without a prompt. Anything the
 // model calls that acts in a meeting (speak_in_meeting, stop_bot, request_meeting_bot, …) keeps
@@ -16,14 +17,14 @@
 // plugin's newer version on update without overwriting their edits), else the plugin's own.
 import type { Register } from 'claude-code'
 
-import type { AppInfo, Listener, Meeting, Room, Seg } from '../types'
+import type { AppInfo, Call, Calendar, Calls, Listener, Meeting, Page, Seg, Upcoming, View, Workspace, Workspaces } from '../types'
 import {
   DECIDE_SYSTEM, FALLBACK_APP, briefFor, buildApp, calibrationSummary, decidePrompt, isDirect,
-  normalize, parseDecision, parseManifest, ruleHit, rulesText,
+  norm, normalize, parseDecision, parseManifest, ruleHit, rulesText,
 } from './listener'
 import type { App, Labelled, Row } from './listener'
 
-const PANE = 'vexa-meeting'
+const PANE = 'vexa-home'
 const SERVER_KEY = 'vexa'
 const EMPTY: Meeting = {
   connection: 'connecting', url: '', platform: '', nativeId: '', title: '', isDemo: false,
@@ -66,6 +67,56 @@ async function updateListener($: any, fn: (l: Listener) => Listener): Promise<vo
     const held = await $.state.get(LISTENER)
     const r = await $.state.set(LISTENER, fn(held.value ?? IDLE), { ifVersion: held.version })
     if (r.isSet) return
+  }
+}
+
+// The pane's other values, one pair of helpers each (a state reference must be a literal).
+const VIEW = { plugin: 'vexa', key: 'view' } as const
+const CALLS = { plugin: 'vexa', key: 'calls' } as const
+const CALENDAR = { plugin: 'vexa', key: 'calendar' } as const
+const WORKSPACES = { plugin: 'vexa', key: 'workspaces' } as const
+const NO_CALLS: Calls = { items: [], filter: '', error: '' }
+const NO_CALENDAR: Calendar = { connected: [], upcoming: [], link: '', error: '', loaded: false }
+const NO_WORKSPACES: Workspaces = { items: [], query: '', results: [], open: null, bound: '', error: '', loaded: false }
+
+async function readView($: any): Promise<View> {
+  const { value } = await $.state.get(VIEW)
+  return value ?? { name: 'home' }
+}
+async function updateView($: any, fn: (v: View) => View): Promise<void> {
+  for (;;) {
+    const held = await $.state.get(VIEW)
+    if ((await $.state.set(VIEW, fn(held.value ?? { name: 'home' }), { ifVersion: held.version })).isSet) return
+  }
+}
+async function readCalls($: any): Promise<Calls> {
+  const { value } = await $.state.get(CALLS)
+  return value ?? NO_CALLS
+}
+async function updateCalls($: any, fn: (c: Calls) => Calls): Promise<void> {
+  for (;;) {
+    const held = await $.state.get(CALLS)
+    if ((await $.state.set(CALLS, fn(held.value ?? NO_CALLS), { ifVersion: held.version })).isSet) return
+  }
+}
+async function readCalendar($: any): Promise<Calendar> {
+  const { value } = await $.state.get(CALENDAR)
+  return value ?? NO_CALENDAR
+}
+async function updateCalendar($: any, fn: (c: Calendar) => Calendar): Promise<void> {
+  for (;;) {
+    const held = await $.state.get(CALENDAR)
+    if ((await $.state.set(CALENDAR, fn(held.value ?? NO_CALENDAR), { ifVersion: held.version })).isSet) return
+  }
+}
+async function readWorkspaces($: any): Promise<Workspaces> {
+  const { value } = await $.state.get(WORKSPACES)
+  return value ?? NO_WORKSPACES
+}
+async function updateWorkspaces($: any, fn: (w: Workspaces) => Workspaces): Promise<void> {
+  for (;;) {
+    const held = await $.state.get(WORKSPACES)
+    if ((await $.state.set(WORKSPACES, fn(held.value ?? NO_WORKSPACES), { ifVersion: held.version })).isSet) return
   }
 }
 
@@ -379,7 +430,7 @@ async function resetApp($: any): Promise<string> {
 
 // --- Listener ---------------------------------------------------------------------------------
 
-const roomKey = (r: Room) => `${r.platform}/${r.nativeId}`
+const roomKey = (r: { platform: string; nativeId: string }) => `${r.platform}/${r.nativeId}`
 
 // A live meeting of the person's, not yet offered or declined, becomes the band's offer.
 let lastOfferCheck = 0
@@ -389,7 +440,7 @@ async function findLive($: any): Promise<void> {
   const now = await $.clock.now()
   if (!l.app.pane.offerListening || l.isOn || l.offer || now - lastOfferCheck < OFFER_EVERY_MS) return
   lastOfferCheck = now
-  if (m.nativeId && m.status === 'active' && !l.declined.includes(roomKey({ ...m, title: '' }))) {
+  if (m.nativeId && m.status === 'active' && !l.declined.includes(roomKey(m))) {
     await updateListener($, x => ({ ...x, offer: { platform: m.platform, nativeId: m.nativeId, title: m.title || m.nativeId } }))
     return
   }
@@ -417,6 +468,8 @@ async function listen($: any): Promise<void> {
     await poll($)
   }
   const heard = (await read($)).segments.filter(s => s.id).map(s => s.id)
+  lastAuditAt = await $.clock.now()
+  auditCount = heard.length
   await updateListener($, x => ({ ...x, offer: null, isOn: true, triaged: heard.slice(-500), wakes: [], lastWakeAt: 0, error: '' }))
   void $.prompt.submit({
     text: `[Vexa listener] The person pressed Listen on "${room.title}" (${room.platform} ${room.nativeId}). `
@@ -425,21 +478,33 @@ async function listen($: any): Promise<void> {
   })
 }
 
+async function listenToPane($: any): Promise<void> {
+  const m = await read($)
+  if (!m.nativeId) return
+  await updateListener($, x => ({ ...x, offer: { platform: m.platform, nativeId: m.nativeId, title: m.title || m.nativeId } }))
+  await listen($)
+}
+
 async function decline($: any): Promise<void> {
   await updateListener($, x => (x.offer ? { ...x, declined: [...x.declined, roomKey(x.offer)].slice(-50), offer: null } : x))
 }
 
 async function stopListening($: any): Promise<void> {
   const m = await read($)
-  await updateListener($, x => ({ ...x, isOn: false, declined: m.nativeId ? [...x.declined, roomKey({ ...m, title: '' })].slice(-50) : x.declined }))
+  await updateListener($, x => ({ ...x, isOn: false, declined: m.nativeId ? [...x.declined, roomKey(m)].slice(-50) : x.declined }))
+}
+
+async function setPreset($: any, preset: string): Promise<void> {
+  if (!app.presets[preset]) return
+  await updateListener($, x => ({ ...x, preset, brief: briefFor(app, preset) }))
 }
 
 async function decide($: any, rules: string, context: string[], fresh: string[]): Promise<{ wake: boolean; reason: string; ms: number }> {
   const t0 = await $.clock.now()
   const r = await $.model.complete({
     model: FILTER_MODEL,
-    maxTokens: 80,
-    system: [{ text: DECIDE_SYSTEM, cache: true }, { text: `Rules: ${rules}` }],
+    maxTokens: 2,
+    system: [{ text: DECIDE_SYSTEM, cache: true }, { text: `Rules: ${rules}`, cache: true }],
     prompt: decidePrompt(context, fresh),
   })
   const ms = (await $.clock.now()) - t0
@@ -447,13 +512,51 @@ async function decide($: any, rules: string, context: string[], fresh: string[])
   return { ...parseDecision(r.text), ms }
 }
 
+// Wakes that pile up while the main Claude is busy go as ONE message, in order, once it is free.
+// Spam guard: one listener message per MIN_GAP_MS at most, MAX_PER_WINDOW per WINDOW_MS (past that,
+// only a direct address goes out); what is held stays in the batch and leaves as one message.
+const MIN_GAP_MS = 15_000
+const WINDOW_MS = 600_000
+const MAX_PER_WINDOW = 8
+let busy = false
+let batch: { reason: string; lines: string[]; direct: boolean }[] = []
+let sentAt: number[] = []
+let flushTimer = false
+async function flush($: any): Promise<void> {
+  if (busy || batch.length === 0) return
+  const now = await $.clock.now()
+  sentAt = sentAt.filter(t => now - t < WINDOW_MS)
+  const last = sentAt[sentAt.length - 1] ?? 0
+  const overCap = sentAt.length >= MAX_PER_WINDOW && !batch.some(b => b.direct)
+  const wait = Math.max(last ? MIN_GAP_MS - (now - last) : 0, overCap ? WINDOW_MS - (now - sentAt[0]!) : 0)
+  if (wait > 0) {
+    if (!flushTimer) { flushTimer = true; $.clock.after(wait + 50, () => { flushTimer = false; void flush($) }) }
+    return
+  }
+  sentAt.push(now)
+  const seen = new Set<string>()
+  const lines: string[] = []
+  for (const b of batch) for (const l of b.lines) { const k = norm(l); if (!seen.has(k)) { seen.add(k); lines.push(l) } }
+  const reasons = [...new Set(batch.map(b => b.reason))].join('; ')
+  const n = batch.length
+  batch = []
+  busy = true
+  const m = await read($)
+  void $.prompt.submit({
+    text: `[Vexa listener${n > 1 ? ` · ${n} wakes batched` : ''}] ${reasons}\n\nFrom the live meeting "${m.title || m.nativeId}" (${m.platform} ${m.nativeId}):\n`
+      + `${lines.join('\n')}\n\nReact briefly if it matters to the person; tune the listener with ${CONFIGURE} if it woke you for nothing.`,
+  })
+}
+
 // Judges the tail of the transcript, drafts included, whenever it changes. A rule trigger wakes
-// with no model call; a segment that already woke the main Claude cannot wake it again; wakes are
-// WAKE_GAP_MS apart unless the speaker addressed the assistant, whose next lines within
-// FOLLOW_MS are the rest of the request.
+// with no model call; one wake per thought (segment id or the same words); wakes are WAKE_GAP_MS
+// apart unless the speaker addressed the assistant, whose next lines within FOLLOW_MS may follow
+// (the filter still has to say wake).
 const WOKE_FOR = new Set<string>()
+const WOKE_TEXT = new Set<string>()
 let lastTail = ''
 let lastDirectAt = 0
+let lastTextAt = 0
 let triaging = false
 async function triage($: any): Promise<void> {
   const l = await readListener($)
@@ -463,6 +566,7 @@ async function triage($: any): Promise<void> {
   const tailText = tail.map(s => `${s.speaker}: ${s.text}`).join('\n')
   if (!tail.length || tailText === lastTail) return
   lastTail = tailText
+  lastTextAt = await $.clock.now()
   const done = new Set(l.triaged)
   const fresh = tail.filter(s => !done.has(s.id) || s.pending)
   if (!fresh.length) return
@@ -474,13 +578,14 @@ async function triage($: any): Promise<void> {
     const v = hit ? { wake: true, reason: hit, ms: 0 } : await decide($, rulesText(l.brief), context, lines)
     const now = await $.clock.now()
     const ids = fresh.map(s => s.id)
+    const key = norm(fresh.map(s => s.text).join(' '))
+    const already = ids.some(id => WOKE_FOR.has(id)) || [...WOKE_TEXT].some(t => t.length > 12 && (key.includes(t) || t.includes(key)))
     const direct = isDirect(lines)
     const followUp = lastDirectAt > 0 && now - lastDirectAt < FOLLOW_MS
     if (direct && v.wake) lastDirectAt = now
     const gapOk = !l.lastWakeAt || now - l.lastWakeAt > WAKE_GAP_MS
-    const canWake = !ids.some(id => WOKE_FOR.has(id)) && l.wakes.length < MAX_WAKES
-      && ((v.wake && (direct || Boolean(hit) || gapOk)) || followUp)
-    if (canWake) ids.forEach(id => WOKE_FOR.add(id))
+    const canWake = !already && v.wake && l.wakes.length < MAX_WAKES && (direct || followUp || Boolean(hit) || gapOk)
+    if (canWake) { ids.forEach(id => WOKE_FOR.add(id)); WOKE_TEXT.add(key) }
     await updateListener($, x => ({
       ...x,
       triaged: [...x.triaged, ...fresh.filter(s => !s.pending).map(s => s.id)].slice(-500),
@@ -491,17 +596,45 @@ async function triage($: any): Promise<void> {
       wakes: canWake ? [...x.wakes, { at: new Date(now).toISOString().slice(11, 19), reason: v.reason }].slice(-20) : x.wakes,
     }))
     if (canWake) {
-      void $.prompt.submit({
-        text: `[Vexa listener] ${v.reason}\n\nFrom the live meeting "${m.title || m.nativeId}" (${m.platform} ${m.nativeId}):\n`
-          + `${[...context.slice(-2), ...lines].join('\n')}\n\n`
-          + `React briefly if it matters to the person; tune the listener with ${CONFIGURE} if it woke you for nothing.`,
-      })
+      batch.push({ reason: v.reason, lines: [...context.slice(-2), ...lines], direct })
+      await flush($)
     }
   } catch (err) {
     await updateListener($, x => ({ ...x, error: message(err) }))
   } finally {
     triaging = false
   }
+}
+
+// If the listener stays quiet while the transcript keeps growing, the main Claude is asked to
+// check whether the filter missed something, and to retune it if so.
+const AUDIT_MS = 180_000
+let lastAuditAt = 0
+let auditCount = 0
+async function audit($: any): Promise<void> {
+  const l = await readListener($)
+  const m = await read($)
+  if (!l.isOn || !m.nativeId) return
+  const now = await $.clock.now()
+  const quietSince = Math.max(l.lastWakeAt, lastAuditAt)
+  const grown = m.segments.length - auditCount
+  if (now - quietSince < AUDIT_MS || grown < 4) return
+  lastAuditAt = now
+  auditCount = m.segments.length
+  const tail = m.segments.slice(-12).map(s => `${s.speaker}: ${s.text}${s.pending ? ' (draft)' : ''}`).join('\n')
+  void $.prompt.submit({
+    text: `[Vexa listener audit] No wake for ${Math.round((now - quietSince) / 60000)} min while ${grown} new lines arrived. Check whether the filter missed something.\n\n`
+      + `Last verdict: ${l.lastVerdict || 'none'} (${l.lastMs} ms)\nRules: ${rulesText(l.brief)}\n\nTranscript tail (${m.platform} ${m.nativeId}):\n${tail}\n\n`
+      + `If it missed something, retune with ${CONFIGURE}; otherwise say nothing.`,
+  })
+}
+
+async function whatDidIMiss($: any): Promise<void> {
+  const m = await read($)
+  const l = await readListener($)
+  const since = l.wakes.length ? `since the last wake (${l.wakes[l.wakes.length - 1]!.at} UTC)` : 'so far'
+  const tail = m.segments.slice(-40).map(s => `${s.speaker}: ${s.text}`).join('\n')
+  void $.prompt.submit({ text: `[Vexa listener · «What did I miss?»] Summarize the meeting ${since} in 3–5 short bullets: decisions, asks to me, numbers, next steps. Skip personal talk.\n\n${tail}` })
 }
 
 // Replays a labelled fixture (`[{speaker, text, wake}]`) through the same filter, one line at a
@@ -519,7 +652,7 @@ async function calibrate($: any, rules: string, fixture: string): Promise<unknow
     rows.push({ text: line.text, expected: line.wake, got: v.wake, reason: v.reason, ms: v.ms })
   }
   const summary = calibrationSummary(rows)
-  const misses = rows.filter(r => r.expected !== r.got).map(r => `${r.got ? 'FALSE WAKE' : 'MISSED'}: «${r.text}» — ${r.reason}`)
+  const misses = rows.filter(r => r.expected !== r.got).map(r => `${r.got ? 'FALSE WAKE' : 'MISSED'}: «${r.text}»`)
   return { fixture: path, model: FILTER_MODEL, summary, misses }
 }
 
@@ -569,9 +702,374 @@ const CONFIGURE_SCHEMA = {
   },
 }
 
+// --- Calls, calendar, workspaces: what the views beyond the meeting read --------------------
+
+function callTitle(x: any): string {
+  return String(x.data?.title || (x.platform === 'google_meet' ? 'Google Meet call' : x.platform === 'teams' ? 'Teams call'
+    : x.platform === 'zoom' ? 'Zoom call' : x.platform === 'jitsi' ? 'Jitsi call' : 'Call'))
+}
+
+async function loadCalls($: any): Promise<void> {
+  try {
+    const p = await call($, 'list_meetings', { limit: 60 })
+    const rows: any[] = Array.isArray(p) ? p : p.meetings ?? p.items ?? []
+    const items: Call[] = rows.map(x => ({
+      id: String(x.id ?? x.meeting_db_id ?? `${x.platform}/${x.native_meeting_id}`), platform: String(x.platform ?? ''),
+      nativeId: String(x.native_meeting_id ?? ''), status: String(x.status ?? ''), title: callTitle(x),
+      at: String(x.start_time ?? x.created_at ?? ''),
+    }))
+    await updateCalls($, c => ({ ...c, items, error: '' }))
+  } catch (err) { await updateCalls($, c => ({ ...c, error: message(err) })) }
+}
+
+async function openCall($: any, c: Call): Promise<void> {
+  await update($, x => ({
+    ...EMPTY, connection: x.connection, platform: c.platform, nativeId: c.nativeId, title: c.title,
+    status: c.status === 'active' ? 'active' : 'requested',
+  }))
+  await go($, 'meeting')
+}
+
+async function loadCalendar($: any): Promise<void> {
+  try {
+    const p = await call($, 'calendar_status', {})
+    const connected: string[] = (p.calendars ?? p.connections ?? []).map((c: any) => String(c.email ?? c.name ?? c.provider ?? c.id ?? 'calendar'))
+    const upcoming: Upcoming[] = (p.upcoming ?? p.events ?? p.meetings ?? []).map((e: any) => ({
+      id: String(e.id ?? e.event_id ?? e.meeting_id ?? ''), title: String(e.title ?? e.summary ?? 'Meeting'),
+      start: String(e.start ?? e.start_time ?? ''), platform: String(e.platform ?? ''),
+      nativeId: String(e.native_meeting_id ?? ''), autoJoin: Boolean(e.auto_join ?? e.will_join ?? false),
+    }))
+    await updateCalendar($, c => ({ ...c, connected, upcoming, error: '', loaded: true }))
+  } catch (err) { await updateCalendar($, c => ({ ...c, error: message(err), loaded: true })) }
+}
+
+async function connectCalendar($: any): Promise<void> {
+  try {
+    const p = await call($, 'calendar_connect', {})
+    await updateCalendar($, c => ({ ...c, link: String(p.url ?? p.link ?? p.connect_url ?? ''), error: '' }))
+  } catch (err) { await updateCalendar($, c => ({ ...c, error: message(err) })) }
+}
+
+async function setAutoJoin($: any, target: Upcoming | null, on: boolean): Promise<void> {
+  try {
+    await call($, 'set_auto_join', target ? { meeting_id: target.id, auto_join: on } : { all: true, auto_join: on })
+    await loadCalendar($)
+  } catch (err) { await updateCalendar($, c => ({ ...c, error: message(err) })) }
+}
+
+async function loadWorkspaces($: any): Promise<void> {
+  try {
+    const p = await call($, 'workspace_list', {})
+    const items: Workspace[] = (p.workspaces ?? p.items ?? []).map((w: any) => ({
+      id: String(w.id ?? w.slug ?? w.name), name: String(w.name ?? w.title ?? w.slug ?? w.id), kind: String(w.kind ?? w.type ?? ''),
+    }))
+    await updateWorkspaces($, w => ({ ...w, items, error: '', loaded: true }))
+  } catch (err) { await updateWorkspaces($, w => ({ ...w, error: message(err), loaded: true })) }
+}
+
+async function searchPages($: any, query: string): Promise<void> {
+  await updateWorkspaces($, w => ({ ...w, query }))
+  if (!query.trim()) return
+  try {
+    const p = await call($, 'workspace_search', { query })
+    const results: Page[] = (p.results ?? p.hits ?? p.pages ?? []).map((r: any) => ({
+      path: String(r.path ?? r.page ?? ''), snippet: String(r.snippet ?? r.excerpt ?? ''), workspace: String(r.workspace ?? r.workspace_id ?? ''),
+    }))
+    await updateWorkspaces($, w => ({ ...w, results, error: '' }))
+  } catch (err) { await updateWorkspaces($, w => ({ ...w, error: message(err) })) }
+}
+
+async function openPage($: any, workspace: string, path: string): Promise<void> {
+  try {
+    const p = await call($, 'workspace_read', { workspace, path })
+    await updateWorkspaces($, w => ({ ...w, open: { workspace, path, text: String(p.text ?? p.content ?? p.body ?? '') }, error: '' }))
+  } catch (err) { await updateWorkspaces($, w => ({ ...w, error: message(err) })) }
+}
+
+async function bindMeeting($: any, workspace: string): Promise<void> {
+  const m = await read($)
+  if (!m.nativeId) return
+  try {
+    await call($, 'meeting_bind_workspace', { platform: m.platform, native_meeting_id: m.nativeId, workspace })
+    await updateWorkspaces($, w => ({ ...w, bound: `${m.title || m.nativeId} → ${workspace}`, error: '' }))
+  } catch (err) { await updateWorkspaces($, w => ({ ...w, error: message(err) })) }
+}
+
+// --- The one Vexa pane: views switch inside it (the engine cannot bring an open tab to the front) --
+
+type ViewName = View['name']
+const ASKS = [
+  { key: 'ask-last', label: 'Summarize my last call', text: 'Summarize my most recent Vexa call: decisions, asks to me, numbers, next steps. Use the Vexa tools to read its transcript.' },
+  { key: 'ask-promises', label: 'What did I promise this week?', text: 'Go through my Vexa calls from the last 7 days and list every commitment I made, with the call and date.' },
+  { key: 'ask-find', label: 'Find a topic in my calls', text: 'I want to find something said in my Vexa calls. Ask me what to look for, then search the transcripts.' },
+]
+
+async function go($: any, v: ViewName): Promise<void> {
+  await updateView($, () => ({ name: v }))
+  await $.ui.open({ id: PANE, title: app.pane.title })
+  if (v === 'calls') void loadCalls($)
+  if (v === 'calendar') void loadCalendar($)
+  if (v === 'workspaces') void loadWorkspaces($)
+}
+
+function day(at: string): string {
+  return at ? new Date(at).toLocaleString('en', { month: 'short', day: 'numeric' }) : ''
+}
+
+function when(at: string): string {
+  return at ? new Date(at).toLocaleString('en', { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : ''
+}
+
+function nav($: any, ui: any, v: ViewName): any {
+  const { Box, Button } = ui
+  const tab = (id: ViewName, label: string) => <Button key={`nav-${id}`} label={label} variant={v === id ? 'primary' : 'secondary'} onPress={() => go($, id)} />
+  return (
+    <Box flexDirection="row" gap={1}>
+      {tab('home', 'Home')}
+      {tab('meeting', 'Meeting')}
+      {tab('calls', 'Calls')}
+      {tab('calendar', 'Calendar')}
+      {tab('workspaces', 'Workspaces')}
+    </Box>
+  )
+}
+
+function section(ui: any, key: string, title: string, what: string, children: any): any {
+  const { Box, Text } = ui
+  return (
+    <Box key={key} flexDirection="column">
+      <Text bold>{title}</Text>
+      <Text dimColor>{what}</Text>
+      {children}
+    </Box>
+  )
+}
+
+async function homeView($: any, ui: any): Promise<any> {
+  const { Box, Text, Button, Input, Select } = ui
+  const c = await readCalls($)
+  const m = await read($)
+  const l = await readListener($)
+  const live = c.items.filter(x => x.status === 'active')
+  const recent = c.items.filter(x => x.status !== 'active').slice(0, 5)
+  const attached = Boolean(m.nativeId) && m.status === 'active'
+  return (
+    <Box flexDirection="column" gap={1}>
+      <Text>Vexa sends a note-taker into your Meet, Teams and Zoom calls. Claude reads the transcript live and afterwards.</Text>
+      {section(ui, 's-send', '1 · Send Vexa to a call', 'Paste a meeting link. The bot asks to join; let it in, and the transcript streams into Meeting.', (
+        <Box flexDirection="column">
+          {Input ? <Input key="h-url" label="Meeting link" placeholder="https://meet.google.com/…" value={m.url} submitLabel="Send" onInput={(v: string) => update($, x => ({ ...x, url: v.trim() }))} onSubmit={async (v: string) => { await send($, v); await go($, 'meeting') }} /> : null}
+          <Box flexDirection="row" gap={1}>
+            <Button key="h-send" label="Send Vexa" variant="primary" onPress={async () => { await send($, m.url); await go($, 'meeting') }} />
+            {l.app.pane.demo ? <Button key="h-demo" label="Try a demo" onPress={async () => { await start($, 'start_demo_meeting', {}, true); await go($, 'meeting') }} /> : null}
+          </Box>
+          {l.app.pane.demo ? <Text dimColor>{l.app.pane.emptyHint}</Text> : null}
+        </Box>
+      ))}
+      {section(ui, 's-live', 'Live now', 'Calls where Vexa is in the room right now.', (
+        live.length
+          ? live.map(x => <Button key={`h-live-${x.id}`} plain label={`● ${x.title} · open`} onPress={() => openCall($, x)} />)
+          : <Text dimColor>None.</Text>
+      ))}
+      {section(ui, 's-listen', '2 · Let Claude listen', 'A small model reads the live transcript and wakes Claude only when something matters. Say «Claude, …» in the call to ask it directly.', (
+        <Box flexDirection="column">
+          <Text>{l.isOn ? `On · ${m.title || m.nativeId} · woke Claude ${l.wakes.length}×` : attached ? `Off · ${m.title || m.nativeId} is live` : 'Off · starts once a call is live'}</Text>
+          <Box flexDirection="row" gap={1}>
+            {attached ? <Button key="h-listen" label={l.isOn ? 'Stop listening' : 'Listen'} variant={l.isOn ? 'secondary' : 'primary'} onPress={() => (l.isOn ? stopListening($) : listenToPane($))} /> : null}
+            {Select ? <Select key="h-mode" label="Mode" value={l.preset} options={l.app.presets.map(p => ({ value: p, label: `Mode: ${p}` }))} onSelect={(v: string) => setPreset($, v)} /> : null}
+          </Box>
+        </Box>
+      ))}
+      {section(ui, 's-ask', '3 · Ask Claude about your calls', 'One click sends the question to Claude in the chat.', (
+        <Box flexDirection="column">
+          {ASKS.map(a => <Button key={a.key} plain label={`→ ${a.label}`} onPress={() => $.prompt.submit({ text: a.text })} />)}
+        </Box>
+      ))}
+      {section(ui, 's-recent', 'Recent calls', 'Open one to read its transcript here.', (
+        <Box flexDirection="column">
+          {recent.length ? recent.map(x => <Button key={`h-rec-${x.id}`} plain label={`${x.title}  ${day(x.at)}`} onPress={() => openCall($, x)} />) : <Text dimColor>No calls yet.</Text>}
+          <Button key="h-calls" plain label="All calls →" onPress={() => go($, 'calls')} />
+        </Box>
+      ))}
+      {section(ui, 's-cal', 'Calendar', 'Connect your calendar and Vexa joins your meetings by itself; choose which ones.', (
+        <Button key="h-cal" plain label="Calendar →" onPress={() => go($, 'calendar')} />
+      ))}
+      {section(ui, 's-ws', 'Workspaces', 'Shared pages for your team: Claude writes decisions and notes from your calls there.', (
+        <Button key="h-ws" plain label="Workspaces →" onPress={() => go($, 'workspaces')} />
+      ))}
+      <Text dimColor>Commands: /vexa · /vexa-meeting · /vexa-calls · /vexa-help</Text>
+    </Box>
+  )
+}
+
+async function callsView($: any, ui: any): Promise<any> {
+  const { Box, Text, Button, Input } = ui
+  const c = await readCalls($)
+  const q = c.filter.toLowerCase()
+  const list = c.items.filter(x => !q || x.title.toLowerCase().includes(q) || x.nativeId.toLowerCase().includes(q))
+  const live = list.filter(x => x.status === 'active')
+  const groups: Record<string, Call[]> = {}
+  for (const x of list.filter(y => y.status !== 'active')) {
+    const k = x.at ? new Date(x.at).toLocaleString('en', { month: 'long', year: 'numeric' }).toUpperCase() : 'EARLIER'
+    ;(groups[k] ??= []).push(x)
+  }
+  return (
+    <Box flexDirection="column" gap={1}>
+      <Text dimColor>Every call Vexa attended. Click one to open its transcript in Meeting.</Text>
+      {Input ? <Input key="calls-filter" label="Filter" placeholder="Filter calls" value={c.filter} onInput={(v: string) => updateCalls($, x => ({ ...x, filter: v }))} onSubmit={(v: string) => updateCalls($, x => ({ ...x, filter: v }))} /> : null}
+      {c.error ? <Text color="red">{c.error}</Text> : null}
+      {live.length ? <Text dimColor>LIVE</Text> : null}
+      {live.map(x => <Button key={`call-${x.id}`} plain label={`● ${x.title} · live`} onPress={() => openCall($, x)} />)}
+      {Object.entries(groups).map(([month, xs]) => (
+        <Box key={`m-${month}`} flexDirection="column">
+          <Text dimColor>{month}</Text>
+          {xs.map(x => <Button key={`call-${x.id}`} plain label={`${x.title}  ${day(x.at)}`} onPress={() => openCall($, x)} />)}
+        </Box>
+      ))}
+      {list.length === 0 ? <Text dimColor>No calls yet.</Text> : null}
+    </Box>
+  )
+}
+
+async function meetingView($: any, ui: any, rows: number): Promise<any> {
+  const { Box, Text, Button, Input } = ui
+  const m = await read($)
+  const l = await readListener($)
+  const live = isLive(m) || m.status === 'requesting'
+  const room = Math.max(4, Math.floor((rows - (l.isOn ? 18 : 12)) / 2))
+  const state = live ? (m.status === 'active' ? '● In the call' : m.status) : m.nativeId ? 'Past call' : 'No meeting'
+  return (
+    <Box flexDirection="column" gap={1}>
+      <Box flexDirection="row" gap={1}>
+        <Text bold>{state}</Text>
+        {m.nativeId ? <Text dimColor>{`${m.isDemo ? 'demo · ' : ''}${m.title || `${m.platform} ${m.nativeId}`}`}</Text> : null}
+        {live ? <Text dimColor>{l.isOn ? `· listening · woke Claude ${l.wakes.length}×` : '· not listening'}</Text> : null}
+      </Box>
+      {l.isOn ? (
+        <Box key="listener" flexDirection="column">
+          <Text dimColor>{`Mode ${l.preset} · ${rulesText(l.brief).slice(0, 200)}`}</Text>
+          {l.brief.rules.length ? <Text dimColor>{`Triggers: ${l.brief.rules.map(r => `${r.kind} "${r.value}"`).join(', ')}`}</Text> : null}
+          {l.lastVerdict ? <Text dimColor>{`Last: ${l.lastVerdict} (${l.lastMs} ms)`}</Text> : null}
+          {l.error ? <Text color="red">{l.error}</Text> : null}
+        </Box>
+      ) : null}
+      {live ? (
+        <Box flexDirection="row" gap={1}>
+          {m.status === 'active' ? <Button key="listen" label={l.isOn ? 'Stop listening' : 'Listen'} variant={l.isOn ? 'secondary' : 'primary'} onPress={() => (l.isOn ? stopListening($) : listenToPane($))} /> : null}
+          {l.isOn ? <Button key="missed" label="What did I miss?" onPress={() => whatDidIMiss($)} /> : null}
+          <Button key="stop" label="Leave call" onPress={() => stop($)} />
+        </Box>
+      ) : (
+        <Box flexDirection="column">
+          <Text dimColor>{m.nativeId ? 'A finished call. Paste a new link to send Vexa to another one.' : 'Paste a Meet, Teams or Zoom link; the transcript appears here once Vexa is let in.'}</Text>
+          {Input ? <Input key="url" label="Meeting link" placeholder="https://meet.google.com/abc-defg-hij" value={m.url} submitLabel="Send bot" onInput={(v: string) => update($, x => ({ ...x, url: v.trim() }))} onSubmit={(v: string) => send($, v)} /> : null}
+          <Box flexDirection="row" gap={1}>
+            <Button key="send" label="Send bot" variant="primary" onPress={() => send($, m.url)} />
+            {l.app.pane.demo ? <Button key="demo" label="Try a demo" onPress={() => start($, 'start_demo_meeting', {}, true)} /> : null}
+          </Box>
+        </Box>
+      )}
+      {m.error ? <Text color="red">{m.error.split('\n')[0]}</Text> : null}
+      {m.segments.length === 0 ? (
+        <Text dimColor>{live
+          ? (m.isDemo ? 'The demo presenter starts speaking in a few seconds…' : 'Waiting for the bot to be admitted and for speech…')
+          : l.app.pane.emptyHint}</Text>
+      ) : null}
+      {runs(m.segments).slice(-room).map((s, i) => (
+        <Box key={`seg-${i}`} flexDirection="column">
+          <Text bold>{`${s.speaker}${s.time ? ` · ${s.time}` : ''}`}</Text>
+          {s.text ? <Text>{s.text}</Text> : null}
+          {s.draft ? <Text dimColor italic>{s.draft}</Text> : null}
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
+async function calendarView($: any, ui: any): Promise<any> {
+  const { Box, Text, Button, Link } = ui
+  const c = await readCalendar($)
+  const joining = c.upcoming.filter(e => e.autoJoin).length
+  return (
+    <Box flexDirection="column" gap={1}>
+      <Text dimColor>Connect your calendar and Vexa joins your meetings by itself. Turn auto-join on or off per meeting, or for all of them.</Text>
+      {section(ui, 'c-conn', 'Connected calendars', 'Sign in on vexa.ai yourself; Vexa never asks for your password here.', (
+        <Box flexDirection="column">
+          {c.connected.length ? c.connected.map((name, i) => <Text key={`cal-${i}`}>{`● ${name}`}</Text>) : <Text dimColor>{c.loaded ? 'None connected.' : 'Loading…'}</Text>}
+          <Button key="c-connect" label={c.connected.length ? 'Connect another calendar' : 'Connect a calendar'} variant={c.connected.length ? 'secondary' : 'primary'} onPress={() => connectCalendar($)} />
+          {c.link ? (Link ? <Link key="c-link" href={c.link} label="Open the sign-in page" /> : <Text>{c.link}</Text>) : null}
+        </Box>
+      ))}
+      {section(ui, 'c-next', 'Upcoming meetings', `${c.upcoming.length} upcoming · Vexa joins ${joining}.`, (
+        <Box flexDirection="column">
+          {c.upcoming.map(e => (
+            <Box key={`up-${e.id}`} flexDirection="row" gap={1}>
+              <Button key={`aj-${e.id}`} label={e.autoJoin ? 'Auto-join on' : 'Auto-join off'} variant={e.autoJoin ? 'primary' : 'secondary'} onPress={() => setAutoJoin($, e, !e.autoJoin)} />
+              <Text>{`${when(e.start)}  ${e.title}`}</Text>
+            </Box>
+          ))}
+          {c.upcoming.length ? (
+            <Box flexDirection="row" gap={1}>
+              <Button key="aj-all-on" plain label="Join all" onPress={() => setAutoJoin($, null, true)} />
+              <Button key="aj-all-off" plain label="Join none" onPress={() => setAutoJoin($, null, false)} />
+            </Box>
+          ) : <Text dimColor>{c.loaded ? 'Nothing on the calendar soon.' : ''}</Text>}
+        </Box>
+      ))}
+      {c.error ? <Text color="red">{c.error}</Text> : null}
+      <Button key="c-refresh" plain label="Refresh" onPress={() => loadCalendar($)} />
+    </Box>
+  )
+}
+
+async function workspacesView($: any, ui: any, rows: number): Promise<any> {
+  const { Box, Text, Button, Input } = ui
+  const w = await readWorkspaces($)
+  const m = await read($)
+  return (
+    <Box flexDirection="column" gap={1}>
+      <Text dimColor>Your workspaces: pages Claude reads and writes for you and your team. Bind a meeting to one and its notes land there.</Text>
+      {section(ui, 'w-list', 'Workspaces', m.nativeId ? `Bind ${m.title || m.nativeId} to one so its notes land there.` : 'Open a meeting to bind it to a workspace.', (
+        <Box flexDirection="column">
+          {w.items.map(x => (
+            <Box key={`ws-${x.id}`} flexDirection="row" gap={1}>
+              <Text>{`${x.name}${x.kind ? ` · ${x.kind}` : ''}`}</Text>
+              {m.nativeId ? <Button key={`bind-${x.id}`} plain label="Bind meeting" onPress={() => bindMeeting($, x.id)} /> : null}
+            </Box>
+          ))}
+          {w.items.length === 0 ? <Text dimColor>{w.loaded ? 'No workspaces yet.' : 'Loading…'}</Text> : null}
+          {w.bound ? <Text>{`Bound: ${w.bound}`}</Text> : null}
+        </Box>
+      ))}
+      {section(ui, 'w-find', 'Find a page', 'Search your workspaces, then open a page here.', (
+        <Box flexDirection="column">
+          {Input ? <Input key="w-query" label="Search" placeholder="pricing decision" value={w.query} submitLabel="Search" onInput={(v: string) => updateWorkspaces($, x => ({ ...x, query: v }))} onSubmit={(v: string) => searchPages($, v)} /> : null}
+          {w.results.slice(0, 8).map((r, i) => <Button key={`res-${i}`} plain label={`${r.path}${r.snippet ? ` — ${r.snippet.slice(0, 80)}` : ''}`} onPress={() => openPage($, r.workspace, r.path)} />)}
+        </Box>
+      ))}
+      {w.open ? section(ui, 'w-page', w.open.path, `In ${w.open.workspace}. Ask Claude to change it; it writes a commit in your name.`, (
+        <Text>{w.open.text.split('\n').slice(0, Math.max(6, rows - 24)).join('\n')}</Text>
+      )) : null}
+      {w.error ? <Text color="red">{w.error}</Text> : null}
+    </Box>
+  )
+}
+
+const HELP = [
+  'Vexa in Claude — how it works',
+  '1. /vexa opens the Vexa pane. Paste a meeting link → «Send Vexa», or «Try a demo». The live transcript appears in Meeting.',
+  '2. «Listen» (pane or the band above the prompt): a small model reads every new piece of the transcript and wakes Claude only when the rules match. «Claude, …» in the call always reaches it.',
+  '3. Ask Claude to tune it: «this is a standup, wake me only for blockers». Claude changes the rules with listener_configure.',
+  '4. If the listener stays quiet while the call goes on, Claude is asked to check what it may have missed.',
+  '5. Calendar: connect it and pick which meetings Vexa joins. Workspaces: pages Claude reads and writes; bind a meeting so its notes land there.',
+].join('\n')
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'vexa', description: 'Open the Vexa meeting pane beside the chat' })
+    await $.command.register({ name: 'vexa', description: 'Vexa: your calls, the live listener, calendar and workspaces' })
+    await $.command.register({ name: 'vexa-meeting', description: 'Open the Vexa pane at the meeting' })
+    await $.command.register({ name: 'vexa-calls', description: 'Open the Vexa pane at your calls' })
+    await $.command.register({ name: 'vexa-help', description: 'How the Vexa pane and listener work' })
     await $.command.register({ name: 'vexa-app-seed', description: 'Copy your Vexa app (pane copy, listener presets) into .vexa/app for this project' })
     await $.command.register({ name: 'vexa-app-reset', description: "Reset your Vexa app to the plugin's version (keeps a backup)" })
     await $.tool.register({
@@ -589,20 +1087,34 @@ export const register: Register = on => {
     })
     await loadApp($)
     void $.ui.open({ id: PANE, title: app.pane.title })
-    void connect($)
+    await connect($)
     if (!polling) {
       polling = true
       $.clock.every(1500, async () => { await poll($); await findLive($) })
+      $.clock.every(30_000, () => audit($))
+      $.clock.every(60_000, () => loadCalls($))
     }
+    void loadCalls($)
     return next(e)
   })
 
-  on('command.run', { command: 'vexa' }, async $ => {
-    await $.ui.open({ id: PANE, title: app.pane.title })
-    await connect($)
-    return { text: 'Vexa pane opened.' }
-  })
+  on('turn.start', async ($, e, next) => { busy = true; return next(e) })
+  on('turn.complete', async ($, e, next) => { const r = await next(e); busy = false; await flush($); return r })
 
+  on('command.run', { command: 'vexa' }, async $ => {
+    await connect($)
+    await go($, 'home')
+    return { text: 'Vexa opened.' }
+  })
+  on('command.run', { command: 'vexa-meeting' }, async $ => {
+    await go($, 'meeting')
+    return { text: 'Vexa meeting opened.' }
+  })
+  on('command.run', { command: 'vexa-calls' }, async $ => {
+    await go($, 'calls')
+    return { text: 'Vexa calls opened.' }
+  })
+  on('command.run', { command: 'vexa-help' }, async () => ({ text: HELP }))
   on('command.run', { command: 'vexa-app-seed' }, async $ => ({ text: await seedProject($) }))
   on('command.run', { command: 'vexa-app-reset' }, async $ => ({ text: await resetApp($) }))
 
@@ -627,21 +1139,42 @@ export const register: Register = on => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
+  // The band above the prompt: an offer to listen to a live meeting, and while listening, its
+  // state with the mode, «What did I miss?» and Stop.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const l = await readListener($)
-    if (!l.offer || l.isOn || e.props.hasSurvey) return next(e)
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const m = await read($)
+    if (e.props.hasSurvey) return next(e)
+    const { Box, Button, Text, Select } = $.ui.resolve(e) as any
+    if (l.offer && !l.isOn) {
+      return (
+        <Box flexDirection="row" gap={1}>
+          <Text>{`Vexa: "${l.offer.title}" is live. Listen and tell you when something matters?`}</Text>
+          <Button key="listen" label="Listen" variant="primary" onPress={() => listen($)} />
+          <Button key="decline" label="No" onPress={() => decline($)} />
+        </Box>
+      )
+    }
+    if (!l.isOn) return next(e)
+    const now = await $.clock.now()
+    const age = lastTextAt ? Math.round((now - lastTextAt) / 1000) : -1
+    const dot = age < 0 ? '○' : age < 10 ? '●' : age < 60 ? '◐' : '○'
+    const verdict = l.lastVerdict.startsWith('wake') ? 'woke' : 'skipped'
     return (
       <Box flexDirection="row" gap={1}>
-        <Text>{`Vexa: "${l.offer.title}" is live. Listen and tell you when something matters?`}</Text>
-        <Button key="listen" label="Listen" variant="primary" onPress={() => listen($)} />
-        <Button key="decline" label="No" onPress={() => decline($)} />
+        <Text color={age >= 0 && age < 10 ? 'green' : age >= 0 && age < 60 ? 'yellow' : 'gray'}>{dot}</Text>
+        <Text>{`Listening · ${m.title || m.nativeId}`}</Text>
+        <Text dimColor>{`text ${age < 0 ? '—' : `${age} s ago`} · filter ${l.lastMs ? `${(l.lastMs / 1000).toFixed(1)} s` : '—'} · last ${verdict} · woke Claude ${l.wakes.length}×${batch.length ? ` · ${batch.length} waiting` : ''}`}</Text>
+        {Select ? <Select key="mode" value={l.preset} options={l.app.presets.map(p => ({ value: p, label: p }))} onSelect={(v: string) => setPreset($, v)} /> : null}
+        <Button key="missed" label="What did I miss?" onPress={() => whatDidIMiss($)} />
+        <Button key="listen-stop" label="Stop" onPress={() => stopListening($)} />
       </Box>
     )
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button, Input } = $.ui.resolve(e) as any
+    const ui = $.ui.resolve(e) as any
+    const { Box, Text, Button } = ui
     const m = await read($)
     const l = await readListener($)
     const title = l.app.pane.title
@@ -652,7 +1185,7 @@ export const register: Register = on => {
 
     if (m.connection !== 'ready') {
       return (
-        <Box flexDirection="column">
+        <Box flexDirection="column" gap={1}>
           <Text bold>{title}</Text>
           {m.connection === 'signin' ? (
             <Box flexDirection="column">
@@ -668,43 +1201,17 @@ export const register: Register = on => {
       )
     }
 
-    const live = isLive(m) || m.status === 'requesting'
-    const room = Math.max(4, Math.floor(((e.viewport?.rows ?? 30) - (l.isOn ? 16 : 10)) / 2))
+    const v = (await readView($)).name
+    const rows = e.viewport?.rows ?? 30
+    const body = v === 'calls' ? await callsView($, ui)
+      : v === 'meeting' ? await meetingView($, ui, rows)
+        : v === 'calendar' ? await calendarView($, ui)
+          : v === 'workspaces' ? await workspacesView($, ui, rows)
+            : await homeView($, ui)
     return (
-      <Box flexDirection="column">
-        <Text bold>{title}</Text>
-        {m.nativeId ? <Text dimColor>{`${m.isDemo ? 'demo · ' : ''}${m.title || `${m.platform} ${m.nativeId}`} · ${m.status}`}</Text> : null}
-        {l.isOn ? (
-          <Box key="listener" flexDirection="column">
-            <Text>{`Listening · ${l.preset} · woke Claude ${l.wakes.length}×`}</Text>
-            <Text dimColor>{`Rules: ${rulesText(l.brief).slice(0, 240)}`}</Text>
-            {l.brief.rules.length ? <Text dimColor>{`Triggers: ${l.brief.rules.map(r => `${r.kind} "${r.value}"`).join(', ')}`}</Text> : null}
-            {l.lastVerdict ? <Text dimColor>{`Last: ${l.lastVerdict} (${l.lastMs} ms)`}</Text> : null}
-            {l.error ? <Text color="red">{l.error}</Text> : null}
-            <Button key="unlisten" label="Stop listening" onPress={() => stopListening($)} />
-          </Box>
-        ) : null}
-        {!live ? <Input key="url" label="Meeting link" placeholder="https://meet.google.com/abc-defg-hij" value={m.url} submitLabel="Send bot" onInput={(v: string) => update($, x => ({ ...x, url: v.trim() }))} onSubmit={(v: string) => send($, v)} /> : null}
-        <Box flexDirection="row" gap={1}>
-          {!live ? <Button key="send" label="Send bot" variant="primary" onPress={() => send($, m.url)} /> : null}
-          {!live && l.app.pane.demo ? <Button key="demo" label="Try a demo" onPress={() => start($, 'start_demo_meeting', {}, true)} /> : null}
-          {live && !l.isOn && m.status === 'active' ? <Button key="listen-pane" label="Listen" onPress={async () => { await updateListener($, x => ({ ...x, offer: { platform: m.platform, nativeId: m.nativeId, title: m.title || m.nativeId } })); await listen($) }} /> : null}
-          {live ? <Button key="stop" label="Stop bot" onPress={() => stop($)} /> : null}
-          {!live && m.segments.length ? <Button key="clear" label="Clear" onPress={() => update($, x => ({ ...EMPTY, connection: x.connection }))} /> : null}
-        </Box>
-        {m.error ? <Text color="red">{m.error.split('\n')[0]}</Text> : null}
-        {m.segments.length === 0 ? (
-          <Text dimColor>{live
-            ? (m.isDemo ? 'The demo presenter starts speaking in a few seconds…' : 'Waiting for the bot to be admitted and for speech…')
-            : l.app.pane.emptyHint}</Text>
-        ) : null}
-        {runs(m.segments).slice(-room).map((s, i) => (
-          <Box key={`seg-${i}`} flexDirection="column">
-            <Text bold>{`${s.speaker}${s.time ? ` · ${s.time}` : ''}`}</Text>
-            {s.text ? <Text>{s.text}</Text> : null}
-            {s.draft ? <Text dimColor italic>{s.draft}</Text> : null}
-          </Box>
-        ))}
+      <Box flexDirection="column" gap={1}>
+        {nav($, ui, v)}
+        {body}
       </Box>
     )
   })

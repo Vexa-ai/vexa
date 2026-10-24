@@ -13,7 +13,7 @@ const seg = (id: string, speaker: string, t: string, completed = true) => ({ seg
 
 type Seen = { tools: string[]; model: string[]; prompts: string[]; written: Record<string, string> }
 
-function engine(on: any, segments: () => unknown[], decision = '{"wake":false,"reason":"small talk"}', fs: Record<string, string> = {}, live?: () => unknown[]): Seen {
+function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<string, string> = {}, live?: () => unknown[]): Seen {
   const seen: Seen = { tools: [], model: [], prompts: [], written: {} }
   on('command.register', () => ({ value: { command: 'vexa' } }))
   on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__vexa__${e.name}` } }))
@@ -78,7 +78,7 @@ test('a live meeting is offered; nothing is listened to before Listen', async ($
 test('after Listen, a new line the filter flags wakes the main Claude once; the gap holds the next', async ($, on) => {
   const clock = mock.clock(on)
   let lines = [seg('1', 'Ann', 'Morning all.')]
-  const seen = engine(on, () => lines, '{"wake":true,"reason":"a decision was made"}')
+  const seen = engine(on, () => lines, 'W')
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await clock.advance(31_500)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
@@ -88,11 +88,11 @@ test('after Listen, a new line the filter flags wakes the main Claude once; the 
   lines = [...lines, seg('2', 'Ann', 'We decided to go with the annual plan.')]
   await clock.advance(1_500)
   expect(seen.model.at(-1)).toMatch(/annual plan/)
-  expect(seen.model.at(-1)).not.toMatch(/NEW lines:\nAnn: Morning/)
-  expect(seen.prompts.filter(p => p.includes('a decision was made')).length).toBe(1)
+  expect(seen.model.at(-1)).not.toMatch(/NEW:\nAnn: Morning/)
+  expect(seen.prompts.filter(p => p.includes('matched the rules')).length).toBe(1)
   lines = [...lines, seg('3', 'Bob', 'And we decided on a 3 year term.')]
   await clock.advance(3_000)
-  expect(seen.prompts.filter(p => p.includes('a decision was made')).length).toBe(1)
+  expect(seen.prompts.filter(p => p.includes('matched the rules')).length).toBe(1)
   await ui.unmount()
 })
 
@@ -101,8 +101,8 @@ test('a draft is replaced in place by its final version, and a withdrawn draft d
   let lines: unknown[] = []
   engine(on, () => lines)
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ plugin: 'vexa', component: 'Pane', requestId: 'vexa-meeting', surface: 'desktop', props: { title: 'Vexa', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } } as any)
-  await ui.input({ key: 'url', text: 'https://meet.google.com/abc-defg-hij' } as any)
+  const ui = await $.ui.mount({ plugin: 'vexa', component: 'Pane', requestId: 'vexa-home', surface: 'desktop', props: { title: 'Vexa', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } } as any)
+  await ui.input({ key: 'h-url', text: 'https://meet.google.com/abc-defg-hij' } as any)
   lines = [seg('a', 'Ann', 'we decid', false), seg('b', 'Bob', 'uh', false)]
   await clock.advance(1_500)
   expect((await ui.find({ type: 'Text', text: /we decid/ }))?.text).toBe('we decid')
@@ -118,12 +118,12 @@ test('on a deployment with the live feed, drafts come from it and a retract remo
   let batches: unknown[][] = []
   engine(on, () => [], undefined, {}, () => batches.shift() ?? [])
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ plugin: 'vexa', component: 'Pane', requestId: 'vexa-meeting', surface: 'desktop', props: { title: 'Vexa', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } } as any)
+  const ui = await $.ui.mount({ plugin: 'vexa', component: 'Pane', requestId: 'vexa-home', surface: 'desktop', props: { title: 'Vexa', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } } as any)
   batches = [
     [{ type: 'transcript', id: 'a', speaker: 'Ann', text: 'we deci', completed: false }, { type: 'transcript', id: 'b', speaker: 'Bob', text: 'hm', completed: false }],
     [{ type: 'transcript', id: 'a', speaker: 'Ann', text: 'We decided.', completed: true }, { type: 'retract', segment_ids: ['b'] }],
   ]
-  await ui.input({ key: 'url', text: 'https://meet.google.com/abc-defg-hij' } as any)
+  await ui.input({ key: 'h-url', text: 'https://meet.google.com/abc-defg-hij' } as any)
   await clock.advance(1_500)
   expect((await ui.find({ type: 'Text', text: /we deci/ }))?.text).toBe('we deci')
   await clock.advance(1_500)
@@ -193,8 +193,8 @@ test('pure parts: brief bounds, triggers, the filter reply, direct address, app 
   expect(ruleHit(b.rules, [{ speaker: 'Ann Lee', text: 'hi' }])).toMatch(/person/)
   expect(rulesText(briefFor(FALLBACK_APP, 'default'))).toMatch(/addresses the assistant/)
   expect(rulesText(b)).toMatch(/money terms/)
-  expect(parseDecision('sure: {"wake":true,"reason":"asked a price"}')).toEqual({ wake: true, reason: 'asked a price' })
-  expect(parseDecision('nope').wake).toBe(false)
+  expect(parseDecision(' W').wake).toBe(true)
+  expect(parseDecision('S').wake).toBe(false)
   expect(isDirect(['Bob: Claude, what did we agree?'])).toBe(true)
   expect(isDirect(['Bob: Клод, прочитай'])).toBe(true)
   expect(isDirect(['Bob: the cloud is fine'])).toBe(false)

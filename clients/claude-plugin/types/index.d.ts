@@ -65,8 +65,26 @@ export type Listener = {
   app: AppInfo
 }
 
+// The one Vexa pane's views, and what the views beyond the meeting read.
+export type View = { name: 'home' | 'meeting' | 'calls' | 'calendar' | 'workspaces' }
+export type Call = { id: string; platform: string; nativeId: string; status: string; title: string; at: string }
+export type Calls = { items: Call[]; filter: string; error: string }
+export type Upcoming = { id: string; title: string; start: string; platform: string; nativeId: string; autoJoin: boolean }
+export type Calendar = { connected: string[]; upcoming: Upcoming[]; link: string; error: string; loaded: boolean }
+export type Workspace = { id: string; name: string; kind: string }
+export type Page = { path: string; snippet: string; workspace: string }
+export type Workspaces = {
+  items: Workspace[]
+  query: string
+  results: Page[]
+  open: { workspace: string; path: string; text: string } | null
+  bound: string
+  error: string
+  loaded: boolean
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    vexa: { meeting: Meeting; listener: Listener }
+    vexa: { meeting: Meeting; listener: Listener; view: View; calls: Calls; calendar: Calendar; workspaces: Workspaces }
   }
 }

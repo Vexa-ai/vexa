@@ -3,7 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 const PANE = {
   plugin: 'vexa',
   component: 'Pane',
-  requestId: 'vexa-meeting',
+  requestId: 'vexa-home',
   props: {
     title: 'Vexa',
     isFocused: false,
@@ -54,7 +54,7 @@ test('signed in: Try a demo starts the demo and the transcript follows', async (
   engine(on, { isConnected: true, server: 'plugin:vexa:vexa' }, calls)
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  await ui.press({ key: 'demo' })
+  await ui.press({ key: 'h-demo' })
   expect(calls.map(c => c.tool)).toContain('start_demo_meeting')
   await clock.advance(4000)
   expect((await ui.find({ type: 'Text', text: /Hello from the demo/ }))?.text).toBe('Hello from the demo')
@@ -77,4 +77,48 @@ test('tool.check: reads are approved, meeting actions keep their prompt', async 
   }
   const other = await $.tool.check({ tool: 'mcp__other__get_meeting_transcript', input: {} })
   expect(other.decision).toBe('ask')
+})
+
+test('one pane: Calendar and Workspaces are views behind its nav buttons', async ($, on) => {
+  mock.clock(on)
+  const calls: { tool: string; args: any }[] = []
+  on('command.register', () => ({ value: { command: 'vexa' } }))
+  on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__vexa__${e.name}` } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
+  on('fs.exists', () => ({ value: false }))
+  on('env.get', () => ({ value: undefined }))
+  on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:vexa:vexa' } }))
+  let autoJoin = false
+  on('mcp.call', (_: unknown, e: any) => {
+    calls.push({ tool: e.tool, args: e.args })
+    if (e.tool === 'calendar_status') return { value: text({ calendars: [{ email: 'me@acme.com' }], upcoming: [{ id: 'ev1', title: 'Acme weekly', start: '2026-10-25T10:00:00Z', auto_join: autoJoin }] }) }
+    if (e.tool === 'set_auto_join') { autoJoin = e.args.auto_join; return { value: text({ ok: true }) } }
+    if (e.tool === 'workspace_list') return { value: text({ workspaces: [{ id: 'team', name: 'Team', kind: 'shared' }] }) }
+    if (e.tool === 'workspace_search') return { value: text({ results: [{ workspace: 'team', path: 'decisions.md', snippet: 'annual plan' }] }) }
+    if (e.tool === 'workspace_read') return { value: text({ text: '# Decisions\nAnnual plan at 38k.' }) }
+    if (e.tool === 'list_meetings') return { value: text({ meetings: [{ id: 7, platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'completed', data: { title: 'Acme pricing call' } }] }) }
+    return { value: text({ ok: true }) }
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /note-taker/ })).toBeTruthy()
+
+  await ui.press({ key: 'nav-calendar' })
+  expect((await ui.find({ type: 'Text', text: /me@acme\.com/ }))?.text).toMatch(/me@acme/)
+  await ui.press({ key: 'aj-ev1' })
+  expect(calls.find(c => c.tool === 'set_auto_join')?.args).toEqual({ meeting_id: 'ev1', auto_join: true })
+
+  await ui.press({ key: 'nav-workspaces' })
+  expect(await ui.find({ type: 'Text', text: /Team · shared/ })).toBeTruthy()
+  await ui.input({ key: 'w-query', text: 'annual' } as any)
+  await ui.press({ key: 'res-0' })
+  expect(await ui.find({ type: 'Text', text: /Annual plan at 38k/ })).toBeTruthy()
+
+  await ui.press({ key: 'nav-calls' })
+  await ui.press({ key: 'call-7' })
+  await ui.press({ key: 'nav-workspaces' })
+  await ui.press({ key: 'bind-team' })
+  expect(calls.find(c => c.tool === 'meeting_bind_workspace')?.args).toEqual({ platform: 'google_meet', native_meeting_id: 'abc-defg-hij', workspace: 'team' })
+  await ui.unmount()
 })
