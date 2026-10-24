@@ -20,6 +20,8 @@ Claude Code plugin for Vexa (meeting bot + live transcripts for Google Meet, Mic
 - **Files:** it copies its default app (pane copy, listen presets) to `~/.vexa/apps/meeting-assistant/` on first run; a project's `.vexa/app/` overrides it. Workspace pages are written by Claude through the server, or under `~/Vexa` when the person chose "this computer".
 - **Telemetry:** none in the plugin; hosted Vexa's server counts sign-ups and tool calls (vexa.ai privacy policy); a company's own Vexa keeps everything on its server.
 
+**Hosted Vexa (api.cloud.vexa.ai) has no sign-in through /mcp yet:** until it ships, create an API key at https://vexa.ai/account and set it with `/plugin configure vexa@vexa` → **Vexa API key** (or `claude plugin install vexa@vexa --config vexa_api_key=…`). Leave it empty on a Vexa that signs in through `/mcp`. Upgrading from 0.1: the key carries over; a self-hosted address set as `vexa_mcp_url` moves to `vexa_url` without the `/mcp` suffix.
+
 Needs Claude Code **2.1.299 or newer** for the pane (older builds install the plugin but draw an empty pane or none; the plugin says so on 2.1.299+-aware builds). Run `claude update` first.
 
 Install from this repo:

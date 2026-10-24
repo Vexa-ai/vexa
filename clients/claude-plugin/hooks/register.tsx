@@ -953,7 +953,9 @@ async function saveSettings($: any, input: any): Promise<unknown> {
 function contextText(m: Meeting): string {
   if (m.connection !== 'ready') {
     return `Vexa (meeting bot, live transcripts, team workspaces) is installed${isHosted() ? '' : `, pointed at the company's Vexa ${vexaHost()},`} but not signed in. `
-      + 'If the person wants Vexa, tell them to type /mcp, choose plugin:vexa:vexa and Authenticate; then use the vexa-setup skill.'
+      + (isHosted() && m.connection === 'refused'
+        ? 'Hosted Vexa has no sign-in yet: if the person wants Vexa, tell them to create an API key at https://vexa.ai/account and set it with /plugin configure vexa@vexa (Vexa API key), then restart Claude Code; never take the key in the chat.'
+        : 'If the person wants Vexa, tell them to type /mcp, choose plugin:vexa:vexa and Authenticate; then use the vexa-setup skill.')
   }
   const lines = [`Vexa is connected. Workspaces: ${workspaceNames.slice(0, 8).join('; ') || 'not loaded yet'}.`]
   if (settings.write === 'cloud') lines.push(`You write what you learn to the Vexa workspace «${settings.workspace}» (${writesLine || 'the account default'}). Before writing, read its rules: workspace_read CLAUDE.md and workspace_purpose; follow the vexa-workspace skill.`)
@@ -1028,8 +1030,8 @@ let mapping = false
 let mapDirty = false
 let workspaceRules: string | null = null
 
-function mapAllowed(): boolean {
-  return settings.write !== 'ask'
+function mapAllowed(m: Meeting): boolean {
+  return settings.write !== 'ask' && m.offers.workspaces
 }
 
 async function rulesForPersonal($: any): Promise<string> {
@@ -1044,7 +1046,7 @@ async function rulesForPersonal($: any): Promise<string> {
 async function mapStep($: any, final: boolean): Promise<void> {
   const m = await read($)
   const l = await readListener($)
-  if (mapping || !m.dbId || m.isDemo || !mapAllowed() || !(l.isOn || final)) return
+  if (mapping || !m.dbId || m.isDemo || !mapAllowed(m) || !(l.isOn || final)) return
   const now = await $.clock.now()
   const day = new Date(now).toISOString().slice(0, 10)
   const run = maps.get(m.dbId) ?? {
@@ -1772,6 +1774,7 @@ export const register: Register = (on, options) => {
           <Text bold>{title}</Text>
           {isHosted() ? null : <Text color="inactive" size="caption">{`Your company's Vexa: ${vexaHost()}`}</Text>}
           <Text color="inactive">{m.connection === 'signin' ? 'Not signed in. Ask Claude to set up Vexa.' : `Not connected${m.error ? `: ${m.error.split('\n')[0]}` : `: ${vexaHost()} did not answer.`}`}</Text>
+          {isHosted() && m.connection === 'refused' ? <Text color="inactive">Hosted Vexa takes an API key until its sign-in ships: /plugin configure vexa@vexa → Vexa API key (from vexa.ai/account).</Text> : null}
           {/\/$/.test(vexaUrl) ? <Text color="inactive">{`The Vexa address ${vexaUrl} ends with «/»; remove it in /config (Vexa address).`}</Text> : null}
         </Box>
       )
