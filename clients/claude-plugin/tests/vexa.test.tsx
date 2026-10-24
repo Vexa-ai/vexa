@@ -203,3 +203,30 @@ test('setup in chat: the context asks the next question, vexa_settings saves the
   expect(filed[0]).toMatch(/vexa-workspace skill/)
   await ui.unmount()
 })
+
+test('web → chat: requests the web queued become turns and are acked; the poll is the heartbeat', async ($, on) => {
+  const clock = mock.clock(on)
+  const calls: { tool: string; args: any }[] = []
+  const prompts: string[] = []
+  let queue = [{ id: 'r1', text: 'Summarize the call «Acme weekly» for me.', meeting_id: 41, created_ms: 1 }]
+  on('command.register', () => ({ value: { command: 'vexa' } }))
+  on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__vexa__${e.name}` } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
+  on('fs.exists', () => ({ value: false }))
+  on('env.get', () => ({ value: undefined }))
+  on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:vexa:vexa' } }))
+  on('tool.list', () => ({ value: ['claude_requests_next', 'claude_requests_ack'].map(n => ({ name: `mcp__plugin_vexa_vexa__${n}` })) }))
+  on('prompt.submit', (_: unknown, e: any) => { prompts.push(e.text); return { text: e.text } })
+  on('mcp.call', (_: unknown, e: any) => {
+    calls.push({ tool: e.tool, args: e.args })
+    if (e.tool === 'claude_requests_next') { const requests = queue; queue = []; return { value: text({ requests, present_until_ms: 30000 }) } }
+    return { value: text({ ok: true, meetings: [] }) }
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await clock.advance(1_000)
+  expect(prompts).toEqual(['[Vexa panel] Summarize the call «Acme weekly» for me.'])
+  expect(calls.find(c => c.tool === 'claude_requests_ack')?.args).toEqual({ id: 'r1', outcome: 'submitted' })
+  expect(calls.find(c => c.tool === 'claude_requests_next')?.args).toEqual({ wait_ms: 8000 })
+  expect(calls.filter(c => c.tool === 'claude_requests_next').length).toBeGreaterThan(1)
+})

@@ -27,7 +27,7 @@ import type { App, Labelled, Row } from './listener'
 const PANE = 'vexa-home'
 const SERVER_KEY = 'vexa'
 const EMPTY: Meeting = {
-  connection: 'connecting', url: '', platform: '', nativeId: '', dbId: 0, offers: { calendar: false, workspaces: false, demo: false }, title: '', isDemo: false,
+  connection: 'connecting', url: '', platform: '', nativeId: '', dbId: 0, offers: { calendar: false, workspaces: false, demo: false, requests: false }, title: '', isDemo: false,
   status: 'idle', nextIndex: 0, liveCursor: '', liveFeed: true, segments: [], error: '',
 }
 const MEETING = { plugin: 'vexa', key: 'meeting' } as const
@@ -213,9 +213,11 @@ async function connect($: any): Promise<void> {
       calendar: names.has(`${prefix}calendar_status`),
       workspaces: names.has(`${prefix}workspace_list`),
       demo: names.has(`${prefix}start_demo_meeting`),
+      requests: names.has(`${prefix}claude_requests_next`),
     }
     await update($, x => ({ ...x, connection: 'ready', offers, error: '' }))
     if (was !== 'ready') { quiet(loadCalls($)); if (offers.workspaces) quiet(loadWorkspaces($)) }
+    if (offers.requests) startRequests($)
     return
   }
   server = ''
@@ -851,6 +853,32 @@ function contextText(m: Meeting): string {
   else if (settings.write === 'ask') lines.push('Write to a workspace only when the person asks; then follow the vexa-workspace skill.')
   else lines.push('Setup is not finished: when it fits, ask in chat «Where should I keep what I learn from your calls: on this computer, or in a cloud workspace you can share?» and save the answer with vexa_settings (vexa-setup skill).')
   return lines.join('\n')
+}
+
+// Web → chat: a panel button in the web («Summarize this call», «Prepare me…») queues a request
+// for this person's Claude. The plugin long-polls claude_requests_next (each call is also the
+// presence heartbeat the web reads as «Claude is running»), turns each request into a turn and
+// acks it. The server renders the text from a fixed list of panel actions and guards the rate.
+let requestsRunning = false
+function startRequests($: any): void {
+  if (requestsRunning) return
+  requestsRunning = true
+  const loop = async (): Promise<void> => {
+    let pause = 0
+    try {
+      const m = await read($)
+      if (m.connection !== 'ready' || !m.offers.requests) { requestsRunning = false; return }
+      const r = await call($, 'claude_requests_next', { wait_ms: 8000 })
+      for (const q of r.requests ?? []) {
+        const text = String(q.text ?? '').slice(0, 2000)
+        if (!text) { quiet(call($, 'claude_requests_ack', { id: q.id, outcome: 'dropped' })); continue }
+        void $.prompt.submit({ text: `[Vexa panel] ${text}` })
+        quiet(call($, 'claude_requests_ack', { id: q.id, outcome: 'submitted' }))
+      }
+    } catch { pause = 10_000 }
+    $.clock.after(pause || 250, () => quiet(loop()))
+  }
+  quiet(loop())
 }
 
 // After a real call ends, when writing is allowed: one turn for the main Claude to file it.

@@ -12,7 +12,7 @@ export type Meeting = {
   dbId: number
   // What this server offers beyond meetings: hosted servers without the agent domain have no
   // calendar, workspace or demo tools, and the pane hides those views and buttons.
-  offers: { calendar: boolean; workspaces: boolean; demo: boolean }
+  offers: { calendar: boolean; workspaces: boolean; demo: boolean; requests: boolean }
   title: string
   isDemo: boolean
   status: string
