@@ -1311,13 +1311,17 @@ export const register: Register = on => {
           {m.connection === 'signin' ? (
             <Box flexDirection="column">
               <Text>Sign in to Vexa to send a bot to your meetings.</Text>
-              <Text>{'Run /mcp, pick plugin:vexa:vexa, then Authenticate. Sign in with Google or Microsoft and press Allow.'}</Text>
-              <Text dimColor>New accounts start with $2 of free credit.</Text>
+              <Text>{'Type /mcp, choose plugin:vexa:vexa, then Authenticate. Sign in with Google or Microsoft and press Allow.'}</Text>
+              <Text color="inactive" size="caption">New accounts start with $2 of free credit.</Text>
             </Box>
           ) : (
-            <Text weight="medium">{m.error || 'Vexa is not connected.'}</Text>
+            <Box flexDirection="column">
+              <Text weight="medium">Vexa could not connect.</Text>
+              <Text color="inactive" size="caption">{m.error.split('\n')[0] || 'The server did not answer.'}</Text>
+              <Text>{'Type /mcp, choose plugin:vexa:vexa and check its status; Authenticate there if it asks you to sign in.'}</Text>
+            </Box>
           )}
-          <Button key="retry" label="I've signed in" variant="primary" onPress={() => connect($)} />
+          <Button key="retry" label={m.connection === 'signin' ? "I've signed in" : 'Try again'} variant="primary" onPress={() => connect($)} />
         </Box>
       )
     }
