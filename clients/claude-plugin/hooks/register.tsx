@@ -202,7 +202,7 @@ async function call($: any, tool: string, args: Record<string, unknown>): Promis
 }
 
 function isLive(m: Meeting): boolean {
-  return m.nativeId !== '' && !['idle', 'stopped', 'completed', 'failed'].includes(m.status)
+  return m.nativeId !== '' && !['idle', 'stopped', 'completed', 'failed', 'past'].includes(m.status)
 }
 
 // Without a live feed, drafts arrive again and again in the confirmed read: upsert on segment id,
@@ -265,7 +265,7 @@ async function readConfirmed($: any, since: number, status: string): Promise<str
   })).filter(s => s.text)
   // Ask again from the first draft next time, so its final version replaces it.
   const next = firstPending >= 0 ? base + firstPending : (typeof page.next_index === 'number' ? page.next_index : since + segs.length)
-  const now = String(page.status ?? status)
+  const now = String(page.status ?? (status === 'past' ? 'completed' : status))
   await update($, x => ({
     ...x, liveFeed: false, nextIndex: next, status: now,
     segments: mergeSegs(x.liveFeed ? [] : x.segments, fresh), error: '',
@@ -277,7 +277,7 @@ async function readConfirmed($: any, since: number, status: string): Promise<str
 let pollingNow = false
 async function poll($: any): Promise<void> {
   const m = await read($)
-  if (m.connection !== 'ready' || !isLive(m) || pollingNow) return
+  if (m.connection !== 'ready' || !(isLive(m) || m.status === 'past') || pollingNow) return
   pollingNow = true
   try {
     let status = m.status
@@ -749,9 +749,11 @@ async function loadCalls($: any): Promise<void> {
 async function openCall($: any, c: Call): Promise<void> {
   await update($, x => ({
     ...EMPTY, connection: x.connection, platform: c.platform, nativeId: c.nativeId, title: c.title,
-    status: c.status === 'active' ? 'active' : 'requested',
+    // A past call is read once, confirmed lines only; its answer's own status then ends the polling.
+    status: c.status === 'active' ? 'active' : 'past', liveFeed: c.status === 'active',
   }))
   await go($, 'meeting')
+  await poll($)
 }
 
 async function loadCalendar($: any): Promise<void> {
@@ -832,10 +834,9 @@ const ASKS = [
   { key: 'ask-find', label: 'Find a topic in my calls', text: 'I want to find something said in my Vexa calls. Ask me what to look for, then search the transcripts.' },
 ]
 
-// Colours: theme keys follow the person's light/dark theme; ACCENT is Vexa's own.
-const ACCENT = '#3B6CF6'
+// Colours (terminal design guidelines 2026-10-10 §1–2, founder 24 Oct): monochrome theme keys,
+// emphasis from weight, never red, sparing with blue; green means live and nothing else.
 const LIVE = 'success'
-const CLAUDE = 'claude'
 const PLATFORM: Record<string, string> = { google_meet: 'Meet', teams: 'Teams', zoom: 'Zoom', jitsi: 'Jitsi', vexa_call: 'Vexa call' }
 
 async function go($: any, v: ViewName): Promise<void> {
@@ -857,37 +858,36 @@ function when(at: string): string {
 }
 
 // A pulsing dot (desktop draws SVG with SMIL animation; the terminal falls back to a glyph).
-function pulse(ui: any, key: string, color: string, isOn: boolean): any {
+function pulse(ui: any, key: string, isOn: boolean): any {
   const { Svg, Text } = ui
-  if (!Svg) return <Text key={key} color={isOn ? color : 'inactive'}>●</Text>
-  const fill = color === 'success' ? '#22A55B' : color === 'claude' ? '#D97757' : color
+  if (!Svg) return <Text key={key} color={isOn ? LIVE : 'inactive'}>●</Text>
   const anim = isOn ? '<animate attributeName="r" values="3;5;3" dur="1.4s" repeatCount="indefinite"/><animate attributeName="opacity" values="1;0.45;1" dur="1.4s" repeatCount="indefinite"/>' : ''
-  return <Svg key={key} alt={isOn ? 'live' : 'off'} width={14} height={14} isInteractive={isOn ? true : undefined} source={`<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="4" fill="${isOn ? fill : '#9AA0A6'}">${anim}</circle></svg>`} />
+  return <Svg key={key} alt={isOn ? 'live' : 'off'} width={14} height={14} isInteractive={isOn ? true : undefined} source={`<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="4" fill="${isOn ? '#2f9e72' : '#9AA0A6'}">${anim}</circle></svg>`} />
 }
 
-// Speech meter: bars that dance while text is arriving, flat when the room is quiet.
+// Speech meter: bars that move while text is arriving, flat when the room is quiet.
 function meter(ui: any, key: string, isTalking: boolean): any {
   const { Svg } = ui
   if (!Svg) return null
   const bars = [0, 1, 2, 3, 4].map(i => {
     const x = 2 + i * 6
     const a = isTalking ? `<animate attributeName="height" values="3;${8 + (i % 3) * 4};3" dur="${0.6 + i * 0.13}s" repeatCount="indefinite"/><animate attributeName="y" values="8.5;${7 - (i % 3) * 2};8.5" dur="${0.6 + i * 0.13}s" repeatCount="indefinite"/>` : ''
-    return `<rect x="${x}" y="8.5" width="3" height="3" rx="1" fill="${isTalking ? '#22A55B' : '#9AA0A6'}">${a}</rect>`
+    return `<rect x="${x}" y="8.5" width="3" height="3" rx="1" fill="${isTalking ? '#2f9e72' : '#9AA0A6'}">${a}</rect>`
   }).join('')
   return <Svg key={key} alt={isTalking ? 'people are talking' : 'quiet'} width={32} height={20} isInteractive={isTalking ? true : undefined} source={`<svg xmlns="http://www.w3.org/2000/svg" width="32" height="20" viewBox="0 0 32 20">${bars}</svg>`} />
 }
 
-// The nav: plain words, the current one in the accent colour. Fits a narrow pane.
+// The nav: the current view is the default (grey pill) Button; the others are quiet text.
 function nav($: any, ui: any, v: ViewName): any {
   const { Box, Button, Text } = ui
   const cur = v === 'space' ? 'workspaces' : v
   const tab = (id: ViewName, label: string) => (
-    <Button key={`nav-${id}`} plain onPress={() => go($, id)}>
-      <Text color={cur === id ? ACCENT : 'inactive'} weight={cur === id ? 'semibold' : undefined}>{label}</Text>
-    </Button>
+    cur === id
+      ? <Button key={`nav-${id}`} label={label} onPress={() => go($, id)} />
+      : <Button key={`nav-${id}`} plain onPress={() => go($, id)}><Text color="inactive">{label}</Text></Button>
   )
   return (
-    <Box flexDirection="row" gap={2} flexWrap="wrap">
+    <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
       {tab('home', 'Home')}
       {tab('calls', 'Calls')}
       {tab('workspaces', 'Workspaces')}
@@ -897,35 +897,58 @@ function nav($: any, ui: any, v: ViewName): any {
   )
 }
 
-// A card: bordered box, a pressable title line, a dim meta line, optional extras below.
-function card(ui: any, key: string, title: any, meta: string, onPress?: () => unknown, accent?: string, extra?: any): any {
+// A card, kept for «Send Vexa to a call» and the live call only: neutral border, title, meta.
+function card(ui: any, key: string, title: any, meta: string, onPress?: () => unknown, extra?: any): any {
   const { Box, Button, Text } = ui
   return (
-    <Box key={key} flexDirection="column" borderStyle="round" borderColor={accent ?? 'subtle'} paddingX={1}>
+    <Box key={key} flexDirection="column" borderStyle="round" borderColor="subtle" paddingX={1}>
       {onPress
         ? <Button key={`${key}-b`} plain onPress={onPress}><Text weight="semibold">{title}</Text></Button>
         : <Text weight="semibold">{title}</Text>}
-      {meta ? <Text dimColor size="footnote">{meta}</Text> : null}
+      {meta ? <Text color="inactive" size="caption">{meta}</Text> : null}
       {extra ?? null}
     </Box>
   )
 }
 
+// A section label: sentence case, caption size, medium weight, quiet.
 function heading(ui: any, key: string, label: string, more?: { label: string; onPress: () => unknown }): any {
   const { Box, Text, Button } = ui
   return (
     <Box key={key} flexDirection="row" justifyContent="space-between" alignItems="center">
-      <Text dimColor size="footnote" weight="semibold">{label}</Text>
-      {more ? <Button key={`${key}-more`} plain onPress={more.onPress}><Text color={ACCENT} size="footnote">{more.label}</Text></Button> : null}
+      <Text color="inactive" size="caption" weight="medium">{label}</Text>
+      {more ? <Button key={`${key}-more`} plain onPress={more.onPress}><Text color="inactive" size="caption">{more.label}</Text></Button> : null}
     </Box>
   )
 }
 
-function callCard($: any, ui: any, x: Call, keyPrefix: string): any {
+// A list row (guidelines §4.8): a pressable title, a quiet meta line under it, no border.
+function row(ui: any, key: string, title: string, meta: string, onPress?: () => unknown, isLive = false, extra?: any): any {
+  const { Box, Button, Text } = ui
+  return (
+    <Box key={key} flexDirection="column">
+      <Box flexDirection="row" gap={1} alignItems="center">
+        {isLive ? pulse(ui, `${key}-dot`, true) : null}
+        {onPress
+          ? <Button key={`${key}-b`} plain onPress={onPress}><Text weight="medium">{title}</Text></Button>
+          : <Text weight="medium">{title}</Text>}
+        {extra ?? null}
+      </Box>
+      {meta ? <Text color="inactive" size="caption">{meta}</Text> : null}
+    </Box>
+  )
+}
+
+function callRow($: any, ui: any, x: Call, keyPrefix: string): any {
   const live = x.status === 'active'
-  return card(ui, `${keyPrefix}-${x.id}`, live ? `● ${x.title}` : x.title,
-    [day(x.at), hour(x.at), PLATFORM[x.platform] ?? x.platform, live ? 'live' : ''].filter(Boolean).join(' · '),
-    () => openCall($, x), live ? LIVE : undefined)
+  return row(ui, `${keyPrefix}-${x.id}`, x.title,
+    [live ? 'Live' : '', day(x.at), hour(x.at), PLATFORM[x.platform] ?? x.platform].filter(Boolean).join(' · '),
+    () => openCall($, x), live)
+}
+
+function problem(ui: any, key: string, text: string): any {
+  const { Text } = ui
+  return text ? <Text key={key} weight="medium" size="footnote">{text.split('\n')[0]}</Text> : null
 }
 
 async function homeView($: any, ui: any): Promise<any> {
@@ -939,35 +962,35 @@ async function homeView($: any, ui: any): Promise<any> {
   const recent = c.items.filter(x => x.status !== 'active').slice(0, 3)
   return (
     <Box flexDirection="column" gap={1}>
-      {card(ui, 'h-send', 'Send Vexa to a call', 'Paste a Meet, Teams or Zoom link. Let the bot in; the transcript streams here.', undefined, ACCENT, (
+      {card(ui, 'h-send', 'Send Vexa to a call', 'Paste a Meet, Teams or Zoom link. Let the bot in; the transcript streams here.', undefined, (
         <Box flexDirection="column">
           {Input ? <Input key="h-url" placeholder="Meeting link" value={m.url} submitLabel="Send" onInput={(v: string) => update($, x => ({ ...x, url: v.trim() }))} onSubmit={async (v: string) => { await send($, v); await go($, 'meeting') }} /> : null}
           {l.app.pane.demo ? (
-            <Box flexDirection="row" gap={1} flexWrap="wrap">
+            <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
               <Button key="h-demo" label="Try a demo" onPress={async () => { await start($, 'start_demo_meeting', {}, true); await go($, 'meeting') }} />
-              <Text dimColor size="footnote">No meeting now? A presenter speaks for a minute and you watch it transcribed.</Text>
+              <Text color="inactive" size="caption">No meeting now? A presenter speaks for a minute while you watch it transcribed.</Text>
             </Box>
           ) : null}
         </Box>
       ))}
-      {live.map(x => card(ui, `h-live-${x.id}`, `● Live · ${x.title}`,
+      {live.map(x => card(ui, `h-live-${x.id}`, `Live · ${x.title}`,
         l.isOn && m.nativeId === x.nativeId ? `Claude is listening · woke ${l.wakes.length}×` : 'Claude is not listening',
-        () => openCall($, x), LIVE,
+        () => openCall($, x),
         <Box flexDirection="row" gap={1} flexWrap="wrap">
           <Button key={`h-live-open-${x.id}`} label="Open" variant="primary" onPress={() => openCall($, x)} />
           {m.nativeId === x.nativeId ? <Button key={`h-live-listen-${x.id}`} label={l.isOn ? 'Stop listening' : 'Listen'} onPress={() => (l.isOn ? stopListening($) : listenToPane($))} /> : null}
         </Box>))}
-      {heading(ui, 'h-recent', 'RECENT CALLS', { label: 'All →', onPress: () => go($, 'calls') })}
-      {recent.length ? recent.map(x => callCard($, ui, x, 'h-rec')) : <Text dimColor>No calls yet.</Text>}
-      {heading(ui, 'h-ws', 'WORKSPACES', { label: 'All →', onPress: () => go($, 'workspaces') })}
-      {w.items.length ? w.items.slice(0, 3).map(x => card(ui, `h-ws-${x.slug}`, x.name, [x.kind, x.role].filter(Boolean).join(' · '), () => openSpace($, x.slug)))
-        : <Text dimColor>{w.error || (w.loaded ? 'No workspaces yet.' : 'Loading…')}</Text>}
-      {heading(ui, 'h-cal', 'CALENDAR', { label: 'Open →', onPress: () => go($, 'calendar') })}
-      {card(ui, 'h-cal-card', cal.connected.length ? `${cal.upcoming.filter(e => e.autoJoin).length} of ${cal.upcoming.length} upcoming meetings auto-joined` : 'Connect your calendar',
+      {heading(ui, 'h-recent', 'Recent calls', { label: 'All', onPress: () => go($, 'calls') })}
+      {recent.length ? recent.map(x => callRow($, ui, x, 'h-rec')) : <Text dimColor>No calls yet.</Text>}
+      {heading(ui, 'h-ws', 'Workspaces', { label: 'All', onPress: () => go($, 'workspaces') })}
+      {w.items.length ? w.items.slice(0, 3).map(x => row(ui, `h-ws-${x.slug}`, x.name, [x.kind, x.role].filter(Boolean).join(' · '), () => openSpace($, x.slug)))
+        : w.error ? problem(ui, 'h-ws-err', w.error) : <Text dimColor>{w.loaded ? 'No workspaces yet.' : 'Loading…'}</Text>}
+      {heading(ui, 'h-cal', 'Calendar', { label: 'Open', onPress: () => go($, 'calendar') })}
+      {row(ui, 'h-cal-row', cal.connected.length ? `Vexa joins ${cal.upcoming.filter(e => e.autoJoin).length} of ${cal.upcoming.length} upcoming meetings` : 'Connect your calendar',
         'Vexa joins your meetings by itself; you choose which ones.', () => go($, 'calendar'))}
-      {heading(ui, 'h-ask', 'ASK CLAUDE')}
+      {heading(ui, 'h-ask', 'Ask Claude')}
       <Box flexDirection="column">
-        {ASKS.map(a => <Button key={a.key} plain onPress={() => $.prompt.submit({ text: a.text })}><Text color={ACCENT}>→ {a.label}</Text></Button>)}
+        {ASKS.map(a => <Button key={a.key} plain onPress={() => $.prompt.submit({ text: a.text })}><Text>{a.label}</Text></Button>)}
       </Box>
     </Box>
   )
@@ -980,17 +1003,17 @@ async function callsView($: any, ui: any): Promise<any> {
   const list = c.items.filter(x => !q || x.title.toLowerCase().includes(q) || x.nativeId.toLowerCase().includes(q))
   const groups: Record<string, Call[]> = {}
   for (const x of list) {
-    const k = x.status === 'active' ? 'LIVE' : x.at ? new Date(x.at).toLocaleString('en', { month: 'long', year: 'numeric' }).toUpperCase() : 'EARLIER'
+    const k = x.status === 'active' ? 'Live' : x.at ? new Date(x.at).toLocaleString('en', { month: 'long', year: 'numeric' }) : 'Earlier'
     ;(groups[k] ??= []).push(x)
   }
   return (
     <Box flexDirection="column" gap={1}>
       {Input ? <Input key="calls-filter" placeholder="Filter calls" value={c.filter} onInput={(v: string) => updateCalls($, x => ({ ...x, filter: v }))} onSubmit={(v: string) => updateCalls($, x => ({ ...x, filter: v }))} /> : null}
-      {c.error ? <Text color="error" size="footnote">{c.error}</Text> : null}
+      {problem(ui, 'calls-err', c.error)}
       {Object.entries(groups).map(([g, xs]) => (
         <Box key={`g-${g}`} flexDirection="column" gap={1}>
           {heading(ui, `gh-${g}`, g)}
-          {xs.map(x => callCard($, ui, x, 'call'))}
+          {xs.map(x => callRow($, ui, x, 'call'))}
         </Box>
       ))}
       {list.length === 0 ? <Text dimColor>No calls yet.</Text> : null}
@@ -1003,9 +1026,9 @@ async function workspacesView($: any, ui: any): Promise<any> {
   const w = await readWorkspaces($)
   return (
     <Box flexDirection="column" gap={1}>
-      <Text dimColor size="footnote">Shared pages Claude reads and writes: notes, decisions, people.</Text>
-      {w.error ? <Text color="error" size="footnote">{w.error}</Text> : null}
-      {w.items.map(x => card(ui, `ws-${x.slug}`, x.name, [x.kind, x.role].filter(Boolean).join(' · '), () => openSpace($, x.slug)))}
+      <Text color="inactive" size="caption">Shared pages Claude reads and writes: notes, decisions, people.</Text>
+      {problem(ui, 'ws-err', w.error)}
+      {w.items.map(x => row(ui, `ws-${x.slug}`, x.name, [x.kind, x.role].filter(Boolean).join(' · '), () => openSpace($, x.slug)))}
       {w.items.length === 0 && !w.error ? <Text dimColor>{w.loaded ? 'No workspaces yet.' : 'Loading…'}</Text> : null}
     </Box>
   )
@@ -1019,20 +1042,20 @@ async function spaceView($: any, ui: any): Promise<any> {
   const top = w.files.filter(f => f !== w.path).slice(0, 24)
   return (
     <Box flexDirection="column" gap={1}>
-      <Button key="ws-back" plain onPress={() => go($, 'workspaces')}><Text color={ACCENT}>← Workspaces</Text></Button>
-      <Text size="title" weight="semibold">{ws?.name ?? w.slug}</Text>
-      {w.path ? <Text dimColor size="footnote">{w.path}</Text> : null}
+      <Button key="ws-back" plain onPress={() => go($, 'workspaces')}><Text color="inactive">Workspaces</Text></Button>
+      <Text size="heading" weight="semibold">{ws?.name ?? w.slug}</Text>
+      {w.path ? <Text color="inactive" size="caption">{w.path}</Text> : null}
       {m.nativeId ? (
-        <Box flexDirection="row" gap={1} flexWrap="wrap">
+        <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
           <Button key="ws-bind" label="Bind the open meeting here" onPress={() => bindMeeting($, w.slug)} />
-          <Text dimColor size="footnote">{w.bound ? `Bound: ${w.bound}` : `${m.title || m.nativeId}: its notes land here`}</Text>
+          <Text color="inactive" size="caption">{w.bound ? `Bound: ${w.bound}` : `${m.title || m.nativeId}: its notes land here`}</Text>
         </Box>
       ) : null}
-      {w.error ? <Text color="error" size="footnote">{w.error}</Text> : null}
+      {problem(ui, 'ws-err', w.error)}
       {w.content ? (Markdown ? <Markdown key="ws-md" text={w.content.slice(0, 60000)} /> : <Text>{w.content.slice(0, 4000)}</Text>) : <Text dimColor>{w.files.length && !w.path ? '' : 'Loading…'}</Text>}
-      {top.length ? heading(ui, 'ws-pages', 'PAGES') : null}
+      {top.length ? heading(ui, 'ws-pages', 'Pages') : null}
       <Box flexDirection="column">
-        {top.map(f => <Button key={`ws-f-${f}`} plain onPress={() => openFile($, w.slug, f)}><Text color={ACCENT}>{f}</Text></Button>)}
+        {top.map(f => <Button key={`ws-f-${f}`} plain onPress={() => openFile($, w.slug, f)}><Text>{f}</Text></Button>)}
       </Box>
     </Box>
   )
@@ -1044,16 +1067,16 @@ async function calendarView($: any, ui: any): Promise<any> {
   const joining = c.upcoming.filter(e => e.autoJoin).length
   return (
     <Box flexDirection="column" gap={1}>
-      <Text dimColor size="footnote">Connect your calendar and Vexa joins your meetings by itself. Turn auto-join on or off per meeting.</Text>
-      {heading(ui, 'c-conn', 'CALENDARS')}
-      {c.connected.map((name, i) => card(ui, `cal-${i}`, name, 'connected'))}
-      {card(ui, 'c-add', c.connected.length ? 'Connect another calendar' : 'Connect your calendar', 'You sign in on vexa.ai yourself; Vexa never asks for your password here.', () => connectCalendar($), c.connected.length ? undefined : ACCENT,
-        c.link ? (Link ? <Link key="c-link" href={c.link} label="Open the sign-in page →" /> : <Text>{c.link}</Text>) : null)}
-      {heading(ui, 'c-next', `UPCOMING · VEXA JOINS ${joining} OF ${c.upcoming.length}`, c.upcoming.length ? { label: joining === c.upcoming.length ? 'Join none' : 'Join all', onPress: () => setAutoJoin($, null, joining !== c.upcoming.length) } : undefined)}
-      {c.upcoming.map(e => card(ui, `up-${e.id}`, e.title, [when(e.start), PLATFORM[e.platform] ?? e.platform].filter(Boolean).join(' · '), undefined, e.autoJoin ? ACCENT : undefined,
-        <Button key={`aj-${e.id}`} label={e.autoJoin ? 'Auto-join on' : 'Auto-join off'} variant={e.autoJoin ? 'primary' : 'secondary'} onPress={() => setAutoJoin($, e, !e.autoJoin)} />))}
+      <Text color="inactive" size="caption">Connect your calendar and Vexa joins your meetings by itself. Choose which ones.</Text>
+      {heading(ui, 'c-conn', 'Calendars')}
+      {c.connected.map((name, i) => row(ui, `cal-${i}`, name, 'Connected'))}
+      {row(ui, 'c-add', c.connected.length ? 'Connect another calendar' : 'Connect your calendar', 'You sign in on vexa.ai yourself; Vexa never asks for your password here.', () => connectCalendar($))}
+      {c.link ? (Link ? <Link key="c-link" href={c.link} label="Open the sign-in page" /> : <Text>{c.link}</Text>) : null}
+      {heading(ui, 'c-next', `Upcoming · Vexa joins ${joining} of ${c.upcoming.length}`, c.upcoming.length ? { label: joining === c.upcoming.length ? 'Join none' : 'Join all', onPress: () => setAutoJoin($, null, joining !== c.upcoming.length) } : undefined)}
+      {c.upcoming.map(e => row(ui, `up-${e.id}`, e.title, [when(e.start), PLATFORM[e.platform] ?? e.platform, e.autoJoin ? 'Vexa joins' : 'Vexa skips'].filter(Boolean).join(' · '), undefined, false,
+        <Button key={`aj-${e.id}`} plain onPress={() => setAutoJoin($, e, !e.autoJoin)}><Text color="inactive" size="caption">{e.autoJoin ? 'Skip' : 'Join'}</Text></Button>))}
       {c.upcoming.length === 0 ? <Text dimColor>{c.loaded ? 'Nothing on the calendar soon.' : 'Loading…'}</Text> : null}
-      {c.error ? <Text color="error" size="footnote">{c.error}</Text> : null}
+      {problem(ui, 'c-err', c.error)}
     </Box>
   )
 }
@@ -1073,36 +1096,32 @@ async function meetingView($: any, ui: any, rows: number, cols: number): Promise
   const controls = (
     <Box key="m-controls" flexDirection="column" gap={1} width={wide ? 34 : undefined} flexShrink={0}>
       <Box flexDirection="row" gap={1} alignItems="center">
-        {pulse(ui, 'm-dot', LIVE, inCall)}
-        <Text weight="semibold" color={inCall ? LIVE : undefined}>{state}</Text>
+        {inCall ? pulse(ui, 'm-dot', true) : null}
+        <Text weight="semibold">{state}</Text>
         {inCall ? meter(ui, 'm-meter', talking) : null}
       </Box>
-      {inCall ? (
-        <Box flexDirection="column" gap={1} borderStyle="round" borderColor={l.isOn ? CLAUDE : 'subtle'} paddingX={1}>
-          <Box flexDirection="row" gap={1} alignItems="center">
-            {pulse(ui, 'm-l-dot', CLAUDE, l.isOn)}
-            <Text color={l.isOn ? CLAUDE : 'inactive'} weight="semibold">{l.isOn ? 'Claude is listening' : 'Claude is not listening'}</Text>
-          </Box>
-          <Text dimColor size="footnote">{l.isOn ? `Woke Claude ${l.wakes.length}× · filter ${l.lastMs ? `${(l.lastMs / 1000).toFixed(1)} s` : '—'}` : 'A small model reads the call and wakes Claude when it matters.'}</Text>
-          <Box flexDirection="row" gap={1} flexWrap="wrap">
-            <Button key="listen" label={l.isOn ? 'Stop listening' : 'Listen'} variant={l.isOn ? 'secondary' : 'primary'} onPress={() => (l.isOn ? stopListening($) : listenToPane($))} />
-            {l.isOn ? <Button key="m-missed" label="What did I miss?" onPress={() => whatDidIMiss($)} /> : null}
-          </Box>
-          {Select ? <Select key="m-mode" value={l.preset} options={l.app.presets.map(p => ({ value: p, label: `Mode: ${p}` }))} onSelect={(v: string) => setPreset($, v)} /> : null}
-          {l.error ? <Text color="error" size="footnote">{l.error}</Text> : null}
-        </Box>
-      ) : !live ? (
+      {live ? (
         <Box flexDirection="column" gap={1}>
-          <Text dimColor size="footnote">{m.nativeId ? 'A finished call. Paste a new link to send Vexa to another one.' : 'Paste a Meet, Teams or Zoom link; the transcript appears once Vexa is let in.'}</Text>
+          <Text color="inactive" size="footnote">{l.isOn ? 'Claude is listening and speaks up when something matters.' : 'Claude is not listening.'}</Text>
+          <Box flexDirection="row" gap={1} flexWrap="wrap" alignItems="center">
+            {inCall ? <Button key="listen" label={l.isOn ? 'Stop listening' : 'Listen'} variant={l.isOn ? 'secondary' : 'primary'} onPress={() => (l.isOn ? stopListening($) : listenToPane($))} /> : null}
+            {l.isOn ? <Button key="m-missed" label="What did I miss?" onPress={() => whatDidIMiss($)} /> : null}
+            {l.isOn && Select ? <Select key="m-mode" value={l.preset} options={l.app.presets.map(p => ({ value: p, label: p }))} onSelect={(v: string) => setPreset($, v)} /> : null}
+            <Button key="stop" plain onPress={() => stop($)}><Text color="inactive">Leave call</Text></Button>
+          </Box>
+          {problem(ui, 'm-l-err', l.error)}
+        </Box>
+      ) : (
+        <Box flexDirection="column" gap={1}>
+          <Text color="inactive" size="footnote">{m.nativeId ? 'A finished call. Paste a new link to send Vexa to another one.' : 'Paste a Meet, Teams or Zoom link; the transcript appears once Vexa is let in.'}</Text>
           {Input ? <Input key="url" placeholder="Paste a meeting link" value={m.url} submitLabel="Send bot" onInput={(v: string) => update($, x => ({ ...x, url: v.trim() }))} onSubmit={(v: string) => send($, v)} /> : null}
           <Box flexDirection="row" gap={1} flexWrap="wrap">
             <Button key="send" label="Send Vexa to the call" variant="primary" onPress={() => send($, m.url)} />
             {l.app.pane.demo ? <Button key="demo" label="Try a demo" onPress={() => start($, 'start_demo_meeting', {}, true)} /> : null}
           </Box>
         </Box>
-      ) : null}
-      {live ? <Button key="stop" label="Leave call" onPress={() => stop($)} /> : null}
-      {m.error ? <Text color="error" size="footnote">{m.error.split('\n')[0]}</Text> : null}
+      )}
+      {problem(ui, 'm-err', m.error)}
     </Box>
   )
   const transcript = (
@@ -1111,8 +1130,8 @@ async function meetingView($: any, ui: any, rows: number, cols: number): Promise
       {runs(m.segments).slice(-room).map((s, i) => (
         <Box key={`seg-${i}`} flexDirection="column">
           <Box flexDirection="row" gap={1}>
-            <Text weight="semibold" size="footnote" color={ACCENT}>{s.speaker}</Text>
-            <Text dimColor size="footnote">{s.time}</Text>
+            <Text weight="semibold" size="footnote">{s.speaker}</Text>
+            <Text color="inactive" size="caption" tabular>{s.time}</Text>
           </Box>
           {s.text ? <Text>{s.text}</Text> : null}
           {s.draft ? <Text dimColor italic>{s.draft}</Text> : null}
@@ -1129,14 +1148,14 @@ async function meetingView($: any, ui: any, rows: number, cols: number): Promise
   const header = (
     <Box key="m-head" flexDirection="column">
       <Box flexDirection="row" justifyContent="space-between" alignItems="center">
-        <Button key="m-back" plain onPress={() => go($, 'calls')}><Text color={ACCENT}>← Calls</Text></Button>
+        <Button key="m-back" plain onPress={() => go($, 'calls')}><Text color="inactive">Calls</Text></Button>
         <Box flexDirection="row" gap={1}>
-          {newer ? <Button key="m-prev" plain onPress={() => openCall($, newer)}><Text color={ACCENT}>‹ Newer</Text></Button> : null}
-          {older ? <Button key="m-next" plain onPress={() => openCall($, older)}><Text color={ACCENT}>Older ›</Text></Button> : null}
+          {newer ? <Button key="m-prev" plain onPress={() => openCall($, newer)}><Text color="inactive">Newer</Text></Button> : null}
+          {older ? <Button key="m-next" plain onPress={() => openCall($, older)}><Text color="inactive">Older</Text></Button> : null}
         </Box>
       </Box>
-      <Text size="title" weight="semibold">{cur?.title ?? (m.title || `${m.isDemo ? 'Demo · ' : ''}${PLATFORM[m.platform] ?? m.platform} ${m.nativeId}`)}</Text>
-      {cur ? <Text dimColor size="footnote">{[day(cur.at), hour(cur.at), PLATFORM[cur.platform] ?? cur.platform].filter(Boolean).join(' · ')}</Text> : null}
+      <Text size="heading" weight="semibold">{cur?.title ?? (m.title || `${m.isDemo ? 'Demo · ' : ''}${PLATFORM[m.platform] ?? m.platform} ${m.nativeId}`)}</Text>
+      {cur ? <Text color="inactive" size="caption">{[day(cur.at), hour(cur.at), PLATFORM[cur.platform] ?? cur.platform].filter(Boolean).join(' · ')}</Text> : null}
     </Box>
   )
   return (
@@ -1246,7 +1265,7 @@ export const register: Register = on => {
 
   // The band above the prompt: ONE row of fixed height. A dot and one line of status cut at the
   // edge, then two buttons; the line changes text, never size. It offers to listen while a
-  // meeting is live, says «Listening», and flashes what woke Claude until the chat answers.
+  // meeting is live, says «Listening», and shows what woke Claude until the chat answers.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const l = await readListener($)
     const m = await read($)
@@ -1255,21 +1274,21 @@ export const register: Register = on => {
     const { Box, Text, Button } = ui
     const f = await readFlash($)
     const hot = l.isOn && ['woke', 'queued', 'sent', 'answering'].includes(f.stage)
-    const line = !l.isOn ? `«${l.offer?.title ?? m.title ?? m.nativeId}» is live · Claude is not listening`
+    const line = !l.isOn ? `${l.offer?.title ?? m.title ?? m.nativeId} is live · Claude is not listening`
       : f.stage === 'answering' ? 'Claude is answering ↓'
         : hot ? `Heard «${f.line.slice(-80)}» → Claude`
           : 'Listening'
     return (
       <Box flexDirection="row" gap={1} alignItems="center">
-        {pulse(ui, 'band-dot', hot ? CLAUDE : LIVE, l.isOn)}
+        {pulse(ui, 'band-dot', l.isOn)}
         <Box flexGrow={1} flexShrink={1} minWidth={0}>
-          <Text color={!l.isOn ? 'inactive' : hot ? CLAUDE : undefined} weight={hot ? 'semibold' : undefined} wrap="truncate-end">{line}</Text>
+          <Text color={!l.isOn ? 'inactive' : undefined} weight={hot ? 'semibold' : undefined} wrap="truncate-end">{line}</Text>
         </Box>
         {l.isOn ? <Button key="missed" label="What did I miss?" onPress={() => whatDidIMiss($)} /> : null}
         {l.isOn
           ? <Button key="listen-stop" label="Stop" onPress={() => stopListening($)} />
           : <Button key="listen" label="Listen" variant="primary" onPress={() => listen($)} />}
-        {!l.isOn ? <Button key="decline" label="No" onPress={() => decline($)} /> : null}
+        {!l.isOn ? <Button key="decline" plain onPress={() => decline($)}><Text color="inactive">No</Text></Button> : null}
       </Box>
     )
   })
@@ -1296,7 +1315,7 @@ export const register: Register = on => {
               <Text dimColor>New accounts start with $2 of free credit.</Text>
             </Box>
           ) : (
-            <Text color="red">{m.error || 'Vexa is not connected.'}</Text>
+            <Text weight="medium">{m.error || 'Vexa is not connected.'}</Text>
           )}
           <Button key="retry" label="I've signed in" variant="primary" onPress={() => connect($)} />
         </Box>

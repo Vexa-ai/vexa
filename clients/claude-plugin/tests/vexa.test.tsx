@@ -119,7 +119,8 @@ test('one pane: Calendar and Workspaces are views behind its nav buttons', async
 
   await ui.press({ key: 'nav-calls' })
   await ui.press({ key: 'call-7-b' })
-  expect(await ui.find({ type: 'Text', text: /← Calls/ })).toBeTruthy()
+  expect((await ui.find({ type: 'Text', text: /^Past call$/ }))?.text).toBe('Past call')
+  expect(calls.some(c => c.tool === 'get_meeting_transcript' && c.args.since_index === 0)).toBe(true)
   await ui.press({ key: 'nav-workspaces' })
   await ui.press({ key: 'ws-team-b' })
   await ui.press({ key: 'ws-bind' })
