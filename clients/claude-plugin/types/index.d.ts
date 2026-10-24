@@ -15,7 +15,7 @@ export type Meeting = {
   attachedTo: string
   // What this server offers beyond meetings: hosted servers without the agent domain have no
   // calendar, workspace or demo tools, and the pane hides those views and buttons.
-  offers: { calendar: boolean; workspaces: boolean; demo: boolean; requests: boolean }
+  offers: { calendar: boolean; workspaces: boolean; demo: boolean; requests: boolean; webPanel: boolean }
   title: string
   isDemo: boolean
   status: string
@@ -42,7 +42,7 @@ export type Brief = {
   rules: Rule[]
 }
 
-export type Room = { platform: string; nativeId: string; title: string; dbId?: number }
+export type Room = { platform: string; nativeId: string; title: string; dbId?: number; demo?: boolean }
 export type Line = { speaker: string; text: string }
 export type Wake = { at: string; reason: string }
 
@@ -75,7 +75,7 @@ export type Listener = {
 
 // The one Vexa pane's views, and what the views beyond the meeting read.
 export type View = { name: 'home' | 'meeting' | 'calls' | 'calendar' | 'workspaces' | 'space' }
-export type Call = { id: number; platform: string; nativeId: string; status: string; title: string; at: string; shared: boolean }
+export type Call = { id: number; platform: string; nativeId: string; status: string; title: string; at: string; shared: boolean; demo: boolean }
 export type Calls = { items: Call[]; filter: string; error: string }
 export type Upcoming = { id: number; title: string; start: string; platform: string; nativeId: string; autoJoin: boolean; whyNot: string }
 export type Calendar = { connected: string[]; upcoming: Upcoming[]; link: string; steps: string[]; error: string; loaded: boolean }
