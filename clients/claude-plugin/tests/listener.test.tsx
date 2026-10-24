@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { FALLBACK_APP, briefFor, buildApp, calibrationSummary, isDirect, normalize, parseDecision, parseManifest, ruleHit, rulesText } from '../hooks/listener'
+import { FALLBACK_APP, briefFor, buildApp, calibrationSummary, isDirect, normalize, parseDecision, parseManifest, ruleHit, rulesText, triggerWords } from '../hooks/listener'
 
 const BAND = {
   plugin: 'vexa',
@@ -86,7 +86,7 @@ test('a live meeting is offered; nothing is listened to before Listen', async ($
 test('after Listen, a new line the filter flags wakes the main Claude once; the gap holds the next', async ($, on) => {
   const clock = mock.clock(on)
   let lines = [seg('1', 'Ann', 'Morning all.')]
-  const seen = engine(on, () => lines, 'W')
+  const seen = engine(on, () => lines, 'W annual plan decision')
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await clock.advance(31_500)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
@@ -97,12 +97,12 @@ test('after Listen, a new line the filter flags wakes the main Claude once; the 
   await clock.advance(1_500)
   expect(seen.model.at(-1)).toMatch(/annual plan/)
   expect(seen.model.at(-1)).not.toMatch(/NEW:\nAnn: Morning/)
-  expect(seen.prompts.filter(p => p.includes('matched the rules')).length).toBe(1)
-  expect((await ui.find({ type: 'Text', text: /Heard «/ }))?.text).toMatch(/annual plan\.» → Claude$/)
+  expect(seen.prompts.filter(p => p.includes('annual plan decision')).length).toBe(1)
+  expect((await ui.find({ type: 'Text', text: /^Heard: / }))?.text).toBe('Heard: annual plan decision → Claude')
   expect(await ui.find({ type: 'Text', text: /woke|filter|Mode/ })).toBeFalsy()
   lines = [...lines, seg('3', 'Bob', 'And we decided on a 3 year term.')]
   await clock.advance(3_000)
-  expect(seen.prompts.filter(p => p.includes('matched the rules')).length).toBe(1)
+  expect(seen.prompts.filter(p => p.includes('annual plan decision')).length).toBe(1)
   await ui.unmount()
 })
 
@@ -241,7 +241,9 @@ test('pure parts: brief bounds, triggers, the filter reply, direct address, app 
   expect(rulesText(briefFor(FALLBACK_APP, 'default'))).toMatch(/addresses the assistant/)
   expect(rulesText(b)).toMatch(/money terms/)
   expect(parseDecision(' W').wake).toBe(true)
+  expect(parseDecision('W price €40k for the pilot')).toEqual({ wake: true, reason: 'price €40k for' })
   expect(parseDecision('S').wake).toBe(false)
+  expect(triggerWords('rule keyword "AWS"')).toBe('AWS')
   expect(isDirect(['Bob: Claude, what did we agree?'])).toBe(true)
   expect(isDirect(['Bob: Клод, прочитай'])).toBe(true)
   expect(isDirect(['Bob: the cloud is fine'])).toBe(false)

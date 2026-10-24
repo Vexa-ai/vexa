@@ -149,13 +149,16 @@ export function ruleHit(rules: readonly Rule[], lines: readonly Line[]): string 
   return null
 }
 
-// The attention filter: one small-model call per change in the transcript tail, one letter back
-// (W wake, S skip). This is the dogfood listener's prompt: instructions and rules lead and are
-// cached, so each call sends only the few transcript lines. `listener_calibrate` replays a
-// labelled fixture through it.
+// The attention filter: one small-model call per change in the transcript tail. It answers S
+// (skip), or W and at most three words naming what triggered it («W price €40k»): those words are
+// what the band and the web show as why Claude reacted. Instructions and rules lead and are cached,
+// so each call sends only the few transcript lines. `listener_calibrate` replays a labelled
+// fixture through it.
 export const DECIDE_SYSTEM = 'You are an attention filter for an assistant listening to a live meeting transcript '
   + '(any language, with speech-recognition errors). Decide whether the NEW lines need the assistant now. Answer '
-  + 'with exactly one letter: W = wake the assistant, S = skip. No other text.'
+  + 'S to skip, or W followed by at most three words naming what triggered it (for example: W price €40k, '
+  + 'W Claude question, W AWS). No other text.'
+export const DECIDE_MAX_TOKENS = 12
 
 // The brief as the filter reads it: its focus is the plain-language rules; label questions and
 // what is already known are added to them.
@@ -174,8 +177,17 @@ export function decidePrompt(context: readonly string[], fresh: readonly string[
 }
 
 export function parseDecision(text: string): { wake: boolean; reason: string } {
-  const wake = text.trim().toUpperCase().startsWith('W')
-  return { wake, reason: wake ? 'matched the rules' : 'no match' }
+  const t = text.trim()
+  const wake = t.toUpperCase().startsWith('W')
+  if (!wake) return { wake, reason: 'no match' }
+  const why = t.slice(1).replace(/^[\s:·-]+/, '').split(/\s+/).filter(Boolean).slice(0, 3).join(' ')
+  return { wake, reason: why || 'matched the rules' }
+}
+
+// A rule trigger's own words, at most three, for the band.
+export function triggerWords(reason: string): string {
+  const m = reason.match(/"([^"]+)"/)
+  return (m ? m[1]! : reason).split(/\s+/).filter(Boolean).slice(0, 3).join(' ')
 }
 
 // One wake per thought: the same words (a draft and its final version, a repeat) wake once.

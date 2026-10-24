@@ -19,8 +19,8 @@ import type { Register } from 'claude-code'
 
 import type { AppInfo, Call, Calendar, Calls, Flash, Listener, Meeting, Seg, Upcoming, View, Workspace, Workspaces } from '../types'
 import {
-  DECIDE_SYSTEM, FALLBACK_APP, briefFor, buildApp, calibrationSummary, decidePrompt, isDirect,
-  norm, normalize, parseDecision, parseManifest, ruleHit, rulesText,
+  DECIDE_MAX_TOKENS, DECIDE_SYSTEM, FALLBACK_APP, briefFor, buildApp, calibrationSummary, decidePrompt, isDirect,
+  norm, normalize, parseDecision, parseManifest, ruleHit, rulesText, triggerWords,
 } from './listener'
 import type { App, Labelled, Row } from './listener'
 
@@ -579,7 +579,7 @@ async function decide($: any, rules: string, context: string[], fresh: string[])
   const t0 = await $.clock.now()
   const r = await $.model.complete({
     model: FILTER_MODEL,
-    maxTokens: 2,
+    maxTokens: DECIDE_MAX_TOKENS,
     system: [{ text: DECIDE_SYSTEM, cache: true }, { text: `Rules: ${rules}`, cache: true }],
     prompt: decidePrompt(context, fresh),
   })
@@ -735,7 +735,7 @@ async function triage($: any): Promise<void> {
       wakes: canWake ? [...x.wakes, { at: new Date(now).toISOString().slice(11, 19), reason: v.reason }].slice(-20) : x.wakes,
     }))
     if (canWake) {
-      await setFlash($, 'woke', fresh.map(s => s.text).join(' ').slice(-160))
+      await setFlash($, 'woke', triggerWords(v.reason))
       batch.push({ reason: v.reason, lines: [...context.slice(-2), ...lines], direct })
       await flush($)
     }
@@ -1502,7 +1502,7 @@ export const register: Register = on => {
     const hot = l.isOn && ['woke', 'queued', 'sent', 'answering'].includes(f.stage)
     const line = !l.isOn ? `${l.offer?.title ?? m.title ?? m.nativeId} is live · Claude is not listening`
       : f.stage === 'answering' ? 'Claude is answering ↓'
-        : hot ? `Heard «${f.line.slice(-80)}» → Claude`
+        : hot ? `Heard: ${f.line || 'something'} → Claude`
           : 'Listening'
     return (
       <Box flexDirection="row" gap={1} alignItems="center">
