@@ -364,7 +364,7 @@ test('a demo Claude starts from the chat: the pane follows it and names it', asy
   await ui.unmount()
 })
 
-test('sign-in from the chat: Claude offers it and runs claude mcp login; when it lands the panel opens', async ($, on) => {
+test('sign-in from the chat: Claude offers it and calls authenticate; when it lands the panel opens', async ($, on) => {
   const clock = mock.clock(on)
   let signedIn = false
   const opened: string[] = []
@@ -372,8 +372,9 @@ test('sign-in from the chat: Claude offers it and runs claude mcp login; when it
   on('prompt.compose', () => ({ sections: [] }))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const ctx: any = await $.prompt.compose({ model: 'claude-sonnet-5-5', promptModel: 'claude-sonnet-5-5', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [], sections: [] } as any)
-  expect(ctx.sections.at(-1).text).toMatch(/Sign in\? I'll open your browser/)
-  expect(ctx.sections.at(-1).text).toMatch(/claude mcp login plugin:vexa:vexa/)
+  expect(ctx.sections.at(-1).text).toMatch(/Vexa is installed\. Sign in\?/)
+  expect(ctx.sections.at(-1).text).toMatch(/call mcp__plugin_vexa_vexa__authenticate/)
+  expect((await $.tool.check({ tool: 'mcp__plugin_vexa_vexa__authenticate', input: {} })).decision).toBe('allow')
   expect(ctx.sections.at(-1).text).not.toMatch(/type \/mcp/)
   opened.length = 0
   signedIn = true
