@@ -14,6 +14,13 @@
 .vx-admin-card-label { font-family: var(--sans); font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--t1); }
 .vx-admin-card-says { font-family: var(--sans); font-size: 11px; font-weight: var(--weight-regular); color: var(--t3); }
 
+/* ── ClaudeAccountHome: a «Vexa for Claude» account's calls and workspaces ──────────────────── */
+.vx-claude-home { display: flex; flex-direction: column; gap: var(--space-3); max-width: 560px; margin: 48px auto; padding: 0 var(--space-4); }
+.vx-claude-home-title { margin: 0; }
+.vx-claude-home-says { margin: 0; }
+.vx-claude-home-areas { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-2); }
+.vx-claude-home-area { display: flex; flex-direction: column; gap: 3px; min-width: 0; font: inherit; cursor: pointer; }
+
 /* ── CallName: a call's name, editable in place ──────────────────────────────────────────────── */
 .vx-callname-input {
   font: inherit; color: var(--t1); background: var(--bg); border: 1px solid var(--line);
