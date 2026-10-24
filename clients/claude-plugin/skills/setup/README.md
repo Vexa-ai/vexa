@@ -1,3 +1,3 @@
 # setup
 
-Skill: where the Vexa API key comes from (hosted account page, self-hosted `make all`, or the door at vexa.ai/connect), the hosted vs self-hosted MCP URL, and how to check the connection. See `SKILL.md`.
+Skill `vexa-setup`: Vexa setup as a conversation in chat — which Vexa the plugin talks to (hosted, or a company's own address), sign-in through that Vexa's OAuth via /mcp, where Claude keeps what it learns (cloud workspace, this computer, or only when asked; saved with the plugin's `vexa_settings` tool), calendar, a first demo. See `SKILL.md`.

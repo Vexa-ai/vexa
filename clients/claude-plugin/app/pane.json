@@ -1,0 +1,6 @@
+{
+  "title": "Vexa",
+  "emptyHint": "No meeting right now? Try a demo: a presenter speaks for a minute and you watch it transcribed live.",
+  "demo": true,
+  "offerListening": true
+}
