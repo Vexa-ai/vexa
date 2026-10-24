@@ -24,7 +24,7 @@ const throws = (fn: () => unknown): Error | null => { try { fn(); return null; }
 
 // ── every committed invocation.v1 golden parses ──
 const goldens = readdirSync(GOLDEN_DIR).filter((n) => n.startsWith('Invocation.') && n.endsWith('.json'));
-check('found all invocation goldens', goldens.length === 7, `got ${goldens.join(', ')}`);
+check('found all invocation goldens', goldens.length === 8, `got ${goldens.join(', ')}`);
 for (const g of goldens) {
   const raw = readFileSync(join(GOLDEN_DIR, g), 'utf8');
   const err = throws(() => parseInvocation(raw));
@@ -54,6 +54,14 @@ for (const g of goldens) {
   const acct = parseInvocation(readFileSync(join(GOLDEN_DIR, 'Invocation.bot-account.json'), 'utf8'));
   check('bot-account: authenticated with sessionRestoreUrl, no store fields',
     acct.authenticated === true && typeof acct.sessionRestoreUrl === 'string' && acct.userdataS3Path === undefined, String(acct.sessionRestoreUrl));
+}
+
+// ── typed access on the demo-call golden (a demo call carries its scripted speakers) ──
+{
+  const demo = parseInvocation(readFileSync(join(GOLDEN_DIR, 'Invocation.vexa_call-demo.json'), 'utf8'));
+  check('vexa_call-demo: presenter names the script and one token per speaker',
+    demo.call?.presenter?.script === 'demo-v1' && demo.call.presenter.speakers.map((s) => s.name).join() === 'Maya,Leo',
+    JSON.stringify(demo.call?.presenter?.speakers?.map((s) => s.name)));
 }
 
 // ── typed access on the jitsi golden (the platform enum accepts jitsi) ──
