@@ -229,6 +229,22 @@ test('while listening, the live map upserts people and companies into personal a
   await ui.unmount()
 })
 
+test('a trigger already heard in this call does not wake twice', async ($, on) => {
+  const clock = mock.clock(on)
+  let lines = [seg('1', 'Ann', 'Morning all.')]
+  const seen = engine(on, () => lines, 'W AWS')
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await clock.advance(31_500)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await ui.press({ key: 'listen' })
+  lines = [...lines, seg('2', 'Bob', 'We run it all on AWS.')]
+  await clock.advance(1_500)
+  lines = [...lines, seg('3', 'Ann', 'Our AWS bill doubled this year, a totally different topic.')]
+  await clock.advance(60_000)
+  expect(seen.triage.length).toBe(1)
+  await ui.unmount()
+})
+
 test('a signal the triage model calls not worth it never reaches the main chat', async ($, on) => {
   const clock = mock.clock(on)
   let lines = [seg('1', 'Ann', 'Morning all.')]

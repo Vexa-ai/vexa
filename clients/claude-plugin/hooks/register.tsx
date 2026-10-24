@@ -731,6 +731,8 @@ async function flush($: any): Promise<void> {
 // apart unless the speaker addressed the assistant, whose next lines within FOLLOW_MS may follow
 // (the filter still has to say wake).
 const WOKE_FOR = new Set<string>()
+// Per call: a trigger already heard («AWS», «Ramp») doesn't wake twice; asking the assistant always does.
+const SEEN_TRIGGERS = new Set<string>()
 const WOKE_TEXT = new Set<string>()
 let lastTail = ''
 let lastDirectAt = 0
@@ -762,7 +764,10 @@ async function triage($: any): Promise<void> {
     const followUp = lastDirectAt > 0 && now - lastDirectAt < FOLLOW_MS
     if (direct && v.wake) lastDirectAt = now
     const gapOk = !l.lastWakeAt || now - l.lastWakeAt > WAKE_GAP_MS
-    const canWake = !already && v.wake && l.wakes.length < MAX_WAKES && (direct || followUp || Boolean(hit) || gapOk)
+    const trig = `${m.platform}/${m.nativeId}|${triggerWords(v.reason).toLowerCase()}`
+    const seenTrig = !direct && SEEN_TRIGGERS.has(trig)
+    const canWake = !already && !seenTrig && v.wake && l.wakes.length < MAX_WAKES && (direct || followUp || Boolean(hit) || gapOk)
+    if (canWake && !direct) SEEN_TRIGGERS.add(trig)
     if (canWake) { ids.forEach(id => WOKE_FOR.add(id)); WOKE_TEXT.add(key) }
     await updateListener($, x => ({
       ...x,
