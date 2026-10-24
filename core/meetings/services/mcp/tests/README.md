@@ -26,4 +26,4 @@ path and the fake records each hop (method, path, headers, params, body).
   session's client name and the gateway's `x-user-id`; non-tool methods, missing user id and
   oversized bodies yield none; refusals record `ok=false`; the SSE GET passes through untouched;
   the sink signs each batch as `verifyInternalWebhook` checks, batches at 50, drops on overflow,
-  and never raises.
+  never raises, and never writes the secret to a log line.

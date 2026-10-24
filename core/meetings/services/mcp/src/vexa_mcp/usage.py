@@ -112,9 +112,12 @@ class UsageSink:
         secret = (env.get(SECRET_ENV) or "").strip()
         if not url and not secret:
             return None
-        if not (url and secret):
-            logger.warning("mcp usage sink OFF — %s and %s must both be set (only %s is)",
-                           URL_ENV, SECRET_ENV, URL_ENV if url else SECRET_ENV)
+        # Fixed literals only: nothing derived from the secret reaches a log line.
+        if not secret:
+            logger.warning("mcp usage sink OFF — MCP_USAGE_URL is set but MCP_USAGE_SECRET is not")
+            return None
+        if not url:
+            logger.warning("mcp usage sink OFF — MCP_USAGE_SECRET is set but MCP_USAGE_URL is not")
             return None
         return cls(url, secret)
 

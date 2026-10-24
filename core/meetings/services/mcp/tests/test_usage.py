@@ -318,6 +318,18 @@ def test_the_sink_is_off_unless_both_keys_are_set(env, on):
     assert (sink is not None) is on
 
 
+def test_the_secret_never_reaches_a_log_line(caplog):
+    canary = "canary-secret-7f3a"
+    with caplog.at_level(logging.DEBUG):
+        usage.UsageSink.from_env({"MCP_USAGE_SECRET": canary})
+        sink = usage.UsageSink("http://c", canary, start=False,
+                               transport=httpx.MockTransport(lambda r: httpx.Response(500)))
+        sink.submit(_event())
+        sink.flush()
+    assert caplog.records, "the half-configured sink and the failed batch must both be logged"
+    assert not any(canary in r.getMessage() for r in caplog.records)
+
+
 def test_end_to_end_through_a_real_sink():
     posted = []
     sink = usage.UsageSink("http://c", SECRET, start=False,
