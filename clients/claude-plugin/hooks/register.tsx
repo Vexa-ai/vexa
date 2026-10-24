@@ -17,7 +17,7 @@
 // plugin's newer version on update without overwriting their edits), else the plugin's own.
 import type { Register } from 'claude-code'
 
-import type { AppInfo, Call, Calendar, Calls, Listener, Meeting, Page, Seg, Upcoming, View, Workspace, Workspaces } from '../types'
+import type { AppInfo, Call, Calendar, Calls, Flash, Listener, Meeting, Seg, Upcoming, View, Workspace, Workspaces } from '../types'
 import {
   DECIDE_SYSTEM, FALLBACK_APP, briefFor, buildApp, calibrationSummary, decidePrompt, isDirect,
   norm, normalize, parseDecision, parseManifest, ruleHit, rulesText,
@@ -77,7 +77,9 @@ const CALENDAR = { plugin: 'vexa', key: 'calendar' } as const
 const WORKSPACES = { plugin: 'vexa', key: 'workspaces' } as const
 const NO_CALLS: Calls = { items: [], filter: '', error: '' }
 const NO_CALENDAR: Calendar = { connected: [], upcoming: [], link: '', error: '', loaded: false }
-const NO_WORKSPACES: Workspaces = { items: [], query: '', results: [], open: null, bound: '', error: '', loaded: false }
+const NO_WORKSPACES: Workspaces = { items: [], slug: '', files: [], path: '', content: '', bound: '', error: '', loaded: false }
+const FLASH = { plugin: 'vexa', key: 'flash' } as const
+const NO_FLASH: Flash = { stage: 'idle', at: 0, line: '' }
 
 async function readView($: any): Promise<View> {
   const { value } = await $.state.get(VIEW)
@@ -117,6 +119,16 @@ async function updateWorkspaces($: any, fn: (w: Workspaces) => Workspaces): Prom
   for (;;) {
     const held = await $.state.get(WORKSPACES)
     if ((await $.state.set(WORKSPACES, fn(held.value ?? NO_WORKSPACES), { ifVersion: held.version })).isSet) return
+  }
+}
+async function readFlash($: any): Promise<Flash> {
+  const { value } = await $.state.get(FLASH)
+  return value ?? NO_FLASH
+}
+async function updateFlash($: any, fn: (f: Flash) => Flash): Promise<void> {
+  for (;;) {
+    const held = await $.state.get(FLASH)
+    if ((await $.state.set(FLASH, fn(held.value ?? NO_FLASH), { ifVersion: held.version })).isSet) return
   }
 }
 
@@ -520,16 +532,26 @@ const WINDOW_MS = 600_000
 const MAX_PER_WINDOW = 8
 let busy = false
 let batch: { reason: string; lines: string[]; direct: boolean }[] = []
+
+// What the band shows the moment the listener acts, before the chat answers: woke → queued →
+// sent → answering → done, back to idle 8 s after done.
+async function setFlash($: any, stage: Flash['stage'], line?: string): Promise<void> {
+  const at = await $.clock.now()
+  await updateFlash($, f => ({ ...f, stage, at, line: line ?? f.line }))
+  if (stage === 'done') $.clock.after(8000, () => updateFlash($, f => (f.stage === 'done' && f.at === at ? { ...f, stage: 'idle' } : f)))
+}
 let sentAt: number[] = []
 let flushTimer = false
 async function flush($: any): Promise<void> {
-  if (busy || batch.length === 0) return
+  if (batch.length === 0) return
+  if (busy) { await setFlash($, 'queued'); return }
   const now = await $.clock.now()
   sentAt = sentAt.filter(t => now - t < WINDOW_MS)
   const last = sentAt[sentAt.length - 1] ?? 0
   const overCap = sentAt.length >= MAX_PER_WINDOW && !batch.some(b => b.direct)
   const wait = Math.max(last ? MIN_GAP_MS - (now - last) : 0, overCap ? WINDOW_MS - (now - sentAt[0]!) : 0)
   if (wait > 0) {
+    await setFlash($, 'queued')
     if (!flushTimer) { flushTimer = true; $.clock.after(wait + 50, () => { flushTimer = false; void flush($) }) }
     return
   }
@@ -541,6 +563,7 @@ async function flush($: any): Promise<void> {
   const n = batch.length
   batch = []
   busy = true
+  await setFlash($, 'sent')
   const m = await read($)
   void $.prompt.submit({
     text: `[Vexa listener${n > 1 ? ` · ${n} wakes batched` : ''}] ${reasons}\n\nFrom the live meeting "${m.title || m.nativeId}" (${m.platform} ${m.nativeId}):\n`
@@ -596,6 +619,7 @@ async function triage($: any): Promise<void> {
       wakes: canWake ? [...x.wakes, { at: new Date(now).toISOString().slice(11, 19), reason: v.reason }].slice(-20) : x.wakes,
     }))
     if (canWake) {
+      await setFlash($, 'woke', fresh.map(s => s.text).join(' ').slice(-160))
       batch.push({ reason: v.reason, lines: [...context.slice(-2), ...lines], direct })
       await flush($)
     }
@@ -757,32 +781,36 @@ async function setAutoJoin($: any, target: Upcoming | null, on: boolean): Promis
   } catch (err) { await updateCalendar($, c => ({ ...c, error: message(err) })) }
 }
 
+// --- Workspaces: list them, open one at its README and its .md pages, bind the open meeting --
+
 async function loadWorkspaces($: any): Promise<void> {
   try {
     const p = await call($, 'workspace_list', {})
-    const items: Workspace[] = (p.workspaces ?? p.items ?? []).map((w: any) => ({
-      id: String(w.id ?? w.slug ?? w.name), name: String(w.name ?? w.title ?? w.slug ?? w.id), kind: String(w.kind ?? w.type ?? ''),
+    const items: Workspace[] = (p.workspaces ?? p.items ?? []).filter((w: any) => w.state !== 'inactive').map((w: any) => ({
+      slug: String(w.slug ?? w.id ?? w.name), name: String(w.display ?? w.name ?? w.title ?? w.slug ?? w.id),
+      kind: String(w.kind ?? w.type ?? ''), role: String(w.role ?? ''),
     }))
     await updateWorkspaces($, w => ({ ...w, items, error: '', loaded: true }))
   } catch (err) { await updateWorkspaces($, w => ({ ...w, error: message(err), loaded: true })) }
 }
 
-async function searchPages($: any, query: string): Promise<void> {
-  await updateWorkspaces($, w => ({ ...w, query }))
-  if (!query.trim()) return
+async function openFile($: any, slug: string, path: string): Promise<void> {
+  await updateWorkspaces($, w => ({ ...w, slug, path, content: '', error: '' }))
   try {
-    const p = await call($, 'workspace_search', { query })
-    const results: Page[] = (p.results ?? p.hits ?? p.pages ?? []).map((r: any) => ({
-      path: String(r.path ?? r.page ?? ''), snippet: String(r.snippet ?? r.excerpt ?? ''), workspace: String(r.workspace ?? r.workspace_id ?? ''),
-    }))
-    await updateWorkspaces($, w => ({ ...w, results, error: '' }))
+    const f = await call($, 'workspace_read', { workspace: slug, path })
+    await updateWorkspaces($, w => (w.slug === slug ? { ...w, content: String(f.content ?? f.text ?? f.body ?? '') } : w))
   } catch (err) { await updateWorkspaces($, w => ({ ...w, error: message(err) })) }
 }
 
-async function openPage($: any, workspace: string, path: string): Promise<void> {
+async function openSpace($: any, slug: string): Promise<void> {
+  await updateWorkspaces($, w => ({ ...w, slug, files: [], path: '', content: '', error: '' }))
+  await go($, 'space')
   try {
-    const p = await call($, 'workspace_read', { workspace, path })
-    await updateWorkspaces($, w => ({ ...w, open: { workspace, path, text: String(p.text ?? p.content ?? p.body ?? '') }, error: '' }))
+    const t = await call($, 'workspace_read', { workspace: slug })
+    const files: string[] = (t.files ?? t.pages ?? t.tree ?? []).map((f: any) => String(typeof f === 'string' ? f : f.path ?? '')).filter((f: string) => f.endsWith('.md'))
+    await updateWorkspaces($, w => ({ ...w, files }))
+    const first = files.find(f => /^readme\.md$/i.test(f)) ?? files.find(f => !f.includes('/')) ?? files[0]
+    if (first) await openFile($, slug, first)
   } catch (err) { await updateWorkspaces($, w => ({ ...w, error: message(err) })) }
 }
 
@@ -804,6 +832,12 @@ const ASKS = [
   { key: 'ask-find', label: 'Find a topic in my calls', text: 'I want to find something said in my Vexa calls. Ask me what to look for, then search the transcripts.' },
 ]
 
+// Colours: theme keys follow the person's light/dark theme; ACCENT is Vexa's own.
+const ACCENT = '#3B6CF6'
+const LIVE = 'success'
+const CLAUDE = 'claude'
+const PLATFORM: Record<string, string> = { google_meet: 'Meet', teams: 'Teams', zoom: 'Zoom', jitsi: 'Jitsi', vexa_call: 'Vexa call' }
+
 async function go($: any, v: ViewName): Promise<void> {
   await updateView($, () => ({ name: v }))
   await $.ui.open({ id: PANE, title: app.pane.title })
@@ -815,115 +849,148 @@ async function go($: any, v: ViewName): Promise<void> {
 function day(at: string): string {
   return at ? new Date(at).toLocaleString('en', { month: 'short', day: 'numeric' }) : ''
 }
-
+function hour(at: string): string {
+  return at ? new Date(at).toLocaleString('en', { hour: '2-digit', minute: '2-digit', hour12: false }) : ''
+}
 function when(at: string): string {
-  return at ? new Date(at).toLocaleString('en', { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : ''
+  return at ? new Date(at).toLocaleString('en', { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) : ''
 }
 
+// A pulsing dot (desktop draws SVG with SMIL animation; the terminal falls back to a glyph).
+function pulse(ui: any, key: string, color: string, isOn: boolean): any {
+  const { Svg, Text } = ui
+  if (!Svg) return <Text key={key} color={isOn ? color : 'inactive'}>●</Text>
+  const fill = color === 'success' ? '#22A55B' : color === 'claude' ? '#D97757' : color
+  const anim = isOn ? '<animate attributeName="r" values="3;5;3" dur="1.4s" repeatCount="indefinite"/><animate attributeName="opacity" values="1;0.45;1" dur="1.4s" repeatCount="indefinite"/>' : ''
+  return <Svg key={key} alt={isOn ? 'live' : 'off'} width={14} height={14} isInteractive={isOn ? true : undefined} source={`<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="4" fill="${isOn ? fill : '#9AA0A6'}">${anim}</circle></svg>`} />
+}
+
+// Speech meter: bars that dance while text is arriving, flat when the room is quiet.
+function meter(ui: any, key: string, isTalking: boolean): any {
+  const { Svg } = ui
+  if (!Svg) return null
+  const bars = [0, 1, 2, 3, 4].map(i => {
+    const x = 2 + i * 6
+    const a = isTalking ? `<animate attributeName="height" values="3;${8 + (i % 3) * 4};3" dur="${0.6 + i * 0.13}s" repeatCount="indefinite"/><animate attributeName="y" values="8.5;${7 - (i % 3) * 2};8.5" dur="${0.6 + i * 0.13}s" repeatCount="indefinite"/>` : ''
+    return `<rect x="${x}" y="8.5" width="3" height="3" rx="1" fill="${isTalking ? '#22A55B' : '#9AA0A6'}">${a}</rect>`
+  }).join('')
+  return <Svg key={key} alt={isTalking ? 'people are talking' : 'quiet'} width={32} height={20} isInteractive={isTalking ? true : undefined} source={`<svg xmlns="http://www.w3.org/2000/svg" width="32" height="20" viewBox="0 0 32 20">${bars}</svg>`} />
+}
+
+// The nav: plain words, the current one in the accent colour. Fits a narrow pane.
 function nav($: any, ui: any, v: ViewName): any {
-  const { Box, Button } = ui
-  const tab = (id: ViewName, label: string) => <Button key={`nav-${id}`} label={label} variant={v === id ? 'primary' : 'secondary'} onPress={() => go($, id)} />
+  const { Box, Button, Text } = ui
+  const cur = v === 'space' ? 'workspaces' : v
+  const tab = (id: ViewName, label: string) => (
+    <Button key={`nav-${id}`} plain onPress={() => go($, id)}>
+      <Text color={cur === id ? ACCENT : 'inactive'} weight={cur === id ? 'semibold' : undefined}>{label}</Text>
+    </Button>
+  )
   return (
-    <Box flexDirection="row" gap={1}>
+    <Box flexDirection="row" gap={2} flexWrap="wrap">
       {tab('home', 'Home')}
-      {tab('meeting', 'Meeting')}
       {tab('calls', 'Calls')}
-      {tab('calendar', 'Calendar')}
       {tab('workspaces', 'Workspaces')}
+      {tab('calendar', 'Calendar')}
+      {tab('meeting', 'Meeting')}
     </Box>
   )
 }
 
-function section(ui: any, key: string, title: string, what: string, children: any): any {
-  const { Box, Text } = ui
+// A card: bordered box, a pressable title line, a dim meta line, optional extras below.
+function card(ui: any, key: string, title: any, meta: string, onPress?: () => unknown, accent?: string, extra?: any): any {
+  const { Box, Button, Text } = ui
   return (
-    <Box key={key} flexDirection="column">
-      <Text bold>{title}</Text>
-      <Text dimColor>{what}</Text>
-      {children}
+    <Box key={key} flexDirection="column" borderStyle="round" borderColor={accent ?? 'subtle'} paddingX={1}>
+      {onPress
+        ? <Button key={`${key}-b`} plain onPress={onPress}><Text weight="semibold">{title}</Text></Button>
+        : <Text weight="semibold">{title}</Text>}
+      {meta ? <Text dimColor size="footnote">{meta}</Text> : null}
+      {extra ?? null}
     </Box>
   )
+}
+
+function heading(ui: any, key: string, label: string, more?: { label: string; onPress: () => unknown }): any {
+  const { Box, Text, Button } = ui
+  return (
+    <Box key={key} flexDirection="row" justifyContent="space-between" alignItems="center">
+      <Text dimColor size="footnote" weight="semibold">{label}</Text>
+      {more ? <Button key={`${key}-more`} plain onPress={more.onPress}><Text color={ACCENT} size="footnote">{more.label}</Text></Button> : null}
+    </Box>
+  )
+}
+
+function callCard($: any, ui: any, x: Call, keyPrefix: string): any {
+  const live = x.status === 'active'
+  return card(ui, `${keyPrefix}-${x.id}`, live ? `● ${x.title}` : x.title,
+    [day(x.at), hour(x.at), PLATFORM[x.platform] ?? x.platform, live ? 'live' : ''].filter(Boolean).join(' · '),
+    () => openCall($, x), live ? LIVE : undefined)
 }
 
 async function homeView($: any, ui: any): Promise<any> {
-  const { Box, Text, Button, Input, Select } = ui
+  const { Box, Text, Button, Input } = ui
   const c = await readCalls($)
   const m = await read($)
   const l = await readListener($)
+  const w = await readWorkspaces($)
+  const cal = await readCalendar($)
   const live = c.items.filter(x => x.status === 'active')
-  const recent = c.items.filter(x => x.status !== 'active').slice(0, 5)
-  const attached = Boolean(m.nativeId) && m.status === 'active'
+  const recent = c.items.filter(x => x.status !== 'active').slice(0, 3)
   return (
     <Box flexDirection="column" gap={1}>
-      <Text>Vexa sends a note-taker into your Meet, Teams and Zoom calls. Claude reads the transcript live and afterwards.</Text>
-      {section(ui, 's-send', '1 · Send Vexa to a call', 'Paste a meeting link. The bot asks to join; let it in, and the transcript streams into Meeting.', (
+      {card(ui, 'h-send', 'Send Vexa to a call', 'Paste a Meet, Teams or Zoom link. Let the bot in; the transcript streams here.', undefined, ACCENT, (
         <Box flexDirection="column">
-          {Input ? <Input key="h-url" label="Meeting link" placeholder="https://meet.google.com/…" value={m.url} submitLabel="Send" onInput={(v: string) => update($, x => ({ ...x, url: v.trim() }))} onSubmit={async (v: string) => { await send($, v); await go($, 'meeting') }} /> : null}
-          <Box flexDirection="row" gap={1}>
-            <Button key="h-send" label="Send Vexa" variant="primary" onPress={async () => { await send($, m.url); await go($, 'meeting') }} />
-            {l.app.pane.demo ? <Button key="h-demo" label="Try a demo" onPress={async () => { await start($, 'start_demo_meeting', {}, true); await go($, 'meeting') }} /> : null}
-          </Box>
-          {l.app.pane.demo ? <Text dimColor>{l.app.pane.emptyHint}</Text> : null}
+          {Input ? <Input key="h-url" placeholder="Meeting link" value={m.url} submitLabel="Send" onInput={(v: string) => update($, x => ({ ...x, url: v.trim() }))} onSubmit={async (v: string) => { await send($, v); await go($, 'meeting') }} /> : null}
+          {l.app.pane.demo ? (
+            <Box flexDirection="row" gap={1} flexWrap="wrap">
+              <Button key="h-demo" label="Try a demo" onPress={async () => { await start($, 'start_demo_meeting', {}, true); await go($, 'meeting') }} />
+              <Text dimColor size="footnote">No meeting now? A presenter speaks for a minute and you watch it transcribed.</Text>
+            </Box>
+          ) : null}
         </Box>
       ))}
-      {section(ui, 's-live', 'Live now', 'Calls where Vexa is in the room right now.', (
-        live.length
-          ? live.map(x => <Button key={`h-live-${x.id}`} plain label={`● ${x.title} · open`} onPress={() => openCall($, x)} />)
-          : <Text dimColor>None.</Text>
-      ))}
-      {section(ui, 's-listen', '2 · Let Claude listen', 'A small model reads the live transcript and wakes Claude only when something matters. Say «Claude, …» in the call to ask it directly.', (
-        <Box flexDirection="column">
-          <Text>{l.isOn ? `On · ${m.title || m.nativeId} · woke Claude ${l.wakes.length}×` : attached ? `Off · ${m.title || m.nativeId} is live` : 'Off · starts once a call is live'}</Text>
-          <Box flexDirection="row" gap={1}>
-            {attached ? <Button key="h-listen" label={l.isOn ? 'Stop listening' : 'Listen'} variant={l.isOn ? 'secondary' : 'primary'} onPress={() => (l.isOn ? stopListening($) : listenToPane($))} /> : null}
-            {Select ? <Select key="h-mode" label="Mode" value={l.preset} options={l.app.presets.map(p => ({ value: p, label: `Mode: ${p}` }))} onSelect={(v: string) => setPreset($, v)} /> : null}
-          </Box>
-        </Box>
-      ))}
-      {section(ui, 's-ask', '3 · Ask Claude about your calls', 'One click sends the question to Claude in the chat.', (
-        <Box flexDirection="column">
-          {ASKS.map(a => <Button key={a.key} plain label={`→ ${a.label}`} onPress={() => $.prompt.submit({ text: a.text })} />)}
-        </Box>
-      ))}
-      {section(ui, 's-recent', 'Recent calls', 'Open one to read its transcript here.', (
-        <Box flexDirection="column">
-          {recent.length ? recent.map(x => <Button key={`h-rec-${x.id}`} plain label={`${x.title}  ${day(x.at)}`} onPress={() => openCall($, x)} />) : <Text dimColor>No calls yet.</Text>}
-          <Button key="h-calls" plain label="All calls →" onPress={() => go($, 'calls')} />
-        </Box>
-      ))}
-      {section(ui, 's-cal', 'Calendar', 'Connect your calendar and Vexa joins your meetings by itself; choose which ones.', (
-        <Button key="h-cal" plain label="Calendar →" onPress={() => go($, 'calendar')} />
-      ))}
-      {section(ui, 's-ws', 'Workspaces', 'Shared pages for your team: Claude writes decisions and notes from your calls there.', (
-        <Button key="h-ws" plain label="Workspaces →" onPress={() => go($, 'workspaces')} />
-      ))}
-      <Text dimColor>Commands: /vexa · /vexa-meeting · /vexa-calls · /vexa-help</Text>
+      {live.map(x => card(ui, `h-live-${x.id}`, `● Live · ${x.title}`,
+        l.isOn && m.nativeId === x.nativeId ? `Claude is listening · woke ${l.wakes.length}×` : 'Claude is not listening',
+        () => openCall($, x), LIVE,
+        <Box flexDirection="row" gap={1} flexWrap="wrap">
+          <Button key={`h-live-open-${x.id}`} label="Open" variant="primary" onPress={() => openCall($, x)} />
+          {m.nativeId === x.nativeId ? <Button key={`h-live-listen-${x.id}`} label={l.isOn ? 'Stop listening' : 'Listen'} onPress={() => (l.isOn ? stopListening($) : listenToPane($))} /> : null}
+        </Box>))}
+      {heading(ui, 'h-recent', 'RECENT CALLS', { label: 'All →', onPress: () => go($, 'calls') })}
+      {recent.length ? recent.map(x => callCard($, ui, x, 'h-rec')) : <Text dimColor>No calls yet.</Text>}
+      {heading(ui, 'h-ws', 'WORKSPACES', { label: 'All →', onPress: () => go($, 'workspaces') })}
+      {w.items.length ? w.items.slice(0, 3).map(x => card(ui, `h-ws-${x.slug}`, x.name, [x.kind, x.role].filter(Boolean).join(' · '), () => openSpace($, x.slug)))
+        : <Text dimColor>{w.error || (w.loaded ? 'No workspaces yet.' : 'Loading…')}</Text>}
+      {heading(ui, 'h-cal', 'CALENDAR', { label: 'Open →', onPress: () => go($, 'calendar') })}
+      {card(ui, 'h-cal-card', cal.connected.length ? `${cal.upcoming.filter(e => e.autoJoin).length} of ${cal.upcoming.length} upcoming meetings auto-joined` : 'Connect your calendar',
+        'Vexa joins your meetings by itself; you choose which ones.', () => go($, 'calendar'))}
+      {heading(ui, 'h-ask', 'ASK CLAUDE')}
+      <Box flexDirection="column">
+        {ASKS.map(a => <Button key={a.key} plain onPress={() => $.prompt.submit({ text: a.text })}><Text color={ACCENT}>→ {a.label}</Text></Button>)}
+      </Box>
     </Box>
   )
 }
 
 async function callsView($: any, ui: any): Promise<any> {
-  const { Box, Text, Button, Input } = ui
+  const { Box, Text, Input } = ui
   const c = await readCalls($)
   const q = c.filter.toLowerCase()
   const list = c.items.filter(x => !q || x.title.toLowerCase().includes(q) || x.nativeId.toLowerCase().includes(q))
-  const live = list.filter(x => x.status === 'active')
   const groups: Record<string, Call[]> = {}
-  for (const x of list.filter(y => y.status !== 'active')) {
-    const k = x.at ? new Date(x.at).toLocaleString('en', { month: 'long', year: 'numeric' }).toUpperCase() : 'EARLIER'
+  for (const x of list) {
+    const k = x.status === 'active' ? 'LIVE' : x.at ? new Date(x.at).toLocaleString('en', { month: 'long', year: 'numeric' }).toUpperCase() : 'EARLIER'
     ;(groups[k] ??= []).push(x)
   }
   return (
     <Box flexDirection="column" gap={1}>
-      <Text dimColor>Every call Vexa attended. Click one to open its transcript in Meeting.</Text>
-      {Input ? <Input key="calls-filter" label="Filter" placeholder="Filter calls" value={c.filter} onInput={(v: string) => updateCalls($, x => ({ ...x, filter: v }))} onSubmit={(v: string) => updateCalls($, x => ({ ...x, filter: v }))} /> : null}
-      {c.error ? <Text color="red">{c.error}</Text> : null}
-      {live.length ? <Text dimColor>LIVE</Text> : null}
-      {live.map(x => <Button key={`call-${x.id}`} plain label={`● ${x.title} · live`} onPress={() => openCall($, x)} />)}
-      {Object.entries(groups).map(([month, xs]) => (
-        <Box key={`m-${month}`} flexDirection="column">
-          <Text dimColor>{month}</Text>
-          {xs.map(x => <Button key={`call-${x.id}`} plain label={`${x.title}  ${day(x.at)}`} onPress={() => openCall($, x)} />)}
+      {Input ? <Input key="calls-filter" placeholder="Filter calls" value={c.filter} onInput={(v: string) => updateCalls($, x => ({ ...x, filter: v }))} onSubmit={(v: string) => updateCalls($, x => ({ ...x, filter: v }))} /> : null}
+      {c.error ? <Text color="error" size="footnote">{c.error}</Text> : null}
+      {Object.entries(groups).map(([g, xs]) => (
+        <Box key={`g-${g}`} flexDirection="column" gap={1}>
+          {heading(ui, `gh-${g}`, g)}
+          {xs.map(x => callCard($, ui, x, 'call'))}
         </Box>
       ))}
       {list.length === 0 ? <Text dimColor>No calls yet.</Text> : null}
@@ -931,57 +998,42 @@ async function callsView($: any, ui: any): Promise<any> {
   )
 }
 
-async function meetingView($: any, ui: any, rows: number): Promise<any> {
-  const { Box, Text, Button, Input } = ui
-  const m = await read($)
-  const l = await readListener($)
-  const live = isLive(m) || m.status === 'requesting'
-  const room = Math.max(4, Math.floor((rows - (l.isOn ? 18 : 12)) / 2))
-  const state = live ? (m.status === 'active' ? '● In the call' : m.status) : m.nativeId ? 'Past call' : 'No meeting'
+async function workspacesView($: any, ui: any): Promise<any> {
+  const { Box, Text } = ui
+  const w = await readWorkspaces($)
   return (
     <Box flexDirection="column" gap={1}>
-      <Box flexDirection="row" gap={1}>
-        <Text bold>{state}</Text>
-        {m.nativeId ? <Text dimColor>{`${m.isDemo ? 'demo · ' : ''}${m.title || `${m.platform} ${m.nativeId}`}`}</Text> : null}
-        {live ? <Text dimColor>{l.isOn ? `· listening · woke Claude ${l.wakes.length}×` : '· not listening'}</Text> : null}
+      <Text dimColor size="footnote">Shared pages Claude reads and writes: notes, decisions, people.</Text>
+      {w.error ? <Text color="error" size="footnote">{w.error}</Text> : null}
+      {w.items.map(x => card(ui, `ws-${x.slug}`, x.name, [x.kind, x.role].filter(Boolean).join(' · '), () => openSpace($, x.slug)))}
+      {w.items.length === 0 && !w.error ? <Text dimColor>{w.loaded ? 'No workspaces yet.' : 'Loading…'}</Text> : null}
+    </Box>
+  )
+}
+
+async function spaceView($: any, ui: any): Promise<any> {
+  const { Box, Text, Button, Markdown } = ui
+  const w = await readWorkspaces($)
+  const m = await read($)
+  const ws = w.items.find(x => x.slug === w.slug)
+  const top = w.files.filter(f => f !== w.path).slice(0, 24)
+  return (
+    <Box flexDirection="column" gap={1}>
+      <Button key="ws-back" plain onPress={() => go($, 'workspaces')}><Text color={ACCENT}>← Workspaces</Text></Button>
+      <Text size="title" weight="semibold">{ws?.name ?? w.slug}</Text>
+      {w.path ? <Text dimColor size="footnote">{w.path}</Text> : null}
+      {m.nativeId ? (
+        <Box flexDirection="row" gap={1} flexWrap="wrap">
+          <Button key="ws-bind" label="Bind the open meeting here" onPress={() => bindMeeting($, w.slug)} />
+          <Text dimColor size="footnote">{w.bound ? `Bound: ${w.bound}` : `${m.title || m.nativeId}: its notes land here`}</Text>
+        </Box>
+      ) : null}
+      {w.error ? <Text color="error" size="footnote">{w.error}</Text> : null}
+      {w.content ? (Markdown ? <Markdown key="ws-md" text={w.content.slice(0, 60000)} /> : <Text>{w.content.slice(0, 4000)}</Text>) : <Text dimColor>{w.files.length && !w.path ? '' : 'Loading…'}</Text>}
+      {top.length ? heading(ui, 'ws-pages', 'PAGES') : null}
+      <Box flexDirection="column">
+        {top.map(f => <Button key={`ws-f-${f}`} plain onPress={() => openFile($, w.slug, f)}><Text color={ACCENT}>{f}</Text></Button>)}
       </Box>
-      {l.isOn ? (
-        <Box key="listener" flexDirection="column">
-          <Text dimColor>{`Mode ${l.preset} · ${rulesText(l.brief).slice(0, 200)}`}</Text>
-          {l.brief.rules.length ? <Text dimColor>{`Triggers: ${l.brief.rules.map(r => `${r.kind} "${r.value}"`).join(', ')}`}</Text> : null}
-          {l.lastVerdict ? <Text dimColor>{`Last: ${l.lastVerdict} (${l.lastMs} ms)`}</Text> : null}
-          {l.error ? <Text color="red">{l.error}</Text> : null}
-        </Box>
-      ) : null}
-      {live ? (
-        <Box flexDirection="row" gap={1}>
-          {m.status === 'active' ? <Button key="listen" label={l.isOn ? 'Stop listening' : 'Listen'} variant={l.isOn ? 'secondary' : 'primary'} onPress={() => (l.isOn ? stopListening($) : listenToPane($))} /> : null}
-          {l.isOn ? <Button key="missed" label="What did I miss?" onPress={() => whatDidIMiss($)} /> : null}
-          <Button key="stop" label="Leave call" onPress={() => stop($)} />
-        </Box>
-      ) : (
-        <Box flexDirection="column">
-          <Text dimColor>{m.nativeId ? 'A finished call. Paste a new link to send Vexa to another one.' : 'Paste a Meet, Teams or Zoom link; the transcript appears here once Vexa is let in.'}</Text>
-          {Input ? <Input key="url" label="Meeting link" placeholder="https://meet.google.com/abc-defg-hij" value={m.url} submitLabel="Send bot" onInput={(v: string) => update($, x => ({ ...x, url: v.trim() }))} onSubmit={(v: string) => send($, v)} /> : null}
-          <Box flexDirection="row" gap={1}>
-            <Button key="send" label="Send bot" variant="primary" onPress={() => send($, m.url)} />
-            {l.app.pane.demo ? <Button key="demo" label="Try a demo" onPress={() => start($, 'start_demo_meeting', {}, true)} /> : null}
-          </Box>
-        </Box>
-      )}
-      {m.error ? <Text color="red">{m.error.split('\n')[0]}</Text> : null}
-      {m.segments.length === 0 ? (
-        <Text dimColor>{live
-          ? (m.isDemo ? 'The demo presenter starts speaking in a few seconds…' : 'Waiting for the bot to be admitted and for speech…')
-          : l.app.pane.emptyHint}</Text>
-      ) : null}
-      {runs(m.segments).slice(-room).map((s, i) => (
-        <Box key={`seg-${i}`} flexDirection="column">
-          <Text bold>{`${s.speaker}${s.time ? ` · ${s.time}` : ''}`}</Text>
-          {s.text ? <Text>{s.text}</Text> : null}
-          {s.draft ? <Text dimColor italic>{s.draft}</Text> : null}
-        </Box>
-      ))}
     </Box>
   )
 }
@@ -992,65 +1044,107 @@ async function calendarView($: any, ui: any): Promise<any> {
   const joining = c.upcoming.filter(e => e.autoJoin).length
   return (
     <Box flexDirection="column" gap={1}>
-      <Text dimColor>Connect your calendar and Vexa joins your meetings by itself. Turn auto-join on or off per meeting, or for all of them.</Text>
-      {section(ui, 'c-conn', 'Connected calendars', 'Sign in on vexa.ai yourself; Vexa never asks for your password here.', (
-        <Box flexDirection="column">
-          {c.connected.length ? c.connected.map((name, i) => <Text key={`cal-${i}`}>{`● ${name}`}</Text>) : <Text dimColor>{c.loaded ? 'None connected.' : 'Loading…'}</Text>}
-          <Button key="c-connect" label={c.connected.length ? 'Connect another calendar' : 'Connect a calendar'} variant={c.connected.length ? 'secondary' : 'primary'} onPress={() => connectCalendar($)} />
-          {c.link ? (Link ? <Link key="c-link" href={c.link} label="Open the sign-in page" /> : <Text>{c.link}</Text>) : null}
-        </Box>
-      ))}
-      {section(ui, 'c-next', 'Upcoming meetings', `${c.upcoming.length} upcoming · Vexa joins ${joining}.`, (
-        <Box flexDirection="column">
-          {c.upcoming.map(e => (
-            <Box key={`up-${e.id}`} flexDirection="row" gap={1}>
-              <Button key={`aj-${e.id}`} label={e.autoJoin ? 'Auto-join on' : 'Auto-join off'} variant={e.autoJoin ? 'primary' : 'secondary'} onPress={() => setAutoJoin($, e, !e.autoJoin)} />
-              <Text>{`${when(e.start)}  ${e.title}`}</Text>
-            </Box>
-          ))}
-          {c.upcoming.length ? (
-            <Box flexDirection="row" gap={1}>
-              <Button key="aj-all-on" plain label="Join all" onPress={() => setAutoJoin($, null, true)} />
-              <Button key="aj-all-off" plain label="Join none" onPress={() => setAutoJoin($, null, false)} />
-            </Box>
-          ) : <Text dimColor>{c.loaded ? 'Nothing on the calendar soon.' : ''}</Text>}
-        </Box>
-      ))}
-      {c.error ? <Text color="red">{c.error}</Text> : null}
-      <Button key="c-refresh" plain label="Refresh" onPress={() => loadCalendar($)} />
+      <Text dimColor size="footnote">Connect your calendar and Vexa joins your meetings by itself. Turn auto-join on or off per meeting.</Text>
+      {heading(ui, 'c-conn', 'CALENDARS')}
+      {c.connected.map((name, i) => card(ui, `cal-${i}`, name, 'connected'))}
+      {card(ui, 'c-add', c.connected.length ? 'Connect another calendar' : 'Connect your calendar', 'You sign in on vexa.ai yourself; Vexa never asks for your password here.', () => connectCalendar($), c.connected.length ? undefined : ACCENT,
+        c.link ? (Link ? <Link key="c-link" href={c.link} label="Open the sign-in page →" /> : <Text>{c.link}</Text>) : null)}
+      {heading(ui, 'c-next', `UPCOMING · VEXA JOINS ${joining} OF ${c.upcoming.length}`, c.upcoming.length ? { label: joining === c.upcoming.length ? 'Join none' : 'Join all', onPress: () => setAutoJoin($, null, joining !== c.upcoming.length) } : undefined)}
+      {c.upcoming.map(e => card(ui, `up-${e.id}`, e.title, [when(e.start), PLATFORM[e.platform] ?? e.platform].filter(Boolean).join(' · '), undefined, e.autoJoin ? ACCENT : undefined,
+        <Button key={`aj-${e.id}`} label={e.autoJoin ? 'Auto-join on' : 'Auto-join off'} variant={e.autoJoin ? 'primary' : 'secondary'} onPress={() => setAutoJoin($, e, !e.autoJoin)} />))}
+      {c.upcoming.length === 0 ? <Text dimColor>{c.loaded ? 'Nothing on the calendar soon.' : 'Loading…'}</Text> : null}
+      {c.error ? <Text color="error" size="footnote">{c.error}</Text> : null}
     </Box>
   )
 }
 
-async function workspacesView($: any, ui: any, rows: number): Promise<any> {
-  const { Box, Text, Button, Input } = ui
-  const w = await readWorkspaces($)
+async function meetingView($: any, ui: any, rows: number, cols: number): Promise<any> {
+  const { Box, Text, Button, Input, Select } = ui
   const m = await read($)
+  const l = await readListener($)
+  const room = Math.max(4, Math.floor((rows - 10) / 2))
+  const live = isLive(m) || m.status === 'requesting'
+  const inCall = live && m.status === 'active'
+  const now = await $.clock.now()
+  const talking = inCall && lastTextAt > 0 && now - lastTextAt < 10_000
+  const state = live ? (inCall ? 'In the call' : m.status) : m.nativeId ? 'Past call' : 'No meeting'
+  // Wide pane: transcript on the left, the call's controls on the right. Narrow: one column.
+  const wide = cols >= 80
+  const controls = (
+    <Box key="m-controls" flexDirection="column" gap={1} width={wide ? 34 : undefined} flexShrink={0}>
+      <Box flexDirection="row" gap={1} alignItems="center">
+        {pulse(ui, 'm-dot', LIVE, inCall)}
+        <Text weight="semibold" color={inCall ? LIVE : undefined}>{state}</Text>
+        {inCall ? meter(ui, 'm-meter', talking) : null}
+      </Box>
+      {inCall ? (
+        <Box flexDirection="column" gap={1} borderStyle="round" borderColor={l.isOn ? CLAUDE : 'subtle'} paddingX={1}>
+          <Box flexDirection="row" gap={1} alignItems="center">
+            {pulse(ui, 'm-l-dot', CLAUDE, l.isOn)}
+            <Text color={l.isOn ? CLAUDE : 'inactive'} weight="semibold">{l.isOn ? 'Claude is listening' : 'Claude is not listening'}</Text>
+          </Box>
+          <Text dimColor size="footnote">{l.isOn ? `Woke Claude ${l.wakes.length}× · filter ${l.lastMs ? `${(l.lastMs / 1000).toFixed(1)} s` : '—'}` : 'A small model reads the call and wakes Claude when it matters.'}</Text>
+          <Box flexDirection="row" gap={1} flexWrap="wrap">
+            <Button key="listen" label={l.isOn ? 'Stop listening' : 'Listen'} variant={l.isOn ? 'secondary' : 'primary'} onPress={() => (l.isOn ? stopListening($) : listenToPane($))} />
+            {l.isOn ? <Button key="m-missed" label="What did I miss?" onPress={() => whatDidIMiss($)} /> : null}
+          </Box>
+          {Select ? <Select key="m-mode" value={l.preset} options={l.app.presets.map(p => ({ value: p, label: `Mode: ${p}` }))} onSelect={(v: string) => setPreset($, v)} /> : null}
+          {l.error ? <Text color="error" size="footnote">{l.error}</Text> : null}
+        </Box>
+      ) : !live ? (
+        <Box flexDirection="column" gap={1}>
+          <Text dimColor size="footnote">{m.nativeId ? 'A finished call. Paste a new link to send Vexa to another one.' : 'Paste a Meet, Teams or Zoom link; the transcript appears once Vexa is let in.'}</Text>
+          {Input ? <Input key="url" placeholder="Paste a meeting link" value={m.url} submitLabel="Send bot" onInput={(v: string) => update($, x => ({ ...x, url: v.trim() }))} onSubmit={(v: string) => send($, v)} /> : null}
+          <Box flexDirection="row" gap={1} flexWrap="wrap">
+            <Button key="send" label="Send Vexa to the call" variant="primary" onPress={() => send($, m.url)} />
+            {l.app.pane.demo ? <Button key="demo" label="Try a demo" onPress={() => start($, 'start_demo_meeting', {}, true)} /> : null}
+          </Box>
+        </Box>
+      ) : null}
+      {live ? <Button key="stop" label="Leave call" onPress={() => stop($)} /> : null}
+      {m.error ? <Text color="error" size="footnote">{m.error.split('\n')[0]}</Text> : null}
+    </Box>
+  )
+  const transcript = (
+    <Box key="m-transcript" flexDirection="column" gap={1} flexGrow={1}>
+      {m.segments.length === 0 ? <Text dimColor>{live ? (m.isDemo ? 'The demo presenter starts speaking in a few seconds…' : 'Waiting for speech…') : m.nativeId ? 'Loading the transcript…' : 'The transcript will appear here.'}</Text> : null}
+      {runs(m.segments).slice(-room).map((s, i) => (
+        <Box key={`seg-${i}`} flexDirection="column">
+          <Box flexDirection="row" gap={1}>
+            <Text weight="semibold" size="footnote" color={ACCENT}>{s.speaker}</Text>
+            <Text dimColor size="footnote">{s.time}</Text>
+          </Box>
+          {s.text ? <Text>{s.text}</Text> : null}
+          {s.draft ? <Text dimColor italic>{s.draft}</Text> : null}
+        </Box>
+      ))}
+    </Box>
+  )
+  // Header: back to the list, the call's title, and stepping to the newer / older call.
+  const c = await readCalls($)
+  const i = c.items.findIndex(x => x.nativeId === m.nativeId && x.platform === m.platform)
+  const cur = i >= 0 ? c.items[i] : undefined
+  const newer = i > 0 ? c.items[i - 1] : undefined
+  const older = i >= 0 && i < c.items.length - 1 ? c.items[i + 1] : undefined
+  const header = (
+    <Box key="m-head" flexDirection="column">
+      <Box flexDirection="row" justifyContent="space-between" alignItems="center">
+        <Button key="m-back" plain onPress={() => go($, 'calls')}><Text color={ACCENT}>← Calls</Text></Button>
+        <Box flexDirection="row" gap={1}>
+          {newer ? <Button key="m-prev" plain onPress={() => openCall($, newer)}><Text color={ACCENT}>‹ Newer</Text></Button> : null}
+          {older ? <Button key="m-next" plain onPress={() => openCall($, older)}><Text color={ACCENT}>Older ›</Text></Button> : null}
+        </Box>
+      </Box>
+      <Text size="title" weight="semibold">{cur?.title ?? (m.title || `${m.isDemo ? 'Demo · ' : ''}${PLATFORM[m.platform] ?? m.platform} ${m.nativeId}`)}</Text>
+      {cur ? <Text dimColor size="footnote">{[day(cur.at), hour(cur.at), PLATFORM[cur.platform] ?? cur.platform].filter(Boolean).join(' · ')}</Text> : null}
+    </Box>
+  )
   return (
     <Box flexDirection="column" gap={1}>
-      <Text dimColor>Your workspaces: pages Claude reads and writes for you and your team. Bind a meeting to one and its notes land there.</Text>
-      {section(ui, 'w-list', 'Workspaces', m.nativeId ? `Bind ${m.title || m.nativeId} to one so its notes land there.` : 'Open a meeting to bind it to a workspace.', (
-        <Box flexDirection="column">
-          {w.items.map(x => (
-            <Box key={`ws-${x.id}`} flexDirection="row" gap={1}>
-              <Text>{`${x.name}${x.kind ? ` · ${x.kind}` : ''}`}</Text>
-              {m.nativeId ? <Button key={`bind-${x.id}`} plain label="Bind meeting" onPress={() => bindMeeting($, x.id)} /> : null}
-            </Box>
-          ))}
-          {w.items.length === 0 ? <Text dimColor>{w.loaded ? 'No workspaces yet.' : 'Loading…'}</Text> : null}
-          {w.bound ? <Text>{`Bound: ${w.bound}`}</Text> : null}
-        </Box>
-      ))}
-      {section(ui, 'w-find', 'Find a page', 'Search your workspaces, then open a page here.', (
-        <Box flexDirection="column">
-          {Input ? <Input key="w-query" label="Search" placeholder="pricing decision" value={w.query} submitLabel="Search" onInput={(v: string) => updateWorkspaces($, x => ({ ...x, query: v }))} onSubmit={(v: string) => searchPages($, v)} /> : null}
-          {w.results.slice(0, 8).map((r, i) => <Button key={`res-${i}`} plain label={`${r.path}${r.snippet ? ` — ${r.snippet.slice(0, 80)}` : ''}`} onPress={() => openPage($, r.workspace, r.path)} />)}
-        </Box>
-      ))}
-      {w.open ? section(ui, 'w-page', w.open.path, `In ${w.open.workspace}. Ask Claude to change it; it writes a commit in your name.`, (
-        <Text>{w.open.text.split('\n').slice(0, Math.max(6, rows - 24)).join('\n')}</Text>
-      )) : null}
-      {w.error ? <Text color="red">{w.error}</Text> : null}
+      {m.nativeId ? header : null}
+      {wide
+        ? <Box flexDirection="row" gap={2}>{transcript}{controls}</Box>
+        : <Box flexDirection="column" gap={1}>{controls}{transcript}</Box>}
     </Box>
   )
 }
@@ -1095,11 +1189,22 @@ export const register: Register = on => {
       $.clock.every(60_000, () => loadCalls($))
     }
     void loadCalls($)
+    void loadWorkspaces($)
     return next(e)
   })
 
-  on('turn.start', async ($, e, next) => { busy = true; return next(e) })
-  on('turn.complete', async ($, e, next) => { const r = await next(e); busy = false; await flush($); return r })
+  on('turn.start', async ($, e, next) => {
+    busy = true
+    if ((await readFlash($)).stage === 'sent') await setFlash($, 'answering')
+    return next(e)
+  })
+  on('turn.complete', async ($, e, next) => {
+    const r = await next(e)
+    busy = false
+    if ((await readFlash($)).stage === 'answering') await setFlash($, 'done')
+    await flush($)
+    return r
+  })
 
   on('command.run', { command: 'vexa' }, async $ => {
     await connect($)
@@ -1139,35 +1244,32 @@ export const register: Register = on => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
-  // The band above the prompt: an offer to listen to a live meeting, and while listening, its
-  // state with the mode, «What did I miss?» and Stop.
+  // The band above the prompt: ONE row of fixed height. A dot and one line of status cut at the
+  // edge, then two buttons; the line changes text, never size. It offers to listen while a
+  // meeting is live, says «Listening», and flashes what woke Claude until the chat answers.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const l = await readListener($)
     const m = await read($)
-    if (e.props.hasSurvey) return next(e)
-    const { Box, Button, Text, Select } = $.ui.resolve(e) as any
-    if (l.offer && !l.isOn) {
-      return (
-        <Box flexDirection="row" gap={1}>
-          <Text>{`Vexa: "${l.offer.title}" is live. Listen and tell you when something matters?`}</Text>
-          <Button key="listen" label="Listen" variant="primary" onPress={() => listen($)} />
-          <Button key="decline" label="No" onPress={() => decline($)} />
-        </Box>
-      )
-    }
-    if (!l.isOn) return next(e)
-    const now = await $.clock.now()
-    const age = lastTextAt ? Math.round((now - lastTextAt) / 1000) : -1
-    const dot = age < 0 ? '○' : age < 10 ? '●' : age < 60 ? '◐' : '○'
-    const verdict = l.lastVerdict.startsWith('wake') ? 'woke' : 'skipped'
+    if (e.props.hasSurvey || (!l.isOn && !l.offer)) return next(e)
+    const ui = $.ui.resolve(e) as any
+    const { Box, Text, Button } = ui
+    const f = await readFlash($)
+    const hot = l.isOn && ['woke', 'queued', 'sent', 'answering'].includes(f.stage)
+    const line = !l.isOn ? `«${l.offer?.title ?? m.title ?? m.nativeId}» is live · Claude is not listening`
+      : f.stage === 'answering' ? 'Claude is answering ↓'
+        : hot ? `Heard «${f.line.slice(-80)}» → Claude`
+          : 'Listening'
     return (
-      <Box flexDirection="row" gap={1}>
-        <Text color={age >= 0 && age < 10 ? 'green' : age >= 0 && age < 60 ? 'yellow' : 'gray'}>{dot}</Text>
-        <Text>{`Listening · ${m.title || m.nativeId}`}</Text>
-        <Text dimColor>{`text ${age < 0 ? '—' : `${age} s ago`} · filter ${l.lastMs ? `${(l.lastMs / 1000).toFixed(1)} s` : '—'} · last ${verdict} · woke Claude ${l.wakes.length}×${batch.length ? ` · ${batch.length} waiting` : ''}`}</Text>
-        {Select ? <Select key="mode" value={l.preset} options={l.app.presets.map(p => ({ value: p, label: p }))} onSelect={(v: string) => setPreset($, v)} /> : null}
-        <Button key="missed" label="What did I miss?" onPress={() => whatDidIMiss($)} />
-        <Button key="listen-stop" label="Stop" onPress={() => stopListening($)} />
+      <Box flexDirection="row" gap={1} alignItems="center">
+        {pulse(ui, 'band-dot', hot ? CLAUDE : LIVE, l.isOn)}
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          <Text color={!l.isOn ? 'inactive' : hot ? CLAUDE : undefined} weight={hot ? 'semibold' : undefined} wrap="truncate-end">{line}</Text>
+        </Box>
+        {l.isOn ? <Button key="missed" label="What did I miss?" onPress={() => whatDidIMiss($)} /> : null}
+        {l.isOn
+          ? <Button key="listen-stop" label="Stop" onPress={() => stopListening($)} />
+          : <Button key="listen" label="Listen" variant="primary" onPress={() => listen($)} />}
+        {!l.isOn ? <Button key="decline" label="No" onPress={() => decline($)} /> : null}
       </Box>
     )
   })
@@ -1203,11 +1305,13 @@ export const register: Register = on => {
 
     const v = (await readView($)).name
     const rows = e.viewport?.rows ?? 30
+    const cols = (e as any).props?.bodyColumns ?? 60
     const body = v === 'calls' ? await callsView($, ui)
-      : v === 'meeting' ? await meetingView($, ui, rows)
+      : v === 'meeting' ? await meetingView($, ui, rows, cols)
         : v === 'calendar' ? await calendarView($, ui)
-          : v === 'workspaces' ? await workspacesView($, ui, rows)
-            : await homeView($, ui)
+          : v === 'workspaces' ? await workspacesView($, ui)
+            : v === 'space' ? await spaceView($, ui)
+              : await homeView($, ui)
     return (
       <Box flexDirection="column" gap={1}>
         {nav($, ui, v)}

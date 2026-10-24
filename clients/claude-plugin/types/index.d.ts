@@ -66,25 +66,29 @@ export type Listener = {
 }
 
 // The one Vexa pane's views, and what the views beyond the meeting read.
-export type View = { name: 'home' | 'meeting' | 'calls' | 'calendar' | 'workspaces' }
+export type View = { name: 'home' | 'meeting' | 'calls' | 'calendar' | 'workspaces' | 'space' }
 export type Call = { id: string; platform: string; nativeId: string; status: string; title: string; at: string }
 export type Calls = { items: Call[]; filter: string; error: string }
 export type Upcoming = { id: string; title: string; start: string; platform: string; nativeId: string; autoJoin: boolean }
 export type Calendar = { connected: string[]; upcoming: Upcoming[]; link: string; error: string; loaded: boolean }
-export type Workspace = { id: string; name: string; kind: string }
-export type Page = { path: string; snippet: string; workspace: string }
+export type Workspace = { slug: string; name: string; kind: string; role: string }
 export type Workspaces = {
   items: Workspace[]
-  query: string
-  results: Page[]
-  open: { workspace: string; path: string; text: string } | null
+  slug: string
+  files: string[]
+  path: string
+  content: string
   bound: string
   error: string
   loaded: boolean
 }
 
+// What the band shows the moment the listener acts, before the chat answers:
+// woke (heard a line, waking Claude) → queued (Claude busy or spacing) → sent → answering → done.
+export type Flash = { stage: 'idle' | 'woke' | 'queued' | 'sent' | 'answering' | 'done'; at: number; line: string }
+
 declare module 'claude-code' {
   interface PluginState {
-    vexa: { meeting: Meeting; listener: Listener; view: View; calls: Calls; calendar: Calendar; workspaces: Workspaces }
+    vexa: { meeting: Meeting; listener: Listener; view: View; calls: Calls; calendar: Calendar; workspaces: Workspaces; flash: Flash }
   }
 }

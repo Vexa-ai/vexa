@@ -90,6 +90,8 @@ test('after Listen, a new line the filter flags wakes the main Claude once; the 
   expect(seen.model.at(-1)).toMatch(/annual plan/)
   expect(seen.model.at(-1)).not.toMatch(/NEW:\nAnn: Morning/)
   expect(seen.prompts.filter(p => p.includes('matched the rules')).length).toBe(1)
+  expect((await ui.find({ type: 'Text', text: /Heard «/ }))?.text).toMatch(/annual plan\.» → Claude$/)
+  expect(await ui.find({ type: 'Text', text: /woke|filter|Mode/ })).toBeFalsy()
   lines = [...lines, seg('3', 'Bob', 'And we decided on a 3 year term.')]
   await clock.advance(3_000)
   expect(seen.prompts.filter(p => p.includes('matched the rules')).length).toBe(1)

@@ -94,15 +94,15 @@ test('one pane: Calendar and Workspaces are views behind its nav buttons', async
     calls.push({ tool: e.tool, args: e.args })
     if (e.tool === 'calendar_status') return { value: text({ calendars: [{ email: 'me@acme.com' }], upcoming: [{ id: 'ev1', title: 'Acme weekly', start: '2026-10-25T10:00:00Z', auto_join: autoJoin }] }) }
     if (e.tool === 'set_auto_join') { autoJoin = e.args.auto_join; return { value: text({ ok: true }) } }
-    if (e.tool === 'workspace_list') return { value: text({ workspaces: [{ id: 'team', name: 'Team', kind: 'shared' }] }) }
-    if (e.tool === 'workspace_search') return { value: text({ results: [{ workspace: 'team', path: 'decisions.md', snippet: 'annual plan' }] }) }
-    if (e.tool === 'workspace_read') return { value: text({ text: '# Decisions\nAnnual plan at 38k.' }) }
+    if (e.tool === 'workspace_list') return { value: text({ workspaces: [{ slug: 'team', display: 'Team', kind: 'shared', role: 'owner' }, { slug: 'old', name: 'Old', state: 'inactive' }] }) }
+    if (e.tool === 'workspace_read' && !e.args.path) return { value: text({ files: ['README.md', 'decisions.md', 'logo.png'] }) }
+    if (e.tool === 'workspace_read') return { value: text({ content: e.args.path === 'README.md' ? '# Team\nOur notes.' : '# Decisions\nAnnual plan at 38k.' }) }
     if (e.tool === 'list_meetings') return { value: text({ meetings: [{ id: 7, platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'completed', data: { title: 'Acme pricing call' } }] }) }
     return { value: text({ ok: true }) }
   })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text: /note-taker/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /Send Vexa to a call/ })).toBeTruthy()
 
   await ui.press({ key: 'nav-calendar' })
   expect((await ui.find({ type: 'Text', text: /me@acme\.com/ }))?.text).toMatch(/me@acme/)
@@ -110,15 +110,19 @@ test('one pane: Calendar and Workspaces are views behind its nav buttons', async
   expect(calls.find(c => c.tool === 'set_auto_join')?.args).toEqual({ meeting_id: 'ev1', auto_join: true })
 
   await ui.press({ key: 'nav-workspaces' })
-  expect(await ui.find({ type: 'Text', text: /Team · shared/ })).toBeTruthy()
-  await ui.input({ key: 'w-query', text: 'annual' } as any)
-  await ui.press({ key: 'res-0' })
-  expect(await ui.find({ type: 'Text', text: /Annual plan at 38k/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /shared · owner/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^Old$/ })).toBeFalsy()
+  await ui.press({ key: 'ws-team-b' })
+  expect(calls.filter(c => c.tool === 'workspace_read').map(c => c.args.path ?? null)).toEqual([null, 'README.md'])
+  await ui.press({ key: 'ws-f-decisions.md' })
+  expect(calls.at(-1)?.args).toEqual({ workspace: 'team', path: 'decisions.md' })
 
   await ui.press({ key: 'nav-calls' })
-  await ui.press({ key: 'call-7' })
+  await ui.press({ key: 'call-7-b' })
+  expect(await ui.find({ type: 'Text', text: /← Calls/ })).toBeTruthy()
   await ui.press({ key: 'nav-workspaces' })
-  await ui.press({ key: 'bind-team' })
+  await ui.press({ key: 'ws-team-b' })
+  await ui.press({ key: 'ws-bind' })
   expect(calls.find(c => c.tool === 'meeting_bind_workspace')?.args).toEqual({ platform: 'google_meet', native_meeting_id: 'abc-defg-hij', workspace: 'team' })
   await ui.unmount()
 })
