@@ -20,9 +20,9 @@ import type { Register } from 'claude-code'
 import type { AppInfo, Call, Calendar, Calls, Flash, Listener, Meeting, Seg, Upcoming, View, Workspace, Workspaces } from '../types'
 import {
   DECIDE_MAX_TOKENS, DECIDE_SYSTEM, FALLBACK_APP, briefFor, buildApp, calibrationSummary, decidePrompt, isDirect,
-  MAP_SYSTEM, norm, normalize, parseDecision, parseManifest, parseMap, ruleHit, rulesText, triggerWords,
+  DEFAULT_MODELS, EMPTY_MAP, MAP_SYSTEM, TRIAGE_SYSTEM, norm, normalize, parseDecision, parseManifest, parseMap, parseTriage, renderMap, ruleHit, rulesText, triggerWords,
 } from './listener'
-import type { App, Labelled, MapPass, Row } from './listener'
+import type { App, CallMap, Labelled, Models, Row } from './listener'
 
 const PANE = 'vexa-home'
 const SERVER_KEY = 'vexa'
@@ -133,7 +133,6 @@ async function updateFlash($: any, fn: (f: Flash) => Flash): Promise<void> {
   }
 }
 
-const FILTER_MODEL = 'haiku'
 const WAKE_GAP_MS = 45_000
 const FOLLOW_MS = 25_000
 const MAX_WAKES = 30
@@ -559,6 +558,7 @@ async function listen($: any): Promise<void> {
   auditCount = heard.length
   await updateListener($, x => ({ ...x, offer: null, isOn: true, triaged: heard.slice(-500), wakes: [], lastWakeAt: 0, error: '' }))
   await writeState($, 'listening')
+  listenedSince = await $.clock.now()
   void $.prompt.submit({
     text: `[Vexa listener] The person pressed Listen on "${room.title}" (${room.platform} ${room.nativeId}). `
       + `I watch its transcript and wake you when something matters under the "${l.preset}" listen brief. `
@@ -591,8 +591,7 @@ async function setPreset($: any, preset: string): Promise<void> {
 
 async function decide($: any, rules: string, context: string[], fresh: string[]): Promise<{ wake: boolean; reason: string; ms: number }> {
   const t0 = await $.clock.now()
-  const r = await $.model.complete({
-    model: FILTER_MODEL,
+  const r = await complete($, 'filter', {
     maxTokens: DECIDE_MAX_TOKENS,
     system: [{ text: DECIDE_SYSTEM, cache: true }, { text: `Rules: ${rules}`, cache: true }],
     prompt: decidePrompt(context, fresh),
@@ -698,14 +697,32 @@ async function flush($: any): Promise<void> {
   busy = true
   await setFlash($, 'sent')
   const m = await read($)
-  // Founder, 24 Oct: a wake is a signal, not an order. Only a direct address carries the lines and
-  // asks for an answer; otherwise Claude gets the trigger and decides whether to read on.
-  const text = direct
-    ? `[Vexa listener] ${reasons}\n\nFrom the live meeting "${m.title || m.nativeId}" (${m.platform} ${m.nativeId}):\n${lines.join('\n')}\n\nThis was addressed to you: answer briefly.`
-    : `[Vexa listener · signal] ${reasons} — ${m.platform} ${m.nativeId}\n\nYou decide: if this may matter to the person, read the transcript `
-      + `(get_meeting_transcript, since_index=${index}) and react briefly; if not, let it pass with a single «·». `
-      + `Tune the listener with ${CONFIGURE} if signals like this are noise.`
-  void $.prompt.submit({ text })
+  // Founder, 24 Oct: a wake is a signal, not an order. A direct address goes straight to the main
+  // chat with the lines; any other signal first goes to the triage model in the plugin, and only a
+  // yes reaches the main chat, as one line with where to read.
+  if (direct) {
+    void $.prompt.submit({ text: `[Vexa listener] ${reasons}\n\nFrom the live meeting "${m.title || m.nativeId}" (${m.platform} ${m.nativeId}):\n${lines.join('\n')}\n\nThis was addressed to you: answer briefly.` })
+    return
+  }
+  let verdict = { yes: false, line: '' }
+  try {
+    const l = await readListener($)
+    const r = await complete($, 'triage', {
+      maxTokens: 60,
+      system: [{ text: TRIAGE_SYSTEM, cache: true }, { text: `Listen rules: ${rulesText(l.brief)}`, cache: true }],
+      prompt: `Trigger: ${reasons}\nRecent lines:\n${lines.slice(-8).join('\n')}`,
+    })
+    if (r.isAnswered) verdict = parseTriage(r.text)
+  } catch { verdict = { yes: false, line: '' } }
+  if (!verdict.yes) {
+    busy = false
+    await setFlash($, 'done')
+    return
+  }
+  void $.prompt.submit({
+    text: `[Vexa listener · signal] ${reasons}: ${verdict.line} — ${m.platform} ${m.nativeId} (get_meeting_transcript since_index=${index}). `
+      + `Look only if it matters; otherwise let it pass with a single «·».`,
+  })
 }
 
 // Judges the tail of the transcript, drafts included, whenever it changes. A rule trigger wakes
@@ -756,7 +773,7 @@ async function triage($: any): Promise<void> {
       wakes: canWake ? [...x.wakes, { at: new Date(now).toISOString().slice(11, 19), reason: v.reason }].slice(-20) : x.wakes,
     }))
     if (canWake) {
-      wokeAt = now
+      mapDirty = true
       await setFlash($, 'woke', triggerWords(v.reason))
       batch.push({ reason: v.reason, lines: [...context.slice(-2), ...lines], direct, index: Math.max(0, m.segments.length - fresh.length) })
       await flush($)
@@ -815,7 +832,7 @@ async function calibrate($: any, rules: string, fixture: string): Promise<unknow
   }
   const summary = calibrationSummary(rows)
   const misses = rows.filter(r => r.expected !== r.got).map(r => `${r.got ? 'FALSE WAKE' : 'MISSED'}: «${r.text}»`)
-  return { fixture: path, model: FILTER_MODEL, summary, misses }
+  return { fixture: path, model: models.filter, summary, misses }
 }
 
 // The main Claude's control: read the listener, change its brief, or stop it. Starting is the
@@ -828,6 +845,17 @@ async function configure($: any, input: any): Promise<unknown> {
   if (action === 'stop') {
     await stopListening($)
     return { listening: false }
+  }
+  if (input.models && typeof input.models === 'object') {
+    const next = { ...models }
+    for (const k of ['filter', 'writer', 'triage'] as const) {
+      if (typeof input.models[k] === 'string' && input.models[k].trim()) next[k] = input.models[k].trim()
+    }
+    models = next
+    try { await $.store.set('models', models) } catch { /* kept for this session */ }
+    if (action === 'status' || (!input.preset && !input.rules && !input.focus && !input.labels && !input.triggers && !input.known)) {
+      return { models, spend: await spendReport($) }
+    }
   }
   if (action === 'update') {
     const preset = typeof input.preset === 'string' && app.presets[input.preset] ? input.preset : l.preset
@@ -842,7 +870,7 @@ async function configure($: any, input: any): Promise<unknown> {
     await updateListener($, x => ({ ...x, preset, brief }))
     return { listening: l.isOn, meeting, preset, brief }
   }
-  return { listening: l.isOn, meeting, offer: l.offer, preset: l.preset, presets: l.app.presets, app: l.app.name, appFolder: appDir, brief: l.brief, wakes: l.wakes, lastVerdict: l.lastVerdict }
+  return { listening: l.isOn, meeting, offer: l.offer, preset: l.preset, presets: l.app.presets, app: l.app.name, appFolder: appDir, brief: l.brief, wakes: l.wakes, lastVerdict: l.lastVerdict, spend: await spendReport($) }
 }
 
 // The person's answer to «where should I keep what I learn», saved by Claude in chat. Cloud also
@@ -910,19 +938,44 @@ function startRequests($: any): void {
   quiet(loop())
 }
 
+// --- Models per job, and what each job spends ---------------------------------------------------
+// filter (wake or skip + trigger), writer (the live map), triage (is a signal worth the person's
+// attention): each runs in the plugin through Claude Code's model access, so the main chat spends
+// nothing on them. Changed from chat with listener_configure; kept across sessions.
+let models: Models = DEFAULT_MODELS
+type Spend = { calls: number; input: number; output: number }
+const spend: Record<keyof Models, Spend> = { filter: { calls: 0, input: 0, output: 0 }, writer: { calls: 0, input: 0, output: 0 }, triage: { calls: 0, input: 0, output: 0 } }
+let listenedSince = 0
+
+async function complete($: any, job: keyof Models, request: Record<string, unknown>): Promise<any> {
+  const r = await $.model.complete({ model: models[job], ...request })
+  const u: any = r.usage ?? {}
+  spend[job].calls += 1
+  spend[job].input += Number(u.inputTokens ?? u.input_tokens ?? 0) + Number(u.cacheReadInputTokens ?? 0) + Number(u.cacheCreationInputTokens ?? 0)
+  spend[job].output += Number(u.outputTokens ?? u.output_tokens ?? 0)
+  return r
+}
+
+async function spendReport($: any): Promise<Record<string, unknown>> {
+  const hours = listenedSince ? Math.max(1 / 60, ((await $.clock.now()) - listenedSince) / 3_600_000) : 0
+  const per = (x: Spend) => ({ ...x, tokens_per_hour: hours ? Math.round((x.input + x.output) / hours) : null })
+  return { models, listened_minutes: Math.round(hours * 60), filter: per(spend.filter), writer: per(spend.writer), triage: per(spend.triage) }
+}
+
 // --- The live map ---------------------------------------------------------------------------
-// While the person listens (unless they said «only when I ask»), at most every MAP_EVERY_MS of new
-// transcript and soon after a wake, a small-model pass extracts people, companies, projects,
-// decisions and their relations; the plugin upserts them into the personal workspace (by its own
-// rules, read once) and keeps one meeting page that links them, finalized as the call report.
-const MAP_EVERY_MS = 120_000
-const MAP_AFTER_WAKE_MS = 30_000
+// While the person listens (unless they said «only when I ask»): every filter hit marks the map
+// dirty and the writer runs within MAP_AFTER_HIT_MS; MAP_SWEEP_MS is a safety sweep for what the
+// filter missed. Each pass merges the new transcript into the call's map and writes the README onto
+// the meeting's page (its note page, else calls/<date>-<id>.md in personal) and the changed people
+// and companies as linked cards in personal. The personal workspace's own rules go with the pass.
+const MAP_AFTER_HIT_MS = 15_000
+const MAP_SWEEP_MS = 120_000
 const MAP_MIN_LINES = 3
-type MapRun = { mapped: Set<string>; lastAt: number; page: string; attached: boolean; people: Set<string>; companies: Set<string>; others: Set<string>; title: string }
+type MapRun = { data: CallMap; lastIdx: number; lastAt: number; path: string; notePath: string; sent: Set<string>; title: string; found: boolean }
 const maps = new Map<number, MapRun>()
 let mapping = false
+let mapDirty = false
 let workspaceRules: string | null = null
-let wokeAt = 0
 
 function mapAllowed(): boolean {
   return settings.write !== 'ask'
@@ -941,51 +994,58 @@ async function mapStep($: any, final: boolean): Promise<void> {
   const m = await read($)
   const l = await readListener($)
   if (mapping || !m.dbId || m.isDemo || !mapAllowed() || !(l.isOn || final)) return
-  const run = maps.get(m.dbId) ?? { mapped: new Set<string>(), lastAt: 0, page: '', attached: false, people: new Set<string>(), companies: new Set<string>(), others: new Set<string>(), title: m.title || `${PLATFORM[m.platform] ?? m.platform} call` }
   const now = await $.clock.now()
-  const fresh = m.segments.filter(x => !x.pending && x.id && !run.mapped.has(x.id))
-  const due = final || now - run.lastAt >= MAP_EVERY_MS || (wokeAt > run.lastAt && now - wokeAt >= MAP_AFTER_WAKE_MS)
-  if (!due || (fresh.length < MAP_MIN_LINES && !(final && fresh.length))) return
+  const day = new Date(now).toISOString().slice(0, 10)
+  const run = maps.get(m.dbId) ?? {
+    data: EMPTY_MAP, lastIdx: 0, lastAt: 0, notePath: '', sent: new Set<string>(), found: false,
+    title: m.title || `${PLATFORM[m.platform] ?? m.platform} call`,
+    path: `calls/${day}-${m.nativeId.replace(/[^a-zA-Z0-9-]/g, '-')}.md`,
+  }
+  const segs = m.segments.filter(x => !x.pending && x.text)
+  const since = now - run.lastAt
+  const due = final || (mapDirty ? since >= MAP_AFTER_HIT_MS : since >= MAP_SWEEP_MS && segs.length - run.lastIdx >= MAP_MIN_LINES)
+  if (!due || segs.length <= run.lastIdx) return
+  mapDirty = false
   mapping = true
   maps.set(m.dbId, run)
   try {
-    run.lastAt = now
     const rules = await rulesForPersonal($)
-    const day = new Date(now).toISOString().slice(0, 10)
-    const r = await $.model.complete({
-      model: FILTER_MODEL,
-      maxTokens: 1500,
+    const slice = segs.slice(run.lastIdx).slice(-150).map(x => `[${x.time}] ${x.speaker}: ${x.text}`).join('\n')
+    const r = await complete($, 'writer', {
+      maxTokens: 2000,
       system: [{ text: MAP_SYSTEM, cache: true }, ...(rules ? [{ text: `The workspace's own rules (they win):\n${rules}`, cache: true }] : [])],
-      prompt: fresh.map(x => `[${x.time}] ${x.speaker}: ${x.text}`).join('\n'),
+      prompt: `Current map:\n${JSON.stringify(run.data)}\n\nNew transcript:\n${slice}`,
     })
-    fresh.forEach(x => run.mapped.add(x.id))
-    if (!r.isAnswered) return
-    const pass: MapPass = parseMap(r.text)
-    const source = `${day} call «${run.title}» (meeting ${m.dbId})`
-    for (const e of pass.entities) {
-      quiet(call($, 'entity_upsert', { kind: e.kind, name: e.name, facts: e.facts, source, slug: 'personal', fields: e.fields, connections: e.connections }))
-      ;(e.kind === 'person' ? run.people : e.kind === 'company' ? run.companies : run.others).add(e.name)
+    run.lastAt = await $.clock.now()
+    const j = r.isAnswered ? parseMap(r.text) : null
+    if (!j) return
+    run.data = j
+    run.lastIdx = segs.length
+    run.found = run.found || j.people.length + j.companies.length > 0
+    // 1) The call's README goes on the meeting's own page (the app shows it as Notes).
+    if (!run.notePath) {
+      try {
+        const g = await call($, 'get_meeting', { meeting_db_id: m.dbId })
+        run.notePath = String(g?.data?.metadata?.note_path ?? g?.metadata?.note_path ?? '')
+      } catch { /* the personal calls/ page below */ }
     }
-    const page = await call($, 'entity_upsert', {
-      kind: 'meeting', name: `${day} ${run.title}`, slug: 'personal', source,
-      dates: { held_at: day },
-      fields: {
-        participants: [...run.people].join(', '),
-        ...(pass.decided.length ? { decided: pass.decided.join('; ') } : {}),
-        ...(pass.committed.length ? { committed: pass.committed.join('; ') } : {}),
-      },
-      facts: pass.numbers.map(n => `Number mentioned: ${n}`),
-      connections: [...run.people, ...run.companies, ...run.others].map(name => ({ name, relation: 'discussed in' })),
-      open_questions: pass.open_questions,
-    })
-    run.page = String(page?.path ?? run.page)
-    if (run.page && !run.attached) {
-      run.attached = true
-      quiet(call($, 'meeting_attach_page', { path: run.page, workspace: '', meeting_id: String(m.dbId) }))
+    const readme = (j.readme || renderMap(run.title, j)).slice(0, 1500)
+    if (run.notePath) await call($, 'workspace_write', { path: run.notePath, content: readme })
+    else await call($, 'workspace_write', { path: run.path, content: readme, slug: 'personal' })
+    // 2) People and companies become linked cards in personal (only what changed).
+    const source = `call ${day} «${run.title}» (meeting ${m.dbId})`
+    const cards = [
+      ...j.people.map(x => ({ kind: 'person', name: x.name, fact: [x.role, x.org, x.notes].filter(Boolean).join(', '), fields: { ...(x.role ? { role: x.role } : {}), ...(x.org ? { company: x.org } : {}) } })),
+      ...j.companies.map(x => ({ kind: 'company', name: x.name, fact: [x.what, x.notes].filter(Boolean).join('. '), fields: x.what ? { what: x.what } : {} })),
+    ].filter(c => c.name && c.fact)
+    for (const c of cards.slice(0, 12)) {
+      const sig = `${c.kind}|${c.name}|${c.fact}`
+      if (run.sent.has(sig)) continue
+      run.sent.add(sig)
+      const connections = j.relations.filter(x => x.from === c.name).map(x => ({ name: x.to, relation: x.rel }))
+      quiet(call($, 'entity_upsert', { kind: c.kind, name: c.name, facts: [c.fact], fields: c.fields, connections, source, slug: 'personal' }))
     }
-    if (final) {
-      $.ui.log(`Updated your map: ${run.people.size} people, ${run.companies.size} companies${run.others.size ? `, ${run.others.size} more` : ''}${run.page ? ` · ${run.page}` : ''}`)
-    }
+    if (final && run.found) $.ui.log(`Updated your map: ${j.people.length} people, ${j.companies.length} companies`)
   } catch (err) {
     await updateListener($, x => ({ ...x, error: `map: ${message(err)}` }))
   } finally {
@@ -1021,6 +1081,11 @@ const CONFIGURE_SCHEMA = {
     triggers: { ...TRIGGERS_SCHEMA, description: 'Instant triggers that wake you with no model call: a keyword, a speaker name, or a regex.' },
     known: { type: 'string', maxLength: 8000, description: 'What you already know or do not want to hear about again.' },
     labels: { type: 'array', items: { type: 'object', required: ['name'], properties: { name: { type: 'string' }, question: { type: 'string' }, wake: { type: 'boolean' } } }, description: 'Extra things to wake on, each a named question (signals.v1 labels).' },
+    models: {
+      type: 'object',
+      description: 'Which model each listener job uses (haiku, sonnet, opus or a full id): filter = wake or skip, writer = the live map into the personal workspace, triage = whether a signal deserves the person now. «Use haiku for notes» = {writer: "haiku"}. Status shows them and the tokens each job spent per listened hour.',
+      properties: { filter: { type: 'string' }, writer: { type: 'string' }, triage: { type: 'string' } },
+    },
   },
 }
 
@@ -1514,6 +1579,10 @@ export const register: Register = (on, options) => {
       } },
     })
     try {
+      const savedModels = await $.store.get('models')
+      if (savedModels && typeof savedModels === 'object') models = { ...DEFAULT_MODELS, ...(savedModels as Models) }
+    } catch { /* defaults */ }
+    try {
       const saved = await $.store.get('settings')
       if (saved && typeof saved === 'object') settings = { ...NO_SETTINGS, ...(saved as Settings) }
     } catch { /* no saved choice: the context asks for one */ }
@@ -1524,7 +1593,7 @@ export const register: Register = (on, options) => {
       polling = true
       $.clock.every(1500, () => quiet((async () => { await poll($); await findLive($) })()))
       $.clock.every(3000, () => quiet(followWeb($)))
-      $.clock.every(15_000, () => quiet(mapStep($, false)))
+      $.clock.every(5000, () => quiet(mapStep($, false)))
       // Signing in happens in /mcp, outside the pane: notice it without a button press.
       $.clock.every(5000, async () => {
         try { if ((await read($)).connection !== 'ready') await connect($) } catch { /* the next tick tries again */ }

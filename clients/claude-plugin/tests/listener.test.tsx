@@ -11,11 +11,11 @@ const BAND = {
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 const seg = (id: string, speaker: string, t: string, completed = true) => ({ segment_id: id, speaker, text: t, completed, absolute_start_time: '2026-10-24T12:00:00Z' })
 
-type Seen = { tools: string[]; model: string[]; prompts: string[]; written: Record<string, string>; annotations: any[]; maps: string[]; upserts: any[]; logs: string[] }
+type Seen = { tools: string[]; model: string[]; prompts: string[]; written: Record<string, string>; annotations: any[]; maps: string[]; upserts: any[]; logs: string[]; triage: string[]; pages: any[] }
 const meta: Record<string, unknown> = {}
 
-function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<string, string> = {}, live?: (() => unknown[]) | 'strict'): Seen {
-  const seen: Seen = { tools: [], model: [], prompts: [], written: {}, annotations: [], maps: [], upserts: [], logs: [] }
+function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<string, string> = {}, live?: (() => unknown[]) | 'strict', triage = 'YES check the annual plan'): Seen {
+  const seen: Seen = { tools: [], model: [], prompts: [], written: {}, annotations: [], maps: [], upserts: [], logs: [], triage: [], pages: [] }
   on('ui.log', (_: unknown, e: any) => { seen.logs.push(String(e.text ?? e)); return { value: undefined } })
   for (const k of Object.keys(meta)) delete meta[k]
   on('command.register', () => ({ value: { command: 'vexa' } }))
@@ -40,6 +40,7 @@ function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<s
       const from = Number(e.args?.since_index ?? 0)
       return { value: text({ status: 'active', since_index: from, next_index: all.length, segments: all.slice(from) }) }
     }
+    if (e.tool === 'workspace_write') { seen.pages.push(e.args); return { value: text({ path: e.args.path, written: true }) } }
     if (e.tool === 'entity_upsert') { seen.upserts.push(e.args); return { value: text({ path: e.args.kind === 'meeting' ? 'kg/entities/meeting/x.md' : `kg/entities/${e.args.kind}/y.md` }) } }
     if (e.tool === 'annotate_meeting') { Object.assign(meta, e.args.metadata); seen.annotations.push({ ...e.args.metadata }); return { value: text({ ok: true }) } }
     if (e.tool === 'get_meeting') return { value: text({ id: 41, data: { metadata: { ...meta } } }) }
@@ -47,13 +48,18 @@ function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<s
     return { value: text({}) }
   })
   on('model.complete', (_: unknown, e: any) => {
-    if (JSON.stringify(e.system ?? '').includes('knowledge map')) {
+    const sys = JSON.stringify(e.system ?? '')
+    if (sys.includes('knowledge map')) {
       seen.maps.push(String(e.prompt))
-      return { value: { isAnswered: true, text: JSON.stringify({ entities: [
-        { kind: 'person', name: 'Ann Lee', facts: ['Ann leads procurement at [[Acme]].'], fields: { role: 'Procurement lead', company: 'Acme' }, connections: [{ name: 'Acme', relation: 'works at' }] },
-        { kind: 'company', name: 'Acme', facts: ['Acme is renewing for a year.'], fields: {}, connections: [] },
-        { kind: 'weird', name: 'X', facts: [] },
-      ], decided: ['Annual plan at 38k'], committed: ['Bob: contract by Friday'], numbers: ['38k'], open_questions: ['Who is Zed?'] }), usage: { inputTokens: 1, outputTokens: 1 } } }
+      return { value: { isAnswered: true, text: JSON.stringify({
+        people: [{ name: 'Ann Lee', role: 'Procurement lead', org: 'Acme' }], companies: [{ name: 'Acme', what: 'renewing for a year' }],
+        relations: [{ from: 'Ann Lee', rel: 'works at', to: 'Acme' }], decisions: ['Annual plan at 38k'], numbers: [{ what: 'price', value: '38k' }],
+        open_questions: ['Who is Zed?'], readme: '# Acme renewal\nAnn Lee ([[Acme]]) agreed the annual plan at 38k.',
+      }), usage: { inputTokens: 900, outputTokens: 300 } } }
+    }
+    if (sys.includes('deserves the attention')) {
+      seen.triage.push(String(e.prompt))
+      return { value: { isAnswered: true, text: triage, usage: { inputTokens: 200, outputTokens: 10 } } }
     }
     seen.model.push(String(e.prompt))
     return { value: { isAnswered: true, text: decision, usage: { inputTokens: 1, outputTokens: 1 } } }
@@ -110,7 +116,8 @@ test('after Listen, a new line the filter flags wakes the main Claude once; the 
   expect(seen.model.at(-1)).not.toMatch(/NEW:\nAnn: Morning/)
   expect(seen.prompts.filter(p => p.includes('annual plan decision')).length).toBe(1)
   const signal = seen.prompts.find(p => p.includes('annual plan decision'))!
-  expect(signal).toMatch(/^\[Vexa listener · signal\] annual plan decision — google_meet abc-defg-hij/)
+  expect(signal).toMatch(/^\[Vexa listener · signal\] annual plan decision: check the annual plan — google_meet abc-defg-hij/)
+  expect(seen.triage.length).toBe(1)
   expect(signal).toMatch(/since_index=1/)
   expect(signal).not.toMatch(/We decided to go with the annual plan/)
   expect((await ui.find({ type: 'Text', text: /annual plan decision/ }))?.text).toBe('annual plan decision')
@@ -207,16 +214,32 @@ test('while listening, the live map upserts people and companies into personal a
   lines = [...lines, seg('2', 'Ann', 'I lead procurement at Acme.'), seg('3', 'Bob', 'We agreed the annual plan at 38k.'), seg('4', 'Bob', 'I will send the contract by Friday.')]
   await clock.advance(121_500)
   expect(seen.maps.length).toBe(1)
+  expect(seen.maps[0]).toMatch(/Current map:/)
   expect(seen.maps[0]).toMatch(/procurement at Acme/)
+  expect(seen.pages.at(-1)).toMatchObject({ slug: 'personal', content: expect.stringMatching(/annual plan at 38k/) })
+  expect(seen.pages.at(-1).path).toMatch(/^calls\/\d{4}-\d{2}-\d{2}-abc-defg-hij\.md$/)
   const kinds = seen.upserts.map(u => `${u.kind}:${u.name}`)
-  expect(kinds).toEqual(expect.arrayContaining(['person:Ann Lee', 'company:Acme']))
-  expect(kinds.some(k => k.startsWith('weird'))).toBe(false)
-  expect(seen.upserts.every(u => u.slug === 'personal' && /meeting 41/.test(u.source))).toBe(true)
-  const page = seen.upserts.find(u => u.kind === 'meeting')
-  expect(page.fields).toMatchObject({ participants: 'Ann Lee', decided: 'Annual plan at 38k', committed: 'Bob: contract by Friday' })
-  expect(page.open_questions).toEqual(['Who is Zed?'])
-  expect(seen.tools).toContain('meeting_attach_page')
-  expect(seen.prompts.some(p => p.includes('Updated your map'))).toBe(false)
+  expect(kinds).toEqual(['person:Ann Lee', 'company:Acme'])
+  expect(seen.upserts[0]).toMatchObject({ slug: 'personal', fields: { role: 'Procurement lead', company: 'Acme' }, connections: [{ name: 'Acme', relation: 'works at' }] })
+  expect(seen.upserts.every(u => /meeting 41/.test(u.source))).toBe(true)
+  const r: any = await $.tool.call({ tool: 'mcp__vexa__listener_configure', models: { writer: 'haiku' } } as any)
+  expect(r.result.models).toEqual({ filter: 'haiku', writer: 'haiku', triage: 'sonnet' })
+  expect(r.result.spend.writer).toMatchObject({ calls: 1, input: 900, output: 300 })
+  await ui.unmount()
+})
+
+test('a signal the triage model calls not worth it never reaches the main chat', async ($, on) => {
+  const clock = mock.clock(on)
+  let lines = [seg('1', 'Ann', 'Morning all.')]
+  const seen = engine(on, () => lines, 'W weather chat', {}, undefined, 'NO')
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await clock.advance(31_500)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await ui.press({ key: 'listen' })
+  lines = [...lines, seg('2', 'Bob', 'Lovely weather today.')]
+  await clock.advance(1_500)
+  expect(seen.triage.length).toBe(1)
+  expect(seen.prompts.filter(p => p.includes('signal'))).toEqual([])
   await ui.unmount()
 })
 
