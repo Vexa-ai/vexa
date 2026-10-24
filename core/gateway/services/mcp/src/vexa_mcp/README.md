@@ -20,6 +20,9 @@ The MCP service logic, injectable. Public surface is `__init__.py`: **`create_ap
   deployed domain's `mcp.tools.v1` manifest validated, discovered over HTTP, bound to the domain's
   own OpenAPI, and registered as one route per tool (a domain that declares `forward` is called
   back through the gateway).
+- **`calendar_tools.py`** · **`workspace_tools.py`** — `calendar_status`, `calendar_connect`,
+  `set_auto_join` and `meeting_bind_workspace`: compositions of public routes, registered from
+  `create_app` with one call each, with their MCP annotations (`ANNOTATIONS`, the #1852 shape).
 - **`features.py`** — `VEXA_FEATURES` at the edge, read at boot: `browser_bots` off ⇒ the three
   bot-account tools are not registered; `crm` off ⇒ no assembled `crm` tool is. Empty (the release
   default) is both off; `all` is both on. The parse is agent-api's, copied.

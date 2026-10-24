@@ -93,6 +93,10 @@ manifest `note` says which); `parse_meeting_link` and `report_issue` are edge lo
 | `get_meeting_chat` | `GET /bots/{platform}/{native}/chat` |
 | `list_recordings` | `GET /recordings` |
 | `report_issue` | `GET /meetings` to authenticate the caller, then the ticket is POSTed to `VEXA_TICKET_SINK_URL` |
+| `calendar_status` | `GET /user/calendars` + `GET /user/calendar/sync` + `GET /meetings?status=scheduled` (`src/vexa_mcp/calendar_tools.py`) |
+| `calendar_connect` | no hop — `VEXA_CALENDAR_CONNECT_URL`, the page where the person connects a calendar; takes no arguments |
+| `set_auto_join` | `PATCH /meetings/{id}` `{auto_join}`, or `PATCH /user/calendars/{id}` + `POST /user/calendars/{id}/sync` per calendar |
+| `meeting_bind_workspace` | agent domain only (`src/vexa_mcp/workspace_tools.py`): `GET /meetings/{id}`, `GET /agent/workspace/shared`, for a shared workspace `PATCH /meetings/{id}` `{workspace_id}` (409 → `POST /meetings/{p}/{n}/workspace`), `GET`/`PUT /agent/workspace/file`, `POST /agent/meeting/note/attach` |
 
 **Zoom URLs `parse_meeting_link` accepts:** `zoom.us` and any subdomain of it (`us02web.`, a company vanity subdomain) plus `zoomgov.com`, on `/j/<id>`, `/w/<id>` or `/wc/join/<id>`, passcode read from `?pwd=` or `?password=`; **and** a tenancy fronted on an organisation's OWN hostname, which carries no "zoom" anywhere — any host whose path is `/meeting/<10-11 digits>` or `/j/<10-11 digits>` **and** which carries `?password=` or `?pwd=` (e.g. `https://zoom-lfx.platform.linuxfoundation.org/meeting/<id>?password=<uuid>`), answered with a warning saying the platform was read from the path shape rather than recognised from the host. `/my/<personal-room>` and `events.zoom.us` links are refused 422 with the reason.
 

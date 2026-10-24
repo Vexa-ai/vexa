@@ -64,6 +64,15 @@
       ]
     },
     {
+      "key": "VEXA_CALENDAR_CONNECT_URL",
+      "class": "defaulted",
+      "default": "(empty)",
+      "description": "The page on this deployment's site where a person connects a calendar (its secret iCal address) so the bot joins their meetings by itself. `calendar_connect` hands it to the agent to give the person; the address is typed there, never through a tool. Empty: the tool says where in Vexa's settings to go instead.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
       "key": "ADMIN_API_URL",
       "class": "capability",
       "capability": "assembly",

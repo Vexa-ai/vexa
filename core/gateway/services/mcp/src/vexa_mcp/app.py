@@ -34,12 +34,14 @@ from fastapi_mcp import FastApiMCP
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from . import bind as bind_mod
+from . import calendar_tools as calendar_tools_mod
 from . import discover as discover_mod
 from . import features as features_mod
 from . import notices as notices_mod
 from . import obs as obs_mod
 from . import reentry as reentry_mod
 from . import register as register_mod
+from . import workspace_tools as workspace_tools_mod
 from .link_parser import ParseMeetingLinkResponse, parse_meeting_url
 from .paths import path_segment
 from .prompts import PROMPTS, get_prompt_result
@@ -1447,6 +1449,12 @@ def create_app(
             ack["url"] = ticket_url
         return ack
 
+    # CALENDAR AND WORKSPACE TOOLS — compositions of public routes, in their own modules
+    # (`calendar_tools.py`, `workspace_tools.py`); the workspace binding only where agents run.
+    calendar_tools_mod.install(app, base_url=base_url, make_request=make_request, get_api_key=get_api_key)
+    if (assembly_env if assembly_env is not None else os.environ).get("AGENT_API_URL"):
+        workspace_tools_mod.install(app, base_url=base_url, make_request=make_request, get_api_key=get_api_key)
+
     # ---------------------------
     # ASSEMBLY (PRD decision 40) — the tools the DEPLOYED domains declare
     # ---------------------------
@@ -1525,6 +1533,8 @@ def create_app(
         schema = getattr(_tool, "inputSchema", None)
         if isinstance(schema, dict) and schema.get("type") == "object":
             schema.setdefault("additionalProperties", False)
+
+    calendar_tools_mod.annotate(mcp.tools, {**calendar_tools_mod.ANNOTATIONS, **workspace_tools_mod.ANNOTATIONS})
 
     # WHICH TOOLS EACH CALLER IS SHOWN AND MAY CALL (`visibility.py`, VEXA_MCP_TOOLS_*). Innermost on
     # the call path, so a refused call is answered, and then rendered by every wrapper below, exactly

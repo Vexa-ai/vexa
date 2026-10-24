@@ -1,4 +1,4 @@
-"""L1 — the MCP surface: the /mcp mount exists, exactly the 18 built-in tools are exposed (plus
+"""L1 — the MCP surface: the /mcp mount exists, exactly the 21 built-in tools are exposed (plus
 meetings' own when meetings is deployed), and the 4 prompts render."""
 import httpx
 import pytest
@@ -27,6 +27,10 @@ EXPECTED_TOOLS = {
     "browser_session_open",
     "bot_accounts_list",
     "bot_account_verify",
+    # calendar auto-join (`calendar_tools.py`)
+    "calendar_status",
+    "calendar_connect",
+    "set_auto_join",
 }
 
 

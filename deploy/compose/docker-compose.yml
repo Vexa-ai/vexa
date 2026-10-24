@@ -1782,6 +1782,8 @@ services:
       - VEXA_MCP_TOOLS_ALLOW=${VEXA_MCP_TOOLS_ALLOW:-}
       - VEXA_MCP_TOOLS_DENY=${VEXA_MCP_TOOLS_DENY:-}
       - VEXA_MCP_TOOLS_COHORT=${VEXA_MCP_TOOLS_COHORT:-}
+      # Where calendar_connect sends a person to connect a calendar (their site's calendar page).
+      - VEXA_CALENDAR_CONNECT_URL=${VEXA_CALENDAR_CONNECT_URL:-}
       - VEXA_ENV=${VEXA_ENV:-development}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # Same declared-jitsi-hosts setting meeting-api reads — the two parsers must agree.

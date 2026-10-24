@@ -27,7 +27,9 @@ REPO = pathlib.Path(__file__).resolve().parents[5]
 AGENT_MANIFEST = json.loads((REPO / "core" / "agent" / "mcp.tools.v1.json").read_text())
 
 AGENT_OPENAPI = json.loads((REPO / "core" / "agent" / "mcp.tools.v1.openapi.json").read_text())
-BUILT_IN = 18  # 17 less get_bot_status and get_recording, meetings' own since #1783, + the three bot-account tools (ADR-0049)
+BUILT_IN = 21  # 17 less get_bot_status and get_recording, meetings' own since #1783, + the three bot-account tools (ADR-0049), + the three calendar tools
+#: the edge's own tools that exist only where agents run (`workspace_tools.py`: meeting_bind_workspace)
+AGENT_EDGE = 1
 
 
 def _boot(**env):
@@ -60,7 +62,7 @@ def test_a_deployment_with_agent_serves_the_agent_tools_beside_the_built_in_ones
     names = {t.name for t in app.state.mcp.tools}
     declared = {t["name"] for t in AGENT_MANIFEST["tools"]}
     assert declared <= names, f"missing from tools/list: {sorted(declared - names)}"
-    assert len(names) == BUILT_IN + len(declared)
+    assert len(names) == BUILT_IN + AGENT_EDGE + len(declared)
 
 
 def test_a_deployment_without_agent_serves_exactly_the_built_in_tools():
@@ -169,8 +171,8 @@ def test_agent_beside_flows_is_twentyfive_plus_the_agent_tools():
     names = {t.name for t in app.state.mcp.tools}
     n_agent = len(AGENT_MANIFEST["tools"])
     n_flows = 12 + sum(len(ops) for ops in _RPATHS.values()) + len(MAIL_TOOLS)   # one tool per route and method
-    assert len(names) == BUILT_IN + n_flows + n_agent, (
-        f"expected {BUILT_IN} + {n_flows} + {n_agent} = {BUILT_IN + n_flows + n_agent} tools with flows+agent both present, got "
+    assert len(names) == BUILT_IN + AGENT_EDGE + n_flows + n_agent, (
+        f"expected {BUILT_IN} + {AGENT_EDGE} + {n_flows} + {n_agent} = {BUILT_IN + AGENT_EDGE + n_flows + n_agent} tools with flows+agent both present, got "
         f"{len(names)}")
 
 

@@ -51,6 +51,10 @@ The meeting tools, plus four prompts (`vexa.meeting_prep` · `vexa.during_meetin
 | `browser_session_open` | `POST /bot-accounts/sessions` — opens a live browser in which the person signs a bot account in |
 | `bot_accounts_list` | `GET /bot-accounts` |
 | `bot_account_verify` | `POST /bot-accounts/{account_id}/verify` |
+| `calendar_status` | `GET /user/calendars` + `GET /user/calendar/sync` + `GET /meetings?status=scheduled` — the connected calendars, their last sync, and the upcoming meetings with `will_auto_join` (and `why_not`) for each. Read-only |
+| `calendar_connect` | no hop — the page on this deployment's site where the person connects a calendar (`VEXA_CALENDAR_CONNECT_URL`). Takes no arguments: the calendar's secret address is typed there, never through a tool |
+| `set_auto_join` | `PATCH /meetings/{meeting_db_id}` `{auto_join}` for one planned meeting (kept as the person's choice), or `PATCH /user/calendars/{id}` + `POST /user/calendars/{id}/sync` for one calendar or all of them |
+| `meeting_bind_workspace` | with the agent domain: the meeting's page in that workspace (created with `PUT /agent/workspace/file` if missing) attached with `POST /agent/meeting/note/attach`, so the post-meeting report lands there; for a shared workspace the meeting joins it too (`PATCH /meetings/{id}` or `POST /meetings/{platform}/{native}/workspace`) |
 
 A voice note recorded in Minutes is a meeting with `platform: "voice_note"`: `list_meetings`,
 `get_meeting_transcript` and `stop_bot` take it like any meeting. Its audio comes from the person's
@@ -68,11 +72,22 @@ profile for Google, Microsoft or Zoom. `browser_session_open` answers with
 them and the person signs in there themselves — no tool takes or types a password. Once saved, the
 account appears in `bot_accounts_list`, and its `id` goes to `request_meeting_bot` as `bot_account`.
 
+**Calendar auto-join.** A connected calendar (a secret iCal feed, up to ten per person) brings its
+meetings in as planned meetings, and the bot joins each one by itself when it starts unless auto-join
+is off for it. `calendar_status` shows what will happen; `set_auto_join` changes it for one meeting or a
+whole calendar; `calendar_connect` gives the person the link to connect a calendar themselves. The
+calendar routes need the `bot` scope and the meeting list needs `tx`; a `bot`-only key still sees its
+calendars, with `upcoming: null`. See [Calendar sync](/how-to/calendar-sync).
+
+**Who wrote a page.** A page an API key writes (`workspace_write`, `meeting_bind_workspace`) is
+committed with `On-behalf-of: <person>` and `Written-by: agent`, like a worker's; only a write from the
+person's own signed-in session carries no trailer.
+
 ### Tools the deployed domains add
 
 At start-up the server asks each deployed domain for its tool manifest (`mcp.tools.v1`) and serves
 the union beside the tools above — one server, one tool list. With the agent domain deployed that adds
-the workspace tools (reading, and the page verbs `workspace_write`, `workspace_delete`,
+the workspace tools (reading — `workspace_list`, `workspaces`, `workspace_tree`, `workspace_read`, and `workspace_search`, which finds pages by the words in them — and the page verbs `workspace_write`, `workspace_delete`,
 `workspace_move`, `entity_upsert` and `fetch_asset`), repository sync (`workspace_import`,
 `workspace_attach`, `workspace_status`, `workspace_push`, `workspace_pull` — `workspace_status` fetches and reports ahead/behind without changing the workspace; a git token is never a tool argument), the claim book (`propose`, `validate`, `company_context`), the pages panel and the conversation's target (`open_page`, `workspace_target`), membership (`workspace_members`, `workspace_invite`, `workspace_invite_link_create`, `workspace_invite_links`, `workspace_invite_link_revoke`,
 `workspace_membership`, `workspace_member_add`), a chat's people (`chat_participants`,

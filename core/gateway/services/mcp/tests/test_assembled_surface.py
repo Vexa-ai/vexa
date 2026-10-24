@@ -100,7 +100,7 @@ _extend_routines(FLOWS_OPENAPI)
 from _mail_paths import MAIL_PATHS  # noqa: E402
 FLOWS_OPENAPI["paths"].update(MAIL_PATHS)
 
-BUILT_IN = 18  # 17 less get_bot_status and get_recording, meetings' own since #1783, + the three bot-account tools (ADR-0049)
+BUILT_IN = 21  # 17 less get_bot_status and get_recording, meetings' own since #1783, + the three bot-account tools (ADR-0049), + the three calendar tools
 
 
 def _boot(**env):
