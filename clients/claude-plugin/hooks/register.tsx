@@ -292,10 +292,17 @@ async function poll($: any): Promise<void> {
     if (!m.liveFeed) {
       status = await readConfirmed($, m.nextIndex, status)
     } else {
-      const p = await call($, 'get_meeting_transcript', {
-        platform: m.platform, native_meeting_id: m.nativeId, limit: 1, include_pending: true, live_wait_ms: LIVE_WAIT_MS,
-        ...(m.liveCursor ? { live_cursor: m.liveCursor } : {}),
-      })
+      let p: any
+      try {
+        p = await call($, 'get_meeting_transcript', {
+          platform: m.platform, native_meeting_id: m.nativeId, limit: 1, include_pending: true, live_wait_ms: LIVE_WAIT_MS,
+          ...(m.liveCursor ? { live_cursor: m.liveCursor } : {}),
+        })
+      } catch (err) {
+        // A server without the live feed refuses its arguments outright (strict tool schemas).
+        if (!/include_pending|live_wait_ms|live_cursor|unexpected/i.test(message(err))) throw err
+        p = {}
+      }
       status = String(p.status ?? p.meeting_status ?? status)
       if (p.live) {
         const events: any[] = p.live.events ?? []

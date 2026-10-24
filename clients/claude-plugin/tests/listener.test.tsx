@@ -13,7 +13,7 @@ const seg = (id: string, speaker: string, t: string, completed = true) => ({ seg
 
 type Seen = { tools: string[]; model: string[]; prompts: string[]; written: Record<string, string> }
 
-function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<string, string> = {}, live?: () => unknown[]): Seen {
+function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<string, string> = {}, live?: (() => unknown[]) | 'strict'): Seen {
   const seen: Seen = { tools: [], model: [], prompts: [], written: {} }
   on('command.register', () => ({ value: { command: 'vexa' } }))
   on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__vexa__${e.name}` } }))
@@ -25,6 +25,9 @@ function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<s
   on('mcp.call', (_: unknown, e: any) => {
     seen.tools.push(e.tool)
     if (e.tool === 'list_meetings') return { value: text({ meetings: [{ platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'active', data: { title: 'Acme pricing call' } }] }) }
+    if (e.tool === 'get_meeting_transcript' && e.args?.include_pending && live === 'strict') {
+      return { value: { isError: true, content: [{ type: 'text', text: "Input validation error: Additional properties are not allowed ('include_pending', 'live_wait_ms' were unexpected)" }] } }
+    }
     if (e.tool === 'get_meeting_transcript' && e.args?.include_pending && live) {
       return { value: text({ status: 'active', segments: [], live: { events: live(), cursor: 'c', ended: false } }) }
     }
@@ -131,6 +134,21 @@ test('on a deployment with the live feed, drafts come from it and a retract remo
   await clock.advance(1_500)
   expect((await ui.find({ type: 'Text', text: /We decided\./ }))?.text).toBe('We decided.')
   expect(await ui.find({ type: 'Text', text: /^hm$/ })).toBeFalsy()
+  await ui.unmount()
+})
+
+test('a server whose transcript tool refuses the live-feed arguments falls back to confirmed reads', async ($, on) => {
+  const clock = mock.clock(on)
+  let lines: unknown[] = []
+  engine(on, () => lines, undefined, {}, 'strict')
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ plugin: 'vexa', component: 'Pane', requestId: 'vexa-home', surface: 'desktop', props: { title: 'Vexa', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } } as any)
+  await ui.input({ key: 'h-url', text: 'https://meet.google.com/abc-defg-hij' } as any)
+  lines = [seg('a', 'Maya', 'Hi everyone!')]
+  await clock.advance(1_500)
+  await clock.advance(1_500)
+  expect((await ui.find({ type: 'Text', text: /Hi everyone/ }))?.text).toBe('Hi everyone!')
+  expect(await ui.find({ type: 'Text', text: /Additional properties/ })).toBeFalsy()
   await ui.unmount()
 })
 
