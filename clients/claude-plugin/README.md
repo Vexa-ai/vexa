@@ -31,7 +31,7 @@ Install from this repo:
 /plugin install vexa@vexa
 ```
 
-Then sign in: `/mcp` → `plugin:vexa:vexa` → **Authenticate** → sign in → **Allow**. On hosted Vexa that is Google or Microsoft, and a new account starts with $2 of free credit.
+Then talk to Claude: it offers «Sign in? I'll open your browser», runs `claude mcp login plugin:vexa:vexa`, you sign in and press **Allow**, and the Vexa panel opens. On hosted Vexa that is Google or Microsoft, and a new account starts with $2 of free credit.
 
 Your company's own Vexa: set the address at install (`claude plugin install vexa@vexa --config vexa_url=https://vexa.example.com`) or later (`/plugin configure vexa@vexa`); the sign-in is then your company's. Administrators: [`ADMIN.md`](ADMIN.md) covers pushing the address through managed settings, what runs where, every network call and the data.
 

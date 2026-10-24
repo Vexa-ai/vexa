@@ -10,11 +10,8 @@ Setup is a conversation, never a form: check where things stand, ask the ONE nex
 ## 1. Which Vexa, and signed in?
 The plugin talks to the Vexa at `${user_config.vexa_url}` (its MCP server is `${user_config.vexa_url}/mcp`): `https://api.cloud.vexa.ai` is hosted Vexa, the default. A company running its own Vexa sets its address with `/plugin configure vexa@vexa`, the Vexa address row in `/config`, or `claude plugin install vexa@vexa --config vexa_url=https://vexa.example.com`; an administrator can set it for everyone through managed settings (`pluginConfigs`). No trailing slash.
 
-The session context says whether Vexa is connected. If not, tell the person:
-«Type /mcp, choose plugin:vexa:vexa, then Authenticate.» Then: on hosted Vexa, «Sign in with Google or Microsoft and press Allow; a new account starts with $2 of free credit»; on a company's Vexa, «your browser opens your company's Vexa: sign in with your company account (Entra, Okta, …) and press Allow».
-**Hosted Vexa before its sign-in ships:** `/mcp` can't sign in there yet (the pane says «Not connected»). The person creates an API key at https://vexa.ai/account and sets it with `/plugin configure vexa@vexa` → **Vexa API key** (or `claude plugin install vexa@vexa --config vexa_api_key=…`), then restarts Claude Code. Leave that field empty on any Vexa that signs in through `/mcp`.
-
-After installing from a terminal, Claude Code may print «userConfig options not yet set»: both options are optional. Don't send the person to set an API key unless their Vexa has no sign-in (the pane says «Not connected» on hosted Vexa); otherwise sign in through `/mcp`.
+The session context says whether Vexa is connected. If not, say one line: «Vexa is installed. Sign in? I'll open your browser.» On yes, run `claude mcp login plugin:vexa:vexa` with Bash yourself (it opens the browser and waits until sign-in finishes; give it a few minutes). Tell the person what they'll see: on hosted Vexa, «sign in with Google or Microsoft and press Allow; a new account starts with $2 of free credit»; on a company's Vexa, «sign in with your company account (Entra, Okta, …) and press Allow». When it finishes, the plugin notices the sign-in and opens the Vexa panel; confirm in one line and go to step 2. Never send the person to `/mcp`, `/reload-plugins` or plugin settings, and never explain install notices.
+**Hosted Vexa before its sign-in ships** (the session context says hosted Vexa has no sign-in yet): the person needs an API key from https://vexa.ai/account set as the plugin's Vexa API key; never take it in the chat.
 
 Nothing else works until then. Never ask for or accept an API key in the chat.
 
