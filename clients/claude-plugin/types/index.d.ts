@@ -14,8 +14,42 @@ export type Meeting = {
   error: string
 }
 
+// The listen brief, as signals.v1 `Brief` names it (labels, focus, known, wake_at, max_wait_s,
+// rules), so the app's chat and Claude share one rule model.
+export type Label = { name: string; question?: string; wake?: boolean }
+export type Rule = { kind: 'keyword' | 'person' | 'regex'; value: string; wake?: boolean }
+export type Brief = {
+  labels: Label[]
+  focus: string
+  known: string
+  wake_at: number
+  max_wait_s: number
+  rules: Rule[]
+}
+
+export type Room = { platform: string; nativeId: string; title: string }
+export type Line = { speaker: string; text: string }
+export type Wake = { at: string; reason: string; excerpt: string }
+
+// One listener: offered when a meeting is live, running only after the person pressed Listen.
+export type Listener = {
+  offer: Room | null
+  declined: string[]
+  active: Room | null
+  preset: string
+  brief: Brief
+  nextIndex: number
+  context: Line[]
+  buffer: Line[]
+  score: number
+  since: number
+  lastWakeAt: number
+  wakes: Wake[]
+  error: string
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    vexa: { meeting: Meeting }
+    vexa: { meeting: Meeting; listener: Listener }
   }
 }

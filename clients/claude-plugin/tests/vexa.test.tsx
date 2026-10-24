@@ -18,12 +18,14 @@ const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o
 
 function engine(on: any, connect: unknown, calls: { tool: string; args: unknown }[] = []) {
   on('command.register', () => ({ value: { command: 'vexa' } }))
+  on('tool.register', () => ({ value: { tool: 'mcp__vexa__listener_configure' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('mcp.connect', () => ({ value: connect }))
   on('mcp.call', (_: unknown, e: any) => {
     calls.push({ tool: e.tool, args: e.args })
     if (e.tool === 'start_demo_meeting') return { value: text({ platform: 'jitsi', native_meeting_id: 'vexa-demo-1', status: 'requested' }) }
+    if (e.tool === 'list_meetings') return { value: text({ meetings: [] }) }
     if (e.tool === 'get_meeting_transcript') return { value: text({ status: 'active', next_index: 1, segments: [{ speaker: 'Vexa demo', text: 'Hello from the demo', absolute_start_time: '2026-10-24T12:00:01Z' }] }) }
     return { value: text({}) }
   })
