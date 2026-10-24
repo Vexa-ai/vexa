@@ -118,6 +118,7 @@ import { listProposals, resolveProposal, type DeskProposal } from "../surfaces/p
 import { ProposalChips } from "./ProposalChips";
 import { AdminHome } from "./AdminHome";
 import { ClaudeAccountHome } from "./ClaudeAccountHome";
+import { useAccountMode } from "../platform/accountMode";
 import { EdgeHandle, ShellToggle } from "./Collapse";
 import { Drawer, Sheet, Splitter, useShellLayout } from "../ui-kit";
 import { CallDock } from "./CallDock";
@@ -2366,23 +2367,18 @@ export function MinutesShell() {
   // Nothing hangs on it being right — the server confines the admin account and refuses everybody
   // else's `_global` writes either way — so it is a probe, not a gate.
   const [isAdminAccount, setIsAdminAccount] = useState(false);
-  // «VEXA FOR CLAUDE» (identity.v1 `account_mode`, founder 2026-10-24): Vexa runs no agent for this
-  // account, so the centre holds its calls and workspaces instead of an agent chat. Only a literal
-  // `claude` counts; the server refuses the agent turns either way.
-  const [claudeAccount, setClaudeAccount] = useState(false);
   useEffect(() => {
     let active = true;
     void fetch("/api/auth/me", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (!active) return;
-        const me = d as { admin_account?: boolean; account_mode?: string } | null;
-        setIsAdminAccount(me?.admin_account === true);
-        setClaudeAccount(me?.account_mode === "claude");
-      })
+      .then((d) => { if (active) setIsAdminAccount((d as { admin_account?: boolean } | null)?.admin_account === true); })
       .catch(() => undefined);
     return () => { active = false; };
   }, []);
+  // «VEXA FOR CLAUDE» (identity.v1 `account_mode`, founder 2026-10-24): Vexa runs no agent for this
+  // account, so the centre holds its calls and workspaces instead of an agent chat. Only a literal
+  // `claude` counts; the server refuses the agent turns either way.
+  const claudeAccount = useAccountMode() === "claude";
 
   const [signedInAs, setSignedInAs] = useState<string | null>(null);
   useEffect(() => {
