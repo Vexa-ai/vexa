@@ -1,8 +1,8 @@
 {
   "name": "vexa",
   "displayName": "Vexa",
-  "version": "0.2.9-rc",
-  "description": "Send a bot to a Google Meet, Teams or Zoom call and follow the live transcript beside the chat. Nothing to configure where your Vexa offers sign-in: type /mcp, choose plugin:vexa:vexa, Authenticate. Optional settings: your company's Vexa address; an API key only for a Vexa without sign-in yet.",
+  "version": "0.2.10-rc",
+  "description": "Send a bot to a Google Meet, Teams or Zoom call and follow the live transcript beside the chat. Nothing to configure: Claude offers to sign you in and opens your browser. Optional settings: your company's Vexa address; an API key only for a Vexa without sign-in yet.",
   "author": {
     "name": "Vexa",
     "url": "https://github.com/Vexa-ai"

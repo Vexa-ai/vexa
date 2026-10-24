@@ -16,12 +16,12 @@ const PANE = {
 
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 
-function engine(on: any, connect: unknown, calls: { tool: string; args: unknown }[] = []) {
+function engine(on: any, connect: unknown | (() => unknown), calls: { tool: string; args: unknown }[] = [], opened: string[] = []) {
   on('command.register', () => ({ value: { command: 'vexa' } }))
   on('tool.register', () => ({ value: { tool: 'mcp__vexa__listener_configure' } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.open', (_: unknown, e: any) => { opened.push(e.id); return { value: { isPlaced: true } } })
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
-  on('mcp.connect', () => ({ value: connect }))
+  on('mcp.connect', () => ({ value: typeof connect === 'function' ? connect() : connect }))
   on('tool.list', () => ({ value: ['calendar_status', 'workspace_list', 'start_demo_meeting', 'get_meeting_transcript'].map(n => ({ name: `mcp__plugin_vexa_vexa__${n}` })) }))
   on('fs.exists', () => ({ value: false }))
   on('env.get', () => ({ value: undefined }))
@@ -362,4 +362,21 @@ test('a demo Claude starts from the chat: the pane follows it and names it', asy
   expect((await ui.find({ type: 'Text', text: /^Demo meeting$/ }))?.text).toBe('Demo meeting')
   expect(await ui.find({ type: 'Text', text: /call-d7be66819bdd/ })).toBeFalsy()
   await ui.unmount()
+})
+
+test('sign-in from the chat: Claude offers it and runs claude mcp login; when it lands the panel opens', async ($, on) => {
+  const clock = mock.clock(on)
+  let signedIn = false
+  const opened: string[] = []
+  engine(on, () => signedIn ? { isConnected: true, server: 'plugin:vexa:vexa' } : { isConnected: false, reason: 'auth', message: 'needs sign-in' }, [], opened)
+  on('prompt.compose', () => ({ sections: [] }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ctx: any = await $.prompt.compose({ model: 'claude-sonnet-5-5', promptModel: 'claude-sonnet-5-5', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [], sections: [] } as any)
+  expect(ctx.sections.at(-1).text).toMatch(/Sign in\? I'll open your browser/)
+  expect(ctx.sections.at(-1).text).toMatch(/claude mcp login plugin:vexa:vexa/)
+  expect(ctx.sections.at(-1).text).not.toMatch(/type \/mcp/)
+  opened.length = 0
+  signedIn = true
+  await clock.advance(5000)
+  expect(opened).toContain('vexa-home')
 })
