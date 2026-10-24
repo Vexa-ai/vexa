@@ -27,7 +27,7 @@ import type { App, Labelled, Row } from './listener'
 const PANE = 'vexa-home'
 const SERVER_KEY = 'vexa'
 const EMPTY: Meeting = {
-  connection: 'connecting', url: '', platform: '', nativeId: '', title: '', isDemo: false,
+  connection: 'connecting', url: '', platform: '', nativeId: '', dbId: 0, title: '', isDemo: false,
   status: 'idle', nextIndex: 0, liveCursor: '', liveFeed: true, segments: [], error: '',
 }
 const MEETING = { plugin: 'vexa', key: 'meeting' } as const
@@ -76,7 +76,7 @@ const CALLS = { plugin: 'vexa', key: 'calls' } as const
 const CALENDAR = { plugin: 'vexa', key: 'calendar' } as const
 const WORKSPACES = { plugin: 'vexa', key: 'workspaces' } as const
 const NO_CALLS: Calls = { items: [], filter: '', error: '' }
-const NO_CALENDAR: Calendar = { connected: [], upcoming: [], link: '', error: '', loaded: false }
+const NO_CALENDAR: Calendar = { connected: [], upcoming: [], link: '', steps: [], error: '', loaded: false }
 const NO_WORKSPACES: Workspaces = { items: [], slug: '', files: [], path: '', content: '', bound: '', error: '', loaded: false }
 const FLASH = { plugin: 'vexa', key: 'flash' } as const
 const NO_FLASH: Flash = { stage: 'idle', at: 0, line: '' }
@@ -307,13 +307,14 @@ async function poll($: any): Promise<void> {
 }
 
 async function start($: any, tool: string, args: Record<string, unknown>, isDemo: boolean): Promise<void> {
-  await update($, x => ({ ...x, isDemo, title: '', status: 'requesting', error: '', segments: [], nextIndex: 0, liveCursor: '', liveFeed: true, nativeId: '' }))
+  await update($, x => ({ ...x, isDemo, title: isDemo ? 'Demo meeting' : '', status: 'requesting', error: '', segments: [], nextIndex: 0, liveCursor: '', liveFeed: true, nativeId: '', dbId: 0 }))
   try {
     const bot = await call($, tool, args)
     await update($, x => ({
       ...x,
       platform: String(bot.platform ?? ''),
       nativeId: String(bot.native_meeting_id ?? ''),
+      dbId: Number(bot.id ?? bot.meeting_db_id ?? 0),
       status: String(bot.status ?? 'requested'),
     }))
   } catch (err) {
@@ -729,8 +730,8 @@ const CONFIGURE_SCHEMA = {
 // --- Calls, calendar, workspaces: what the views beyond the meeting read --------------------
 
 function callTitle(x: any): string {
-  return String(x.data?.title || (x.platform === 'google_meet' ? 'Google Meet call' : x.platform === 'teams' ? 'Teams call'
-    : x.platform === 'zoom' ? 'Zoom call' : x.platform === 'jitsi' ? 'Jitsi call' : 'Call'))
+  return String(x.data?.title || (x.data?.demo ? 'Demo meeting' : x.platform === 'google_meet' ? 'Google Meet call' : x.platform === 'teams' ? 'Teams call'
+    : x.platform === 'zoom' ? 'Zoom call' : x.platform === 'jitsi' ? 'Jitsi call' : x.platform === 'vexa_call' ? 'Vexa call' : 'Call'))
 }
 
 async function loadCalls($: any): Promise<void> {
@@ -738,7 +739,7 @@ async function loadCalls($: any): Promise<void> {
     const p = await call($, 'list_meetings', { limit: 60 })
     const rows: any[] = Array.isArray(p) ? p : p.meetings ?? p.items ?? []
     const items: Call[] = rows.map(x => ({
-      id: String(x.id ?? x.meeting_db_id ?? `${x.platform}/${x.native_meeting_id}`), platform: String(x.platform ?? ''),
+      id: Number(x.id ?? x.meeting_db_id ?? 0), platform: String(x.platform ?? ''),
       nativeId: String(x.native_meeting_id ?? ''), status: String(x.status ?? ''), title: callTitle(x),
       at: String(x.start_time ?? x.created_at ?? ''),
     }))
@@ -748,7 +749,7 @@ async function loadCalls($: any): Promise<void> {
 
 async function openCall($: any, c: Call): Promise<void> {
   await update($, x => ({
-    ...EMPTY, connection: x.connection, platform: c.platform, nativeId: c.nativeId, title: c.title,
+    ...EMPTY, connection: x.connection, platform: c.platform, nativeId: c.nativeId, dbId: c.id, title: c.title,
     // A past call is read once, confirmed lines only; its answer's own status then ends the polling.
     status: c.status === 'active' ? 'active' : 'past', liveFeed: c.status === 'active',
   }))
@@ -758,27 +759,28 @@ async function openCall($: any, c: Call): Promise<void> {
 
 async function loadCalendar($: any): Promise<void> {
   try {
-    const p = await call($, 'calendar_status', {})
-    const connected: string[] = (p.calendars ?? p.connections ?? []).map((c: any) => String(c.email ?? c.name ?? c.provider ?? c.id ?? 'calendar'))
-    const upcoming: Upcoming[] = (p.upcoming ?? p.events ?? p.meetings ?? []).map((e: any) => ({
-      id: String(e.id ?? e.event_id ?? e.meeting_id ?? ''), title: String(e.title ?? e.summary ?? 'Meeting'),
-      start: String(e.start ?? e.start_time ?? ''), platform: String(e.platform ?? ''),
-      nativeId: String(e.native_meeting_id ?? ''), autoJoin: Boolean(e.auto_join ?? e.will_join ?? false),
+    const p = await call($, 'calendar_status', { days: 7 })
+    const connected: string[] = (p.calendars ?? []).map((c: any) => String(c.name || c.ics_url_masked || 'Calendar'))
+    const upcoming: Upcoming[] = (p.upcoming ?? []).map((e: any) => ({
+      id: Number(e.meeting_db_id ?? 0), title: String(e.title || 'Meeting'), start: String(e.scheduled_at ?? ''),
+      platform: String(e.platform ?? ''), nativeId: String(e.native_meeting_id ?? ''),
+      autoJoin: Boolean(e.will_auto_join ?? e.auto_join), whyNot: String(e.why_not ?? e.auto_join_error ?? ''),
     }))
-    await updateCalendar($, c => ({ ...c, connected, upcoming, error: '', loaded: true }))
+    const error = p.upcoming_unavailable ? String(p.upcoming_unavailable) : ''
+    await updateCalendar($, c => ({ ...c, connected, upcoming, error, loaded: true }))
   } catch (err) { await updateCalendar($, c => ({ ...c, error: message(err), loaded: true })) }
 }
 
 async function connectCalendar($: any): Promise<void> {
   try {
     const p = await call($, 'calendar_connect', {})
-    await updateCalendar($, c => ({ ...c, link: String(p.url ?? p.link ?? p.connect_url ?? ''), error: '' }))
+    await updateCalendar($, c => ({ ...c, link: String(p.url ?? ''), steps: (p.steps ?? []).map(String), error: '' }))
   } catch (err) { await updateCalendar($, c => ({ ...c, error: message(err) })) }
 }
 
 async function setAutoJoin($: any, target: Upcoming | null, on: boolean): Promise<void> {
   try {
-    await call($, 'set_auto_join', target ? { meeting_id: target.id, auto_join: on } : { all: true, auto_join: on })
+    await call($, 'set_auto_join', target ? { enabled: on, meeting_db_id: target.id } : { enabled: on, all_calendars: true })
     await loadCalendar($)
   } catch (err) { await updateCalendar($, c => ({ ...c, error: message(err) })) }
 }
@@ -788,7 +790,7 @@ async function setAutoJoin($: any, target: Upcoming | null, on: boolean): Promis
 async function loadWorkspaces($: any): Promise<void> {
   try {
     const p = await call($, 'workspace_list', {})
-    const items: Workspace[] = (p.workspaces ?? p.items ?? []).filter((w: any) => w.state !== 'inactive').map((w: any) => ({
+    const items: Workspace[] = (p.workspaces ?? []).filter((w: any) => (w.state ?? 'active') === 'active').map((w: any) => ({
       slug: String(w.slug ?? w.id ?? w.name), name: String(w.display ?? w.name ?? w.title ?? w.slug ?? w.id),
       kind: String(w.kind ?? w.type ?? ''), role: String(w.role ?? ''),
     }))
@@ -799,7 +801,7 @@ async function loadWorkspaces($: any): Promise<void> {
 async function openFile($: any, slug: string, path: string): Promise<void> {
   await updateWorkspaces($, w => ({ ...w, slug, path, content: '', error: '' }))
   try {
-    const f = await call($, 'workspace_read', { workspace: slug, path })
+    const f = await call($, 'workspace_read', { slug, path })
     await updateWorkspaces($, w => (w.slug === slug ? { ...w, content: String(f.content ?? f.text ?? f.body ?? '') } : w))
   } catch (err) { await updateWorkspaces($, w => ({ ...w, error: message(err) })) }
 }
@@ -808,7 +810,7 @@ async function openSpace($: any, slug: string): Promise<void> {
   await updateWorkspaces($, w => ({ ...w, slug, files: [], path: '', content: '', error: '' }))
   await go($, 'space')
   try {
-    const t = await call($, 'workspace_read', { workspace: slug })
+    const t = await call($, 'workspace_tree', { slug })
     const files: string[] = (t.files ?? t.pages ?? t.tree ?? []).map((f: any) => String(typeof f === 'string' ? f : f.path ?? '')).filter((f: string) => f.endsWith('.md'))
     await updateWorkspaces($, w => ({ ...w, files }))
     const first = files.find(f => /^readme\.md$/i.test(f)) ?? files.find(f => !f.includes('/')) ?? files[0]
@@ -818,9 +820,9 @@ async function openSpace($: any, slug: string): Promise<void> {
 
 async function bindMeeting($: any, workspace: string): Promise<void> {
   const m = await read($)
-  if (!m.nativeId) return
+  if (!m.dbId) return
   try {
-    await call($, 'meeting_bind_workspace', { platform: m.platform, native_meeting_id: m.nativeId, workspace })
+    await call($, 'meeting_bind_workspace', { meeting_db_id: m.dbId, workspace })
     await updateWorkspaces($, w => ({ ...w, bound: `${m.title || m.nativeId} → ${workspace}`, error: '' }))
   } catch (err) { await updateWorkspaces($, w => ({ ...w, error: message(err) })) }
 }
@@ -1045,7 +1047,7 @@ async function spaceView($: any, ui: any): Promise<any> {
       <Button key="ws-back" plain onPress={() => go($, 'workspaces')}><Text color="inactive">Workspaces</Text></Button>
       <Text size="heading" weight="semibold">{ws?.name ?? w.slug}</Text>
       {w.path ? <Text color="inactive" size="caption">{w.path}</Text> : null}
-      {m.nativeId ? (
+      {m.dbId ? (
         <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
           <Button key="ws-bind" label="Bind the open meeting here" onPress={() => bindMeeting($, w.slug)} />
           <Text color="inactive" size="caption">{w.bound ? `Bound: ${w.bound}` : `${m.title || m.nativeId}: its notes land here`}</Text>
@@ -1071,9 +1073,10 @@ async function calendarView($: any, ui: any): Promise<any> {
       {heading(ui, 'c-conn', 'Calendars')}
       {c.connected.map((name, i) => row(ui, `cal-${i}`, name, 'Connected'))}
       {row(ui, 'c-add', c.connected.length ? 'Connect another calendar' : 'Connect your calendar', 'You sign in on vexa.ai yourself; Vexa never asks for your password here.', () => connectCalendar($))}
-      {c.link ? (Link ? <Link key="c-link" href={c.link} label="Open the sign-in page" /> : <Text>{c.link}</Text>) : null}
+      {c.link ? (Link ? <Link key="c-link" href={c.link} label="Open the calendar page" /> : <Text>{c.link}</Text>) : null}
+      {c.steps.map((st, i) => <Text key={`c-step-${i}`} color="inactive" size="caption">{`${i + 1}. ${st}`}</Text>)}
       {heading(ui, 'c-next', `Upcoming · Vexa joins ${joining} of ${c.upcoming.length}`, c.upcoming.length ? { label: joining === c.upcoming.length ? 'Join none' : 'Join all', onPress: () => setAutoJoin($, null, joining !== c.upcoming.length) } : undefined)}
-      {c.upcoming.map(e => row(ui, `up-${e.id}`, e.title, [when(e.start), PLATFORM[e.platform] ?? e.platform, e.autoJoin ? 'Vexa joins' : 'Vexa skips'].filter(Boolean).join(' · '), undefined, false,
+      {c.upcoming.map(e => row(ui, `up-${e.id}`, e.title, [when(e.start), PLATFORM[e.platform] ?? e.platform, e.autoJoin ? 'Vexa joins' : e.whyNot || 'Vexa skips'].filter(Boolean).join(' · '), undefined, false,
         <Button key={`aj-${e.id}`} plain onPress={() => setAutoJoin($, e, !e.autoJoin)}><Text color="inactive" size="caption">{e.autoJoin ? 'Skip' : 'Join'}</Text></Button>))}
       {c.upcoming.length === 0 ? <Text dimColor>{c.loaded ? 'Nothing on the calendar soon.' : 'Loading…'}</Text> : null}
       {problem(ui, 'c-err', c.error)}

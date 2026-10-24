@@ -92,11 +92,11 @@ test('one pane: Calendar and Workspaces are views behind its nav buttons', async
   let autoJoin = false
   on('mcp.call', (_: unknown, e: any) => {
     calls.push({ tool: e.tool, args: e.args })
-    if (e.tool === 'calendar_status') return { value: text({ calendars: [{ email: 'me@acme.com' }], upcoming: [{ id: 'ev1', title: 'Acme weekly', start: '2026-10-25T10:00:00Z', auto_join: autoJoin }] }) }
-    if (e.tool === 'set_auto_join') { autoJoin = e.args.auto_join; return { value: text({ ok: true }) } }
-    if (e.tool === 'workspace_list') return { value: text({ workspaces: [{ slug: 'team', display: 'Team', kind: 'shared', role: 'owner' }, { slug: 'old', name: 'Old', state: 'inactive' }] }) }
-    if (e.tool === 'workspace_read' && !e.args.path) return { value: text({ files: ['README.md', 'decisions.md', 'logo.png'] }) }
-    if (e.tool === 'workspace_read') return { value: text({ content: e.args.path === 'README.md' ? '# Team\nOur notes.' : '# Decisions\nAnnual plan at 38k.' }) }
+    if (e.tool === 'calendar_status') return { value: text({ calendars: [{ id: 'c1', name: 'me@acme.com', enabled: true, auto_join: true }], window_days: 7, upcoming: [{ meeting_db_id: 230, title: 'Acme weekly', scheduled_at: '2026-10-25T10:00:00Z', platform: 'google_meet', native_meeting_id: 'abc-defg-hij', auto_join: autoJoin, will_auto_join: autoJoin, why_not: autoJoin ? null : 'auto-join is off for this meeting' }], will_auto_join: autoJoin ? 1 : 0 }) }
+    if (e.tool === 'set_auto_join') { autoJoin = e.args.enabled; return { value: text({ scope: 'meeting', meeting: {} }) } }
+    if (e.tool === 'workspace_list') return { value: text({ workspaces: [{ slug: 'team', name: 'team', display: 'Team', kind: 'shared', role: 'owner', state: 'active' }, { slug: 'old', name: 'Old', display: 'Old', state: 'inactive' }], line: 'Writes to Personal' }) }
+    if (e.tool === 'workspace_tree') return { value: text({ files: ['README.md', 'decisions.md', 'logo.png'] }) }
+    if (e.tool === 'workspace_read') return { value: text({ path: e.args.path, content: e.args.path === 'README.md' ? '# Team\nOur notes.' : '# Decisions\nAnnual plan at 38k.' }) }
     if (e.tool === 'list_meetings') return { value: text({ meetings: [{ id: 7, platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'completed', data: { title: 'Acme pricing call' } }] }) }
     return { value: text({ ok: true }) }
   })
@@ -106,16 +106,18 @@ test('one pane: Calendar and Workspaces are views behind its nav buttons', async
 
   await ui.press({ key: 'nav-calendar' })
   expect((await ui.find({ type: 'Text', text: /me@acme\.com/ }))?.text).toMatch(/me@acme/)
-  await ui.press({ key: 'aj-ev1' })
-  expect(calls.find(c => c.tool === 'set_auto_join')?.args).toEqual({ meeting_id: 'ev1', auto_join: true })
+  expect(await ui.find({ type: 'Text', text: /auto-join is off for this meeting/ })).toBeTruthy()
+  await ui.press({ key: 'aj-230' })
+  expect(calls.find(c => c.tool === 'set_auto_join')?.args).toEqual({ enabled: true, meeting_db_id: 230 })
 
   await ui.press({ key: 'nav-workspaces' })
   expect(await ui.find({ type: 'Text', text: /shared · owner/ })).toBeTruthy()
   expect(await ui.find({ type: 'Text', text: /^Old$/ })).toBeFalsy()
   await ui.press({ key: 'ws-team-b' })
-  expect(calls.filter(c => c.tool === 'workspace_read').map(c => c.args.path ?? null)).toEqual([null, 'README.md'])
+  expect(calls.find(c => c.tool === 'workspace_tree')?.args).toEqual({ slug: 'team' })
+  expect(calls.filter(c => c.tool === 'workspace_read').map(c => c.args)).toEqual([{ slug: 'team', path: 'README.md' }])
   await ui.press({ key: 'ws-f-decisions.md' })
-  expect(calls.at(-1)?.args).toEqual({ workspace: 'team', path: 'decisions.md' })
+  expect(calls.at(-1)?.args).toEqual({ slug: 'team', path: 'decisions.md' })
 
   await ui.press({ key: 'nav-calls' })
   await ui.press({ key: 'call-7-b' })
@@ -124,6 +126,6 @@ test('one pane: Calendar and Workspaces are views behind its nav buttons', async
   await ui.press({ key: 'nav-workspaces' })
   await ui.press({ key: 'ws-team-b' })
   await ui.press({ key: 'ws-bind' })
-  expect(calls.find(c => c.tool === 'meeting_bind_workspace')?.args).toEqual({ platform: 'google_meet', native_meeting_id: 'abc-defg-hij', workspace: 'team' })
+  expect(calls.find(c => c.tool === 'meeting_bind_workspace')?.args).toEqual({ meeting_db_id: 7, workspace: 'team' })
   await ui.unmount()
 })

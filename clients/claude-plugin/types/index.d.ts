@@ -8,6 +8,8 @@ export type Meeting = {
   url: string
   platform: string
   nativeId: string
+  // The meeting's row id (meeting_db_id): what binding it to a workspace takes.
+  dbId: number
   title: string
   isDemo: boolean
   status: string
@@ -67,10 +69,10 @@ export type Listener = {
 
 // The one Vexa pane's views, and what the views beyond the meeting read.
 export type View = { name: 'home' | 'meeting' | 'calls' | 'calendar' | 'workspaces' | 'space' }
-export type Call = { id: string; platform: string; nativeId: string; status: string; title: string; at: string }
+export type Call = { id: number; platform: string; nativeId: string; status: string; title: string; at: string }
 export type Calls = { items: Call[]; filter: string; error: string }
-export type Upcoming = { id: string; title: string; start: string; platform: string; nativeId: string; autoJoin: boolean }
-export type Calendar = { connected: string[]; upcoming: Upcoming[]; link: string; error: string; loaded: boolean }
+export type Upcoming = { id: number; title: string; start: string; platform: string; nativeId: string; autoJoin: boolean; whyNot: string }
+export type Calendar = { connected: string[]; upcoming: Upcoming[]; link: string; steps: string[]; error: string; loaded: boolean }
 export type Workspace = { slug: string; name: string; kind: string; role: string }
 export type Workspaces = {
   items: Workspace[]
