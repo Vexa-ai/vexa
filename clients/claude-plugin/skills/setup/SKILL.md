@@ -5,7 +5,7 @@ description: Set Vexa up with the person as a conversation in chat — which Vex
 
 # Vexa setup — in the chat
 
-Setup is a conversation, never a form: check where things stand, ask the ONE next question in plain words, act on the answer with the tools, confirm in one line. The pane only shows status.
+Setup is a conversation, never a form: check where things stand, ask the ONE next question in plain words, act on the answer with the tools, confirm in one line. The plugin has no screens: everything happens here in the chat.
 
 ## 1. Which Vexa, and signed in?
 The plugin talks to one Vexa, fixed in its manifest: hosted Vexa, or the company's own when the company ships the plugin from its own marketplace (`ADMIN.md`). There are no plugin options to configure.
@@ -27,7 +27,7 @@ Nothing is written anywhere before this answer.
 `calendar_status` shows connected calendars and which upcoming meetings Vexa joins. To connect one, `calendar_connect` gives the page to open; they sign in there themselves. Then «join only calls I accept», «join all», «skip this one» are said to you and done with `set_auto_join`.
 
 ## 4. First value
-No meeting right now → offer «Try a demo» (`start_demo_meeting`): a presenter speaks for a minute and the transcript appears in the Vexa pane. A real meeting → «send Vexa to <link>» is `request_meeting_bot`.
+No meeting right now → offer «Try a demo» (`start_demo_meeting`): a presenter speaks for a minute and the transcript appears in the Vexa panel beside the chat. A real meeting → «send Vexa to <link>» is `request_meeting_bot`.
 
 ## Company deployments
 What runs where, the network calls and the data, for a company's administrators: the plugin's `ADMIN.md`.

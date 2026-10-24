@@ -7,7 +7,7 @@ Vexa. The plugin talks to one Vexa, the address you give it, and nothing else of
 
 | Piece | Runs on | What it is |
 |---|---|---|
-| Plugin: pane, band, listener, skills | the person's machine, inside Claude Code | `hooks/register.tsx`, `hooks/listener.ts`, `skills/`; no server process of its own |
+| Plugin: band, listener, skills | the person's machine, inside Claude Code | `hooks/register.tsx`, `hooks/listener.ts`, `skills/`; no server process of its own |
 | Listener's filter model | the person's Claude Code model provider (Anthropic, Bedrock, Vertex, Foundry: whatever Claude Code is set to) | a small-model call per batch of new transcript lines, through Claude Code's own `$.model` |
 | MCP server, sign-in, bots, transcription, storage | **your Vexa** | `<Vexa address>/mcp` and the services behind it |
 
@@ -18,7 +18,7 @@ The plugin has no install-time options. Its MCP server is a literal address in `
 session's server, so it can't hold variables.
 
 - **Your company's address:** ship the plugin from your own marketplace (below) with `mcpServers.vexa.url` set to
-  `https://vexa.example.com/mcp`. The pane reads the address from there.
+  `https://vexa.example.com/mcp`. The plugin reads the address from there.
 - **Without a mirror:** declare the server yourself in `managed-mcp.json` (a managed server wins over a plugin server).
 
 - **Keep hosted Vexa out:** add `{"deniedMcpServers": [{"serverUrl": "https://api.cloud.vexa.ai/*"}]}` to managed settings,
@@ -48,7 +48,7 @@ DCR (Entra, Okta) needs no client registration for Claude Code. Revoking a perso
 
 | From | To | When | Carries |
 |---|---|---|---|
-| Claude Code | `<Vexa address>/mcp` | every tool call, from the model or the pane | the call's arguments; `Authorization: Bearer <OAuth access token>` |
+| Claude Code | `<Vexa address>/mcp` | every tool call, from the model or the plugin | the call's arguments; `Authorization: Bearer <OAuth access token>` |
 | Claude Code | `<Vexa address>/.well-known/*`, `/oauth/*` | sign-in and token refresh | PKCE code, refresh token |
 | browser | `<Vexa address>` sign-in, your IdP | sign-in only | your SSO session |
 | your authorization server | `claude.ai/oauth/claude-code-client-metadata` | during sign-in, to read Claude Code's client metadata (CIMD) | nothing about the person |
@@ -65,8 +65,8 @@ Foundry it is off by default. If you want usage data, Claude Code's OpenTelemetr
 ## The data
 
 - **On your Vexa:** meetings, recordings, transcripts, chat, calendar connections, workspaces, OAuth grants.
-- **On the person's machine:** OAuth tokens (OS keychain); the pane's state (Claude Code session state);
-  the app folder `~/.vexa/apps/<name>` (pane copy, listener presets; editable); a project's `.vexa/app` if they seed one.
+- **On the person's machine:** OAuth tokens (OS keychain); the plugin's state (Claude Code session state);
+  the app folder `~/.vexa/apps/<name>` (listener presets; editable); a project's `.vexa/app` if they seed one.
 - **In the Claude conversation:** whatever transcript or tool result the model reads, under your Claude agreement
   like any other tool output.
 - **For audio to stay with you,** run transcription on your own Vexa (`deploy/transcription`). A
@@ -85,4 +85,3 @@ does, a self-hosted stack works with the plugin only through an edge that adds i
 
 - `claude mcp list` shows `plugin:vexa:vexa: https://<your address>/mcp`.
 - `curl -si -X POST https://<your address>/mcp` returns `401` with a `resource_metadata` challenge.
-- The pane names your host ("Your company's Vexa: …") until the person signs in.

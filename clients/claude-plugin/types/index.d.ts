@@ -5,8 +5,6 @@ export type Seg = { id: string; speaker: string; text: string; time: string; pen
 // OAuth sign-in Claude Code has not done yet; `refused` carries the reason.
 export type Meeting = {
   connection: 'connecting' | 'signin' | 'refused' | 'ready'
-  // The sign-in link Claude Code's authenticate tool answered, shown in the pane until signed in.
-  signinUrl: string
   url: string
   platform: string
   nativeId: string
@@ -75,30 +73,12 @@ export type Listener = {
   app: AppInfo
 }
 
-// The one Vexa pane's views, and what the views beyond the meeting read.
-export type View = { name: 'home' | 'meeting' | 'calls' | 'calendar' | 'workspaces' | 'space' }
-export type Call = { id: number; platform: string; nativeId: string; status: string; title: string; at: string; shared: boolean; demo: boolean }
-export type Calls = { items: Call[]; filter: string; error: string }
-export type Upcoming = { id: number; title: string; start: string; platform: string; nativeId: string; autoJoin: boolean; whyNot: string }
-export type Calendar = { connected: string[]; upcoming: Upcoming[]; link: string; steps: string[]; error: string; loaded: boolean }
-export type Workspace = { slug: string; name: string; kind: string; role: string }
-export type Workspaces = {
-  items: Workspace[]
-  slug: string
-  files: string[]
-  path: string
-  content: string
-  bound: string
-  error: string
-  loaded: boolean
-}
-
 // What the band shows the moment the listener acts, before the chat answers:
 // woke (heard a line, waking Claude) → queued (Claude busy or spacing) → sent → answering → done.
 export type Flash = { stage: 'idle' | 'woke' | 'queued' | 'sent' | 'answering' | 'done'; at: number; line: string }
 
 declare module 'claude-code' {
   interface PluginState {
-    vexa: { meeting: Meeting; listener: Listener; view: View; calls: Calls; calendar: Calendar; workspaces: Workspaces; flash: Flash }
+    vexa: { meeting: Meeting; listener: Listener; flash: Flash }
   }
 }

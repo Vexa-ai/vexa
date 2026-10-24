@@ -1,34 +1,23 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { vexaUrlOf } from '../hooks/register'
-
-const PANE = {
-  plugin: 'vexa',
-  component: 'Pane',
-  requestId: 'vexa-home',
-  props: {
-    title: 'Vexa',
-    isFocused: false,
-    bodyColumns: 60,
-    placement: 'dock',
-    scroll: { offset: 0, bodyRows: 30 },
-    view: {},
-  },
-} as const
+import { leadingJson, vexaUrlOf } from '../hooks/register'
 
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 
-function engine(on: any, connect: unknown | (() => unknown), calls: { tool: string; args: unknown }[] = [], opened: string[] = [], env: Record<string, string> = {}) {
+// `refuse`: every mod call fails the way auto mode refuses one in the desktop app.
+function engine(on: any, connect: unknown | (() => unknown), calls: { tool: string; args: unknown }[] = [], opened: string[] = [], env: Record<string, string> = {}, tools = ['calendar_status', 'workspace_list', 'start_demo_meeting', 'get_meeting_transcript'], browser = false, refuse = false) {
   on('command.register', () => ({ value: { command: 'vexa' } }))
   on('tool.register', () => ({ value: { tool: 'mcp__vexa__listener_configure' } }))
   on('ui.open', (_: unknown, e: any) => { opened.push(e.id); return { value: { isPlaced: true } } })
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('mcp.connect', () => ({ value: typeof connect === 'function' ? connect() : connect }))
-  on('tool.list', () => ({ value: ['calendar_status', 'workspace_list', 'start_demo_meeting', 'get_meeting_transcript'].map(n => ({ name: `mcp__plugin_vexa_vexa__${n}` })) }))
+  on('tool.list', () => ({ value: [...tools.map(n => ({ name: `mcp__plugin_vexa_vexa__${n}` })), ...(browser ? [{ name: 'mcp__Claude_Browser__preview_start' }] : [])] }))
   on('fs.exists', () => ({ value: false }))
   on('env.get', (_: unknown, e: any) => ({ value: env[e.name] }))
   on('mcp.call', (_: unknown, e: any) => {
     calls.push({ tool: e.tool, args: e.args })
+    if (refuse) return { value: { isError: true, content: [{ type: 'text', text: 'The server-side auto mode classifier gave no verdict' }] } }
+    if (e.tool === 'panel_link') return { value: text({ url: 'https://claude-rc-app.dev.vexa.ai/api/auth/redeem?t=SECRET&next=/panel' }) }
     if (e.tool === 'start_demo_meeting') return { value: text({ platform: 'jitsi', native_meeting_id: 'vexa-demo-1', status: 'requested' }) }
     if (e.tool === 'list_meetings') return { value: text({ meetings: [] }) }
     if (e.tool === 'get_meeting_transcript') {
@@ -39,15 +28,33 @@ function engine(on: any, connect: unknown | (() => unknown), calls: { tool: stri
   })
 }
 
-test('not signed in: the pane shows the sign-in state', async ($, on) => {
+test('not signed in: the plugin draws nothing of its own; /vexa says to ask Claude', async ($, on) => {
   mock.clock(on)
-  engine(on, { isConnected: false, reason: 'auth', message: 'needs sign-in' })
+  const opened: string[] = []
+  const calls: { tool: string; args: unknown }[] = []
+  engine(on, { isConnected: false, reason: 'auth', message: 'needs sign-in' }, calls, opened)
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ ...PANE, surface })
-    expect((await ui.find({ type: 'Text', text: /Not signed in/ }))?.text).toBe('Not signed in. Ask Claude to set up Vexa.')
-    await ui.unmount()
-  }
+  expect(opened).toEqual([])
+  expect(calls).toEqual([])
+  const r: any = await $.command.run({ command: 'vexa', args: '' } as any)
+  expect(r.text).toBe("Vexa isn't signed in yet. Ask Claude to set up Vexa.")
+  expect(opened).toEqual([])
+})
+
+test('signed in: nothing is called and nothing opens at startup until a meeting is live; a refused call shows nothing', async ($, on) => {
+  const clock = mock.clock(on)
+  const opened: string[] = []
+  const calls: { tool: string; args: unknown }[] = []
+  engine(on, { isConnected: true, server: 'plugin:vexa:vexa' }, calls, opened, {}, undefined, false, true)
+  on('ui.toast', (_: unknown, e: any) => { opened.push(`toast:${e.text ?? e}`); return { value: undefined } })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  expect(calls).toEqual([])
+  expect(opened).toEqual([])
+  await clock.advance(60_000)
+  expect(calls.length).toBeGreaterThan(0)
+  expect(opened).toEqual([])
+  // The band draws nothing of ours: no offer, no error text.
+  await expect($.ui.mount({ plugin: 'vexa', component: 'AbovePrompt', surface: 'desktop', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 80, scroll: { offset: 0, bodyRows: 10 }, view: {} } } as any)).rejects.toThrow(/no implementation/)
 })
 
 test("a company's own Vexa: the address comes from the manifest's literal server URL", async () => {
@@ -56,27 +63,8 @@ test("a company's own Vexa: the address comes from the manifest's literal server
   expect(vexaUrlOf('not json')).toBe('https://api.cloud.vexa.ai')
 })
 
-test('hosted Vexa by default: the hosted sign-in copy', async ($, on) => {
-  mock.clock(on)
-  engine(on, { isConnected: false, reason: 'auth', message: 'needs sign-in' })
-  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text: /Not signed in/ })).toBeTruthy()
-  expect(await ui.find({ type: 'Text', text: /Your company's Vexa/ })).toBeFalsy()
-  await ui.unmount()
-})
-
-test('signed in: Try a demo starts the demo and the transcript follows', async ($, on) => {
-  const calls: { tool: string; args: unknown }[] = []
-  const clock = mock.clock(on)
-  engine(on, { isConnected: true, server: 'plugin:vexa:vexa' }, calls)
-  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  await ui.press({ key: 'h-demo' })
-  expect(calls.map(c => c.tool)).toContain('start_demo_meeting')
-  await clock.advance(4000)
-  expect((await ui.find({ type: 'Text', text: /Hello from the demo/ }))?.text).toBe('Hello from the demo')
-  await ui.unmount()
+test('a tool answer with a notice after its JSON still parses', () => {
+  expect(leadingJson('{"meetings":[{"id":5}]}\n\n⚠ Vexa: 13 items wait in your queue {not json}')).toEqual({ meetings: [{ id: 5 }] })
 })
 
 test('tool.check: reads are approved, meeting actions keep their prompt', async ($, on) => {
@@ -102,78 +90,6 @@ test('tool.check: reads are approved, meeting actions keep their prompt', async 
   expect(other.decision).toBe('ask')
 })
 
-test('one pane: Calendar and Workspaces are views behind its nav buttons', async ($, on) => {
-  mock.clock(on)
-  const calls: { tool: string; args: any }[] = []
-  on('command.register', () => ({ value: { command: 'vexa' } }))
-  on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__vexa__${e.name}` } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
-  on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
-  on('fs.exists', () => ({ value: false }))
-  on('env.get', () => ({ value: undefined }))
-  on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:vexa:vexa' } }))
-  on('tool.list', () => ({ value: ['calendar_status', 'workspace_list', 'start_demo_meeting', 'get_meeting_transcript'].map(n => ({ name: `mcp__plugin_vexa_vexa__${n}` })) }))
-  let autoJoin = false
-  on('mcp.call', (_: unknown, e: any) => {
-    calls.push({ tool: e.tool, args: e.args })
-    if (e.tool === 'calendar_status') return { value: text({ calendars: [{ id: 'c1', name: 'me@acme.com', enabled: true, auto_join: true }], window_days: 7, upcoming: [{ meeting_db_id: 230, title: 'Acme weekly', scheduled_at: '2026-10-25T10:00:00Z', platform: 'google_meet', native_meeting_id: 'abc-defg-hij', auto_join: autoJoin, will_auto_join: autoJoin, why_not: autoJoin ? null : 'auto-join is off for this meeting' }], will_auto_join: autoJoin ? 1 : 0 }) }
-    if (e.tool === 'set_auto_join') { autoJoin = e.args.enabled; return { value: text({ scope: 'meeting', meeting: {} }) } }
-    if (e.tool === 'workspace_list') return { value: text({ workspaces: [{ slug: 'team', name: 'team', display: 'Team', kind: 'shared', role: 'owner', state: 'active' }, { slug: 'old', name: 'Old', display: 'Old', state: 'inactive' }], line: 'Writes to Personal' }) }
-    if (e.tool === 'workspace_tree') return { value: text({ files: ['README.md', 'decisions.md', 'logo.png'] }) }
-    if (e.tool === 'workspace_read') return { value: text({ path: e.args.path, content: e.args.path === 'README.md' ? '# Team\nOur notes.' : '# Decisions\nAnnual plan at 38k.' }) }
-    if (e.tool === 'list_meetings') return { value: text({ meetings: [{ id: 7, platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'completed', data: { title: 'Acme pricing call' } }] }) }
-    return { value: text({ ok: true }) }
-  })
-  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text: /Send Vexa to a call/ })).toBeTruthy()
-
-  await ui.press({ key: 'nav-calendar' })
-  expect((await ui.find({ type: 'Text', text: /me@acme\.com/ }))?.text).toMatch(/me@acme/)
-  expect(await ui.find({ type: 'Text', text: /auto-join is off for this meeting/ })).toBeTruthy()
-  await ui.press({ key: 'aj-230' })
-  expect(calls.find(c => c.tool === 'set_auto_join')?.args).toEqual({ enabled: true, meeting_db_id: 230 })
-
-  await ui.press({ key: 'nav-workspaces' })
-  expect(await ui.find({ type: 'Text', text: /shared · owner/ })).toBeTruthy()
-  expect(await ui.find({ type: 'Text', text: /^Old$/ })).toBeFalsy()
-  await ui.press({ key: 'ws-team-b' })
-  expect(calls.find(c => c.tool === 'workspace_tree')?.args).toEqual({ slug: 'team' })
-  expect(calls.filter(c => c.tool === 'workspace_read').map(c => c.args)).toEqual([{ slug: 'team', path: 'README.md' }])
-  await ui.press({ key: 'ws-f-decisions.md' })
-  expect(calls.at(-1)?.args).toEqual({ slug: 'team', path: 'decisions.md' })
-
-  await ui.press({ key: 'nav-calls' })
-  await ui.press({ key: 'call-7-b' })
-  expect((await ui.find({ type: 'Text', text: /^Past call$/ }))?.text).toBe('Past call')
-  expect(calls.some(c => c.tool === 'get_meeting_transcript' && c.args.since_index === 0)).toBe(true)
-  await ui.press({ key: 'nav-workspaces' })
-  await ui.press({ key: 'ws-team-b' })
-  await ui.press({ key: 'ws-bind' })
-  expect(calls.find(c => c.tool === 'meeting_bind_workspace')?.args).toEqual({ meeting_db_id: 7, workspace: 'team' })
-  await ui.unmount()
-})
-
-test('a hosted server without calendar, workspace or demo tools: those views and buttons stay hidden', async ($, on) => {
-  mock.clock(on)
-  on('command.register', () => ({ value: { command: 'vexa' } }))
-  on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__vexa__${e.name}` } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
-  on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
-  on('fs.exists', () => ({ value: false }))
-  on('env.get', () => ({ value: undefined }))
-  on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:vexa:vexa' } }))
-  on('tool.list', () => ({ value: [{ name: 'mcp__plugin_vexa_vexa__get_meeting_transcript' }] }))
-  const calls: string[] = []
-  on('mcp.call', (_: unknown, e: any) => { calls.push(e.tool); return { value: text({ meetings: [] }) } })
-  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /Send Vexa to a call/ })).toBeTruthy()
-  for (const t of [/^Workspaces$/, /^Calendar$/, /Try a demo/]) expect(await ui.find({ type: 'Text', text: t })).toBeFalsy()
-  expect(calls).not.toContain('workspace_list')
-  await ui.unmount()
-})
-
 test('setup in chat: the context asks the next question, vexa_settings saves the answer, a finished call is filed', async ($, on) => {
   const clock = mock.clock(on)
   mock.store(on)
@@ -197,6 +113,9 @@ test('setup in chat: the context asks the next question, vexa_settings saves the
     if (e.tool === 'get_meeting_transcript') return { value: text({ status, segments: [], next_index: 0 }) }
     return { value: text({ ok: true }) }
   })
+  on('tool.call', (_: unknown, e: any) => (e.tool === 'mcp__plugin_vexa_vexa__request_meeting_bot'
+    ? { result: {}, text: JSON.stringify({ id: 41, platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'active' }) }
+    : { result: {} }))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await clock.advance(10)
   const before: any = await $.prompt.compose({ model: 'claude-sonnet-5-5', promptModel: 'claude-sonnet-5-5', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [], sections: [] } as any)
@@ -209,8 +128,7 @@ test('setup in chat: the context asks the next question, vexa_settings saves the
   expect(after.sections.at(-1).text).toMatch(/workspace «team»/)
   expect(after.sections.at(-1).text).toMatch(/workspace_read CLAUDE\.md/)
 
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  await ui.input({ key: 'h-url', text: 'https://meet.google.com/abc-defg-hij' } as any)
+  await $.tool.call({ tool: 'mcp__plugin_vexa_vexa__request_meeting_bot', meeting_url: 'https://meet.google.com/abc-defg-hij' } as any)
   await clock.advance(1_500)
   status = 'completed'
   await clock.advance(1_500)
@@ -219,7 +137,6 @@ test('setup in chat: the context asks the next question, vexa_settings saves the
   expect(filed.length).toBe(1)
   expect(filed[0]).toMatch(/meeting_db_id 41/)
   expect(filed[0]).toMatch(/vexa-workspace skill/)
-  await ui.unmount()
 })
 
 test('web → chat: requests the web queued become turns and are acked; the poll is the heartbeat', async ($, on) => {
@@ -249,63 +166,6 @@ test('web → chat: requests the web queued become turns and are acked; the poll
   expect(calls.filter(c => c.tool === 'claude_requests_next').length).toBeGreaterThan(1)
 })
 
-test('a call another person\'s bot is already in: the pane says whose, and leaving never stops their bot', async ($, on) => {
-  const clock = mock.clock(on)
-  const calls: string[] = []
-  on('command.register', () => ({ value: { command: 'vexa' } }))
-  on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__vexa__${e.name}` } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
-  on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
-  on('fs.exists', () => ({ value: false }))
-  on('env.get', () => ({ value: undefined }))
-  on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:vexa:vexa' } }))
-  on('tool.list', () => ({ value: [{ name: 'mcp__plugin_vexa_vexa__get_meeting_transcript' }] }))
-  on('mcp.call', (_: unknown, e: any) => {
-    calls.push(e.tool)
-    if (e.tool === 'request_meeting_bot') return { value: text({ id: 52, platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'active', attached: true, attached_via: 'share', owner: { user_id: 9, email: 'ana@acme.io' }, message: 'Joined ana@acme.io\'s bot in this call.' }) }
-    if (e.tool === 'get_meeting_transcript') return { value: text({ status: 'active', segments: [], next_index: 0 }) }
-    return { value: text({ meetings: [] }) }
-  })
-  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  await ui.input({ key: 'h-url', text: 'https://meet.google.com/abc-defg-hij' } as any)
-  await clock.advance(1_500)
-  expect((await ui.find({ type: 'Text', text: /shared with you/ }))?.text).toBe("ana@acme.io's bot · shared with you")
-  expect((await ui.find({ type: 'Text', text: /Stop following/ }))?.text).toBe('Stop following')
-  await ui.press({ key: 'stop' })
-  expect(calls).not.toContain('stop_bot')
-  await ui.unmount()
-})
-
-test('a tool answer with a notice after its JSON still parses; a timed-out Send finds the bot it did send', async ($, on) => {
-  const clock = mock.clock(on)
-  on('command.register', () => ({ value: { command: 'vexa' } }))
-  on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__vexa__${e.name}` } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
-  on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
-  on('fs.exists', () => ({ value: false }))
-  on('env.get', () => ({ value: undefined }))
-  on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:vexa:vexa' } }))
-  on('tool.list', () => ({ value: [{ name: 'mcp__plugin_vexa_vexa__get_meeting_transcript' }] }))
-  const withNotice = (o: unknown) => ({ content: [{ type: 'text', text: `${JSON.stringify(o)}\n\n⚠ Vexa: 13 items wait in your queue {not json}` }] })
-  on('mcp.call', (_: unknown, e: any) => {
-    if (e.tool === 'list_meetings') return { value: withNotice({ meetings: [{ id: 5, platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'requested', data: { title: 'Acme pricing call' } }] }) }
-    if (e.tool === 'request_meeting_bot') return { value: { isError: true, content: [{ type: 'text', text: 'HTTP 504 upstream ReadTimeout' }] } }
-    if (e.tool === 'parse_meeting_link') return { value: text({ platform: 'google_meet', native_meeting_id: 'abc-defg-hij' }) }
-    if (e.tool === 'get_meeting_transcript') return { value: text({ status: 'requested', segments: [], next_index: 0 }) }
-    return { value: text({}) }
-  })
-  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  await clock.advance(10)
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text: /No calls yet/ })).toBeFalsy()
-  expect(await ui.find({ type: 'Button', key: 'h-rec-5-b' } as any)).toBeTruthy()
-  await ui.input({ key: 'h-url', text: 'https://meet.google.com/abc-defg-hij' } as any)
-  expect(await ui.find({ type: 'Text', text: /504/ })).toBeFalsy()
-  expect(await ui.find({ type: 'Text', text: /^requested$/ })).toBeTruthy()
-  await ui.unmount()
-})
-
 test('the web panel: /vexa opens a one-time sign-in link in the browser pane; the model may not mint one', async ($, on) => {
   mock.clock(on)
   mock.store(on)
@@ -330,39 +190,37 @@ test('the web panel: /vexa opens a one-time sign-in link in the browser pane; th
   expect(opened).not.toContain('vexa-home')
   await $.command.run({ command: 'vexa', args: '' } as any)
   expect(calls.find(c => c.tool === 'panel_link')?.args).toEqual({ next: '/panel' })
+  expect(opened).toEqual([])
   expect(calls.find(c => c.tool === 'preview_start')).toMatchObject({ args: { url: expect.stringContaining('/api/auth/redeem?t=SECRET') } })
   expect((await $.tool.check({ tool: 'mcp__plugin_vexa_vexa__panel_link', input: {} })).decision).toBe('deny')
   // Only the plugin's own call for the panel origin is approved; anyone else's preview_start is not ours to allow.
   expect((await $.tool.check({ tool: 'mcp__Claude_Browser__preview_start', input: { url: 'https://claude-rc-app.dev.vexa.ai/panel' } })).decision).toBe('ask')
 })
 
-test('a demo Claude starts from the chat: the pane follows it and names it', async ($, on) => {
-  mock.clock(on)
-  on('command.register', () => ({ value: { command: 'vexa' } }))
-  on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__vexa__${e.name}` } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
-  on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
-  on('fs.exists', () => ({ value: false }))
-  on('env.get', () => ({ value: undefined }))
-  on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:vexa:vexa' } }))
-  on('tool.list', () => ({ value: [{ name: 'mcp__plugin_vexa_vexa__start_demo_meeting' }] }))
-  on('mcp.call', () => ({ value: text({ meetings: [], segments: [], status: 'requested' }) }))
+test('a call Claude starts from the chat opens in the web panel at that meeting', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  const calls: { tool: string; args: any }[] = []
+  const opened: string[] = []
+  engine(on, { isConnected: true, server: 'plugin:vexa:vexa' }, calls, opened, {}, ['start_demo_meeting', 'panel_link'], true)
   on('tool.call', (_: unknown, e: any) => (e.tool === 'mcp__plugin_vexa_vexa__start_demo_meeting'
     ? { result: {}, text: JSON.stringify({ id: 300, platform: 'vexa_call', native_meeting_id: 'call-d7be66819bdd', status: 'requested', data: { demo: true } }) }
     : { result: {} }))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await $.tool.call({ tool: 'mcp__plugin_vexa_vexa__start_demo_meeting' } as any)
-  expect((await ui.find({ type: 'Text', text: /^Demo meeting$/ }))?.text).toBe('Demo meeting')
-  expect(await ui.find({ type: 'Text', text: /call-d7be66819bdd/ })).toBeFalsy()
-  await ui.unmount()
+  await clock.advance(10)
+  expect(calls.find(c => c.tool === 'panel_link')?.args).toEqual({ next: '/panel/meeting/vexa_call/call-d7be66819bdd' })
+  expect(calls.find(c => c.tool === 'preview_start')).toBeTruthy()
+  expect(opened).toEqual([])
 })
 
-test('sign-in from the chat: Claude offers it and calls authenticate; when it lands the panel opens', async ($, on) => {
+test('sign-in from the chat: Claude offers it and calls authenticate; when it lands the web panel opens', async ($, on) => {
   const clock = mock.clock(on)
+  mock.store(on)
   let signedIn = false
+  const calls: { tool: string; args: any }[] = []
   const opened: string[] = []
-  engine(on, () => signedIn ? { isConnected: true, server: 'plugin:vexa:vexa' } : { isConnected: false, reason: 'auth', message: 'needs sign-in' }, [], opened)
+  engine(on, () => signedIn ? { isConnected: true, server: 'plugin:vexa:vexa' } : { isConnected: false, reason: 'auth', message: 'needs sign-in' }, calls, opened, {}, ['panel_link'], true)
   on('prompt.compose', () => ({ sections: [] }))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const ctx: any = await $.prompt.compose({ model: 'claude-sonnet-5-5', promptModel: 'claude-sonnet-5-5', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [], sections: [] } as any)
@@ -370,20 +228,8 @@ test('sign-in from the chat: Claude offers it and calls authenticate; when it la
   expect(ctx.sections.at(-1).text).toMatch(/call mcp__plugin_vexa_vexa__authenticate/)
   expect((await $.tool.check({ tool: 'mcp__plugin_vexa_vexa__authenticate', input: {} })).decision).toBe('allow')
   expect(ctx.sections.at(-1).text).not.toMatch(/type \/mcp/)
-  opened.length = 0
   signedIn = true
   await clock.advance(5000)
-  expect(opened).toContain('vexa-home')
-})
-
-test('the pane shows the sign-in link authenticate answered, so the person never depends on Claude echoing it', async ($, on) => {
-  mock.clock(on)
-  engine(on, { isConnected: false, reason: 'auth', message: 'needs sign-in' })
-  on('tool.call', () => ({ result: {}, text: 'Open this URL to sign in: https://claude-rc.dev.vexa.ai/oauth/authorize?client_id=x&state=y' }))
-  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  await $.tool.call({ tool: 'mcp__plugin_vexa_vexa__authenticate', input: {} } as any)
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  const link: any = await ui.find({ type: 'Link' })
-  expect(link?.props?.href ?? link?.text).toMatch(/oauth\/authorize\?client_id=x&state=y$/)
-  await ui.unmount()
+  expect(calls.find(c => c.tool === 'preview_start')).toBeTruthy()
+  expect(opened).toEqual([])
 })

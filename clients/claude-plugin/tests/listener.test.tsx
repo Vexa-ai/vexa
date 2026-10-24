@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { applyLive, mergeSegs } from '../hooks/register'
 import { FALLBACK_APP, briefFor, buildApp, calibrationSummary, isDirect, normalize, parseDecision, parseManifest, ruleHit, rulesText, triggerWords } from '../hooks/listener'
 
 const BAND = {
@@ -11,12 +12,17 @@ const BAND = {
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 const seg = (id: string, speaker: string, t: string, completed = true) => ({ segment_id: id, speaker, text: t, completed, absolute_start_time: '2026-10-24T12:00:00Z' })
 
-type Seen = { tools: string[]; model: string[]; prompts: string[]; written: Record<string, string>; annotations: any[]; maps: string[]; upserts: any[]; logs: string[]; triage: string[]; pages: any[] }
+type Seen = { args: { tool: string; args: any }[]; tools: string[]; model: string[]; prompts: string[]; written: Record<string, string>; annotations: any[]; maps: string[]; upserts: any[]; logs: string[]; triage: string[]; pages: any[] }
 const meta: Record<string, unknown> = {}
 const endedLive = { value: false }
 
+// A bot Claude sends from the chat: the plugin follows that meeting.
+async function sendBot($: any): Promise<void> {
+  await $.tool.call({ tool: 'mcp__plugin_vexa_vexa__request_meeting_bot', meeting_url: 'https://meet.google.com/abc-defg-hij' } as any)
+}
+
 function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<string, string> = {}, live?: (() => unknown[]) | 'strict', triage = 'YES check the annual plan'): Seen {
-  const seen: Seen = { tools: [], model: [], prompts: [], written: {}, annotations: [], maps: [], upserts: [], logs: [], triage: [], pages: [] }
+  const seen: Seen = { args: [], tools: [], model: [], prompts: [], written: {}, annotations: [], maps: [], upserts: [], logs: [], triage: [], pages: [] }
   on('ui.log', (_: unknown, e: any) => { seen.logs.push(String(e.text ?? e)); return { value: undefined } })
   for (const k of Object.keys(meta)) delete meta[k]
   endedLive.value = false
@@ -24,12 +30,16 @@ function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<s
   on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__vexa__${e.name}` } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.toast', () => ({ value: undefined }))
+  on('tool.call', (_: unknown, e: any) => (e.tool === 'mcp__plugin_vexa_vexa__request_meeting_bot'
+    ? { result: {}, text: JSON.stringify({ id: 41, platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'active' }) }
+    : { result: {} }))
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('env.get', (_: unknown, e: any) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
   on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:vexa:vexa' } }))
   on('tool.list', () => ({ value: ['calendar_status', 'workspace_list', 'start_demo_meeting', 'get_meeting_transcript'].map(n => ({ name: `mcp__plugin_vexa_vexa__${n}` })) }))
   on('mcp.call', (_: unknown, e: any) => {
     seen.tools.push(e.tool)
+    seen.args.push({ tool: e.tool, args: e.args })
     if (e.tool === 'list_meetings') return { value: text({ meetings: endedLive.value ? [] : [{ id: 41, platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'active', data: { title: 'Acme pricing call' } }] }) }
     if (e.tool === 'get_meeting_transcript' && e.args?.include_pending && live === 'strict') {
       return { value: { isError: true, content: [{ type: 'text', text: "Input validation error: Additional properties are not allowed ('include_pending', 'live_wait_ms' were unexpected)" }] } }
@@ -132,64 +142,32 @@ test('after Listen, a new line the filter flags wakes the main Claude once; the 
   await ui.unmount()
 })
 
-test('a draft is replaced in place by its final version, and a withdrawn draft disappears', async ($, on) => {
-  const clock = mock.clock(on)
-  let lines: unknown[] = []
-  engine(on, () => lines)
-  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ plugin: 'vexa', component: 'Pane', requestId: 'vexa-home', surface: 'desktop', props: { title: 'Vexa', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } } as any)
-  await ui.input({ key: 'h-url', text: 'https://meet.google.com/abc-defg-hij' } as any)
-  lines = [seg('a', 'Ann', 'we decid', false), seg('b', 'Bob', 'uh', false)]
-  await clock.advance(1_500)
-  expect((await ui.find({ type: 'Text', text: /we decid/ }))?.text).toBe('we decid')
-  lines = [seg('a', 'Ann', 'We decided.')]
-  await clock.advance(1_500)
-  expect((await ui.find({ type: 'Text', text: /We decided\./ }))?.text).toBe('We decided.')
-  expect(await ui.find({ type: 'Text', text: /^uh$/ })).toBeFalsy()
-  await ui.unmount()
-})
-
-test('on a deployment with the live feed, drafts come from it and a retract removes them', async ($, on) => {
-  const clock = mock.clock(on)
-  let batches: unknown[][] = []
-  engine(on, () => [], undefined, {}, () => batches.shift() ?? [])
-  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ plugin: 'vexa', component: 'Pane', requestId: 'vexa-home', surface: 'desktop', props: { title: 'Vexa', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } } as any)
-  batches = [
-    [{ type: 'transcript', id: 'a', speaker: 'Ann', text: 'we deci', completed: false }, { type: 'transcript', id: 'b', speaker: 'Bob', text: 'hm', completed: false }],
-    [{ type: 'transcript', id: 'a', speaker: 'Ann', text: 'We decided.', completed: true }, { type: 'retract', segment_ids: ['b'] }],
-  ]
-  await ui.input({ key: 'h-url', text: 'https://meet.google.com/abc-defg-hij' } as any)
-  await clock.advance(1_500)
-  expect((await ui.find({ type: 'Text', text: /we deci/ }))?.text).toBe('we deci')
-  await clock.advance(1_500)
-  expect((await ui.find({ type: 'Text', text: /We decided\./ }))?.text).toBe('We decided.')
-  expect(await ui.find({ type: 'Text', text: /^hm$/ })).toBeFalsy()
-  await ui.unmount()
+test('drafts: replaced in place by their final version, a withdrawn draft goes, a live-feed retract removes one', () => {
+  const draft = mergeSegs([], [{ id: 'a', speaker: 'Ann', text: 'we decid', time: '', pending: true }, { id: 'b', speaker: 'Bob', text: 'uh', time: '', pending: true }])
+  expect(mergeSegs(draft, [{ id: 'a', speaker: 'Ann', text: 'We decided.', time: '', pending: false }]).map(x => x.text)).toEqual(['We decided.'])
+  const live = applyLive([], [{ type: 'transcript', id: 'a', speaker: 'Ann', text: 'we deci', completed: false }, { type: 'transcript', id: 'b', speaker: 'Bob', text: 'hm', completed: false }])
+  expect(applyLive(live, [{ type: 'transcript', id: 'a', speaker: 'Ann', text: 'We decided.', completed: true }, { type: 'retract', segment_ids: ['b'] }]).map(x => x.text)).toEqual(['We decided.'])
 })
 
 test('a server whose transcript tool refuses the live-feed arguments falls back to confirmed reads', async ($, on) => {
   const clock = mock.clock(on)
-  let lines: unknown[] = []
-  engine(on, () => lines, undefined, {}, 'strict')
+  const seen = engine(on, () => [seg('a', 'Maya', 'Hi everyone!')], undefined, {}, 'strict')
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ plugin: 'vexa', component: 'Pane', requestId: 'vexa-home', surface: 'desktop', props: { title: 'Vexa', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } } as any)
-  await ui.input({ key: 'h-url', text: 'https://meet.google.com/abc-defg-hij' } as any)
-  lines = [seg('a', 'Maya', 'Hi everyone!')]
+  await sendBot($)
   await clock.advance(1_500)
   await clock.advance(1_500)
-  expect((await ui.find({ type: 'Text', text: /Hi everyone/ }))?.text).toBe('Hi everyone!')
-  expect(await ui.find({ type: 'Text', text: /Additional properties/ })).toBeFalsy()
-  await ui.unmount()
+  const reads = seen.args.filter(c => c.tool === 'get_meeting_transcript')
+  expect(reads.some(c => c.args?.include_pending)).toBe(true)
+  expect(reads.at(-1)?.args?.include_pending).toBeFalsy()
 })
 
 test('web and plugin share the listener through meeting metadata: state, heartbeat, the web\'s Stop', async ($, on) => {
   const clock = mock.clock(on)
   const seen = engine(on, () => [seg('1', 'Ann', 'Morning all.')])
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ plugin: 'vexa', component: 'Pane', requestId: 'vexa-home', surface: 'desktop', props: { title: 'Vexa', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } } as any)
-  await ui.input({ key: 'h-url', text: 'https://meet.google.com/abc-defg-hij' } as any)
-  await clock.advance(1_500)
+  await sendBot($)
+  await clock.advance(31_500)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   await ui.press({ key: 'listen' })
   expect(seen.annotations.at(-1)).toMatchObject({ listener_state: 'listening', listener_mode: 'normal' })
   const n = seen.annotations.length
@@ -201,7 +179,6 @@ test('web and plugin share the listener through meeting metadata: state, heartbe
   meta.listener_want_ts = now + 1
   await clock.advance(3_000)
   expect(seen.annotations.at(-1).listener_state).toBe('off')
-  expect(await ui.find({ type: 'Text', text: /Claude is not listening/ })).toBeTruthy()
   await ui.unmount()
 })
 
@@ -210,9 +187,9 @@ test('while listening, the live map upserts people and companies into personal a
   let lines = [seg('1', 'Ann', 'Morning all.')]
   const seen = engine(on, () => lines)
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ plugin: 'vexa', component: 'Pane', requestId: 'vexa-home', surface: 'desktop', props: { title: 'Vexa', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } } as any)
-  await ui.input({ key: 'h-url', text: 'https://meet.google.com/abc-defg-hij' } as any)
-  await clock.advance(1_500)
+  await sendBot($)
+  await clock.advance(31_500)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   await ui.press({ key: 'listen' })
   lines = [...lines, seg('2', 'Ann', 'I lead procurement at Acme.'), seg('3', 'Bob', 'We agreed the annual plan at 38k.'), seg('4', 'Bob', 'I will send the contract by Friday.')]
   await clock.advance(121_500)

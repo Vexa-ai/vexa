@@ -1,7 +1,7 @@
 {
   "name": "vexa",
   "displayName": "Vexa",
-  "version": "0.2.16-rc",
+  "version": "0.2.17-rc",
   "description": "Send a bot to a Google Meet, Teams or Zoom call and follow the live transcript beside the chat. Nothing to configure: Claude offers to sign you in and gives you the link.",
   "author": {
     "name": "Vexa",
