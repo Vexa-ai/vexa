@@ -8,6 +8,7 @@
   "shared_tools": [
     "workspace_tree",
     "workspace_read",
+    "workspace_search",
     "propose",
     "workspace_purpose",
     "workspace_write",
@@ -55,6 +56,7 @@
     "workspace_create",
     "workspace_template_save",
     "workspace_read",
+    "workspace_search",
     "report_friction",
     "flows_list",
     "propose",

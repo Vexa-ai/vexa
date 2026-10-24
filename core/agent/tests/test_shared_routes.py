@@ -30,7 +30,7 @@ SHARED = identity_token.SHARED_REFUSAL["reason"]
 #: proposing a claim (the write half of `/api/claims` only).
 #: Everything else is refused. Widening this is a security decision: say why beside the row.
 EXPECTED_ALLOWED = frozenset({
-    ("GET", "/api/workspace/tree"), ("GET", "/api/workspace/file"), ("PUT", "/api/workspace/file"),
+    ("GET", "/api/workspace/tree"), ("GET", "/api/workspace/search"), ("GET", "/api/workspace/file"), ("PUT", "/api/workspace/file"),
     ("POST", "/api/workspace/entity"), ("POST", "/api/workspace/asset"), ("GET", "/api/workspace/purpose"),
     ("GET", "/api/workspaces/{slug}/identity/state"), ("PUT", "/api/workspaces/{slug}/identity/icon"),
     ("POST", "/api/sessions/{session}/call/show"), ("POST", "/api/sessions/{session}/call/highlight"),

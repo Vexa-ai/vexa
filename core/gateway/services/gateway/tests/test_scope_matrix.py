@@ -253,6 +253,7 @@ CASES = [
     ("POST", "/agent/workspace/create", "/agent/workspace/create"),
     ("POST", "/agent/workspace/templates/save", "/agent/workspace/templates/save"),
     ("GET", "/agent/workspace/tree", "/agent/workspace/tree"),
+    ("GET", "/agent/workspace/search", "/agent/workspace/search"),
 
     ("GET", "/mcp", "/mcp"),
     ("POST", "/mcp", "/mcp"),
