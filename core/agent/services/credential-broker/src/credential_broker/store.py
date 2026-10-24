@@ -215,9 +215,13 @@ def _drop_wal(c: sqlite3.Connection) -> None:
     """Fold the write-ahead log into the database and truncate it. A destroyed version is then
     overwritten in the database file (``secure_delete``) and no earlier copy of it stays in the
     log. It does not wait: a reader holding the log open leaves it for the next write, which is not
-    an error (the connection is closed right after)."""
-    c.execute("PRAGMA busy_timeout=0")
-    c.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
+    an error (the connection is closed right after). It runs after COMMIT, so a busy checkpoint
+    never reports a stored version as failed."""
+    try:
+        c.execute("PRAGMA busy_timeout=0")
+        c.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
+    except sqlite3.Error:
+        pass
 
 
 def address_allowed(address: str) -> bool:

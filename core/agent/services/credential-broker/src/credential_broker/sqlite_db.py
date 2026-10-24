@@ -12,7 +12,10 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-BUSY_TIMEOUT_MS = 10_000
+#: 30 s: a busy writer on a loaded host commits in ~200 ms (fsync), and SQLite's busy handler is not
+#: fair, so two writers can starve each other past 10 s (seen on a host at load 16, 2026-10-24). The
+#: store is written rarely; waiting is better than refusing a person's connection.
+BUSY_TIMEOUT_MS = 30_000
 
 
 def connect(path: "str | Path", **kwargs) -> sqlite3.Connection:
