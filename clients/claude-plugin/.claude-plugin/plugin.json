@@ -1,7 +1,7 @@
 {
   "name": "vexa",
   "displayName": "Vexa",
-  "version": "0.2.0",
+  "version": "0.2.6-rc",
   "description": "Send a bot to a Google Meet, Teams or Zoom call and follow the live transcript in a panel beside the chat. Works with hosted Vexa or your company's own Vexa; you sign in through its sign-in page, no API key.",
   "author": {
     "name": "Vexa",
@@ -27,7 +27,7 @@
       "type": "string",
       "title": "Vexa address",
       "description": "The Vexa this plugin talks to. Keep https://api.cloud.vexa.ai for hosted Vexa; a company running its own Vexa puts its address here, for example https://vexa.example.com.",
-      "default": "https://api.cloud.vexa.ai"
+      "default": "https://claude-rc.dev.vexa.ai"
     },
     "vexa_api_key": {
       "type": "string",
