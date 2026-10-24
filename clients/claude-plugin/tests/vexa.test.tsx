@@ -314,6 +314,7 @@ test('a tool answer with a notice after its JSON still parses; a timed-out Send 
 
 test('the web panel: /vexa opens a one-time sign-in link in the browser pane; the model may not mint one', async ($, on) => {
   mock.clock(on)
+  mock.store(on)
   const calls: { server?: string; tool: string; args: any }[] = []
   const opened: string[] = []
   on('command.register', () => ({ value: { command: 'vexa' } }))
@@ -339,4 +340,26 @@ test('the web panel: /vexa opens a one-time sign-in link in the browser pane; th
   expect((await $.tool.check({ tool: 'mcp__plugin_vexa_vexa__panel_link', input: {} })).decision).toBe('deny')
   // Only the plugin's own call for the panel origin is approved; anyone else's preview_start is not ours to allow.
   expect((await $.tool.check({ tool: 'mcp__Claude_Browser__preview_start', input: { url: 'https://claude-rc-app.dev.vexa.ai/panel' } })).decision).toBe('ask')
+})
+
+test('a demo Claude starts from the chat: the pane follows it and names it', async ($, on) => {
+  mock.clock(on)
+  on('command.register', () => ({ value: { command: 'vexa' } }))
+  on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__vexa__${e.name}` } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
+  on('fs.exists', () => ({ value: false }))
+  on('env.get', () => ({ value: undefined }))
+  on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:vexa:vexa' } }))
+  on('tool.list', () => ({ value: [{ name: 'mcp__plugin_vexa_vexa__start_demo_meeting' }] }))
+  on('mcp.call', () => ({ value: text({ meetings: [], segments: [], status: 'requested' }) }))
+  on('tool.call', (_: unknown, e: any) => (e.tool === 'mcp__plugin_vexa_vexa__start_demo_meeting'
+    ? { result: {}, text: JSON.stringify({ id: 300, platform: 'vexa_call', native_meeting_id: 'call-d7be66819bdd', status: 'requested', data: { demo: true } }) }
+    : { result: {} }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await $.tool.call({ tool: 'mcp__plugin_vexa_vexa__start_demo_meeting' } as any)
+  expect((await ui.find({ type: 'Text', text: /^Demo meeting$/ }))?.text).toBe('Demo meeting')
+  expect(await ui.find({ type: 'Text', text: /call-d7be66819bdd/ })).toBeFalsy()
+  await ui.unmount()
 })
