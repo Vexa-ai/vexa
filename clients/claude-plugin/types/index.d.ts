@@ -31,6 +31,16 @@ export type Room = { platform: string; nativeId: string; title: string }
 export type Line = { speaker: string; text: string }
 export type Wake = { at: string; reason: string; excerpt: string }
 
+// The app the pane and listener run from (vexa-app.json), as the pane shows it.
+export type AppInfo = {
+  name: string
+  version: string
+  source: string
+  upstream: string
+  presets: string[]
+  pane: { title: string; emptyHint: string; demo: boolean; offerListening: boolean }
+}
+
 // One listener: offered when a meeting is live, running only after the person pressed Listen.
 export type Listener = {
   offer: Room | null
@@ -46,6 +56,7 @@ export type Listener = {
   lastWakeAt: number
   wakes: Wake[]
   error: string
+  app: AppInfo
 }
 
 declare module 'claude-code' {

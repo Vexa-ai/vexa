@@ -1,5 +1,5 @@
 // The listener's pure parts: the listen brief (signals.v1 `Brief`, the rule model the app's chat
-// uses too), presets per kind of conversation, rule triggers, the scoring prompt and the wake
+// uses too), the app folder its presets come from, rule triggers, the scoring prompt and the wake
 // decision. Ported from core/signals (brief.py, scoring.py, model.py) so a brief means the same
 // thing in both places. No `$` here: register.tsx does the I/O.
 import type { Brief, Label, Line, Rule } from '../types'
@@ -26,27 +26,72 @@ export const QUESTIONS: Record<string, string> = {
   red_flag: 'Does NEW SPEECH contain a claim that contradicts something said earlier, or a red flag about the speaker?',
 }
 
-const label = (name: string, wake = true): Label => ({ name, wake })
-
-export const PRESETS: Record<string, Pick<Brief, 'labels' | 'focus'>> = {
-  default: { labels: [label('decision'), label('action_item'), label('question_to_user')], focus: '' },
-  sales: {
-    labels: [label('price'), label('objection'), label('next_step'), label('question_to_user'), label('decision', false)],
-    focus: 'A sales call: money terms, objections, who decides, and next steps matter most.',
-  },
-  standup: {
-    labels: [label('blocker'), label('question_to_user'), label('action_item'), label('decision', false)],
-    focus: 'A team standup: blockers, asks for the person, and new commitments matter most.',
-  },
-  interview: {
-    labels: [label('red_flag'), label('question_to_user'), label('decision', false)],
-    focus: 'An interview: inconsistent claims and questions put to the person matter most.',
-  },
+// The app the listener and pane run from: a folder with a `vexa-app.json` manifest (see
+// app/README.md). The plugin ships one; a project's own `.vexa/app/` replaces it.
+export type PaneCopy = { title: string; emptyHint: string; demo: boolean; offerListening: boolean }
+export type App = {
+  name: string
+  version: string
+  source: string
+  upstream: string
+  defaultPreset: string
+  presets: Record<string, Brief>
+  pane: PaneCopy
 }
 
-export function defaultBrief(preset = 'default'): Brief {
-  const p = PRESETS[preset] ?? PRESETS.default!
-  return normalize({ labels: p.labels, focus: p.focus, known: '', wake_at: 1.0, max_wait_s: 3600, rules: [] })
+export const PANE_DEFAULTS: PaneCopy = {
+  title: 'Vexa',
+  emptyHint: 'No meeting right now? Try a demo: a presenter speaks for a minute and you watch it transcribed live.',
+  demo: true,
+  offerListening: true,
+}
+
+// What runs when no app folder can be read: the default preset alone.
+export const FALLBACK_APP: App = {
+  name: 'built-in', version: '0', source: 'built-in', upstream: '', defaultPreset: 'default',
+  presets: { default: normalize({ labels: [{ name: 'decision' }, { name: 'action_item' }, { name: 'question_to_user' }] }) },
+  pane: PANE_DEFAULTS,
+}
+
+export type Manifest = {
+  schema?: string
+  name?: string
+  version?: string
+  upstream?: { repo?: string; path?: string; ref?: string }
+  entry?: { pane?: string; listener?: string; skills?: string; flows?: string }
+  listener?: { defaultPreset?: string }
+}
+
+export function parseManifest(text: string): Manifest | null {
+  try {
+    const m = JSON.parse(text)
+    return m && typeof m === 'object' && m.schema === 'vexa-app/v1' ? m as Manifest : null
+  } catch { return null }
+}
+
+// The app from its manifest, its pane copy and its listener files (`<preset>.json` → text).
+export function buildApp(source: string, m: Manifest, paneText: string | null, briefs: Record<string, string>): App {
+  const presets: Record<string, Brief> = {}
+  for (const [file, text] of Object.entries(briefs)) {
+    const name = file.replace(/\.json$/, '')
+    if (!NAME.test(name)) continue
+    try { presets[name] = normalize(JSON.parse(text)) } catch { /* a broken preset is skipped */ }
+  }
+  if (!Object.keys(presets).length) Object.assign(presets, FALLBACK_APP.presets)
+  let pane = PANE_DEFAULTS
+  try { if (paneText) pane = { ...PANE_DEFAULTS, ...JSON.parse(paneText) } } catch { /* defaults */ }
+  const wanted = m.listener?.defaultPreset ?? 'default'
+  const up = m.upstream
+  return {
+    name: String(m.name ?? 'app'), version: String(m.version ?? '0'), source,
+    upstream: up?.repo ? `${up.repo}${up.path ? `/${up.path}` : ''}${up.ref ? `@${up.ref}` : ''}` : '',
+    defaultPreset: presets[wanted] ? wanted : Object.keys(presets)[0]!,
+    presets, pane,
+  }
+}
+
+export function briefFor(app: App, preset: string): Brief {
+  return app.presets[preset] ?? app.presets[app.defaultPreset] ?? FALLBACK_APP.presets.default!
 }
 
 function bounded(v: unknown, fallback: number, lo: number, hi: number): number {

@@ -1,0 +1,25 @@
+{
+  "labels": [
+    {
+      "name": "price"
+    },
+    {
+      "name": "objection"
+    },
+    {
+      "name": "next_step"
+    },
+    {
+      "name": "question_to_user"
+    },
+    {
+      "name": "decision",
+      "wake": false
+    }
+  ],
+  "focus": "A sales call: money terms, objections, who decides, and next steps matter most.",
+  "known": "",
+  "wake_at": 1.0,
+  "max_wait_s": 3600,
+  "rules": []
+}

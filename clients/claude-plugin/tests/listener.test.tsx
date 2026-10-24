@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { defaultBrief, normalize, ruleHit, wakeReason } from '../hooks/listener'
+import { FALLBACK_APP, briefFor, buildApp, normalize, parseManifest, ruleHit, wakeReason } from '../hooks/listener'
 
 const BAND = {
   plugin: 'vexa',
@@ -34,6 +34,7 @@ function engine(on: any, segments: () => unknown[], scores = '{}'): Seen {
     return { value: { isAnswered: true, text: scores, usage: { inputTokens: 1, outputTokens: 1 } } }
   })
   on('prompt.submit', (_: unknown, e: any) => { seen.prompts.push(e.text); return { text: e.text } })
+  on('fs.exists', () => ({ value: false }))
   return seen
 }
 
@@ -73,15 +74,31 @@ test('after Listen, a scored stretch wakes the main Claude once, then waits out 
   await ui.unmount()
 })
 
-test('listener_configure sets a preset and triggers but cannot start listening', async ($, on) => {
+test('listener_configure sets labels and triggers but cannot start listening', async ($, on) => {
   mock.clock(on)
   engine(on, () => [])
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const r: any = await $.tool.call({ tool: 'mcp__vexa__listener_configure', action: 'update', preset: 'sales', rules: [{ kind: 'keyword', value: 'discount' }] } as any)
+  const r: any = await $.tool.call({ tool: 'mcp__vexa__listener_configure', action: 'update', labels: [{ name: 'price' }], rules: [{ kind: 'keyword', value: 'discount' }] } as any)
   expect(r.result.listening).toBe(false)
-  expect(r.result.preset).toBe('sales')
-  expect(r.result.brief.labels.map((l: any) => l.name)).toContain('price')
+  expect(r.result.brief.labels.map((l: any) => l.name)).toEqual(['addressed_to_vexa', 'price'])
   expect(r.result.brief.rules[0].value).toBe('discount')
+})
+
+test('an app folder: manifest, pane copy and presets; broken parts fall back', () => {
+  const m = parseManifest(JSON.stringify({ schema: 'vexa-app/v1', name: 'acme-sales', version: '1.0.0', upstream: { repo: 'https://github.com/Vexa-ai/vexa', path: 'clients/claude-plugin/app', ref: 'main' }, listener: { defaultPreset: 'sales' } }))
+  expect(m?.name).toBe('acme-sales')
+  expect(parseManifest('{"schema":"other"}')).toBe(null)
+  const a = buildApp('.vexa/app', m!, '{"title":"Acme","demo":false}', {
+    'sales.json': JSON.stringify({ labels: [{ name: 'price' }], focus: 'money' }),
+    'broken.json': '{',
+  })
+  expect(Object.keys(a.presets)).toEqual(['sales'])
+  expect(a.defaultPreset).toBe('sales')
+  expect(a.pane.title).toBe('Acme')
+  expect(a.pane.demo).toBe(false)
+  expect(a.pane.offerListening).toBe(true)
+  expect(a.upstream).toBe('https://github.com/Vexa-ai/vexa/clients/claude-plugin/app@main')
+  expect(briefFor(a, 'nope').focus).toBe('money')
 })
 
 test('brief rules: addressed_to_vexa is kept, bounds hold, unsafe regex refused, triggers match', () => {
@@ -90,7 +107,7 @@ test('brief rules: addressed_to_vexa is kept, bounds hold, unsafe regex refused,
   expect(b.wake_at).toBe(1)
   expect(b.rules).toEqual([{ kind: 'person', value: 'ann', wake: true }])
   expect(ruleHit(b.rules, [{ speaker: 'Ann Lee', text: 'hi' }])).toMatch(/person/)
-  const d = defaultBrief()
+  const d = briefFor(FALLBACK_APP, 'default')
   expect(wakeReason({ scores: { addressed_to_vexa: 0.8 }, running: 0, brief: d, buffered: 1, since: 1, now: 2 })).toBe('addressed')
   expect(wakeReason({ scores: {}, running: 0.3, brief: d, buffered: 1, since: 1, now: 2 })).toBe(null)
 })

@@ -1,0 +1,19 @@
+{
+  "labels": [
+    {
+      "name": "red_flag"
+    },
+    {
+      "name": "question_to_user"
+    },
+    {
+      "name": "decision",
+      "wake": false
+    }
+  ],
+  "focus": "An interview: inconsistent claims and questions put to the person matter most.",
+  "known": "",
+  "wake_at": 1.0,
+  "max_wait_s": 3600,
+  "rules": []
+}

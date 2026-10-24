@@ -12,11 +12,12 @@
 // the excerpt and why. The main Claude tunes the brief with the `listener_configure` tool.
 import type { Register } from 'claude-code'
 
-import type { Line, Listener, Meeting, Room, Seg } from '../types'
+import type { AppInfo, Line, Listener, Meeting, Room, Seg } from '../types'
 import {
-  CONTEXT_LINES, PRESETS, SYSTEM, batchScore, defaultBrief, normalize, parseScores, ruleHit,
-  scoringPrompt, topLabels, wakeReason,
+  CONTEXT_LINES, FALLBACK_APP, SYSTEM, batchScore, briefFor, buildApp, normalize, parseManifest,
+  parseScores, ruleHit, scoringPrompt, topLabels, wakeReason,
 } from './listener'
+import type { App } from './listener'
 
 const PANE = 'vexa-meeting'
 const SERVER_KEY = 'vexa'
@@ -40,10 +41,19 @@ async function update($: any, fn: (m: Meeting) => Meeting): Promise<void> {
   }
 }
 
-const IDLE: Listener = {
-  offer: null, declined: [], active: null, preset: 'default', brief: defaultBrief(), nextIndex: 0,
-  context: [], buffer: [], score: 0, since: 0, lastWakeAt: 0, wakes: [], error: '',
+function info(a: App): AppInfo {
+  return { name: a.name, version: a.version, source: a.source, upstream: a.upstream, presets: Object.keys(a.presets), pane: a.pane }
 }
+
+const IDLE: Listener = {
+  offer: null, declined: [], active: null, preset: FALLBACK_APP.defaultPreset,
+  brief: briefFor(FALLBACK_APP, FALLBACK_APP.defaultPreset), nextIndex: 0,
+  context: [], buffer: [], score: 0, since: 0, lastWakeAt: 0, wakes: [], error: '', app: info(FALLBACK_APP),
+}
+
+// The project's own app folder wins over the one the plugin ships.
+const PROJECT_APP = '.vexa/app'
+let app: App = FALLBACK_APP
 const LISTENER = { plugin: 'vexa', key: 'listener' } as const
 
 async function readListener($: any): Promise<Listener> {
@@ -175,6 +185,48 @@ async function stop($: any): Promise<void> {
   await update($, x => ({ ...x, status: 'stopped' }))
 }
 
+async function readApp($: any, dir: string, source: string): Promise<App | null> {
+  if (!(await $.fs.exists(`${dir}/vexa-app.json`))) return null
+  const m = parseManifest(await $.fs.read(`${dir}/vexa-app.json`))
+  if (!m) return null
+  const paneFile = `${dir}/${m.entry?.pane ?? 'pane.json'}`
+  const paneText = (await $.fs.exists(paneFile)) ? await $.fs.read(paneFile) : null
+  const listenerDir = `${dir}/${m.entry?.listener ?? 'listener'}`
+  const briefs: Record<string, string> = {}
+  if (await $.fs.exists(listenerDir)) {
+    for (const f of await $.fs.list(listenerDir)) {
+      if (f.kind === 'file' && f.name.endsWith('.json')) briefs[f.name] = await $.fs.read(`${listenerDir}/${f.name}`)
+    }
+  }
+  return buildApp(source, m, paneText, briefs)
+}
+
+async function loadApp($: any): Promise<void> {
+  try {
+    app = (await readApp($, PROJECT_APP, PROJECT_APP)) ?? (await readApp($, `${$.plugin.root}/app`, 'plugin')) ?? FALLBACK_APP
+  } catch { app = FALLBACK_APP }
+  await updateListener($, x => (x.active ? { ...x, app: info(app) } : {
+    ...x, app: info(app), preset: app.defaultPreset, brief: briefFor(app, app.defaultPreset),
+  }))
+}
+
+// Copies the shipped app into the project so the team can change it and keep it in git.
+async function copyTree($: any, from: string, to: string): Promise<number> {
+  let n = 0
+  for (const f of await $.fs.list(from)) {
+    if (f.kind === 'dir') n += await copyTree($, `${from}/${f.name}`, `${to}/${f.name}`)
+    else if (f.kind === 'file') { await $.fs.write(`${to}/${f.name}`, await $.fs.read(`${from}/${f.name}`)); n += 1 }
+  }
+  return n
+}
+
+async function seedApp($: any): Promise<string> {
+  if (await $.fs.exists(`${PROJECT_APP}/vexa-app.json`)) return `${PROJECT_APP} already holds an app; nothing copied.`
+  const n = await copyTree($, `${$.plugin.root}/app`, PROJECT_APP)
+  await loadApp($)
+  return `Copied the default Vexa app (${n} files) to ${PROJECT_APP}. Edit its listener presets and pane.json, then commit it.`
+}
+
 const roomKey = (r: Room) => `${r.platform}/${r.nativeId}`
 
 // A live meeting of the person's, not yet offered or declined, becomes the band's offer.
@@ -182,7 +234,7 @@ let lastOfferCheck = 0
 async function findLive($: any): Promise<void> {
   const l = await readListener($)
   const now = await $.clock.now()
-  if (l.active || l.offer || now - lastOfferCheck < OFFER_EVERY_MS) return
+  if (!l.app.pane.offerListening || l.active || l.offer || now - lastOfferCheck < OFFER_EVERY_MS) return
   lastOfferCheck = now
   try {
     const p = await call($, 'list_meetings', { status: 'active', limit: 5 })
@@ -283,8 +335,8 @@ async function configure($: any, input: any): Promise<unknown> {
     return { listening: false }
   }
   if (action === 'update') {
-    const preset = typeof input.preset === 'string' && PRESETS[input.preset] ? input.preset : l.preset
-    const base = preset !== l.preset ? defaultBrief(preset) : l.brief
+    const preset = typeof input.preset === 'string' && app.presets[input.preset] ? input.preset : l.preset
+    const base = preset !== l.preset ? briefFor(app, preset) : l.brief
     const brief = normalize({
       labels: input.labels ?? base.labels, focus: input.focus ?? base.focus, known: input.known ?? base.known,
       wake_at: input.wake_at ?? base.wake_at, max_wait_s: input.max_wait_s ?? base.max_wait_s, rules: input.rules ?? base.rules,
@@ -292,14 +344,14 @@ async function configure($: any, input: any): Promise<unknown> {
     await updateListener($, x => ({ ...x, preset, brief }))
     return { listening: Boolean(l.active), meeting: l.active, preset, brief }
   }
-  return { listening: Boolean(l.active), meeting: l.active, offer: l.offer, preset: l.preset, brief: l.brief, wakes: l.wakes }
+  return { listening: Boolean(l.active), meeting: l.active, offer: l.offer, preset: l.preset, presets: l.app.presets, app: l.app.name, brief: l.brief, wakes: l.wakes }
 }
 
 const CONFIGURE_SCHEMA = {
   type: 'object',
   properties: {
     action: { enum: ['status', 'update', 'stop'], description: 'status (default) reads the listener; update changes the brief; stop stops listening.' },
-    preset: { enum: Object.keys(PRESETS), description: 'A starting brief per kind of conversation. Labels and focus you pass override it.' },
+    preset: { type: 'string', description: "A starting brief per kind of conversation, from the app's listener presets (status lists them; the default app has default, sales, standup, interview). Labels and focus you pass override it." },
     labels: {
       type: 'array', maxItems: 11,
       items: { type: 'object', required: ['name'], properties: {
@@ -326,6 +378,8 @@ const CONFIGURE_SCHEMA = {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'vexa', description: 'Open the Vexa meeting pane beside the chat' })
+    await $.command.register({ name: 'vexa-app-seed', description: 'Copy the default Vexa app (pane copy, listener presets) into .vexa/app to change it' })
+    await loadApp($)
     void $.ui.open({ id: PANE, title: 'Vexa' })
     void connect($)
     await $.tool.register({
@@ -349,7 +403,10 @@ export const register: Register = on => {
     return { text: 'Vexa pane opened.' }
   })
 
+  on('command.run', { command: 'vexa-app-seed' }, async $ => ({ text: await seedApp($) }))
+
   on('tool.call', { tool: 'mcp__vexa__listener_configure' }, async ($, e) => ({ result: await configure($, e) }))
+    .catch(($, e, next) => (next.called ? next(e) : { deny: 'The Vexa listener control failed; try again.' }))
 
   // The pane's own calls are the person's button presses: approved. A model call is approved
   // only for a read-only tool; the rest goes to the session's decider as it would without us.
@@ -360,6 +417,7 @@ export const register: Register = on => {
     if (READ_ONLY.has(e.tool.slice(prefix.length))) return { decision: 'allow', reason: 'Vexa read-only tool' }
     return next(e)
   })
+    .catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const l = await readListener($)
@@ -406,10 +464,10 @@ export const register: Register = on => {
     const room = Math.max(4, (e.viewport?.rows ?? 30) - (l.active ? 20 : 12))
     return (
       <Box flexDirection="column">
-        <Text bold>Vexa</Text>
+        <Text bold>{l.app.pane.title}</Text>
         {l.active ? (
           <Box key="listener" flexDirection="column">
-            <Text>{`Listening: ${l.active.title} · ${l.preset}`}</Text>
+            <Text>{`Listening: ${l.active.title} · ${l.preset} (app ${l.app.name}, ${l.app.source})`}</Text>
             <Text dimColor>{`Watching for: ${l.brief.labels.filter(x => x.wake).map(x => x.name).join(', ')}`}</Text>
             {l.brief.focus ? <Text dimColor>{`Focus: ${l.brief.focus}`}</Text> : null}
             {l.brief.rules.length ? <Text dimColor>{`Triggers: ${l.brief.rules.map(r => `${r.kind} "${r.value}"`).join(', ')}`}</Text> : null}
@@ -422,7 +480,7 @@ export const register: Register = on => {
         {!live ? <Input key="url" label="Meeting link" placeholder="https://meet.google.com/abc-defg-hij" value={m.url} submitLabel="Send bot" onInput={(v: string) => update($, x => ({ ...x, url: v.trim() }))} onSubmit={(v: string) => send($, v)} /> : null}
         <Box flexDirection="row" gap={1}>
           {!live ? <Button key="send" label="Send bot" variant="primary" onPress={() => send($, m.url)} /> : null}
-          {!live ? <Button key="demo" label="Try a demo" onPress={() => start($, 'start_demo_meeting', {}, true)} /> : null}
+          {!live && l.app.pane.demo ? <Button key="demo" label="Try a demo" onPress={() => start($, 'start_demo_meeting', {}, true)} /> : null}
           {live ? <Button key="stop" label="Stop bot" onPress={() => stop($)} /> : null}
           {!live && m.segments.length ? <Button key="clear" label="Clear" onPress={() => update($, x => ({ ...EMPTY, connection: x.connection }))} /> : null}
         </Box>
@@ -430,7 +488,7 @@ export const register: Register = on => {
         {m.segments.length === 0 ? (
           <Text dimColor>{live
             ? (m.isDemo ? 'The demo presenter starts speaking in a few seconds…' : 'Waiting for the bot to be admitted and for speech…')
-            : 'No meeting right now? Try a demo: a presenter speaks for a minute and you watch it transcribed live.'}</Text>
+            : l.app.pane.emptyHint}</Text>
         ) : null}
         {m.segments.slice(-room).map((s, i) => (
           <Box key={`seg-${i}`} flexDirection="row">

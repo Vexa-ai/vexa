@@ -1,0 +1,22 @@
+{
+  "labels": [
+    {
+      "name": "blocker"
+    },
+    {
+      "name": "question_to_user"
+    },
+    {
+      "name": "action_item"
+    },
+    {
+      "name": "decision",
+      "wake": false
+    }
+  ],
+  "focus": "A team standup: blockers, asks for the person, and new commitments matter most.",
+  "known": "",
+  "wake_at": 1.0,
+  "max_wait_s": 3600,
+  "rules": []
+}

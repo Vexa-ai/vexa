@@ -22,6 +22,7 @@ function engine(on: any, connect: unknown, calls: { tool: string; args: unknown 
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('mcp.connect', () => ({ value: connect }))
+  on('fs.exists', () => ({ value: false }))
   on('mcp.call', (_: unknown, e: any) => {
     calls.push({ tool: e.tool, args: e.args })
     if (e.tool === 'start_demo_meeting') return { value: text({ platform: 'jitsi', native_meeting_id: 'vexa-demo-1', status: 'requested' }) }

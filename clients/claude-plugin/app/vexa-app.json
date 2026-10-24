@@ -1,0 +1,18 @@
+{
+  "schema": "vexa-app/v1",
+  "name": "meeting-assistant",
+  "version": "0.2.0",
+  "description": "Vexa's default app for Claude: the meeting pane, the live-call listener and its presets.",
+  "upstream": {
+    "repo": "https://github.com/Vexa-ai/vexa",
+    "path": "clients/claude-plugin/app",
+    "ref": "main"
+  },
+  "entry": {
+    "pane": "pane.json",
+    "listener": "listener",
+    "skills": "skills",
+    "flows": "flows"
+  },
+  "listener": { "defaultPreset": "default" }
+}
