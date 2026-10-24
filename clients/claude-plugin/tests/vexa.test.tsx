@@ -337,4 +337,6 @@ test('the web panel: /vexa opens a one-time sign-in link in the browser pane; th
   expect(calls.find(c => c.tool === 'panel_link')?.args).toEqual({ next: '/panel' })
   expect(calls.find(c => c.tool === 'preview_start')).toMatchObject({ args: { url: expect.stringContaining('/api/auth/redeem?t=SECRET') } })
   expect((await $.tool.check({ tool: 'mcp__plugin_vexa_vexa__panel_link', input: {} })).decision).toBe('deny')
+  // Only the plugin's own call for the panel origin is approved; anyone else's preview_start is not ours to allow.
+  expect((await $.tool.check({ tool: 'mcp__Claude_Browser__preview_start', input: { url: 'https://claude-rc-app.dev.vexa.ai/panel' } })).decision).toBe('ask')
 })

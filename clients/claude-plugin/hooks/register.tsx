@@ -1266,6 +1266,13 @@ const ASKS = [
 const LIVE = 'success'
 const PLATFORM: Record<string, string> = { google_meet: 'Meet', teams: 'Teams', zoom: 'Zoom', jitsi: 'Jitsi', vexa_call: 'Vexa call' }
 
+// The panel origin the plugin is about to open (from panel_link's answer): the plugin's own
+// preview_start call is approved for that origin only.
+let panelOrigin = ''
+export function originOf(url: unknown): string {
+  try { return new URL(String(url)).origin } catch { return '' }
+}
+
 // The one app: our web panel in Claude's browser pane. panel_link answers a single-use sign-in
 // link (≤120 s) for this account landing on `next`; it is opened at once and never kept, shown or
 // logged. Without it (no browser pane, or a Vexa that doesn't mint links) the plugin's own pane.
@@ -1275,6 +1282,7 @@ async function openPanel($: any, next: string, fallback: ViewName): Promise<void
     try {
       const r = await call($, 'panel_link', { next })
       if (r?.url) {
+        panelOrigin = originOf(r.url)
         await $.mcp.call(BROWSER_SERVER, 'preview_start', { url: String(r.url) })
         return
       }
@@ -1748,6 +1756,12 @@ export const register: Register = (on, options) => {
   // person; the rest goes to the session's decider as it would without us.
   on('tool.check', async ($, e, next) => {
     if (e.tool === CONFIGURE_TOOL || e.tool === CALIBRATE_TOOL || e.tool === SETTINGS_TOOL) return { decision: 'allow', reason: "Vexa plugin's own control" }
+    // The plugin opening its web panel in the browser pane: allowed for the panel origin it just
+    // got from panel_link, and only from the plugin itself (auto mode's classifier gives no verdict).
+    if (e.tool === BROWSER_TOOL && next.origin.plugin === $.plugin.name && panelOrigin
+      && originOf((e.input as { url?: unknown } | undefined)?.url) === panelOrigin) {
+      return { decision: 'allow', reason: 'Vexa opens its own panel' }
+    }
     if (!e.tool.startsWith(prefix)) return next(e)
     if (next.origin.plugin === $.plugin.name) return { decision: 'allow', reason: 'Vexa pane button' }
     const name = e.tool.slice(prefix.length)
