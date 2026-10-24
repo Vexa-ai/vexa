@@ -149,13 +149,16 @@ export function ruleHit(rules: readonly Rule[], lines: readonly Line[]): string 
   return null
 }
 
-// The attention filter: one small-model call per change in the transcript tail, one letter back
-// (W wake, S skip). This is the dogfood listener's prompt: instructions and rules lead and are
-// cached, so each call sends only the few transcript lines. `listener_calibrate` replays a
-// labelled fixture through it.
+// The attention filter: one small-model call per change in the transcript tail. It answers S
+// (skip), or W and at most three words naming what triggered it («W price €40k»): those words are
+// what the band and the web show as why Claude reacted. Instructions and rules lead and are cached,
+// so each call sends only the few transcript lines. `listener_calibrate` replays a labelled
+// fixture through it.
 export const DECIDE_SYSTEM = 'You are an attention filter for an assistant listening to a live meeting transcript '
   + '(any language, with speech-recognition errors). Decide whether the NEW lines need the assistant now. Answer '
-  + 'with exactly one letter: W = wake the assistant, S = skip. No other text.'
+  + 'S to skip, or W followed by at most three words naming what triggered it (for example: W price €40k, '
+  + 'W Claude question, W AWS). No other text.'
+export const DECIDE_MAX_TOKENS = 12
 
 // The brief as the filter reads it: its focus is the plain-language rules; label questions and
 // what is already known are added to them.
@@ -174,8 +177,17 @@ export function decidePrompt(context: readonly string[], fresh: readonly string[
 }
 
 export function parseDecision(text: string): { wake: boolean; reason: string } {
-  const wake = text.trim().toUpperCase().startsWith('W')
-  return { wake, reason: wake ? 'matched the rules' : 'no match' }
+  const t = text.trim()
+  const wake = t.toUpperCase().startsWith('W')
+  if (!wake) return { wake, reason: 'no match' }
+  const why = t.slice(1).replace(/^[\s:·-]+/, '').split(/\s+/).filter(Boolean).slice(0, 3).join(' ')
+  return { wake, reason: why || 'matched the rules' }
+}
+
+// A rule trigger's own words, at most three, for the band.
+export function triggerWords(reason: string): string {
+  const m = reason.match(/"([^"]+)"/)
+  return (m ? m[1]! : reason).split(/\s+/).filter(Boolean).slice(0, 3).join(' ')
 }
 
 // One wake per thought: the same words (a draft and its final version, a repeat) wake once.
@@ -202,3 +214,71 @@ export function calibrationSummary(rows: readonly Row[]) {
     ms_p50: ms[Math.floor(ms.length / 2)] ?? 0, ms_p95: ms[Math.floor(ms.length * 0.95)] ?? 0, ms_max: ms[ms.length - 1] ?? 0,
   }
 }
+
+// The live map (dogfood mod's design): one pass gets the current map and the new transcript lines
+// and returns the whole updated map, with a short README of the call; the plugin writes the README
+// onto the meeting's page and the people and companies as linked cards in the personal workspace.
+export const MAP_SYSTEM = 'You maintain a knowledge map of a live meeting. You get the current map as JSON and new '
+  + 'transcript lines (any language, with speech-recognition errors; fix obvious mis-hearings of names). Return ONLY the '
+  + 'full updated map as JSON, no prose: {"people":[{"name","role","org","notes"}],"companies":[{"name","what","notes"}],'
+  + '"relations":[{"from","rel","to"}],"decisions":[string],"numbers":[{"what","value"}],"open_questions":[string],'
+  + '"readme":string}. "readme" is the live README of the call in markdown, AT MOST 1400 characters, rewritten whole each '
+  + 'time so it stays short: a one-line gist, then the key people and companies as [[Name]] wikilinks with how they connect, '
+  + 'decisions, numbers and open questions, the most important first; drop detail rather than exceed the limit. Merge, never '
+  + 'duplicate; keep every note under 15 words; speaker labels before the colon are participants, add them to people only if '
+  + 'they say something substantive about themselves; skip small talk, family talk, health and secrets; English values.'
+
+export type CallMap = {
+  people: { name: string; role?: string; org?: string; notes?: string }[]
+  companies: { name: string; what?: string; notes?: string }[]
+  relations: { from: string; rel: string; to: string }[]
+  decisions: string[]
+  numbers: { what: string; value: string }[]
+  open_questions: string[]
+  readme?: string
+}
+export const EMPTY_MAP: CallMap = { people: [], companies: [], relations: [], decisions: [], numbers: [], open_questions: [] }
+
+export function parseMap(text: string): CallMap | null {
+  const a = text.indexOf('{')
+  const b = text.lastIndexOf('}')
+  if (a < 0 || b <= a) return null
+  try {
+    const j = JSON.parse(text.slice(a, b + 1))
+    const arr = (v: unknown) => (Array.isArray(v) ? v : [])
+    return {
+      people: arr(j.people).filter((x: any) => x?.name), companies: arr(j.companies).filter((x: any) => x?.name),
+      relations: arr(j.relations).filter((x: any) => x?.from && x?.to), decisions: arr(j.decisions).map(String),
+      numbers: arr(j.numbers).filter((x: any) => x?.what), open_questions: arr(j.open_questions).map(String),
+      readme: typeof j.readme === 'string' ? j.readme : undefined,
+    }
+  } catch { return null }
+}
+
+export function renderMap(title: string, d: CallMap): string {
+  const L: string[] = [`# ${title}`, '', '_Live map, updated during the call by your Claude._', '']
+  const sec = (h: string, rows: string[]) => { if (rows.length) L.push(`## ${h}`, ...rows, '') }
+  sec('People', d.people.map(x => `- **${x.name}**${x.role ? ` — ${x.role}` : ''}${x.org ? `, ${x.org}` : ''}${x.notes ? `. ${x.notes}` : ''}`))
+  sec('Companies', d.companies.map(x => `- **${x.name}**${x.what ? ` — ${x.what}` : ''}${x.notes ? `. ${x.notes}` : ''}`))
+  sec('How they connect', d.relations.map(x => `- ${x.from} — ${x.rel} → ${x.to}`))
+  sec('Decisions', d.decisions.map(x => `- ${x}`))
+  sec('Numbers', d.numbers.map(x => `- ${x.what}: ${x.value}`))
+  sec('Open questions', d.open_questions.map(x => `- ${x}`))
+  return L.join('\n')
+}
+
+// Signal triage: a non-direct wake goes to a mid model first, which decides whether it deserves
+// the person's attention now; only a yes reaches the main chat, as one line.
+export const TRIAGE_SYSTEM = 'You decide whether a signal from a live meeting deserves the attention of the person your '
+  + 'assistant works for RIGHT NOW. You get the trigger, the recent lines and the listen rules. Reply with exactly one line: '
+  + '"YES <one short sentence saying what to look at>" or "NO". Default to NO for chatter, repetition and things that can wait '
+  + 'for the call report.'
+
+export function parseTriage(text: string): { yes: boolean; line: string } {
+  const t = text.trim()
+  return /^yes\b/i.test(t) ? { yes: true, line: t.replace(/^yes\b[\s:,-]*/i, '').split('\n')[0]!.slice(0, 200) } : { yes: false, line: '' }
+}
+
+// Which model each listener job uses; the person changes them from chat.
+export type Models = { filter: string; writer: string; triage: string }
+export const DEFAULT_MODELS: Models = { filter: 'haiku', writer: 'sonnet', triage: 'sonnet' }
