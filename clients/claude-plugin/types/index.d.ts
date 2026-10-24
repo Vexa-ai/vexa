@@ -5,6 +5,8 @@ export type Seg = { id: string; speaker: string; text: string; time: string; pen
 // OAuth sign-in Claude Code has not done yet; `refused` carries the reason.
 export type Meeting = {
   connection: 'connecting' | 'signin' | 'refused' | 'ready'
+  // The sign-in link Claude Code's authenticate tool answered, shown in the pane until signed in.
+  signinUrl: string
   url: string
   platform: string
   nativeId: string

@@ -381,3 +381,15 @@ test('sign-in from the chat: Claude offers it and calls authenticate; when it la
   await clock.advance(5000)
   expect(opened).toContain('vexa-home')
 })
+
+test('the pane shows the sign-in link authenticate answered, so the person never depends on Claude echoing it', async ($, on) => {
+  mock.clock(on)
+  engine(on, { isConnected: false, reason: 'auth', message: 'needs sign-in' })
+  on('tool.call', () => ({ result: {}, text: 'Open this URL to sign in: https://claude-rc.dev.vexa.ai/oauth/authorize?client_id=x&state=y' }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__plugin_vexa_vexa__authenticate', input: {} } as any)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const link: any = await ui.find({ type: 'Link' })
+  expect(link?.props?.href ?? link?.text).toMatch(/oauth\/authorize\?client_id=x&state=y$/)
+  await ui.unmount()
+})

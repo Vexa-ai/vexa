@@ -28,7 +28,7 @@ const PANE = 'vexa-home'
 const SERVER_KEY = 'vexa'
 const HOSTED_URL = 'https://api.cloud.vexa.ai'
 const EMPTY: Meeting = {
-  connection: 'connecting', url: '', platform: '', nativeId: '', dbId: 0, attachedTo: '', offers: { calendar: false, workspaces: false, demo: false, requests: false, webPanel: false }, title: '', isDemo: false,
+  connection: 'connecting', signinUrl: '', url: '', platform: '', nativeId: '', dbId: 0, attachedTo: '', offers: { calendar: false, workspaces: false, demo: false, requests: false, webPanel: false }, title: '', isDemo: false,
   status: 'idle', nextIndex: 0, liveCursor: '', liveFeed: true, segments: [], error: '',
 }
 const MEETING = { plugin: 'vexa', key: 'meeting' } as const
@@ -259,7 +259,7 @@ async function connect($: any): Promise<void> {
       // mints those links and this Claude has the browser pane (the desktop app).
       webPanel: names.has(`${prefix}panel_link`) && names.has(BROWSER_TOOL),
     }
-    await update($, x => ({ ...x, connection: 'ready', offers, error: '' }))
+    await update($, x => ({ ...x, connection: 'ready', signinUrl: '', offers, error: '' }))
     if (was !== 'ready') { quiet(loadCalls($)); if (offers.workspaces) quiet(loadWorkspaces($)) }
     // The sign-in Claude just ran from the chat went through: show the person their Vexa.
     if (was === 'signin') quiet(openPanel($, '/panel', 'home'))
@@ -1756,6 +1756,12 @@ export const register: Register = (on, options) => {
   on('tool.call', async ($, e, next) => {
     const ran = await next(e)
     const name = e.tool.startsWith(prefix) ? e.tool.slice(prefix.length) : ''
+    // The pane shows the sign-in link itself, so it never depends on the model writing it out.
+    if (e.tool === SIGNIN_TOOL && !ran.deny) {
+      const url = /https?:\/\/[^\s"'<>)\]]+/.exec(String(ran.text ?? ''))?.[0]
+      if (url) await update($, x => ({ ...x, signinUrl: url }))
+      return ran
+    }
     if ((name === 'request_meeting_bot' || name === 'start_demo_meeting') && !ran.deny && !ran.isError) try {
       const bot = leadingJson(String(ran.text ?? ''))
       const m = await read($)
@@ -1849,7 +1855,7 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const ui = $.ui.resolve(e) as any
-    const { Box, Text, Button } = ui
+    const { Box, Text, Button, Link } = ui
     const m = await read($)
     const l = await readListener($)
     const title = l.app.pane.title
@@ -1865,6 +1871,7 @@ export const register: Register = (on, options) => {
           <Text bold>{title}</Text>
           {isHosted() ? null : <Text color="inactive" size="caption">{`Your company's Vexa: ${vexaHost()}`}</Text>}
           <Text color="inactive">{m.connection === 'signin' ? 'Not signed in. Ask Claude to set up Vexa.' : `Not connected${m.error ? `: ${m.error.split('\n')[0]}` : `: ${vexaHost()} did not answer.`}`}</Text>
+          {m.connection === 'signin' && m.signinUrl ? (Link ? <Link key="signin" href={m.signinUrl} label="Sign in to Vexa: open, press Allow" /> : <Text>{m.signinUrl}</Text>) : null}
           {isHosted() && m.connection === 'refused' ? <Text color="inactive">Hosted Vexa takes an API key until its sign-in ships: /plugin configure vexa@vexa → Vexa API key (from vexa.ai/account).</Text> : null}
           {/\/$/.test(vexaUrl) ? <Text color="inactive">{`The Vexa address ${vexaUrl} ends with «/»; remove it in /config (Vexa address).`}</Text> : null}
         </Box>
