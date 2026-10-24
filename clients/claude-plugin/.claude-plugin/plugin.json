@@ -7,6 +7,8 @@
   "homepage": "https://docs.vexa.ai/vexa-mcp",
   "repository": "https://github.com/Vexa-ai/vexa",
   "license": "Apache-2.0",
+  "icon": ".claude-plugin/icon.png",
+  "privacyPolicyUrl": "https://vexa.ai/legal/privacy",
   "keywords": ["meetings", "transcription", "google-meet", "microsoft-teams", "zoom", "meeting-bot", "mcp"],
   "types": "./types/index.d.ts",
   "mcpServers": {
