@@ -27,7 +27,7 @@ import type { App, Labelled, Row } from './listener'
 const PANE = 'vexa-home'
 const SERVER_KEY = 'vexa'
 const EMPTY: Meeting = {
-  connection: 'connecting', url: '', platform: '', nativeId: '', dbId: 0, title: '', isDemo: false,
+  connection: 'connecting', url: '', platform: '', nativeId: '', dbId: 0, offers: { calendar: false, workspaces: false, demo: false }, title: '', isDemo: false,
   status: 'idle', nextIndex: 0, liveCursor: '', liveFeed: true, segments: [], error: '',
 }
 const MEETING = { plugin: 'vexa', key: 'meeting' } as const
@@ -195,8 +195,14 @@ async function connect($: any): Promise<void> {
     const was = (await read($)).connection
     server = r.server
     prefix = toolPrefix(r.server)
-    await update($, x => ({ ...x, connection: 'ready', error: '' }))
-    if (was !== 'ready') { quiet(loadCalls($)); quiet(loadWorkspaces($)) }
+    const names = new Set((await $.tool.list()).map((t: { name: string }) => t.name))
+    const offers = {
+      calendar: names.has(`${prefix}calendar_status`),
+      workspaces: names.has(`${prefix}workspace_list`),
+      demo: names.has(`${prefix}start_demo_meeting`),
+    }
+    await update($, x => ({ ...x, connection: 'ready', offers, error: '' }))
+    if (was !== 'ready') { quiet(loadCalls($)); if (offers.workspaces) quiet(loadWorkspaces($)) }
     return
   }
   server = ''
@@ -245,6 +251,13 @@ export function runs(segs: readonly Seg[]): { speaker: string; time: string; tex
   return out
 }
 
+// A segment's time in the person's own clock, as the call's meta line shows it.
+function clockTime(t: unknown): string {
+  if (t === undefined || t === null || t === '') return ''
+  const d = new Date(typeof t === 'number' ? t : String(t))
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
 // The live feed's events, as the app's live view applies them: a `transcript` event upserts its
 // segment by id (a draft, `completed: false`, is revised in place), `retract` drops ids.
 export function applyLive(old: readonly Seg[], events: readonly any[]): Seg[] {
@@ -256,7 +269,7 @@ export function applyLive(old: readonly Seg[], events: readonly any[]): Seg[] {
     } else if (ev?.type === 'transcript' && String(ev.text ?? '').trim()) {
       const seg: Seg = {
         id: String(ev.id ?? ''), speaker: String(ev.speaker ?? '—'), text: String(ev.text).trim(),
-        time: ev.tsMs ? new Date(ev.tsMs).toISOString().slice(11, 16) : '', pending: ev.completed === false,
+        time: clockTime(ev.tsMs), pending: ev.completed === false,
       }
       const i = seg.id ? out.findIndex(o => o.id === seg.id) : -1
       if (i >= 0) out[i] = seg; else out.push(seg)
@@ -275,7 +288,7 @@ async function readConfirmed($: any, since: number, status: string): Promise<str
     id: String(s.segment_id ?? s.id ?? ''),
     speaker: String(s.speaker ?? s.speaker_name ?? '—'),
     text: String(s.text ?? '').trim(),
-    time: String(s.absolute_start_time ?? s.start_time ?? '').slice(11, 16),
+    time: clockTime(s.absolute_start_time ?? s.start_time),
     pending: s.completed === false,
   })).filter(s => s.text)
   // Ask again from the first draft next time, so its final version replaces it.
@@ -771,7 +784,7 @@ async function loadCalls($: any): Promise<void> {
 
 async function openCall($: any, c: Call): Promise<void> {
   await update($, x => ({
-    ...EMPTY, connection: x.connection, platform: c.platform, nativeId: c.nativeId, dbId: c.id, title: c.title,
+    ...EMPTY, connection: x.connection, offers: x.offers, platform: c.platform, nativeId: c.nativeId, dbId: c.id, title: c.title,
     // A past call is read once, confirmed lines only; its answer's own status then ends the polling.
     status: c.status === 'active' ? 'active' : 'past', liveFeed: c.status === 'active',
   }))
@@ -902,7 +915,7 @@ function meter(ui: any, key: string, isTalking: boolean): any {
 }
 
 // The nav: the current view is the default (grey pill) Button; the others are quiet text.
-function nav($: any, ui: any, v: ViewName): any {
+function nav($: any, ui: any, v: ViewName, offers: Meeting['offers']): any {
   const { Box, Button, Text } = ui
   const cur = v === 'space' ? 'workspaces' : v
   const tab = (id: ViewName, label: string) => (
@@ -914,8 +927,8 @@ function nav($: any, ui: any, v: ViewName): any {
     <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
       {tab('home', 'Home')}
       {tab('calls', 'Calls')}
-      {tab('workspaces', 'Workspaces')}
-      {tab('calendar', 'Calendar')}
+      {offers.workspaces ? tab('workspaces', 'Workspaces') : null}
+      {offers.calendar ? tab('calendar', 'Calendar') : null}
       {tab('meeting', 'Meeting')}
     </Box>
   )
@@ -989,7 +1002,7 @@ async function homeView($: any, ui: any): Promise<any> {
       {card(ui, 'h-send', 'Send Vexa to a call', 'Paste a Meet, Teams or Zoom link. Let the bot in; the transcript streams here.', undefined, (
         <Box flexDirection="column">
           {Input ? <Input key="h-url" placeholder="Meeting link" value={m.url} submitLabel="Send" onInput={(v: string) => update($, x => ({ ...x, url: v.trim() }))} onSubmit={async (v: string) => { await send($, v); await go($, 'meeting') }} /> : null}
-          {l.app.pane.demo ? (
+          {l.app.pane.demo && m.offers.demo ? (
             <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
               <Button key="h-demo" label="Try a demo" hotkey="d" onPress={async () => { await start($, 'start_demo_meeting', {}, true); await go($, 'meeting') }} />
               <Text color="inactive" size="caption">No meeting now? A presenter speaks for a minute while you watch it transcribed.</Text>
@@ -1006,11 +1019,11 @@ async function homeView($: any, ui: any): Promise<any> {
         </Box>))}
       {heading(ui, 'h-recent', 'Recent calls', { label: 'All', onPress: () => go($, 'calls') })}
       {recent.length ? recent.map(x => callRow($, ui, x, 'h-rec')) : <Text dimColor>No calls yet.</Text>}
-      {heading(ui, 'h-ws', 'Workspaces', { label: 'All', onPress: () => go($, 'workspaces') })}
-      {w.items.length ? w.items.slice(0, 3).map(x => row(ui, `h-ws-${x.slug}`, x.name, [x.kind, x.role].filter(Boolean).join(' · '), () => openSpace($, x.slug)))
+      {m.offers.workspaces ? heading(ui, 'h-ws', 'Workspaces', { label: 'All', onPress: () => go($, 'workspaces') }) : null}
+      {!m.offers.workspaces ? null : w.items.length ? w.items.slice(0, 3).map(x => row(ui, `h-ws-${x.slug}`, x.name, [x.kind, x.role].filter(Boolean).join(' · '), () => openSpace($, x.slug)))
         : w.error ? problem(ui, 'h-ws-err', w.error) : <Text dimColor>{w.loaded ? 'No workspaces yet.' : 'Loading…'}</Text>}
-      {heading(ui, 'h-cal', 'Calendar', { label: 'Open', onPress: () => go($, 'calendar') })}
-      {row(ui, 'h-cal-row', cal.connected.length ? `Vexa joins ${cal.upcoming.filter(e => e.autoJoin).length} of ${cal.upcoming.length} upcoming meetings` : 'Connect your calendar',
+      {m.offers.calendar ? heading(ui, 'h-cal', 'Calendar', { label: 'Open', onPress: () => go($, 'calendar') }) : null}
+      {m.offers.calendar && row(ui, 'h-cal-row', cal.connected.length ? `Vexa joins ${cal.upcoming.filter(e => e.autoJoin).length} of ${cal.upcoming.length} upcoming meetings` : 'Connect your calendar',
         'Vexa joins your meetings by itself; you choose which ones.', () => go($, 'calendar'))}
       {heading(ui, 'h-ask', 'Ask Claude')}
       <Box flexDirection="column">
@@ -1142,7 +1155,7 @@ async function meetingView($: any, ui: any, rows: number, cols: number): Promise
           {Input ? <Input key="url" placeholder="Paste a meeting link" value={m.url} submitLabel="Send bot" onInput={(v: string) => update($, x => ({ ...x, url: v.trim() }))} onSubmit={(v: string) => send($, v)} /> : null}
           <Box flexDirection="row" gap={1} flexWrap="wrap">
             <Button key="send" label="Send Vexa to the call" variant="primary" onPress={() => send($, m.url)} />
-            {l.app.pane.demo ? <Button key="demo" label="Try a demo" onPress={() => start($, 'start_demo_meeting', {}, true)} /> : null}
+            {l.app.pane.demo && m.offers.demo ? <Button key="demo" label="Try a demo" onPress={() => start($, 'start_demo_meeting', {}, true)} /> : null}
           </Box>
         </Box>
       )}
@@ -1236,8 +1249,6 @@ export const register: Register = on => {
       $.clock.every(30_000, () => quiet(audit($)))
       $.clock.every(60_000, () => quiet(loadCalls($)))
     }
-    quiet(loadCalls($))
-    quiet(loadWorkspaces($))
     return next(e)
   })
 
@@ -1368,7 +1379,7 @@ export const register: Register = on => {
               : await homeView($, ui)
     return (
       <Box flexDirection="column" gap={1}>
-        {nav($, ui, v)}
+        {nav($, ui, v, m.offers)}
         {body}
       </Box>
     )
