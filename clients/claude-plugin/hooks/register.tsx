@@ -27,7 +27,7 @@ const PANE = 'vexa-meeting'
 const SERVER_KEY = 'vexa'
 const EMPTY: Meeting = {
   connection: 'connecting', url: '', platform: '', nativeId: '', title: '', isDemo: false,
-  status: 'idle', nextIndex: 0, segments: [], error: '',
+  status: 'idle', nextIndex: 0, liveCursor: '', liveFeed: true, segments: [], error: '',
 }
 const MEETING = { plugin: 'vexa', key: 'meeting' } as const
 
@@ -80,6 +80,7 @@ const CALIBRATE = 'listener_calibrate'
 const CONFIGURE_TOOL = 'mcp__vexa__listener_configure'
 const CALIBRATE_TOOL = 'mcp__vexa__listener_calibrate'
 const PROJECT_APP = '.vexa/app'
+const LIVE_WAIT_MS = 1200
 
 // Tools that only read. A model call to any of them is approved; everything else asks.
 export const READ_ONLY = new Set([
@@ -141,9 +142,8 @@ function isLive(m: Meeting): boolean {
   return m.nativeId !== '' && !['idle', 'stopped', 'completed', 'failed'].includes(m.status)
 }
 
-// Drafts arrive again and again as the recognizer refines them: upsert on segment id, and drop a
-// draft the latest answer no longer holds (finalized under another id, or withdrawn), as the
-// app's live view does with its stream's retracts.
+// Without a live feed, drafts arrive again and again in the confirmed read: upsert on segment id,
+// and drop a draft the latest answer no longer holds (finalized under another id, or withdrawn).
 export function mergeSegs(old: readonly Seg[], fresh: readonly Seg[]): Seg[] {
   const seen = new Set(fresh.map(f => f.id))
   const out = fresh.length ? old.filter(o => !o.pending || seen.has(o.id)) : [...old]
@@ -167,34 +167,84 @@ export function runs(segs: readonly Seg[]): { speaker: string; time: string; tex
   return out
 }
 
+// The live feed's events, as the app's live view applies them: a `transcript` event upserts its
+// segment by id (a draft, `completed: false`, is revised in place), `retract` drops ids.
+export function applyLive(old: readonly Seg[], events: readonly any[]): Seg[] {
+  let out = [...old]
+  for (const ev of events) {
+    if (ev?.type === 'retract') {
+      const drop = new Set<string>((ev.segment_ids ?? []).map(String))
+      out = out.filter(s => !drop.has(s.id))
+    } else if (ev?.type === 'transcript' && String(ev.text ?? '').trim()) {
+      const seg: Seg = {
+        id: String(ev.id ?? ''), speaker: String(ev.speaker ?? '—'), text: String(ev.text).trim(),
+        time: ev.tsMs ? new Date(ev.tsMs).toISOString().slice(11, 16) : '', pending: ev.completed === false,
+      }
+      const i = seg.id ? out.findIndex(o => o.id === seg.id) : -1
+      if (i >= 0) out[i] = seg; else out.push(seg)
+    }
+  }
+  return out.slice(-300)
+}
+
+async function readConfirmed($: any, since: number, status: string): Promise<string> {
+  const m = await read($)
+  const page = await call($, 'get_meeting_transcript', { platform: m.platform, native_meeting_id: m.nativeId, since_index: since })
+  const segs: any[] = page.segments ?? page.transcripts ?? []
+  const base = typeof page.since_index === 'number' ? page.since_index : since
+  const firstPending = segs.findIndex(x => x.completed === false)
+  const fresh: Seg[] = segs.map(s => ({
+    id: String(s.segment_id ?? s.id ?? ''),
+    speaker: String(s.speaker ?? s.speaker_name ?? '—'),
+    text: String(s.text ?? '').trim(),
+    time: String(s.absolute_start_time ?? s.start_time ?? '').slice(11, 16),
+    pending: s.completed === false,
+  })).filter(s => s.text)
+  // Ask again from the first draft next time, so its final version replaces it.
+  const next = firstPending >= 0 ? base + firstPending : (typeof page.next_index === 'number' ? page.next_index : since + segs.length)
+  const now = String(page.status ?? status)
+  await update($, x => ({
+    ...x, liveFeed: false, nextIndex: next, status: now,
+    segments: mergeSegs(x.liveFeed ? [] : x.segments, fresh), error: '',
+  }))
+  if (segs.length) await triage($)
+  return now
+}
+
+let pollingNow = false
 async function poll($: any): Promise<void> {
   const m = await read($)
-  if (m.connection !== 'ready' || !isLive(m)) return
+  if (m.connection !== 'ready' || !isLive(m) || pollingNow) return
+  pollingNow = true
   try {
-    const p = await call($, 'get_meeting_transcript', { platform: m.platform, native_meeting_id: m.nativeId, since_index: m.nextIndex })
-    const segs: any[] = p.segments ?? p.transcripts ?? []
-    const base = typeof p.since_index === 'number' ? p.since_index : m.nextIndex
-    const firstPending = segs.findIndex(x => x.completed === false)
-    const fresh: Seg[] = segs.map(s => ({
-      id: String(s.segment_id ?? s.id ?? ''),
-      speaker: String(s.speaker ?? s.speaker_name ?? '—'),
-      text: String(s.text ?? '').trim(),
-      time: String(s.absolute_start_time ?? s.start_time ?? '').slice(11, 16),
-      pending: s.completed === false,
-    })).filter(s => s.text)
-    // Ask again from the first draft next time, so its final version replaces it.
-    const next = firstPending >= 0 ? base + firstPending : (typeof p.next_index === 'number' ? p.next_index : m.nextIndex + segs.length)
-    const status = String(p.status ?? p.meeting_status ?? m.status)
-    await update($, x => ({ ...x, nextIndex: next, status, segments: mergeSegs(x.segments, fresh), error: '' }))
-    if (segs.length) await triage($)
+    let status = m.status
+    if (!m.liveFeed) {
+      status = await readConfirmed($, m.nextIndex, status)
+    } else {
+      const p = await call($, 'get_meeting_transcript', {
+        platform: m.platform, native_meeting_id: m.nativeId, limit: 1, include_pending: true, live_wait_ms: LIVE_WAIT_MS,
+        ...(m.liveCursor ? { live_cursor: m.liveCursor } : {}),
+      })
+      status = String(p.status ?? p.meeting_status ?? status)
+      if (p.live) {
+        const events: any[] = p.live.events ?? []
+        await update($, x => ({ ...x, status, liveCursor: String(p.live.cursor ?? x.liveCursor), segments: applyLive(x.segments, events), error: '' }))
+        if (events.length) await triage($)
+      } else {
+        // This deployment serves no live feed: confirmed lines from the start, with since_index.
+        status = await readConfirmed($, 0, status)
+      }
+    }
     if (['completed', 'failed', 'stopped'].includes(status)) await updateListener($, x => ({ ...x, isOn: false }))
   } catch (err) {
     await update($, x => ({ ...x, error: message(err) }))
+  } finally {
+    pollingNow = false
   }
 }
 
 async function start($: any, tool: string, args: Record<string, unknown>, isDemo: boolean): Promise<void> {
-  await update($, x => ({ ...x, isDemo, title: '', status: 'requesting', error: '', segments: [], nextIndex: 0, nativeId: '' }))
+  await update($, x => ({ ...x, isDemo, title: '', status: 'requesting', error: '', segments: [], nextIndex: 0, liveCursor: '', liveFeed: true, nativeId: '' }))
   try {
     const bot = await call($, tool, args)
     await update($, x => ({
@@ -363,7 +413,7 @@ async function listen($: any): Promise<void> {
   if (!room) return
   const m = await read($)
   if (m.platform !== room.platform || m.nativeId !== room.nativeId) {
-    await update($, x => ({ ...x, platform: room.platform, nativeId: room.nativeId, title: room.title, isDemo: false, status: 'active', segments: [], nextIndex: 0 }))
+    await update($, x => ({ ...x, platform: room.platform, nativeId: room.nativeId, title: room.title, isDemo: false, status: 'active', segments: [], nextIndex: 0, liveCursor: '', liveFeed: true }))
     await poll($)
   }
   const heard = (await read($)).segments.filter(s => s.id).map(s => s.id)

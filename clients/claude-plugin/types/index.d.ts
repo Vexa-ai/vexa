@@ -12,6 +12,10 @@ export type Meeting = {
   isDemo: boolean
   status: string
   nextIndex: number
+  // The server's live feed (get_meeting_transcript include_pending): its cursor, and whether this
+  // deployment serves one; without it, confirmed lines are read with since_index.
+  liveCursor: string
+  liveFeed: boolean
   segments: Seg[]
   error: string
 }

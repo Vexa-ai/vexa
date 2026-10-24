@@ -13,7 +13,7 @@ const seg = (id: string, speaker: string, t: string, completed = true) => ({ seg
 
 type Seen = { tools: string[]; model: string[]; prompts: string[]; written: Record<string, string> }
 
-function engine(on: any, segments: () => unknown[], decision = '{"wake":false,"reason":"small talk"}', fs: Record<string, string> = {}): Seen {
+function engine(on: any, segments: () => unknown[], decision = '{"wake":false,"reason":"small talk"}', fs: Record<string, string> = {}, live?: () => unknown[]): Seen {
   const seen: Seen = { tools: [], model: [], prompts: [], written: {} }
   on('command.register', () => ({ value: { command: 'vexa' } }))
   on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__vexa__${e.name}` } }))
@@ -25,6 +25,9 @@ function engine(on: any, segments: () => unknown[], decision = '{"wake":false,"r
   on('mcp.call', (_: unknown, e: any) => {
     seen.tools.push(e.tool)
     if (e.tool === 'list_meetings') return { value: text({ meetings: [{ platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'active', data: { title: 'Acme pricing call' } }] }) }
+    if (e.tool === 'get_meeting_transcript' && e.args?.include_pending && live) {
+      return { value: text({ status: 'active', segments: [], live: { events: live(), cursor: 'c', ended: false } }) }
+    }
     if (e.tool === 'get_meeting_transcript') {
       const all = segments()
       const from = Number(e.args?.since_index ?? 0)
@@ -107,6 +110,25 @@ test('a draft is replaced in place by its final version, and a withdrawn draft d
   await clock.advance(1_500)
   expect((await ui.find({ type: 'Text', text: /We decided\./ }))?.text).toBe('We decided.')
   expect(await ui.find({ type: 'Text', text: /^uh$/ })).toBeFalsy()
+  await ui.unmount()
+})
+
+test('on a deployment with the live feed, drafts come from it and a retract removes them', async ($, on) => {
+  const clock = mock.clock(on)
+  let batches: unknown[][] = []
+  engine(on, () => [], undefined, {}, () => batches.shift() ?? [])
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ plugin: 'vexa', component: 'Pane', requestId: 'vexa-meeting', surface: 'desktop', props: { title: 'Vexa', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } } as any)
+  batches = [
+    [{ type: 'transcript', id: 'a', speaker: 'Ann', text: 'we deci', completed: false }, { type: 'transcript', id: 'b', speaker: 'Bob', text: 'hm', completed: false }],
+    [{ type: 'transcript', id: 'a', speaker: 'Ann', text: 'We decided.', completed: true }, { type: 'retract', segment_ids: ['b'] }],
+  ]
+  await ui.input({ key: 'url', text: 'https://meet.google.com/abc-defg-hij' } as any)
+  await clock.advance(1_500)
+  expect((await ui.find({ type: 'Text', text: /we deci/ }))?.text).toBe('we deci')
+  await clock.advance(1_500)
+  expect((await ui.find({ type: 'Text', text: /We decided\./ }))?.text).toBe('We decided.')
+  expect(await ui.find({ type: 'Text', text: /^hm$/ })).toBeFalsy()
   await ui.unmount()
 })
 
