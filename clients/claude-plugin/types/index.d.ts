@@ -10,6 +10,9 @@ export type Meeting = {
   nativeId: string
   // The meeting's row id (meeting_db_id): what binding it to a workspace takes.
   dbId: number
+  // Set when the call is another person's bot this person was attached to (shared with them or
+  // bound to their workspace): whose it is. Only its owner can stop it.
+  attachedTo: string
   // What this server offers beyond meetings: hosted servers without the agent domain have no
   // calendar, workspace or demo tools, and the pane hides those views and buttons.
   offers: { calendar: boolean; workspaces: boolean; demo: boolean; requests: boolean }
@@ -72,7 +75,7 @@ export type Listener = {
 
 // The one Vexa pane's views, and what the views beyond the meeting read.
 export type View = { name: 'home' | 'meeting' | 'calls' | 'calendar' | 'workspaces' | 'space' }
-export type Call = { id: number; platform: string; nativeId: string; status: string; title: string; at: string }
+export type Call = { id: number; platform: string; nativeId: string; status: string; title: string; at: string; shared: boolean }
 export type Calls = { items: Call[]; filter: string; error: string }
 export type Upcoming = { id: number; title: string; start: string; platform: string; nativeId: string; autoJoin: boolean; whyNot: string }
 export type Calendar = { connected: string[]; upcoming: Upcoming[]; link: string; steps: string[]; error: string; loaded: boolean }

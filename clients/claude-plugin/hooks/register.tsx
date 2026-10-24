@@ -27,7 +27,7 @@ import type { App, Labelled, Row } from './listener'
 const PANE = 'vexa-home'
 const SERVER_KEY = 'vexa'
 const EMPTY: Meeting = {
-  connection: 'connecting', url: '', platform: '', nativeId: '', dbId: 0, offers: { calendar: false, workspaces: false, demo: false, requests: false }, title: '', isDemo: false,
+  connection: 'connecting', url: '', platform: '', nativeId: '', dbId: 0, attachedTo: '', offers: { calendar: false, workspaces: false, demo: false, requests: false }, title: '', isDemo: false,
   status: 'idle', nextIndex: 0, liveCursor: '', liveFeed: true, segments: [], error: '',
 }
 const MEETING = { plugin: 'vexa', key: 'meeting' } as const
@@ -360,7 +360,7 @@ async function poll($: any): Promise<void> {
 }
 
 async function start($: any, tool: string, args: Record<string, unknown>, isDemo: boolean): Promise<void> {
-  await update($, x => ({ ...x, isDemo, title: isDemo ? 'Demo meeting' : '', status: 'requesting', error: '', segments: [], nextIndex: 0, liveCursor: '', liveFeed: true, nativeId: '', dbId: 0 }))
+  await update($, x => ({ ...x, isDemo, title: isDemo ? 'Demo meeting' : '', status: 'requesting', error: '', segments: [], nextIndex: 0, liveCursor: '', liveFeed: true, nativeId: '', dbId: 0, attachedTo: '' }))
   try {
     const bot = await call($, tool, args)
     await update($, x => ({
@@ -368,6 +368,7 @@ async function start($: any, tool: string, args: Record<string, unknown>, isDemo
       platform: String(bot.platform ?? ''),
       nativeId: String(bot.native_meeting_id ?? ''),
       dbId: Number(bot.id ?? bot.meeting_db_id ?? 0),
+      attachedTo: bot.attached ? String(bot.owner?.email ?? (bot.owner?.workspace_id ? 'the workspace' : 'a teammate')) : '',
       status: String(bot.status ?? 'requested'),
     }))
   } catch (err) {
@@ -383,6 +384,12 @@ async function send($: any, url: string): Promise<void> {
 
 async function stop($: any): Promise<void> {
   const m = await read($)
+  // Another person's bot: only its owner stops it; this person just stops following the call.
+  if (m.attachedTo) {
+    await updateListener($, x => ({ ...x, isOn: false }))
+    await update($, x => ({ ...EMPTY, connection: x.connection, offers: x.offers }))
+    return
+  }
   try { await call($, 'stop_bot', { platform: m.platform, native_meeting_id: m.nativeId }) } catch (err) {
     await update($, x => ({ ...x, error: message(err) }))
   }
@@ -926,7 +933,7 @@ async function loadCalls($: any): Promise<void> {
     const items: Call[] = rows.map(x => ({
       id: Number(x.id ?? x.meeting_db_id ?? 0), platform: String(x.platform ?? ''),
       nativeId: String(x.native_meeting_id ?? ''), status: String(x.status ?? ''), title: callTitle(x),
-      at: String(x.start_time ?? x.created_at ?? ''),
+      at: String(x.start_time ?? x.created_at ?? ''), shared: Boolean(x.shared),
     }))
     await updateCalls($, c => ({ ...c, items, error: '' }))
   } catch (err) { await updateCalls($, c => ({ ...c, error: message(err) })) }
@@ -1131,7 +1138,7 @@ function row(ui: any, key: string, title: string, meta: string, onPress?: () => 
 function callRow($: any, ui: any, x: Call, keyPrefix: string): any {
   const live = x.status === 'active'
   return row(ui, `${keyPrefix}-${x.id}`, x.title,
-    [live ? 'Live' : '', day(x.at), hour(x.at), PLATFORM[x.platform] ?? x.platform].filter(Boolean).join(' · '),
+    [live ? 'Live' : '', day(x.at), hour(x.at), PLATFORM[x.platform] ?? x.platform, x.shared ? 'shared with you' : ''].filter(Boolean).join(' · '),
     () => openCall($, x), live)
 }
 
@@ -1297,7 +1304,7 @@ async function meetingView($: any, ui: any, rows: number, cols: number): Promise
             {inCall ? <Button key="listen" label={l.isOn ? 'Stop listening' : 'Listen'} hotkey="l" variant={l.isOn ? 'secondary' : 'primary'} onPress={() => (l.isOn ? stopListening($) : listenToPane($))} /> : null}
             {l.isOn ? <Button key="m-missed" label="What did I miss?" onPress={() => whatDidIMiss($)} /> : null}
             {l.isOn && Select ? <Select key="m-mode" value={l.preset} options={l.app.presets.map(p => ({ value: p, label: p }))} onSelect={(v: string) => setPreset($, v)} /> : null}
-            <Button key="stop" plain onPress={() => stop($)}><Text color="inactive">Leave call</Text></Button>
+            <Button key="stop" plain onPress={() => stop($)}><Text color="inactive">{m.attachedTo ? 'Stop following' : 'Leave call'}</Text></Button>
           </Box>
           {problem(ui, 'm-l-err', l.error)}
         </Box>
@@ -1345,6 +1352,7 @@ async function meetingView($: any, ui: any, rows: number, cols: number): Promise
         </Box>
       </Box>
       <Text size="heading" weight="semibold">{cur?.title ?? (m.title || `${m.isDemo ? 'Demo · ' : ''}${PLATFORM[m.platform] ?? m.platform} ${m.nativeId}`)}</Text>
+      {m.attachedTo ? <Text color="inactive" size="caption">{`${m.attachedTo}'s bot · shared with you`}</Text> : null}
       {cur ? <Text color="inactive" size="caption">{[day(cur.at), hour(cur.at), PLATFORM[cur.platform] ?? cur.platform].filter(Boolean).join(' · ')}</Text> : null}
     </Box>
   )
