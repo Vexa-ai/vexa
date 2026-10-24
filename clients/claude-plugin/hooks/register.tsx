@@ -595,7 +595,7 @@ const MIN_GAP_MS = 15_000
 const WINDOW_MS = 600_000
 const MAX_PER_WINDOW = 8
 let busy = false
-let batch: { reason: string; lines: string[]; direct: boolean }[] = []
+let batch: { reason: string; lines: string[]; direct: boolean; index: number }[] = []
 
 // The web and the plugin talk only through the meeting's metadata (flat keys, since
 // annotate_meeting merges key-wise): the plugin writes listener_state / listener_heard /
@@ -676,15 +676,20 @@ async function flush($: any): Promise<void> {
   const lines: string[] = []
   for (const b of batch) for (const l of b.lines) { const k = norm(l); if (!seen.has(k)) { seen.add(k); lines.push(l) } }
   const reasons = [...new Set(batch.map(b => b.reason))].join('; ')
-  const n = batch.length
+  const direct = batch.some(b => b.direct)
+  const index = Math.min(...batch.map(b => b.index))
   batch = []
   busy = true
   await setFlash($, 'sent')
   const m = await read($)
-  void $.prompt.submit({
-    text: `[Vexa listener${n > 1 ? ` · ${n} wakes batched` : ''}] ${reasons}\n\nFrom the live meeting "${m.title || m.nativeId}" (${m.platform} ${m.nativeId}):\n`
-      + `${lines.join('\n')}\n\nReact briefly if it matters to the person; tune the listener with ${CONFIGURE} if it woke you for nothing.`,
-  })
+  // Founder, 24 Oct: a wake is a signal, not an order. Only a direct address carries the lines and
+  // asks for an answer; otherwise Claude gets the trigger and decides whether to read on.
+  const text = direct
+    ? `[Vexa listener] ${reasons}\n\nFrom the live meeting "${m.title || m.nativeId}" (${m.platform} ${m.nativeId}):\n${lines.join('\n')}\n\nThis was addressed to you: answer briefly.`
+    : `[Vexa listener · signal] ${reasons} — ${m.platform} ${m.nativeId}\n\nYou decide: if this may matter to the person, read the transcript `
+      + `(get_meeting_transcript, since_index=${index}) and react briefly; if not, let it pass with a single «·». `
+      + `Tune the listener with ${CONFIGURE} if signals like this are noise.`
+  void $.prompt.submit({ text })
 }
 
 // Judges the tail of the transcript, drafts included, whenever it changes. A rule trigger wakes
@@ -736,7 +741,7 @@ async function triage($: any): Promise<void> {
     }))
     if (canWake) {
       await setFlash($, 'woke', triggerWords(v.reason))
-      batch.push({ reason: v.reason, lines: [...context.slice(-2), ...lines], direct })
+      batch.push({ reason: v.reason, lines: [...context.slice(-2), ...lines], direct, index: Math.max(0, m.segments.length - fresh.length) })
       await flush($)
     }
   } catch (err) {
@@ -1500,15 +1505,17 @@ export const register: Register = on => {
     const { Box, Text, Button } = ui
     const f = await readFlash($)
     const hot = l.isOn && ['woke', 'queued', 'sent', 'answering'].includes(f.stage)
-    const line = !l.isOn ? `${l.offer?.title ?? m.title ?? m.nativeId} is live · Claude is not listening`
-      : f.stage === 'answering' ? 'Claude is answering ↓'
-        : hot ? `Heard: ${f.line || 'something'} → Claude`
+    // Founder, 24 Oct: four states only — «Listening», the trigger itself (≤3 words), «Answering»,
+    // «Not listening» — in footnote size, with no «Claude» in the text.
+    const line = !l.isOn ? 'Not listening'
+      : f.stage === 'answering' ? 'Answering'
+        : hot ? (f.line || 'Listening')
           : 'Listening'
     return (
       <Box flexDirection="row" gap={1} alignItems="center">
         {pulse(ui, 'band-dot', l.isOn)}
         <Box flexGrow={1} flexShrink={1} minWidth={0}>
-          <Text color={!l.isOn ? 'inactive' : undefined} weight={hot ? 'semibold' : undefined} wrap="truncate-end">{line}</Text>
+          <Text color={!l.isOn ? 'inactive' : undefined} weight={hot ? 'semibold' : undefined} size="footnote" wrap="truncate-end">{line}</Text>
         </Box>
         {l.isOn ? <Button key="missed" label="What did I miss?" onPress={() => whatDidIMiss($)} /> : null}
         {l.isOn

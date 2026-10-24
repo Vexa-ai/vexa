@@ -74,7 +74,8 @@ test('a live meeting is offered; nothing is listened to before Listen', async ($
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await clock.advance(31_500)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect((await ui.find({ type: 'Text', text: /Acme pricing call/ }))?.text).toMatch(/is live/)
+  expect((await ui.find({ type: 'Text', text: /^Not listening$/ }))?.text).toBe('Not listening')
+  expect(await ui.find({ type: 'Text', text: /Claude/ })).toBeFalsy()
   expect(seen.tools).not.toContain('get_meeting_transcript')
   expect(seen.model.length).toBe(0)
   await ui.press({ key: 'decline' })
@@ -98,7 +99,12 @@ test('after Listen, a new line the filter flags wakes the main Claude once; the 
   expect(seen.model.at(-1)).toMatch(/annual plan/)
   expect(seen.model.at(-1)).not.toMatch(/NEW:\nAnn: Morning/)
   expect(seen.prompts.filter(p => p.includes('annual plan decision')).length).toBe(1)
-  expect((await ui.find({ type: 'Text', text: /^Heard: / }))?.text).toBe('Heard: annual plan decision → Claude')
+  const signal = seen.prompts.find(p => p.includes('annual plan decision'))!
+  expect(signal).toMatch(/^\[Vexa listener · signal\] annual plan decision — google_meet abc-defg-hij/)
+  expect(signal).toMatch(/since_index=1/)
+  expect(signal).not.toMatch(/We decided to go with the annual plan/)
+  expect((await ui.find({ type: 'Text', text: /annual plan decision/ }))?.text).toBe('annual plan decision')
+  expect(await ui.find({ type: 'Text', text: /Claude|Heard/ })).toBeFalsy()
   expect(await ui.find({ type: 'Text', text: /woke|filter|Mode/ })).toBeFalsy()
   lines = [...lines, seg('3', 'Bob', 'And we decided on a 3 year term.')]
   await clock.advance(3_000)
