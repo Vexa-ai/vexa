@@ -3,7 +3,7 @@
   "name": "ai.vexa/vexa",
   "title": "Vexa",
   "description": "Meeting bot and transcripts for Google Meet, Teams and Zoom. Live or after, speakers labelled.",
-  "version": "0.12.27",
+  "version": "0.12.28",
   "repository": {
     "url": "https://github.com/Vexa-ai/vexa",
     "source": "github"

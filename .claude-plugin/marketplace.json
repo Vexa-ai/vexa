@@ -1,12 +1,13 @@
 {
   "name": "vexa",
   "owner": { "name": "Vexa", "url": "https://github.com/Vexa-ai" },
+  "metadata": { "description": "Meeting bots and live transcripts for Google Meet, Microsoft Teams and Zoom, in Claude Code." },
   "plugins": [
     {
       "name": "vexa",
       "source": "./clients/claude-plugin",
       "description": "Send a bot to a Google Meet, Teams or Zoom call and read the transcript, live or after, with speakers labelled. Hosted or self-hosted.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "productivity",
       "tags": ["meetings", "transcription", "google-meet", "microsoft-teams", "zoom", "mcp"],
       "homepage": "https://docs.vexa.ai/vexa-mcp",
