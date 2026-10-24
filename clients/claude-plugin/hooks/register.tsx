@@ -608,7 +608,9 @@ let seenWantTs = 0
 let seenAskTs = 0
 async function writeState($: any, state: 'listening' | 'heard' | 'answering' | 'off', heard?: string): Promise<void> {
   const m = await read($)
-  if (!m.dbId) return
+  // Metadata is the bot owner's (annotate_meeting is owner-only): a teammate following a shared
+  // call writes nothing there; showing a reader's state needs a per-reader slot that doesn't exist yet.
+  if (!m.dbId || m.attachedTo) return
   const now = await $.clock.now()
   lastStateWrite = now
   const l = await readListener($)
@@ -620,7 +622,7 @@ async function writeState($: any, state: 'listening' | 'heard' | 'answering' | '
 // The web's buttons: Listen / Stop listening (listener_want) and «What did I miss?» (listener_ask).
 async function followWeb($: any): Promise<void> {
   const m = await read($)
-  if (!m.dbId || m.connection !== 'ready' || !isLive(m)) return
+  if (!m.dbId || m.attachedTo || m.connection !== 'ready' || !isLive(m)) return
   const l = await readListener($)
   const now = await $.clock.now()
   if (l.isOn && now - lastStateWrite >= HEARTBEAT_MS) await writeState($, 'listening')
