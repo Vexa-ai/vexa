@@ -11,10 +11,12 @@ const BAND = {
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 const seg = (id: string, speaker: string, t: string, completed = true) => ({ segment_id: id, speaker, text: t, completed, absolute_start_time: '2026-10-24T12:00:00Z' })
 
-type Seen = { tools: string[]; model: string[]; prompts: string[]; written: Record<string, string> }
+type Seen = { tools: string[]; model: string[]; prompts: string[]; written: Record<string, string>; annotations: any[] }
+const meta: Record<string, unknown> = {}
 
 function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<string, string> = {}, live?: (() => unknown[]) | 'strict'): Seen {
-  const seen: Seen = { tools: [], model: [], prompts: [], written: {} }
+  const seen: Seen = { tools: [], model: [], prompts: [], written: {}, annotations: [] }
+  for (const k of Object.keys(meta)) delete meta[k]
   on('command.register', () => ({ value: { command: 'vexa' } }))
   on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__vexa__${e.name}` } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
@@ -25,7 +27,7 @@ function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<s
   on('tool.list', () => ({ value: ['calendar_status', 'workspace_list', 'start_demo_meeting', 'get_meeting_transcript'].map(n => ({ name: `mcp__plugin_vexa_vexa__${n}` })) }))
   on('mcp.call', (_: unknown, e: any) => {
     seen.tools.push(e.tool)
-    if (e.tool === 'list_meetings') return { value: text({ meetings: [{ platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'active', data: { title: 'Acme pricing call' } }] }) }
+    if (e.tool === 'list_meetings') return { value: text({ meetings: [{ id: 41, platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'active', data: { title: 'Acme pricing call' } }] }) }
     if (e.tool === 'get_meeting_transcript' && e.args?.include_pending && live === 'strict') {
       return { value: { isError: true, content: [{ type: 'text', text: "Input validation error: Additional properties are not allowed ('include_pending', 'live_wait_ms' were unexpected)" }] } }
     }
@@ -37,7 +39,9 @@ function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<s
       const from = Number(e.args?.since_index ?? 0)
       return { value: text({ status: 'active', since_index: from, next_index: all.length, segments: all.slice(from) }) }
     }
-    if (e.tool === 'request_meeting_bot') return { value: text({ platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'active' }) }
+    if (e.tool === 'annotate_meeting') { Object.assign(meta, e.args.metadata); seen.annotations.push({ ...e.args.metadata }); return { value: text({ ok: true }) } }
+    if (e.tool === 'get_meeting') return { value: text({ id: 41, data: { metadata: { ...meta } } }) }
+    if (e.tool === 'request_meeting_bot') return { value: text({ id: 41, platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'active' }) }
     return { value: text({}) }
   })
   on('model.complete', (_: unknown, e: any) => {
@@ -150,6 +154,28 @@ test('a server whose transcript tool refuses the live-feed arguments falls back 
   await clock.advance(1_500)
   expect((await ui.find({ type: 'Text', text: /Hi everyone/ }))?.text).toBe('Hi everyone!')
   expect(await ui.find({ type: 'Text', text: /Additional properties/ })).toBeFalsy()
+  await ui.unmount()
+})
+
+test('web and plugin share the listener through meeting metadata: state, heartbeat, the web\'s Stop', async ($, on) => {
+  const clock = mock.clock(on)
+  const seen = engine(on, () => [seg('1', 'Ann', 'Morning all.')])
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ plugin: 'vexa', component: 'Pane', requestId: 'vexa-home', surface: 'desktop', props: { title: 'Vexa', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } } as any)
+  await ui.input({ key: 'h-url', text: 'https://meet.google.com/abc-defg-hij' } as any)
+  await clock.advance(1_500)
+  await ui.press({ key: 'listen' })
+  expect(seen.annotations.at(-1)).toMatchObject({ listener_state: 'listening', listener_mode: 'normal' })
+  const n = seen.annotations.length
+  await clock.advance(24_000)
+  expect(seen.annotations.length).toBeGreaterThan(n)
+  expect(seen.annotations.at(-1).listener_state).toBe('listening')
+  const now = Number(seen.annotations.at(-1).listener_ts)
+  meta.listener_want = 'off'
+  meta.listener_want_ts = now + 1
+  await clock.advance(3_000)
+  expect(seen.annotations.at(-1).listener_state).toBe('off')
+  expect(await ui.find({ type: 'Text', text: /Claude is not listening/ })).toBeTruthy()
   await ui.unmount()
 })
 

@@ -535,6 +535,7 @@ async function listen($: any): Promise<void> {
   lastAuditAt = await $.clock.now()
   auditCount = heard.length
   await updateListener($, x => ({ ...x, offer: null, isOn: true, triaged: heard.slice(-500), wakes: [], lastWakeAt: 0, error: '' }))
+  await writeState($, 'listening')
   void $.prompt.submit({
     text: `[Vexa listener] The person pressed Listen on "${room.title}" (${room.platform} ${room.nativeId}). `
       + `I watch its transcript and wake you when something matters under the "${l.preset}" listen brief. `
@@ -555,12 +556,14 @@ async function decline($: any): Promise<void> {
 
 async function stopListening($: any): Promise<void> {
   const m = await read($)
+  if ((await readListener($)).isOn) await writeState($, 'off')
   await updateListener($, x => ({ ...x, isOn: false, declined: m.nativeId ? [...x.declined, roomKey(m)].slice(-50) : x.declined }))
 }
 
 async function setPreset($: any, preset: string): Promise<void> {
   if (!app.presets[preset]) return
   await updateListener($, x => ({ ...x, preset, brief: briefFor(app, preset) }))
+  if ((await readListener($)).isOn) await writeState($, 'listening')
 }
 
 async function decide($: any, rules: string, context: string[], fresh: string[]): Promise<{ wake: boolean; reason: string; ms: number }> {
@@ -585,11 +588,63 @@ const MAX_PER_WINDOW = 8
 let busy = false
 let batch: { reason: string; lines: string[]; direct: boolean }[] = []
 
+// The web and the plugin talk only through the meeting's metadata (flat keys, since
+// annotate_meeting merges key-wise): the plugin writes listener_state / listener_heard /
+// listener_ts (+ a heartbeat every 20 s while listening; the web treats a state older than 45 s
+// as not listening) and listener_mode; the web writes listener_want ("on" | "off") and
+// listener_ask ("missed") with their _ts, which the plugin follows.
+const HEARTBEAT_MS = 20_000
+let lastStateWrite = 0
+let seenWantTs = 0
+let seenAskTs = 0
+async function writeState($: any, state: 'listening' | 'heard' | 'answering' | 'off', heard?: string): Promise<void> {
+  const m = await read($)
+  if (!m.dbId) return
+  const now = await $.clock.now()
+  lastStateWrite = now
+  const l = await readListener($)
+  const metadata: Record<string, unknown> = { listener_state: state, listener_ts: now, listener_mode: l.preset === 'default' ? 'normal' : l.preset }
+  if (heard !== undefined) metadata.listener_heard = heard.slice(-160)
+  quiet(call($, 'annotate_meeting', { meeting_db_id: m.dbId, metadata }))
+}
+
+// The web's buttons: Listen / Stop listening (listener_want) and «What did I miss?» (listener_ask).
+async function followWeb($: any): Promise<void> {
+  const m = await read($)
+  if (!m.dbId || m.connection !== 'ready' || !isLive(m)) return
+  const l = await readListener($)
+  const now = await $.clock.now()
+  if (l.isOn && now - lastStateWrite >= HEARTBEAT_MS) await writeState($, 'listening')
+  const meeting = await call($, 'get_meeting', { meeting_db_id: m.dbId })
+  const md = meeting?.data?.metadata ?? meeting?.metadata ?? {}
+  const wantTs = Number(md.listener_want_ts ?? 0)
+  if (wantTs > seenWantTs) {
+    const first = seenWantTs === 0
+    seenWantTs = wantTs
+    // A press made before this session saw the meeting is history, not a request.
+    if (!first || now - wantTs < 60_000) {
+      if (md.listener_want === 'off' && l.isOn) await stopListening($)
+      if (md.listener_want === 'on' && !l.isOn) await listenToPane($)
+    }
+  }
+  const mode = md.listener_mode === 'normal' ? 'default' : String(md.listener_mode ?? '')
+  if (l.isOn && mode && mode !== l.preset && app.presets[mode]) await setPreset($, mode)
+  const askTs = Number(md.listener_ask_ts ?? 0)
+  if (askTs > seenAskTs) {
+    const first = seenAskTs === 0
+    seenAskTs = askTs
+    if ((!first || now - askTs < 60_000) && md.listener_ask === 'missed' && l.isOn) await whatDidIMiss($)
+  }
+}
+
 // What the band shows the moment the listener acts, before the chat answers: woke → queued →
 // sent → answering → done, back to idle 8 s after done.
 async function setFlash($: any, stage: Flash['stage'], line?: string): Promise<void> {
   const at = await $.clock.now()
   await updateFlash($, f => ({ ...f, stage, at, line: line ?? f.line }))
+  if (stage === 'woke') await writeState($, 'heard', line ?? '')
+  if (stage === 'answering') await writeState($, 'answering')
+  if (stage === 'done') await writeState($, 'listening')
   if (stage === 'done') $.clock.after(8000, () => updateFlash($, f => (f.stage === 'done' && f.at === at ? { ...f, stage: 'idle' } : f)))
 }
 let sentAt: number[] = []
@@ -1326,6 +1381,7 @@ export const register: Register = on => {
     if (!polling) {
       polling = true
       $.clock.every(1500, () => quiet((async () => { await poll($); await findLive($) })()))
+      $.clock.every(3000, () => quiet(followWeb($)))
       // Signing in happens in /mcp, outside the pane: notice it without a button press.
       $.clock.every(5000, async () => {
         try { if ((await read($)).connection !== 'ready') await connect($) } catch { /* the next tick tries again */ }
