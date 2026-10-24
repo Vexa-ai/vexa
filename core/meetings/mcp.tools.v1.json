@@ -52,6 +52,19 @@
         "method": "POST",
         "path": "/voice-notes/recorder"
       }
+    },
+    {
+      "name": "start_demo_meeting",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "meetings"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/demo-meetings"
+      }
     }
   ]
 }

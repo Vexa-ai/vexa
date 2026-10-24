@@ -185,6 +185,11 @@ class MeetingRepo(Protocol):
         ``continue_meeting`` reopen not double-count the row it is about to reuse."""
         ...
 
+    async def count_demo_meetings(self, *, user_id: int, since: datetime) -> int:
+        """Count the user's demo meetings (``data.demo``) created at or after ``since`` (naive UTC):
+        the per-account demo limit (``POST /demo-meetings``)."""
+        ...
+
     async def list_service_authority_sessions(self) -> list[dict]:
         """Active admitted rows carrying a frozen service-authority identity."""
         ...

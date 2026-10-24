@@ -487,6 +487,9 @@ async def request_bot(
     # so no personal credential of the payer's is its owner. A continued meeting is reopened only
     # when it is the same principal's (or, with none, nobody's room meeting).
     room_principal: Optional[dict] = None,
+    # A DEMO MEETING (``POST /demo-meetings``): written as ``data.demo = true`` on the fresh row, so
+    # every reader that counts real use (activation, usage, the per-account demo limit) can tell it apart.
+    demo: bool = False,
 ) -> dict:
     """Run the spawn flow and return a MeetingResponse-shaped dict.
 
@@ -812,6 +815,8 @@ async def request_bot(
             meeting_data["call"] = dict(call_data)
         if is_voice_note:
             meeting_data["voice_note"] = {"max_duration_sec": voice_note_cap}
+        if demo:
+            meeting_data["demo"] = True
         if transcription_provider is not None:
             meeting_data["transcription_provider"] = transcription_provider
         meeting_data["service_authority"] = authority_record

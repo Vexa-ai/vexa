@@ -503,6 +503,20 @@
    "description": "the most people one call room admits"
   },
   {
+   "key": "DEMO_MEETINGS_PER_DAY",
+   "class": "defaulted",
+   "default": "3",
+   "targets": [],
+   "description": "demo meetings (POST /demo-meetings) one account may start in any 24 hours; 0 turns demos off"
+  },
+  {
+   "key": "DEMO_MAX_DURATION_SEC",
+   "class": "defaulted",
+   "default": "300",
+   "targets": [],
+   "description": "the longest a demo meeting's call may run (at least 60)"
+  },
+  {
    "key": "CALL_TRANSCRIPTION_SWITCHABLE",
    "class": "defaulted",
    "default": "false",

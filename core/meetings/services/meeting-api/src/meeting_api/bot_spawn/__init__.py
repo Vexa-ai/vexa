@@ -38,11 +38,13 @@ from .ports import (
     SpawnFailed,
     TranscriptionNotConfigured,
 )
+from .router import _resolve_max_concurrent as resolve_max_concurrent
 from .router import build_router
 from .service import DuplicateMeeting, construct_meeting_url, request_bot
 
 __all__ = [
     "build_router",
+    "resolve_max_concurrent",
     "request_bot",
     "construct_meeting_url",
     "build_invocation",

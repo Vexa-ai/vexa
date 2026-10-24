@@ -227,7 +227,7 @@ MCP_CALLBACKS = {
     ("GET", "/recordings"), ("GET", "/recordings/{recording_id}"),
     ("GET", "/transcripts/by-id/{meeting_id}"), ("GET", "/transcripts/search"),
     ("GET", "/transcripts/{platform}/{native_meeting_id}"),
-    ("POST", "/voice-notes/recorder"),
+    ("POST", "/voice-notes/recorder"), ("POST", "/demo-meetings"),
     ("GET", "/user/settings"), ("PUT", "/user/settings"),
     ("GET", "/user/workspace-regime"), ("PUT", "/user/workspace-regime"),
 }

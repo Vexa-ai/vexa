@@ -43,6 +43,7 @@ The meeting tools, plus four prompts (`vexa.meeting_prep` · `vexa.during_meetin
 | `list_recordings` | `GET /recordings` |
 | `get_recording` | `GET /recordings/{recording_id}` |
 | `record_voice_note` | `POST /voice-notes/recorder` — opens the voice-note recorder in the person's open Minutes tab (`ui_action: open_voice_note`); records nothing itself; refused to a worker with nobody present |
+| `start_demo_meeting` | `POST /demo-meetings` — a demo meeting for someone with no meeting right now: Vexa opens a call room, two scripted speakers talk for about a minute, and the person's own bot transcribes them. Returns `platform` + `native_meeting_id` for `get_meeting_transcript`; ends by itself; marked `data.demo`, not billed, 3 per account per day (`DEMO_MEETINGS_PER_DAY`); needs calls (LiveKit) on the deployment |
 | `search_transcripts` | `GET /transcripts/search` |
 | `annotate_meeting` | `POST /meetings/{platform}/{native}/annotate` (or `/meetings/{meeting_db_id}/annotate`) — sets the title and merges metadata keys |
 | `get_meeting_chat` | `GET /bots/{platform}/{native}/chat` |

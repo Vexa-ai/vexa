@@ -430,6 +430,23 @@ class SqlAlchemyMeetingRepo:
                 stmt = stmt.where(Meeting.id != exclude_meeting_id)
             return int((await db.execute(stmt)).scalar() or 0)
 
+    async def count_demo_meetings(self, *, user_id, since) -> int:
+        from sqlalchemy import func, select
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            stmt = (
+                select(func.count())
+                .select_from(Meeting)
+                .where(
+                    Meeting.user_id == user_id,
+                    Meeting.created_at >= since,
+                    Meeting.data["demo"].astext == "true",
+                )
+            )
+            return int((await db.execute(stmt)).scalar() or 0)
+
     async def list_stale_stopping(
         self, *, older_than_seconds: float
     ) -> list[tuple[int, str, Optional[str]]]:

@@ -29,7 +29,29 @@
         "maxDurationSec": { "type": "integer", "minimum": 1, "description": "the longest call; the bot ends a call still running at it with `max_bot_time_exceeded`" },
         "emptyGraceSec": { "type": "integer", "minimum": 0, "default": 30, "description": "how long an emptied room is given for someone to come back before the call ends (`left_alone`)" },
         "firstJoinTimeoutSec": { "type": "integer", "minimum": 1, "default": 300, "description": "how long the bot waits for the first participant before the call ends (`left_alone`)" },
-        "screenShareAudio": { "type": "boolean", "default": true, "description": "policy: also transcribe the audio of a screen a participant shares (a tab or video with sound), as its own channel named \"<participant> (shared screen)\"; false ⇒ that track is never read (CALL_TRANSCRIBE_SHARED_SCREEN)" }
+        "screenShareAudio": { "type": "boolean", "default": true, "description": "policy: also transcribe the audio of a screen a participant shares (a tab or video with sound), as its own channel named \"<participant> (shared screen)\"; false ⇒ that track is never read (CALL_TRANSCRIBE_SHARED_SCREEN)" },
+        "presenter": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["script", "speakers"],
+          "description": "A demo call (`POST /demo-meetings`): the bot also joins the room once per scripted speaker, with that speaker's own publish token, and plays the script bundled in the bot image, so a room nobody hosts has something to transcribe. The listener transcribes the speakers like any participants; when the script ends they leave and the call ends as an emptied room. Absent on every other call",
+          "properties": {
+            "script": { "type": "string", "pattern": "^[a-z0-9-]{1,40}$", "description": "the bundled script's name (`demo/<script>/` in the bot image)" },
+            "speakers": {
+              "type": "array", "minItems": 1, "maxItems": 4,
+              "description": "one entry per voice in the script, matched to its turns by name",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "token"],
+                "properties": {
+                  "name": { "type": "string", "minLength": 1, "maxLength": 60, "description": "the speaker as the script names them, and as the transcript shows them" },
+                  "token": { "type": "string", "description": "SECRET — this speaker's LiveKit access token: this room only, publishes audio, short-lived. Placeholder in goldens" }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "AutomaticLeave": {

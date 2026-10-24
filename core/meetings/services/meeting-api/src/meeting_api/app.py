@@ -324,8 +324,11 @@ def create_app(
     if calls is not None:
         from .calls.spawn import end_call_room
 
+        from .demo import demo_ended
+
         async def _call_ended(meeting_row):
             await end_call_room(calls, meeting_row)
+            await demo_ended(meeting_row)
 
     # --- lifecycle: bot lifecycle callbacks + FSM (lifecycle.v1), PERSISTED to the meeting row ---
     sink = LifecycleSink(store=meeting_store if meeting_store is not None else MeetingStore())
@@ -380,6 +383,16 @@ def create_app(
         redis_grant=bot_redis.grant if bot_redis is not None else None,
         calls=calls,
         bot_accounts=bot_accounts,
+    ))
+
+    # --- demo: POST /demo-meetings — the MCP tool start_demo_meeting (a call with scripted speakers) ---
+    from .demo import build_router as _build_demo_router
+    app.include_router(_build_demo_router(
+        meeting_repo,
+        runtime,
+        calls=calls,
+        transcript_stream_purge=_stream_purge,
+        redis_grant=bot_redis.grant if bot_redis is not None else None,
     ))
 
     # --- user-stop: DELETE /bots/{platform}/{native_meeting_id} (lifecycle/stop.py over redis) ---

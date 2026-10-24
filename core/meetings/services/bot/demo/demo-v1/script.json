@@ -1,0 +1,47 @@
+{
+  "script": "demo-v1",
+  "sampleRate": 16000,
+  "leadInMs": 1500,
+  "gapMs": 600,
+  "speakers": [
+    "Maya",
+    "Leo"
+  ],
+  "turns": [
+    {
+      "speaker": "Maya",
+      "audio": "turn0.wav",
+      "text": "Hi everyone, thanks for joining. This is a short demo meeting, so you can see Vexa transcribe a live call in real time."
+    },
+    {
+      "speaker": "Leo",
+      "audio": "turn1.wav",
+      "text": "Great. Quick agenda: the launch date, the pricing page, and who follows up with the design team."
+    },
+    {
+      "speaker": "Maya",
+      "audio": "turn2.wav",
+      "text": "On the launch, we agreed to move it to Tuesday the fourteenth. That gives us two extra days for testing."
+    },
+    {
+      "speaker": "Leo",
+      "audio": "turn3.wav",
+      "text": "Makes sense. For pricing, let's keep the free tier and add an annual plan with a twenty percent discount."
+    },
+    {
+      "speaker": "Maya",
+      "audio": "turn4.wav",
+      "text": "Agreed. I'll send the updated copy to design by Friday. Leo, can you check the analytics dashboard before then?"
+    },
+    {
+      "speaker": "Leo",
+      "audio": "turn5.wav",
+      "text": "Yes, I'll own that. And notice that everything we just said is already in your transcript, with each speaker named."
+    },
+    {
+      "speaker": "Maya",
+      "audio": "turn6.wav",
+      "text": "That's the demo. Ask Claude for a summary or the action items, then try Vexa on your next real meeting. Bye!"
+    }
+  ]
+}

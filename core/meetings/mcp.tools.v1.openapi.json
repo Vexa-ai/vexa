@@ -43,6 +43,46 @@
         "summary": "Bots Status"
       }
     },
+    "/demo-meetings": {
+      "post": {
+        "description": "Start a demo meeting the person can watch being transcribed live, when they have no\nmeeting of their own right now (or just want to see how Vexa works). Nothing to paste and\nnobody to admit: Vexa opens a room, two scripted speakers talk for about a minute, and the\nperson's own transcription bot transcribes them. Returns `platform` and `native_meeting_id`:\nread the transcript with get_meeting_transcript while it runs (the first lines arrive within\nseconds). The meeting ends by itself when the script ends. A few per account per day;\ndemos are free and are marked as demos (`data.demo`).",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-user-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-user-limits",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Limits"
+            }
+          }
+        ],
+        "summary": "Start Demo Meeting"
+      }
+    },
     "/recordings/{recording_id}": {
       "get": {
         "description": "Get a single recording and its media files. 404 if the id is not one of your recordings.",

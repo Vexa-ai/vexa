@@ -22,6 +22,9 @@
  * terminal `failed` (join_failure) rather than crashing the root — same disposability as the
  * lazy redis connect.
  */
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createClient } from 'redis';
 import { isMixedLanePlatform, loadInvocation, InvocationError, speakerStreamConfigFromEnv, withLatencyProfile, type Invocation } from './config.js';
 import type { Act, LifecycleEvent, TranscriptSegment } from './contracts.js';
@@ -47,6 +50,7 @@ import { createRedisAudioStreamReader, redisStreamClientFrom, type LiveRedisStre
 import { createSessionEnd } from './adapters/redis-terminal.js';
 import { callMaxActiveMs, createCallJoinDriver, createCallPipeline, createCallSource } from './call.js';
 import { createLiveKitRoom, type LiveKitSdk } from './adapters/livekit-room.js';
+import { loadScript, runPresenter, withPresenter, type Presenter, type PresenterRun, type PresenterSdk } from './presenter.js';
 import { runBrowserSession } from './browser-session.js';
 import type {
   JoinDriver,
@@ -137,6 +141,22 @@ export function teeActs(
  * whether redis answers a PING. Never throws: any fault resolves to `false` (unreachable). Uses a
  * throwaway client (not the lazy transcript/acts clients) so the probe can't disturb their state.
  */
+/** The demo presenter of a demo call (invocation.v1 `call.presenter`): its script is bundled in the
+ *  image at `demo/<script>/`. A script that cannot be loaded starts nothing — the room stays
+ *  empty and the call ends by its first-join window — and is logged. */
+function startDemoPresenter(url: string, presenter: Presenter, sdk: unknown): PresenterRun | null {
+  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'demo', presenter.script);
+  try {
+    const { script, turns } = loadScript(presenter, (rel) => fs.readFileSync(path.join(dir, rel)));
+    const run = runPresenter({ sdk: sdk as PresenterSdk, url, presenter, script, turns, log: (m) => console.log(m) });
+    void run.done.then((r) => console.log(`[bot] demo presenter done: ${JSON.stringify(r)}`));
+    return run;
+  } catch (e) {
+    console.error(`[bot] demo presenter not started: ${(e as Error).message}`);
+    return null;
+  }
+}
+
 async function pingRedis(redisUrl: string, timeoutMs = 3000): Promise<boolean> {
   const client = createClient({ url: redisUrl, socket: { connectTimeout: timeoutMs, reconnectStrategy: false } });
   client.on('error', () => { /* swallow — the probe's verdict is the return value, not a throw */ });
@@ -321,9 +341,10 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     });
     botPipeline = engine;
     const sdk = (await import('@livekit/rtc-node')) as unknown as LiveKitSdk;
+    const listenerRoom = createLiveKitRoom({ sdk, url: c.url, token: c.token, log: (m) => console.log(m),
+      screenShareAudio: c.screenShareAudio !== false });
     const source = createCallSource({
-      room: createLiveKitRoom({ sdk, url: c.url, token: c.token, log: (m) => console.log(m),
-        screenShareAudio: c.screenShareAudio !== false }),
+      room: c.presenter ? withPresenter(listenerRoom, () => startDemoPresenter(c.url, c.presenter!, sdk)) : listenerRoom,
       feed: (channel, name, pcm, tsMs) => engine.feedAudio(channel, name, pcm, tsMs),
       onEmpty: (why) => { console.log(`[bot] call: ${why}`); aloneHook?.(); },
       emptyGraceMs: (c.emptyGraceSec ?? 30) * 1000,

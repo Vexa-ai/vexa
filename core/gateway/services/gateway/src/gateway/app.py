@@ -1508,6 +1508,12 @@ def create_app(
     async def voice_note_recorder(request: Request):
         return await _forward_meeting(request)
 
+    # A demo meeting (the MCP tool start_demo_meeting): meeting-api opens a call room with scripted
+    # speakers and the person's own listener; a worker with nobody present is refused there.
+    @app.post("/demo-meetings")
+    async def demo_meeting(request: Request):
+        return await _forward_meeting(request)
+
     @app.get("/voice-notes/{native_meeting_id}/stream")
     async def voice_note_stream_without_upgrade(native_meeting_id: str, request: Request):
         return await _forward_meeting(request)   # meeting-api answers a plain GET with 426

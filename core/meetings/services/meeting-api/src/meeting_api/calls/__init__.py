@@ -10,7 +10,7 @@ Front door (P6): import from here, never a deep module path.
 """
 from __future__ import annotations
 
-from .livekit import LiveKitConfig, RoomService, admin_token, listener_token, participant_token
+from .livekit import LiveKitConfig, RoomService, admin_token, listener_token, participant_token, presenter_token
 from .spawn import (
     PLATFORM,
     CallLimits,
@@ -36,6 +36,7 @@ __all__ = [
     "discard_call",
     "listener_token",
     "participant_token",
+    "presenter_token",
     "prepare_call",
     "record_meeting",
 ]

@@ -69,7 +69,8 @@ export interface Call {
   /** How long the listener waits for the first participant. */
   firstJoinTimeoutSec?: number;
   /** Transcribe the audio of a screen a participant shares (policy; absent ⇒ on). */
-  screenShareAudio?: boolean;
+  screenShareAudio?: boolean;  /** A demo call: the scripted speakers this bot also plays into the room (`presenter.ts`). */
+  presenter?: { script: string; speakers: { name: string; token: string }[] };
 }
 
 export interface AutomaticLeave {

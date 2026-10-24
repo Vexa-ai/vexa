@@ -130,6 +130,7 @@ HAND_WRITTEN = [
     ("GET", "/recordings", {}),
     ("GET", "/tools/get_recording", {"params": {"recording_id": 5}}),  # meetings' own tool
     ("POST", "/tools/record_voice_note", {}),  # meetings' own tool: opens the recorder in Minutes
+    ("POST", "/tools/start_demo_meeting", {}),  # meetings' own tool: a call with scripted speakers
     ("GET", "/meeting", {"params": {"meeting_db_id": 7}}),
     ("DELETE", "/meeting", {"params": {"meeting_db_id": 7, "asked_by_a_human": True}}),
     ("GET", "/meeting-participants", {"params": {"native_meeting_id": "abc-defg-hij"}}),

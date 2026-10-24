@@ -122,6 +122,16 @@ def listener_token(cfg: LiveKitConfig, *, room: str, ttl_sec: int, now: Optional
                          now=now, name="Vexa transcription"), cfg.api_secret)
 
 
+def presenter_token(cfg: LiveKitConfig, *, room: str, name: str, ttl_sec: int = DEFAULT_PARTICIPANT_TTL_SEC,
+                    now: Optional[float] = None) -> str:
+    """A demo call's scripted speaker (``POST /demo-meetings``): join this one room and publish audio;
+    hears nothing and sends no data. Minted with the deployment's own LiveKit key, never a person's."""
+    video = {"room": room, "roomJoin": True, "canPublish": True, "canPublishSources": ["microphone"],
+             "canSubscribe": False, "canPublishData": False}
+    return _sign(_claims(cfg, identity=f"vexa-demo-{room}-{name.lower()}", video=video, ttl_sec=ttl_sec,
+                         now=now, name=name), cfg.api_secret)
+
+
 def admin_token(cfg: LiveKitConfig, *, room: str, now: Optional[float] = None) -> str:
     """A room-service token for one room: create it, read it, end it."""
     video = {"room": room, "roomAdmin": True, "roomCreate": True}

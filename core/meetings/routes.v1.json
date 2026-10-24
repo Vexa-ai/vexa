@@ -161,6 +161,15 @@
       "shared": "refuse"
     },
     {
+      "method": "POST",
+      "path": "/demo-meetings",
+      "scopes": [
+        "bot"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
       "method": "GET",
       "path": "/meetings",
       "scopes": [

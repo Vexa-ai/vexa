@@ -356,6 +356,12 @@ class InMemoryMeetingRepo:
             and m["id"] != exclude_meeting_id
         )
 
+    async def count_demo_meetings(self, *, user_id, since) -> int:
+        # The in-memory store stamps every row with one fixed time, so ``since`` cannot separate
+        # them: every demo row of the user counts.
+        return sum(1 for m in self._meetings.values()
+                   if m["user_id"] == user_id and (m.get("data") or {}).get("demo") is True)
+
     async def list_service_authority_sessions(self) -> list[dict]:
         """Active rows carrying a per-run authority identity."""
         return [

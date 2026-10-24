@@ -49,6 +49,7 @@ CASES = [
     ("GET", "/bots/status", "/bots/status"),
     ("GET", "/voice-notes/vn-abc/stream", "/voice-notes/{native_meeting_id}/stream"),
     ("POST", "/voice-notes/recorder", "/voice-notes/recorder"),
+    ("POST", "/demo-meetings", "/demo-meetings"),
     ("DELETE", "/bots/google_meet/abc-defg-hij", "/bots/{platform}/{native_meeting_id}"),
     ("PUT", "/bots/google_meet/abc-defg-hij/config", "/bots/{platform}/{native_meeting_id}/config"),
     ("POST", "/bots/google_meet/abc-defg-hij/speak", "/bots/{platform}/{native_meeting_id}/speak"),
