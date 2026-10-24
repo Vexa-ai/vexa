@@ -23,11 +23,15 @@ function engine(on: any, connect: unknown, calls: { tool: string; args: unknown 
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('mcp.connect', () => ({ value: connect }))
   on('fs.exists', () => ({ value: false }))
+  on('env.get', () => ({ value: undefined }))
   on('mcp.call', (_: unknown, e: any) => {
     calls.push({ tool: e.tool, args: e.args })
     if (e.tool === 'start_demo_meeting') return { value: text({ platform: 'jitsi', native_meeting_id: 'vexa-demo-1', status: 'requested' }) }
     if (e.tool === 'list_meetings') return { value: text({ meetings: [] }) }
-    if (e.tool === 'get_meeting_transcript') return { value: text({ status: 'active', next_index: 1, segments: [{ speaker: 'Vexa demo', text: 'Hello from the demo', absolute_start_time: '2026-10-24T12:00:01Z' }] }) }
+    if (e.tool === 'get_meeting_transcript') {
+      const all = [{ segment_id: 's1', completed: true, speaker: 'Vexa demo', text: 'Hello from the demo', absolute_start_time: '2026-10-24T12:00:01Z' }]
+      return { value: text({ status: 'active', next_index: all.length, segments: all.slice(Number(e.args?.since_index ?? 0)) }) }
+    }
     return { value: text({}) }
   })
 }

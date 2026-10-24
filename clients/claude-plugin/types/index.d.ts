@@ -1,4 +1,5 @@
-export type Seg = { speaker: string; text: string; time: string }
+// A transcript segment. `pending`: a draft the recognizer may still change or withdraw.
+export type Seg = { id: string; speaker: string; text: string; time: string; pending: boolean }
 
 // `connection`: where the plugin's own `vexa` server stands. `signin` is the
 // OAuth sign-in Claude Code has not done yet; `refused` carries the reason.
@@ -7,6 +8,7 @@ export type Meeting = {
   url: string
   platform: string
   nativeId: string
+  title: string
   isDemo: boolean
   status: string
   nextIndex: number
@@ -15,7 +17,8 @@ export type Meeting = {
 }
 
 // The listen brief, as signals.v1 `Brief` names it (labels, focus, known, wake_at, max_wait_s,
-// rules), so the app's chat and Claude share one rule model.
+// rules), so the app's chat and Claude share one rule model. Here `focus` carries the
+// plain-language rules the attention filter reads; `rules` are keyword/person/regex triggers.
 export type Label = { name: string; question?: string; wake?: boolean }
 export type Rule = { kind: 'keyword' | 'person' | 'regex'; value: string; wake?: boolean }
 export type Brief = {
@@ -29,7 +32,7 @@ export type Brief = {
 
 export type Room = { platform: string; nativeId: string; title: string }
 export type Line = { speaker: string; text: string }
-export type Wake = { at: string; reason: string; excerpt: string }
+export type Wake = { at: string; reason: string }
 
 // The app the pane and listener run from (vexa-app.json), as the pane shows it.
 export type AppInfo = {
@@ -41,20 +44,19 @@ export type AppInfo = {
   pane: { title: string; emptyHint: string; demo: boolean; offerListening: boolean }
 }
 
-// One listener: offered when a meeting is live, running only after the person pressed Listen.
+// The listener: offered when a meeting is live, on only after the person pressed Listen; it
+// follows the meeting the pane shows.
 export type Listener = {
   offer: Room | null
   declined: string[]
-  active: Room | null
+  isOn: boolean
   preset: string
   brief: Brief
-  nextIndex: number
-  context: Line[]
-  buffer: Line[]
-  score: number
-  since: number
+  triaged: string[]
   lastWakeAt: number
   wakes: Wake[]
+  lastVerdict: string
+  lastMs: number
   error: string
   app: AppInfo
 }

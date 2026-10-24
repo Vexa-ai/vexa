@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { FALLBACK_APP, briefFor, buildApp, normalize, parseManifest, ruleHit, wakeReason } from '../hooks/listener'
+import { FALLBACK_APP, briefFor, buildApp, calibrationSummary, isDirect, normalize, parseDecision, parseManifest, ruleHit, rulesText } from '../hooks/listener'
 
 const BAND = {
   plugin: 'vexa',
@@ -9,15 +9,18 @@ const BAND = {
 } as const
 
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
+const seg = (id: string, speaker: string, t: string, completed = true) => ({ segment_id: id, speaker, text: t, completed, absolute_start_time: '2026-10-24T12:00:00Z' })
 
-type Seen = { tools: string[]; model: string[]; prompts: string[] }
+type Seen = { tools: string[]; model: string[]; prompts: string[]; written: Record<string, string> }
 
-function engine(on: any, segments: () => unknown[], scores = '{}'): Seen {
-  const seen: Seen = { tools: [], model: [], prompts: [] }
+function engine(on: any, segments: () => unknown[], decision = '{"wake":false,"reason":"small talk"}', fs: Record<string, string> = {}): Seen {
+  const seen: Seen = { tools: [], model: [], prompts: [], written: {} }
   on('command.register', () => ({ value: { command: 'vexa' } }))
-  on('tool.register', () => ({ value: { tool: 'mcp__vexa__listener_configure' } }))
+  on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__vexa__${e.name}` } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.toast', () => ({ value: undefined }))
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
+  on('env.get', (_: unknown, e: any) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
   on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:vexa:vexa' } }))
   on('mcp.call', (_: unknown, e: any) => {
     seen.tools.push(e.tool)
@@ -25,24 +28,40 @@ function engine(on: any, segments: () => unknown[], scores = '{}'): Seen {
     if (e.tool === 'get_meeting_transcript') {
       const all = segments()
       const from = Number(e.args?.since_index ?? 0)
-      return { value: text({ status: 'active', next_index: all.length, segments: all.slice(from) }) }
+      return { value: text({ status: 'active', since_index: from, next_index: all.length, segments: all.slice(from) }) }
     }
+    if (e.tool === 'request_meeting_bot') return { value: text({ platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'active' }) }
     return { value: text({}) }
   })
   on('model.complete', (_: unknown, e: any) => {
     seen.model.push(String(e.prompt))
-    return { value: { isAnswered: true, text: scores, usage: { inputTokens: 1, outputTokens: 1 } } }
+    return { value: { isAnswered: true, text: decision, usage: { inputTokens: 1, outputTokens: 1 } } }
   })
   on('prompt.submit', (_: unknown, e: any) => { seen.prompts.push(e.text); return { text: e.text } })
-  on('fs.exists', () => ({ value: false }))
+  // The plugin's own folder is spelled PLUGIN here: the kit sets the real root.
+  const key = (p: string) => (p.startsWith('/home/') || p.includes('.vexa/app') ? p : `PLUGIN${p.slice(p.lastIndexOf('/app'))}`)
+  const files = { ...fs }
+  const dirOf = (p: string) => Object.keys(files).filter(f => f.startsWith(`${key(p)}/`))
+  on('fs.exists', (_: unknown, e: any) => ({ value: key(e.path) in files || dirOf(e.path).length > 0 }))
+  on('fs.read', (_: unknown, e: any) => (key(e.path) in files ? { value: files[key(e.path)] } : { deny: `ENOENT ${e.path}` }))
+  on('fs.write', (_: unknown, e: any) => { files[key(e.path)] = e.text; seen.written[key(e.path)] = e.text; return { value: undefined } })
+  on('fs.list', (_: unknown, e: any) => {
+    const names = new Map<string, 'file' | 'dir'>()
+    for (const f of dirOf(e.path)) {
+      const rest = f.slice(key(e.path).length + 1)
+      const [head, ...tail] = rest.split('/')
+      names.set(head!, tail.length ? 'dir' : 'file')
+    }
+    return { value: [...names].map(([name, kind]) => ({ name, kind, size: 0, mtimeMs: 0, isLink: false })) }
+  })
   return seen
 }
 
 test('a live meeting is offered; nothing is listened to before Listen', async ($, on) => {
   const clock = mock.clock(on)
-  const seen = engine(on, () => [{ speaker: 'Ann', text: 'Our budget is 40k' }])
+  const seen = engine(on, () => [seg('1', 'Ann', 'Our budget is 40k')])
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  await clock.advance(32_000)
+  await clock.advance(31_500)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect((await ui.find({ type: 'Text', text: /Acme pricing call/ }))?.text).toMatch(/is live/)
   expect(seen.tools).not.toContain('get_meeting_transcript')
@@ -53,61 +72,118 @@ test('a live meeting is offered; nothing is listened to before Listen', async ($
   await ui.unmount()
 })
 
-test('after Listen, a scored stretch wakes the main Claude once, then waits out the gap', async ($, on) => {
+test('after Listen, a new line the filter flags wakes the main Claude once; the gap holds the next', async ($, on) => {
   const clock = mock.clock(on)
-  let lines = [{ speaker: 'Ann', text: 'We decided to go with the annual plan.' }]
-  const seen = engine(on, () => lines, '{"addressed_to_vexa":0,"decision":0.95,"action_item":0.1,"question_to_user":0}')
+  let lines = [seg('1', 'Ann', 'Morning all.')]
+  const seen = engine(on, () => lines, '{"wake":true,"reason":"a decision was made"}')
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  await clock.advance(32_000)
+  await clock.advance(31_500)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   await ui.press({ key: 'listen' })
   expect(seen.prompts.at(-1)).toMatch(/pressed Listen/)
-  await clock.advance(4_000)
-  expect(seen.model.length).toBeGreaterThan(0)
-  expect(seen.model[0]).toMatch(/annual plan/)
-  const wakes = seen.prompts.filter(p => p.includes('woke because'))
-  expect(wakes.length).toBe(1)
-  expect(wakes[0]).toMatch(/decision/)
-  lines = [...lines, { speaker: 'Bob', text: 'And we decided on a 3 year term.' }]
-  await clock.advance(8_000)
-  expect(seen.prompts.filter(p => p.includes('woke because')).length).toBe(1)
+  expect(seen.model.length).toBe(0)
+  lines = [...lines, seg('2', 'Ann', 'We decided to go with the annual plan.')]
+  await clock.advance(1_500)
+  expect(seen.model.at(-1)).toMatch(/annual plan/)
+  expect(seen.model.at(-1)).not.toMatch(/NEW lines:\nAnn: Morning/)
+  expect(seen.prompts.filter(p => p.includes('a decision was made')).length).toBe(1)
+  lines = [...lines, seg('3', 'Bob', 'And we decided on a 3 year term.')]
+  await clock.advance(3_000)
+  expect(seen.prompts.filter(p => p.includes('a decision was made')).length).toBe(1)
   await ui.unmount()
 })
 
-test('listener_configure sets labels and triggers but cannot start listening', async ($, on) => {
+test('a draft is replaced in place by its final version, and a withdrawn draft disappears', async ($, on) => {
+  const clock = mock.clock(on)
+  let lines: unknown[] = []
+  engine(on, () => lines)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ plugin: 'vexa', component: 'Pane', requestId: 'vexa-meeting', surface: 'desktop', props: { title: 'Vexa', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } } as any)
+  await ui.input({ key: 'url', text: 'https://meet.google.com/abc-defg-hij' } as any)
+  lines = [seg('a', 'Ann', 'we decid', false), seg('b', 'Bob', 'uh', false)]
+  await clock.advance(1_500)
+  expect((await ui.find({ type: 'Text', text: /we decid/ }))?.text).toBe('we decid')
+  lines = [seg('a', 'Ann', 'We decided.')]
+  await clock.advance(1_500)
+  expect((await ui.find({ type: 'Text', text: /We decided\./ }))?.text).toBe('We decided.')
+  expect(await ui.find({ type: 'Text', text: /^uh$/ })).toBeFalsy()
+  await ui.unmount()
+})
+
+test('listener_configure: plain rules, triggers and presets; it cannot start listening', async ($, on) => {
   mock.clock(on)
   engine(on, () => [])
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const r: any = await $.tool.call({ tool: 'mcp__vexa__listener_configure', action: 'update', labels: [{ name: 'price' }], rules: [{ kind: 'keyword', value: 'discount' }] } as any)
+  const r: any = await $.tool.call({ tool: 'mcp__vexa__listener_configure', rules: 'Wake on any price.', triggers: [{ kind: 'keyword', value: 'discount' }] } as any)
   expect(r.result.listening).toBe(false)
-  expect(r.result.brief.labels.map((l: any) => l.name)).toEqual(['addressed_to_vexa', 'price'])
+  expect(r.result.brief.focus).toBe('Wake on any price.')
   expect(r.result.brief.rules[0].value).toBe('discount')
 })
 
-test('an app folder: manifest, pane copy and presets; broken parts fall back', () => {
-  const m = parseManifest(JSON.stringify({ schema: 'vexa-app/v1', name: 'acme-sales', version: '1.0.0', upstream: { repo: 'https://github.com/Vexa-ai/vexa', path: 'clients/claude-plugin/app', ref: 'main' }, listener: { defaultPreset: 'sales' } }))
-  expect(m?.name).toBe('acme-sales')
-  expect(parseManifest('{"schema":"other"}')).toBe(null)
-  const a = buildApp('.vexa/app', m!, '{"title":"Acme","demo":false}', {
-    'sales.json': JSON.stringify({ labels: [{ name: 'price' }], focus: 'money' }),
-    'broken.json': '{',
-  })
-  expect(Object.keys(a.presets)).toEqual(['sales'])
-  expect(a.defaultPreset).toBe('sales')
-  expect(a.pane.title).toBe('Acme')
-  expect(a.pane.demo).toBe(false)
-  expect(a.pane.offerListening).toBe(true)
-  expect(a.upstream).toBe('https://github.com/Vexa-ai/vexa/clients/claude-plugin/app@main')
-  expect(briefFor(a, 'nope').focus).toBe('money')
+test('first run seeds ~/.vexa/apps/<name>; an update keeps edited files and lands the new version beside them', async ($, on) => {
+  mock.clock(on)
+  const root = 'PLUGIN'
+  const manifest = (v: string) => JSON.stringify({ schema: 'vexa-app/v1', name: 'meeting-assistant', version: v, listener: { defaultPreset: 'default' } })
+  const files: Record<string, string> = {
+    [`${root}/app/vexa-app.json`]: manifest('0.3.0'),
+    [`${root}/app/pane.json`]: '{"title":"Vexa v3"}',
+    [`${root}/app/listener/default.json`]: '{"focus":"new default rules"}',
+    '/home/u/.vexa/apps/meeting-assistant/vexa-app.json': manifest('0.2.0'),
+    '/home/u/.vexa/apps/meeting-assistant/pane.json': '{"title":"Vexa"}',
+    '/home/u/.vexa/apps/meeting-assistant/listener/default.json': '{"focus":"my own rules"}',
+    '/home/u/.vexa/apps/meeting-assistant/.upstream/vexa-app.json': manifest('0.2.0'),
+    '/home/u/.vexa/apps/meeting-assistant/.upstream/pane.json': '{"title":"Vexa"}',
+    '/home/u/.vexa/apps/meeting-assistant/.upstream/listener/default.json': '{"focus":"old default rules"}',
+  }
+  const seen = engine(on, () => [], undefined, files)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const dir = '/home/u/.vexa/apps/meeting-assistant'
+  expect(seen.written[`${dir}/pane.json`]).toBe('{"title":"Vexa v3"}')
+  expect(seen.written[`${dir}/listener/default.json`]).toBeUndefined()
+  expect(seen.written[`${dir}/listener/default.json.upstream`]).toBe('{"focus":"new default rules"}')
+  expect(seen.written[`${dir}/.upstream/vexa-app.json`]).toBe(manifest('0.3.0'))
+  const r: any = await $.tool.call({ tool: 'mcp__vexa__listener_configure' } as any)
+  expect(r.result.appFolder).toBe(dir)
+  expect(r.result.brief.focus).toBe('my own rules')
 })
 
-test('brief rules: addressed_to_vexa is kept, bounds hold, unsafe regex refused, triggers match', () => {
+test('a clean profile: the shipped app is copied to ~/.vexa/apps/<name> with its .upstream base', async ($, on) => {
+  mock.clock(on)
+  const root = 'PLUGIN'
+  const seen = engine(on, () => [], undefined, {
+    [`${root}/app/vexa-app.json`]: JSON.stringify({ schema: 'vexa-app/v1', name: 'meeting-assistant', version: '0.2.0' }),
+    [`${root}/app/listener/default.json`]: '{"focus":"shipped"}',
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  expect(Object.keys(seen.written).sort()).toEqual([
+    '/home/u/.vexa/apps/meeting-assistant/.upstream/listener/default.json',
+    '/home/u/.vexa/apps/meeting-assistant/.upstream/vexa-app.json',
+    '/home/u/.vexa/apps/meeting-assistant/listener/default.json',
+    '/home/u/.vexa/apps/meeting-assistant/vexa-app.json',
+  ])
+})
+
+test('pure parts: brief bounds, triggers, the filter reply, direct address, app folder, calibration score', () => {
   const b = normalize({ labels: [{ name: 'price' }, { name: 'Bad Name' }], wake_at: 500, rules: [{ kind: 'regex', value: '(a+)+' }, { kind: 'person', value: 'ann' }] })
   expect(b.labels.map(l => l.name)).toEqual(['addressed_to_vexa', 'price'])
   expect(b.wake_at).toBe(1)
   expect(b.rules).toEqual([{ kind: 'person', value: 'ann', wake: true }])
   expect(ruleHit(b.rules, [{ speaker: 'Ann Lee', text: 'hi' }])).toMatch(/person/)
-  const d = briefFor(FALLBACK_APP, 'default')
-  expect(wakeReason({ scores: { addressed_to_vexa: 0.8 }, running: 0, brief: d, buffered: 1, since: 1, now: 2 })).toBe('addressed')
-  expect(wakeReason({ scores: {}, running: 0.3, brief: d, buffered: 1, since: 1, now: 2 })).toBe(null)
+  expect(rulesText(briefFor(FALLBACK_APP, 'default'))).toMatch(/addresses the assistant/)
+  expect(rulesText(b)).toMatch(/money terms/)
+  expect(parseDecision('sure: {"wake":true,"reason":"asked a price"}')).toEqual({ wake: true, reason: 'asked a price' })
+  expect(parseDecision('nope').wake).toBe(false)
+  expect(isDirect(['Bob: Claude, what did we agree?'])).toBe(true)
+  expect(isDirect(['Bob: Клод, прочитай'])).toBe(true)
+  expect(isDirect(['Bob: the cloud is fine'])).toBe(false)
+  const m = parseManifest(JSON.stringify({ schema: 'vexa-app/v1', name: 'acme-sales', upstream: { repo: 'https://github.com/Vexa-ai/vexa', path: 'clients/claude-plugin/app', ref: 'main' }, listener: { defaultPreset: 'sales' } }))
+  const a = buildApp('.vexa/app', m!, '{"title":"Acme","demo":false}', { 'sales.json': '{"focus":"money"}', 'broken.json': '{' })
+  expect(Object.keys(a.presets)).toEqual(['sales'])
+  expect(a.pane).toEqual({ title: 'Acme', emptyHint: expect.any(String), demo: false, offerListening: true })
+  expect(a.upstream).toBe('https://github.com/Vexa-ai/vexa/clients/claude-plugin/app@main')
+  const s = calibrationSummary([
+    { text: 'a', expected: true, got: true, reason: '', ms: 10 }, { text: 'b', expected: false, got: true, reason: '', ms: 20 },
+    { text: 'c', expected: true, got: false, reason: '', ms: 30 },
+  ])
+  expect(s).toMatchObject({ tp: 1, fp: 1, fn: 1, precision: 0.5, recall: 0.5, ms_p50: 20 })
 })
