@@ -68,7 +68,10 @@ test('tool.check: reads are approved, meeting actions keep their prompt', async 
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const read = await $.tool.check({ tool: 'mcp__plugin_vexa_vexa__get_meeting_transcript', input: {} })
   expect(read.decision).toBe('allow')
-  for (const tool of ['speak_in_meeting', 'stop_bot', 'request_meeting_bot']) {
+  for (const tool of ['calendar_status', 'workspace_search']) {
+    expect((await $.tool.check({ tool: `mcp__plugin_vexa_vexa__${tool}`, input: {} })).decision).toBe('allow')
+  }
+  for (const tool of ['speak_in_meeting', 'stop_bot', 'request_meeting_bot', 'set_auto_join', 'workspace_write', 'meeting_bind_workspace', 'calendar_connect']) {
     const r = await $.tool.check({ tool: `mcp__plugin_vexa_vexa__${tool}`, input: {} })
     expect(r.decision).toBe('ask')
   }

@@ -87,7 +87,7 @@ export const READ_ONLY = new Set([
   'whats_waiting', 'parse_meeting_link', 'list_meetings', 'get_meeting', 'get_meeting_transcript',
   'get_meeting_participants', 'get_meeting_chat', 'search_transcripts', 'list_recordings',
   'get_recording', 'get_bot_status', 'timeline', 'reactions_list', 'flows_list', 'friction_so_far',
-  'bot_accounts_list', 'open_meeting',
+  'bot_accounts_list', 'open_meeting', 'calendar_status', 'workspace_list', 'workspace_read', 'workspace_search',
 ])
 
 // The module's own: a reload reconnects and reloads the app.
