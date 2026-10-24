@@ -2,7 +2,7 @@
 
 Claude Code plugin for Vexa (meeting bot + live transcripts for Google Meet, Microsoft Teams and Zoom). It brings:
 
-- the Vexa MCP server at `<Vexa address>/mcp`, signed in with OAuth against that Vexa's own sign-in: no API key. The address is `VEXA_URL` from the environment, hosted Vexa (`https://api.cloud.vexa.ai`) unless set;
+- the Vexa MCP server at `<Vexa address>/mcp`, signed in with OAuth against that Vexa's own sign-in: no API key. hosted Vexa (`https://api.cloud.vexa.ai`), or a company's own address in its mirrored copy;
 - **one Vexa pane** beside the chat (`hooks/register.tsx`): it opens at session start, shows the sign-in step until Vexa is connected, then views switched by buttons at its top: **Home** (send Vexa, try a demo, live now, let Claude listen, ask Claude, recent calls), **Meeting** (the live transcript), **Calls**, **Calendar** (connect, upcoming meetings with an auto-join toggle each) and **Workspaces** (list, find and open a page, bind the current meeting). `/vexa`, `/vexa-meeting`, `/vexa-calls` open it at that view; `/vexa-help` explains it;
 - a **listener** for live calls: offered when a meeting is live, on only after **Listen**; a small model wakes Claude when something matters; Claude tunes it with `listener_configure` and measures it with `listener_calibrate`;
 - a permission hook: the pane's own calls and Vexa's read-only tools run without a prompt; anything the model does in a meeting (`speak_in_meeting`, `stop_bot`, `request_meeting_bot`, …) keeps the session's normal prompt;
@@ -12,7 +12,7 @@ Claude Code plugin for Vexa (meeting bot + live transcripts for Google Meet, Mic
 
 ## What it connects to and what it does on its own
 
-- **One server:** the MCP server of the Vexa named by `VEXA_URL` (hosted `https://api.cloud.vexa.ai` by default; a company's own Vexa otherwise — see `ADMIN.md`), signed in with OAuth through Claude Code's `/mcp`. The plugin holds no key; the pane calls the same server through Claude Code.
+- **One server:** the MCP server of the Vexa at the literal address in the manifest (hosted `https://api.cloud.vexa.ai`; a company's own Vexa in its own marketplace copy — see `ADMIN.md`), signed in with OAuth through Claude Code's `/mcp`. The plugin holds no key; the pane calls the same server through Claude Code.
 - **Permissions it grants itself (`tool.check`):** the pane's own button presses; Vexa's read-only tools (list, get, search, transcript, calendar status, workspace list/read/search); and its own three tools (`listener_configure`, `listener_calibrate`, `vexa_settings`). `speak_in_meeting` and `stop_bot` always ask the person; every other Vexa write keeps the session's normal prompt.
 - **Model calls:** only while the person has pressed **Listen** on a meeting, through Claude Code's own model access, three jobs, each on its own model (changed from chat with `listener_configure` «models»): the **filter** (haiku: wake or skip, plus the trigger in ≤3 words) reads each change in that meeting's transcript; the **writer** (sonnet) merges new speech into the call's map within ~15 s of a filter hit, plus a sweep every 2 min; the **triage** (sonnet) decides whether a signal that isn't a direct address deserves the person now. Only a direct address or a triage yes reaches the main chat. `listener_configure` status reports each job's calls and tokens per listened hour. Nothing else of the session is sent.
 - **Writes it makes on its own:** while listening (unless the person said «only when I ask»), the call's README (≤1500 characters) goes onto the meeting's notes page, or `calls/<date>-<id>.md` in the person's **personal** workspace, and the people and companies it names become linked cards there (`entity_upsert`), by the workspace's own `CLAUDE.md` rules; at the end one line: «Updated your map: N people, M companies».
@@ -33,7 +33,7 @@ Install from this repo:
 
 Then talk to Claude: it offers «Sign in?», gives you a link, you sign in and press **Allow**, and the Vexa panel opens. On hosted Vexa that is Google or Microsoft, and a new account starts with $2 of free credit.
 
-Your company's own Vexa: `{ "env": { "VEXA_URL": "https://vexa.example.com" } }` in `~/.claude/settings.json`; the sign-in is then your company's. Administrators: [`ADMIN.md`](ADMIN.md) covers setting it for everyone through managed settings, what runs where, every network call and the data.
+Your company's own Vexa: your administrators ship this plugin from the company's marketplace with its address; the sign-in is then your company's. Administrators: [`ADMIN.md`](ADMIN.md) covers the company marketplace, what runs where, every network call and the data.
 
 Tests: `claude plugin validate clients/claude-plugin` and `claude plugin test clients/claude-plugin` (`tests/`).
 

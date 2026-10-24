@@ -13,21 +13,18 @@ Vexa. The plugin talks to one Vexa, the address you give it, and nothing else of
 
 ## Setting the address
 
-The plugin has no install-time options. The address is the environment variable `VEXA_URL`, hosted Vexa
-(`https://api.cloud.vexa.ai`) unless set; its MCP server is `${VEXA_URL}/mcp`. Give the address without a trailing slash.
+The plugin has no install-time options. Its MCP server is a literal address in `.claude-plugin/plugin.json`
+(`mcpServers.vexa.url`, hosted `https://api.cloud.vexa.ai/mcp`); the Claude desktop app's sign-in compares that exact text with the
+session's server, so it can't hold variables.
 
-- **Per person:** `{ "env": { "VEXA_URL": "https://vexa.example.com" } }` in `~/.claude/settings.json`.
-- **For everyone (managed settings):** the same `env` block in managed settings.
+- **Your company's address:** ship the plugin from your own marketplace (below) with `mcpServers.vexa.url` set to
+  `https://vexa.example.com/mcp`. The pane reads the address from there.
+- **Without a mirror:** declare the server yourself in `managed-mcp.json` (a managed server wins over a plugin server).
 
 - **Keep hosted Vexa out:** add `{"deniedMcpServers": [{"serverUrl": "https://api.cloud.vexa.ai/*"}]}` to managed settings,
   or allow only your own with `allowedMcpServers` + `allowManagedMcpServersOnly: true`.
 - **Your own marketplace:** mirror `Vexa-ai/vexa` (or just `clients/claude-plugin`) internally and pin it with
   `extraKnownMarketplaces` / `strictKnownMarketplaces`, so installs never reach GitHub.
-
-Verified on Claude Code 2.1.310 (`claude mcp list`): with `VEXA_URL` unset, the server is the default address; with it set,
-the server is `${VEXA_URL}/mcp`. **Not verified:** a managed-tier `env` overriding a person's own value (the managed file needs root
-on the test machine). If it doesn't hold for you, `managed-mcp.json` declares the server yourself (a managed server wins over a
-plugin server at the same URL).
 
 ## Sign-in
 

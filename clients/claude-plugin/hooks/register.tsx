@@ -178,9 +178,17 @@ const reported = new Set<number>()
 
 // The module's own: a reload reconnects and reloads the app.
 let server = ''
-// The Vexa the plugin's server points at: VEXA_URL from the environment (a company's own Vexa,
-// set in settings' `env`), hosted Vexa unless set. The manifest's server URL reads the same variable.
+// The Vexa the plugin's server points at, read from the manifest's literal server URL (the desktop
+// app's sign-in compares that text with the session's server, so it holds no variables). A company
+// running its own Vexa ships the plugin from its own marketplace with its address there.
 let vexaUrl = HOSTED_URL
+
+export function vexaUrlOf(manifest: string): string {
+  try {
+    const url = String(JSON.parse(manifest)?.mcpServers?.vexa?.url ?? '')
+    return /^https?:\/\//.test(url) ? url.replace(/\/mcp\/?$/, '') : HOSTED_URL
+  } catch { return HOSTED_URL }
+}
 let polling = false
 let app: App = FALLBACK_APP
 let appDir = ''
@@ -1654,7 +1662,7 @@ const HELP = [
 
 export const register: Register = (on) => {
   on('session.start', async ($, e, next) => {
-    vexaUrl = String((await $.env.get('VEXA_URL')) || HOSTED_URL)
+    try { vexaUrl = vexaUrlOf(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)) } catch { vexaUrl = HOSTED_URL }
     await $.command.register({ name: 'vexa', description: 'Vexa: your calls, the live listener, calendar and workspaces' })
     await $.command.register({ name: 'vexa-meeting', description: 'Open the Vexa pane at the meeting' })
     await $.command.register({ name: 'vexa-calls', description: 'Open the Vexa pane at your calls' })
@@ -1874,7 +1882,6 @@ export const register: Register = (on) => {
           <Text color="inactive">{m.connection === 'signin' ? 'Not signed in. Ask Claude to set up Vexa.' : `Not connected${m.error ? `: ${m.error.split('\n')[0]}` : `: ${vexaHost()} did not answer.`}`}</Text>
           {m.connection === 'signin' && m.signinUrl ? (Link ? <Link key="signin" href={m.signinUrl} label="Sign in to Vexa: open, press Allow" /> : <Text>{m.signinUrl}</Text>) : null}
           {isHosted() && m.connection === 'refused' ? <Text color="inactive">Hosted Vexa takes an API key until its sign-in ships: VEXA_API_KEY in the env block of ~/.claude/settings.json (from vexa.ai/account).</Text> : null}
-          {/\/$/.test(vexaUrl) ? <Text color="inactive">{`The Vexa address ${vexaUrl} ends with «/»; remove it from VEXA_URL in your settings.`}</Text> : null}
         </Box>
       )
     }

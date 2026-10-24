@@ -1,5 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { vexaUrlOf } from '../hooks/register'
+
 const PANE = {
   plugin: 'vexa',
   component: 'Pane',
@@ -48,18 +50,10 @@ test('not signed in: the pane shows the sign-in state', async ($, on) => {
   }
 })
 
-test("a company's own Vexa (VEXA_URL): the sign-in names its host and drops hosted-only copy", async ($, on) => {
-  mock.clock(on)
-  engine(on, { isConnected: false, reason: 'auth', message: 'needs sign-in' }, [], [], { VEXA_URL: 'https://vexa.acme.example' })
-  on('prompt.compose', () => ({ sections: [] }))
-  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text: /Your company's Vexa: vexa\.acme\.example/ })).toBeTruthy()
-  const ctx: any = await $.prompt.compose({ model: 'claude-sonnet-5-5', promptModel: 'claude-sonnet-5-5', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [], sections: [] } as any)
-  expect(ctx.sections.at(-1).text).toMatch(/company's Vexa vexa\.acme\.example/)
-  expect(await ui.find({ type: 'Text', text: /Google or Microsoft/ })).toBeFalsy()
-  expect(await ui.find({ type: 'Text', text: /free credit/ })).toBeFalsy()
-  await ui.unmount()
+test("a company's own Vexa: the address comes from the manifest's literal server URL", async () => {
+  expect(vexaUrlOf(JSON.stringify({ mcpServers: { vexa: { url: 'https://vexa.acme.example/mcp' } } }))).toBe('https://vexa.acme.example')
+  expect(vexaUrlOf(JSON.stringify({ mcpServers: { vexa: { url: '${VEXA_URL}/mcp' } } }))).toBe('https://api.cloud.vexa.ai')
+  expect(vexaUrlOf('not json')).toBe('https://api.cloud.vexa.ai')
 })
 
 test('hosted Vexa by default: the hosted sign-in copy', async ($, on) => {
