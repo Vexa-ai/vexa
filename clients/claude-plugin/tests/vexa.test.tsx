@@ -64,14 +64,19 @@ test('signed in: Try a demo starts the demo and the transcript follows', async (
 test('tool.check: reads are approved, meeting actions keep their prompt', async ($, on) => {
   mock.clock(on)
   engine(on, { isConnected: true, server: 'plugin:vexa:vexa' })
-  on('tool.check', () => ({ decision: 'ask' }))
+  // Beneath the plugin, an auto-mode decider that would allow speaking and leaving.
+  on('tool.check', (_: unknown, e: any) => ({ decision: /speak_in_meeting|stop_bot/.test(e.tool) ? 'allow' : 'ask' }))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const read = await $.tool.check({ tool: 'mcp__plugin_vexa_vexa__get_meeting_transcript', input: {} })
   expect(read.decision).toBe('allow')
   for (const tool of ['calendar_status', 'workspace_search']) {
     expect((await $.tool.check({ tool: `mcp__plugin_vexa_vexa__${tool}`, input: {} })).decision).toBe('allow')
   }
-  for (const tool of ['speak_in_meeting', 'stop_bot', 'request_meeting_bot', 'set_auto_join', 'workspace_write', 'meeting_bind_workspace', 'calendar_connect']) {
+  for (const tool of ['speak_in_meeting', 'stop_bot']) {
+    const r = await $.tool.check({ tool: `mcp__plugin_vexa_vexa__${tool}`, input: {} })
+    expect(r.decision).toBe('ask')
+  }
+  for (const tool of ['request_meeting_bot', 'set_auto_join', 'workspace_write', 'meeting_bind_workspace']) {
     const r = await $.tool.check({ tool: `mcp__plugin_vexa_vexa__${tool}`, input: {} })
     expect(r.decision).toBe('ask')
   }
