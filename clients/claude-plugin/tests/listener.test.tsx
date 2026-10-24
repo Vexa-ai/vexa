@@ -22,6 +22,7 @@ function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<s
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('env.get', (_: unknown, e: any) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
   on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:vexa:vexa' } }))
+  on('tool.list', () => ({ value: ['calendar_status', 'workspace_list', 'start_demo_meeting', 'get_meeting_transcript'].map(n => ({ name: `mcp__plugin_vexa_vexa__${n}` })) }))
   on('mcp.call', (_: unknown, e: any) => {
     seen.tools.push(e.tool)
     if (e.tool === 'list_meetings') return { value: text({ meetings: [{ platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'active', data: { title: 'Acme pricing call' } }] }) }

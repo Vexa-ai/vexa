@@ -22,6 +22,7 @@ function engine(on: any, connect: unknown, calls: { tool: string; args: unknown 
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('mcp.connect', () => ({ value: connect }))
+  on('tool.list', () => ({ value: ['calendar_status', 'workspace_list', 'start_demo_meeting', 'get_meeting_transcript'].map(n => ({ name: `mcp__plugin_vexa_vexa__${n}` })) }))
   on('fs.exists', () => ({ value: false }))
   on('env.get', () => ({ value: undefined }))
   on('mcp.call', (_: unknown, e: any) => {
@@ -94,6 +95,7 @@ test('one pane: Calendar and Workspaces are views behind its nav buttons', async
   on('fs.exists', () => ({ value: false }))
   on('env.get', () => ({ value: undefined }))
   on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:vexa:vexa' } }))
+  on('tool.list', () => ({ value: ['calendar_status', 'workspace_list', 'start_demo_meeting', 'get_meeting_transcript'].map(n => ({ name: `mcp__plugin_vexa_vexa__${n}` })) }))
   let autoJoin = false
   on('mcp.call', (_: unknown, e: any) => {
     calls.push({ tool: e.tool, args: e.args })
@@ -132,5 +134,25 @@ test('one pane: Calendar and Workspaces are views behind its nav buttons', async
   await ui.press({ key: 'ws-team-b' })
   await ui.press({ key: 'ws-bind' })
   expect(calls.find(c => c.tool === 'meeting_bind_workspace')?.args).toEqual({ meeting_db_id: 7, workspace: 'team' })
+  await ui.unmount()
+})
+
+test('a hosted server without calendar, workspace or demo tools: those views and buttons stay hidden', async ($, on) => {
+  mock.clock(on)
+  on('command.register', () => ({ value: { command: 'vexa' } }))
+  on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__vexa__${e.name}` } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
+  on('fs.exists', () => ({ value: false }))
+  on('env.get', () => ({ value: undefined }))
+  on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:vexa:vexa' } }))
+  on('tool.list', () => ({ value: [{ name: 'mcp__plugin_vexa_vexa__get_meeting_transcript' }] }))
+  const calls: string[] = []
+  on('mcp.call', (_: unknown, e: any) => { calls.push(e.tool); return { value: text({ meetings: [] }) } })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /Send Vexa to a call/ })).toBeTruthy()
+  for (const t of [/^Workspaces$/, /^Calendar$/, /Try a demo/]) expect(await ui.find({ type: 'Text', text: t })).toBeFalsy()
+  expect(calls).not.toContain('workspace_list')
   await ui.unmount()
 })
