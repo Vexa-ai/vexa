@@ -76,3 +76,11 @@ export const JOIN_BROWSER_ARGS: readonly string[] = [
 export function getJoinBrowserArgs(): string[] {
   return [...JOIN_BROWSER_ARGS, ...getLocaleBrowserArgs()];
 }
+
+/** The join args for an AUTHENTICATED launch (#1725): the same set minus `--incognito`.
+ *  An incognito context does not read the restored persistent profile, so a signed-in
+ *  bot reaches Meet as a guest and fails with auth_session_missing. Guest launches keep
+ *  `getJoinBrowserArgs()` unchanged. */
+export function getAuthenticatedJoinBrowserArgs(): string[] {
+  return getJoinBrowserArgs().filter((a) => a !== "--incognito");
+}

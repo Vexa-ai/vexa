@@ -35,7 +35,7 @@ import {
   type Page,
   type BrowserContext,
 } from '@vexa/remote-browser';
-import { getJoinBrowserArgs } from '@vexa/join';
+import { getJoinBrowserArgs, getAuthenticatedJoinBrowserArgs } from '@vexa/join';
 import type { RecordingMasterFormat } from '@vexa/recording';
 import { isMixedLanePlatform, isPerTrackLanePlatform, type Invocation } from './config.js';
 import type { BotPipeline } from './pipeline.js';
@@ -591,8 +591,10 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
 
   // getAuthenticatedBrowserArgs() is the minimal clean set remote-browser uses for signed-in
   // joins; getJoinBrowserArgs() adds the fake-device / autoplay flags the join lane needs. The
-  // join args win on conflict (later wins in Chromium arg parsing).
-  const args = [...getAuthenticatedBrowserArgs(), ...getJoinBrowserArgs()];
+  // join args win on conflict (later wins in Chromium arg parsing). An authenticated launch drops
+  // --incognito (#1725): an incognito context ignores the profile restored above.
+  const joinArgs = inv.authenticated ? getAuthenticatedJoinBrowserArgs() : getJoinBrowserArgs();
+  const args = [...getAuthenticatedBrowserArgs(), ...joinArgs];
   const { context, page } = await launchPersistentBrowser({ dataDir, args });
 
   // Voice-agent gate the page reads to decide whether to keep the mic hot (production parity).
