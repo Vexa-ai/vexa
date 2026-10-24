@@ -1,8 +1,8 @@
 {
   "name": "vexa",
   "displayName": "Vexa",
-  "version": "0.2.14-rc",
-  "description": "Send a bot to a Google Meet, Teams or Zoom call and follow the live transcript beside the chat. Nothing to configure: Claude offers to sign you in and gives you the link. Optional settings: your company's Vexa address; an API key only for a Vexa without sign-in yet.",
+  "version": "0.2.15-rc",
+  "description": "Send a bot to a Google Meet, Teams or Zoom call and follow the live transcript beside the chat. Nothing to configure: Claude offers to sign you in and gives you the link.",
   "author": {
     "name": "Vexa",
     "url": "https://github.com/Vexa-ai"
@@ -22,28 +22,12 @@
     "mcp"
   ],
   "types": "./types/index.d.ts",
-  "userConfig": {
-    "vexa_url": {
-      "type": "string",
-      "title": "Vexa address",
-      "description": "The Vexa this plugin talks to. Keep https://api.cloud.vexa.ai for hosted Vexa; a company running its own Vexa puts its address here, for example https://vexa.example.com.",
-      "default": "https://claude-rc.dev.vexa.ai"
-    },
-    "vexa_api_key": {
-      "type": "string",
-      "title": "Vexa API key (only until your Vexa offers sign-in)",
-      "description": "Leave empty when your Vexa signs you in through /mcp (OAuth). Hosted Vexa takes a key until its sign-in ships: create one at https://vexa.ai/account and paste it here.",
-      "sensitive": true,
-      "required": false,
-      "default": ""
-    }
-  },
   "mcpServers": {
     "vexa": {
       "type": "http",
-      "url": "${user_config.vexa_url}/mcp",
+      "url": "${VEXA_URL:-https://claude-rc.dev.vexa.ai}/mcp",
       "headers": {
-        "X-API-Key": "${user_config.vexa_api_key}"
+        "X-API-Key": "${VEXA_API_KEY:-}"
       }
     }
   }

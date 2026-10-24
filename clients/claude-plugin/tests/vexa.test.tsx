@@ -16,7 +16,7 @@ const PANE = {
 
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 
-function engine(on: any, connect: unknown | (() => unknown), calls: { tool: string; args: unknown }[] = [], opened: string[] = []) {
+function engine(on: any, connect: unknown | (() => unknown), calls: { tool: string; args: unknown }[] = [], opened: string[] = [], env: Record<string, string> = {}) {
   on('command.register', () => ({ value: { command: 'vexa' } }))
   on('tool.register', () => ({ value: { tool: 'mcp__vexa__listener_configure' } }))
   on('ui.open', (_: unknown, e: any) => { opened.push(e.id); return { value: { isPlaced: true } } })
@@ -24,7 +24,7 @@ function engine(on: any, connect: unknown | (() => unknown), calls: { tool: stri
   on('mcp.connect', () => ({ value: typeof connect === 'function' ? connect() : connect }))
   on('tool.list', () => ({ value: ['calendar_status', 'workspace_list', 'start_demo_meeting', 'get_meeting_transcript'].map(n => ({ name: `mcp__plugin_vexa_vexa__${n}` })) }))
   on('fs.exists', () => ({ value: false }))
-  on('env.get', () => ({ value: undefined }))
+  on('env.get', (_: unknown, e: any) => ({ value: env[e.name] }))
   on('mcp.call', (_: unknown, e: any) => {
     calls.push({ tool: e.tool, args: e.args })
     if (e.tool === 'start_demo_meeting') return { value: text({ platform: 'jitsi', native_meeting_id: 'vexa-demo-1', status: 'requested' }) }
@@ -48,9 +48,9 @@ test('not signed in: the pane shows the sign-in state', async ($, on) => {
   }
 })
 
-test("a company's own Vexa: the sign-in names its host and drops hosted-only copy", { options: { vexa_url: 'https://vexa.acme.example' } }, async ($, on) => {
+test("a company's own Vexa (VEXA_URL): the sign-in names its host and drops hosted-only copy", async ($, on) => {
   mock.clock(on)
-  engine(on, { isConnected: false, reason: 'auth', message: 'needs sign-in' })
+  engine(on, { isConnected: false, reason: 'auth', message: 'needs sign-in' }, [], [], { VEXA_URL: 'https://vexa.acme.example' })
   on('prompt.compose', () => ({ sections: [] }))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })

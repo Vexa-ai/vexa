@@ -178,7 +178,8 @@ const reported = new Set<number>()
 
 // The module's own: a reload reconnects and reloads the app.
 let server = ''
-// The Vexa the plugin's server points at: the `vexa_url` option, hosted Vexa unless set.
+// The Vexa the plugin's server points at: VEXA_URL from the environment (a company's own Vexa,
+// set in settings' `env`), hosted Vexa unless set. The manifest's server URL reads the same variable.
 let vexaUrl = HOSTED_URL
 let polling = false
 let app: App = FALLBACK_APP
@@ -969,7 +970,7 @@ function contextText(m: Meeting): string {
   if (m.connection !== 'ready') {
     return `Vexa (meeting bot, live transcripts, team workspaces) is installed${isHosted() ? '' : `, pointed at the company's Vexa ${vexaHost()},`} but not signed in. `
       + (isHosted() && m.connection === 'refused'
-        ? 'Hosted Vexa has no sign-in yet: if the person wants Vexa, tell them to create an API key at https://vexa.ai/account and set it with /plugin configure vexa@vexa (Vexa API key), then restart Claude Code; never take the key in the chat.'
+        ? 'Hosted Vexa has no sign-in yet: if the person wants Vexa, tell them to create an API key at https://vexa.ai/account and set it as VEXA_API_KEY in the env block of ~/.claude/settings.json, then restart Claude Code; never take the key in the chat.'
         : `Required: unless you already offered in this conversation, begin your next reply, whatever the person wrote, with this exact line: «Vexa is installed. Sign in?» If they say yes, sign in, connect or set up Vexa, call ${SIGNIN_TOOL} right away, write the full link it returns in your reply (the person cannot see tool results) and say «open it, press Allow, then come back»; the Vexa panel then opens by itself. If the page after Allow shows an error, ask them to paste its address and pass it to ${prefix}complete_authentication. Never send the person to /mcp, /reload-plugins or plugin settings, and never run claude mcp login; follow the vexa-setup skill.`)
   }
   const lines = [`Vexa is connected. Workspaces: ${workspaceNames.slice(0, 8).join('; ') || 'not loaded yet'}.`]
@@ -1651,9 +1652,9 @@ const HELP = [
   '5. Calendar: connect it and pick which meetings Vexa joins. Workspaces: pages Claude reads and writes; bind a meeting so its notes land there.',
 ].join('\n')
 
-export const register: Register = (on, options) => {
-  vexaUrl = String(options?.vexa_url || HOSTED_URL)
+export const register: Register = (on) => {
   on('session.start', async ($, e, next) => {
+    vexaUrl = String((await $.env.get('VEXA_URL')) || HOSTED_URL)
     await $.command.register({ name: 'vexa', description: 'Vexa: your calls, the live listener, calendar and workspaces' })
     await $.command.register({ name: 'vexa-meeting', description: 'Open the Vexa pane at the meeting' })
     await $.command.register({ name: 'vexa-calls', description: 'Open the Vexa pane at your calls' })
@@ -1872,8 +1873,8 @@ export const register: Register = (on, options) => {
           {isHosted() ? null : <Text color="inactive" size="caption">{`Your company's Vexa: ${vexaHost()}`}</Text>}
           <Text color="inactive">{m.connection === 'signin' ? 'Not signed in. Ask Claude to set up Vexa.' : `Not connected${m.error ? `: ${m.error.split('\n')[0]}` : `: ${vexaHost()} did not answer.`}`}</Text>
           {m.connection === 'signin' && m.signinUrl ? (Link ? <Link key="signin" href={m.signinUrl} label="Sign in to Vexa: open, press Allow" /> : <Text>{m.signinUrl}</Text>) : null}
-          {isHosted() && m.connection === 'refused' ? <Text color="inactive">Hosted Vexa takes an API key until its sign-in ships: /plugin configure vexa@vexa → Vexa API key (from vexa.ai/account).</Text> : null}
-          {/\/$/.test(vexaUrl) ? <Text color="inactive">{`The Vexa address ${vexaUrl} ends with «/»; remove it in /config (Vexa address).`}</Text> : null}
+          {isHosted() && m.connection === 'refused' ? <Text color="inactive">Hosted Vexa takes an API key until its sign-in ships: VEXA_API_KEY in the env block of ~/.claude/settings.json (from vexa.ai/account).</Text> : null}
+          {/\/$/.test(vexaUrl) ? <Text color="inactive">{`The Vexa address ${vexaUrl} ends with «/»; remove it from VEXA_URL in your settings.`}</Text> : null}
         </Box>
       )
     }

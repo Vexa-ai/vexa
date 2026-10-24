@@ -13,28 +13,21 @@ Vexa. The plugin talks to one Vexa, the address you give it, and nothing else of
 
 ## Setting the address
 
-The plugin has one option, `vexa_url` (**Vexa address**), default `https://api.cloud.vexa.ai` (hosted Vexa).
-Its MCP server is `${user_config.vexa_url}/mcp`. Give the address without a trailing slash.
+The plugin has no install-time options. The address is the environment variable `VEXA_URL`, hosted Vexa
+(`https://api.cloud.vexa.ai`) unless set; its MCP server is `${VEXA_URL}/mcp`. Give the address without a trailing slash.
 
-- **Per person, at install:** `claude plugin install vexa@vexa --config vexa_url=https://vexa.example.com`
-- **Per person, later:** `/plugin configure vexa@vexa`, or the **Vexa address** row in `/config`.
-- **For everyone (managed settings):** Claude Code reads `pluginConfigs` from user or managed settings:
-
-  ```json
-  { "pluginConfigs": { "vexa@vexa": { "options": { "vexa_url": "https://vexa.example.com" } } } }
-  ```
+- **Per person:** `{ "env": { "VEXA_URL": "https://vexa.example.com" } }` in `~/.claude/settings.json`.
+- **For everyone (managed settings):** the same `env` block in managed settings.
 
 - **Keep hosted Vexa out:** add `{"deniedMcpServers": [{"serverUrl": "https://api.cloud.vexa.ai/*"}]}` to managed settings,
   or allow only your own with `allowedMcpServers` + `allowManagedMcpServersOnly: true`.
 - **Your own marketplace:** mirror `Vexa-ai/vexa` (or just `clients/claude-plugin`) internally and pin it with
   `extraKnownMarketplaces` / `strictKnownMarketplaces`, so installs never reach GitHub.
 
-Verified on Claude Code 2.1.310 (`claude mcp list`): with no option set, the server is `https://api.cloud.vexa.ai/mcp`.
-With `vexa_url` set in settings, the server is `https://mcp-appdev.dev.vexa.ai/mcp`, our test stand-in for a company deployment,
-and the status is "Needs authentication". With `deniedMcpServers` on the hosted URL, the server is gone.
-**Not verified:** a managed-tier `pluginConfigs` overriding a person's own value. The managed file needs root on the
-test machine, and that was not done. If it doesn't hold for you, `managed-mcp.json` declares the server yourself
-(a managed server wins over a plugin server at the same URL).
+Verified on Claude Code 2.1.310 (`claude mcp list`): with `VEXA_URL` unset, the server is the default address; with it set,
+the server is `${VEXA_URL}/mcp`. **Not verified:** a managed-tier `env` overriding a person's own value (the managed file needs root
+on the test machine). If it doesn't hold for you, `managed-mcp.json` declares the server yourself (a managed server wins over a
+plugin server at the same URL).
 
 ## Sign-in
 
