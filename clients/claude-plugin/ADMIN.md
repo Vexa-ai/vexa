@@ -40,7 +40,7 @@ test machine, and that was not done. If it doesn't hold for you, `managed-mcp.js
 
 No API keys anywhere. Claude Code runs standard MCP OAuth against your Vexa:
 
-1. `/mcp` → `plugin:vexa:vexa` → **Authenticate**.
+1. Claude runs `claude mcp login plugin:vexa:vexa` on the person's yes (or they use `/mcp` → `plugin:vexa:vexa` → **Authenticate**).
 2. Claude Code POSTs to `/mcp` and gets `401` with `WWW-Authenticate: Bearer resource_metadata=…` (RFC 9728).
 3. It reads `/.well-known/oauth-protected-resource/mcp`, then your authorization server's
    `/.well-known/oauth-authorization-server` (RFC 8414).

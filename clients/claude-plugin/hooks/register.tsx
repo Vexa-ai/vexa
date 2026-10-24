@@ -26,6 +26,8 @@ import type { App, CallMap, Labelled, Models, Row } from './listener'
 
 const PANE = 'vexa-home'
 const SERVER_KEY = 'vexa'
+// The name Claude Code knows the plugin's server by, for `claude mcp login`.
+const LOGIN_NAME = `plugin:vexa:${SERVER_KEY}`
 const HOSTED_URL = 'https://api.cloud.vexa.ai'
 const EMPTY: Meeting = {
   connection: 'connecting', url: '', platform: '', nativeId: '', dbId: 0, attachedTo: '', offers: { calendar: false, workspaces: false, demo: false, requests: false, webPanel: false }, title: '', isDemo: false,
@@ -256,6 +258,8 @@ async function connect($: any): Promise<void> {
     }
     await update($, x => ({ ...x, connection: 'ready', offers, error: '' }))
     if (was !== 'ready') { quiet(loadCalls($)); if (offers.workspaces) quiet(loadWorkspaces($)) }
+    // The sign-in Claude just ran from the chat went through: show the person their Vexa.
+    if (was === 'signin') quiet(openPanel($, '/panel', 'home'))
     if (offers.requests) startRequests($)
     return
   }
@@ -963,7 +967,7 @@ function contextText(m: Meeting): string {
     return `Vexa (meeting bot, live transcripts, team workspaces) is installed${isHosted() ? '' : `, pointed at the company's Vexa ${vexaHost()},`} but not signed in. `
       + (isHosted() && m.connection === 'refused'
         ? 'Hosted Vexa has no sign-in yet: if the person wants Vexa, tell them to create an API key at https://vexa.ai/account and set it with /plugin configure vexa@vexa (Vexa API key), then restart Claude Code; never take the key in the chat.'
-        : 'If the person wants Vexa, tell them to type /mcp, choose plugin:vexa:vexa and Authenticate; then use the vexa-setup skill.')
+        : `Unless you already offered in this conversation, say one line in your next reply: «Vexa is installed. Sign in? I'll open your browser.» On yes, run \`claude mcp login ${LOGIN_NAME}\` with Bash (it waits until the browser sign-in finishes); the Vexa panel then opens by itself. Never send the person to /mcp, /reload-plugins or plugin settings; follow the vexa-setup skill.`)
   }
   const lines = [`Vexa is connected. Workspaces: ${workspaceNames.slice(0, 8).join('; ') || 'not loaded yet'}.`]
   if (settings.write === 'cloud') lines.push(`You write what you learn to the Vexa workspace «${settings.workspace}» (${writesLine || 'the account default'}). Before writing, read its rules: workspace_read CLAUDE.md and workspace_purpose; follow the vexa-workspace skill.`)
@@ -1703,7 +1707,7 @@ export const register: Register = (on, options) => {
       $.clock.every(1500, () => quiet((async () => { await poll($); await findLive($) })()))
       $.clock.every(3000, () => quiet(followWeb($)))
       $.clock.every(5000, () => quiet(mapStep($, false)))
-      // Signing in happens in /mcp, outside the pane: notice it without a button press.
+      // Signing in happens outside the pane (`claude mcp login`): notice it without a button press.
       $.clock.every(5000, async () => {
         try { if ((await read($)).connection !== 'ready') await connect($) } catch { /* the next tick tries again */ }
       })
