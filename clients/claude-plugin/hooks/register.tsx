@@ -26,8 +26,6 @@ import type { App, CallMap, Labelled, Models, Row } from './listener'
 
 const PANE = 'vexa-home'
 const SERVER_KEY = 'vexa'
-// The name Claude Code knows the plugin's server by, for `claude mcp login`.
-const LOGIN_NAME = `plugin:vexa:${SERVER_KEY}`
 const HOSTED_URL = 'https://api.cloud.vexa.ai'
 const EMPTY: Meeting = {
   connection: 'connecting', url: '', platform: '', nativeId: '', dbId: 0, attachedTo: '', offers: { calendar: false, workspaces: false, demo: false, requests: false, webPanel: false }, title: '', isDemo: false,
@@ -192,6 +190,11 @@ export function toolPrefix(name: string): string {
 }
 
 let prefix = toolPrefix(`plugin:vexa:${SERVER_KEY}`)
+// While the server needs sign-in, Claude Code gives Claude these two in its place: `authenticate`
+// answers the sign-in link (callback on this session's localhost), `complete_authentication` takes
+// a pasted callback URL. The session connects live; no reload.
+const SIGNIN_TOOL = `${prefix}authenticate`
+const SIGNIN_TOOLS = new Set([SIGNIN_TOOL, `${prefix}complete_authentication`])
 
 // MCP results come back as content blocks; Vexa returns one JSON text block, sometimes followed by
 // a notice in plain text («\n\n<notice>»): parse the leading JSON value and ignore what follows.
@@ -967,7 +970,7 @@ function contextText(m: Meeting): string {
     return `Vexa (meeting bot, live transcripts, team workspaces) is installed${isHosted() ? '' : `, pointed at the company's Vexa ${vexaHost()},`} but not signed in. `
       + (isHosted() && m.connection === 'refused'
         ? 'Hosted Vexa has no sign-in yet: if the person wants Vexa, tell them to create an API key at https://vexa.ai/account and set it with /plugin configure vexa@vexa (Vexa API key), then restart Claude Code; never take the key in the chat.'
-        : `Unless you already offered in this conversation, say one line in your next reply: «Vexa is installed. Sign in? I'll open your browser.» On yes, run \`claude mcp login ${LOGIN_NAME}\` with Bash (it waits until the browser sign-in finishes); the Vexa panel then opens by itself. Never send the person to /mcp, /reload-plugins or plugin settings; follow the vexa-setup skill.`)
+        : `Unless you already offered in this conversation, say one line in your next reply: «Vexa is installed. Sign in?» On yes, call ${SIGNIN_TOOL}, give the person the link it returns and say «open it, press Allow, then come back»; the Vexa panel then opens by itself. If the page after Allow shows an error, ask them to paste its address and pass it to ${prefix}complete_authentication. Never send the person to /mcp, /reload-plugins or plugin settings, and never run claude mcp login; follow the vexa-setup skill.`)
   }
   const lines = [`Vexa is connected. Workspaces: ${workspaceNames.slice(0, 8).join('; ') || 'not loaded yet'}.`]
   if (settings.write === 'cloud') lines.push(`You write what you learn to the Vexa workspace «${settings.workspace}» (${writesLine || 'the account default'}). Before writing, read its rules: workspace_read CLAUDE.md and workspace_purpose; follow the vexa-workspace skill.`)
@@ -1707,7 +1710,7 @@ export const register: Register = (on, options) => {
       $.clock.every(1500, () => quiet((async () => { await poll($); await findLive($) })()))
       $.clock.every(3000, () => quiet(followWeb($)))
       $.clock.every(5000, () => quiet(mapStep($, false)))
-      // Signing in happens outside the pane (`claude mcp login`): notice it without a button press.
+      // Signing in happens in the browser, outside the pane: notice it without a button press.
       $.clock.every(5000, async () => {
         try { if ((await read($)).connection !== 'ready') await connect($) } catch { /* the next tick tries again */ }
       })
@@ -1792,6 +1795,8 @@ export const register: Register = (on, options) => {
   // person; the rest goes to the session's decider as it would without us.
   on('tool.check', async ($, e, next) => {
     if (e.tool === CONFIGURE_TOOL || e.tool === CALIBRATE_TOOL || e.tool === SETTINGS_TOOL) return { decision: 'allow', reason: "Vexa plugin's own control" }
+    // Starting sign-in only answers a link; the person signs in and presses Allow in their browser.
+    if (SIGNIN_TOOLS.has(e.tool)) return { decision: 'allow', reason: 'Vexa sign-in link' }
     // The plugin opening its web panel in the browser pane, for the panel origin it just got from
     // panel_link: the person decides (founder, 24 Oct), in Claude Code's own dialog — a hook's ask
     // goes to a person, not to auto mode's classifier. Once they said Yes, the same origin opens silently.
