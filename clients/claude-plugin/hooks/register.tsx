@@ -583,7 +583,7 @@ async function findLive($: any): Promise<void> {
     const rooms = rows.filter(r => (r.status ?? 'active') === 'active').map(r => ({
       platform: String(r.platform ?? ''),
       nativeId: String(r.native_meeting_id ?? r.native_id ?? ''),
-      title: String(r.data?.title ?? r.title ?? r.native_meeting_id ?? 'Your meeting'),
+      title: callTitle(r),
       dbId: Number(r.id ?? r.meeting_db_id ?? 0), demo: Boolean(r.data?.demo),
     }))
     // An offer whose meeting is no longer live goes; a live one stays.
@@ -1269,6 +1269,9 @@ const PLATFORM: Record<string, string> = { google_meet: 'Meet', teams: 'Teams', 
 // The panel origin the plugin is about to open (from panel_link's answer): the plugin's own
 // preview_start call is approved for that origin only.
 let panelOrigin = ''
+// Origins the person said Yes to once: Claude Code's dialog for a hook's ask offers no «always»,
+// so the plugin keeps that answer itself ($.store, across sessions).
+let panelAllowed: string[] = []
 export function originOf(url: unknown): string {
   try { return new URL(String(url)).origin } catch { return '' }
 }
@@ -1283,8 +1286,14 @@ async function openPanel($: any, next: string, fallback: ViewName): Promise<void
       const r = await call($, 'panel_link', { next })
       if (r?.url) {
         panelOrigin = originOf(r.url)
-        await $.mcp.call(BROWSER_SERVER, 'preview_start', { url: String(r.url) })
-        return
+        const opened = await $.mcp.call(BROWSER_SERVER, 'preview_start', { url: String(r.url) })
+        if (!opened?.isError) {
+          if (!panelAllowed.includes(panelOrigin)) {
+            panelAllowed = [...panelAllowed, panelOrigin]
+            try { await $.store.set('panelAllowed', panelAllowed) } catch { /* asked again next session */ }
+          }
+          return
+        }
       }
     } catch { /* the plugin's own pane below */ }
   }
@@ -1669,6 +1678,8 @@ export const register: Register = (on, options) => {
       } },
     })
     try {
+      const savedPanel = await $.store.get('panelAllowed')
+      if (Array.isArray(savedPanel)) panelAllowed = savedPanel.filter((o): o is string => typeof o === 'string')
       const savedModels = await $.store.get('models')
       if (savedModels && typeof savedModels === 'object') models = { ...DEFAULT_MODELS, ...(savedModels as Models) }
     } catch { /* defaults */ }
@@ -1733,6 +1744,27 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'vexa-app-reset' }, async $ => ({ text: await resetApp($) }))
 
   // A registered tool answers text: the engine checks a hook's result against a string.
+  // A call Claude starts from the chat (a bot or the demo) is followed by the pane, as the pane's
+  // own buttons do: «Claude opens the call beside the chat».
+  on('tool.call', async ($, e, next) => {
+    const ran = await next(e)
+    const name = e.tool.startsWith(prefix) ? e.tool.slice(prefix.length) : ''
+    if ((name === 'request_meeting_bot' || name === 'start_demo_meeting') && !ran.deny && !ran.isError) try {
+      const bot = leadingJson(String(ran.text ?? ''))
+      const m = await read($)
+      if (bot?.native_meeting_id && !isLive(m)) {
+        await update($, x => ({
+          ...x, platform: String(bot.platform ?? ''), nativeId: String(bot.native_meeting_id), dbId: Number(bot.id ?? 0),
+          isDemo: name === 'start_demo_meeting' || Boolean(bot.data?.demo), title: callTitle(bot),
+          attachedTo: bot.attached ? String(bot.owner?.email ?? 'a teammate') : '',
+          status: String(bot.status ?? 'requested'), segments: [], nextIndex: 0, liveCursor: '', liveFeed: true, error: '',
+        }))
+        quiet(openPanel($, panelPath(await read($)), 'meeting'))
+      }
+    } catch { /* following is a convenience; the tool's answer stands */ }
+    return ran
+  })
+
   on('tool.call', { tool: 'mcp__vexa__vexa_settings' }, async ($, e) => ({ result: JSON.stringify(await saveSettings($, e)) }))
     .catch(($, e, next) => (next.called ? next(e) : { deny: 'Saving the Vexa setting failed; try again.' }))
 
@@ -1756,11 +1788,13 @@ export const register: Register = (on, options) => {
   // person; the rest goes to the session's decider as it would without us.
   on('tool.check', async ($, e, next) => {
     if (e.tool === CONFIGURE_TOOL || e.tool === CALIBRATE_TOOL || e.tool === SETTINGS_TOOL) return { decision: 'allow', reason: "Vexa plugin's own control" }
-    // The plugin opening its web panel in the browser pane: allowed for the panel origin it just
-    // got from panel_link, and only from the plugin itself (auto mode's classifier gives no verdict).
+    // The plugin opening its web panel in the browser pane, for the panel origin it just got from
+    // panel_link: the person decides (founder, 24 Oct), in Claude Code's own dialog — a hook's ask
+    // goes to a person, not to auto mode's classifier. Once they said Yes, the same origin opens silently.
     if (e.tool === BROWSER_TOOL && next.origin.plugin === $.plugin.name && panelOrigin
       && originOf((e.input as { url?: unknown } | undefined)?.url) === panelOrigin) {
-      return { decision: 'allow', reason: 'Vexa opens its own panel' }
+      if (panelAllowed.includes(panelOrigin)) return { decision: 'allow', reason: 'Vexa call panel, opened before with your Yes' }
+      return { decision: 'ask', reason: 'Vexa wants to open its call panel beside the chat' }
     }
     if (!e.tool.startsWith(prefix)) return next(e)
     if (next.origin.plugin === $.plugin.name) return { decision: 'allow', reason: 'Vexa pane button' }
