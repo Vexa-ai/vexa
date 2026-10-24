@@ -13,11 +13,13 @@ const seg = (id: string, speaker: string, t: string, completed = true) => ({ seg
 
 type Seen = { tools: string[]; model: string[]; prompts: string[]; written: Record<string, string>; annotations: any[]; maps: string[]; upserts: any[]; logs: string[]; triage: string[]; pages: any[] }
 const meta: Record<string, unknown> = {}
+const endedLive = { value: false }
 
 function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<string, string> = {}, live?: (() => unknown[]) | 'strict', triage = 'YES check the annual plan'): Seen {
   const seen: Seen = { tools: [], model: [], prompts: [], written: {}, annotations: [], maps: [], upserts: [], logs: [], triage: [], pages: [] }
   on('ui.log', (_: unknown, e: any) => { seen.logs.push(String(e.text ?? e)); return { value: undefined } })
   for (const k of Object.keys(meta)) delete meta[k]
+  endedLive.value = false
   on('command.register', () => ({ value: { command: 'vexa' } }))
   on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__vexa__${e.name}` } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
@@ -28,7 +30,7 @@ function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<s
   on('tool.list', () => ({ value: ['calendar_status', 'workspace_list', 'start_demo_meeting', 'get_meeting_transcript'].map(n => ({ name: `mcp__plugin_vexa_vexa__${n}` })) }))
   on('mcp.call', (_: unknown, e: any) => {
     seen.tools.push(e.tool)
-    if (e.tool === 'list_meetings') return { value: text({ meetings: [{ id: 41, platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'active', data: { title: 'Acme pricing call' } }] }) }
+    if (e.tool === 'list_meetings') return { value: text({ meetings: endedLive.value ? [] : [{ id: 41, platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'active', data: { title: 'Acme pricing call' } }] }) }
     if (e.tool === 'get_meeting_transcript' && e.args?.include_pending && live === 'strict') {
       return { value: { isError: true, content: [{ type: 'text', text: "Input validation error: Additional properties are not allowed ('include_pending', 'live_wait_ms' were unexpected)" }] } }
     }
@@ -226,6 +228,21 @@ test('while listening, the live map upserts people and companies into personal a
   const r: any = await $.tool.call({ tool: 'mcp__vexa__listener_configure', models: { writer: 'haiku' } } as any)
   expect(r.result.models).toEqual({ filter: 'haiku', writer: 'haiku', triage: 'sonnet' })
   expect(r.result.spend.writer).toMatchObject({ calls: 1, input: 900, output: 300 })
+  await ui.unmount()
+})
+
+test('an offer whose meeting ended goes away instead of staying on the band', async ($, on) => {
+  const clock = mock.clock(on)
+  engine(on, () => [])
+  on('ui.render', ($: any, e: any) => { const { Text } = $.ui.resolve(e); return <Text>engine</Text> })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await clock.advance(31_500)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /^Not listening$/ })).toBeTruthy()
+  endedLive.value = true
+  await clock.advance(31_500)
+  expect(await ui.find({ type: 'Text', text: /^Not listening$/ })).toBeFalsy()
+  expect(await ui.find({ type: 'Text', text: /^engine$/ })).toBeTruthy()
   await ui.unmount()
 })
 

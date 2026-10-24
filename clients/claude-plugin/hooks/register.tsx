@@ -143,6 +143,7 @@ const CALIBRATE = 'listener_calibrate'
 const CONFIGURE_TOOL = 'mcp__vexa__listener_configure'
 const CALIBRATE_TOOL = 'mcp__vexa__listener_calibrate'
 const PROJECT_APP = '.vexa/app'
+const MIN_PATCH = 299
 const LIVE_WAIT_MS = 1200
 
 // Tools that only read. A model call to any of them is approved; everything else asks.
@@ -188,10 +189,33 @@ export function toolPrefix(name: string): string {
 
 let prefix = toolPrefix(`plugin:vexa:${SERVER_KEY}`)
 
-// MCP results come back as content blocks; Vexa returns one JSON text block.
+// MCP results come back as content blocks; Vexa returns one JSON text block, sometimes followed by
+// a notice in plain text («\n\n<notice>»): parse the leading JSON value and ignore what follows.
+export function leadingJson(t: string): any {
+  const start = t.search(/[{[]/)
+  if (start < 0) return null
+  let depth = 0
+  let inString = false
+  for (let i = start; i < t.length; i++) {
+    const c = t[i]
+    if (inString) {
+      if (c === '\\') i++
+      else if (c === '"') inString = false
+    } else if (c === '"') inString = true
+    else if (c === '{' || c === '[') depth++
+    else if (c === '}' || c === ']') {
+      depth--
+      if (depth === 0) {
+        try { return JSON.parse(t.slice(start, i + 1)) } catch { return null }
+      }
+    }
+  }
+  return null
+}
+
 function payload(r: { content: readonly { type: string; text?: string }[] }): any {
   const t = r.content.find(c => c.type === 'text')?.text ?? ''
-  try { return JSON.parse(t) } catch { return { raw: t } }
+  return leadingJson(t) ?? { raw: t }
 }
 
 // Background work (timers, loads a view starts): a failure shows in the view's own error line;
@@ -385,8 +409,22 @@ async function start($: any, tool: string, args: Record<string, unknown>, isDemo
       status: String(bot.status ?? 'requested'),
     }))
   } catch (err) {
-    await update($, x => ({ ...x, status: 'idle', error: message(err) }))
+    // A gateway timeout can come back after the bot was already sent: find it before giving up.
+    const found = tool === 'request_meeting_bot' && /504|timed? ?out|ReadTimeout/i.test(message(err)) ? await findSent($, String(args.meeting_url ?? '')) : null
+    if (found) await update($, x => ({ ...x, ...found, error: '' }))
+    else await update($, x => ({ ...x, status: 'idle', error: message(err) }))
   }
+}
+
+async function findSent($: any, url: string): Promise<Partial<Meeting> | null> {
+  try {
+    const link = await call($, 'parse_meeting_link', { meeting_url: url })
+    const p = await call($, 'list_meetings', { limit: 10 })
+    const rows: any[] = Array.isArray(p) ? p : p.meetings ?? []
+    const r = rows.find(x => x.platform === link.platform && x.native_meeting_id === link.native_meeting_id
+      && !['completed', 'failed', 'stopped'].includes(String(x.status)))
+    return r ? { platform: String(r.platform), nativeId: String(r.native_meeting_id), dbId: Number(r.id ?? 0), status: String(r.status ?? 'requested') } : null
+  } catch { return null }
 }
 
 async function send($: any, url: string): Promise<void> {
@@ -407,7 +445,7 @@ async function stop($: any): Promise<void> {
     await update($, x => ({ ...x, error: message(err) }))
   }
   await update($, x => ({ ...x, status: 'stopped' }))
-  await updateListener($, x => ({ ...x, isOn: false }))
+  await updateListener($, x => ({ ...x, isOn: false, offer: x.offer && roomKey(x.offer) === roomKey(m) ? null : x.offer }))
 }
 
 // --- App folder -------------------------------------------------------------------------------
@@ -524,22 +562,29 @@ async function findLive($: any): Promise<void> {
   const l = await readListener($)
   const m = await read($)
   const now = await $.clock.now()
-  if (!l.app.pane.offerListening || l.isOn || l.offer || now - lastOfferCheck < OFFER_EVERY_MS) return
+  if (now < lastOfferCheck) lastOfferCheck = 0
+  if (!l.app.pane.offerListening || l.isOn || now - lastOfferCheck < OFFER_EVERY_MS) return
   lastOfferCheck = now
   if (m.nativeId && m.status === 'active' && !l.declined.includes(roomKey(m))) {
     await updateListener($, x => ({ ...x, offer: { platform: m.platform, nativeId: m.nativeId, title: m.title || m.nativeId, dbId: m.dbId } }))
     return
   }
+  if (l.offer && l.offer.platform === m.platform && l.offer.nativeId === m.nativeId && !isLive(m)) {
+    await updateListener($, x => ({ ...x, offer: null }))
+  }
   try {
     const p = await call($, 'list_meetings', { status: 'active', limit: 5 })
     const rows: any[] = Array.isArray(p) ? p : p.meetings ?? p.items ?? []
-    const live = rows.map(r => ({
+    const rooms = rows.filter(r => (r.status ?? 'active') === 'active').map(r => ({
       platform: String(r.platform ?? ''),
       nativeId: String(r.native_meeting_id ?? r.native_id ?? ''),
       title: String(r.data?.title ?? r.title ?? r.native_meeting_id ?? 'Your meeting'),
       dbId: Number(r.id ?? r.meeting_db_id ?? 0),
-    })).find(r => r.platform && r.nativeId && !l.declined.includes(roomKey(r)))
-    if (live) await updateListener($, x => (x.isOn || x.offer ? x : { ...x, offer: live }))
+    }))
+    // An offer whose meeting is no longer live goes; a live one stays.
+    if (l.offer && rooms.some(r => roomKey(r) === roomKey(l.offer!))) return
+    const live = rooms.find(r => r.platform && r.nativeId && !l.declined.includes(roomKey(r)))
+    await updateListener($, x => (x.isOn ? x : { ...x, offer: live ?? null }))
   } catch { /* offering is best effort; the next check tries again */ }
 }
 
@@ -1593,6 +1638,12 @@ export const register: Register = (on, options) => {
       if (saved && typeof saved === 'object') settings = { ...NO_SETTINGS, ...(saved as Settings) }
     } catch { /* no saved choice: the context asks for one */ }
     await loadApp($)
+    // The pane needs Claude Code 2.1.299 or newer: older builds install the plugin but draw nothing.
+    try {
+      const v = String((await $.session.version())?.version ?? '')
+      const [a, b, c] = v.split(/[.-]/).map(Number)
+      if (a === 2 && b === 1 && Number(c) < MIN_PATCH) $.ui.toast(`Vexa's pane needs Claude Code 2.1.${MIN_PATCH} or newer (this is ${v}). Run «claude update».`)
+    } catch { /* older engines have no version call: the README says what they need */ }
     void $.ui.open({ id: PANE, title: app.pane.title })
     await connect($)
     if (!polling) {

@@ -282,3 +282,32 @@ test('a call another person\'s bot is already in: the pane says whose, and leavi
   expect(calls).not.toContain('stop_bot')
   await ui.unmount()
 })
+
+test('a tool answer with a notice after its JSON still parses; a timed-out Send finds the bot it did send', async ($, on) => {
+  const clock = mock.clock(on)
+  on('command.register', () => ({ value: { command: 'vexa' } }))
+  on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__vexa__${e.name}` } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
+  on('fs.exists', () => ({ value: false }))
+  on('env.get', () => ({ value: undefined }))
+  on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:vexa:vexa' } }))
+  on('tool.list', () => ({ value: [{ name: 'mcp__plugin_vexa_vexa__get_meeting_transcript' }] }))
+  const withNotice = (o: unknown) => ({ content: [{ type: 'text', text: `${JSON.stringify(o)}\n\n⚠ Vexa: 13 items wait in your queue {not json}` }] })
+  on('mcp.call', (_: unknown, e: any) => {
+    if (e.tool === 'list_meetings') return { value: withNotice({ meetings: [{ id: 5, platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'requested', data: { title: 'Acme pricing call' } }] }) }
+    if (e.tool === 'request_meeting_bot') return { value: { isError: true, content: [{ type: 'text', text: 'HTTP 504 upstream ReadTimeout' }] } }
+    if (e.tool === 'parse_meeting_link') return { value: text({ platform: 'google_meet', native_meeting_id: 'abc-defg-hij' }) }
+    if (e.tool === 'get_meeting_transcript') return { value: text({ status: 'requested', segments: [], next_index: 0 }) }
+    return { value: text({}) }
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await clock.advance(10)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /No calls yet/ })).toBeFalsy()
+  expect(await ui.find({ type: 'Button', key: 'h-rec-5-b' } as any)).toBeTruthy()
+  await ui.input({ key: 'h-url', text: 'https://meet.google.com/abc-defg-hij' } as any)
+  expect(await ui.find({ type: 'Text', text: /504/ })).toBeFalsy()
+  expect(await ui.find({ type: 'Text', text: /^requested$/ })).toBeTruthy()
+  await ui.unmount()
+})
