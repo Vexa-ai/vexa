@@ -172,6 +172,12 @@ function payload(r: { content: readonly { type: string; text?: string }[] }): an
   try { return JSON.parse(t) } catch { return { raw: t } }
 }
 
+// Background work (timers, loads a view starts): a failure shows in the view's own error line;
+// a session ending under it rejects nothing.
+function quiet(p: Promise<unknown>): void {
+  p.catch(() => {})
+}
+
 function message(err: unknown): string {
   return String((err as Error)?.message ?? err).slice(0, 300)
 }
@@ -179,9 +185,11 @@ function message(err: unknown): string {
 async function connect($: any): Promise<void> {
   const r = await $.mcp.connect(SERVER_KEY)
   if (r.isConnected) {
+    const was = (await read($)).connection
     server = r.server
     prefix = toolPrefix(r.server)
     await update($, x => ({ ...x, connection: 'ready', error: '' }))
+    if (was !== 'ready') { quiet(loadCalls($)); quiet(loadWorkspaces($)) }
     return
   }
   server = ''
@@ -844,9 +852,9 @@ const PLATFORM: Record<string, string> = { google_meet: 'Meet', teams: 'Teams', 
 async function go($: any, v: ViewName): Promise<void> {
   await updateView($, () => ({ name: v }))
   await $.ui.open({ id: PANE, title: app.pane.title })
-  if (v === 'calls') void loadCalls($)
-  if (v === 'calendar') void loadCalendar($)
-  if (v === 'workspaces') void loadWorkspaces($)
+  if (v === 'calls') quiet(loadCalls($))
+  if (v === 'calendar') quiet(loadCalendar($))
+  if (v === 'workspaces') quiet(loadWorkspaces($))
 }
 
 function day(at: string): string {
@@ -969,7 +977,7 @@ async function homeView($: any, ui: any): Promise<any> {
           {Input ? <Input key="h-url" placeholder="Meeting link" value={m.url} submitLabel="Send" onInput={(v: string) => update($, x => ({ ...x, url: v.trim() }))} onSubmit={async (v: string) => { await send($, v); await go($, 'meeting') }} /> : null}
           {l.app.pane.demo ? (
             <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
-              <Button key="h-demo" label="Try a demo" onPress={async () => { await start($, 'start_demo_meeting', {}, true); await go($, 'meeting') }} />
+              <Button key="h-demo" label="Try a demo" hotkey="d" onPress={async () => { await start($, 'start_demo_meeting', {}, true); await go($, 'meeting') }} />
               <Text color="inactive" size="caption">No meeting now? A presenter speaks for a minute while you watch it transcribed.</Text>
             </Box>
           ) : null}
@@ -1107,7 +1115,7 @@ async function meetingView($: any, ui: any, rows: number, cols: number): Promise
         <Box flexDirection="column" gap={1}>
           <Text color="inactive" size="footnote">{l.isOn ? 'Claude is listening and speaks up when something matters.' : 'Claude is not listening.'}</Text>
           <Box flexDirection="row" gap={1} flexWrap="wrap" alignItems="center">
-            {inCall ? <Button key="listen" label={l.isOn ? 'Stop listening' : 'Listen'} variant={l.isOn ? 'secondary' : 'primary'} onPress={() => (l.isOn ? stopListening($) : listenToPane($))} /> : null}
+            {inCall ? <Button key="listen" label={l.isOn ? 'Stop listening' : 'Listen'} hotkey="l" variant={l.isOn ? 'secondary' : 'primary'} onPress={() => (l.isOn ? stopListening($) : listenToPane($))} /> : null}
             {l.isOn ? <Button key="m-missed" label="What did I miss?" onPress={() => whatDidIMiss($)} /> : null}
             {l.isOn && Select ? <Select key="m-mode" value={l.preset} options={l.app.presets.map(p => ({ value: p, label: p }))} onSelect={(v: string) => setPreset($, v)} /> : null}
             <Button key="stop" plain onPress={() => stop($)}><Text color="inactive">Leave call</Text></Button>
@@ -1206,12 +1214,16 @@ export const register: Register = on => {
     await connect($)
     if (!polling) {
       polling = true
-      $.clock.every(1500, async () => { await poll($); await findLive($) })
-      $.clock.every(30_000, () => audit($))
-      $.clock.every(60_000, () => loadCalls($))
+      $.clock.every(1500, () => quiet((async () => { await poll($); await findLive($) })()))
+      // Signing in happens in /mcp, outside the pane: notice it without a button press.
+      $.clock.every(5000, async () => {
+        try { if ((await read($)).connection !== 'ready') await connect($) } catch { /* the next tick tries again */ }
+      })
+      $.clock.every(30_000, () => quiet(audit($)))
+      $.clock.every(60_000, () => quiet(loadCalls($)))
     }
-    void loadCalls($)
-    void loadWorkspaces($)
+    quiet(loadCalls($))
+    quiet(loadWorkspaces($))
     return next(e)
   })
 
@@ -1290,7 +1302,7 @@ export const register: Register = on => {
         {l.isOn ? <Button key="missed" label="What did I miss?" onPress={() => whatDidIMiss($)} /> : null}
         {l.isOn
           ? <Button key="listen-stop" label="Stop" onPress={() => stopListening($)} />
-          : <Button key="listen" label="Listen" variant="primary" onPress={() => listen($)} />}
+          : <Button key="listen" label="Listen" hotkey="l" variant="primary" onPress={() => listen($)} />}
         {!l.isOn ? <Button key="decline" plain onPress={() => decline($)}><Text color="inactive">No</Text></Button> : null}
       </Box>
     )
@@ -1324,7 +1336,7 @@ export const register: Register = on => {
               <Text>{'Type /mcp, choose plugin:vexa:vexa and check its status; Authenticate there if it asks you to sign in.'}</Text>
             </Box>
           )}
-          <Button key="retry" label={m.connection === 'signin' ? "I've signed in" : 'Try again'} variant="primary" onPress={() => connect($)} />
+          <Button key="retry" label={m.connection === 'signin' ? "I've signed in" : 'Try again'} hotkey="r" variant="primary" onPress={() => connect($)} />
         </Box>
       )
     }
