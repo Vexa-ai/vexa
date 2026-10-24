@@ -214,3 +214,37 @@ export function calibrationSummary(rows: readonly Row[]) {
     ms_p50: ms[Math.floor(ms.length / 2)] ?? 0, ms_p95: ms[Math.floor(ms.length * 0.95)] ?? 0, ms_max: ms[ms.length - 1] ?? 0,
   }
 }
+
+// The live map: while the person listens, a small-model pass reads the new stretch of the call and
+// names what it says about people, companies, projects and decisions, so the plugin can upsert them
+// into the personal workspace and keep one meeting page linking them (the call report at the end).
+export const MAP_SYSTEM = 'You extract a knowledge map from a stretch of a meeting transcript (any language, '
+  + 'speech-recognition errors). Only what was SAID; never guess; skip small talk, personal or family talk, health, '
+  + 'secrets and credentials. Reply with ONE JSON object and nothing else: {"entities":[{"kind":"person|company|project|decision",'
+  + '"name":"...","facts":["one short sentence, naming others as [[Name]]"],"fields":{"role":"..","company":"..","what":".."},'
+  + '"connections":[{"name":"Other","relation":"works at|buys from|competes with|mentioned with|owns"}]}],'
+  + '"decided":["..."],"committed":["who: what by when"],"numbers":["..."],"open_questions":["Who is X?"]}. '
+  + 'A name heard once with no other context goes to open_questions, not entities. Empty arrays when nothing.'
+
+export type MapEntity = { kind: string; name: string; facts: string[]; fields: Record<string, string>; connections: { name: string; relation: string }[] }
+export type MapPass = { entities: MapEntity[]; decided: string[]; committed: string[]; numbers: string[]; open_questions: string[] }
+
+const KINDS = new Set(['person', 'company', 'project', 'decision'])
+const strs = (v: unknown, n = 20): string[] => (Array.isArray(v) ? v.map(x => String(x).trim()).filter(Boolean).slice(0, n) : [])
+
+export function parseMap(text: string): MapPass {
+  let raw: any = {}
+  try { raw = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)) } catch { raw = {} }
+  const entities: MapEntity[] = (Array.isArray(raw.entities) ? raw.entities : [])
+    .filter((e: any) => e && KINDS.has(String(e.kind)) && String(e.name ?? '').trim())
+    .slice(0, 25)
+    .map((e: any) => ({
+      kind: String(e.kind), name: String(e.name).trim().slice(0, 120), facts: strs(e.facts, 10),
+      fields: Object.fromEntries(Object.entries(e.fields && typeof e.fields === 'object' ? e.fields : {})
+        .filter(([, v]) => typeof v === 'string' && v.trim()).map(([k, v]) => [k, String(v).slice(0, 300)])),
+      connections: (Array.isArray(e.connections) ? e.connections : [])
+        .filter((c: any) => c && String(c.name ?? '').trim())
+        .map((c: any) => ({ name: String(c.name).trim(), relation: String(c.relation ?? 'mentioned with') })).slice(0, 10),
+    }))
+  return { entities, decided: strs(raw.decided), committed: strs(raw.committed), numbers: strs(raw.numbers), open_questions: strs(raw.open_questions) }
+}

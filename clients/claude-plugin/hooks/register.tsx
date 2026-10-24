@@ -20,9 +20,9 @@ import type { Register } from 'claude-code'
 import type { AppInfo, Call, Calendar, Calls, Flash, Listener, Meeting, Seg, Upcoming, View, Workspace, Workspaces } from '../types'
 import {
   DECIDE_MAX_TOKENS, DECIDE_SYSTEM, FALLBACK_APP, briefFor, buildApp, calibrationSummary, decidePrompt, isDirect,
-  norm, normalize, parseDecision, parseManifest, ruleHit, rulesText, triggerWords,
+  MAP_SYSTEM, norm, normalize, parseDecision, parseManifest, parseMap, ruleHit, rulesText, triggerWords,
 } from './listener'
-import type { App, Labelled, Row } from './listener'
+import type { App, Labelled, MapPass, Row } from './listener'
 
 const PANE = 'vexa-home'
 const SERVER_KEY = 'vexa'
@@ -361,7 +361,10 @@ async function poll($: any): Promise<void> {
     }
     if (['completed', 'failed', 'stopped'].includes(status)) {
       await updateListener($, x => ({ ...x, isOn: false }))
-      if (m.status !== 'past' && status === 'completed') await afterCall($, { ...m, status })
+      if (m.status !== 'past' && status === 'completed') {
+        await mapStep($, true)
+        if (!maps.has(m.dbId)) await afterCall($, { ...m, status })
+      }
     }
   } catch (err) {
     await update($, x => ({ ...x, error: message(err) }))
@@ -753,6 +756,7 @@ async function triage($: any): Promise<void> {
       wakes: canWake ? [...x.wakes, { at: new Date(now).toISOString().slice(11, 19), reason: v.reason }].slice(-20) : x.wakes,
     }))
     if (canWake) {
+      wokeAt = now
       await setFlash($, 'woke', triggerWords(v.reason))
       batch.push({ reason: v.reason, lines: [...context.slice(-2), ...lines], direct, index: Math.max(0, m.segments.length - fresh.length) })
       await flush($)
@@ -904,6 +908,89 @@ function startRequests($: any): void {
     $.clock.after(pause || 250, () => quiet(loop()))
   }
   quiet(loop())
+}
+
+// --- The live map ---------------------------------------------------------------------------
+// While the person listens (unless they said «only when I ask»), at most every MAP_EVERY_MS of new
+// transcript and soon after a wake, a small-model pass extracts people, companies, projects,
+// decisions and their relations; the plugin upserts them into the personal workspace (by its own
+// rules, read once) and keeps one meeting page that links them, finalized as the call report.
+const MAP_EVERY_MS = 120_000
+const MAP_AFTER_WAKE_MS = 30_000
+const MAP_MIN_LINES = 3
+type MapRun = { mapped: Set<string>; lastAt: number; page: string; attached: boolean; people: Set<string>; companies: Set<string>; others: Set<string>; title: string }
+const maps = new Map<number, MapRun>()
+let mapping = false
+let workspaceRules: string | null = null
+let wokeAt = 0
+
+function mapAllowed(): boolean {
+  return settings.write !== 'ask'
+}
+
+async function rulesForPersonal($: any): Promise<string> {
+  if (workspaceRules !== null) return workspaceRules
+  try {
+    const r = await call($, 'workspace_read', { slug: 'personal', path: 'CLAUDE.md' })
+    workspaceRules = String(r.content ?? '').slice(0, 4000)
+  } catch { workspaceRules = '' }
+  return workspaceRules
+}
+
+async function mapStep($: any, final: boolean): Promise<void> {
+  const m = await read($)
+  const l = await readListener($)
+  if (mapping || !m.dbId || m.isDemo || !mapAllowed() || !(l.isOn || final)) return
+  const run = maps.get(m.dbId) ?? { mapped: new Set<string>(), lastAt: 0, page: '', attached: false, people: new Set<string>(), companies: new Set<string>(), others: new Set<string>(), title: m.title || `${PLATFORM[m.platform] ?? m.platform} call` }
+  const now = await $.clock.now()
+  const fresh = m.segments.filter(x => !x.pending && x.id && !run.mapped.has(x.id))
+  const due = final || now - run.lastAt >= MAP_EVERY_MS || (wokeAt > run.lastAt && now - wokeAt >= MAP_AFTER_WAKE_MS)
+  if (!due || (fresh.length < MAP_MIN_LINES && !(final && fresh.length))) return
+  mapping = true
+  maps.set(m.dbId, run)
+  try {
+    run.lastAt = now
+    const rules = await rulesForPersonal($)
+    const day = new Date(now).toISOString().slice(0, 10)
+    const r = await $.model.complete({
+      model: FILTER_MODEL,
+      maxTokens: 1500,
+      system: [{ text: MAP_SYSTEM, cache: true }, ...(rules ? [{ text: `The workspace's own rules (they win):\n${rules}`, cache: true }] : [])],
+      prompt: fresh.map(x => `[${x.time}] ${x.speaker}: ${x.text}`).join('\n'),
+    })
+    fresh.forEach(x => run.mapped.add(x.id))
+    if (!r.isAnswered) return
+    const pass: MapPass = parseMap(r.text)
+    const source = `${day} call «${run.title}» (meeting ${m.dbId})`
+    for (const e of pass.entities) {
+      quiet(call($, 'entity_upsert', { kind: e.kind, name: e.name, facts: e.facts, source, slug: 'personal', fields: e.fields, connections: e.connections }))
+      ;(e.kind === 'person' ? run.people : e.kind === 'company' ? run.companies : run.others).add(e.name)
+    }
+    const page = await call($, 'entity_upsert', {
+      kind: 'meeting', name: `${day} ${run.title}`, slug: 'personal', source,
+      dates: { held_at: day },
+      fields: {
+        participants: [...run.people].join(', '),
+        ...(pass.decided.length ? { decided: pass.decided.join('; ') } : {}),
+        ...(pass.committed.length ? { committed: pass.committed.join('; ') } : {}),
+      },
+      facts: pass.numbers.map(n => `Number mentioned: ${n}`),
+      connections: [...run.people, ...run.companies, ...run.others].map(name => ({ name, relation: 'discussed in' })),
+      open_questions: pass.open_questions,
+    })
+    run.page = String(page?.path ?? run.page)
+    if (run.page && !run.attached) {
+      run.attached = true
+      quiet(call($, 'meeting_attach_page', { path: run.page, workspace: '', meeting_id: String(m.dbId) }))
+    }
+    if (final) {
+      $.ui.log(`Updated your map: ${run.people.size} people, ${run.companies.size} companies${run.others.size ? `, ${run.others.size} more` : ''}${run.page ? ` · ${run.page}` : ''}`)
+    }
+  } catch (err) {
+    await updateListener($, x => ({ ...x, error: `map: ${message(err)}` }))
+  } finally {
+    mapping = false
+  }
 }
 
 // After a real call ends, when writing is allowed: one turn for the main Claude to file it.
@@ -1437,6 +1524,7 @@ export const register: Register = (on, options) => {
       polling = true
       $.clock.every(1500, () => quiet((async () => { await poll($); await findLive($) })()))
       $.clock.every(3000, () => quiet(followWeb($)))
+      $.clock.every(15_000, () => quiet(mapStep($, false)))
       // Signing in happens in /mcp, outside the pane: notice it without a button press.
       $.clock.every(5000, async () => {
         try { if ((await read($)).connection !== 'ready') await connect($) } catch { /* the next tick tries again */ }

@@ -11,11 +11,12 @@ const BAND = {
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 const seg = (id: string, speaker: string, t: string, completed = true) => ({ segment_id: id, speaker, text: t, completed, absolute_start_time: '2026-10-24T12:00:00Z' })
 
-type Seen = { tools: string[]; model: string[]; prompts: string[]; written: Record<string, string>; annotations: any[] }
+type Seen = { tools: string[]; model: string[]; prompts: string[]; written: Record<string, string>; annotations: any[]; maps: string[]; upserts: any[]; logs: string[] }
 const meta: Record<string, unknown> = {}
 
 function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<string, string> = {}, live?: (() => unknown[]) | 'strict'): Seen {
-  const seen: Seen = { tools: [], model: [], prompts: [], written: {}, annotations: [] }
+  const seen: Seen = { tools: [], model: [], prompts: [], written: {}, annotations: [], maps: [], upserts: [], logs: [] }
+  on('ui.log', (_: unknown, e: any) => { seen.logs.push(String(e.text ?? e)); return { value: undefined } })
   for (const k of Object.keys(meta)) delete meta[k]
   on('command.register', () => ({ value: { command: 'vexa' } }))
   on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__vexa__${e.name}` } }))
@@ -39,12 +40,21 @@ function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<s
       const from = Number(e.args?.since_index ?? 0)
       return { value: text({ status: 'active', since_index: from, next_index: all.length, segments: all.slice(from) }) }
     }
+    if (e.tool === 'entity_upsert') { seen.upserts.push(e.args); return { value: text({ path: e.args.kind === 'meeting' ? 'kg/entities/meeting/x.md' : `kg/entities/${e.args.kind}/y.md` }) } }
     if (e.tool === 'annotate_meeting') { Object.assign(meta, e.args.metadata); seen.annotations.push({ ...e.args.metadata }); return { value: text({ ok: true }) } }
     if (e.tool === 'get_meeting') return { value: text({ id: 41, data: { metadata: { ...meta } } }) }
     if (e.tool === 'request_meeting_bot') return { value: text({ id: 41, platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'active' }) }
     return { value: text({}) }
   })
   on('model.complete', (_: unknown, e: any) => {
+    if (JSON.stringify(e.system ?? '').includes('knowledge map')) {
+      seen.maps.push(String(e.prompt))
+      return { value: { isAnswered: true, text: JSON.stringify({ entities: [
+        { kind: 'person', name: 'Ann Lee', facts: ['Ann leads procurement at [[Acme]].'], fields: { role: 'Procurement lead', company: 'Acme' }, connections: [{ name: 'Acme', relation: 'works at' }] },
+        { kind: 'company', name: 'Acme', facts: ['Acme is renewing for a year.'], fields: {}, connections: [] },
+        { kind: 'weird', name: 'X', facts: [] },
+      ], decided: ['Annual plan at 38k'], committed: ['Bob: contract by Friday'], numbers: ['38k'], open_questions: ['Who is Zed?'] }), usage: { inputTokens: 1, outputTokens: 1 } } }
+    }
     seen.model.push(String(e.prompt))
     return { value: { isAnswered: true, text: decision, usage: { inputTokens: 1, outputTokens: 1 } } }
   })
@@ -182,6 +192,31 @@ test('web and plugin share the listener through meeting metadata: state, heartbe
   await clock.advance(3_000)
   expect(seen.annotations.at(-1).listener_state).toBe('off')
   expect(await ui.find({ type: 'Text', text: /Claude is not listening/ })).toBeTruthy()
+  await ui.unmount()
+})
+
+test('while listening, the live map upserts people and companies into personal and keeps one meeting page', async ($, on) => {
+  const clock = mock.clock(on)
+  let lines = [seg('1', 'Ann', 'Morning all.')]
+  const seen = engine(on, () => lines)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ plugin: 'vexa', component: 'Pane', requestId: 'vexa-home', surface: 'desktop', props: { title: 'Vexa', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } } as any)
+  await ui.input({ key: 'h-url', text: 'https://meet.google.com/abc-defg-hij' } as any)
+  await clock.advance(1_500)
+  await ui.press({ key: 'listen' })
+  lines = [...lines, seg('2', 'Ann', 'I lead procurement at Acme.'), seg('3', 'Bob', 'We agreed the annual plan at 38k.'), seg('4', 'Bob', 'I will send the contract by Friday.')]
+  await clock.advance(121_500)
+  expect(seen.maps.length).toBe(1)
+  expect(seen.maps[0]).toMatch(/procurement at Acme/)
+  const kinds = seen.upserts.map(u => `${u.kind}:${u.name}`)
+  expect(kinds).toEqual(expect.arrayContaining(['person:Ann Lee', 'company:Acme']))
+  expect(kinds.some(k => k.startsWith('weird'))).toBe(false)
+  expect(seen.upserts.every(u => u.slug === 'personal' && /meeting 41/.test(u.source))).toBe(true)
+  const page = seen.upserts.find(u => u.kind === 'meeting')
+  expect(page.fields).toMatchObject({ participants: 'Ann Lee', decided: 'Annual plan at 38k', committed: 'Bob: contract by Friday' })
+  expect(page.open_questions).toEqual(['Who is Zed?'])
+  expect(seen.tools).toContain('meeting_attach_page')
+  expect(seen.prompts.some(p => p.includes('Updated your map'))).toBe(false)
   await ui.unmount()
 })
 
