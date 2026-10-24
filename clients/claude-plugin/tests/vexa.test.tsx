@@ -43,8 +43,7 @@ test('not signed in: the pane shows the sign-in state', async ($, on) => {
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
-    expect((await ui.find({ type: 'Text', text: /Sign in to Vexa/ }))?.text).toMatch(/Sign in/)
-    expect(await ui.find({ type: 'Text', text: /\/mcp/ })).toBeTruthy()
+    expect((await ui.find({ type: 'Text', text: /Not signed in/ }))?.text).toBe('Not signed in. Ask Claude to set up Vexa.')
     await ui.unmount()
   }
 })
@@ -154,5 +153,53 @@ test('a hosted server without calendar, workspace or demo tools: those views and
   expect(await ui.find({ type: 'Text', text: /Send Vexa to a call/ })).toBeTruthy()
   for (const t of [/^Workspaces$/, /^Calendar$/, /Try a demo/]) expect(await ui.find({ type: 'Text', text: t })).toBeFalsy()
   expect(calls).not.toContain('workspace_list')
+  await ui.unmount()
+})
+
+test('setup in chat: the context asks the next question, vexa_settings saves the answer, a finished call is filed', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  const calls: { tool: string; args: any }[] = []
+  const prompts: string[] = []
+  let status = 'active'
+  on('command.register', () => ({ value: { command: 'vexa' } }))
+  on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__vexa__${e.name}` } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
+  on('fs.exists', () => ({ value: false }))
+  on('env.get', () => ({ value: '/home/u' }))
+  on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:vexa:vexa' } }))
+  on('tool.list', () => ({ value: ['workspace_list', 'get_meeting_transcript'].map(n => ({ name: `mcp__plugin_vexa_vexa__${n}` })) }))
+  on('prompt.submit', (_: unknown, e: any) => { prompts.push(e.text); return { text: e.text } })
+  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'engine', scope: 'shared' }] }))
+  on('mcp.call', (_: unknown, e: any) => {
+    calls.push({ tool: e.tool, args: e.args })
+    if (e.tool === 'workspace_list') return { value: text({ workspaces: [{ slug: 'team', display: 'Team', kind: 'shared', role: 'owner', state: 'active' }], line: 'Writes to Team' }) }
+    if (e.tool === 'request_meeting_bot') return { value: text({ id: 41, platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'active' }) }
+    if (e.tool === 'get_meeting_transcript') return { value: text({ status, segments: [], next_index: 0 }) }
+    return { value: text({ ok: true }) }
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await clock.advance(10)
+  const before: any = await $.prompt.compose({ model: 'claude-sonnet-5-5', promptModel: 'claude-sonnet-5-5', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [], sections: [] } as any)
+  expect(before.sections.at(-1).text).toMatch(/Where should I keep what I learn/)
+
+  const r: any = await $.tool.call({ tool: 'mcp__vexa__vexa_settings', write: 'cloud', workspace: 'team' } as any)
+  expect(r.result.saved).toEqual({ write: 'cloud', workspace: 'team', localPath: '' })
+  expect(calls.find(c => c.tool === 'workspace_defaults_set')?.args).toEqual({ target: 'team' })
+  const after: any = await $.prompt.compose({ model: 'claude-sonnet-5-5', promptModel: 'claude-sonnet-5-5', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [], sections: [] } as any)
+  expect(after.sections.at(-1).text).toMatch(/workspace «team»/)
+  expect(after.sections.at(-1).text).toMatch(/workspace_read CLAUDE\.md/)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.input({ key: 'h-url', text: 'https://meet.google.com/abc-defg-hij' } as any)
+  await clock.advance(1_500)
+  status = 'completed'
+  await clock.advance(1_500)
+  await clock.advance(1_500)
+  const filed = prompts.filter(p => p.includes('just ended'))
+  expect(filed.length).toBe(1)
+  expect(filed[0]).toMatch(/meeting_db_id 41/)
+  expect(filed[0]).toMatch(/vexa-workspace skill/)
   await ui.unmount()
 })

@@ -160,6 +160,19 @@ export const ASK_PERSON: Record<string, string> = {
   stop_bot: 'Vexa will leave the meeting and stop transcribing it.',
 }
 
+// Where Claude keeps what it learns, as the person said it in chat (kept across sessions in
+// $.store, so the next session knows): `cloud` = a Vexa workspace (the account's default write
+// target, the same one the web's «Writes to …» shows), `local` = a folder on this computer,
+// `ask` = only when they ask; unset = not asked yet.
+type Settings = { write: '' | 'cloud' | 'local' | 'ask'; workspace: string; localPath: string }
+const NO_SETTINGS: Settings = { write: '', workspace: '', localPath: '' }
+let settings: Settings = NO_SETTINGS
+// What the session-start context says about the server: its «Writes to …» line and workspaces.
+let writesLine = ''
+let workspaceNames: string[] = []
+const SETTINGS_TOOL = 'mcp__vexa__vexa_settings'
+const reported = new Set<number>()
+
 // The module's own: a reload reconnects and reloads the app.
 let server = ''
 let polling = false
@@ -333,7 +346,10 @@ async function poll($: any): Promise<void> {
         status = await readConfirmed($, 0, status)
       }
     }
-    if (['completed', 'failed', 'stopped'].includes(status)) await updateListener($, x => ({ ...x, isOn: false }))
+    if (['completed', 'failed', 'stopped'].includes(status)) {
+      await updateListener($, x => ({ ...x, isOn: false }))
+      if (m.status !== 'past' && status === 'completed') await afterCall($, { ...m, status })
+    }
   } catch (err) {
     await update($, x => ({ ...x, error: message(err) }))
   } finally {
@@ -743,6 +759,57 @@ async function configure($: any, input: any): Promise<unknown> {
   return { listening: l.isOn, meeting, offer: l.offer, preset: l.preset, presets: l.app.presets, app: l.app.name, appFolder: appDir, brief: l.brief, wakes: l.wakes, lastVerdict: l.lastVerdict }
 }
 
+// The person's answer to «where should I keep what I learn», saved by Claude in chat. Cloud also
+// sets the account's default write target on the server, so the web shows the same choice.
+async function saveSettings($: any, input: any): Promise<unknown> {
+  const write = ['cloud', 'local', 'ask'].includes(input.write) ? input.write : settings.write
+  const next: Settings = {
+    write,
+    workspace: typeof input.workspace === 'string' ? input.workspace : settings.workspace,
+    localPath: typeof input.local_path === 'string' ? input.local_path : settings.localPath,
+  }
+  if (input.write === undefined && input.workspace === undefined && input.local_path === undefined) return { settings, writes: writesLine }
+  if (next.write === 'cloud') {
+    if (!next.workspace) return { error: 'Cloud needs a workspace slug: workspace_list shows them; workspace_new makes one.' }
+    await call($, 'workspace_defaults_set', { target: next.workspace })
+  }
+  if (next.write === 'local' && !next.localPath) {
+    const home = await $.env.get('HOME')
+    next.localPath = `${home ?? '~'}/Vexa`
+  }
+  settings = next
+  await $.store.set('settings', settings)
+  quiet(loadWorkspaces($))
+  return { saved: settings }
+}
+
+// Two or three lines at the end of the system prompt: what Vexa is connected to, where Claude
+// writes and whose rules apply, or which setup question to ask next. Read from memory: no calls.
+function contextText(m: Meeting): string {
+  if (m.connection !== 'ready') {
+    return 'Vexa (meeting bot, live transcripts, team workspaces) is installed but not signed in. If the person wants Vexa, '
+      + 'tell them to type /mcp, choose plugin:vexa:vexa and Authenticate; then use the vexa-setup skill.'
+  }
+  const lines = [`Vexa is connected. Workspaces: ${workspaceNames.slice(0, 8).join('; ') || 'not loaded yet'}.`]
+  if (settings.write === 'cloud') lines.push(`You write what you learn to the Vexa workspace «${settings.workspace}» (${writesLine || 'the account default'}). Before writing, read its rules: workspace_read CLAUDE.md and workspace_purpose; follow the vexa-workspace skill.`)
+  else if (settings.write === 'local') lines.push(`You write what you learn as markdown under ${settings.localPath} (the vexa-workspace layout). Read ${settings.localPath}/CLAUDE.md first if it exists.`)
+  else if (settings.write === 'ask') lines.push('Write to a workspace only when the person asks; then follow the vexa-workspace skill.')
+  else lines.push('Setup is not finished: when it fits, ask in chat «Where should I keep what I learn from your calls: on this computer, or in a cloud workspace you can share?» and save the answer with vexa_settings (vexa-setup skill).')
+  return lines.join('\n')
+}
+
+// After a real call ends, when writing is allowed: one turn for the main Claude to file it.
+async function afterCall($: any, m: Meeting): Promise<void> {
+  if (!m.dbId || m.isDemo || reported.has(m.dbId) || !['cloud', 'local'].includes(settings.write)) return
+  reported.add(m.dbId)
+  const where = settings.write === 'cloud' ? `the Vexa workspace «${settings.workspace}»` : `the local folder ${settings.localPath}`
+  void $.prompt.submit({
+    text: `[Vexa] The call «${m.title || m.nativeId}» (${m.platform} ${m.nativeId}, meeting_db_id ${m.dbId}) just ended. `
+      + `Writing is allowed to ${where}. Follow the vexa-workspace skill: read the workspace's rules first, then write the notes, `
+      + `decisions, commitments and the people in it, link the meeting page to them, and reply with one line and a link. Skip personal talk.`,
+  })
+}
+
 const TRIGGERS_SCHEMA = {
   type: 'array', maxItems: 20,
   items: { type: 'object', required: ['kind', 'value'], properties: {
@@ -825,10 +892,12 @@ async function setAutoJoin($: any, target: Upcoming | null, on: boolean): Promis
 async function loadWorkspaces($: any): Promise<void> {
   try {
     const p = await call($, 'workspace_list', {})
+    writesLine = String(p.line ?? '')
     const items: Workspace[] = (p.workspaces ?? []).filter((w: any) => (w.state ?? 'active') === 'active').map((w: any) => ({
       slug: String(w.slug ?? w.id ?? w.name), name: String(w.display ?? w.name ?? w.title ?? w.slug ?? w.id),
       kind: String(w.kind ?? w.type ?? ''), role: String(w.role ?? ''),
     }))
+    workspaceNames = items.map(x => `${x.name} (${x.slug}, ${x.kind || 'workspace'}${x.role ? `, ${x.role}` : ''})`)
     await updateWorkspaces($, w => ({ ...w, items, error: '', loaded: true }))
   } catch (err) { await updateWorkspaces($, w => ({ ...w, error: message(err), loaded: true })) }
 }
@@ -1236,6 +1305,21 @@ export const register: Register = on => {
         + 'ones) and return precision, recall, per-call latency and the misses. No meeting needed.',
       inputSchema: { type: 'object', properties: { rules: { type: 'string' }, fixture: { type: 'string', description: 'Path to a JSON list of {speaker, text, wake}.' } } },
     })
+    await $.tool.register({
+      name: 'vexa_settings',
+      description: 'Read or save where Claude keeps what it learns from Vexa calls, exactly as the person answered in chat: '
+        + 'write "cloud" (a Vexa workspace, by slug; also becomes the account\'s default write target, shared with the web), '
+        + '"local" (markdown in a folder on this computer, default ~/Vexa), or "ask" (only when they ask). No arguments reads it.',
+      inputSchema: { type: 'object', properties: {
+        write: { enum: ['cloud', 'local', 'ask'] },
+        workspace: { type: 'string', description: 'For cloud: the workspace slug (workspace_list).' },
+        local_path: { type: 'string', description: 'For local: the folder; default ~/Vexa.' },
+      } },
+    })
+    try {
+      const saved = await $.store.get('settings')
+      if (saved && typeof saved === 'object') settings = { ...NO_SETTINGS, ...(saved as Settings) }
+    } catch { /* no saved choice: the context asks for one */ }
     await loadApp($)
     void $.ui.open({ id: PANE, title: app.pane.title })
     await connect($)
@@ -1282,6 +1366,14 @@ export const register: Register = on => {
   on('command.run', { command: 'vexa-app-seed' }, async $ => ({ text: await seedProject($) }))
   on('command.run', { command: 'vexa-app-reset' }, async $ => ({ text: await resetApp($) }))
 
+  on('tool.call', { tool: 'mcp__vexa__vexa_settings' }, async ($, e) => ({ result: await saveSettings($, e) }))
+    .catch(($, e, next) => (next.called ? next(e) : { deny: 'Saving the Vexa setting failed; try again.' }))
+
+  on('prompt.compose', async ($, e, next) => {
+    const r = await next(e)
+    return { ...r, sections: [...r.sections, { id: 'vexa:context', text: contextText(await read($)), scope: 'session' }] }
+  }).catch(($, e, next) => next(e))
+
   on('tool.call', { tool: 'mcp__vexa__listener_configure' }, async ($, e) => ({ result: await configure($, e) }))
     .catch(($, e, next) => (next.called ? next(e) : { deny: 'The Vexa listener control failed; try again.' }))
 
@@ -1296,7 +1388,7 @@ export const register: Register = on => {
   // only for a read-only tool or the listener's own controls; speaking and leaving always ask the
   // person; the rest goes to the session's decider as it would without us.
   on('tool.check', async ($, e, next) => {
-    if (e.tool === CONFIGURE_TOOL || e.tool === CALIBRATE_TOOL) return { decision: 'allow', reason: "Vexa listener's own control" }
+    if (e.tool === CONFIGURE_TOOL || e.tool === CALIBRATE_TOOL || e.tool === SETTINGS_TOOL) return { decision: 'allow', reason: "Vexa plugin's own control" }
     if (!e.tool.startsWith(prefix)) return next(e)
     if (next.origin.plugin === $.plugin.name) return { decision: 'allow', reason: 'Vexa pane button' }
     const name = e.tool.slice(prefix.length)
@@ -1346,24 +1438,12 @@ export const register: Register = on => {
       return <Box flexDirection="column"><Text bold>{title}</Text><Text dimColor>Connecting…</Text></Box>
     }
 
+    // Setup happens in the chat (founder, 24 Oct): the pane only says where things stand.
     if (m.connection !== 'ready') {
       return (
-        <Box flexDirection="column" gap={1}>
+        <Box flexDirection="column">
           <Text bold>{title}</Text>
-          {m.connection === 'signin' ? (
-            <Box flexDirection="column">
-              <Text>Sign in to Vexa to send a bot to your meetings.</Text>
-              <Text>{'Type /mcp, choose plugin:vexa:vexa, then Authenticate. Sign in with Google or Microsoft and press Allow.'}</Text>
-              <Text color="inactive" size="caption">New accounts start with $2 of free credit.</Text>
-            </Box>
-          ) : (
-            <Box flexDirection="column">
-              <Text weight="medium">Vexa could not connect.</Text>
-              <Text color="inactive" size="caption">{m.error.split('\n')[0] || 'The server did not answer.'}</Text>
-              <Text>{'Type /mcp, choose plugin:vexa:vexa and check its status; Authenticate there if it asks you to sign in.'}</Text>
-            </Box>
-          )}
-          <Button key="retry" label={m.connection === 'signin' ? "I've signed in" : 'Try again'} hotkey="r" variant="primary" onPress={() => connect($)} />
+          <Text color="inactive">{m.connection === 'signin' ? 'Not signed in. Ask Claude to set up Vexa.' : `Not connected${m.error ? `: ${m.error.split('\n')[0]}` : '.'}`}</Text>
         </Box>
       )
     }
