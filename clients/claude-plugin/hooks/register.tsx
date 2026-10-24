@@ -153,6 +153,13 @@ export const READ_ONLY = new Set([
   'bot_accounts_list', 'open_meeting', 'calendar_status', 'workspace_list', 'workspace_read', 'workspace_search',
 ])
 
+// Tools whose effect other people see or that end the call: a model call always asks the person,
+// whatever the mode (a hook's ask is a person's; no auto-mode check settles it).
+export const ASK_PERSON: Record<string, string> = {
+  speak_in_meeting: 'Vexa will say this out loud to everyone in the meeting.',
+  stop_bot: 'Vexa will leave the meeting and stop transcribing it.',
+}
+
 // The module's own: a reload reconnects and reloads the app.
 let server = ''
 let polling = false
@@ -1275,13 +1282,15 @@ export const register: Register = on => {
   }).catch(($, e, next) => (next.called ? next(e) : { deny: 'The Vexa listener calibration failed.' }))
 
   // The pane's own calls are the person's button presses: approved. A model call is approved
-  // only for a read-only tool or the listener's own controls; the rest goes to the session's
-  // decider as it would without us.
+  // only for a read-only tool or the listener's own controls; speaking and leaving always ask the
+  // person; the rest goes to the session's decider as it would without us.
   on('tool.check', async ($, e, next) => {
     if (e.tool === CONFIGURE_TOOL || e.tool === CALIBRATE_TOOL) return { decision: 'allow', reason: "Vexa listener's own control" }
     if (!e.tool.startsWith(prefix)) return next(e)
     if (next.origin.plugin === $.plugin.name) return { decision: 'allow', reason: 'Vexa pane button' }
-    if (READ_ONLY.has(e.tool.slice(prefix.length))) return { decision: 'allow', reason: 'Vexa read-only tool' }
+    const name = e.tool.slice(prefix.length)
+    if (READ_ONLY.has(name)) return { decision: 'allow', reason: 'Vexa read-only tool' }
+    if (ASK_PERSON[name]) return { decision: 'ask', reason: ASK_PERSON[name] }
     return next(e)
   }).catch(($, e, next) => next(e))
 
