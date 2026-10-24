@@ -48,6 +48,30 @@ test('not signed in: the pane shows the sign-in state', async ($, on) => {
   }
 })
 
+test("a company's own Vexa: the sign-in names its host and drops hosted-only copy", { options: { vexa_url: 'https://vexa.acme.example' } }, async ($, on) => {
+  mock.clock(on)
+  engine(on, { isConnected: false, reason: 'auth', message: 'needs sign-in' })
+  on('prompt.compose', () => ({ sections: [] }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /Your company's Vexa: vexa\.acme\.example/ })).toBeTruthy()
+  const ctx: any = await $.prompt.compose({ model: 'claude-sonnet-5-5', promptModel: 'claude-sonnet-5-5', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [], sections: [] } as any)
+  expect(ctx.sections.at(-1).text).toMatch(/company's Vexa vexa\.acme\.example/)
+  expect(await ui.find({ type: 'Text', text: /Google or Microsoft/ })).toBeFalsy()
+  expect(await ui.find({ type: 'Text', text: /free credit/ })).toBeFalsy()
+  await ui.unmount()
+})
+
+test('hosted Vexa by default: the hosted sign-in copy', async ($, on) => {
+  mock.clock(on)
+  engine(on, { isConnected: false, reason: 'auth', message: 'needs sign-in' })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /Not signed in/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /Your company's Vexa/ })).toBeFalsy()
+  await ui.unmount()
+})
+
 test('signed in: Try a demo starts the demo and the transcript follows', async ($, on) => {
   const calls: { tool: string; args: unknown }[] = []
   const clock = mock.clock(on)

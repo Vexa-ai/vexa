@@ -26,6 +26,7 @@ import type { App, Labelled, Row } from './listener'
 
 const PANE = 'vexa-home'
 const SERVER_KEY = 'vexa'
+const HOSTED_URL = 'https://api.cloud.vexa.ai'
 const EMPTY: Meeting = {
   connection: 'connecting', url: '', platform: '', nativeId: '', dbId: 0, attachedTo: '', offers: { calendar: false, workspaces: false, demo: false, requests: false }, title: '', isDemo: false,
   status: 'idle', nextIndex: 0, liveCursor: '', liveFeed: true, segments: [], error: '',
@@ -175,6 +176,8 @@ const reported = new Set<number>()
 
 // The module's own: a reload reconnects and reloads the app.
 let server = ''
+// The Vexa the plugin's server points at: the `vexa_url` option, hosted Vexa unless set.
+let vexaUrl = HOSTED_URL
 let polling = false
 let app: App = FALLBACK_APP
 let appDir = ''
@@ -196,6 +199,14 @@ function payload(r: { content: readonly { type: string; text?: string }[] }): an
 // a session ending under it rejects nothing.
 function quiet(p: Promise<unknown>): void {
   p.catch(() => {})
+}
+
+function vexaHost(): string {
+  return vexaUrl.replace(/^[a-z]+:\/\//i, '').replace(/[/?#].*$/, '')
+}
+
+function isHosted(): boolean {
+  return vexaUrl.replace(/\/+$/, '') === HOSTED_URL
 }
 
 function message(err: unknown): string {
@@ -858,8 +869,8 @@ async function saveSettings($: any, input: any): Promise<unknown> {
 // writes and whose rules apply, or which setup question to ask next. Read from memory: no calls.
 function contextText(m: Meeting): string {
   if (m.connection !== 'ready') {
-    return 'Vexa (meeting bot, live transcripts, team workspaces) is installed but not signed in. If the person wants Vexa, '
-      + 'tell them to type /mcp, choose plugin:vexa:vexa and Authenticate; then use the vexa-setup skill.'
+    return `Vexa (meeting bot, live transcripts, team workspaces) is installed${isHosted() ? '' : `, pointed at the company's Vexa ${vexaHost()},`} but not signed in. `
+      + 'If the person wants Vexa, tell them to type /mcp, choose plugin:vexa:vexa and Authenticate; then use the vexa-setup skill.'
   }
   const lines = [`Vexa is connected. Workspaces: ${workspaceNames.slice(0, 8).join('; ') || 'not loaded yet'}.`]
   if (settings.write === 'cloud') lines.push(`You write what you learn to the Vexa workspace «${settings.workspace}» (${writesLine || 'the account default'}). Before writing, read its rules: workspace_read CLAUDE.md and workspace_purpose; follow the vexa-workspace skill.`)
@@ -1273,7 +1284,7 @@ async function calendarView($: any, ui: any): Promise<any> {
       <Text color="inactive" size="caption">Connect your calendar and Vexa joins your meetings by itself. Choose which ones.</Text>
       {heading(ui, 'c-conn', 'Calendars')}
       {c.connected.map((name, i) => row(ui, `cal-${i}`, name, 'Connected'))}
-      {row(ui, 'c-add', c.connected.length ? 'Connect another calendar' : 'Connect your calendar', 'You sign in on vexa.ai yourself; Vexa never asks for your password here.', () => connectCalendar($))}
+      {row(ui, 'c-add', c.connected.length ? 'Connect another calendar' : 'Connect your calendar', `You sign in on ${vexaHost()} yourself; Vexa never asks for your password here.`, () => connectCalendar($))}
       {c.link ? (Link ? <Link key="c-link" href={c.link} label="Open the calendar page" /> : <Text>{c.link}</Text>) : null}
       {c.steps.map((st, i) => <Text key={`c-step-${i}`} color="inactive" size="caption">{`${i + 1}. ${st}`}</Text>)}
       {heading(ui, 'c-next', `Upcoming · Vexa joins ${joining} of ${c.upcoming.length}`, c.upcoming.length ? { label: joining === c.upcoming.length ? 'Join none' : 'Join all', onPress: () => setAutoJoin($, null, joining !== c.upcoming.length) } : undefined)}
@@ -1382,7 +1393,8 @@ const HELP = [
   '5. Calendar: connect it and pick which meetings Vexa joins. Workspaces: pages Claude reads and writes; bind a meeting so its notes land there.',
 ].join('\n')
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  vexaUrl = String(options?.vexa_url || HOSTED_URL)
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'vexa', description: 'Vexa: your calls, the live listener, calendar and workspaces' })
     await $.command.register({ name: 'vexa-meeting', description: 'Open the Vexa pane at the meeting' })
@@ -1544,7 +1556,9 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column">
           <Text bold>{title}</Text>
-          <Text color="inactive">{m.connection === 'signin' ? 'Not signed in. Ask Claude to set up Vexa.' : `Not connected${m.error ? `: ${m.error.split('\n')[0]}` : '.'}`}</Text>
+          {isHosted() ? null : <Text color="inactive" size="caption">{`Your company's Vexa: ${vexaHost()}`}</Text>}
+          <Text color="inactive">{m.connection === 'signin' ? 'Not signed in. Ask Claude to set up Vexa.' : `Not connected${m.error ? `: ${m.error.split('\n')[0]}` : `: ${vexaHost()} did not answer.`}`}</Text>
+          {/\/$/.test(vexaUrl) ? <Text color="inactive">{`The Vexa address ${vexaUrl} ends with «/»; remove it in /config (Vexa address).`}</Text> : null}
         </Box>
       )
     }

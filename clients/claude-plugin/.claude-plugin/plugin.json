@@ -2,7 +2,7 @@
   "name": "vexa",
   "displayName": "Vexa",
   "version": "0.2.0",
-  "description": "Send a bot to a Google Meet, Teams or Zoom call and follow the live transcript in a panel beside the chat. Sign in with your Vexa account; no API key.",
+  "description": "Send a bot to a Google Meet, Teams or Zoom call and follow the live transcript in a panel beside the chat. Works with hosted Vexa or your company's own Vexa; you sign in through its sign-in page, no API key.",
   "author": { "name": "Vexa", "url": "https://github.com/Vexa-ai" },
   "homepage": "https://docs.vexa.ai/vexa-mcp",
   "repository": "https://github.com/Vexa-ai/vexa",
@@ -11,10 +11,18 @@
   "privacyPolicyUrl": "https://vexa.ai/legal/privacy",
   "keywords": ["meetings", "transcription", "google-meet", "microsoft-teams", "zoom", "meeting-bot", "mcp"],
   "types": "./types/index.d.ts",
+  "userConfig": {
+    "vexa_url": {
+      "type": "string",
+      "title": "Vexa address",
+      "description": "The Vexa this plugin talks to. Keep https://api.cloud.vexa.ai for hosted Vexa; a company running its own Vexa puts its address here, for example https://vexa.example.com.",
+      "default": "https://api.cloud.vexa.ai"
+    }
+  },
   "mcpServers": {
     "vexa": {
       "type": "http",
-      "url": "https://api.cloud.vexa.ai/mcp"
+      "url": "${user_config.vexa_url}/mcp"
     }
   }
 }
