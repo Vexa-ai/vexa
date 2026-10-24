@@ -208,7 +208,7 @@ test('setup in chat: the context asks the next question, vexa_settings saves the
   const before: any = await $.prompt.compose({ model: 'claude-sonnet-5-5', promptModel: 'claude-sonnet-5-5', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [], sections: [] } as any)
   expect(before.sections.at(-1).text).toMatch(/Where should I keep what I learn/)
 
-  const r: any = await $.tool.call({ tool: 'mcp__vexa__vexa_settings', write: 'cloud', workspace: 'team' } as any)
+  const r: any = { result: JSON.parse(((await $.tool.call({ tool: 'mcp__vexa__vexa_settings', write: 'cloud', workspace: 'team' } as any)) as any).result) }
   expect(r.result.saved).toEqual({ write: 'cloud', workspace: 'team', localPath: '' })
   expect(calls.find(c => c.tool === 'workspace_defaults_set')?.args).toEqual({ target: 'team' })
   const after: any = await $.prompt.compose({ model: 'claude-sonnet-5-5', promptModel: 'claude-sonnet-5-5', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [], sections: [] } as any)

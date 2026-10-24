@@ -571,7 +571,7 @@ async function findLive($: any): Promise<void> {
   if (!l.app.pane.offerListening || l.isOn || now - lastOfferCheck < OFFER_EVERY_MS) return
   lastOfferCheck = now
   if (m.nativeId && m.status === 'active' && !l.declined.includes(roomKey(m))) {
-    await updateListener($, x => ({ ...x, offer: { platform: m.platform, nativeId: m.nativeId, title: m.title || m.nativeId, dbId: m.dbId } }))
+    await updateListener($, x => ({ ...x, offer: { platform: m.platform, nativeId: m.nativeId, title: m.title || m.nativeId, dbId: m.dbId, demo: m.isDemo } }))
     return
   }
   if (l.offer && l.offer.platform === m.platform && l.offer.nativeId === m.nativeId && !isLive(m)) {
@@ -584,7 +584,7 @@ async function findLive($: any): Promise<void> {
       platform: String(r.platform ?? ''),
       nativeId: String(r.native_meeting_id ?? r.native_id ?? ''),
       title: String(r.data?.title ?? r.title ?? r.native_meeting_id ?? 'Your meeting'),
-      dbId: Number(r.id ?? r.meeting_db_id ?? 0),
+      dbId: Number(r.id ?? r.meeting_db_id ?? 0), demo: Boolean(r.data?.demo),
     }))
     // An offer whose meeting is no longer live goes; a live one stays.
     if (l.offer && rooms.some(r => roomKey(r) === roomKey(l.offer!))) return
@@ -601,7 +601,7 @@ async function listen($: any): Promise<void> {
   if (!room) return
   const m = await read($)
   if (m.platform !== room.platform || m.nativeId !== room.nativeId) {
-    await update($, x => ({ ...x, platform: room.platform, nativeId: room.nativeId, dbId: room.dbId ?? 0, attachedTo: '', title: room.title, isDemo: false, status: 'active', segments: [], nextIndex: 0, liveCursor: '', liveFeed: true }))
+    await update($, x => ({ ...x, platform: room.platform, nativeId: room.nativeId, dbId: room.dbId ?? 0, attachedTo: '', title: room.title, isDemo: Boolean(room.demo), status: 'active', segments: [], nextIndex: 0, liveCursor: '', liveFeed: true }))
     await poll($)
   }
   const heard = (await read($)).segments.filter(s => s.id).map(s => s.id)
@@ -816,7 +816,10 @@ async function triage($: any): Promise<void> {
     const gapOk = !l.lastWakeAt || now - l.lastWakeAt > WAKE_GAP_MS
     const trig = `${m.platform}/${m.nativeId}|${triggerWords(v.reason).toLowerCase()}`
     const seenTrig = !direct && SEEN_TRIGGERS.has(trig)
-    const canWake = !already && !seenTrig && v.wake && l.wakes.length < MAX_WAKES && (direct || followUp || Boolean(hit) || gapOk)
+    // Right after the speaker addressed the assistant, the main Claude is already on it: the next
+    // lines don't become separate signals.
+    const answering = !direct && lastDirectAt > 0 && now - lastDirectAt < FOLLOW_MS
+    const canWake = !already && !seenTrig && !answering && v.wake && l.wakes.length < MAX_WAKES && (direct || followUp || Boolean(hit) || gapOk)
     if (canWake && !direct) SEEN_TRIGGERS.add(trig)
     if (canWake) { ids.forEach(id => WOKE_FOR.add(id)); WOKE_TEXT.add(key) }
     await updateListener($, x => ({
@@ -1161,7 +1164,7 @@ async function loadCalls($: any): Promise<void> {
     const items: Call[] = rows.map(x => ({
       id: Number(x.id ?? x.meeting_db_id ?? 0), platform: String(x.platform ?? ''),
       nativeId: String(x.native_meeting_id ?? ''), status: String(x.status ?? ''), title: callTitle(x),
-      at: String(x.start_time ?? x.created_at ?? ''), shared: Boolean(x.shared),
+      at: String(x.start_time ?? x.created_at ?? ''), shared: Boolean(x.shared), demo: Boolean(x.data?.demo),
     }))
     await updateCalls($, c => ({ ...c, items, error: '' }))
   } catch (err) { await updateCalls($, c => ({ ...c, error: message(err) })) }
@@ -1169,7 +1172,7 @@ async function loadCalls($: any): Promise<void> {
 
 async function openCall($: any, c: Call): Promise<void> {
   await update($, x => ({
-    ...EMPTY, connection: x.connection, offers: x.offers, platform: c.platform, nativeId: c.nativeId, dbId: c.id, title: c.title,
+    ...EMPTY, connection: x.connection, offers: x.offers, platform: c.platform, nativeId: c.nativeId, dbId: c.id, title: c.title, isDemo: c.demo,
     // A past call is read once, confirmed lines only; its answer's own status then ends the polling.
     status: c.status === 'active' ? 'active' : 'past', liveFeed: c.status === 'active',
   }))
@@ -1721,7 +1724,8 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'vexa-app-seed' }, async $ => ({ text: await seedProject($) }))
   on('command.run', { command: 'vexa-app-reset' }, async $ => ({ text: await resetApp($) }))
 
-  on('tool.call', { tool: 'mcp__vexa__vexa_settings' }, async ($, e) => ({ result: await saveSettings($, e) }))
+  // A registered tool answers text: the engine checks a hook's result against a string.
+  on('tool.call', { tool: 'mcp__vexa__vexa_settings' }, async ($, e) => ({ result: JSON.stringify(await saveSettings($, e)) }))
     .catch(($, e, next) => (next.called ? next(e) : { deny: 'Saving the Vexa setting failed; try again.' }))
 
   on('prompt.compose', async ($, e, next) => {
@@ -1729,14 +1733,14 @@ export const register: Register = (on, options) => {
     return { ...r, sections: [...r.sections, { id: 'vexa:context', text: contextText(await read($)), scope: 'session' }] }
   }).catch(($, e, next) => next(e))
 
-  on('tool.call', { tool: 'mcp__vexa__listener_configure' }, async ($, e) => ({ result: await configure($, e) }))
+  on('tool.call', { tool: 'mcp__vexa__listener_configure' }, async ($, e) => ({ result: JSON.stringify(await configure($, e)) }))
     .catch(($, e, next) => (next.called ? next(e) : { deny: 'The Vexa listener control failed; try again.' }))
 
   on('tool.call', { tool: 'mcp__vexa__listener_calibrate' }, async ($, e) => {
     const input = e as any
     const l = await readListener($)
     const rules = typeof input.rules === 'string' && input.rules.trim() ? input.rules.trim() : rulesText(l.brief)
-    return { result: await calibrate($, rules, typeof input.fixture === 'string' ? input.fixture : '') }
+    return { result: JSON.stringify(await calibrate($, rules, typeof input.fixture === 'string' ? input.fixture : '')) }
   }).catch(($, e, next) => (next.called ? next(e) : { deny: 'The Vexa listener calibration failed.' }))
 
   // The pane's own calls are the person's button presses: approved. A model call is approved
@@ -1767,7 +1771,7 @@ export const register: Register = (on, options) => {
     const hot = l.isOn && ['woke', 'queued', 'sent', 'answering'].includes(f.stage)
     // Founder, 24 Oct: four states only — «Listening», the trigger itself (≤3 words), «Answering»,
     // «Not listening» — in footnote size, with no «Claude» in the text.
-    const line = !l.isOn ? 'Not listening'
+    const line = !l.isOn ? `${l.offer?.title ?? (m.title || m.nativeId)} · Not listening`
       : f.stage === 'answering' ? 'Answering'
         : hot ? (f.line || 'Listening')
           : 'Listening'

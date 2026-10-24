@@ -14,6 +14,8 @@ The session context says whether Vexa is connected. If not, tell the person:
 «Type /mcp, choose plugin:vexa:vexa, then Authenticate.» Then: on hosted Vexa, «Sign in with Google or Microsoft and press Allow; a new account starts with $2 of free credit»; on a company's Vexa, «your browser opens your company's Vexa: sign in with your company account (Entra, Okta, …) and press Allow».
 **Hosted Vexa before its sign-in ships:** `/mcp` can't sign in there yet (the pane says «Not connected»). The person creates an API key at https://vexa.ai/account and sets it with `/plugin configure vexa@vexa` → **Vexa API key** (or `claude plugin install vexa@vexa --config vexa_api_key=…`), then restarts Claude Code. Leave that field empty on any Vexa that signs in through `/mcp`.
 
+After installing from a terminal, Claude Code may print «userConfig options not yet set»: both options are optional. Don't send the person to set an API key unless their Vexa has no sign-in (the pane says «Not connected» on hosted Vexa); otherwise sign in through `/mcp`.
+
 Nothing else works until then. Never ask for or accept an API key in the chat.
 
 ## 2. Where should I keep what I learn?
