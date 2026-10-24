@@ -23,7 +23,7 @@ INTERNAL = "internal-secret-for-tests"
 DLG = "delegation-secret-for-tests"
 KEY = "vxa_bot_test-key"
 
-BASE_FIELDS = {"user_id", "scopes", "max_concurrent", "email", "is_admin", "admin_account",
+BASE_FIELDS = {"user_id", "scopes", "max_concurrent", "email", "is_admin", "admin_account", "account_mode",
                "email_verified", "credential_class"}
 
 
@@ -104,8 +104,13 @@ def test_an_api_key_answers_the_base_fields_and_nothing_that_does_not_apply(monk
     assert r.status_code == 200, r.text
     assert r.json() == {"user_id": 42, "scopes": ["bot"], "max_concurrent": 2,
                         "email": "ada@example.com", "is_admin": False, "admin_account": False,
-                        "email_verified": False, "credential_class": "key"}
+                        "account_mode": "standard", "email_verified": False, "credential_class": "key"}
     assert session.commits == 1, "every hit bumps last_used_at"
+
+
+def test_a_claude_account_says_so_on_the_wire(monkeypatch):
+    client, _ = _client(monkeypatch, data={"account_mode": "claude"})
+    assert _validate(client, {"token": KEY}).json()["account_mode"] == "claude"
 
 
 def test_webhook_and_memberships_appear_only_when_the_account_has_them(monkeypatch):

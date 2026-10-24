@@ -36,7 +36,7 @@ from fastapi.responses import Response
 from control_plane import budgets, front_page as front_page_mod, home, home_media, identity_presence, home_model, home_playbook, home_sources, meeting_note, people_directory, publish, session_sync
 from control_plane.ceiling import refuse_delegated
 from shared import usage as usage_mod
-from control_plane import llm_budget
+from control_plane import global_layer, llm_budget
 
 logger = logging.getLogger("agent_api.home")
 
@@ -356,7 +356,8 @@ def build(**d) -> APIRouter:
         ranker, model_id = None, ""
         pol = budgets.read(_gdir())
         ucli = budgets.usage_client(d.get("redis_url"))
-        over = budgets.verdict(pol, usage_mod.rolling(ucli, owner), background=True).get("stop")
+        over = (budgets.verdict(pol, usage_mod.rolling(ucli, owner), background=True).get("stop")
+                or global_layer.agents_off(d.get("settings"), owner))   # «Vexa for Claude»: no model
         if allow_model and not over and hs.count_since(owner, now - 86400, with_model=True) < pol["home_compose_per_day"]:
             if rank_override is not None:
                 ranker, model_id = rank_override, "test"
@@ -590,6 +591,9 @@ def build(**d) -> APIRouter:
         stop = budgets.verdict(pol, usage_mod.rolling(ucli, owner), background=False)
         if stop.get("stop"):
             raise HTTPException(status_code=429, detail={"refused": "budget_exhausted", "note": stop["why"]})
+        if global_layer.agents_off(d.get("settings"), owner):
+            refusal = llm_budget.BudgetExhausted(llm_budget.ACCOUNT_AGENTS_OFF, scope="user")
+            raise HTTPException(status_code=refusal.http_status, detail=refusal.as_dict())
         user = json.dumps({"item": item, "ask": home.clip(body.ask, 400)}, ensure_ascii=False)
         out = expander(user) if expander else home_model.complete_json(
             getattr(dispatcher, "catalog", None), home_model.EXPAND, user, named=pol["model_home"],

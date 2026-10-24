@@ -145,6 +145,21 @@ describe("/api/auth/me", () => {
     }
   });
 
+  it("says the ACCOUNT MODE — `claude` only when the oracle says so, `standard` otherwise", async () => {
+    cookieJar["vexa-token"] = "good-token";
+    for (const [answer, said] of [
+      [{ account_mode: "claude" }, "claude"],
+      [{ account_mode: "standard" }, "standard"],
+      [{}, "standard"],                                     // an older identity: no field at all
+      [{ account_mode: "CLAUDE" }, "standard"],
+    ] as const) {
+      stubOracle(() => new Response(JSON.stringify({ user_id: 7, email: "a@example.test", ...answer }), { status: 200 }));
+      const body = await (await meRoute()).json();
+      expect(body.account_mode).toBe(said);
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("an unreachable oracle leaves admin_account UNKNOWN (null), never a yes", async () => {
     cookieJar["vexa-token"] = "good-token";
     stubOracle(() => new Response("down", { status: 503 }));

@@ -355,6 +355,17 @@ def effective(global_dir: Optional[Path], env: Optional[Mapping[str, str]] = Non
     return out
 
 
+#: What a «Vexa for Claude» account (identity's ``account_mode: claude``) never has: every feature whose
+#: entry point starts, shows or feeds a Vexa server agent. Its calls and workspaces stay as they are.
+AGENT_FEATURES = ("transcript_signals", "intent_router", "home_stream", "people", "event_agents",
+                  "agent_messages", "chat_history_tools", "desktop_cards", "meeting_prep", "home_prepare")
+
+
+def without_agents(on: Mapping[str, bool]) -> dict[str, bool]:
+    """``on`` with every :data:`AGENT_FEATURES` name off."""
+    return {**on, **{name: False for name in AGENT_FEATURES}}
+
+
 def on_for_anyone(global_dir: Optional[Path], name: str, env: Optional[Mapping[str, str]] = None) -> bool:
     """Is ``name`` on for the company, or for at least one named account? (a background loop's
     question: it serves everyone and filters per item)."""

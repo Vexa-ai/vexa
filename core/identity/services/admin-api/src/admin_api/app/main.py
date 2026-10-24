@@ -23,7 +23,7 @@ import os
 import socket
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import urlparse
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, Security, status
@@ -49,6 +49,7 @@ from . import photo_storage as photo_storage_mod
 from . import profile_doors as profile_doors_mod
 from . import orgs as orgs_mod
 from . import claim_code
+from . import account_mode
 from . import admin_account
 from . import signin_allow
 from . import signin_wire
@@ -198,6 +199,9 @@ class UserCreate(BaseModel):
     email: str
     name: Optional[str] = None
     max_concurrent_bots: int = 3
+    # Stamped on a NEW row only (app/account_mode.py): the door that creates the account says the
+    # person came through «Vexa for Claude». An existing account keeps the mode it has.
+    account_mode: Optional[Literal["claude"]] = None
 
 
 class PlatformBillingDataPatch(BaseModel):
@@ -230,13 +234,16 @@ class PlatformBillingDataPatch(BaseModel):
 class UserAdminPatch(BaseModel):
     max_concurrent_bots: Optional[int] = Field(default=None, ge=0)
     data: Optional[PlatformBillingDataPatch] = None
+    # The operator's door to app/account_mode.py: `claude` turns Vexa's server agents off for the
+    # account, `standard` turns them back on.
+    account_mode: Optional[Literal["standard", "claude"]] = None
 
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def require_change(self):
         has_data = self.data is not None and bool(self.data.model_fields_set)
-        if self.max_concurrent_bots is None and not has_data:
+        if self.max_concurrent_bots is None and not has_data and self.account_mode is None:
             raise ValueError("at least one user field must be supplied")
         return self
 
@@ -663,6 +670,8 @@ def create_app() -> FastAPI:
         u.data = admin_account.stamp_for_new_row(u.email, u.data)
         if admin_account.is_stamped(u.data):
             u.max_concurrent_bots = admin_account.MAX_CONCURRENT_BOTS
+        elif user_in.account_mode:
+            u.data = account_mode.apply(u.data, user_in.account_mode)
         db.add(u)
         try:
             await db.commit()
@@ -763,6 +772,8 @@ def create_app() -> FastAPI:
                 **(user.data or {}),
                 **patch.data.model_dump(exclude_unset=True),
             }
+        if patch.account_mode is not None:
+            user.data = account_mode.apply(user.data, patch.account_mode)
         await db.commit()
         await db.refresh(user)
         return UserResponse.model_validate(user)
@@ -1497,7 +1508,8 @@ def create_app() -> FastAPI:
         # NOT `is_admin` — the instance admin is a person, and a person's chats read `_global` only.
         return {"user_id": user.id, "email": user.email,
                 "is_admin": signin_allow.is_admin(user.email, user.data, signin_allow.admin_emails()[0]),
-                "admin_account": admin_account.is_admin_account(user.email, user.data)}
+                "admin_account": admin_account.is_admin_account(user.email, user.data),
+                "account_mode": account_mode.of(user.data)}
 
     @app.post("/internal/release-admin", include_in_schema=False)
     async def release_admin(payload: dict, request: Request, db: AsyncSession = Depends(get_db)):

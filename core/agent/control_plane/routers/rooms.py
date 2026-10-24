@@ -22,7 +22,7 @@ from typing import Annotated, Literal, Optional
 from fastapi import APIRouter, Body, HTTPException, Path, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from control_plane import identity_token, meeting_listen, people_directory, rooms, rooms_overview, session_sync
+from control_plane import global_layer, identity_token, meeting_listen, people_directory, rooms, rooms_overview, session_sync
 from control_plane.bodies import CHAT_SESSION_PATTERN, ListenBrief
 from control_plane.ceiling import is_unwatched, refuse_delegated, require_in_ceiling, require_read_in_ceiling
 
@@ -653,6 +653,8 @@ def build(**d) -> APIRouter:
         except Exception:  # noqa: BLE001
             root = None
         pol = meeting_listen.policy(_home.read_global(root, "POLICIES.md"), subject=subject)
+        if global_layer.agents_off(settings, str(subject)):   # «Vexa for Claude»: no listener
+            pol = {**pol, "transcript_signals": "off"}
         st = rooms.settings(s, row["id"])
         # what the people chose (proactivity) applied to what the agent wrote (the brief)
         brief = rooms.effective_brief(st["listen"] or meeting_listen.default_brief(pol), st["proactivity"])

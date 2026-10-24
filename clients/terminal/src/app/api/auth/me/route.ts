@@ -83,6 +83,9 @@ export async function GET() {
         // layer, and on nothing else. The client shows it only Company, and shows Company to nobody
         // else. Same three values as `is_admin`.
         admin_account: validated.adminAccount,
+        // THE ACCOUNT MODE (identity.v1 `account_mode`): `claude` is «Vexa for Claude» — calls and
+        // workspaces, no Vexa server agent. The client hides every agent surface for it.
+        account_mode: validated.accountMode,
         // The account id scopes this browser's stored state to this account (platform/accountStorage).
         user: { id: String(validated.userId), email: validated.email ?? email ?? null, name: name ?? null },
         company: personToken && validated.adminAccount ? { person: { email: person?.email ?? null, name: person?.name ?? null } } : null,
@@ -119,7 +122,7 @@ export async function GET() {
   return NextResponse.json(
     // is_admin: null — "unknown", NOT "no". A consumer that reads this as a denial turns an
     // admin-api blip into a lockout screen for the administrator.
-    { authenticated: true, degraded: true, is_admin: null, admin_account: null,
+    { authenticated: true, degraded: true, is_admin: null, admin_account: null, account_mode: null,
       user: { id: null, email: email ?? null, name: name ?? null } },
     { headers: NO_STORE },
   );

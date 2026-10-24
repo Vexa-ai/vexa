@@ -14,7 +14,7 @@
  *  One CSS grid: three columns (rail · conversation · pages), a shared 46px header band. */
 import { ROUTINES_CHANGED_EVENT } from "./RoutineBar";
 import { COMPANY_WORD, WORKSPACE_WORD, deskName } from "./vocabulary";
-import { closeCentre, useCentre } from "./shell2/centre";
+import { closeCentre, openCentre, useCentre } from "./shell2/centre";
 import { CentrePane } from "./shell2/CentrePane";
 import { setMe } from "./shell2/me";
 import { isPersonPath } from "./shell2/personOpen";
@@ -117,6 +117,7 @@ import { CONNECTIONS_OPEN } from "./connectionEvents";
 import { listProposals, resolveProposal, type DeskProposal } from "../surfaces/proposalsApi";
 import { ProposalChips } from "./ProposalChips";
 import { AdminHome } from "./AdminHome";
+import { ClaudeAccountHome } from "./ClaudeAccountHome";
 import { EdgeHandle, ShellToggle } from "./Collapse";
 import { Drawer, Sheet, Splitter, useShellLayout } from "../ui-kit";
 import { CallDock } from "./CallDock";
@@ -2365,11 +2366,20 @@ export function MinutesShell() {
   // Nothing hangs on it being right — the server confines the admin account and refuses everybody
   // else's `_global` writes either way — so it is a probe, not a gate.
   const [isAdminAccount, setIsAdminAccount] = useState(false);
+  // «VEXA FOR CLAUDE» (identity.v1 `account_mode`, founder 2026-10-24): Vexa runs no agent for this
+  // account, so the centre holds its calls and workspaces instead of an agent chat. Only a literal
+  // `claude` counts; the server refuses the agent turns either way.
+  const [claudeAccount, setClaudeAccount] = useState(false);
   useEffect(() => {
     let active = true;
     void fetch("/api/auth/me", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (active) setIsAdminAccount((d as { admin_account?: boolean } | null)?.admin_account === true); })
+      .then((d) => {
+        if (!active) return;
+        const me = d as { admin_account?: boolean; account_mode?: string } | null;
+        setIsAdminAccount(me?.admin_account === true);
+        setClaudeAccount(me?.account_mode === "claude");
+      })
       .catch(() => undefined);
     return () => { active = false; };
   }, []);
@@ -2684,8 +2694,8 @@ export function MinutesShell() {
             live under "…" → Activity in both headers instead of as a strip. */}
         {/* A DRAFT ROUTINE whose home is this chat: its Turn on line, in every layout (live app.dev
             2026-10-18 — with rooms on the strip sits behind "…" → Activity, where a draft was lost) */}
-        <ChatRoutineDrafts session={session} cards={routineStates} />
-        {(() => {
+        {!claudeAccount && <ChatRoutineDrafts session={session} cards={routineStates} />}
+        {!claudeAccount && (() => {
           const strip = <ChatRoutines key={session} session={session} fallback={routineOfOpenChat(allChats, session)}
             stage={allChats.find((c) => c.id === session)?.concern?.stage} />;
           if (!roomsOn) return strip;
@@ -2695,6 +2705,9 @@ export function MinutesShell() {
         <div style={{ flex: 1, minHeight: 0 }}>
           {/* THE ADMIN ACCOUNT'S HOME (founder ruling 2026-10-11): its four areas in place of the
               everyday chips, which offer a desk and meetings it does not have. */}
+          {claudeAccount ? <ClaudeAccountHome
+            onCalls={() => (shell2 ? openCentre("meetings") : shell.setPagesOpen(true))}
+            onPages={() => shell.setPagesOpen(true)} /> :
           <Chat params={{ session }} emptyExtra={isAdminAccount ? <AdminHome /> : <DesktopHome
             /* THE DESKTOP (desktop ADR D1): behind `desktop`, in place of the composed cards; otherwise the home below */
             active={spent !== sel.chatId && draft?.id === sel.chatId} greeting={homeRead?.doc.greeting}
@@ -2704,7 +2717,7 @@ export function MinutesShell() {
             ? <HomeStream doc={homeRead.doc} people={homeRead.people} starters={shownChips.length ? <ProposalChips items={shownChips}
                 onPick={(p) => void runProposal(p)} onDismiss={dismissProposal} /> : undefined} />
             : <ProposalChips items={shownChips}
-            onPick={(p) => void runProposal(p)} onDismiss={dismissProposal} />} />} />
+            onPick={(p) => void runProposal(p)} onDismiss={dismissProposal} />} />} />}
         </div>
         </BlocksProvider>
       </main>

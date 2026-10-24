@@ -11,6 +11,7 @@ import json
 import pathlib
 
 from control_plane import features as features_mod
+from control_plane import global_layer
 from control_plane import version as version_mod
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -38,7 +39,10 @@ def build(**d) -> APIRouter:
     def _features(subject: str = "") -> dict:
         """The switches as THIS caller has them: the company's, plus every feature
         `features_accounts` switches on for their account (the test-account switch)."""
-        return features_mod.effective(_root(), subject=subject or None)
+        on = features_mod.effective(_root(), subject=subject or None)
+        if subject and global_layer.agents_off(d.get("settings"), subject):   # «Vexa for Claude»
+            on = features_mod.without_agents(on)
+        return on
 
     @router.get("/health")
     def health():

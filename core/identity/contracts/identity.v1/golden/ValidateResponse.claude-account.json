@@ -1,0 +1,14 @@
+{
+  "user_id": 77,
+  "scopes": [
+    "bot",
+    "tx"
+  ],
+  "max_concurrent": 3,
+  "email": "sam@example.com",
+  "is_admin": false,
+  "admin_account": false,
+  "account_mode": "claude",
+  "email_verified": true,
+  "credential_class": "key"
+}

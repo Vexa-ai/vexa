@@ -28,6 +28,7 @@ from control_plane.workspace_attach import (SEED_SLOT, active_workspaces, chat_r
 from control_plane.workspace_membership import reconciled_memberships
 from control_plane.workspace_purpose import read_purpose
 from control_plane import delegation_refresh, delegation_revocation, global_layer
+from control_plane import llm_budget as llm_budget_mod
 from control_plane import model_endpoint
 from control_plane import model_proxy
 from shared import model_grant as model_grant_mod
@@ -1633,6 +1634,19 @@ class Dispatcher:
         # nothing; the caller answers the typed refusal.
         if getattr(self, "_llm_budget", None) is not None:
             self._llm_budget.admit(payer)
+        # «VEXA FOR CLAUDE» ACCOUNTS RUN NO VEXA AGENT (founder 2026-10-24; identity's
+        # `account_mode`). Here, beside the spend cap, for the same reason: every turn of every
+        # trigger passes this line. Asked of the person the turn is for and of whoever pays for it.
+        speaker = str((invocation.get("identity") or {}).get("subject") or "")
+        if room_principal is not None:
+            speaker = str(room_principal.on_behalf_of or speaker)
+        for who in {speaker, payer} - {""}:
+            if global_layer.agents_off(self._settings, who):
+                logger.info("dispatch REFUSED trigger=%s subject=%s: account_mode=claude",
+                            invocation.get("trigger"), who)
+                obs.log_event("agent_refused_account_mode", audience="system", user_id=who,
+                              fields={"trigger": invocation.get("trigger")})
+                raise llm_budget_mod.BudgetExhausted(llm_budget_mod.ACCOUNT_AGENTS_OFF, scope="user")
         self.dispatched.append(invocation)
         identity = invocation["identity"]
         uid = dispatch_id(invocation)

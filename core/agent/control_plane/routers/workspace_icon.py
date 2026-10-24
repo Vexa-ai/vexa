@@ -37,7 +37,7 @@ from fastapi import APIRouter, Body, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from control_plane import home_media
+from control_plane import global_layer, home_media
 from control_plane import workspace_glyph as wg
 from control_plane import workspace_icon as wi
 from control_plane import workspace_membership as membership_mod
@@ -180,6 +180,8 @@ def build(**d) -> APIRouter:
             pol = budgets.read(_global_root())
             ucli = budgets.usage_client(d.get("redis_url"))
             if budgets.verdict(pol, usage_mod.rolling(ucli, subject), background=True).get("stop"):
+                return None
+            if global_layer.agents_off(d.get("settings"), subject):
                 return None
             out = home_model.complete_json(catalog, system, user, named=pol.get("model_home", "cheapest"),
                                            allowed=budgets.allowed_list(pol))

@@ -1115,6 +1115,8 @@ def build(**d) -> APIRouter:
         def complete(system: str, user: str):
             if _budgets.verdict(pol, _usage.rolling(ucli, subject), background=False).get("stop"):
                 return None
+            if global_layer.agents_off(settings, subject):
+                return None
             out = inner(system, user)
             if out and out.get("_tokens"):
                 llm_budget_mod.record_local(subject, "route",
@@ -2914,6 +2916,8 @@ def build(**d) -> APIRouter:
             pol = budgets.read(gdir)
             ucli = budgets.usage_client(redis_url)
             if budgets.verdict(pol, usage_mod.rolling(ucli, subject), background=True).get("stop"):
+                return None
+            if global_layer.agents_off(settings, subject):
                 return None
             out = home_model.complete_json(catalog, system, user, named=pol.get("model_home", "cheapest"),
                                            allowed=budgets.allowed_list(pol))

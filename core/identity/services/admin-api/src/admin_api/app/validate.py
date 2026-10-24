@@ -39,6 +39,7 @@ from .. import delegation as delegation_mod
 from .. import obs
 from ..schema.models import APIToken, User
 from . import delegation_revocation as revocation
+from . import account_mode
 from . import admin_account
 from . import public_profile
 from . import signin_allow
@@ -136,6 +137,10 @@ class ValidatedIdentity(BaseModel):
     # worker is never the account; `person_admin_account` says whether its person is.
     admin_account: Optional[bool] = None
     person_admin_account: Optional[bool] = None
+    # THE ACCOUNT MODE (app/account_mode.py): `claude` is «Vexa for Claude» — calls and workspaces,
+    # no Vexa server agent. Always stated; for a delegation token it is the person's. A resolver that
+    # finds it missing (an older identity) reads `standard`.
+    account_mode: Literal["standard", "claude"] = "standard"
     # THE CREDENTIAL CLASS (D13, MIGRATION-0010) — always stated, positive evidence: `session` for the
     # terminal's signed-in browser (minted only by `POST /internal/sessions`), `key` for every other
     # API key (legacy rows included), `delegation` for a worker's `vxd_` token. A decision that must
@@ -161,6 +166,7 @@ def identity_of(user: User, *, scopes: List[str], is_admin: bool) -> Dict[str, A
         "email": user.email,
         "is_admin": is_admin,
         "admin_account": is_account,
+        "account_mode": account_mode.of(data_blob),
         "email_verified": public_profile.email_is_verified(data_blob, str(user.email or "")),
     }
     if data_blob.get("webhook_url"):

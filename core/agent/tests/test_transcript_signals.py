@@ -614,3 +614,13 @@ def test_a_signal_turn_keeps_the_chat_idle_window_so_the_next_wake_is_warm(tmp_p
     assert r.status_code == 202, r.text
     _uid, _profile, env = rt.spawned[-1]
     assert env["VEXA_IDLE_TIMEOUT_SEC"] == str(d.settings.chat_idle_timeout_sec)
+
+
+def test_a_claude_accounts_meetings_are_not_listened_to(tmp_path, monkeypatch):
+    """«Vexa for Claude» (identity's `account_mode`): the person's own Claude listens, so `signals`
+    reads `transcript_signals: off` for their meetings and spends no model on them."""
+    from control_plane import global_layer
+    client, _d, _rt, _desk = _world(tmp_path)
+    monkeypatch.setattr(global_layer, "agents_off", lambda _settings, subject: str(subject) == JANE)
+    got = client.get(f"/internal/meetings/{ROW}/listen?subject={JANE}", headers=_internal()).json()
+    assert got["policy"]["transcript_signals"] == "off"

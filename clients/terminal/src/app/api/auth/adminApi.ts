@@ -90,7 +90,7 @@ export function createUserToken(userId: string | number): Promise<AdminResult<{ 
 //    security-relevant may ever be derived from it.
 
 export type ValidatedUser =
-  | { ok: true; userId: string | number; email: string; isAdmin: boolean; adminAccount: boolean;
+  | { ok: true; userId: string | number; email: string; isAdmin: boolean; adminAccount: boolean; accountMode: "standard" | "claude";
       /** identity.v1 `credential_class`: `session` (a signed-in browser, D13), `key`, `delegation`;
        *  null when an older admin-api does not say. */
       credentialClass?: "session" | "key" | "delegation" | null }
@@ -116,7 +116,7 @@ export async function validateAuthToken(token: string): Promise<ValidatedUser> {
     if (!res.ok) return { ok: false, status: 503, error: `Token validation failed (admin-api returned ${res.status})` };
     const data = (await res.json()) as {
       user_id?: string | number; email?: string; is_admin?: boolean; admin_account?: boolean;
-      credential_class?: unknown;
+      account_mode?: unknown; credential_class?: unknown;
     };
     if (data.user_id === undefined || data.user_id === null || !data.email) {
       return { ok: false, status: 502, error: "Token validation returned no identity" };
@@ -127,6 +127,9 @@ export async function validateAuthToken(token: string): Promise<ValidatedUser> {
     const cc = data.credential_class;
     return { ok: true, userId: data.user_id, email: data.email, isAdmin: data.is_admin === true,
              adminAccount: data.admin_account === true,
+             // identity.v1 `account_mode`: `claude` is «Vexa for Claude», no Vexa server agents. A
+             // missing or unknown value (an older admin-api) is `standard`.
+             accountMode: data.account_mode === "claude" ? "claude" : "standard",
              credentialClass: cc === "session" || cc === "key" || cc === "delegation" ? cc : null };
   } catch (err) {
     const e = err as Error;

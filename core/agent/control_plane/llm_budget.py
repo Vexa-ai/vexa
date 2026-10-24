@@ -259,9 +259,14 @@ def settle_unreported(r, payer: str, unit: str, usd: Optional[float] = None) -> 
     return 0.0
 
 
+#: The refusal kind for a «Vexa for Claude» account (admin-api ``app/account_mode.py``).
+ACCOUNT_AGENTS_OFF = "account_agents_off"
+
+
 class BudgetExhausted(Exception):
     """A turn refused before it reached the model. ``kind`` is ``llm_budget_exhausted`` (a cap is
-    spent) or ``llm_disabled`` (the kill switch is on)."""
+    spent), ``llm_disabled`` (the kill switch is on), or ``account_agents_off`` (a «Vexa for Claude»
+    account: identity's ``account_mode`` is ``claude``, and Vexa runs no agent for it)."""
 
     def __init__(self, kind: str, *, scope: str = "", period: str = "", cap: float = 0.0,
                  spent: float = 0.0, resets_at: str = "") -> None:
@@ -272,6 +277,9 @@ class BudgetExhausted(Exception):
     def sentence(self) -> str:
         if self.kind == "llm_disabled":
             return "AI features are switched off on this deployment right now. Please try again later."
+        if self.kind == ACCOUNT_AGENTS_OFF:
+            return ("Vexa's agents are off for this account: it uses Vexa for Claude, so your own Claude "
+                    "does this work. Calls and workspaces keep working.")
         if self.kind == "usage_window":
             which = "5-hour" if self.period == "5h" else "weekly"
             back = f" — back at {self.resets_at}" if self.resets_at else ""
@@ -287,11 +295,13 @@ class BudgetExhausted(Exception):
     @property
     def http_status(self) -> int:
         # Not retryable: a flow's step fails at once with the sentence (flows retries 409/429/5xx).
-        return 403 if self.kind == "llm_disabled" else 402
+        return 403 if self.kind in ("llm_disabled", ACCOUNT_AGENTS_OFF) else 402
 
     def remedy(self) -> str:
         if self.kind == "llm_disabled":
             return "The operator has paused model calls on this deployment."
+        if self.kind == ACCOUNT_AGENTS_OFF:
+            return "Ask Claude, where Vexa is connected, to do it."
         if self.kind == "usage_window":
             return "Wait for the window to reset, or turn on extra usage."
         if self.scope == "user":
@@ -302,14 +312,14 @@ class BudgetExhausted(Exception):
         """The typed fault the chat renders (unit.v1 `Fault`): the model call was refused for want of
         budget — the same words a provider out of credit gets, with this deployment's sentence."""
         return {"source": "model-provider",
-                "kind": "refused" if self.kind == "llm_disabled" else "unpaid",
+                "kind": "refused" if self.kind in ("llm_disabled", ACCOUNT_AGENTS_OFF) else "unpaid",
                 "status": self.http_status, "detail": self.sentence(), "remedy": self.remedy()}
 
     def as_dict(self) -> dict:
         """The JSON a refused dispatch answers: the sentence for clients that read only `detail`,
         the typed fault, and which refusal it was."""
         out = {"detail": self.sentence(), "fault": self.fault(), "reason": self.kind}
-        if self.kind != "llm_disabled":
+        if self.kind not in ("llm_disabled", ACCOUNT_AGENTS_OFF):
             out.update(scope=self.scope, period=self.period, resets_at=self.resets_at)
         return out
 

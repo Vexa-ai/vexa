@@ -36,6 +36,11 @@ the internal tier (`X-Internal-Secret` = `INTERNAL_API_SECRET`).
   not `is_admin`: the instance admin is a person, and a person's chats only read `_global`. The admin
   account's `max_concurrent` is always `0` — it launches no bot. A resolver reads a missing field as
   `false`, so an older identity fails closed.
+- **`account_mode`** — `standard` or `claude`. A `claude` account came through «Vexa for Claude»: it
+  gets calls (bot, transcript, recording, calendar auto-join) and workspaces, and no Vexa server-side
+  agent spends a model on its behalf (admin-api `app/account_mode.py`; agent-api asks it before every
+  agent start, the terminal hides agent surfaces). Stamped only when a sign-in door creates the
+  account; for a delegation token it is the person's. A resolver reads a missing field as `standard`.
 - **`email_verified`** — was `email` proven by a sign-in: an emailed link the person redeemed, or an
   identity provider that vouched for the address (Google's `email_verified`, a pinned Microsoft
   tenant, a generic OIDC token that says `email_verified: true`)? Identity keeps the proof with the

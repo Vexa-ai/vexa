@@ -13,6 +13,7 @@ from control_plane.workspace_reader import home_of
 
 from shared import sensitive as sensitive_mod
 from control_plane import claims as claims_mod
+from control_plane import global_layer
 from control_plane import page_grammar as page_grammar_mod
 from control_plane import deploy_keys as deploy_keys_mod
 from control_plane.routers import folder_import as folder_import_routes
@@ -661,6 +662,8 @@ def build(**d) -> APIRouter:
             ucli = budgets.usage_client(d.get("redis_url"))
             if budgets.verdict(pol, usage_mod.rolling(ucli, subject), background=True).get("stop"):
                 return None
+            if global_layer.agents_off(settings, subject):
+                return None
             out = home_model.complete_json(catalog, system, user, named=pol.get("model_home", "cheapest"),
                                            allowed=budgets.allowed_list(pol))
             if out and out.get("_tokens"):
@@ -801,7 +804,12 @@ def build(**d) -> APIRouter:
             root = _global_root() if callable(_global_root) else None
         except Exception:  # noqa: BLE001 — an unreadable company layer is the defaults
             root = None
-        return meeting_listen_mod.policy(_home.read_global(root, "POLICIES.md"), subject=subject)
+        pol = meeting_listen_mod.policy(_home.read_global(root, "POLICIES.md"), subject=subject)
+        # «VEXA FOR CLAUDE» (identity's `account_mode`): the person's own Claude listens to their
+        # calls, so nothing here does — `signals` reads `off` and spends no model on their meetings.
+        if subject and global_layer.agents_off(settings, str(subject)):
+            pol = {**pol, "transcript_signals": "off"}
+        return pol
 
     def _meeting_row(subject: str, meeting: str) -> "dict | None":
         if _meeting_owner_lookup is None or not str(meeting or "").isdigit():

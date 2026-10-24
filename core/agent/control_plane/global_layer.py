@@ -278,6 +278,20 @@ def identities(settings, subject: str) -> list[str]:
     return [str(v) for v in (subject, out.get("email")) if str(v or "").strip()]
 
 
+def agents_off(settings, subject: str) -> bool:
+    """Is this subject a «Vexa for Claude» account — calls and workspaces, and no Vexa server agent?
+
+    Founder ruling 2026-10-24: *"для этих пользователей никаких агентов вообще не надо"*. Identity
+    owns the answer (admin-api ``app/account_mode.py``, ``account_mode == "claude"``); this is
+    agent-api's one reader of it, on the same hop as the two role questions. Every server-side agent
+    start asks it before a model is reached (``Dispatcher.dispatch``, beside the spend cap).
+
+    Fails OPEN to the standard account: identity unreachable, or an older identity that does not
+    say, leaves agents on — every account but the ones identity names works exactly as before."""
+    out = _ask_identity(settings, subject)
+    return bool(out and out.get("account_mode") == "claude")
+
+
 def is_admin_account(settings, subject: str) -> bool:
     """Is this subject the deployment's ADMIN ACCOUNT — the one identity that controls `_global`?
 
