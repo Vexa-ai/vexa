@@ -144,6 +144,25 @@
       "targets": [
         "compose"
       ]
+    },
+    {
+      "key": "MCP_USAGE_URL",
+      "class": "capability",
+      "capability": "usage_sink",
+      "description": "Where usage events are POSTed as `{\"events\":[\u2026]}` (batched every 5 s or 50 events, 3 s timeout, fire-and-forget).",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "MCP_USAGE_SECRET",
+      "class": "capability",
+      "capability": "usage_sink",
+      "secret": true,
+      "description": "Shared secret signing each batch the way meeting-api signs webhooks: `Authorization: Bearer`, `X-Webhook-Timestamp`, `X-Webhook-Signature: sha256=<hmac(ts.body)>`.",
+      "targets": [
+        "compose"
+      ]
     }
   ],
   "capabilities": {
@@ -160,6 +179,11 @@
       "description": "`report_issue` \u2014 an agent filing a ticket a human reads.",
       "mode": "any",
       "when_unconfigured": "`report_issue` answers 503 `not configured` and nothing else changes."
+    },
+    "usage_sink": {
+      "description": "Per-tool-call usage events (user, tool, ok, client) POSTed in signed batches to a collector \u2014 the hosted billing webapp's internal usage endpoint, for instance.",
+      "mode": "all",
+      "when_unconfigured": "No events leave the service; each tool call is still written as one `mcp_tool_call` log line. Setting only one of the two keys is misconfigured and also sends nothing."
     }
   }
 }

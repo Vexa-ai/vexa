@@ -9,6 +9,8 @@
   "tools": [
     {
       "name": "flows_list",
+      "title": "List flows",
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
       "identity": "operator",
       "auth": "subject",
       "requires": ["identity", "flows"],
@@ -16,6 +18,8 @@
     },
     {
       "name": "reactions_list",
+      "title": "List reactions",
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
       "identity": "user",
       "auth": "subject",
       "requires": ["identity", "flows"],
@@ -25,6 +29,8 @@
     },
     {
       "name": "reaction_signal",
+      "title": "Steer a reaction",
+      "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": false },
       "identity": "user",
       "auth": "subject",
       "requires": ["identity", "flows"],
@@ -33,6 +39,8 @@
     },
     {
       "name": "whats_waiting",
+      "title": "What's waiting",
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
       "identity": "user",
       "auth": "subject",
       "requires": ["identity", "flows"],
@@ -41,6 +49,8 @@
     },
     {
       "name": "timeline",
+      "title": "Timeline",
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
       "identity": "user",
       "auth": "subject",
       "requires": ["identity", "flows"],
@@ -49,6 +59,8 @@
     },
     {
       "name": "report_friction",
+      "title": "Report friction",
+      "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false },
       "identity": "user",
       "auth": "subject",
       "requires": ["identity", "flows"],
@@ -58,6 +70,8 @@
     },
     {
       "name": "friction_so_far",
+      "title": "List my friction reports",
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
       "identity": "user",
       "auth": "subject",
       "requires": ["identity", "flows"],

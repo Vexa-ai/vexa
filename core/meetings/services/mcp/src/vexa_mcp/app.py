@@ -33,10 +33,12 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi_mcp import FastApiMCP
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
+from . import annotations as annotations_mod
 from . import bind as bind_mod
 from . import discover as discover_mod
 from . import notices as notices_mod
 from . import register as register_mod
+from . import usage as usage_mod
 from .link_parser import ParseMeetingLinkResponse, parse_meeting_url
 from .prompts import PROMPTS, get_prompt_result
 from .streamable_http import install_streaming_http_transport
@@ -610,12 +612,17 @@ or nobody has spoken — it does not mean transcription is broken.
 """
 
 
+#: `create_app(usage_sink=...)` default — read the sink from the environment.
+_FROM_ENV = object()
+
+
 def create_app(
     gateway_url: Optional[str] = None,
     *,
     transport: Optional[httpx.AsyncBaseTransport] = None,
     assembly_env: Optional[dict] = None,
     assembly_transport: Optional[httpx.BaseTransport] = None,
+    usage_sink: Any = _FROM_ENV,
 ) -> FastAPI:
     """Build the MCP service app.
 
@@ -625,6 +632,8 @@ def create_app(
     ``assembly_env`` / ``assembly_transport`` — the same seam for the DISCOVERY hop: which domains
                       this deployment carries, and how their manifests are fetched. `VEXA_MCP_ASSEMBLY_OFF`
                       skips assembly entirely, which is what the fourteen-tool surface tests want.
+    ``usage_sink``  — where per-tool-call usage events go (`usage.py`). Default: built from
+                      `MCP_USAGE_URL` + `MCP_USAGE_SECRET`, off when unset; tests pass their own.
     """
     # REFUSE TO BOOT MISCONFIGURED (ADR-0026), the same first move every other adopted service
     # makes. This service shipped with eleven env keys, no declaration and no preflight — the one
@@ -1372,6 +1381,16 @@ def create_app(
         if isinstance(schema, dict) and schema.get("type") == "object":
             schema.setdefault("additionalProperties", False)
 
+    # TOOL ANNOTATIONS (#1646) — `title` + readOnly/destructive/idempotent/openWorld hints on every
+    # tool, so a client knows which calls to confirm. Set on the same `types.Tool` objects
+    # `FastApiMCP`'s `list_tools` handler returns (it serves `mcp.tools` as-is), BEFORE the mount.
+    # An assembled tool's own manifest is the authority; `annotations.REGISTRY` the fallback.
+    _manifest_entries = {
+        t.name: {"title": t.title, "annotations": t.annotations or {}}
+        for t in (app.state.assembly.tools if app.state.assembly is not None else [])
+    }
+    app.state.unannotated_tools = annotations_mod.apply(mcp.tools, _manifest_entries)
+
     mcp.mount_http()
     # fastapi-mcp 0.4 buffers the ASGI response; a sessioned GET is an open SSE
     # stream and never completes that buffer — install a passthrough (#921).
@@ -1387,4 +1406,10 @@ def create_app(
     # the result is the result and the refusal is the refusal.
     notices_mod.install(mcp, transport=transport, env=_assembly_env)
     app.state.mcp = mcp
+    # USAGE (#1646 follow-on): one log line per `tools/call`, and — when MCP_USAGE_URL and
+    # MCP_USAGE_SECRET are both set — a signed, batched, fire-and-forget event to that sink. A pure
+    # ASGI observer of POST /mcp: the SSE GET and every other route pass through untouched.
+    sink = usage_mod.UsageSink.from_env() if usage_sink is _FROM_ENV else usage_sink
+    app.state.usage_sink = sink
+    app.add_middleware(usage_mod.UsageMiddleware, sink=sink, mount="/mcp")
     return app
