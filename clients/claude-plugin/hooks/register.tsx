@@ -199,6 +199,11 @@ async function connect($: any): Promise<void> {
   if (was !== 'ready') { quiet(heartbeat($)); quiet(probeHttp($)); if (offers.requests) startRequests($) }
 }
 
+// Whether this session listens through `vexa-listen` (the script the `vexa-listen` skill starts):
+// then the script is the listener, and these hooks stop polling for one of their own. On the desktop
+// app it is the only one that works — there a plugin's own MCP calls are refused.
+let byScript = false
+
 // A Vexa tool the model just called names the server: `mcp__<server>__whats_waiting` and the like.
 export function serverOfCall(tool: string): string {
   const m = /^mcp__(.+)__(whats_waiting|get_meeting_transcript|list_meetings|request_meeting_bot|start_demo_meeting|get_meeting)$/.exec(tool)
@@ -307,7 +312,7 @@ async function readConfirmed($: any, since: number, status: string): Promise<str
 let pollingNow = false
 async function poll($: any): Promise<void> {
   const m = await read($)
-  if (m.connection !== 'ready' || !(isLive(m) || m.status === 'past') || pollingNow) return
+  if (byScript || m.connection !== 'ready' || !(isLive(m) || m.status === 'past') || pollingNow) return
   pollingNow = true
   try {
     let status = m.status
@@ -441,7 +446,7 @@ async function findLive($: any): Promise<void> {
   const m = await read($)
   const now = await $.clock.now()
   if (now < lastOfferCheck) lastOfferCheck = 0
-  if (!l.app.pane.offerListening || l.isOn || now - lastOfferCheck < OFFER_EVERY_MS) return
+  if (byScript || !l.app.pane.offerListening || l.isOn || now - lastOfferCheck < OFFER_EVERY_MS) return
   lastOfferCheck = now
   if (m.nativeId && m.status === 'active' && !l.declined.includes(roomKey(m))) {
     await updateListener($, x => ({ ...x, offer: { platform: m.platform, nativeId: m.nativeId, title: m.title || m.nativeId, dbId: m.dbId, demo: m.isDemo } }))
@@ -1029,6 +1034,7 @@ export const register: Register = (on) => {
   on('tool.call', async ($, e, next) => {
     const ran = await next(e)
     if (!ran.deny && !ran.isError) await learnServer($, e.tool).catch(() => {})
+    if (e.tool === 'Bash' && /vexa-listen/.test(String((e as { command?: unknown }).command ?? ''))) byScript = true
     const name = prefix && e.tool.startsWith(prefix) ? e.tool.slice(prefix.length) : ''
     if ((name === 'request_meeting_bot' || name === 'start_demo_meeting') && !ran.deny && !ran.isError) try {
       const bot = leadingJson(String(ran.text ?? ''))

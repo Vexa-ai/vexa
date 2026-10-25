@@ -6,6 +6,11 @@ while a call of yours is live, a band above the prompt offers to listen; after *
 model reads each new piece of the transcript in the background and wakes Claude only when someone
 says «Claude» or something matters. Without it, Claude can follow a call only inside one reply.
 
+- **How it listens:** the `vexa-listen` skill has Claude get a short-lived, transcripts-only key
+  (`listen_token`) and start `bin/vexa-listen` in the background. The script waits on Vexa's
+  `wait_for_signal`, exits when someone says «Claude» (or the call ends), and Claude Code wakes
+  Claude to answer and restart it. Each read tells Vexa the call is being listened to, which is what
+  the call panel shows. It needs only `sh` and `curl`, so it works in the terminal and the desktop app.
 - **No server of its own, nothing to sign in.** It finds your Vexa among the MCP servers this
   session already has (the one serving `get_meeting_transcript` and `whats_waiting`) and calls it
   with Claude Code's own connection.
