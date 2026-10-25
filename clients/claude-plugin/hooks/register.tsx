@@ -500,7 +500,10 @@ async function follow($: any, mt: NonNullable<LinkEvent['meeting']>, status: str
   const platform = String(mt.platform ?? ''), nativeId = String(mt.native_id ?? '')
   if (!platform || !nativeId) return
   if (m.platform === platform && m.nativeId === nativeId) {
-    if (status && status !== m.status) await update($, x => ({ ...x, status, title: mt.title || x.title }))
+    // The call's name, once someone gives it one, replaces its id everywhere the band says it.
+    if ((status && status !== m.status) || (mt.title && mt.title !== m.title)) {
+      await update($, x => ({ ...x, status: status || x.status, title: mt.title || x.title }))
+    }
     return
   }
   if (m.nativeId) parked.set(roomKey(m), m.segments)
@@ -543,6 +546,7 @@ async function onLinkEvent($: any, ev: LinkEvent): Promise<void> {
     const seg: Seg = { id: `${mt.id ?? mt.native_id}:${ev.index ?? ''}`, speaker: String(ev.speaker ?? '—'), text: String(ev.text).trim(), time: '', pending: false }
     await update($, x => ({ ...x, status: x.status === 'past' ? 'active' : x.status, segments: mergeSegs(x.segments, [seg]) }))
     await logLink($, 'transcript', `${seg.speaker}: ${seg.text}`, 'filter')
+    await heard($)
   }
 }
 
@@ -958,7 +962,8 @@ async function triage($: any): Promise<void> {
     }))
     if (canWake) {
       if (!firstWake) { firstWake = true; quiet(heartbeat($, 'wake')) }
-      await setFlash($, 'woke', triggerWords(v.reason))
+      const heard = (fresh.find(x => isDirect([`${x.speaker}: ${x.text}`])) ?? fresh[fresh.length - 1])?.text ?? ''
+      await setFlash($, 'woke', heardLine(heard, triggerWords(v.reason), direct))
       batch.push({ reason: v.reason, lines: [...context.slice(-2), ...lines], direct, index: Math.max(0, m.segments.length - fresh.length) })
       await flush($)
     }
@@ -1227,8 +1232,8 @@ let linkState = ''
 type BandKey = 'connect' | 'open' | 'send' | 'listen' | 'here' | 'stop' | 'reconnect'
 const BAND_LABEL: Record<BandKey, string> = { connect: 'Connect', open: 'Open panel', send: 'Send bot', listen: 'Listen', here: 'Listen here', stop: 'Stop listening', reconnect: 'Reconnect' }
 const BUSY_LABEL: Partial<Record<BandKey, string>> = { connect: 'Connecting…', open: 'Opening…', send: 'Send bot', listen: 'Starting…', here: 'Switching…', reconnect: 'Reconnecting…' }
-export type BandInput = { connected: boolean; owner: boolean; linkActive: boolean; polling?: boolean; linkState: string; call: string; listening: boolean; flash: string; answering: boolean; preset: string }
-export function bandState(x: BandInput): { tone: 'live' | 'warn' | 'off'; line: string; hot: boolean; buttons: BandKey[] } {
+export type BandInput = { connected: boolean; owner: boolean; linkActive: boolean; polling?: boolean; hearing?: boolean; linkState: string; call: string; listening: boolean; flash: string; answering: boolean; preset: string }
+export function bandState(x: BandInput): { tone: 'live' | 'hear' | 'react' | 'warn' | 'off'; line: string; hot: boolean; buttons: BandKey[] } {
   if (!x.connected) return { tone: 'off', line: 'Vexa not connected', hot: false, buttons: ['connect'] }
   if (x.owner && ['expired', 'unreachable'].includes(x.linkState)) return { tone: 'warn', line: 'Line to Vexa paused', hot: false, buttons: ['reconnect'] }
   if (x.linkActive && !x.owner) return { tone: 'off', line: 'Listening in another chat', hot: false, buttons: ['here'] }
@@ -1236,11 +1241,27 @@ export function bandState(x: BandInput): { tone: 'live' | 'warn' | 'off'; line: 
   // Listening is real either through the line this chat owns, or (no vexa-link anywhere) through
   // the plugin's own reads of the call, where Claude Code lets a plugin call Vexa.
   if (x.listening && ((x.owner && x.linkActive) || (!x.linkActive && x.polling))) {
-    if (x.answering) return { tone: 'live', line: 'Answering', hot: true, buttons: ['open', 'stop'] }
-    if (x.flash) return { tone: 'live', line: x.flash, hot: true, buttons: ['open', 'stop'] }
-    return { tone: 'live', line: `Listening · ${x.call}${x.preset && x.preset !== 'default' ? ` · ${x.preset}` : ''}`, hot: false, buttons: ['open', 'stop'] }
+    if (x.answering) return { tone: 'react', line: x.flash || 'Answering', hot: true, buttons: ['open', 'stop'] }
+    if (x.flash) return { tone: 'react', line: x.flash, hot: true, buttons: ['open', 'stop'] }
+    return { tone: x.hearing ? 'hear' : 'live', line: `Listening · ${x.call}${x.preset && x.preset !== 'default' ? ` · ${x.preset}` : ''}`, hot: false, buttons: ['open', 'stop'] }
   }
   return { tone: 'warn', line: `Not listening · ${x.call}`, hot: false, buttons: ['listen', 'open'] }
+}
+
+// What the band says while the listener acts on something: the words it caught, then what follows.
+export function heardLine(text: string, trigger: string, direct: boolean): string {
+  const quote = String(text || trigger).replace(/\s+/g, ' ').trim()
+  const short = quote.length > 48 ? `${quote.slice(0, 47)}…` : quote
+  return direct ? `Heard: “${short}” → answering` : `Caught: ${short} → checking`
+}
+
+// Hearing: the moment a line of the call arrives, the dot pulses once; a quiet room keeps it steady.
+const HEARING_MS = 1500
+let heardAt = -Infinity
+async function heard($: any): Promise<void> {
+  heardAt = await $.clock.now()
+  await updateFlash($, f => ({ ...f }))
+  $.clock.after(HEARING_MS + 100, () => { void updateFlash($, f => ({ ...f })) })
 }
 
 // Listen (or Listen here): this chat takes the line and follows the live call it knows of.
@@ -1251,13 +1272,17 @@ async function listenHere($: any): Promise<void> {
   await updateListener($, x => ({ ...x, isOn: true, offer: null, declined: x.declined.filter(d => d !== roomKey(m)) }))
 }
 
-function pulse(ui: any, key: string, tone: boolean | 'live' | 'warn' | 'off'): any {
+function pulse(ui: any, key: string, tone: boolean | 'live' | 'hear' | 'react' | 'warn' | 'off'): any {
   const { Svg, Text } = ui
   const t = tone === true ? 'live' : tone === false ? 'off' : tone
-  const fill = t === 'live' ? '#2f9e72' : t === 'warn' ? '#D9A23A' : '#9AA0A6'
-  if (!Svg) return <Text key={key} color={t === 'live' ? LIVE : t === 'warn' ? 'warning' : 'inactive'}>●</Text>
-  const anim = t === 'live' ? '<animate attributeName="r" values="3;5;3" dur="1.4s" repeatCount="indefinite"/><animate attributeName="opacity" values="1;0.45;1" dur="1.4s" repeatCount="indefinite"/>' : ''
-  return <Svg key={key} alt={t} width={14} height={14} isInteractive={t === 'live' ? true : undefined} source={`<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="4" fill="${fill}">${anim}</circle></svg>`} />
+  const fill = t === 'live' || t === 'hear' || t === 'react' ? '#2f9e72' : t === 'warn' ? '#D9A23A' : '#9AA0A6'
+  if (!Svg) return <Text key={key} color={t === 'warn' ? 'warning' : t === 'off' ? 'inactive' : LIVE}>{t === 'react' ? '↻' : '●'}</Text>
+  // Motion only says something: a pulse when a line arrives, a turning arc while Claude acts on one;
+  // a steady dot otherwise. SMIL stops for people who turned motion off (prefers-reduced-motion).
+  const body = t === 'react'
+    ? `<circle cx="7" cy="7" r="4.5" fill="none" stroke="${fill}" stroke-width="2" stroke-dasharray="20 9" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 7 7" to="360 7 7" dur="1s" repeatCount="indefinite"/></circle>`
+    : `<circle cx="7" cy="7" r="4" fill="${fill}">${t === 'hear' ? '<animate attributeName="r" values="3;5.5;4" dur="0.6s" repeatCount="2"/>' : ''}</circle>`
+  return <Svg key={key} alt={t} width={14} height={14} source={`<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><style>@media (prefers-reduced-motion: reduce){animate,animateTransform{display:none}}</style>${body}</svg>`} />
 }
 
 export const register: Register = (on) => {
@@ -1417,7 +1442,8 @@ export const register: Register = (on) => {
     const b = bandState({
       connected: m.connection === 'ready' || linkActive, owner: await ownsLink($), linkActive, linkState, polling: !byScript && m.connection === 'ready',
       call: isLive(m) && m.nativeId ? (m.title || m.nativeId) : '', listening: l.isOn,
-      flash: l.isOn && ['woke', 'queued', 'sent'].includes(f.stage) ? f.line : '', answering: l.isOn && f.stage === 'answering', preset: l.preset,
+      flash: l.isOn && ['woke', 'queued', 'sent', 'answering'].includes(f.stage) ? f.line : '', answering: l.isOn && f.stage === 'answering', preset: l.preset,
+      hearing: now - heardAt < HEARING_MS,
     })
     const act: Record<string, () => Promise<void>> = {
       connect: () => submitOnce($, 'Connect Vexa.'),

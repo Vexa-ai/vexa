@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { bandState, runsListener, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
+import { bandState, heardLine, runsListener, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
 
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 
@@ -268,4 +268,15 @@ test('only a command that runs vexa-link claims the line, never one that names i
   expect(runsListener('grep -n vexa-link clients/claude-plugin/bin/README.md')).toBe(false)
   expect(runsListener('cat ~/.vexa/link/owner; ls bin/vexa-link')).toBe(false)
   expect(runsListener('git log --oneline -- clients/claude-plugin/bin/vexa-link')).toBe(false)
+})
+
+
+test('the band shows the listener at work: a pulse while lines arrive, what it caught while it acts', () => {
+  const base = { connected: true, owner: true, linkActive: true, linkState: 'running', call: 'Claude Code mods video', listening: true, flash: '', answering: false, preset: 'default' }
+  expect(bandState({ ...base, hearing: true })).toMatchObject({ tone: 'hear', line: 'Listening · Claude Code mods video' })
+  expect(bandState(base).tone).toBe('live')
+  const caught = heardLine('Клод, ты меня слышишь?', 'Клод', true)
+  expect(caught).toBe('Heard: “Клод, ты меня слышишь?” → answering')
+  expect(bandState({ ...base, flash: caught, answering: true })).toMatchObject({ tone: 'react', line: caught })
+  expect(heardLine('a very long line that keeps going well past what the band can hold in one row', 'x', false)).toMatch(/^Caught: .{47}… → checking$/)
 })

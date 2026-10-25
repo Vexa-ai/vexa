@@ -134,7 +134,7 @@ test('after Listen, a new line the filter flags wakes the main Claude once; the 
   expect(seen.triage.length).toBe(1)
   expect(signal).toMatch(/since_index=1/)
   expect(signal).not.toMatch(/We decided to go with the annual plan/)
-  expect((await ui.find({ type: 'Text', text: /annual plan decision/ }))?.text).toBe('annual plan decision')
+  expect((await ui.find({ type: 'Text', text: /^Caught: / }))?.text).toBe('Caught: We decided to go with the annual plan. → checking')
   expect(await ui.find({ type: 'Text', text: /Claude|Heard/ })).toBeFalsy()
   expect(await ui.find({ type: 'Text', text: /woke|filter|Mode/ })).toBeFalsy()
   lines = [...lines, seg('3', 'Bob', 'And we decided on a 3 year term.')]
