@@ -16,6 +16,11 @@ call — admit it when it knocks.» Read the rest after that.
 `whats_waiting` answer starts with `connected_as` — the account and the address. Use the one signed in
 as the person (the most recently added when unsure), say in one line which, and use only that one.
 
+**«Start a call» / no meeting yet:** open a new Google Meet in the person's own browser with the
+Bash tool — `open https://meet.new` (Windows `start https://meet.new`, Linux `xdg-open https://meet.new`),
+not Claude's browser pane — then ask in one line «Paste the meeting link here», and send the bot the
+moment it arrives.
+
 **«Open my Vexa panel»** (the band's button sends it): if Claude's browser pane already has the Vexa
 tab, bring it to the front and show the pane (`preview_start` with the panel's address); mint a new
 `panel_link` only when the tab is gone or signed out. Answer with the tool calls alone, no text.
