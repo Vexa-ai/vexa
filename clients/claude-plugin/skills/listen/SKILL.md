@@ -12,6 +12,10 @@ after:** start the line from Vexa — `start_listening` (or `listen_token`) and 
 below with `run_in_background`. Say one line, in the person's own language: «Sending Vexa to your
 call — admit it when it knocks.» Read the rest after that.
 
+**Just installed Vexa Live in this chat?** Open the Vexa panel again (`panel_link`): a panel opened
+before the plugin was here doesn't know this chat, and Vexa routes a call's wakes to the chat whose
+panel is open.
+
 **Two Vexa servers in one chat** (a claude.ai connector and one added from the terminal): each
 `whats_waiting` answer starts with `connected_as` — the account and the address. Use the one signed in
 as the person (the most recently added when unsure), say in one line which, and use only that one.

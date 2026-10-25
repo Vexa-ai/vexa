@@ -535,9 +535,15 @@ let mySession = ''
 let ownerCache = { at: -Infinity, owner: '' }
 const PANELS_FRESH_MS = 90_000
 
-export function pickOwner(used: Record<string, number>, panels: string[]): string {
-  const withPanel = Object.keys(used).filter(c => panels.includes(c))
-  const pool = withPanel.length ? withPanel : Object.keys(used)
+// Which chats count, in order: those with the Vexa panel open; else those that work with Vexa (sent a
+// bot, started listening, opened the panel, or took the line with «Listen here»); else any chat. Among
+// them, the most recently used. A chat that only typed something last never takes a call's wakes
+// from the chat that is working with that call.
+export function pickOwner(used: Record<string, number>, panels: string[], active: string[] = []): string {
+  const chats = Object.keys(used)
+  const withPanel = chats.filter(c => panels.includes(c))
+  const working = chats.filter(c => active.includes(c))
+  const pool = withPanel.length ? withPanel : working.length ? working : chats
   return pool.sort((a, b) => (used[b] ?? 0) - (used[a] ?? 0))[0] ?? ''
 }
 
@@ -564,7 +570,9 @@ async function ownsLink($: any): Promise<boolean> {
       const p = JSON.parse(String(await $.fs.read(`${dir}/panels.json`)))
       if (now - Number(p.ts ?? 0) < PANELS_FRESH_MS) panels = (p.panels ?? []).map((x: any) => String(x.chat ?? x))
     } catch { /* no line from Vexa yet: no panels known */ }
-    const owner = pickOwner(used, panels)
+    let active: string[] = []
+    try { active = (await $.fs.list(`${dir}/active`)).filter((x: any) => x.kind === 'file').map((x: any) => String(x.name)) } catch { /* none yet */ }
+    const owner = pickOwner(used, panels, active)
     if (owner && owner !== ownerCache.owner) { try { await $.fs.write(`${dir}/owner`, owner) } catch { /* the cache only */ } }
     ownerCache = { at: now, owner }
   }
@@ -576,6 +584,13 @@ async function ownsLink($: any): Promise<boolean> {
 async function markUsed($: any): Promise<void> {
   if (!mySession) return
   try { await $.fs.write(`${await linkDir($)}/used/${mySession}`, String(await $.clock.now())) } catch { /* not recorded */ }
+  ownerCache = { at: -Infinity, owner: '' }
+}
+
+// This chat works with Vexa: it sent a bot, started listening, opened the panel, or took the line.
+async function markActive($: any): Promise<void> {
+  if (!mySession) return
+  try { await $.fs.write(`${await linkDir($)}/active/${mySession}`, String(await $.clock.now())) } catch { /* not recorded */ }
   ownerCache = { at: -Infinity, owner: '' }
 }
 
@@ -1429,6 +1444,7 @@ async function heard($: any): Promise<void> {
 // Listen (or Listen here): this chat takes the line and follows the live call it knows of.
 async function listenHere($: any): Promise<void> {
   if (!linkActive) { await submitOnce($, 'Vexa: start listening to my call in this chat — call start_listening.'); return }
+  await markActive($)
   await markUsed($)
   const m = await read($)
   await updateListener($, x => ({ ...x, isOn: true, offer: null, declined: x.declined.filter(d => d !== roomKey(m)) }))
@@ -1542,7 +1558,8 @@ export const register: Register = (on) => {
     const isPanelLink = /panel_link$/.test(e.tool) && typeof (e as { next?: unknown }).next === 'string'
     const ran = await next(isPanelLink ? { ...e, next: withChat(String((e as { next?: unknown }).next), mySession) } as typeof e : e)
     if (!ran.deny && !ran.isError) await learnServer($, e.tool).catch(() => {})
-    if (e.tool === 'Bash' && runsListener(String((e as { command?: unknown }).command ?? ''))) byScript = true
+    if (e.tool === 'Bash' && runsListener(String((e as { command?: unknown }).command ?? ''))) { byScript = true; if (!ran.deny) await markActive($) }
+    if (/(?:request_meeting_bot|start_listening|listen_token|panel_link)$/.test(e.tool) && !ran.deny && !ran.isError) { await markActive($); await markUsed($) }
     const name = prefix && e.tool.startsWith(prefix) ? e.tool.slice(prefix.length) : ''
     if ((name === 'request_meeting_bot' || name === 'start_demo_meeting') && !ran.deny && !ran.isError) try {
       const bot = leadingJson(String(ran.text ?? ''))

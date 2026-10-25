@@ -321,3 +321,12 @@ test('a person or company asked about by name, and a follow-up, carry their own 
   expect(MEETING_CONTEXT_LINK).toMatch(/BEFORE loading any skill/)
   expect(MEETING_CONTEXT_LINK).toMatch(/never paste the link/)
 })
+
+
+test('a chat working with Vexa keeps the wakes over a chat that only typed last', () => {
+  const used = { worker: 100, chatter: 300 }
+  expect(pickOwner(used, [], ['worker'])).toBe('worker')
+  expect(pickOwner(used, ['chatter'], ['worker'])).toBe('chatter')
+  expect(pickOwner(used, [], [])).toBe('chatter')
+  expect(pickOwner({ a: 1, b: 2 }, [], ['a', 'b'])).toBe('b')
+})

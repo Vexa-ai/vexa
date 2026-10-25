@@ -1,7 +1,7 @@
 {
   "name": "vexa-live",
   "displayName": "Vexa Live",
-  "version": "0.4.1-rc",
+  "version": "0.4.2-rc",
   "description": "Vexa listens to your live call in the background and wakes Claude when someone says \"Claude\" or something matters. Uses your Vexa connector; nothing to sign in.",
   "author": {
     "name": "Vexa",
