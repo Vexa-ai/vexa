@@ -184,3 +184,28 @@ test("the plugin's own tools answer under its own name", async ($, on) => {
   const r: any = await $.tool.call({ tool: 'mcp__vexa-live__listener_configure', action: 'status' } as any)
   expect(JSON.parse(r.result)).toMatchObject({ listening: false, preset: 'default' })
 })
+
+test('two Vexa servers in one session: the one with the live meeting is followed', async ($, on) => {
+  const clock = mock.clock(on)
+  const calls: { server?: string; tool: string; args: any }[] = []
+  on('command.register', () => ({ value: { command: 'vexa' } }))
+  on('tool.register', () => ({ value: { tool: 'mcp__vexa-live__listener_configure' } }))
+  on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
+  on('fs.exists', () => ({ value: false }))
+  on('env.get', () => ({ value: undefined }))
+  on('tool.list', () => ({ value: ['vexa-appdev', 'cbaaef3d-c1de'].flatMap(s => ['get_meeting_transcript', 'whats_waiting', 'list_meetings'].map(n => ({ name: `mcp__${s}__${n}` }))) }))
+  on('mcp.call', (_: unknown, e: any) => {
+    calls.push({ server: e.server, tool: e.tool, args: e.args })
+    if (e.tool === 'list_meetings') {
+      return { value: text({ meetings: e.server === 'cbaaef3d-c1de' ? [{ id: 106, platform: 'zoom', native_meeting_id: '8312', status: 'active', data: { title: 'Founder call' } }] : [] }) }
+    }
+    if (e.tool === 'get_meeting_transcript') return { value: text({ status: 'active', segments: [], next_index: 0 }) }
+    return { value: text({}) }
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await clock.advance(31_500)
+  expect(calls.filter(c => c.tool === 'list_meetings').map(c => c.server)).toEqual(['vexa-appdev', 'cbaaef3d-c1de'])
+  await clock.advance(1_600)
+  expect(calls.filter(c => c.tool === 'get_meeting_transcript').every(c => c.server === 'cbaaef3d-c1de')).toBe(true)
+  expect(calls.some(c => c.tool === 'get_meeting_transcript')).toBe(true)
+})

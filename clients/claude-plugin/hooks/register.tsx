@@ -156,19 +156,27 @@ function message(err: unknown): string {
 // lists no server of its own and signs in to nothing; it calls that one with the engine's own
 // connection (`$.mcp.call` takes the tool-name spelling). Servers connect after the session starts,
 // so the poll looks again until one is there.
-export function vexaServerOf(names: readonly string[]): string {
-  const hit = names.find(n => /^mcp__.+__get_meeting_transcript$/.test(n)
+export function vexaServersOf(names: readonly string[]): string[] {
+  return names.filter(n => /^mcp__.+__get_meeting_transcript$/.test(n)
     && names.includes(n.replace(/get_meeting_transcript$/, 'whats_waiting')))
-  return hit ? hit.slice('mcp__'.length, -'__get_meeting_transcript'.length) : ''
+    .map(n => n.slice('mcp__'.length, -'__get_meeting_transcript'.length))
+}
+
+export function vexaServerOf(names: readonly string[]): string {
+  return vexaServersOf(names)[0] ?? ''
 }
 
 // A server the model has called Vexa's tools on (`learnServer`): the desktop app defers MCP tools,
 // so a connector's are not in `$.tool.list()` until the model loads them.
+// Every Vexa server this session has (one person may have two: a connector and a hand-added one);
+// the one followed is the one where their live meeting is (`findLive`).
+const servers = new Set<string>()
 let seen = ''
 
 async function connect($: any): Promise<void> {
   const names: string[] = (await $.tool.list()).map((t: { name: string }) => t.name)
-  const found = vexaServerOf(names) || seen
+  for (const s of vexaServersOf(names)) servers.add(s)
+  const found = seen || vexaServerOf(names)
   if (!found) {
     server = ''
     await update($, x => ({ ...x, connection: 'refused', error: '' }))
@@ -194,14 +202,14 @@ async function connect($: any): Promise<void> {
 // A Vexa tool the model just called names the server: `mcp__<server>__whats_waiting` and the like.
 export function serverOfCall(tool: string): string {
   const m = /^mcp__(.+)__(whats_waiting|get_meeting_transcript|list_meetings|request_meeting_bot|start_demo_meeting|get_meeting)$/.exec(tool)
-  return m && m[1] !== 'vexa-live' ? m[1] : ''
+  return m?.[1] && m[1] !== 'vexa-live' ? m[1] : ''
 }
 
 async function learnServer($: any, tool: string): Promise<void> {
   const s = serverOfCall(tool)
-  if (!s || s === server) return
-  seen = s
-  await connect($)
+  if (!s || servers.has(s)) return
+  servers.add(s)
+  if (!server) { seen = s; await connect($) }
 }
 
 // The server knows this plugin is here (the presence its «Vexa Live» offer reads), and when it
@@ -427,33 +435,45 @@ async function findLive($: any): Promise<void> {
   lastOfferCheck = now
   if (m.nativeId && m.status === 'active' && !l.declined.includes(roomKey(m))) {
     await updateListener($, x => ({ ...x, offer: { platform: m.platform, nativeId: m.nativeId, title: m.title || m.nativeId, dbId: m.dbId, demo: m.isDemo } }))
+    await listen($, true)
     return
   }
   if (l.offer && l.offer.platform === m.platform && l.offer.nativeId === m.nativeId && !isLive(m)) {
     await updateListener($, x => ({ ...x, offer: null }))
   }
   try {
-    const p = await call($, 'list_meetings', { status: 'active', limit: 5 })
-    const rows: any[] = Array.isArray(p) ? p : p.meetings ?? p.items ?? []
-    const rooms = rows.filter(r => (r.status ?? 'active') === 'active').map(r => ({
-      platform: String(r.platform ?? ''),
-      nativeId: String(r.native_meeting_id ?? r.native_id ?? ''),
-      title: callTitle(r),
-      dbId: Number(r.id ?? r.meeting_db_id ?? 0), demo: Boolean(r.data?.demo),
-    }))
-    // An offer whose meeting is no longer live goes; a live one stays.
-    if (l.offer && rooms.some(r => roomKey(r) === roomKey(l.offer!))) return
-    const live = rooms.find(r => r.platform && r.nativeId && !l.declined.includes(roomKey(r)))
-    await updateListener($, x => (x.isOn ? x : { ...x, offer: live ?? null }))
+    for (const where of [server, ...[...servers].filter(x => x && x !== server)].filter(Boolean)) {
+      const r = await $.mcp.call(where, 'list_meetings', { status: 'active', limit: 5 })
+      if (r?.isError) continue
+      const p = payload(r)
+      const rows: any[] = Array.isArray(p) ? p : p.meetings ?? p.items ?? []
+      const rooms = rows.filter(x => (x.status ?? 'active') === 'active').map(x => ({
+        platform: String(x.platform ?? ''),
+        nativeId: String(x.native_meeting_id ?? x.native_id ?? ''),
+        title: callTitle(x),
+        dbId: Number(x.id ?? x.meeting_db_id ?? 0), demo: Boolean(x.data?.demo),
+      }))
+      // An offer whose meeting is no longer live goes; a live one stays.
+      if (l.offer && rooms.some(x => roomKey(x) === roomKey(l.offer!))) return
+      const live = rooms.find(x => x.platform && x.nativeId && !l.declined.includes(roomKey(x)))
+      if (!live) continue
+      if (where !== server) { seen = where; await connect($) }
+      await updateListener($, x => (x.isOn ? x : { ...x, offer: live }))
+      // Listening is on by default (founder, 25 Oct): a live meeting of theirs is followed at once;
+      // Stop on the band (or the panel) is the person's override, and a stopped call stays stopped.
+      await listen($, true)
+      return
+    }
+    await updateListener($, x => (x.isOn ? x : { ...x, offer: null }))
   } catch (err) {
     // Offering is best effort and the next check tries again; the reason is kept for the status.
     await update($, x => ({ ...x, error: message(err) }))
   }
 }
 
-// Listen: the pane follows the offered meeting, what is already said counts as heard, and the
-// main Claude is told so it can tune the brief to the conversation.
-async function listen($: any): Promise<void> {
+// Listen: the offered meeting is followed and what is already said counts as heard. A press is told
+// to the main Claude, so it can tune the brief; listening that started by itself says nothing.
+async function listen($: any, auto = false): Promise<void> {
   const l = await readListener($)
   const room = l.offer
   if (!room) return
@@ -468,6 +488,7 @@ async function listen($: any): Promise<void> {
   await updateListener($, x => ({ ...x, offer: null, isOn: true, triaged: heard.slice(-500), wakes: [], lastWakeAt: 0, error: '' }))
   await writeState($, 'listening')
   listenedSince = await $.clock.now()
+  if (auto) return
   void $.prompt.submit({
     text: `[Vexa listener] The person pressed Listen on "${room.title}" (${room.platform} ${room.nativeId}). `
       + `I watch its transcript and wake you when something matters under the "${l.preset}" listen brief. `

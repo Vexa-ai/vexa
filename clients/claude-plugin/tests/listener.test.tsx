@@ -50,7 +50,7 @@ function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<s
     if (e.tool === 'get_meeting_transcript') {
       const all = segments()
       const from = Number(e.args?.since_index ?? 0)
-      return { value: text({ status: 'active', since_index: from, next_index: all.length, segments: all.slice(from) }) }
+      return { value: text({ status: endedLive.value ? 'completed' : 'active', since_index: from, next_index: all.length, segments: all.slice(from) }) }
     }
     if (e.tool === 'workspace_write') { seen.pages.push(e.args); return { value: text({ path: e.args.path, written: true }) } }
     if (e.tool === 'entity_upsert') { seen.upserts.push(e.args); return { value: text({ path: e.args.kind === 'meeting' ? 'kg/entities/meeting/x.md' : `kg/entities/${e.args.kind}/y.md` }) } }
@@ -96,19 +96,20 @@ function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<s
   return seen
 }
 
-test('a live meeting is offered; nothing is listened to before Listen', async ($, on) => {
+test('a live meeting of theirs is listened to by default, silently; Stop stops it and it stays stopped', async ($, on) => {
   const clock = mock.clock(on)
   const seen = engine(on, () => [seg('1', 'Ann', 'Our budget is 40k')])
+  on('ui.render', ($: any, e: any) => { const { Text } = $.ui.resolve(e); return <Text>engine</Text> })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await clock.advance(31_500)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect((await ui.find({ type: 'Text', text: /Not listening$/ }))?.text).toBe('Acme pricing call · Not listening')
-  expect(await ui.find({ type: 'Text', text: /Claude/ })).toBeFalsy()
-  expect(seen.tools).not.toContain('get_meeting_transcript')
-  expect(seen.model.length).toBe(0)
-  await ui.press({ key: 'decline' })
+  expect((await ui.find({ type: 'Text', text: /^Listening$/ }))?.text).toBe('Listening')
+  expect(seen.annotations.at(-1)).toMatchObject({ listener_state: 'listening' })
+  expect(seen.prompts).toEqual([])
+  await ui.press({ key: 'listen-stop' })
+  expect(seen.annotations.at(-1)).toMatchObject({ listener_state: 'off' })
   await clock.advance(64_000)
-  expect(seen.model.length).toBe(0)
+  expect(await ui.find({ type: 'Text', text: /^Listening$/ })).toBeFalsy()
   await ui.unmount()
 })
 
@@ -119,8 +120,6 @@ test('after Listen, a new line the filter flags wakes the main Claude once; the 
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await clock.advance(31_500)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  await ui.press({ key: 'listen' })
-  expect(seen.prompts.at(-1)).toMatch(/pressed Listen/)
   expect(seen.annotations.at(-1)).toMatchObject({ listener_state: 'listening' })
   expect(seen.model.length).toBe(0)
   lines = [...lines, seg('2', 'Ann', 'We decided to go with the annual plan.')]
@@ -168,7 +167,6 @@ test('web and plugin share the listener through meeting metadata: state, heartbe
   await sendBot($)
   await clock.advance(31_500)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  await ui.press({ key: 'listen' })
   expect(seen.annotations.at(-1)).toMatchObject({ listener_state: 'listening', listener_mode: 'normal' })
   const n = seen.annotations.length
   await clock.advance(24_000)
@@ -182,17 +180,17 @@ test('web and plugin share the listener through meeting metadata: state, heartbe
   await ui.unmount()
 })
 
-test('an offer whose meeting ended goes away instead of staying on the band', async ($, on) => {
+test('listening ends with the meeting instead of staying on the band', async ($, on) => {
   const clock = mock.clock(on)
   engine(on, () => [])
   on('ui.render', ($: any, e: any) => { const { Text } = $.ui.resolve(e); return <Text>engine</Text> })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await clock.advance(31_500)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text: /Not listening$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^Listening$/ })).toBeTruthy()
   endedLive.value = true
   await clock.advance(31_500)
-  expect(await ui.find({ type: 'Text', text: /Not listening$/ })).toBeFalsy()
+  expect(await ui.find({ type: 'Text', text: /^Listening$/ })).toBeFalsy()
   expect(await ui.find({ type: 'Text', text: /^engine$/ })).toBeTruthy()
   await ui.unmount()
 })
@@ -204,7 +202,6 @@ test('a trigger already heard in this call does not wake twice', async ($, on) =
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await clock.advance(31_500)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  await ui.press({ key: 'listen' })
   lines = [...lines, seg('2', 'Bob', 'We run it all on AWS.')]
   await clock.advance(1_500)
   lines = [...lines, seg('3', 'Ann', 'Our AWS bill doubled this year, a totally different topic.')]
@@ -220,7 +217,6 @@ test('a signal the triage model calls not worth it never reaches the main chat',
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await clock.advance(31_500)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  await ui.press({ key: 'listen' })
   lines = [...lines, seg('2', 'Bob', 'Lovely weather today.')]
   await clock.advance(1_500)
   expect(seen.triage.length).toBe(1)
