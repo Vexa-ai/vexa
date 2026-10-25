@@ -81,7 +81,7 @@ function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<s
   const key = (p: string) => (p.startsWith('/home/') || p.includes('.vexa/app') ? p : `PLUGIN${p.slice(p.lastIndexOf('/app'))}`)
   // This test session owns the line from Vexa unless the test says another session does.
   on('session.id', () => ({ value: 's-test' }))
-  const files: Record<string, string> = { '/home/u/.vexa/link/owner': 's-test', ...fs }
+  const files: Record<string, string> = { '/home/u/.vexa/link/used/s-test': '1', ...fs }
   const dirOf = (p: string) => Object.keys(files).filter(f => f.startsWith(`${key(p)}/`))
   on('fs.exists', (_: unknown, e: any) => ({ value: key(e.path) in files || dirOf(e.path).length > 0 }))
   on('fs.read', (_: unknown, e: any) => (key(e.path) in files ? { value: files[key(e.path)] } : { deny: `ENOENT ${e.path}` }))
@@ -309,10 +309,11 @@ test('pure parts: brief bounds, triggers, the filter reply, direct address, app 
 })
 
 
-test('only the chat that owns the line from Vexa speaks: another session open on the same machine stays silent', async ($, on) => {
+test('only the chat Vexa talks to speaks: another, more recently used chat on the same machine means this one stays silent', async ($, on) => {
   const clock = mock.clock(on)
   let lines = [seg('1', 'Ann', 'Morning all.')]
-  const seen = engine(on, () => lines, 'W annual plan decision', { '/home/u/.vexa/link/owner': 's-other-chat' })
+  // Another chat was used more recently (and no panel is open anywhere): it is the one Vexa talks to.
+  const seen = engine(on, () => lines, 'W annual plan decision', { '/home/u/.vexa/link/used/s-other-chat': '2' })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await clock.advance(31_500)
   lines = [...lines, seg('2', 'Ann', 'We decided to go with the annual plan.')]

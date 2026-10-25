@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { bandState, heardLine, runsListener, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
+import { bandState, heardLine, pickOwner, runsListener, withChat, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
 
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 
@@ -93,7 +93,8 @@ test('web → chat: requests the web queued become turns and are acked; the poll
   on('fs.exists', () => ({ value: false }))
   on('env.get', () => ({ value: undefined }))
   on('session.id', () => ({ value: 's-test' }))
-  on('fs.read', (_: unknown, e: any) => (String(e.path).endsWith('/.vexa/link/owner') ? { value: 's-test' } : { deny: 'ENOENT' }))
+  on('fs.read', (_: unknown, e: any) => (String(e.path).endsWith('/.vexa/link/used/s-test') ? { value: '1' } : { deny: 'ENOENT' }))
+  on('fs.list', (_: unknown, e: any) => (String(e.path).endsWith('/.vexa/link/used') ? { value: [{ name: 's-test', kind: 'file', size: 1, mtimeMs: 0, isLink: false }] } : { value: [] }))
   on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:vexa:vexa' } }))
   on('tool.list', () => ({ value: ['claude_requests_next', 'claude_requests_ack', 'get_meeting_transcript', 'whats_waiting'].map(n => ({ name: `mcp__plugin_vexa_vexa__${n}` })) }))
   on('prompt.submit', (_: unknown, e: any) => { prompts.push(e.text); return { text: e.text } })
@@ -280,4 +281,17 @@ test('the band shows the listener at work: a pulse while lines arrive, what it c
   expect(caught).toBe('Heard: “Клод, ты меня слышишь?” → answering')
   expect(bandState({ ...base, flash: caught, answering: true })).toMatchObject({ tone: 'react', line: caught })
   expect(heardLine('a very long line that keeps going well past what the band can hold in one row', 'x', false)).toMatch(/^Caught: .{47}… → checking$/)
+})
+
+
+test('which chat Vexa talks to: the most recently used one among those with the panel open, else the most recently used', () => {
+  const used = { a: 100, b: 300, c: 200 }
+  expect(pickOwner(used, [])).toBe('b')
+  expect(pickOwner(used, ['a', 'c'])).toBe('c')
+  expect(pickOwner(used, ['a'])).toBe('a')
+  expect(pickOwner(used, ['someone-else'])).toBe('b')
+  expect(pickOwner({}, ['a'])).toBe('')
+  expect(withChat('/panel?surface=claude-panel', 's-1')).toBe('/panel?surface=claude-panel&chat=s-1')
+  expect(withChat('/panel', 's-1')).toBe('/panel?chat=s-1')
+  expect(withChat('/panel?chat=x', 's-1')).toBe('/panel?chat=x')
 })

@@ -9,7 +9,8 @@
 #   GET <api_url>/link/events                 the person's calls: state changes, each new line said
 #   GET <api_url>/agent/claude/requests/next  presses in the web panel (each read is also the
 #                                             «Claude is running» the panel shows)
-# One runs per machine (~/.vexa/link/link.pid). It prints and exits only when it cannot go on:
+# One runs per machine (~/.vexa/link/link.pid), whichever chat started it: which chat Vexa talks to
+# is decided by the plugin, not by who started this. It prints and exits only when it cannot go on:
 #   running <pid>   another vexa-link already carries the events          (exit 0)
 #   expired         the key no longer works: get a new one, start again   (exit 2)
 #   unreachable     Vexa did not answer for a while                       (exit 3)
@@ -59,6 +60,10 @@ on_events() {
 }
 requests_url() { echo "$api/agent/claude/requests/next?wait_ms=25000"; }
 on_requests() {
+  # The chats whose Vexa panel is open now (the relay answers them on every poll): the plugin picks
+  # the chat that listens from these.
+  panels=$(printf '%s' "$1" | tr -d '\n' | sed -n 's/.*"panels": *\(\[[^]]*\]\).*/\1/p')
+  printf '{"ts":%s,"panels":%s}\n' "$(now_ms)" "${panels:-[]}" > "$dir/panels.json.tmp" && mv "$dir/panels.json.tmp" "$dir/panels.json"
   # {"requests": [...], ...}: one `ui` event per request, then acked — it is the plugin's now.
   printf '%s' "$1" | tr -d '\n' | sed 's/^.*"requests": *\[//; s/\] *, *"present_until_ms".*$//; s/\]}$//' \
     | awk '{ gsub(/\}, *\{"id"/, "}\n{\"id\""); print }' | while IFS= read -r req; do

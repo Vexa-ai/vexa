@@ -418,28 +418,65 @@ export function meetingContext(text: string): string | null {
 // Each event's decision is kept for the status: wake, filter, follow, log.
 type LinkEvent = { type?: string; event?: string; status?: string; previous?: string | null; index?: number; speaker?: string; text?: string; meeting?: { id?: number; platform?: string; native_id?: string; title?: string }; request?: any }
 // ONE CHAT SPEAKS. The plugin runs in every Claude Code session on the machine, and they all see the
-// same ~/.vexa/link files; only the session that started vexa-link (its Bash call writes this
-// session's id to ~/.vexa/link/owner; the last chat to start it takes over) reads the line and puts
-// anything into its chat. Every other session stays silent.
+// same ~/.vexa/link files. The chat Vexa talks to is the most recently used chat among those with
+// the Vexa panel open (founder, 25 Oct); with no panel open anywhere, the most recently used chat.
+// Each chat records when the person last used it (~/.vexa/link/used/<session>); vexa-link records
+// which chats have a panel open (~/.vexa/link/panels.json, from the server). Who started vexa-link
+// does not matter. ~/.vexa/link/owner is only a cache of the answer.
 let mySession = ''
 let ownerCache = { at: -Infinity, owner: '' }
+const PANELS_FRESH_MS = 90_000
+
+export function pickOwner(used: Record<string, number>, panels: string[]): string {
+  const withPanel = Object.keys(used).filter(c => panels.includes(c))
+  const pool = withPanel.length ? withPanel : Object.keys(used)
+  return pool.sort((a, b) => (used[b] ?? 0) - (used[a] ?? 0))[0] ?? ''
+}
+
+async function linkDir($: any): Promise<string> {
+  if (!localHome) localHome = String((await $.env.get('HOME')) ?? '')
+  return `${localHome}/.vexa/link`
+}
+
 async function ownsLink($: any): Promise<boolean> {
   if (!mySession) return false
   const now = await $.clock.now()
   if (now - ownerCache.at > 1000) {
-    if (!localHome) localHome = String((await $.env.get('HOME')) ?? '')
-    let owner = ''
-    try { owner = String(await $.fs.read(`${localHome}/.vexa/link/owner`)).trim() } catch { owner = '' }
+    const dir = await linkDir($)
+    const used: Record<string, number> = {}
+    try {
+      for (const entry of await $.fs.list(`${dir}/used`)) {
+        if (entry.kind !== 'file') continue
+        const ts = Number(String(await $.fs.read(`${dir}/used/${entry.name}`)).trim())
+        if (Number.isFinite(ts)) used[entry.name] = ts
+      }
+    } catch { /* nobody has used a chat yet */ }
+    let panels: string[] = []
+    try {
+      const p = JSON.parse(String(await $.fs.read(`${dir}/panels.json`)))
+      if (now - Number(p.ts ?? 0) < PANELS_FRESH_MS) panels = (p.panels ?? []).map((x: any) => String(x.chat ?? x))
+    } catch { /* no line from Vexa yet: no panels known */ }
+    const owner = pickOwner(used, panels)
+    if (owner && owner !== ownerCache.owner) { try { await $.fs.write(`${dir}/owner`, owner) } catch { /* the cache only */ } }
     ownerCache = { at: now, owner }
   }
   return ownerCache.owner === mySession
 }
-async function claimLink($: any): Promise<void> {
+
+// The person used this chat: it is now the most recent (and so, with a panel open or none open
+// anywhere, the one Vexa talks to). A message they send, or «Listen here» on the band.
+async function markUsed($: any): Promise<void> {
   if (!mySession) return
-  if (!localHome) localHome = String((await $.env.get('HOME')) ?? '')
-  try { await $.fs.write(`${localHome}/.vexa/link/owner`, mySession) } catch { /* no claim, no speaking */ }
+  try { await $.fs.write(`${await linkDir($)}/used/${mySession}`, String(await $.clock.now())) } catch { /* not recorded */ }
   ownerCache = { at: -Infinity, owner: '' }
 }
+
+// The panel this chat opens says which chat it belongs to, so the server knows which chats have one open.
+export function withChat(next: string, chat: string): string {
+  if (!chat || /[?&]chat=/.test(next)) return next
+  return `${next}${next.includes('?') ? '&' : '?'}chat=${encodeURIComponent(chat)}`
+}
+
 // A Bash command that runs the listener itself — `sh …/bin/vexa-link <url>` or `…/bin/vexa-listen …` —
 // not one that merely names it (a grep, a cat, a test): only that claims the line for this chat.
 export function runsListener(command: string): boolean {
@@ -1267,7 +1304,7 @@ async function heard($: any): Promise<void> {
 // Listen (or Listen here): this chat takes the line and follows the live call it knows of.
 async function listenHere($: any): Promise<void> {
   if (!linkActive) { await submitOnce($, 'Vexa: start listening to my call in this chat — call start_listening.'); return }
-  await claimLink($)
+  await markUsed($)
   const m = await read($)
   await updateListener($, x => ({ ...x, isOn: true, offer: null, declined: x.declined.filter(d => d !== roomKey(m)) }))
 }
@@ -1331,6 +1368,7 @@ export const register: Register = (on) => {
   // A message the person sends about meetings carries one line for the model (context, not their text).
   on('prompt.submit', async ($, e, next) => {
     const kind = (e as any).origin?.kind
+    if (['composer', 'bridge'].includes(kind)) await markUsed($)
     if (e.command || !['composer', 'bridge', 'sdk'].includes(kind)) return next(e)
     const line = meetingContext(String(e.text ?? ''))
     return line ? next({ ...e, context: [...(e.context ?? []), line] }) : next(e)
@@ -1361,12 +1399,10 @@ export const register: Register = (on) => {
   // A call Claude starts from the chat (a bot or the demo) is followed by the pane, as the pane's
   // own buttons do: «Claude opens the call beside the chat».
   on('tool.call', async ($, e, next) => {
-    const ran = await next(e)
+    const isPanelLink = /panel_link$/.test(e.tool) && typeof (e as { next?: unknown }).next === 'string'
+    const ran = await next(isPanelLink ? { ...e, next: withChat(String((e as { next?: unknown }).next), mySession) } as typeof e : e)
     if (!ran.deny && !ran.isError) await learnServer($, e.tool).catch(() => {})
-    if (e.tool === 'Bash' && runsListener(String((e as { command?: unknown }).command ?? ''))) {
-      byScript = true
-      if (!ran.deny) await claimLink($)
-    }
+    if (e.tool === 'Bash' && runsListener(String((e as { command?: unknown }).command ?? ''))) byScript = true
     const name = prefix && e.tool.startsWith(prefix) ? e.tool.slice(prefix.length) : ''
     if ((name === 'request_meeting_bot' || name === 'start_demo_meeting') && !ran.deny && !ran.isError) try {
       const bot = leadingJson(String(ran.text ?? ''))

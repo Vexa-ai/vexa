@@ -22,8 +22,9 @@ use only those) and run, with the Bash tool and `run_in_background: true`:
 VEXA_LISTEN_KEY=<key> sh "${CLAUDE_PLUGIN_ROOT}/bin/vexa-link" <api_url>
 ```
 
-Starting it makes this chat the one Vexa talks to; other chats stay silent. `running <pid>` means
-one already runs: fine. It prints only `expired` (call `listen_token`, start it again) or
+One runs per Mac, whichever chat starts it; `running <pid>` means one already runs: fine. Vexa
+talks to the most recently used chat among those with the Vexa panel open, so opening the panel here
+and using this chat makes it the one. It prints only `expired` (call `listen_token`, start it again) or
 `unreachable` (say once that the line paused). Never show the key.
 
 **Profile.** Pick the closest listener profile for the call with `listener_configure` (`preset`:
