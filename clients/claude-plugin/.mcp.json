@@ -2,7 +2,7 @@
   "mcpServers": {
     "vexa": {
       "type": "http",
-      "url": "https://claude-rc.dev.vexa.ai/mcp?src=claude-plugin"
+      "url": "https://claude-rc.dev.vexa.ai/mcp"
     }
   }
 }
