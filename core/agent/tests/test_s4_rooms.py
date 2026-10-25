@@ -1,4 +1,4 @@
-"""0.13.4 S4 — rooms and tagging (PRD D36, D21, FD4, D10, M1, M8; UI 7z, 7hh).
+"""0.13.4 S4 — rooms and tagging (PRD D36, D21, FD4, M1, M8; UI 7z, 7hh).
 
 L2, in-process: a real FastAPI app over a sqlite session store, the file policy store (the registry's
 stand-in), a fake LiveKit room reader and a captured notification bus. No redis, no containers.
@@ -411,42 +411,6 @@ def test_an_anonymous_invite_preview_shows_the_workspace_name_only(w):
 
 def test_ring_helper_never_raises(w):
     assert room_ring.ring(w.store, w.root, None, "s-nope", caller="alice") == []
-
-
-# ── D10: shared chats become rooms ──────────────────────────────────────────────────────────────
-
-INTERNAL = {"X-Internal-Secret": SECRET}
-
-
-def test_shared_chats_migrate_to_a_room_of_two_or_a_closed_room(w):
-    two = w.store.create("alice", name="pchat-two", title="Venue")["id"]
-    w.store.add_participant(two, "alice", "bob")
-    three = w.store.create("alice", name="pchat-three", title="Plan")["id"]
-    for who in ("bob", "dan"):
-        w.store.add_participant(three, "alice", who)
-    desk = w.store.create("bob", name="pchat-desk", title="Loose")["id"]
-    for who in ("alice", "dan"):
-        w.store.add_participant(desk, "bob", who)
-    targets = {("alice", "pchat-three"): "team"}
-    from control_plane import shared_chat_migration as scm
-    target_of = lambda owner, name: targets.get((owner, name), "")  # noqa: E731
-    report = scm.plan(w.store, target_of)
-    assert report["counts"] == {"room_of_two": 1, "closed_room": 1, "needs_owner": 1}
-    notes = []
-    out = scm.apply(w.store, w.root, target_of, notify=lambda p, a, s, t: notes.append((tuple(p), s, t)))
-    assert out["migrated"] == 2
-    assert pair_rooms.is_pair_room(w.store, w.root, two) and w.store.role_of(two, "bob") == "member"
-    assert w.store.room(three)["visibility"] == "closed" and w.store.room(three)["workspace"] == "team"
-    assert {w.store.role_of(three, x) for x in ("alice", "bob", "dan")} == {"owner", "member"}
-    assert w.store.role_of(three, "vic") is None                    # nobody gains a reader
-    assert w.store.room(desk) is None                                 # the owner decides
-    assert any(s == desk and p == ("bob",) for p, s, _t in notes)
-    # idempotent; and the internal door is internal-only
-    assert scm.plan(w.store, target_of)["counts"]["room_of_two"] == 0
-    assert w.c.post("/internal/rooms/migrate-shared-chats", headers=H("alice")).status_code == 403
-    assert w.c.post("/internal/rooms/migrate-shared-chats", headers=INTERNAL).json()["dry_run"] is True
-    # the next "Message bob" lands in the migrated room
-    assert w.c.post("/api/rooms/direct", json={"subject": "bob"}, headers=H("alice")).json()["session_id"] == two
 
 
 # ── founder I20: who pays a room's turn ───────────────────────────────────────────────────────────

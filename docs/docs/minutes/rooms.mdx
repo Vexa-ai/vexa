@@ -266,9 +266,6 @@ agent-api's process (one replica); a restart forgives at most one window.
 | `VEXA_ROOM_RING_PER_CALLER` | `30` | Rings from one caller to anyone in any 10 minutes |
 | `VEXA_POLICY_LEGACY_READ` | `1` | While on, a closed room adopts its participant rows once (set to `0` after every instance has started on 0.13.4) |
 
-The one-time shared-chat migration is `POST /internal/rooms/migrate-shared-chats?dry_run=true` on the
-internal tier: run it as a dry run, read the report, then run it with `dry_run=false`.
-
 ## Why it complies
 
 ### Architecture

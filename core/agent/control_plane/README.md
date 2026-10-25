@@ -143,7 +143,6 @@ never a chat.
 - `rooms_overview.py` — a workspace's rooms as its reader may see them (`GET /api/rooms/list`, tool
   `rooms_list`): people by name, a live call, recurring meeting links. A shared turn sees only its own
   workspace's open rooms, with no meetings.
-- `shared_chat_migration.py` — D10: existing shared chats become a room of two or a closed room, once.
 
 ## A worker's delegation token ends with its unit
 

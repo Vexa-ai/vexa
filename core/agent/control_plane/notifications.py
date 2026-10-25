@@ -68,7 +68,7 @@ logger = logging.getLogger("agent_api.notifications")
 KINDS = ("chat_added", "chat_shared", "chat_mentioned", "workspace_invited", "workspace_added",
          "invite_accepted", "invite_declined", "workspace_joined_via_link", "routine_posted",
          "call_started", "agent", "meeting_shared", "bot_scheduled", "bot_joined", "access_requested", "budget", "llm_budget",
-         "folders_migrated", "room_added", "room_switch_ask", "chats_migrated",
+         "folders_migrated", "room_added", "room_switch_ask",
          "card_waiting", "card_slipped", "delivery_failed")
 #: The kinds another domain may hand in over the internal tier — meeting facts only. A chat or
 #: workspace notice is written by the agent-api route that performs the act, never from outside.
@@ -104,8 +104,6 @@ _TEXT = {
     # rooms and tagging (0.13.4 S4): an add from a tag card, and the other person's consent card
     "room_added": "{actor} added you to “{object}”",
     "room_switch_ask": "{actor} asks to turn a switch back on in “{object}”",
-    # the shared-chat migration (D10): the object IS the sentence, written by agent-api
-    "chats_migrated": "{object}",
     # the delivery gate (S6): a card's title and who is waiting — nothing else
     "card_waiting": "{actor} is waiting on you: “{object}”",
     "card_slipped": "“{object}” is past its date",

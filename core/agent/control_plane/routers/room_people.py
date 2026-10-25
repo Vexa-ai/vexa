@@ -94,8 +94,6 @@ def build(**d) -> APIRouter:
     livekit = d.get("livekit")
     _pc = d.get("_pc")
     _global_root = d.get("_global_root")
-    _internal_caller = d.get("_internal_caller")
-    sess = d.get("sess")
 
     def _store():
         if store is None:
@@ -525,29 +523,5 @@ def build(**d) -> APIRouter:
         _say(row["id"], f"{word.capitalize()} switched back on — both agreed." if body.accept
              else f"{_name(subject)} kept {word} off.")
         return {**out, **_switch_view(subject, row, s.room(row["id"]) or room, request)}
-
-    # ── D10: shared chats become rooms, once ────────────────────────────────────────────────────
-
-    @router.post("/internal/rooms/migrate-shared-chats")
-    def migrate_shared_chats(request: Request, dry_run: bool = True):
-        """THE ONE-TIME MIGRATION (D10, §10 Q5) — internal tier only. ``dry_run`` (the default) reports
-        what each shared chat would become; otherwise it migrates and tells each person once."""
-        if _internal_caller is None or not _internal_caller(request):
-            raise HTTPException(status_code=403, detail={"refused": "internal_tier_required"})
-        from control_plane import shared_chat_migration as scm  # noqa: PLC0415
-
-        def target_of(owner: str, name: str) -> str:
-            return sess.target(owner, name) if sess is not None else ""
-
-        if dry_run:
-            return {"dry_run": True, **scm.plan(_store(), target_of)}
-
-        def notify(people: list, actor: str, sid: str, text: str) -> None:
-            if notifier is not None:
-                notifier.emit(people, kind="chats_migrated", actor=actor, actor_name="Vexa",
-                              object_kind="chat", object_id=sid, object_name=text)
-                notifier.rail(people, session_id=sid, change="added")
-
-        return {"dry_run": False, **scm.apply(_store(), _root(), target_of, notify=notify)}
 
     return router
