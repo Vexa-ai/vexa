@@ -68,8 +68,8 @@ caller or with the internal secret, never with a credential of its own:
 **Dispatch and workloads**
 - `dispatch.py` — a unit.v1 DISPATCH becomes a runtime.v1 agent container.
 - `events.py` — event.v1 ingress → unit.v1 DISPATCH.
-- `routines.py` (the routine compiler), `workspace_routines.py` (workspace-authored routines onto the
-  runtime scheduler), `routine_resign.py` (re-arms routines armed before dispatches were signed).
+- `routine_flows.py` — routines are the person's own flows: the flows-api client the `/api/routines`
+  adapter uses, the one-time routine-file migration, and the routine cards.
 - `workload_redis.py` — the Redis user an agent worker connects as.
 - `model_endpoint.py` — whether a subject's model config points elsewhere, and the operator gate on
   where.

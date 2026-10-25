@@ -113,23 +113,6 @@ def test_no_key_arms_the_routine_without_a_grant(world, flows, monkeypatch, capl
                for m in caplog.messages)
 
 
-def test_only_a_session_press_is_recorded_as_an_arm(world, flows, key):
-    """agent-api's own record of a press (`record_arm`) is what a later re-issue of the grant
-    rests on: a session creating a routine on, or turning one on, writes it; a draft does not; the
-    person switching it off takes it out."""
-    client, _, root = world
-    client.post("/api/routines", headers=_session(),
-                json={"name": "Morning brief", "cron": "0 8 * * *", "prompt": "brief me"})
-    client.post("/api/routines", headers=_as(),
-                json={"name": "Draft one", "cron": "0 8 * * *", "prompt": "x"})
-    assert rf.recorded_arms(root, "7") == {"Morning-brief"}
-    client.patch("/api/routines/Draft-one/enabled", headers=_session(), json={"enabled": True})
-    assert rf.recorded_arms(root, "7") == {"Morning-brief", "Draft-one"}
-    client.patch("/api/routines/Morning-brief/enabled", headers=_session(),
-                 json={"enabled": False})
-    assert rf.recorded_arms(root, "7") == {"Draft-one"}
-
-
 # ── the wire: what FlowsClient puts on flows-api's door ────────────────────────────────────────
 class _Resp:
     status = 200
@@ -176,10 +159,3 @@ def test_resume_carries_the_grant_in_the_body_and_the_header(wire):
     rf.FlowsClient(base="http://flows", key="op").set_status("7", "brief", 2, "pause")
     assert wire[1]["body"] is None
     assert ticket_mint.GRANT_HEADER.lower() not in wire[1]["headers"]
-
-
-def test_a_converted_routine_file_runs_under_a_grant_only_when_a_person_stood_behind_it(key):
-    """The migration turns a legacy routine on only on agent-api's own evidence that a person stood
-    behind the file; that is the evidence its grant rests on. A paused conversion carries none."""
-    _assert_grant(_claims(rf._migration_grant("7", "daily", True), key), "daily")
-    assert rf._migration_grant("7", "daily", False) == ""

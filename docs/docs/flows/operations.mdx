@@ -88,15 +88,6 @@ To rotate one, remove its volume (compose) or delete its Secret and `helm upgrad
 restart that producer and the gateway. With `helm template`, set `subjectTickets.<issuer>.signingKey`,
 or `subjectTickets.<issuer>.existingSecret` with `subjectTickets.<issuer>.publicKey`.
 
-**Routines running at the upgrade.** agent-api sorts them once, after its routine migration, and
-writes `.routines/grants.v1.json` in the workspace store when it is done. A running routine that
-agent-api's own records show a person turning on (their session creating it on or turning it on, or a
-routine file they stood behind that the migration converted on) gets its grant and keeps running. Any
-other running routine, whether or not its person has a desk, is paused with the reason "routines now run only on your own press — turn it on
-again to keep it running" and a note in its chat; one press of Turn on from the person's session
-starts it again with a grant. What flows lists as running decides only which routines are looked at,
-never which get a grant.
-
 ## Who the mailbox will act for
 
 The mailbox is reachable by anyone who can send email, so it answers that question before it

@@ -8,8 +8,4 @@
   `subject-ticket-{meetings,agent,mail}-key` Secrets and the `subject-ticket-verify-keys` ConfigMap.
   With `helm template` (GitOps), set `subjectTickets.<producer>.signingKey`, or
   `subjectTickets.<producer>.existingSecret` with `subjectTickets.<producer>.publicKey`.
-  `secrets.existingSecretName` needs nothing new. Routines running at the upgrade are sorted once
-  by agent-api: one it recorded a person turning on (from their session, or a routine file they stood
-  behind that the migration converted) gets its grant and keeps running; any other is paused with
-  "routines now run only on your own press — turn it on again to keep it running", and a note in its
-  chat. One press of Turn on, from the person's session, starts it again. See [Flows operations](/flows/operations#subject-tickets).
+  `secrets.existingSecretName` needs nothing new. See [Flows operations](/flows/operations#subject-tickets).

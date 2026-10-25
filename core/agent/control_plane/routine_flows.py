@@ -63,12 +63,6 @@ MARKER_DIR = ".routines/migrated"
 RETIRED_DIR = ".routines/retired"
 FLOW_STATE_DIR = ".routines/flows"
 DONE_MARKER = ".routines/migration.v1.json"
-#: Written once the routines already running at the subject-ticket upgrade have been sorted: a grant
-#: for each one agent-api's own records say a person turned on, a pause and a note for the rest.
-GRANTS_DONE_MARKER = ".routines/grants.v1.json"
-#: Why a routine running before subject tickets is paused when no record of this service shows a
-#: person turning it on. The routine bar shows it under the routine's Turn on control.
-REARM_REASON = ("routines now run only on your own press — turn it on again to keep it running")
 #: What the old mechanism's job metadata said a file-armed job came from.
 WORKSPACE_ROUTINE_SOURCE = "workspace-routine"
 #: A routines folder's README is the folder's own description, never a routine.
@@ -156,20 +150,6 @@ class FlowsClient:
             if cur is None or f["version"] > cur["version"]:
                 newest[f["name"]] = f
         return sorted(newest.values(), key=lambda f: f["name"])
-
-    def running_owners(self) -> set:
-        """Every person flows says has a running flow (`user:<id>` scopes). Read only to PAUSE
-        what has no grant: a person flows adds here gains a pause, never a grant."""
-        data = self._call("GET", "/flows")
-        return {str(f.get("scope"))[len("user:"):] for f in data.get("flows") or []
-                if str(f.get("scope") or "").startswith("user:") and f.get("status") == "active"}
-
-    def attach_grant(self, subject: str, name: str, version: int, grant: str) -> dict:
-        """Store the person's routine grant on a version WITHOUT changing its status."""
-        from control_plane.ticket_mint import GRANT_HEADER  # noqa: PLC0415
-        q = urllib.parse.urlencode({"scope": f"user:{subject}"})
-        return self._call("POST", f"/flows/{urllib.parse.quote(name)}/{int(version)}/grant?{q}",
-                          {"grant": grant}, headers={GRANT_HEADER: grant})
 
     def runs(self, subject: str, limit: int = 100) -> list[dict]:
         """The person's own runs, newest first (`GET /flows/runs`, scoped to `user:<subject>/`)."""
@@ -292,33 +272,6 @@ def load_flow_state(workspaces_dir, subject: str) -> dict:
 
 def save_flow_state(workspaces_dir, subject: str, data: dict) -> None:
     _write_json(_state_path(workspaces_dir, FLOW_STATE_DIR, subject), data)
-
-
-def record_arm(workspaces_dir, subject: str, name: str) -> None:
-    """THIS SERVICE'S RECORD that the person's own session turned routine `name` on (creating it on,
-    turning it on, or a converted file they stood behind). The routine's grant rests on it; a pass
-    that has to re-issue grants reads it, never what flows lists."""
-    state = load_flow_state(workspaces_dir, subject)
-    entry = dict(state.get(name) or {})
-    entry["armed_by_session"] = time.time()
-    entry.pop("paused_reason", None)
-    state[name] = entry
-    save_flow_state(workspaces_dir, subject, state)
-
-
-def recorded_arms(workspaces_dir, subject: str) -> set:
-    """The routines this service's own records say the person turned on and has not switched off
-    here since: `record_arm` entries, and files the migration converted ON because a person stood
-    behind them (`read_marker`, outcome `converted`). Nothing flows reports counts."""
-    state = load_flow_state(workspaces_dir, subject)
-    names = {n for n, e in state.items() if isinstance(e, dict) and e.get("armed_by_session")}
-    try:
-        files = read_marker(workspaces_dir, subject).get("files") or {}
-    except ValueError:
-        files = {}
-    names |= {str(e["flow"]) for e in files.values()
-              if isinstance(e, dict) and e.get("outcome") == "converted" and e.get("flow")}
-    return {n for n in names if not ((state.get(n) or {}).get("paused_reason"))}
 
 
 def set_paused_reason(workspaces_dir, subject: str, name: str, reason: Optional[str]) -> None:
@@ -593,16 +546,6 @@ def migrate_subject_files(subject: str, *, client: "FlowsClient", workspaces_dir
         _write_marker(workspaces_dir, subject, marker)
 
 
-def _migration_grant(subject, name: str, on: bool) -> str:
-    """The routine grant a converted file runs under. Only when it is turned on, and only on this
-    service's own evidence that a person stood behind the file (`_stood_behind`, read from the
-    workspace here) — never on anything flows reports."""
-    if not on:
-        return ""
-    from .ticket_mint import routine_grant  # noqa: PLC0415
-    return routine_grant(subject, name)
-
-
 def _convert(subject, parsed: ParsedFile, path: Path, digest, *, client, flows: dict,
              workspaces_dir, counts: MigrationCounts, store) -> dict:
     """One file into one flow: merged into the flow with its intent, or a new flow — active when
@@ -615,10 +558,9 @@ def _convert(subject, parsed: ParsedFile, path: Path, digest, *, client, flows: 
             if parsed.mtime > _created(twin) and parsed.cron != cron:
                 # a newer schedule nobody stood behind is filed as a draft beside the live one,
                 # never swapped into it (D24): the person's running routine keeps its own cron
-                on = twin.get("status") == "active" and stood
                 made = client.submit(subject, twin["name"], parsed.cron,
                                      (twin.get("params") or {}).get("instruction") or parsed.prompt,
-                                     activate=on, grant=_migration_grant(subject, twin["name"], on))
+                                     activate=twin.get("status") == "active" and stood)
                 flows[twin["name"]] = {**twin, **made}
             counts.files_merged += 1
             post_to_routine_chat(store, subject, twin["name"],
@@ -629,8 +571,7 @@ def _convert(subject, parsed: ParsedFile, path: Path, digest, *, client, flows: 
                                     else "") + ". The file is retired; a copy is kept.")
             return {"outcome": "merged", "flow": twin["name"]}
         run = parsed.enabled and stood
-        made = client.submit(subject, parsed.name, parsed.cron, parsed.prompt, activate=run,
-                             grant=_migration_grant(subject, parsed.name, run))
+        made = client.submit(subject, parsed.name, parsed.cron, parsed.prompt, activate=run)
     except FlowsError as e:
         if 400 <= e.status < 500:
             reason = (e.detail or {}).get("refused") if isinstance(e.detail, dict) else None
@@ -641,7 +582,6 @@ def _convert(subject, parsed: ParsedFile, path: Path, digest, *, client, flows: 
         return {"outcome": "failed"}
     flows[made["name"]] = made
     if run:
-        record_arm(workspaces_dir, subject, made["name"])
         counts.files_converted += 1
         post_to_routine_chat(store, subject, made["name"],
                              f"This routine was converted from routines/{path.name}; it runs on "
@@ -780,119 +720,6 @@ def migrate(*, scheduler, workspaces_dir, client: Optional["FlowsClient"] = None
     if any(vars(counts).values()):
         log.info("routines → flows: %s", vars(counts))
     return counts
-
-
-_SUBJECT = re.compile(r"[A-Za-z0-9_-]{1,64}")
-
-
-@dataclass
-class GrantCounts:
-    granted: int = 0
-    rearm: int = 0
-    failures: int = 0
-
-
-def adopt_grants(*, client: "FlowsClient", workspaces_dir, store=None) -> GrantCounts:
-    """THE SUBJECT-TICKET UPGRADE, once per deployment. Every routine flows says is running gets
-    either its grant — when THIS service's records (`recorded_arms`) show the person turned it on —
-    or a pause with `REARM_REASON` and a note in its chat, so the person turns it on again with one
-    press from their session. Flows' list only says WHICH running routines to look at: a routine it
-    adds or hides gains no grant, it only gains or loses a pause and a note."""
-    counts = GrantCounts()
-    persons = {s for s, _ws in _owners(workspaces_dir)}
-    try:
-        # people flows says run something, desk or no desk: looked at so that what has no grant is
-        # paused; a grant still needs this service's own record (`recorded_arms`)
-        persons |= {p for p in client.running_owners() if _SUBJECT.fullmatch(str(p))}
-    except FlowsError as e:
-        if not 400 <= e.status < 500:
-            counts.failures += 1
-    for subject in sorted(persons):
-        try:
-            listed = client.routines(subject)
-        except FlowsError as e:
-            if not 400 <= e.status < 500:
-                counts.failures += 1
-            continue
-        recorded = recorded_arms(workspaces_dir, subject)
-        state = load_flow_state(workspaces_dir, subject)
-        for f in listed:
-            name, version = str(f.get("name") or ""), f.get("version")
-            if f.get("status") != "active" or not name or version is None:
-                continue
-            done = (state.get(name) or {}).get("ticket_upgrade")
-            if done:
-                continue
-            try:
-                if name in recorded:
-                    from control_plane.ticket_mint import routine_grant  # noqa: PLC0415
-                    grant = routine_grant(subject, name)
-                    if not grant:
-                        counts.failures += 1       # no key yet: the next pass tries again
-                        continue
-                    client.attach_grant(subject, name, int(version), grant)
-                    outcome = "granted"
-                    counts.granted += 1
-                else:
-                    client.set_status(subject, name, int(version), "pause")
-                    set_paused_reason(workspaces_dir, subject, name, REARM_REASON)
-                    post_to_routine_chat(store, subject, name,
-                                         "Routines now run only on your own press. Nothing on "
-                                         "record shows you turning this one on, so it is paused: "
-                                         "turn it on again to keep it running.")
-                    outcome = "rearm"
-                    counts.rearm += 1
-            except FlowsError as e:
-                if not 400 <= e.status < 500:
-                    counts.failures += 1
-                continue
-            state = load_flow_state(workspaces_dir, subject)
-            entry = dict(state.get(name) or {})
-            entry["ticket_upgrade"] = outcome
-            state[name] = entry
-            save_flow_state(workspaces_dir, subject, state)
-    if counts.granted or counts.rearm:
-        log.info("routine grants at the subject-ticket upgrade: %s", vars(counts))
-    return counts
-
-
-def start_grant_adoption(*, workspaces_dir, interval_sec: float = 60.0, store=None,
-                         client_factory: Optional[Callable[[], "FlowsClient"]] = None,
-                         background: bool = True) -> Optional["MigrationHandle"]:
-    """`adopt_grants`, after the routines migration has finished, until one pass completes; then
-    `GRANTS_DONE_MARKER` is written and it never runs again."""
-    stop = threading.Event()
-    done = Path(workspaces_dir) / GRANTS_DONE_MARKER
-    if done.is_file() or not configured():
-        return None
-
-    def once() -> bool:
-        if not migration_done(workspaces_dir):
-            return False
-        try:
-            counts = adopt_grants(client=(client_factory or FlowsClient)(),
-                                  workspaces_dir=workspaces_dir, store=store)
-        except Exception:  # noqa: BLE001
-            log.exception("routine grant adoption pass failed; retrying next pass")
-            return False
-        if counts.failures:
-            return False
-        _write_json(done, {"done_at": time.time(), "last_pass": vars(counts)})
-        return True
-
-    def loop() -> None:
-        if once():
-            return
-        while not stop.wait(interval_sec):
-            if once():
-                return
-
-    if not background:
-        loop()
-        return MigrationHandle(None, stop)
-    t = threading.Thread(target=loop, name="routine-grants", daemon=True)
-    t.start()
-    return MigrationHandle(t, stop)
 
 
 @dataclass(frozen=True)

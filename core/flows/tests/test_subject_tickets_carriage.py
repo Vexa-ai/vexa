@@ -301,27 +301,6 @@ def test_the_operator_activating_for_a_person_stores_the_grant_it_presents(api):
     assert bad.status_code == 400 and bad.json()["detail"]["refused"] == "bad_grant"
 
 
-def test_attaching_a_grant_keeps_the_routines_status(api):
-    """agent-api re-issuing the grant of a routine it recorded a person turning on: the grant is
-    stored, and a paused routine stays paused (attaching is not arming)."""
-    client, _ = api
-    op = {"X-Flows-Operator-Key": "test-flows-key"}
-    client.post("/flows", headers=op,
-                json={"name": "late", "scope": "user:126", "activate": False,
-                      "trigger": {"kind": "schedule", "cron": "0 22 * * *"},
-                      "steps": ["agent_run"], "params": {"instruction": "x"}})
-    before = fa.db.execute("SELECT status FROM flow_version WHERE name = 'late'")[0][0]
-    r = client.post("/flows/late/1/grant?scope=user:126", headers=op,
-                    json={"grant": "st1.adopted.sig"})
-    assert r.status_code == 200, r.text
-    row = fa.db.execute("SELECT status, subject_grant FROM flow_version WHERE name = 'late'")[0]
-    assert row[0] == before and row[1] == "st1.adopted.sig"
-    assert client.post("/flows/late/1/grant?scope=user:126", headers=op,
-                       json={}).status_code == 400
-    assert client.post("/flows/late/9/grant?scope=user:126", headers=op,
-                       json={"grant": "st1.x.y"}).status_code == 404
-
-
 def test_a_submission_cannot_plant_a_grant_through_params(api):
     client, _ = api
     r = client.post("/flows", headers={"X-Flows-Operator-Key": "test-flows-key"},

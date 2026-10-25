@@ -1621,12 +1621,9 @@ def set_flow_status(name: str, version: int, action: str, scope: str = "",
     administrator. Use `GET /flows` to see which versions exist and which one is active."""
     if action == REVOKE_GRANTS:
         return _revoke_grants(_lifecycle_scope(caller, scope), name, version)
-    if action == ATTACH_GRANT:
-        return _attach_grant(caller, _lifecycle_scope(caller, scope), name, version,
-                             (body.grant if body else None) or x_vexa_subject_grant)
     if action not in FLOW_ACTIONS:
         raise HTTPException(status_code=404,
-                            detail="activate | retire | pause | resume | revoke_grants | grant")
+                            detail="activate | retire | pause | resume | revoke_grants")
     target = _lifecycle_scope(caller, scope)
     st = FLOW_ACTIONS[action]
     if st == "active" and caller.is_delegated:
@@ -1669,28 +1666,6 @@ def _clear_pause(scope: str, name: str, version: int) -> None:
     if isinstance(params, dict) and params.pop("paused", None) is not None:
         db.execute("UPDATE flow_version SET params=:p WHERE scope=:sc AND name=:n AND version=:v",
                    {"p": json.dumps(params), "sc": scope, "n": name, "v": version})
-
-
-#: Store a routine's grant on a version WITHOUT changing its status: agent-api re-issuing the grant
-#: of a routine its own records show the person turned on (the subject-ticket upgrade). Flows cannot
-#: make a grant; it only keeps the one presented, and the door verifies it.
-ATTACH_GRANT = "grant"
-
-
-def _attach_grant(caller: Caller, scope: str, name: str, version: int,
-                  presented: Optional[str]) -> dict:
-    if caller.is_delegated:
-        raise HTTPException(status_code=403, detail=APPROVAL_REFUSAL)
-    grant = _grant_value(presented)
-    if not grant or scope == "instance":
-        _refuse(400, "bad_grant", note="grant is one subject-ticket.v1 token (st1.…)")
-    rows = db.execute("UPDATE flow_version SET subject_grant=:g WHERE scope=:sc AND name=:n "
-                      "AND version=:v RETURNING status", {"g": grant, "sc": scope, "n": name,
-                                                          "v": version})
-    if not rows:
-        raise HTTPException(status_code=404, detail="flow version not found")
-    return {"name": name, "scope": scope, "version": version, "status": rows[0][0],
-            "granted": True}
 
 
 #: Withdraw what a routine may do unattended (flows phase 0). A narrowing written in place on the
