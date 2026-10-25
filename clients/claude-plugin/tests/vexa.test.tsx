@@ -92,6 +92,8 @@ test('web → chat: requests the web queued become turns and are acked; the poll
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('fs.exists', () => ({ value: false }))
   on('env.get', () => ({ value: undefined }))
+  on('session.id', () => ({ value: 's-test' }))
+  on('fs.read', (_: unknown, e: any) => (String(e.path).endsWith('/.vexa/link/owner') ? { value: 's-test' } : { deny: 'ENOENT' }))
   on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:vexa:vexa' } }))
   on('tool.list', () => ({ value: ['claude_requests_next', 'claude_requests_ack', 'get_meeting_transcript', 'whats_waiting'].map(n => ({ name: `mcp__plugin_vexa_vexa__${n}` })) }))
   on('prompt.submit', (_: unknown, e: any) => { prompts.push(e.text); return { text: e.text } })

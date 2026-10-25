@@ -402,6 +402,35 @@ async function poll($: any): Promise<void> {
 // starting followed at once, a call ending or a press in the web panel straight to the chat.
 // Each event's decision is kept for the status: wake, filter, follow, log.
 type LinkEvent = { type?: string; event?: string; status?: string; previous?: string | null; index?: number; speaker?: string; text?: string; meeting?: { id?: number; platform?: string; native_id?: string; title?: string }; request?: any }
+// ONE CHAT SPEAKS. The plugin runs in every Claude Code session on the machine, and they all see the
+// same ~/.vexa/link files; only the session that started vexa-link (its Bash call writes this
+// session's id to ~/.vexa/link/owner; the last chat to start it takes over) reads the line and puts
+// anything into its chat. Every other session stays silent.
+let mySession = ''
+let ownerCache = { at: -Infinity, owner: '' }
+async function ownsLink($: any): Promise<boolean> {
+  if (!mySession) return false
+  const now = await $.clock.now()
+  if (now - ownerCache.at > 1000) {
+    if (!localHome) localHome = String((await $.env.get('HOME')) ?? '')
+    let owner = ''
+    try { owner = String(await $.fs.read(`${localHome}/.vexa/link/owner`)).trim() } catch { owner = '' }
+    ownerCache = { at: now, owner }
+  }
+  return ownerCache.owner === mySession
+}
+async function claimLink($: any): Promise<void> {
+  if (!mySession) return
+  if (!localHome) localHome = String((await $.env.get('HOME')) ?? '')
+  try { await $.fs.write(`${localHome}/.vexa/link/owner`, mySession) } catch { /* no claim, no speaking */ }
+  ownerCache = { at: -Infinity, owner: '' }
+}
+// Every message the plugin puts into a chat goes through here: nothing from a session that does not own the line.
+async function say($: any, text: string): Promise<boolean> {
+  if (!(await ownsLink($))) return false
+  void $.prompt.submit({ text })
+  return true
+}
 let linkOffset = -1
 let lastSurface = ''
 let linkActive = false
@@ -446,7 +475,7 @@ async function onLinkEvent($: any, ev: LinkEvent): Promise<void> {
     const m = await read($)
     const title = ev.request?.params?.native_id === m.nativeId ? (m.title || m.nativeId) : ''
     await logLink($, 'ui', String(ev.request?.action ?? ''), 'wake')
-    void $.prompt.submit({ text: uiMessage(ev.request, title) })
+    await say($, uiMessage(ev.request, title))
     return
   }
   if (ev.type === 'system') {
@@ -458,7 +487,7 @@ async function onLinkEvent($: any, ev: LinkEvent): Promise<void> {
       if (ours) { await update($, x => ({ ...x, status })); await updateListener($, x => ({ ...x, isOn: false })) }
       await logLink($, 'system', `${name} ${status}`, ev.previous ? 'wake' : 'log')
       if (ev.previous && status === 'completed') {
-        void $.prompt.submit({ text: `[Vexa] The call «${name}» (${mt.platform} ${mt.native_id}) ended. Offer the summary and action items in one line.` })
+        await say($, `[Vexa] The call «${name}» (${mt.platform} ${mt.native_id}) ended. Offer the summary and action items in one line.`)
       }
       return
     }
@@ -484,6 +513,7 @@ async function syncLink($: any): Promise<void> {
     const st = JSON.parse(await $.fs.read(`${dir}/state.json`))
     linkActive = st.state === 'running' && (await $.clock.now()) - Number(st.ts ?? 0) < 90_000
     if (linkActive) byScript = true
+    if (!(await ownsLink($))) { linkOffset = -1; return }
     const spool = `${dir}/events.jsonl`
     if (!(await $.fs.exists(spool))) return
     const text: string = await $.fs.read(spool)
@@ -657,11 +687,10 @@ async function listen($: any, auto = false): Promise<void> {
   await writeState($, 'listening')
   listenedSince = await $.clock.now()
   if (auto) return
-  void $.prompt.submit({
-    text: `[Vexa listener] The person pressed Listen on "${room.title}" (${room.platform} ${room.nativeId}). `
+  await say($,
+    `[Vexa listener] The person pressed Listen on "${room.title}" (${room.platform} ${room.nativeId}). `
       + `I watch its transcript and wake you when something matters under the "${l.preset}" listen brief. `
-      + `If you can tell what kind of conversation this is, tune it with ${CONFIGURE}; otherwise acknowledge in one line.`,
-  })
+      + `If you can tell what kind of conversation this is, tune it with ${CONFIGURE}; otherwise acknowledge in one line.`)
 }
 
 async function decline($: any): Promise<void> {
@@ -805,7 +834,7 @@ async function flush($: any): Promise<void> {
   // chat with the lines; any other signal first goes to the triage model in the plugin, and only a
   // yes reaches the main chat, as one line with where to read.
   if (direct) {
-    void $.prompt.submit({ text: `[Vexa listener] ${reasons}\n\nFrom the live meeting "${m.title || m.nativeId}" (${m.platform} ${m.nativeId}):\n${lines.join('\n')}\n\nThis was addressed to you: answer briefly.${UNTRUSTED}${RECORD}` })
+    await say($, `[Vexa listener] ${reasons}\n\nFrom the live meeting "${m.title || m.nativeId}" (${m.platform} ${m.nativeId}):\n${lines.join('\n')}\n\nThis was addressed to you: answer briefly.${UNTRUSTED}${RECORD}`)
     return
   }
   let verdict = { yes: false, line: '' }
@@ -823,10 +852,8 @@ async function flush($: any): Promise<void> {
     await setFlash($, 'done')
     return
   }
-  void $.prompt.submit({
-    text: `[Vexa listener · signal] ${reasons}: ${verdict.line} — ${m.platform} ${m.nativeId} (get_meeting_transcript since_index=${index}). `
-      + `Look only if it matters; otherwise let it pass with a single «·».${UNTRUSTED}${RECORD}`,
-  })
+  await say($, `[Vexa listener · signal] ${reasons}: ${verdict.line} — ${m.platform} ${m.nativeId} (get_meeting_transcript since_index=${index}). `
+      + `Look only if it matters; otherwise let it pass with a single «·».${UNTRUSTED}${RECORD}`)
 }
 
 // Judges the tail of the transcript, drafts included, whenever it changes. A rule trigger wakes
@@ -913,11 +940,9 @@ async function audit($: any): Promise<void> {
   lastAuditAt = now
   auditCount = m.segments.length
   const tail = m.segments.slice(-12).map(s => `${s.speaker}: ${s.text}${s.pending ? ' (draft)' : ''}`).join('\n')
-  void $.prompt.submit({
-    text: `[Vexa listener audit] No wake for ${Math.round((now - quietSince) / 60000)} min while ${grown} new lines arrived. Check whether the filter missed something.\n\n`
-      + `Last verdict: ${l.lastVerdict || 'none'} (${l.lastMs} ms)\nRules: ${rulesText(l.brief)}\n\nTranscript tail (${m.platform} ${m.nativeId}):\n${tail}\n\n`
-      + `If it missed something, retune with ${CONFIGURE}; otherwise say nothing.`,
-  })
+  // The audit is for the status and the log, never a message in a chat.
+  await logLink($, 'audit', `no wake for ${Math.round((now - quietSince) / 60000)} min, ${grown} new lines (${m.platform} ${m.nativeId})`, 'log')
+  void tail
 }
 
 async function whatDidIMiss($: any): Promise<void> {
@@ -925,7 +950,7 @@ async function whatDidIMiss($: any): Promise<void> {
   const l = await readListener($)
   const since = l.wakes.length ? `since the last wake (${l.wakes[l.wakes.length - 1]!.at} UTC)` : 'so far'
   const tail = m.segments.slice(-40).map(s => `${s.speaker}: ${s.text}`).join('\n')
-  void $.prompt.submit({ text: `[Vexa listener · «What did I miss?»] Summarize the meeting ${since} in 3–5 short bullets: decisions, asks to me, numbers, next steps. Skip personal talk.\n\n${tail}` })
+  await say($, `[Vexa listener · «What did I miss?»] Summarize the meeting ${since} in 3–5 short bullets: decisions, asks to me, numbers, next steps. Skip personal talk.\n\n${tail}`)
 }
 
 // Replays a labelled fixture (`[{speaker, text, wake}]`) through the same filter, one line at a
@@ -1028,7 +1053,7 @@ function startRequests($: any): void {
       for (const q of r.requests ?? []) {
         const text = String(q.text ?? '').slice(0, 2000)
         if (!text) { quiet(call($, 'claude_requests_ack', { id: q.id, outcome: 'dropped' })); continue }
-        void $.prompt.submit({ text: `[Vexa panel] ${text}` })
+        await say($, `[Vexa panel] ${text}`)
         quiet(call($, 'claude_requests_ack', { id: q.id, outcome: 'submitted' }))
       }
     } catch { pause = 10_000 }
@@ -1156,6 +1181,7 @@ export const register: Register = (on) => {
   on('session.start', async ($, e, next) => {
     try { pluginVersion = String(JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`))?.version ?? '') } catch { pluginVersion = '' }
     lastSurface = String((e as { surface?: unknown }).surface ?? '')
+    try { mySession = String(await $.session.id()) } catch { mySession = '' }
     await $.command.register({ name: 'vexa', description: 'Open the Vexa call panel beside the chat' })
     await $.tool.register({
       name: CONFIGURE,
@@ -1221,7 +1247,10 @@ export const register: Register = (on) => {
   on('tool.call', async ($, e, next) => {
     const ran = await next(e)
     if (!ran.deny && !ran.isError) await learnServer($, e.tool).catch(() => {})
-    if (e.tool === 'Bash' && /vexa-listen/.test(String((e as { command?: unknown }).command ?? ''))) byScript = true
+    if (e.tool === 'Bash' && /vexa-listen|vexa-link/.test(String((e as { command?: unknown }).command ?? ''))) {
+      byScript = true
+      if (!ran.deny) await claimLink($)
+    }
     const name = prefix && e.tool.startsWith(prefix) ? e.tool.slice(prefix.length) : ''
     if ((name === 'request_meeting_bot' || name === 'start_demo_meeting') && !ran.deny && !ran.isError) try {
       const bot = leadingJson(String(ran.text ?? ''))
