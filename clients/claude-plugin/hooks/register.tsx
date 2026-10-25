@@ -405,6 +405,14 @@ const MEETING_WORDS = /\b(?:meetings?|calls?|zoom|google meet|teams|transcripts?
 export const MEETING_CONTEXT_LINK = 'Vexa: this message has a meeting link. Your FIRST tool calls, in one round, before any text: request_meeting_bot with the link, and panel_link with next /panel/meeting/<platform>/<native_meeting_id>?surface=claude-panel (then open its url with preview_start if you have it, otherwise give the person the link). Listener setup (vexa-live:listen) comes after.'
 export const MEETING_CONTEXT_WORDS = 'Vexa: this message is about meetings. Your FIRST tool call, before anything else: panel_link with next /panel?surface=claude-panel (then open its url with preview_start if you have it, otherwise give the person the link) — the person follows along there. Then answer with Vexa\'s tools (whats_waiting, list_meetings, get_meeting_transcript, search_transcripts, the workspace). A meeting link means request_meeting_bot at once.'
 
+// A message the person sent in this chat: typed (the terminal's composer, or the desktop app, which
+// drives Claude Code as an SDK host), or from their phone over Remote Control. Not another session's
+// message, a task's notification or a plugin's prompt, which the desktop app also delivers as `sdk`.
+export function fromPerson(kind: string | undefined, text: string, isMeta = false): boolean {
+  if (isMeta || !['composer', 'bridge', 'sdk'].includes(String(kind))) return false
+  return !/<(?:cross-session-message|task-notification|agent-message|side-sessions-event|ci-monitor-event)\b|^\[Vexa(?: listener| panel| Live self-test)?[\] ·]|^Vexa UI: /.test(text.trimStart())
+}
+
 export function meetingContext(text: string): string | null {
   if (MEETING_LINK.test(text)) return MEETING_CONTEXT_LINK
   if (MEETING_WORDS.test(text)) return MEETING_CONTEXT_WORDS
@@ -1368,9 +1376,11 @@ export const register: Register = (on) => {
   // A message the person sends about meetings carries one line for the model (context, not their text).
   on('prompt.submit', async ($, e, next) => {
     const kind = (e as any).origin?.kind
-    if (['composer', 'bridge'].includes(kind)) await markUsed($)
-    if (e.command || !['composer', 'bridge', 'sdk'].includes(kind)) return next(e)
-    const line = meetingContext(String(e.text ?? ''))
+    const text = String(e.text ?? '')
+    if (!fromPerson(kind, text, Boolean((e as any).isMeta))) return next(e)
+    await markUsed($)
+    if (e.command) return next(e)
+    const line = meetingContext(text)
     return line ? next({ ...e, context: [...(e.context ?? []), line] }) : next(e)
   }).catch(($, e, next) => next(e))
 

@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { bandState, heardLine, pickOwner, runsListener, withChat, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
+import { bandState, fromPerson, heardLine, pickOwner, runsListener, withChat, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
 
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 
@@ -294,4 +294,17 @@ test('which chat Vexa talks to: the most recently used one among those with the 
   expect(withChat('/panel?surface=claude-panel', 's-1')).toBe('/panel?surface=claude-panel&chat=s-1')
   expect(withChat('/panel', 's-1')).toBe('/panel?chat=s-1')
   expect(withChat('/panel?chat=x', 's-1')).toBe('/panel?chat=x')
+})
+
+
+test('a chat counts as used only by what the person sends, whatever the app calls its origin', () => {
+  expect(fromPerson('composer', 'fix the test')).toBe(true)
+  expect(fromPerson('sdk', 'https://meet.google.com/abc-defg-hij')).toBe(true)
+  expect(fromPerson('bridge', 'встреча завтра')).toBe(true)
+  expect(fromPerson('sdk', '<cross-session-message from="local_x">deploy done</cross-session-message>')).toBe(false)
+  expect(fromPerson('sdk', '<task-notification><task-id>b1</task-id></task-notification>')).toBe(false)
+  expect(fromPerson('sdk', '[Vexa listener] Heard …')).toBe(false)
+  expect(fromPerson('sdk', 'Vexa UI: the person pressed «Summarize».')).toBe(false)
+  expect(fromPerson('peer', 'hello')).toBe(false)
+  expect(fromPerson('composer', 'x', true)).toBe(false)
 })
