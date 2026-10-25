@@ -9,12 +9,18 @@ One background script, vexa-link, carries everything Vexa has for this chat: eac
 the person's live calls, a call starting or ending, a press in the Vexa panel. The Vexa Live plugin
 reads it and decides what reaches you, by the listener profile in use. Listening is on by default.
 
+0. **First run, before Vexa is connected** (no Vexa tools in this chat, or they ask to sign in):
+   run `sh "${CLAUDE_PLUGIN_ROOT}/bin/vexa-pair"` and open the address it prints in Claude's
+   browser pane at once (`preview_start`). That is the setup panel: it shows the person each step,
+   the connector's clicks included, and ticks them as they happen. Say one line per step in the
+   chat; the panel carries the detail. Once Vexa is connected, pass the code (the `pair=` part of
+   that address, also in `~/.vexa/pair`) to `listen_token` as `pair` in step 2: that signs the panel in.
 1. **Open the Vexa panel first.** Call Vexa's `panel_link` with `next` =
    `/panel/meeting/<platform>/<native_meeting_id>?surface=claude-panel` for a call, or
    `/panel?surface=claude-panel`, and open the link in Claude's browser pane (`preview_start`); where
    there is none, give the person the link. Any Vexa answer's `open_panel` names the exact `next`.
    Opening it again with the same `next` only refreshes it. «Open my Vexa panel» is this step alone.
-2. **Start vexa-link once per chat.** Call Vexa's `listen_token` (no arguments): it answers `key`
+2. **Start vexa-link once per chat.** Call Vexa's `listen_token` (with `pair` on a first run): it answers `key`
    and `api_url`; take them from that answer only. Then, with the Bash tool and
    `run_in_background: true`:
 

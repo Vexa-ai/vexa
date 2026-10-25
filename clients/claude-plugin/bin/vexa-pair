@@ -1,0 +1,19 @@
+#!/bin/sh
+# vexa-pair — the setup panel's address with this machine's pairing code, for the first run.
+#
+#   sh vexa-pair [app_url]
+#
+# Prints <app_url>/panel/setup?pair=<code>&surface=claude-panel. The code (8 characters, kept in
+# ~/.vexa/pair for half an hour) is what signs that panel in once Vexa is connected: the agent passes
+# it to the Vexa tool `listen_token` as `pair`. app_url defaults to this build's Vexa app.
+set -u
+app=${1:-${VEXA_APP_URL:-https://claude-rc-app.dev.vexa.ai}}
+file="${HOME:-/tmp}/.vexa/pair"
+mkdir -p "$(dirname "$file")"
+if [ -f "$file" ] && [ -n "$(find "$file" -mmin -30 2>/dev/null)" ]; then
+  code=$(cat "$file")
+else
+  code=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c 8)
+  printf '%s' "$code" > "$file"
+fi
+echo "${app%/}/panel/setup?pair=$code&surface=claude-panel"
