@@ -45,6 +45,8 @@ read_loop() {   # name url-builder
     case "$code" in
       200) fails=0; $1 "$text" ;;
       401|403) echo expired > "$dir/exit"; stop; return ;;
+      # This deployment has no such route (a Vexa without the panel's relay): that read ends, the other goes on.
+      404|405) echo "{\"ts\":$(now_ms),\"missing\":\"$1\"}" > "$dir/missing-$1.json"; return ;;
       *) fails=$((fails + 1)); [ "$fails" -ge 10 ] && { echo unreachable > "$dir/exit"; stop; return; }; sleep 5 ;;
     esac
   done
