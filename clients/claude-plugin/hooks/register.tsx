@@ -611,16 +611,33 @@ async function syncLink($: any): Promise<void> {
     const spool = `${dir}/events.jsonl`
     if (!(await $.fs.exists(spool))) return
     const text: string = await $.fs.read(spool)
-    if (linkOffset < 0 || text.length < linkOffset) linkOffset = linkOffset < 0 ? text.length : 0
-    const fresh = text.slice(linkOffset)
-    const end = fresh.lastIndexOf('\n')
-    if (end < 0) return
-    linkOffset += end + 1
-    let lines = 0
-    for (const line of fresh.slice(0, end).split('\n')) {
-      if (!line.trim()) continue
-      try { await onLinkEvent($, JSON.parse(line)); lines++ } catch { /* a line it cannot read is skipped */ }
+    // A chat that becomes the one Vexa talks to carries on where the last one stopped (the shared
+    // ~/.vexa/link/offset), so nothing said in between is lost to the handover.
+    if (linkOffset < 0) {
+      let shared = -1
+      try { shared = Number(String(await $.fs.read(`${dir}/offset`)).trim()) } catch { shared = -1 }
+      linkOffset = Number.isFinite(shared) && shared >= 0 && shared <= text.length ? shared : text.length
     }
+    if (text.length < linkOffset) linkOffset = 0
+    let lines = 0
+    while (true) {
+      const nl = text.indexOf('\n', linkOffset)
+      if (nl < 0) break
+      const line = text.slice(linkOffset, nl)
+      let ev: LinkEvent | null = null
+      try { ev = line.trim() ? JSON.parse(line) : null } catch { ev = null }
+      // A press made in another chat's panel belongs to that chat: it becomes the most recent one,
+      // and it takes the press from here on its next read.
+      const chat = ev?.type === 'ui' ? String(ev.request?.params?.chat ?? '') : ''
+      if (chat && chat !== mySession) {
+        try { await $.fs.write(`${dir}/used/${chat}`, String(await $.clock.now())) } catch { /* not handed over */ }
+        ownerCache = { at: -Infinity, owner: '' }
+        break
+      }
+      linkOffset = nl + 1
+      if (ev) { try { await onLinkEvent($, ev); lines++ } catch { /* an event it cannot act on is skipped */ } }
+    }
+    try { await $.fs.write(`${dir}/offset`, String(linkOffset)) } catch { /* the next owner starts at the end */ }
     if (lines) await triage($)
   } catch { /* the next tick reads again */ } finally {
     linkReading = false
