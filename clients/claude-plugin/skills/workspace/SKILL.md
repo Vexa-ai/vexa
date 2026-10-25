@@ -12,11 +12,21 @@ decision, and a page per meeting. Keep it the way a careful assistant keeps a no
 the topic; `workspace_read` the cards it finds. Use their history, open questions and commitments
 when you prepare the person or answer during the call.
 
-**Cards.** For every person, company, project and decision a call names, `entity_upsert` it (one
-call each): `kind`, `name`, a one-line `summary`, `facts` with what this call added, `source` = the
-meeting. Link both ways with `[[Name]]`: the person's card names `[[Company]]`, the company's card
-lists `[[Person]]`, the decision names who decided and the project it belongs to. Upsert, never
-duplicate: search for the name first.
+**Cards, never prose-only notes.** For every person, company, project and decision a call names,
+`entity_upsert` it (one call each): `kind`, `name`, a one-line `summary`, `facts` with what this
+call added, `source` = the meeting. Link both ways with `[[Name]]`: the person's card names
+`[[Company]]`, the company's card lists `[[Person]]`, the decision names who decided and the project
+it belongs to. Do it on every listener wake that brings new names or decisions, not only at the end.
+
+**No duplicates.** Search for the name first (`workspace_search`) and upsert the page that exists,
+under its own name. One edge per pair: a second relation to the same page goes into the same
+`connections` entry («asked to check; owns»), never a second one. Before adding a fact, read the
+card: skip anything it already says in other words, and when the call adds a detail, send the fuller
+fact once. The demo call's speakers (Maya, Leo) and other scripted voices are not people: never give
+them pages.
+
+**The meeting's page links the call.** Its «In this call» block (the `people` region) lists every
+person, company, project and decision of the call as `[[links]]`, so the page is the call's index.
 
 **The meeting's page is the call's live report.** Find it with `get_meeting` (its attached page);
 if there is none, write `meetings/<YYYY-MM-DD>-<title>.md` with `workspace_write` and attach it with

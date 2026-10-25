@@ -403,6 +403,7 @@ async function poll($: any): Promise<void> {
 // Each event's decision is kept for the status: wake, filter, follow, log.
 type LinkEvent = { type?: string; event?: string; status?: string; previous?: string | null; index?: number; speaker?: string; text?: string; meeting?: { id?: number; platform?: string; native_id?: string; title?: string }; request?: any }
 let linkOffset = -1
+let lastSurface = ''
 let linkActive = false
 const linkLog: { at: number; type: string; what: string; decision: string }[] = []
 const parked = new Map<string, Seg[]>()
@@ -952,6 +953,22 @@ async function configure($: any, input: any): Promise<unknown> {
     await stopListening($)
     return { listening: false }
   }
+  // Whether this surface lets the plugin use the two things listening rests on: its own model call
+  // (the filter) and a message it puts into the chat (a wake).
+  if (action === 'selftest') {
+    const t0 = await $.clock.now()
+    let model: unknown
+    try {
+      const r = await $.model.complete({ model: models.filter, maxTokens: 5, prompt: 'Reply with the single word: ok' })
+      model = r.isAnswered ? { ok: true, text: String(r.text).trim().slice(0, 20), ms: (await $.clock.now()) - t0 } : { ok: false, reason: r.reason }
+    } catch (err) { model = { ok: false, error: message(err) } }
+    let submit: unknown
+    try {
+      const r = await $.prompt.submit({ text: '[Vexa Live self-test] This message came from the Vexa Live plugin. Reply with one word: received.' })
+      submit = { ok: true, result: r ?? null }
+    } catch (err) { submit = { ok: false, error: message(err) } }
+    return { surface: lastSurface || null, model, submit, note: 'submit lands as its own turn once this one ends: a «received» reply proves it.' }
+  }
   if (input.models && typeof input.models === 'object') {
     const next = { ...models }
     for (const k of ['filter', 'writer', 'triage'] as const) {
@@ -1050,7 +1067,7 @@ const TRIGGERS_SCHEMA = {
 const CONFIGURE_SCHEMA = {
   type: 'object',
   properties: {
-    action: { enum: ['status', 'update', 'stop'], description: 'status reads the listener; update changes what it listens for; stop stops listening. Inferred from the other fields when absent.' },
+    action: { enum: ['status', 'update', 'stop', 'selftest'], description: 'status reads the listener; update changes what it listens for; stop stops listening; selftest checks that this app lets the plugin call its model and post into the chat. Inferred from the other fields when absent.' },
     preset: { type: 'string', description: "Start from one of the listener profiles (status lists them; shipped: default, sales, standup, interview)." },
     profile: { type: 'string', description: 'Save what this update sets as this profile (a short lowercase name; a new name makes a new profile file). Default: the profile in use.' },
     rules: { description: 'Plain-language rules: what should wake you and what to ignore, tuned to this conversation (a string). A list of {kind: keyword|person|regex, value} instead sets instant triggers.' },
@@ -1133,6 +1150,7 @@ function pulse(ui: any, key: string, isOn: boolean): any {
 export const register: Register = (on) => {
   on('session.start', async ($, e, next) => {
     try { pluginVersion = String(JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`))?.version ?? '') } catch { pluginVersion = '' }
+    lastSurface = String((e as { surface?: unknown }).surface ?? '')
     await $.command.register({ name: 'vexa', description: 'Open the Vexa call panel beside the chat' })
     await $.tool.register({
       name: CONFIGURE,
