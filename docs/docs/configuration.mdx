@@ -607,6 +607,7 @@ names and on/off only, never data.
 | `model_levels` | (empty) | With the `levels` switch (hosted plans): the model each level 1–5 runs on; gaps are filled from the allowed models by market price |
 | `model_intent_router` | (empty) | The small model the fast intent router asks when its rules are unsure (a catalog id or `cheapest`); empty uses `model_home`.
 | `subscription_token_proxy` | `deny` | Whether a model subscription credential (`CLAUDE_CODE_OAUTH_TOKEN`, `HOST_CLAUDE_CREDENTIALS`, Codex's `auth.json`) may reach agent workers. A consumer subscription is one person's licence and may not be proxied for others, so a turn on a subscription route is refused with a message naming this policy, and no worker is given a subscription file. `allow` only when the install serves the subscription's own holder. See [Model credentials & licensing](/model-credentials-licensing) | It must answer within 0.7 s |
+| `model_scope_unpinned` | `runner_family` | What a turn on a model-provider key that names no model may ask for: its harness's family (Anthropic for Claude Code, OpenAI for Codex and openai-agent), `any`, or listed model ids. Anything else is refused `model_outside_scope`; a turn whose model is named is held to it regardless |
 
 ## Ports
 

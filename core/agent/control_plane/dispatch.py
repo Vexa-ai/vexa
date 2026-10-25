@@ -2181,12 +2181,24 @@ class Dispatcher:
             spend = (payer, caps.caps, (caps.price_in, caps.price_out)) if caps is not None else None
             return model_proxy.confine(env, url=self._settings.model_proxy_url, grants=grants,
                                        unit=uid, cold=cold, toolbelt=self._settings.mcp_url,
-                                       spend=spend)
+                                       spend=spend, unpinned=self._unpinned_scope())
         except Exception:  # noqa: BLE001 — a route that cannot be sealed is never handed out instead
             logger.exception("model route for unit=%s could not be sealed — it runs with no model "
                              "credential", uid)
             return model_proxy.confine(env, url=self._settings.model_proxy_url, grants=None,
                                        unit=uid, cold=cold)
+
+    def _unpinned_scope(self) -> str:
+        """``model_scope_unpinned`` from ``_global/POLICIES.md`` (``budgets``): the scope of a key route
+        that names no model. Unreadable is the default, the harness's own model family."""
+        try:
+            from control_plane import budgets  # noqa: PLC0415
+            from control_plane import system_mounts  # noqa: PLC0415
+
+            pol = budgets.read(system_mounts.global_root(self._settings))
+            return str(pol.get("model_scope_unpinned") or model_proxy.SCOPE_RUNNER_FAMILY)
+        except Exception:  # noqa: BLE001 — a policy that cannot be read is the narrow default
+            return model_proxy.SCOPE_RUNNER_FAMILY
 
     def _workload_gone(self, uid: str) -> bool:
         """True when the runtime says the workload is NOT alive. Errors read as gone: a respawn on

@@ -99,6 +99,26 @@ AUTH_NONE, AUTH_BEARER, AUTH_X_API_KEY, AUTH_OAUTH = "none", "bearer", "x-api-ke
 ROUTE_PROXY, ROUTE_SUBSCRIPTION = "proxy", "subscription"
 SUB_CLAUDE, SUB_CODEX = "claude", "codex"
 
+#: THE SCOPE OF A KEY ROUTE THAT NAMES NO MODEL — ``model_scope_unpinned`` in ``_global/POLICIES.md``
+#: (``control_plane.budgets``), which only the deployment's admin account writes. The default,
+#: ``runner_family``, holds such a route to the models of the family its harness speaks; ``any``
+#: lets it ask for whatever the endpoint serves; a comma-separated list of model ids names exactly
+#: those. A route that names its model is held to that model whatever this says.
+SCOPE_RUNNER_FAMILY, SCOPE_ANY = "runner_family", "any"
+#: The refusal of a model outside the turn's scope, as the caller reads it (``error.type``).
+OUT_OF_SCOPE = "model_outside_scope"
+#: A scope entry naming a model FAMILY rather than a model: ``family:<name>``.
+FAMILY_PREFIX = "family:"
+FAMILY_ANTHROPIC, FAMILY_OPENAI = "anthropic", "openai"
+#: Which family each harness speaks: the claude CLI asks for Anthropic's models; Codex and the
+#: openai-agent loop ask for OpenAI's.
+RUNNER_FAMILY = {"claude-code": FAMILY_ANTHROPIC, "codex": FAMILY_OPENAI,
+                 "openai-agent": FAMILY_OPENAI}
+#: The model-id stems of each family (an id is a stem, or a stem followed by ``-``), with the claude
+#: CLI's bare aliases. A vendor prefix (``anthropic/``, ``openai/``) is the gateway's and is ignored.
+_FAMILY_STEMS = {FAMILY_ANTHROPIC: ("claude", "sonnet", "opus", "haiku"),
+                 FAMILY_OPENAI: ("gpt", "chatgpt", "o1", "o3", "o4", "codex")}
+
 #: Every name a harness reads to choose its endpoint, credential, model or request dialect — what
 #: :func:`confine` reads (the dispatch's stamp, else agent-api's own environment) and then stamps,
 #: whole, into the worker env. The runtime forwards none of these.
@@ -123,7 +143,8 @@ class Route:
     #: The deployment's SUBSCRIPTION, when that is the route: its model calls go from the vendor's own
     #: CLI straight to the vendor, never through the proxy (only its toolbelt does).
     subscription: str = ""                # "" | claude | codex
-    #: The models this turn may ask for; empty = whatever the endpoint serves (nothing names one).
+    #: The models this turn may ask for — ids, or ``family:<name>`` (:func:`model_in_scope`); empty =
+    #: whatever the endpoint serves (an unpinned route under ``model_scope_unpinned: any``).
     models: tuple[str, ...] = ()
     #: The largest output a single request may ask for; 0 = the request's own.
     max_output_tokens: int = 0
@@ -189,7 +210,7 @@ def _v(env: Mapping[str, str], name: str) -> str:
     return (env.get(name) or "").strip()
 
 
-def route_of(env: Mapping[str, str]) -> Route:
+def _harness_route(env: Mapping[str, str]) -> Route:
     """The route a worker env (before :func:`confine`) describes, read the way its harness reads it.
 
     claude-code: the CLI sends ``ANTHROPIC_AUTH_TOKEN`` as a bearer, else ``ANTHROPIC_API_KEY`` as
@@ -238,10 +259,37 @@ def route_of(env: Mapping[str, str]) -> Route:
                  max_output_tokens=max_out)
 
 
+def unpinned_scope(runner: str, setting: Optional[str]) -> tuple[str, ...]:
+    """The scope of a key route that names no model, as ``model_scope_unpinned`` says: the harness's
+    family (the default, and what an empty or unreadable value means), every model (``any``: the
+    empty scope), or the listed model ids."""
+    v = (setting or "").strip()
+    if v.lower() == SCOPE_ANY:
+        return ()
+    if v and v.lower() != SCOPE_RUNNER_FAMILY:
+        listed = tuple(dict.fromkeys(m.strip() for m in v.split(",") if m.strip()))
+        if listed:
+            return listed
+    return (FAMILY_PREFIX + RUNNER_FAMILY.get(runner, FAMILY_ANTHROPIC),)
+
+
+def route_of(env: Mapping[str, str], unpinned: Optional[str] = SCOPE_RUNNER_FAMILY) -> Route:
+    """The route a worker env (before :func:`confine`) describes (:func:`_harness_route`), held to
+    its scope: the model it names, else ``unpinned`` — ``model_scope_unpinned`` as the admin set it
+    (:func:`unpinned_scope`). A subscription route keeps the scope it was read with: its model calls
+    never reach the proxy."""
+    route = _harness_route(env)
+    if route.models or route.subscription:
+        return route
+    runner = _v(env, "VEXA_RUNNER") or units.deployment_runner()
+    return Route(**{**route.__dict__, "models": unpinned_scope(runner, unpinned)})
+
+
 def model_in_scope(model: str, scope: tuple[str, ...]) -> bool:
     """Is ``model`` one the turn may ask for? An empty scope names none and allows any. A scope entry
     matches itself, its dated snapshots (``claude-sonnet-4-5`` → ``claude-sonnet-4-5-20250929``), and
     — for the claude CLI's family aliases (``sonnet``/``opus``/``haiku``) — any model of that family.
+    A ``family:<name>`` entry matches every model of that family (:func:`in_family`).
     A context-window suffix (``[1m]``) is the CLI's own and never sent, so it is ignored."""
     if not scope:
         return True
@@ -252,12 +300,23 @@ def model_in_scope(model: str, scope: tuple[str, ...]) -> bool:
         e = entry.strip().lower().split("[", 1)[0]
         if not e:
             continue
+        if e.startswith(FAMILY_PREFIX):
+            if in_family(m, e[len(FAMILY_PREFIX):]):
+                return True
+            continue
         if m == e or m.startswith(e + "-"):
             return True
         if e in ("sonnet", "opus", "haiku") and e in m:
             return True
     return False
 
+
+
+def in_family(model: str, family: str) -> bool:
+    """Is ``model`` one of ``family``'s (:data:`_FAMILY_STEMS`)? A vendor prefix is ignored."""
+    m = (model or "").strip().lower().split("[", 1)[0].rsplit("/", 1)[-1]
+    return bool(m) and any(m == stem or m.startswith(stem + "-")
+                           for stem in _FAMILY_STEMS.get(family, ()))
 
 # ── sealing ────────────────────────────────────────────────────────────────────────────────────
 
@@ -288,12 +347,14 @@ def _digest(token: str) -> str:
 # ── grants ─────────────────────────────────────────────────────────────────────────────────────
 
 class Refused(Exception):
-    """A request the proxy will not forward: ``status`` and a reason safe to show the caller."""
+    """A request the proxy will not forward: ``status``, a reason safe to show the caller, and the
+    refusal's ``kind`` — the error type the caller reads."""
 
-    def __init__(self, status: int, reason: str) -> None:
+    def __init__(self, status: int, reason: str, kind: str = "model_proxy_refused") -> None:
         super().__init__(reason)
         self.status = status
         self.reason = reason
+        self.kind = kind
 
 
 class Grants:
@@ -379,7 +440,10 @@ class Grants:
             raise Refused(403, "a subscription route's model calls go from the vendor's CLI, never "
                                "through the proxy")
         if model is not None and not model_in_scope(model, route.models):
-            raise Refused(403, f"model {model!r} is outside this turn's scope")
+            raise Refused(403, f"model {model!r} is outside this turn's scope "
+                               f"({', '.join(route.models)}); the admin widens a route that names "
+                               f"no model with model_scope_unpinned in _global/POLICIES.md",
+                          OUT_OF_SCOPE)
         turn = Turn.of(rec, route)
         self._within_spend(turn)
         key = COUNT_PREFIX + _digest(token)
@@ -615,16 +679,18 @@ def effective_env(env: Mapping[str, str], source: Mapping[str, str] = os.environ
 
 def confine(env: dict, *, url: str, grants: Optional[Grants], unit: str, cold: bool,
             toolbelt: str = "", spend: Optional[tuple] = None,
-            source: Mapping[str, str] = os.environ) -> str:
+            source: Mapping[str, str] = os.environ,
+            unpinned: Optional[str] = SCOPE_RUNNER_FAMILY) -> str:
     """Take the model route out of a dispatched worker env, in place, and return the turn's token
     (``""`` when no token could be minted: the worker then holds no model credential at all).
 
     The route is read from what the dispatch stamped, falling back to agent-api's own environment
     (``source``) for a name it left absent — the deployment's route. A cold spawn seals that route
-    for the unit; a message to a running worker gets a token to the route that worker runs."""
+    for the unit; a message to a running worker gets a token to the route that worker runs.
+    ``unpinned`` is ``model_scope_unpinned``: the scope of a route that names no model."""
     eff = effective_env(env, source)
     bearer = (env.get("VEXA_MCP_DELEGATION_TOKEN") or "").strip()
-    route = route_of(eff).with_toolbelt(toolbelt.strip() if bearer else "", bearer)
+    route = route_of(eff, unpinned).with_toolbelt(toolbelt.strip() if bearer else "", bearer)
     if eff["VEXA_MODEL_ROUTE"] == "subject" and route.base_url:
         # a person's own endpoint the allow-list names only through a wildcard: held to public
         # addresses at every connection the proxy makes, not only at this dispatch
@@ -780,7 +846,7 @@ def create_app(grants: Grants, *, transport=None, timeout: float = 600.0, resolv
 
     def _refusal(exc: Refused) -> JSONResponse:
         # Both dialects read `error.message`; `type` names the refusal for a person reading a log.
-        return JSONResponse({"type": "error", "error": {"type": "model_proxy_refused",
+        return JSONResponse({"type": "error", "error": {"type": exc.kind,
                                                         "message": f"model proxy: {exc.reason}"}},
                             status_code=exc.status)
 

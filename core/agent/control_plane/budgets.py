@@ -39,6 +39,8 @@ THE KEYS (one line each, also documented in POLICIES.md):
                                    (a catalog id or `cheapest`; empty: `model_home`)
     subscription_token_proxy       whether a model subscription credential may reach agent workers:
                                    `deny` (the default) or `allow`
+    model_scope_unpinned           what a key route that names no model may ask the model proxy for:
+                                   `runner_family` (its harness's family), `any`, or model ids
 """
 from __future__ import annotations
 
@@ -80,6 +82,10 @@ STR_KEYS = {
     # subscription is one person's licence, so `deny` unless the admin says `allow`. The company layer
     # is the one place it is set; a person cannot change it (`narrow` leaves it the admin's).
     "subscription_token_proxy": ("", "deny"),
+    # THE SCOPE OF A KEY ROUTE THAT NAMES NO MODEL (`model_proxy.unpinned_scope`): the models of the
+    # family its harness speaks, unless the admin says `any` or lists ids. The company layer is the
+    # one place it is set; a person cannot widen it (`narrow` leaves it the admin's).
+    "model_scope_unpinned": ("", "runner_family"),
     # THE COMPANY'S APPEARANCE DEFAULT (Settings → Appearance): what a person sees until they pick
     # their own. No environment variable — the company layer is the one place it is set.
     "appearance_accent": ("", ""),
