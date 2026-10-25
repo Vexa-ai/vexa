@@ -1,7 +1,7 @@
 #!/bin/sh
 # vexa-listen — follow one live call in the background and exit on the first thing for Claude.
 #
-#   VEXA_LISTEN_KEY=<key> sh vexa-listen <api_url> <platform> <native_meeting_id> [since_index]
+#   VEXA_LISTEN_KEY=<key> sh vexa-listen <api_url> <platform> <native_meeting_id> [since_index] [title]
 #
 # The key comes from the Vexa tool `listen_token` (transcripts only, a few hours). Each read is
 # Vexa's `wait_for_signal` (≤25 s); every read also tells Vexa this call is being listened to, which
@@ -13,25 +13,51 @@
 #   ended <next_index>                                                         (exit 0)
 #   expired                  the key no longer works: get a new one           (exit 2)
 #   unreachable              Vexa did not answer for a while                   (exit 3)
+#
+# It also keeps ~/.vexa/live/<platform>-<native_meeting_id>.json current — the call's title, its
+# state and what last woke Claude — which the band above the prompt reads.
 set -u
-api=${1:?api_url}; platform=${2:?platform}; native=${3:?native_meeting_id}; since=${4:-0}
+api=${1:?api_url}; platform=${2:?platform}; native=${3:?native_meeting_id}; since=${4:-0}; title=${5:-}
 key=${VEXA_LISTEN_KEY:?VEXA_LISTEN_KEY}
+version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$(dirname "$0")/../.claude-plugin/plugin.json" 2>/dev/null | head -n 1)
+state_dir="${HOME:-/tmp}/.vexa/live"
+state_file="$state_dir/$platform-$(printf '%s' "$native" | tr -c 'A-Za-z0-9._-' '_').json"
+woke_at=0; trigger=""
+
+clean() { printf '%s' "$1" | tr -d '"\\' | tr '\n\t' '  ' | cut -c1-120; }
+stamp() {   # state
+  mkdir -p "$state_dir" 2>/dev/null || return 0
+  now=$(($(date +%s) * 1000))
+  [ "$1" = woke ] && woke_at=$now
+  printf '{"platform":"%s","native_meeting_id":"%s","title":"%s","state":"%s","trigger":"%s","wake_ts":%s,"ts":%s,"next_index":%s}\n' \
+    "$(clean "$platform")" "$(clean "$native")" "$(clean "$title")" "$1" "$(clean "$trigger")" "$woke_at" "$now" "$since" \
+    > "$state_file.tmp" 2>/dev/null && mv "$state_file.tmp" "$state_file" 2>/dev/null
+  return 0
+}
+# The words after «Claude» in the first line that named it, three at most: what the band shows.
+words_after_claude() {
+  printf '%s\n' "$1" | sed -n 2p | sed 's/^[^:]*: //' \
+    | sed -E 's/.*([Cc][Ll][Aa][Uu][Dd][Ee]|[Кк]лод)[,.!?:;]*[[:space:]]*//' | awk '{print $1, $2, $3}' | sed 's/ *$//'
+}
+
 fails=0
 while :; do
+  stamp listening
   body=$(curl -sS --max-time 40 -w '\n%{http_code}' -H "X-API-Key: $key" \
-    "$api/transcripts/$platform/$native/signal?since_index=$since&timeout_sec=25&listener=1&notes=1&format=text" 2>/dev/null)
+    "$api/transcripts/$platform/$native/signal?since_index=$since&timeout_sec=25&listener=1&notes=1&format=text&client_version=$version" 2>/dev/null)
   code=$(printf '%s\n' "$body" | tail -n 1)
   text=$(printf '%s\n' "$body" | sed '$d')
   case "$code" in
     200) fails=0 ;;
-    401|403) echo expired; exit 2 ;;
-    *) fails=$((fails + 1)); [ "$fails" -ge 10 ] && { echo unreachable; exit 3; }; sleep 5; continue ;;
+    401|403) stamp expired; echo expired; exit 2 ;;
+    *) fails=$((fails + 1)); [ "$fails" -ge 10 ] && { stamp unreachable; echo unreachable; exit 3; }; sleep 5; continue ;;
   esac
   set -- $(printf '%s\n' "$text" | head -n 1)
   signal=${1:-quiet}; next=${2:-$since}
   case "$signal" in
-    addressed|noted) printf '%s\n' "$text"; exit 0 ;;
-    ended) echo "ended $next"; exit 0 ;;
+    addressed) since=$next; trigger=$(words_after_claude "$text"); stamp woke; printf '%s\n' "$text"; exit 0 ;;
+    noted) since=$next; stamp listening; printf '%s\n' "$text"; exit 0 ;;
+    ended) since=$next; stamp ended; echo "ended $next"; exit 0 ;;
     *) since=$next ;;
   esac
 done

@@ -75,10 +75,13 @@ export type Listener = {
 
 // What the band shows the moment the listener acts, before the chat answers:
 // woke (heard a line, waking Claude) → queued (Claude busy or spacing) → sent → answering → done.
+// What the band shows for the calls the vexa-listen script follows, from its files
+// (~/.vexa/live/*.json): `calls` the titles of the ones it follows now; `line` the band's text.
+export type Local = { any: boolean; isOn: boolean; hot: boolean; line: string }
 export type Flash = { stage: 'idle' | 'woke' | 'queued' | 'sent' | 'answering' | 'done'; at: number; line: string }
 
 declare module 'claude-code' {
   interface PluginState {
-    'vexa-live': { meeting: Meeting; listener: Listener; flash: Flash }
+    'vexa-live': { meeting: Meeting; listener: Listener; flash: Flash; local: Local }
   }
 }

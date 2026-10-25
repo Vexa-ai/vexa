@@ -16,7 +16,7 @@
 // plugin's newer version on update without overwriting their edits), else the plugin's own.
 import type { Register } from 'claude-code'
 
-import type { AppInfo, Flash, Listener, Meeting, Seg } from '../types'
+import type { AppInfo, Flash, Listener, Local, Meeting, Seg } from '../types'
 import {
   DECIDE_MAX_TOKENS, DECIDE_SYSTEM, FALLBACK_APP, briefFor, buildApp, calibrationSummary, decidePrompt, isDirect,
   DEFAULT_MODELS, TRIAGE_SYSTEM, norm, normalize, parseDecision, parseManifest, parseTriage, ruleHit, rulesText, triggerWords,
@@ -80,6 +80,52 @@ async function updateFlash($: any, fn: (f: Flash) => Flash): Promise<void> {
     const held = await $.state.get(FLASH)
     if ((await $.state.set(FLASH, fn(held.value ?? NO_FLASH), { ifVersion: held.version })).isSet) return
   }
+}
+
+// THE SCRIPT'S CALLS. vexa-listen keeps one file per call it follows (~/.vexa/live/<call>.json:
+// title, state, the words that last woke Claude, when); the band reads them on a one-second tick,
+// with no call to Vexa, since a plugin's own MCP calls are refused in the desktop app.
+const LOCAL = { plugin: 'vexa-live', key: 'local' } as const
+const NO_LOCAL: Local = { any: false, isOn: false, hot: false, line: '' }
+const LOCAL_FRESH_MS = 60_000
+const LOCAL_SHOWN_MS = 10 * 60_000
+const TRIGGER_MS = 10_000
+const ANSWER_MS = 3 * 60_000
+let localHome = ''
+
+async function readLocal($: any): Promise<Local> {
+  const { value } = await $.state.get(LOCAL)
+  return value ?? NO_LOCAL
+}
+
+type LocalFile = { title?: string; native_meeting_id?: string; state?: string; trigger?: string; wake_ts?: number; ts?: number }
+
+export function localBand(files: LocalFile[], now: number, isBusy: boolean): Local {
+  const shown = files.filter(f => now - Number(f.ts ?? 0) < LOCAL_SHOWN_MS)
+  if (!shown.length) return NO_LOCAL
+  const name = (f: LocalFile) => f.title || f.native_meeting_id || 'call'
+  const live = shown.filter(f => now - Number(f.ts ?? 0) < LOCAL_FRESH_MS && ['listening', 'woke'].includes(String(f.state)))
+  if (!live.length) return { any: true, isOn: false, hot: false, line: `${name(shown[0])} · Not listening` }
+  const woke = [...live].sort((a, b) => Number(b.wake_ts ?? 0) - Number(a.wake_ts ?? 0))[0]
+  const since = now - Number(woke.wake_ts ?? 0)
+  if (woke.trigger && since < TRIGGER_MS) return { any: true, isOn: true, hot: true, line: woke.trigger }
+  if (isBusy && since < ANSWER_MS) return { any: true, isOn: true, hot: true, line: 'Answering' }
+  return { any: true, isOn: true, hot: false, line: `Listening · ${live.map(name).join(', ')}` }
+}
+
+async function syncLocal($: any): Promise<void> {
+  if (!localHome) localHome = String((await $.env.get('HOME')) ?? '')
+  const dir = `${localHome}/.vexa/live`
+  const files: LocalFile[] = []
+  if (localHome && await $.fs.exists(dir)) {
+    for (const entry of await $.fs.list(dir)) {
+      if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
+      try { files.push(JSON.parse(await $.fs.read(`${dir}/${entry.name}`))) } catch { /* a file being rewritten */ }
+    }
+  }
+  const next = localBand(files, await $.clock.now(), busy)
+  const held = await $.state.get(LOCAL)
+  if (JSON.stringify(held.value ?? NO_LOCAL) !== JSON.stringify(next)) await $.state.set(LOCAL, next)
 }
 
 const WAKE_GAP_MS = 45_000
@@ -1004,6 +1050,7 @@ export const register: Register = (on) => {
         try { if ((await read($)).connection !== 'ready') await connect($) } catch { /* the next tick tries again */ }
       })
       $.clock.every(30_000, () => quiet(audit($)))
+      $.clock.every(1000, () => quiet(syncLocal($)))
     }
     return next(e)
   })
@@ -1088,6 +1135,19 @@ export const register: Register = (on) => {
   // edge, then two buttons; the line changes text, never size. It offers to listen while a
   // meeting is live, says «Listening», and shows what woke Claude until the chat answers.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const local = await readLocal($)
+    if (local.any && !e.props.hasSurvey) {
+      const ui = $.ui.resolve(e) as any
+      const { Box, Text } = ui
+      return (
+        <Box flexDirection="row" gap={1} alignItems="center">
+          {pulse(ui, 'band-dot', local.isOn)}
+          <Box flexGrow={1} flexShrink={1} minWidth={0}>
+            <Text color={!local.isOn ? 'inactive' : undefined} weight={local.hot ? 'semibold' : undefined} size="footnote" wrap="truncate-end">{local.line}</Text>
+          </Box>
+        </Box>
+      )
+    }
     const l = await readListener($)
     const m = await read($)
     if (e.props.hasSurvey || (!l.isOn && !l.offer)) return next(e)

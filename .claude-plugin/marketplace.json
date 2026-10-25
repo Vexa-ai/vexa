@@ -9,7 +9,7 @@
       "name": "vexa-live",
       "source": "./clients/claude-plugin",
       "description": "Vexa Live: background listening for your live calls; wakes Claude when it matters. Needs the Vexa connector or the vexa plugin.",
-      "version": "0.2.4-rc",
+      "version": "0.2.5-rc",
       "category": "productivity",
       "tags": [
         "meetings",

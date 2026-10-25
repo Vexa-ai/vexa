@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { leadingJson, serverOfCall, vexaServerOf } from '../hooks/register'
+import { leadingJson, localBand, serverOfCall, vexaServerOf } from '../hooks/register'
 
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 
@@ -208,4 +208,18 @@ test('two Vexa servers in one session: the one with the live meeting is followed
   await clock.advance(1_600)
   expect(calls.filter(c => c.tool === 'get_meeting_transcript').every(c => c.server === 'cbaaef3d-c1de')).toBe(true)
   expect(calls.some(c => c.tool === 'get_meeting_transcript')).toBe(true)
+})
+
+
+test("the band reads the script's files: Listening with the titles, the trigger for 10 s, Answering, Not listening", () => {
+  const now = 1_000_000_000
+  const call = { title: 'Pricing sync', native_meeting_id: '881', state: 'listening', trigger: '', wake_ts: 0, ts: now - 5000 }
+  expect(localBand([], now, false).any).toBe(false)
+  expect(localBand([call, { ...call, title: '', native_meeting_id: 'abc-defg-hij' }], now, false).line).toBe('Listening · Pricing sync, abc-defg-hij')
+  const woke = { ...call, state: 'woke', trigger: 'what did we', wake_ts: now - 3000 }
+  expect(localBand([woke], now, false)).toEqual({ any: true, isOn: true, hot: true, line: 'what did we' })
+  expect(localBand([{ ...woke, wake_ts: now - 20_000 }], now, true).line).toBe('Answering')
+  expect(localBand([{ ...woke, wake_ts: now - 20_000 }], now, false).line).toBe('Listening · Pricing sync')
+  expect(localBand([{ ...call, state: 'ended' }], now, false)).toEqual({ any: true, isOn: false, hot: false, line: 'Pricing sync · Not listening' })
+  expect(localBand([{ ...call, ts: now - 11 * 60_000 }], now, false).any).toBe(false)
 })
