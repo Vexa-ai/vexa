@@ -445,7 +445,10 @@ async function findLive($: any): Promise<void> {
     if (l.offer && rooms.some(r => roomKey(r) === roomKey(l.offer!))) return
     const live = rooms.find(r => r.platform && r.nativeId && !l.declined.includes(roomKey(r)))
     await updateListener($, x => (x.isOn ? x : { ...x, offer: live ?? null }))
-  } catch { /* offering is best effort; the next check tries again */ }
+  } catch (err) {
+    // Offering is best effort and the next check tries again; the reason is kept for the status.
+    await update($, x => ({ ...x, error: message(err) }))
+  }
 }
 
 // Listen: the pane follows the offered meeting, what is already said counts as heard, and the
@@ -785,7 +788,8 @@ async function configure($: any, input: any): Promise<unknown> {
     await updateListener($, x => ({ ...x, preset, brief }))
     return { listening: l.isOn, meeting, preset, brief }
   }
-  return { listening: l.isOn, meeting, offer: l.offer, preset: l.preset, presets: l.app.presets, app: l.app.name, appFolder: appDir, brief: l.brief, wakes: l.wakes, lastVerdict: l.lastVerdict, spend: await spendReport($) }
+  const v = await read($)
+  return { vexa: { server: server || null, connection: v.connection, error: v.error || null }, listening: l.isOn, meeting, offer: l.offer, preset: l.preset, presets: l.app.presets, app: l.app.name, appFolder: appDir, brief: l.brief, wakes: l.wakes, lastVerdict: l.lastVerdict, spend: await spendReport($) }
 }
 
 // Web → chat: a panel button in the web («Summarize this call», «Prepare me…») queues a request
