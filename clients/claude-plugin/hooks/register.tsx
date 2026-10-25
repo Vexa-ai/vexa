@@ -22,6 +22,7 @@ import {
   DEFAULT_MODELS, TRIAGE_SYSTEM, norm, normalize, parseDecision, parseManifest, parseTriage, ruleHit, rulesText, triggerWords,
 } from './listener'
 import type { App, Labelled, Models, Row } from './listener'
+import { PAIR_CODE, VEXA_API, forwardable, resultText, rpcMessage } from './pairing'
 
 const EMPTY: Meeting = {
   connection: 'connecting', url: '', platform: '', nativeId: '', dbId: 0, attachedTo: '', offers: { calendar: false, workspaces: false, demo: false, requests: false, webPanel: false }, title: '', isDemo: false,
@@ -393,6 +394,97 @@ async function poll($: any): Promise<void> {
     await update($, x => ({ ...x, error: message(err) }))
   } finally {
     pollingNow = false
+  }
+}
+
+// --- One-chat install: pairing, and Vexa's tools through this plugin ------------------------------
+// `vexa_setup` starts a pairing (or takes the code the person brought), the person signs in in their
+// own browser, and the plugin — polling the pairing — receives a key of theirs. It keeps it in its
+// own store and reads Vexa's tools over HTTP (Vexa's MCP endpoint), registering each as a tool of its
+// own that forwards the call: Vexa works in this chat, and in every later one as the plugin starts.
+const SETUP = 'vexa_setup'
+let vexaKey = ''
+let vexaEmail = ''
+let mcpSessionId = ''
+let pairCode = ''
+let pairingHere = false
+let pairPolling = false
+const proxied = new Set<string>()
+
+async function mcpRpc($: any, method: string, params: Record<string, unknown> = {}, notify = false): Promise<any> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', Authorization: `Bearer ${vexaKey}`,
+  }
+  if (mcpSessionId) headers['Mcp-Session-Id'] = mcpSessionId
+  const body = JSON.stringify(notify ? { jsonrpc: '2.0', method, params } : { jsonrpc: '2.0', id: Date.now(), method, params })
+  const r = await $.http.fetch(`${VEXA_API}/mcp`, { method: 'POST', headers, body })
+  if (method === 'initialize' && r.headers?.['mcp-session-id']) mcpSessionId = r.headers['mcp-session-id']
+  if (notify) return null
+  if (!r.ok) throw new Error(`Vexa answered ${r.status}`)
+  const m = rpcMessage(r.text)
+  if (m.error) throw new Error(String(m.error.message ?? 'Vexa refused the call'))
+  return m.result
+}
+
+async function connectProxy($: any): Promise<number> {
+  if (!vexaKey) return 0
+  mcpSessionId = ''
+  await mcpRpc($, 'initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'vexa-live', version: pluginVersion || '0' } })
+  await mcpRpc($, 'notifications/initialized', {}, true)
+  const listed = await mcpRpc($, 'tools/list', {})
+  const tools = forwardable(listed?.tools ?? [], [CONFIGURE, CALIBRATE, SETUP])
+  for (const t of tools) {
+    await $.tool.register({ name: t.name, description: t.description, inputSchema: t.inputSchema })
+    proxied.add(t.name)
+  }
+  return tools.length
+}
+
+async function pollPairing($: any): Promise<void> {
+  if (pairPolling || !pairCode) return
+  pairPolling = true
+  const tick = async (): Promise<void> => {
+    try {
+      const r = await $.http.fetch(`${VEXA_API}/pair/${encodeURIComponent(pairCode)}`)
+      if (r.status === 404) { pairPolling = false; return }
+      const p = r.ok ? JSON.parse(r.text) : {}
+      if (p.bound && p.key) {
+        vexaKey = String(p.key); vexaEmail = String(p.email ?? '')
+        try { await $.store.set('vexaKey', vexaKey); await $.store.set('vexaEmail', vexaEmail) } catch { /* this session only */ }
+        const n = await connectProxy($).catch(() => 0)
+        pairPolling = false
+        if (pairingHere) {
+          void $.prompt.submit({ text: `[Vexa] Signed in as ${vexaEmail || 'your account'} — Vexa is connected in this chat (${n} tools). Continue the setup: call whats_waiting and do its next step.` })
+        }
+        return
+      }
+      if (p.bound) { pairPolling = false; return }
+    } catch { /* the next look */ }
+    $.clock.after(2000, () => { void tick() })
+  }
+  void tick()
+}
+
+async function setup($: any, input: any): Promise<unknown> {
+  const action = String(input.action ?? 'start')
+  if (action === 'status') return { connected: Boolean(vexaKey), email: vexaEmail || null, tools: proxied.size, code: pairCode || null }
+  if (vexaKey && proxied.size) return { connected: true, email: vexaEmail || null, tools: proxied.size, note: 'Vexa is already connected in this chat: call whats_waiting.' }
+  const given = String(input.code ?? '').toUpperCase().match(PAIR_CODE)?.[0]
+  let started: any = {}
+  if (given) pairCode = given
+  else {
+    const r = await $.http.fetch(`${VEXA_API}/pair`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    if (!r.ok) return { error: `Vexa could not start a pairing (${r.status}); try again in a minute.` }
+    started = JSON.parse(r.text); pairCode = String(started.code ?? '')
+  }
+  pairingHere = true
+  void pollPairing($)
+  const app = 'https://claude-rc-app.dev.vexa.ai'
+  const setupUrl = String(started.setup_url ?? `${app}/panel/setup?code=${pairCode}&surface=claude-panel`)
+  const signinUrl = String(started.signin_url ?? `${app}/signin?code=${pairCode}`)
+  return {
+    code: pairCode, setup_url: setupUrl, signin_url: signinUrl,
+    next: `1) Open setup_url in your browser pane (preview_start). 2) Open signin_url in the person's OWN browser with the Bash tool: \`open "${signinUrl}"\` (Windows: start, Linux: xdg-open) — never in the pane, never pasted into the chat. 3) Tell them in one line: «Sign in with Google in the browser window that just opened, then come back.» This plugin waits for the sign-in and tells you here when Vexa is connected.`,
   }
 }
 
@@ -1369,6 +1461,11 @@ export const register: Register = (on) => {
       inputSchema: CONFIGURE_SCHEMA,
     })
     await $.tool.register({
+      name: SETUP,
+      description: 'Connect Vexa in this chat (one-chat install): start or continue the pairing with the code the person brought («Install Vexa (code VX-…)»), get the setup panel and the sign-in link, and — once they sign in — Vexa\'s tools appear here. action: start (default; pass `code` when they gave one) or status.',
+      inputSchema: { type: 'object', properties: { action: { enum: ['start', 'status'] }, code: { type: 'string', description: 'The pairing code, VX-XXXX-XXXX, when the person has one.' } } },
+    })
+    await $.tool.register({
       name: CALIBRATE,
       description: "Replay a labelled transcript fixture through the listener's small-model filter with the given rules (or the current "
         + 'ones) and return precision, recall, per-call latency and the misses. No meeting needed.',
@@ -1381,6 +1478,8 @@ export const register: Register = (on) => {
       if (savedModels && typeof savedModels === 'object') models = { ...DEFAULT_MODELS, ...(savedModels as Models) }
     } catch { /* defaults */ }
     await loadApp($)
+    try { vexaKey = String((await $.store.get('vexaKey')) ?? ''); vexaEmail = String((await $.store.get('vexaEmail')) ?? '') } catch { vexaKey = '' }
+    if (vexaKey) await connectProxy($).catch(() => 0)
     await connect($)
     if (!polling) {
       polling = true
@@ -1434,6 +1533,12 @@ export const register: Register = (on) => {
   // A call Claude starts from the chat (a bot or the demo) is followed by the pane, as the pane's
   // own buttons do: «Claude opens the call beside the chat».
   on('tool.call', async ($, e, next) => {
+    // Vexa's own tools, reached through this plugin with the person's paired key.
+    const proxiedName = e.tool.startsWith('mcp__vexa-live__') ? e.tool.slice('mcp__vexa-live__'.length) : ''
+    if (proxiedName && proxied.has(proxiedName)) {
+      const { tool: _t, ...args } = e as any
+      try { return { result: resultText(await mcpRpc($, 'tools/call', { name: proxiedName, arguments: args })) } } catch (err) { return { deny: `Vexa: ${message(err)}` } }
+    }
     const isPanelLink = /panel_link$/.test(e.tool) && typeof (e as { next?: unknown }).next === 'string'
     const ran = await next(isPanelLink ? { ...e, next: withChat(String((e as { next?: unknown }).next), mySession) } as typeof e : e)
     if (!ran.deny && !ran.isError) await learnServer($, e.tool).catch(() => {})
@@ -1454,6 +1559,9 @@ export const register: Register = (on) => {
     } catch { /* following is a convenience; the tool's answer stands */ }
     return ran
   })
+
+  on('tool.call', { tool: `mcp__vexa-live__${SETUP}` }, async ($, e) => ({ result: JSON.stringify(await setup($, e)) }))
+    .catch(($, e, next) => (next.called ? next(e) : { deny: 'Vexa setup failed; try again.' }))
 
   on('tool.call', { tool: CONFIGURE_TOOL }, async ($, e) => ({ result: JSON.stringify(await configure($, e)) }))
     .catch(($, e, next) => (next.called ? next(e) : { deny: 'The Vexa listener control failed; try again.' }))
