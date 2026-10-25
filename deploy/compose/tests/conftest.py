@@ -13,9 +13,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -155,8 +157,42 @@ def _docker_gid() -> str:
     return "0"
 
 
+def _env_lines(path: Path) -> dict:
+    out = {}
+    for line in path.read_text().splitlines():
+        if "=" in line and not line.lstrip().startswith("#"):
+            key, _, value = line.partition("=")
+            out[key.strip()] = value.split(" #", 1)[0].strip()
+    return out
+
+
+_MINTED: dict | None = None
+
+
+def _minted_secrets() -> dict:
+    """Every secret the stack refuses to run without, minted by the stack's own path
+    (`mint-dev-env.sh`, which `make up` runs) into a throwaway copy of `.env.example`: the keys the
+    script set or changed. A key a later change adds to the script is minted here too. Minted once
+    per session; the values are never printed (the script names keys only)."""
+    global _MINTED
+    if _MINTED is None:
+        example = COMPOSE_FILE.parent / ".env.example"
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+            shutil.copyfile(example, env_file)
+            subprocess.run(["bash", str(COMPOSE_FILE.parent / "mint-dev-env.sh"), str(env_file)],
+                           capture_output=True, text=True, check=True, timeout=60)
+            before, after = _env_lines(example), _env_lines(env_file)
+        _MINTED = {k: v for k, v in after.items()
+                   if v and before.get(k) != v and k != "DOCKER_GID" and not k.startswith("LEGACY_")}
+    return _MINTED
+
+
 def _stack_env() -> dict:
     return {
+        # Every no-default secret, minted as `make up` mints it; the pinned values below win, because
+        # the proof presents them.
+        **_minted_secrets(),
         # dev = the locally-built images (the routine gate). Release CI overrides this to pin the
         # PUBLISHED :vX.Y.Z tag (with COMPOSE_NO_BUILD=1), so the proof runs against the artifacts.
         "IMAGE_TAG": os.getenv("IMAGE_TAG", "dev"),
