@@ -246,3 +246,20 @@ test('the desktop app has no authenticate tool: Claude sends the person to /mcp 
   expect(t).not.toMatch(/call mcp__plugin_vexa_vexa__authenticate/)
   expect(t).not.toMatch(/API key at|VEXA_API_KEY/)
 })
+
+test('not signed in where the browser pane is: the panel opens at its sign-in steps, as a plain address', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  const calls: { tool: string; args: any }[] = []
+  engine(on, { isConnected: false, reason: 'auth', message: 'needs sign-in' }, calls, [], {}, [], true)
+  on('fs.read', (_: unknown, e: any) => (String(e.path).endsWith('.claude-plugin/plugin.json')
+    ? { value: JSON.stringify({ mcpServers: { vexa: { url: 'https://claude-rc.dev.vexa.ai/mcp' } } }) }
+    : { deny: 'ENOENT' }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await clock.advance(10)
+  const open = calls.find(c => c.tool === 'preview_start')
+  expect(open?.args).toEqual({ url: 'https://claude-rc-app.dev.vexa.ai/panel?surface=claude-panel&setup=1' })
+  expect(calls.find(c => c.tool === 'panel_link')).toBeFalsy()
+  const r: any = await $.command.run({ command: 'vexa', args: '' } as any)
+  expect(r.text).toBe("Vexa's sign-in steps are open beside the chat.")
+})

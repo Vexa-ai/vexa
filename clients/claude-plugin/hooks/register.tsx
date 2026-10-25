@@ -156,6 +156,8 @@ const SIGNIN_TOOLS = new Set([SIGNIN_TOOL, `${prefix}complete_authentication`])
 // Whether this session offers those tools (the terminal does). The desktop app doesn't: there the
 // person signs the plugin's server in from /mcp in the chat.
 let signinByTool = false
+// Whether Claude's browser pane is here (the desktop app), so the panel can show the sign-in steps.
+let hasBrowser = false
 
 // MCP results come back as content blocks; Vexa returns one JSON text block, sometimes followed by
 // a notice in plain text («\n\n<notice>»): parse the leading JSON value and ignore what follows.
@@ -228,7 +230,11 @@ async function connect($: any): Promise<void> {
   }
   server = ''
   if (r.reason === 'auth') {
-    try { signinByTool = (await $.tool.list()).some((t: { name: string }) => t.name === SIGNIN_TOOL) } catch { signinByTool = false }
+    try {
+      const names = new Set((await $.tool.list()).map((t: { name: string }) => t.name))
+      signinByTool = names.has(SIGNIN_TOOL)
+      hasBrowser = names.has(BROWSER_TOOL)
+    } catch { signinByTool = false }
   }
   await update($, x => ({
     ...x,
@@ -1055,6 +1061,10 @@ function callTitle(x: any): string {
 // The panel origin the plugin is about to open (from panel_link's answer): the plugin's own
 // preview_start call is approved for that origin only.
 let panelOrigin = ''
+// Where each Vexa's web panel lives, for the sign-in steps shown before panel_link can answer.
+const PANEL_ORIGINS: Record<string, string> = {
+  'https://claude-rc.dev.vexa.ai': 'https://claude-rc-app.dev.vexa.ai',
+}
 // Origins the person said Yes to once: Claude Code's dialog for a hook's ask offers no «always»,
 // so the plugin keeps that answer itself ($.store, across sessions).
 let panelAllowed: string[] = []
@@ -1070,20 +1080,31 @@ async function openPanel($: any, next: string): Promise<boolean> {
   if (m.connection === 'ready' && m.offers.webPanel) {
     try {
       const r = await call($, 'panel_link', { next })
-      if (r?.url) {
-        panelOrigin = originOf(r.url)
-        const opened = await $.mcp.call(BROWSER_SERVER, 'preview_start', { url: String(r.url) })
-        if (!opened?.isError) {
-          if (!panelAllowed.includes(panelOrigin)) {
-            panelAllowed = [...panelAllowed, panelOrigin]
-            try { await $.store.set('panelAllowed', panelAllowed) } catch { /* asked again next session */ }
-          }
-          return true
-        }
-      }
+      if (r?.url) return await openInPane($, String(r.url))
     } catch { /* not opened: the caller says so in one plain line, or nothing */ }
   }
   return false
+}
+
+// The panel's three sign-in steps, before the server is signed in: a plain address, as it reads no
+// account. Only where the browser pane is (the desktop app) and the panel's address is known.
+async function openSetup($: any): Promise<boolean> {
+  const origin = PANEL_ORIGINS[vexaUrl]
+  if (!origin || !hasBrowser) return false
+  return openInPane($, `${origin}/panel?surface=claude-panel&setup=1`)
+}
+
+async function openInPane($: any, url: string): Promise<boolean> {
+  try {
+    panelOrigin = originOf(url)
+    const opened = await $.mcp.call(BROWSER_SERVER, 'preview_start', { url })
+    if (opened?.isError) return false
+    if (!panelAllowed.includes(panelOrigin)) {
+      panelAllowed = [...panelAllowed, panelOrigin]
+      try { await $.store.set('panelAllowed', panelAllowed) } catch { /* asked again next session */ }
+    }
+    return true
+  } catch { return false }
 }
 
 function panelPath(m: Meeting): string {
@@ -1139,6 +1160,9 @@ export const register: Register = (on) => {
     } catch { /* no saved choice: the context asks for one */ }
     await loadApp($)
     await connect($)
+    // Not signed in where the browser pane is (also the install chat, which the desktop app reloads
+    // the plugin into): the panel opens at its sign-in steps, with the person's permission.
+    if ((await read($)).connection === 'signin') quiet(openSetup($))
     if (!polling) {
       polling = true
       $.clock.every(1500, () => quiet((async () => { await poll($); await findLive($) })()))
@@ -1169,7 +1193,9 @@ export const register: Register = (on) => {
   on('command.run', { command: 'vexa' }, async $ => {
     await connect($)
     const m = await read($)
-    if (m.connection !== 'ready') return { text: "Vexa isn't signed in yet. Ask Claude to set up Vexa." }
+    if (m.connection !== 'ready') {
+      return { text: (await openSetup($)) ? "Vexa's sign-in steps are open beside the chat." : "Vexa isn't signed in yet. Ask Claude to set up Vexa." }
+    }
     if (!m.offers.webPanel) return { text: "Vexa's call panel opens beside the chat in the Claude desktop app." }
     return { text: (await openPanel($, panelPath(m))) ? 'Vexa opened.' : "Vexa's panel didn't open." }
   })
