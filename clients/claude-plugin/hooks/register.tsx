@@ -713,7 +713,7 @@ async function onLinkEvent($: any, ev: LinkEvent): Promise<void> {
       if (ours) { await update($, x => ({ ...x, status })); await updateListener($, x => ({ ...x, isOn: false })) }
       await logLink($, 'system', `${name} ${status}`, ev.previous ? 'wake' : 'log')
       if (ev.previous && status === 'completed') {
-        await say($, `[Vexa] The call «${name}» (${mt.platform} ${mt.native_id}) ended. Write its summary into the call's page now — find it with get_meeting (or create it with entity_upsert kind=meeting and meeting_attach_page), fill decided, committed and open questions with section_update, never the person's notes — then say in one line that the page is ready.`)
+        await say($, `[Vexa] The call «${name}» (${mt.platform} ${mt.native_id}) ended. Make it part of their workspace, not a block of text: 1) entity_upsert first — the project or product, each person, each company and every decision (kind decision), each with what this call said and the call as the source; 2) give the call a real title (≤ 6 words, the topic): annotate_meeting title, and the same title on its page; 3) write the page's summary, decided, committed and open questions with section_update, naming those pages as [[links]], never touching the person's own notes; 4) links_report on the page, then links_update with its fixes, until the score reaches the target. Then one line in the chat: the title and what you linked.`)
       }
       return
     }

@@ -42,6 +42,13 @@ the name or the company's domain over the last 180 days (e.g. `"Ivan Osman" OR i
 read what matters, and add the facts with the thread as their source. Read only; never send or draft.
 Before a call, the same search for the participants tells you what is open with them.
 
+**When a call ends** (or «Summarize»): pages first, then the text. 1) `entity_upsert` the project or
+product, each person, each company and every decision (`kind: decision`), the call as the source. 2) A
+real title for the call (≤ 6 words, the topic) with `annotate_meeting` and on its page. 3) The summary,
+decided, committed and open questions with `section_update`, every name a `[[link]]` to its page.
+4) `links_report`, then `links_update` with its fixes, until the score reaches the target. A summary
+with no links is not done.
+
 **Small updates.** Change the region that changed, with what is new; don't rewrite the page or a
 card from scratch. Keep the person's wording where they edited yours.
 
