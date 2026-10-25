@@ -1,7 +1,7 @@
 // One-chat install: the plugin pairs, receives the person's key once they sign in, and serves Vexa's
 // own tools in the same chat by forwarding them over HTTP.
 import { expect, mock, test } from 'claude-code/testing'
-import { PAIR_CODE, forwardable, resultText, rpcMessage } from '../hooks/pairing'
+import { PAIR_CODE, forwardable, recordable, resultText, rpcMessage } from '../hooks/pairing'
 
 test('pure parts: the code, a JSON or SSE answer, the result text, the tools forwarded', () => {
   expect('Install Vexa (code VX-7K2M-Q9PD): …'.match(PAIR_CODE)?.[0]).toBe('VX-7K2M-Q9PD')
@@ -51,4 +51,14 @@ test('setup: pair, the person signs in, Vexa\'s tools appear in this chat and th
   expect(prompts.at(-1)).toMatch(/^\[Vexa\] Signed in as ana@acme\.io — Vexa is connected in this chat \(2 tools\)/)
   const called = await $.tool.call({ tool: 'mcp__vexa-live__whats_waiting' } as any)
   expect(called.result).toBe('called whats_waiting')
+})
+
+
+test('what a call brings to the record: new names once, and decisions', () => {
+  const known = new Set<string>()
+  const first = recordable([{ speaker: 'Dana Lee', text: 'I spoke with Northwind about the pilot.' }, { speaker: 'Bob', text: 'We decided to launch on December 1st.' }], known)
+  expect(first.names).toEqual(expect.arrayContaining(['Northwind', 'Dana Lee', 'Bob']))
+  expect(first.decisions).toEqual(['Bob: We decided to launch on December 1st.'])
+  expect(recordable([{ speaker: 'Dana Lee', text: 'Northwind again, on Monday via Google Meet.' }], known).names).toEqual([])
+  expect(recordable([{ speaker: 'Ира', text: 'Договорились, пришлю договор Иван Осман.' }], new Set()).decisions.length).toBe(1)
 })

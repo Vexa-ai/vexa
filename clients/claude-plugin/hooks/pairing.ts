@@ -31,3 +31,28 @@ export function forwardable(tools: any[], own: string[]): { name: string; descri
     inputSchema: t.inputSchema && typeof t.inputSchema === 'object' ? t.inputSchema : { type: 'object', properties: {} },
   }))
 }
+
+// What a call's lines bring to the record: names not heard before (people, companies, projects),
+// and decision or commitment lines. Word rules, English and Russian; no model.
+const NAME = /(?<=[\p{L},;:] )(\p{Lu}[\p{L}'’-]{2,}(?: \p{Lu}[\p{L}'’-]{2,})?)/gu
+const NOT_NAMES = new Set(['claude', 'клод', 'vexa', 'google', 'google meet', 'zoom', 'teams', 'microsoft teams', 'okay', 'monday', 'tuesday', 'wednesday',
+  'thursday', 'friday', 'saturday', 'sunday', 'january', 'february', 'march', 'april', 'june', 'july', 'august', 'september', 'october', 'november', 'december'])
+const DECISION = /\b(?:decided|agreed|let's go with|we(?:'ll| will) go with|approved|settled on|i(?:'ll| will) (?:send|share|do|prepare|write|draft|check|follow|book|call|email|review|fix|ship|own)|by (?:monday|tuesday|wednesday|thursday|friday|tomorrow|end of (?:the )?(?:day|week|month)))\b|(?:договорились|решили|решено|согласовали|утвердили|беру на себя|сделаю|пришлю|отправлю|подготовлю)/iu
+
+export function recordable(lines: { speaker: string; text: string }[], known: Set<string>): { names: string[]; decisions: string[] } {
+  const names: string[] = []
+  const decisions: string[] = []
+  for (const l of lines) {
+    const speaker = String(l.speaker ?? '').trim()
+    const candidates = [...String(l.text ?? '').matchAll(NAME)].map(m => m[1]!)
+    if (speaker && !/^(you|speaker\b|unknown|\?|—)/i.test(speaker)) candidates.push(speaker)
+    for (const c of candidates) {
+      const k = c.toLowerCase()
+      if (NOT_NAMES.has(k) || known.has(k)) continue
+      known.add(k)
+      names.push(c)
+    }
+    if (DECISION.test(String(l.text ?? ''))) decisions.push(`${speaker || '?'}: ${String(l.text).trim().slice(0, 160)}`)
+  }
+  return { names, decisions }
+}
