@@ -36,6 +36,12 @@ call. Everything outside them is the person's: above all the block from
 `<!-- vexa:human-notes:start -->` to `<!-- vexa:human-notes:end -->`, which you never touch, and the
 transcript slot.
 
+**After a call, or when a page is thin** (a short summary, few facts, open questions): if you can read
+the person's mail — a Gmail/Google connector in this chat, or Vexa's `mail_*` tools — search it for
+the name or the company's domain over the last 180 days (e.g. `"Ivan Osman" OR infobip.com newer_than:180d`),
+read what matters, and add the facts with the thread as their source. Read only; never send or draft.
+Before a call, the same search for the participants tells you what is open with them.
+
 **Small updates.** Change the region that changed, with what is new; don't rewrite the page or a
 card from scratch. Keep the person's wording where they edited yours.
 
