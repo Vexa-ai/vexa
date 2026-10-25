@@ -105,13 +105,14 @@ test('a live meeting of theirs is listened to by default, silently; Stop stops i
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await clock.advance(31_500)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect((await ui.find({ type: 'Text', text: /^Listening( · |$)/ }))?.text).toBe('Listening · Acme pricing call')
+  // At rest the band is one green dot; Stop lives in the panel and in the listener's own control.
+  expect((await ui.find({ type: 'Text', text: /^[●◉]$/ }))).toBeTruthy()
   expect(seen.annotations.at(-1)).toMatchObject({ listener_state: 'listening' })
   expect(seen.prompts).toEqual([])
-  await ui.press({ key: 'band-stop' })
+  await $.tool.call({ tool: 'mcp__vexa-live__listener_configure', action: 'stop' } as any)
   expect(seen.annotations.at(-1)).toMatchObject({ listener_state: 'off' })
   await clock.advance(64_000)
-  expect(await ui.find({ type: 'Text', text: /^Listening( · |$)/ })).toBeFalsy()
+  expect(await ui.find({ type: 'Text', text: /^[●◉]$/ })).toBeFalsy()
   await ui.unmount()
 })
 
@@ -189,13 +190,12 @@ test('listening ends with the meeting: the band goes back to every chat\'s Vexa 
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await clock.advance(31_500)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text: /^Listening( · |$)/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^[●◉]$/ })).toBeTruthy()
   endedLive.value = true
   await clock.advance(31_500)
-  expect(await ui.find({ type: 'Text', text: /^Listening( · |$)/ })).toBeFalsy()
-  // With nothing listened to, the band stays as every chat's Vexa band: no live call, Open panel, Send bot.
-  expect((await ui.find({ type: 'Text', text: /^Vexa · / }))?.text).toBe('Vexa · no live call')
-  expect(await ui.find({ type: 'Text', text: 'Panel' })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^[●◉]$/ })).toBeFalsy()
+  // The call over, the band rests as a grey dot that opens the panel.
+  expect(await ui.find({ type: 'Text', text: '○' })).toBeTruthy()
   await ui.unmount()
 })
 

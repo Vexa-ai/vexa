@@ -517,7 +517,7 @@ export const MEETING_CONTEXT_WORDS = 'Vexa: this message is about meetings. Your
 // message, a task's notification or a plugin's prompt, which the desktop app also delivers as `sdk`.
 export function fromPerson(kind: string | undefined, text: string, isMeta = false): boolean {
   if (isMeta || !['composer', 'bridge', 'sdk'].includes(String(kind))) return false
-  return !/<(?:cross-session-message|task-notification|agent-message|side-sessions-event|ci-monitor-event)\b|^\[Vexa(?: listener| panel| Live self-test)?[\] ·]|^Vexa UI: /.test(text.trimStart())
+  return !/<(?:cross-session-message|task-notification|agent-message|side-sessions-event|ci-monitor-event|system-reminder)\b|^The app was quit|^\[Vexa(?: listener| panel| Live self-test)?[\] ·]|^Vexa UI: /.test(text.trimStart())
 }
 
 // A person or a company asked about by name: what the calls and the workspace know comes first.
@@ -1508,6 +1508,12 @@ async function heard($: any): Promise<void> {
   $.clock.after(HEARING_MS + 100, () => { void updateFlash($, f => ({ ...f })) })
 }
 
+// The resting band: one dot that says how things stand — listening (●), hearing a line right now (◉),
+// no call (○). Its accessible text says the same, for a screen reader.
+export function restDot(b: { tone: string }): string {
+  return b.tone === 'hear' ? '◉' : b.tone === 'live' ? '●' : '○'
+}
+
 // Listen (or Listen here): this chat takes the line and follows the live call it knows of.
 async function listenHere($: any): Promise<void> {
   if (!linkActive) { await submitOnce($, 'Vexa: start listening to my call in this chat — call start_listening.'); return }
@@ -1726,6 +1732,19 @@ export const register: Register = (on) => {
     // — a dot, small text, actions as small links — that stands out only when something waits.
     const quiet = !b.hot && b.tone !== 'warn'
     if (!usedVexaHere && !isLive(m) && !linkActive) return next(e)
+    // At rest — no call, or a quiet one — the band is a single Vexa dot (grey, or green while
+    // listening): one press opens the panel, where everything else lives. It grows into a line only
+    // when something needs the person: a request waiting or answered, the line paused, another chat
+    // listening, or Vexa not connected.
+    if (quiet && !b.buttons.some(k => k === 'here' || k === 'reconnect' || k === 'connect')) {
+      return (
+        <Box flexDirection="row" alignItems="center">
+          <Button key="band-dot-open" plain isDisabled={pressing('open', now) || undefined} onPress={() => { void press($, 'open', act.open!) }}>
+            <Text color={b.tone === 'off' ? 'inactive' : LIVE} size="footnote">{restDot(b)}</Text>
+          </Button>
+        </Box>
+      )
+    }
     return (
       <Box flexDirection="row" gap={1} alignItems="center">
         {pulse(ui, 'band-dot', b.tone)}
