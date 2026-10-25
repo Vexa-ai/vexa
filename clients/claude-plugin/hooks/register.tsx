@@ -396,6 +396,112 @@ async function poll($: any): Promise<void> {
   }
 }
 
+// --- vexa-link: the one line from Vexa ----------------------------------------------------------
+// The script appends every event to ~/.vexa/link/events.jsonl; this reads what is new each second
+// and puts it through the listener: a call's lines into the transcript the filter judges, a call
+// starting followed at once, a call ending or a press in the web panel straight to the chat.
+// Each event's decision is kept for the status: wake, filter, follow, log.
+type LinkEvent = { type?: string; event?: string; status?: string; previous?: string | null; index?: number; speaker?: string; text?: string; meeting?: { id?: number; platform?: string; native_id?: string; title?: string }; request?: any }
+let linkOffset = -1
+let linkActive = false
+const linkLog: { at: number; type: string; what: string; decision: string }[] = []
+const parked = new Map<string, Seg[]>()
+
+async function logLink($: any, type: string, what: string, decision: string): Promise<void> {
+  linkLog.push({ at: await $.clock.now(), type, what: what.slice(0, 120), decision })
+  if (linkLog.length > 50) linkLog.splice(0, linkLog.length - 50)
+}
+
+// The text a press in the web panel reaches the chat as: one line, then the reference the agent acts on.
+export function uiMessage(req: any, title: string): string {
+  const meeting = req?.params?.native_id
+    ? { id: req.meeting_id ? Number(req.meeting_id) || req.meeting_id : undefined, platform: req.params.platform, native_id: req.params.native_id }
+    : req?.meeting_id ? { id: Number(req.meeting_id) || req.meeting_id } : undefined
+  const ref = { action: req?.action, label: req?.label, ...(meeting ? { meeting } : {}), ...(req?.params?.page ? { page: req.params.page } : {}), from: 'panel', at: new Date(Number(req?.created_ms ?? 0) || Date.now()).toISOString() }
+  return `Vexa UI: the person pressed «${req?.label ?? req?.action}»${title ? ` on ${title}` : ''}.\n\n\`\`\`vexa-ui:v1\n${JSON.stringify(ref)}\n\`\`\`\n\n${req?.text ?? ''} Answer in the chat in one line.`
+}
+
+async function follow($: any, mt: NonNullable<LinkEvent['meeting']>, status: string): Promise<void> {
+  const m = await read($)
+  const platform = String(mt.platform ?? ''), nativeId = String(mt.native_id ?? '')
+  if (!platform || !nativeId) return
+  if (m.platform === platform && m.nativeId === nativeId) {
+    if (status && status !== m.status) await update($, x => ({ ...x, status, title: mt.title || x.title }))
+    return
+  }
+  if (m.nativeId) parked.set(roomKey(m), m.segments)
+  await update($, x => ({ ...x, platform, nativeId, dbId: Number(mt.id ?? 0), attachedTo: '', title: mt.title || '', isDemo: false,
+    status: status || 'active', segments: parked.get(`${platform}/${nativeId}`) ?? [], nextIndex: 0, liveCursor: '', liveFeed: true, error: '' }))
+  const l = await readListener($)
+  if (!l.declined.includes(`${platform}/${nativeId}`)) {
+    await updateListener($, x => ({ ...x, offer: null, isOn: true, triaged: (parked.get(`${platform}/${nativeId}`) ?? []).map(s => s.id) }))
+  }
+}
+
+async function onLinkEvent($: any, ev: LinkEvent): Promise<void> {
+  const mt = ev.meeting ?? {}
+  const name = mt.title || mt.native_id || 'a call'
+  if (ev.type === 'ui') {
+    const m = await read($)
+    const title = ev.request?.params?.native_id === m.nativeId ? (m.title || m.nativeId) : ''
+    await logLink($, 'ui', String(ev.request?.action ?? ''), 'wake')
+    void $.prompt.submit({ text: uiMessage(ev.request, title) })
+    return
+  }
+  if (ev.type === 'system') {
+    const status = String(ev.status ?? '')
+    if (status === 'active') { await follow($, mt, status); await logLink($, 'system', `${name} live`, 'follow'); return }
+    if (['completed', 'failed'].includes(status)) {
+      const m = await read($)
+      const ours = m.platform === mt.platform && m.nativeId === mt.native_id
+      if (ours) { await update($, x => ({ ...x, status })); await updateListener($, x => ({ ...x, isOn: false })) }
+      await logLink($, 'system', `${name} ${status}`, ev.previous ? 'wake' : 'log')
+      if (ev.previous && status === 'completed') {
+        void $.prompt.submit({ text: `[Vexa] The call «${name}» (${mt.platform} ${mt.native_id}) ended. Offer the summary and action items in one line.` })
+      }
+      return
+    }
+    await logLink($, 'system', `${name} ${status}`, 'log')
+    return
+  }
+  if (ev.type === 'transcript' && String(ev.text ?? '').trim()) {
+    await follow($, mt, '')
+    const seg: Seg = { id: `${mt.id ?? mt.native_id}:${ev.index ?? ''}`, speaker: String(ev.speaker ?? '—'), text: String(ev.text).trim(), time: '', pending: false }
+    await update($, x => ({ ...x, status: x.status === 'past' ? 'active' : x.status, segments: mergeSegs(x.segments, [seg]) }))
+    await logLink($, 'transcript', `${seg.speaker}: ${seg.text}`, 'filter')
+  }
+}
+
+let linkReading = false
+async function syncLink($: any): Promise<void> {
+  if (linkReading) return
+  linkReading = true
+  try {
+    if (!localHome) localHome = String((await $.env.get('HOME')) ?? '')
+    const dir = `${localHome}/.vexa/link`
+    if (!localHome || !(await $.fs.exists(`${dir}/state.json`))) { linkActive = false; return }
+    const st = JSON.parse(await $.fs.read(`${dir}/state.json`))
+    linkActive = st.state === 'running' && (await $.clock.now()) - Number(st.ts ?? 0) < 90_000
+    if (linkActive) byScript = true
+    const spool = `${dir}/events.jsonl`
+    if (!(await $.fs.exists(spool))) return
+    const text: string = await $.fs.read(spool)
+    if (linkOffset < 0 || text.length < linkOffset) linkOffset = linkOffset < 0 ? text.length : 0
+    const fresh = text.slice(linkOffset)
+    const end = fresh.lastIndexOf('\n')
+    if (end < 0) return
+    linkOffset += end + 1
+    let lines = 0
+    for (const line of fresh.slice(0, end).split('\n')) {
+      if (!line.trim()) continue
+      try { await onLinkEvent($, JSON.parse(line)); lines++ } catch { /* a line it cannot read is skipped */ }
+    }
+    if (lines) await triage($)
+  } catch { /* the next tick reads again */ } finally {
+    linkReading = false
+  }
+}
+
 // --- App folder -------------------------------------------------------------------------------
 
 async function readApp($: any, dir: string, source: string): Promise<App | null> {
@@ -840,7 +946,7 @@ async function calibrate($: any, rules: string, fixture: string): Promise<unknow
 async function configure($: any, input: any): Promise<unknown> {
   const l = await readListener($)
   const m = await read($)
-  const action = String(input.action ?? (input.preset || input.rules || input.focus || input.labels || input.triggers || input.known ? 'update' : 'status'))
+  const action = String(input.action ?? (input.preset || input.profile || input.rules || input.focus || input.labels || input.triggers || input.known ? 'update' : 'status'))
   const meeting = l.isOn ? `${m.platform} ${m.nativeId}` : null
   if (action === 'stop') {
     await stopListening($)
@@ -867,12 +973,20 @@ async function configure($: any, input: any): Promise<unknown> {
       labels: input.labels ?? base.labels, focus, known: input.known ?? base.known,
       wake_at: base.wake_at, max_wait_s: base.max_wait_s, rules: triggers,
     })
-    await updateListener($, x => ({ ...x, preset, brief }))
-    return { listening: l.isOn, meeting, preset, brief }
+    // A profile is a file of the person's own (`<app>/listener/<name>.json`): what the chat sets is
+    // written there, under the profile's name or a new one, and the running listener uses it at once.
+    const name = typeof input.profile === 'string' && /^[a-z0-9][a-z0-9_-]{0,39}$/.test(input.profile) ? input.profile : preset
+    let file: string | null = null
+    if (appDir && !appDir.startsWith(String($.plugin.root))) {
+      file = `${appDir}/listener/${name}.json`
+      try { await $.fs.write(file, JSON.stringify(brief, null, 2) + '\n'); await loadApp($) } catch { file = null }
+    }
+    await updateListener($, x => ({ ...x, preset: name, brief }))
+    return { listening: l.isOn, meeting, profile: name, file, brief }
   }
   const v = await read($)
   await probeHttp($)
-  return { version: pluginVersion || null, vexa: { server: server || null, connection: v.connection, error: v.error || null, http: httpProbe || null }, listening: l.isOn, meeting, offer: l.offer, preset: l.preset, presets: l.app.presets, app: l.app.name, appFolder: appDir, brief: l.brief, wakes: l.wakes, lastVerdict: l.lastVerdict, spend: await spendReport($) }
+  return { profile: { name: l.preset, file: appDir ? `${appDir}/listener/${l.preset}.json` : null }, link: { active: linkActive, recent: linkLog.slice(-12) }, version: pluginVersion || null, vexa: { server: server || null, connection: v.connection, error: v.error || null, http: httpProbe || null }, listening: l.isOn, meeting, offer: l.offer, preset: l.preset, presets: l.app.presets, app: l.app.name, appFolder: appDir, brief: l.brief, wakes: l.wakes, lastVerdict: l.lastVerdict, spend: await spendReport($) }
 }
 
 // Web → chat: a panel button in the web («Summarize this call», «Prepare me…») queues a request
@@ -937,7 +1051,8 @@ const CONFIGURE_SCHEMA = {
   type: 'object',
   properties: {
     action: { enum: ['status', 'update', 'stop'], description: 'status reads the listener; update changes what it listens for; stop stops listening. Inferred from the other fields when absent.' },
-    preset: { type: 'string', description: "Start from one of the app's presets (status lists them; the default app has default, sales, standup, interview)." },
+    preset: { type: 'string', description: "Start from one of the listener profiles (status lists them; shipped: default, sales, standup, interview)." },
+    profile: { type: 'string', description: 'Save what this update sets as this profile (a short lowercase name; a new name makes a new profile file). Default: the profile in use.' },
     rules: { description: 'Plain-language rules: what should wake you and what to ignore, tuned to this conversation (a string). A list of {kind: keyword|person|regex, value} instead sets instant triggers.' },
     triggers: { ...TRIGGERS_SCHEMA, description: 'Instant triggers that wake you with no model call: a keyword, a speaker name, or a regex.' },
     known: { type: 'string', maxLength: 8000, description: 'What you already know or do not want to hear about again.' },
@@ -1051,6 +1166,7 @@ export const register: Register = (on) => {
       })
       $.clock.every(30_000, () => quiet(audit($)))
       $.clock.every(1000, () => quiet(syncLocal($)))
+      $.clock.every(1000, () => quiet(syncLink($)))
     }
     return next(e)
   })
@@ -1160,7 +1276,7 @@ export const register: Register = (on) => {
     const line = !l.isOn ? `${l.offer?.title ?? (m.title || m.nativeId)} · Not listening`
       : f.stage === 'answering' ? 'Answering'
         : hot ? (f.line || 'Listening')
-          : 'Listening'
+          : `Listening · ${l.preset} · ${m.title || m.nativeId}`
     return (
       <Box flexDirection="row" gap={1} alignItems="center">
         {pulse(ui, 'band-dot', l.isOn)}

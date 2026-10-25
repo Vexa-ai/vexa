@@ -1,60 +1,61 @@
 ---
 name: vexa-listen
-description: Listen to the person's live call in the background with Vexa Live, answer when someone in the call says "Claude", and keep the meeting's page and its people, companies and decisions current while the call runs; open their Vexa call panel. Use when a Vexa meeting of theirs is live (whats_waiting says a meeting is happening, or a bot they sent just went active), unless they said not to listen, and when they say «Open my Vexa panel».
+description: Keep the line from the person's Vexa open in this chat (vexa-link) and listen to their live calls with a listener profile set for each call — answer when someone in the call says "Claude" or something the profile wakes on, act on presses in the Vexa panel, keep the meeting's page and its people, companies and decisions current. Use on the first Vexa use in a chat, when a Vexa meeting of theirs is live, when they ask to listen or change what the listener reacts to («also wake me on prices», «just take notes»), and when they say «Open my Vexa panel».
 ---
 
-# Listening to a live call (Vexa Live)
+# Vexa Live: the line from Vexa, and listening
 
-Listening is on by default: when the person's Vexa bot is in a live call, start it without asking
-and keep it running until the call ends or they say stop. The panel opens first: until it is open
-the person has nothing to look at.
+One background script, vexa-link, carries everything Vexa has for this chat: each line said in
+the person's live calls, a call starting or ending, a press in the Vexa panel. The Vexa Live plugin
+reads it and decides what reaches you, by the listener profile in use. Listening is on by default.
 
-1. Open the Vexa panel before anything else: call Vexa's `panel_link` with `next` =
-   `/panel/meeting/<platform>/<native_meeting_id>?surface=claude-panel` (the call you are about to
-   listen to; `/panel?surface=claude-panel` when you don't know it yet) and open the link it returns
-   in Claude's browser pane (`preview_start`); where there is none, give the person the link. Any
-   Vexa answer's `open_panel` names the exact `next`. Opening it again with the same `next` only
-   refreshes it. «Open my Vexa panel» means this step alone.
-2. Call Vexa's `listen_token` (no arguments). It answers everything the listener needs: `key`,
-   `api_url`, and `meetings`, every call a bot of theirs is in now (`platform`, `native_meeting_id`;
-   `meeting` is the first). Take these from that answer only; don't look for the address anywhere
-   else. No live call: say so in one line and stop.
-3. Start one listener per live call, each with the Bash tool, `run_in_background: true`:
+1. **Open the Vexa panel first.** Call Vexa's `panel_link` with `next` =
+   `/panel/meeting/<platform>/<native_meeting_id>?surface=claude-panel` for a call, or
+   `/panel?surface=claude-panel`, and open the link in Claude's browser pane (`preview_start`); where
+   there is none, give the person the link. Any Vexa answer's `open_panel` names the exact `next`.
+   Opening it again with the same `next` only refreshes it. «Open my Vexa panel» is this step alone.
+2. **Start vexa-link once per chat.** Call Vexa's `listen_token` (no arguments): it answers `key`
+   and `api_url`; take them from that answer only. Then, with the Bash tool and
+   `run_in_background: true`:
 
    ```
-   VEXA_LISTEN_KEY=<key> sh "${CLAUDE_PLUGIN_ROOT}/bin/vexa-listen" <api_url> <platform> <native_meeting_id> <since_index> "<title>"
+   VEXA_LISTEN_KEY=<key> sh "${CLAUDE_PLUGIN_ROOT}/bin/vexa-link" <api_url>
    ```
 
-   `since_index` is 0 the first time; `title` is the call's title, empty until it has one. With more
-   than one live call, listen to all of them, never only the first. Then say one line naming them:
-   «Listening to <title or id>[, <title or id>] — say "Claude" in the call and I'll answer here».
-   The band above the prompt shows the same.
-4. When one finishes, read its output (each call's listener on its own):
-   - `addressed <next_index>` and lines: someone said "Claude" to you. Answer them in the chat, briefly,
-     reading `get_meeting_transcript` for context if you need it. Then start it again with that
-     `next_index`.
-   - `noted <next_index>` and `[kinds] speaker: text` lines: something worth keeping was said — a
-     decision, a commitment, a price, a date, or a new person, company or project. Keep the record
-     current, silently (no chat message unless you were addressed):
-     1. `entity_upsert` each person, company, project and decision the lines name (one call each,
-        `source` = this meeting), linking them with `[[Name]]` in `facts` and `connections`.
-     2. Update the meeting's page: find it with `get_meeting` (its attached page); if it has none,
-        write `meetings/<YYYY-MM-DD>-<title>.md` with `workspace_write` and attach it with
-        `meeting_attach_page`. Read it, then rewrite only what sits between these markers:
-        `<!-- meeting:decisions:start/end -->`, `<!-- meeting:commitments:start/end -->` (who, what,
-        by when), `<!-- meeting:people:start/end -->` (with `[[links]]`) and
-        `<!-- meeting:questions:start/end -->`. Everything else stays byte for byte: above all the
-        person's own block from `<!-- vexa:human-notes:start -->` to `<!-- vexa:human-notes:end -->`,
-        the transcript slot and the `report` region.
-     3. Start that call's listener again with that `next_index`. Say nothing in the chat.
-   - `ended <next_index>`: the call is over. Offer the summary and action items in one line.
+   It answers `running <pid>` at once when one already runs: fine, leave it. It keeps running and
+   prints only `expired` (call `listen_token` and start it again) or `unreachable` (say once that
+   the line to Vexa paused; try again on the person's next message). Never show the key.
+3. **Set the profile for this call.** A profile is a file of the person's own: what wakes you
+   (being addressed, keywords, people, labels the small model judges), what to ignore, and what you
+   do on a wake. Look at the call (its title, who is in it, the calendar event, what the person
+   said) and pick the closest profile with `listener_configure` (`preset`: default, sales, standup,
+   interview, or one they made), adapting it when the call needs it (`rules`, `triggers`, `labels`,
+   `known`; `profile` saves it under a new name). Say one line:
+   «Listening to <call> · <profile> profile — say "Claude" in the call and I'll answer here».
+   When they ask to change it («also wake me on prices», «stop answering, just take notes»), update
+   it with `listener_configure`: the listener uses it from the next line on.
+
+What reaches you, and what to do:
+- `[Vexa listener] …` with lines from the call: someone addressed you or the profile woke on it.
+  Answer briefly in the chat, reading `get_meeting_transcript` for context if you need it — or, if
+  the profile says notes only, update the meeting's page (below) and say nothing.
+- `[Vexa listener · signal] …`: something may matter. Look only if it does; otherwise let it pass
+  with a single «·».
+- `Vexa UI: the person pressed «…» on <call>.` with a `vexa-ui:v1` block: do what the action asks
+  (the words under the block), for the meeting and page it names, then answer in one line.
+- `[Vexa] The call … ended.`: offer the summary and action items in one line.
+
+The meeting's page, kept current silently while the call runs (`vexa-live:workspace` has the rules):
+`entity_upsert` each person, company, project and decision named, linked with `[[Name]]`; on the
+meeting's page (found with `get_meeting`; created with `workspace_write` and attached with
+`meeting_attach_page` when it has none) rewrite only the decisions, commitments, people and open
+questions regions; the person's block from `<!-- vexa:human-notes:start -->` to
+`<!-- vexa:human-notes:end -->`, the transcript slot and the report stay byte for byte.
 
 Name the call. Once its topic is clear (the first two minutes or so of talk, or the calendar event's
-title if it came from the calendar), give it a short title with `annotate_meeting` (`title`, six
-words at most: the topic, never «Call with …») and pass it to the listener's next start. Rename it
-later only if the topic clearly changed and the person hasn't renamed it themselves.
-   - `expired`: call `listen_token` again and restart from where you were.
-   - `unreachable`: say once that listening paused; try again on the person's next message.
+title), give it a short title with `annotate_meeting` (`title`, six words at most: the topic, never
+«Call with …»). Rename it later only if the topic clearly changed and the person hasn't renamed it.
 
-Never show the key. Don't narrate restarts. One listener per call: don't start a second one while one
-is running.
+Without vexa-link (an older setup), `bin/vexa-listen` follows one call: start it per live call with
+`<api_url> <platform> <native_meeting_id> <since_index> "<title>"`; it exits with `addressed`,
+`noted`, `ended`, `expired` or `unreachable`, and is started again with the `next_index` it printed.

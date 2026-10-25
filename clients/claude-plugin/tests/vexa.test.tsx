@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { leadingJson, localBand, serverOfCall, vexaServerOf } from '../hooks/register'
+import { leadingJson, localBand, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
 
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 
@@ -222,4 +222,16 @@ test("the band reads the script's files: Listening with the titles, the trigger 
   expect(localBand([{ ...woke, wake_ts: now - 20_000 }], now, false).line).toBe('Listening · Pricing sync')
   expect(localBand([{ ...call, state: 'ended' }], now, false)).toEqual({ any: true, isOn: false, hot: false, line: 'Pricing sync · Not listening' })
   expect(localBand([{ ...call, ts: now - 11 * 60_000 }], now, false).any).toBe(false)
+})
+
+
+test('a press in the web panel reaches the chat as one line and a vexa-ui:v1 reference', () => {
+  const text = uiMessage({ id: 'ab', action: 'update_notes', label: 'Update notes', text: 'Update the notes on the page of this call.',
+    meeting_id: '107', params: { platform: 'google_meet', native_id: 'jgm-injt-gkj', page: 'kg/entities/meeting/x.md' }, created_ms: 1792944000000 }, 'testing 23')
+  const [line] = text.split('\n')
+  expect(line).toBe('Vexa UI: the person pressed «Update notes» on testing 23.')
+  const ref = JSON.parse(text.split('```vexa-ui:v1\n')[1]!.split('\n```')[0]!)
+  expect(ref).toEqual({ action: 'update_notes', label: 'Update notes', meeting: { id: 107, platform: 'google_meet', native_id: 'jgm-injt-gkj' },
+    page: 'kg/entities/meeting/x.md', from: 'panel', at: new Date(1792944000000).toISOString() })
+  expect(text).toContain('Update the notes on the page of this call.')
 })

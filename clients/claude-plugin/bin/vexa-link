@@ -1,0 +1,86 @@
+#!/bin/sh
+# vexa-link — the one line from the person's Vexa to this Claude, kept open for the whole chat.
+#
+#   VEXA_LISTEN_KEY=<key> sh vexa-link <api_url>
+#
+# The key and the address come from the Vexa tool `listen_token`. Two long reads run side by side and
+# append every event, one JSON object per line, to ~/.vexa/link/events.jsonl, where the Vexa Live
+# plugin's filter reads them and decides what wakes Claude:
+#   GET <api_url>/link/events                 the person's calls: state changes, each new line said
+#   GET <api_url>/agent/claude/requests/next  presses in the web panel (each read is also the
+#                                             «Claude is running» the panel shows)
+# One runs per machine (~/.vexa/link/link.pid). It prints and exits only when it cannot go on:
+#   running <pid>   another vexa-link already carries the events          (exit 0)
+#   expired         the key no longer works: get a new one, start again   (exit 2)
+#   unreachable     Vexa did not answer for a while                       (exit 3)
+set -u
+api=${1:?api_url}
+key=${VEXA_LISTEN_KEY:?VEXA_LISTEN_KEY}
+dir="${HOME:-/tmp}/.vexa/link"
+spool="$dir/events.jsonl"
+mkdir -p "$dir"
+if [ -f "$dir/link.pid" ] && kill -0 "$(cat "$dir/link.pid" 2>/dev/null)" 2>/dev/null; then
+  echo "running $(cat "$dir/link.pid")"; exit 0
+fi
+echo $$ > "$dir/link.pid"
+rm -f "$dir/stop"
+version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$(dirname "$0")/../.claude-plugin/plugin.json" 2>/dev/null | head -n 1)
+
+now_ms() { echo $(($(date +%s) * 1000)); }
+state() { printf '{"state":"%s","ts":%s,"pid":%s,"version":"%s"}\n' "$1" "$(now_ms)" "$$" "$version" > "$dir/state.json"; }
+# The spool never grows past ~1 MB: the plugin notices the shorter file and reads from its start.
+append() {
+  [ -s "$spool" ] && [ "$(wc -c < "$spool")" -gt 1000000 ] && mv "$spool" "$spool.old"
+  printf '%s\n' "$1" >> "$spool"
+}
+stop() { [ -f "$dir/stop" ] || touch "$dir/stop"; }
+
+read_loop() {   # name url-builder
+  fails=0
+  while [ ! -f "$dir/stop" ]; do
+    body=$(curl -sS --max-time 40 -w '\n%{http_code}' -H "X-API-Key: $key" "$($2)" 2>/dev/null)
+    code=$(printf '%s\n' "$body" | tail -n 1)
+    text=$(printf '%s\n' "$body" | sed '$d')
+    case "$code" in
+      200) fails=0; $1 "$text" ;;
+      401|403) echo expired > "$dir/exit"; stop; return ;;
+      *) fails=$((fails + 1)); [ "$fails" -ge 10 ] && { echo unreachable > "$dir/exit"; stop; return; }; sleep 5 ;;
+    esac
+  done
+}
+
+cursor_file="$dir/cursor"
+events_url() { echo "$api/link/events?timeout_sec=25&client_version=$version&cursor=$(cat "$cursor_file" 2>/dev/null)"; }
+on_events() {
+  first=$(printf '%s\n' "$1" | head -n 1)
+  case "$first" in cursor\ *) printf '%s' "${first#cursor }" > "$cursor_file" ;; esac
+  printf '%s\n' "$1" | sed '1d' | while IFS= read -r line; do [ -n "$line" ] && append "$line"; done
+  state running
+}
+requests_url() { echo "$api/agent/claude/requests/next?wait_ms=25000"; }
+on_requests() {
+  # {"requests": [...], ...}: one `ui` event per request, then acked — it is the plugin's now.
+  printf '%s' "$1" | tr -d '\n' | sed 's/^.*"requests": *\[//; s/\] *, *"present_until_ms".*$//; s/\]}$//' \
+    | awk '{ gsub(/\}, *\{"id"/, "}\n{\"id\""); print }' | while IFS= read -r req; do
+      case "$req" in \{\"id\"*)
+        id=$(printf '%s' "$req" | sed 's/^{"id": *"\([0-9a-f]*\)".*/\1/')
+        append "{\"type\":\"ui\",\"request\":$req}"
+        curl -sS --max-time 10 -o /dev/null -X POST -H "X-API-Key: $key" -H 'Content-Type: application/json' \
+          -d '{"outcome":"submitted"}' "$api/agent/claude/requests/$id/ack" 2>/dev/null ;;
+      esac
+    done
+  state running
+}
+
+state running
+read_loop on_events events_url &
+read_loop on_requests requests_url &
+trap 'stop; rm -f "$dir/link.pid"' INT TERM
+wait
+rm -f "$dir/link.pid"
+reason=$(cat "$dir/exit" 2>/dev/null); rm -f "$dir/exit"
+state "${reason:-stopped}"
+case "$reason" in
+  expired) echo expired; exit 2 ;;
+  unreachable) echo unreachable; exit 3 ;;
+esac
