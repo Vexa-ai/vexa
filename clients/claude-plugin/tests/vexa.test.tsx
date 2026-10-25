@@ -330,3 +330,13 @@ test('a chat working with Vexa keeps the wakes over a chat that only typed last'
   expect(pickOwner(used, [], [])).toBe('chatter')
   expect(pickOwner({ a: 1, b: 2 }, [], ['a', 'b'])).toBe('b')
 })
+
+
+test('the band never says listening while a wake waits; Listen here moves the line at once', () => {
+  const base = { connected: true, owner: true, linkActive: true, linkState: 'running', call: 'gqo-mkdv-dzx', listening: true, flash: '', answering: false, preset: 'default' }
+  expect(bandState({ ...base, busy: true })).toMatchObject({ line: "Listening · gqo-mkdv-dzx · busy, I'll answer after this task" })
+  const waiting = bandState({ ...base, busy: true, stage: 'queued', flash: 'Heard: “Клод, что ты слышишь” → answering', heardAt: '21:25' })
+  expect(waiting).toMatchObject({ tone: 'warn', line: "Heard: “Клод, что ты слышишь” 21:25 · waiting — I'll answer after this task" })
+  expect(pickOwner({ coordinator: 300, onboarding: 100 }, ['coordinator'], ['coordinator'], 'onboarding')).toBe('onboarding')
+  expect(pickOwner({ coordinator: 300 }, [], [], 'gone-chat')).toBe('coordinator')
+})

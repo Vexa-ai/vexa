@@ -539,7 +539,9 @@ const PANELS_FRESH_MS = 90_000
 // bot, started listening, opened the panel, or took the line with «Listen here»); else any chat. Among
 // them, the most recently used. A chat that only typed something last never takes a call's wakes
 // from the chat that is working with that call.
-export function pickOwner(used: Record<string, number>, panels: string[], active: string[] = []): string {
+export function pickOwner(used: Record<string, number>, panels: string[], active: string[] = [], pinned = ''): string {
+  // «Listen here» (or Listen) pressed in a chat: that chat, until a press in another chat moves it.
+  if (pinned && pinned in used) return pinned
   const chats = Object.keys(used)
   const withPanel = chats.filter(c => panels.includes(c))
   const working = chats.filter(c => active.includes(c))
@@ -572,7 +574,9 @@ async function ownsLink($: any): Promise<boolean> {
     } catch { /* no line from Vexa yet: no panels known */ }
     let active: string[] = []
     try { active = (await $.fs.list(`${dir}/active`)).filter((x: any) => x.kind === 'file').map((x: any) => String(x.name)) } catch { /* none yet */ }
-    const owner = pickOwner(used, panels, active)
+    let pinned = ''
+    try { pinned = String(await $.fs.read(`${dir}/pinned`)).trim() } catch { pinned = '' }
+    const owner = pickOwner(used, panels, active, pinned)
     if (owner && owner !== ownerCache.owner) { try { await $.fs.write(`${dir}/owner`, owner) } catch { /* the cache only */ } }
     ownerCache = { at: now, owner }
   }
@@ -1409,7 +1413,7 @@ let linkState = ''
 type BandKey = 'connect' | 'open' | 'send' | 'listen' | 'here' | 'stop' | 'reconnect'
 const BAND_LABEL: Record<BandKey, string> = { connect: 'Connect', open: 'Open panel', send: 'Send bot', listen: 'Listen', here: 'Listen here', stop: 'Stop listening', reconnect: 'Reconnect' }
 const BUSY_LABEL: Partial<Record<BandKey, string>> = { connect: 'Connecting…', open: 'Opening…', send: 'Send bot', listen: 'Starting…', here: 'Switching…', reconnect: 'Reconnecting…' }
-export type BandInput = { connected: boolean; owner: boolean; linkActive: boolean; polling?: boolean; hearing?: boolean; linkState: string; call: string; listening: boolean; flash: string; answering: boolean; preset: string }
+export type BandInput = { connected: boolean; owner: boolean; linkActive: boolean; polling?: boolean; hearing?: boolean; busy?: boolean; stage?: string; heardAt?: string; linkState: string; call: string; listening: boolean; flash: string; answering: boolean; preset: string }
 export function bandState(x: BandInput): { tone: 'live' | 'hear' | 'react' | 'warn' | 'off'; line: string; hot: boolean; buttons: BandKey[] } {
   if (!x.connected) return { tone: 'off', line: 'Vexa not connected', hot: false, buttons: ['connect'] }
   if (x.owner && ['expired', 'unreachable'].includes(x.linkState)) return { tone: 'warn', line: 'Line to Vexa paused', hot: false, buttons: ['reconnect'] }
@@ -1419,7 +1423,12 @@ export function bandState(x: BandInput): { tone: 'live' | 'hear' | 'react' | 'wa
   // the plugin's own reads of the call, where Claude Code lets a plugin call Vexa.
   if (x.listening && ((x.owner && x.linkActive) || (!x.linkActive && x.polling))) {
     if (x.answering) return { tone: 'react', line: x.flash || 'Answering', hot: true, buttons: ['open', 'stop'] }
+    // A wake this chat can't take yet (it is in the middle of something): said, never silent.
+    if (x.flash && (x.stage === 'queued' || (x.busy && x.stage === 'woke'))) {
+      return { tone: 'warn', line: `${x.flash.replace(/ → (answering|checking)$/, '')}${x.heardAt ? ` ${x.heardAt}` : ''} · waiting — I'll answer after this task`, hot: true, buttons: ['open', 'stop'] }
+    }
     if (x.flash) return { tone: 'react', line: x.flash, hot: true, buttons: ['open', 'stop'] }
+    if (x.busy) return { tone: x.hearing ? 'hear' : 'live', line: `Listening · ${x.call} · busy, I'll answer after this task`, hot: false, buttons: ['open', 'stop'] }
     return { tone: x.hearing ? 'hear' : 'live', line: `Listening · ${x.call}${x.preset && x.preset !== 'default' ? ` · ${x.preset}` : ''}`, hot: false, buttons: ['open', 'stop'] }
   }
   return { tone: 'warn', line: `Not listening · ${x.call}`, hot: false, buttons: ['listen', 'open'] }
@@ -1444,6 +1453,7 @@ async function heard($: any): Promise<void> {
 // Listen (or Listen here): this chat takes the line and follows the live call it knows of.
 async function listenHere($: any): Promise<void> {
   if (!linkActive) { await submitOnce($, 'Vexa: start listening to my call in this chat — call start_listening.'); return }
+  try { await $.fs.write(`${await linkDir($)}/pinned`, mySession) } catch { /* the usual rule decides */ }
   await markActive($)
   await markUsed($)
   const m = await read($)
@@ -1527,12 +1537,14 @@ export const register: Register = (on) => {
   on('turn.start', async ($, e, next) => {
     busy = true
     if ((await readFlash($)).stage === 'sent') await setFlash($, 'answering')
+    else await updateFlash($, f => ({ ...f }))
     return next(e)
   })
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
     busy = false
     if ((await readFlash($)).stage === 'answering') await setFlash($, 'done')
+    else await updateFlash($, f => ({ ...f }))
     await flush($)
     return r
   })
@@ -1639,7 +1651,8 @@ export const register: Register = (on) => {
       connected: m.connection === 'ready' || linkActive, owner: await ownsLink($), linkActive, linkState, polling: !byScript && m.connection === 'ready',
       call: isLive(m) && m.nativeId ? (m.title || m.nativeId) : '', listening: l.isOn,
       flash: l.isOn && ['woke', 'queued', 'sent', 'answering'].includes(f.stage) ? f.line : '', answering: l.isOn && f.stage === 'answering', preset: l.preset,
-      hearing: now - heardAt < HEARING_MS,
+      hearing: now - heardAt < HEARING_MS, busy, stage: f.stage,
+      heardAt: f.at ? new Date(f.at).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', hour12: false }) : '',
     })
     const act: Record<string, () => Promise<void>> = {
       connect: () => submitOnce($, 'Connect Vexa.'),
