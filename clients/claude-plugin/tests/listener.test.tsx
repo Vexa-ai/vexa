@@ -8,6 +8,7 @@ const BAND = {
   component: 'AbovePrompt',
   props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 80, scroll: { offset: 0, bodyRows: 10 }, view: {} },
 } as const
+const FOOTER = { plugin: 'vexa-live', component: 'SessionMode', props: { modes: [] } } as const
 
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 const seg = (id: string, speaker: string, t: string, completed = true) => ({ segment_id: id, speaker, text: t, completed, absolute_start_time: '2026-10-24T12:00:00Z' })
@@ -26,6 +27,8 @@ function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<s
   on('ui.log', (_: unknown, e: any) => { seen.logs.push(String(e.text ?? e)); return { value: undefined } })
   for (const k of Object.keys(meta)) delete meta[k]
   endedLive.value = false
+  // The engine's own drawing, for a band or footer the plugin passes on.
+  on('ui.render', ($: any, e: any) => { const { Text } = $.ui.resolve(e); return <Text>engine</Text> })
   on('command.register', () => ({ value: { command: 'vexa' } }))
   on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__vexa__${e.name}` } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
@@ -101,12 +104,15 @@ function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<s
 test('a live meeting of theirs is listened to by default, silently; Stop stops it and it stays stopped', async ($, on) => {
   const clock = mock.clock(on)
   const seen = engine(on, () => [seg('1', 'Ann', 'Our budget is 40k')])
-  on('ui.render', ($: any, e: any) => { const { Text } = $.ui.resolve(e); return <Text>engine</Text> })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await clock.advance(31_500)
-  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  // At rest the band is one green dot; Stop lives in the panel and in the listener's own control.
+  const ui = await $.ui.mount({ ...FOOTER, surface: 'desktop' })
+  // At rest Vexa is one green dot in the footer; Stop lives in the panel and in the listener's own control.
   expect((await ui.find({ type: 'Text', text: /^[●◉]$/ }))).toBeTruthy()
+  // …and the band above the prompt draws nothing of Vexa's.
+  const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await band.find({ type: 'Text', text: 'engine' })).toBeTruthy()
+  await band.unmount()
   expect(seen.annotations.at(-1)).toMatchObject({ listener_state: 'listening' })
   expect(seen.prompts).toEqual([])
   await $.tool.call({ tool: 'mcp__vexa-live__listener_configure', action: 'stop' } as any)
@@ -186,10 +192,9 @@ test('web and plugin share the listener through meeting metadata: state, heartbe
 test('listening ends with the meeting: the band goes back to every chat\'s Vexa band', async ($, on) => {
   const clock = mock.clock(on)
   engine(on, () => [])
-  on('ui.render', ($: any, e: any) => { const { Text } = $.ui.resolve(e); return <Text>engine</Text> })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await clock.advance(31_500)
-  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const ui = await $.ui.mount({ ...FOOTER, surface: 'desktop' })
   expect(await ui.find({ type: 'Text', text: /^[●◉]$/ })).toBeTruthy()
   endedLive.value = true
   await clock.advance(31_500)

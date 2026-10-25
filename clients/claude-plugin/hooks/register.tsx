@@ -1537,6 +1537,44 @@ function pulse(ui: any, key: string, tone: boolean | 'live' | 'hear' | 'react' |
   return <Svg key={key} alt={t} width={14} height={14} source={`<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><style>@media (prefers-reduced-motion: reduce){animate,animateTransform{display:none}}</style>${body}</svg>`} />
 }
 
+type BandView =
+  | { kind: 'none' }
+  | { kind: 'rest'; dot: string; now: number; open: () => Promise<void> }
+  | { kind: 'local'; line: string }
+  | { kind: 'line'; b: ReturnType<typeof bandState>; now: number; act: Record<string, () => Promise<void>> }
+
+// What Vexa shows for this chat: nothing (a chat that never worked with Vexa, no call), a resting
+// dot, or one line when something needs the person.
+async function bandView($: any): Promise<BandView> {
+  const now = await $.clock.now()
+  const m = await read($)
+  const open = async () => { if (!(await openInPane($, `${panelOrigin || APP_URL}${panelPath(m)}?surface=claude-panel`))) await submitOnce($, 'Open my Vexa panel.') }
+  const local = await readLocal($)
+  if (local.any) return local.hot ? { kind: 'local', line: local.line } : { kind: 'rest', dot: local.isOn ? '●' : '○', now, open }
+  if (!usedVexaHere && !isLive(m) && !linkActive) return { kind: 'none' }
+  const l = await readListener($)
+  const f = await readFlash($)
+  const b = bandState({
+    connected: m.connection === 'ready' || linkActive, owner: await ownsLink($), linkActive, linkState, polling: !byScript && m.connection === 'ready',
+    call: isLive(m) && m.nativeId ? (m.title || m.nativeId) : '', listening: l.isOn,
+    flash: l.isOn && ['woke', 'queued', 'sent', 'answering'].includes(f.stage) ? f.line : '', answering: l.isOn && f.stage === 'answering', preset: l.preset,
+    hearing: now - heardAt < HEARING_MS, busy, stage: f.stage,
+    heardAt: f.at ? new Date(f.at).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', hour12: false }) : '',
+  })
+  const quiet = !b.hot && b.tone !== 'warn'
+  if (quiet && !b.buttons.some(k => k === 'here' || k === 'reconnect' || k === 'connect')) return { kind: 'rest', dot: restDot(b), now, open }
+  const act: Record<string, () => Promise<void>> = {
+    connect: () => submitOnce($, 'Connect Vexa.'),
+    open,
+    send: async () => { await $.prompt.fill({ text: 'Send Vexa to ', mode: 'replace' }) },
+    listen: () => listenHere($),
+    here: () => listenHere($),
+    stop: () => stopListening($),
+    reconnect: () => submitOnce($, 'Reconnect Vexa Live: call start_listening (or listen_token) and start vexa-link again in this chat.'),
+  }
+  return { kind: 'line', b, now, act }
+}
+
 export const register: Register = (on) => {
   on('session.start', async ($, e, next) => {
     try { pluginVersion = String(JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`))?.version ?? '') } catch { pluginVersion = '' }
@@ -1688,70 +1726,50 @@ export const register: Register = (on) => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
-  // The band above the prompt: ONE row of fixed height. A dot and one line of status cut at the
-  // edge, then two buttons; the line changes text, never size. It offers to listen while a
-  // meeting is live, says «Listening», and shows what woke Claude until the chat answers.
+  // At rest Vexa is a single dot among the mode labels at the right of the prompt footer (grey, or
+  // green while listening): one press opens the panel, where everything else lives. The band above
+  // the prompt stays empty until something needs the person — a request waiting or answered, the
+  // line paused, another chat listening, or Vexa not connected — and then holds one line.
+  on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    const v = await bandView($)
+    if (v.kind !== 'rest') return next(e)
+    const { Box, Text, Button } = $.ui.resolve(e) as any
+    const modes = (e.props as any).modes as readonly string[]
+    return (
+      <Box flexDirection="row" gap={1} alignItems="center">
+        {modes.length ? <Text color="inactive" size="footnote">{modes.join(' & ')}</Text> : null}
+        <Button key="vexa-dot" plain isDisabled={pressing('open', v.now) || undefined} onPress={() => { void press($, 'open', v.open) }}>
+          <Text color={v.dot === '○' ? 'inactive' : LIVE} size="footnote">{v.dot}</Text>
+        </Button>
+      </Box>
+    )
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const local = await readLocal($)
-    if (local.any && !e.props.hasSurvey) {
-      const ui = $.ui.resolve(e) as any
-      const { Box, Text } = ui
+    if (e.props.hasSurvey) return next(e)
+    const v = await bandView($)
+    if (v.kind === 'none' || v.kind === 'rest') return next(e)
+    const ui = $.ui.resolve(e) as any
+    const { Box, Text, Button } = ui
+    if (v.kind === 'local') {
       return (
         <Box flexDirection="row" gap={1} alignItems="center">
-          {pulse(ui, 'band-dot', local.isOn)}
+          {pulse(ui, 'band-dot', true)}
           <Box flexGrow={1} flexShrink={1} minWidth={0}>
-            <Text color={!local.isOn ? 'inactive' : undefined} weight={local.hot ? 'semibold' : undefined} size="footnote" wrap="truncate-end">{local.line}</Text>
+            <Text weight="semibold" size="footnote" wrap="truncate-end">{v.line}</Text>
           </Box>
         </Box>
       )
     }
-    const l = await readListener($)
-    const m = await read($)
-    if (e.props.hasSurvey) return next(e)
-    const ui = $.ui.resolve(e) as any
-    const { Box, Text, Button } = ui
-    const f = await readFlash($)
-    const now = await $.clock.now()
-    const b = bandState({
-      connected: m.connection === 'ready' || linkActive, owner: await ownsLink($), linkActive, linkState, polling: !byScript && m.connection === 'ready',
-      call: isLive(m) && m.nativeId ? (m.title || m.nativeId) : '', listening: l.isOn,
-      flash: l.isOn && ['woke', 'queued', 'sent', 'answering'].includes(f.stage) ? f.line : '', answering: l.isOn && f.stage === 'answering', preset: l.preset,
-      hearing: now - heardAt < HEARING_MS, busy, stage: f.stage,
-      heardAt: f.at ? new Date(f.at).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', hour12: false }) : '',
-    })
-    const act: Record<string, () => Promise<void>> = {
-      connect: () => submitOnce($, 'Connect Vexa.'),
-      open: async () => { if (!(await openInPane($, `${panelOrigin || APP_URL}${panelPath(m)}?surface=claude-panel`))) await submitOnce($, 'Open my Vexa panel.') },
-      send: async () => { await $.prompt.fill({ text: 'Send Vexa to ', mode: 'replace' }) },
-      listen: () => listenHere($),
-      here: () => listenHere($),
-      stop: () => stopListening($),
-      reconnect: () => submitOnce($, 'Reconnect Vexa Live: call start_listening (or listen_token) and start vexa-link again in this chat.'),
-    }
-    // A chat that never worked with Vexa shows nothing until there is a call; otherwise one slim line
-    // — a dot, small text, actions as small links — that stands out only when something waits.
+    const { b, now, act } = v
     const quiet = !b.hot && b.tone !== 'warn'
-    if (!usedVexaHere && !isLive(m) && !linkActive) return next(e)
-    // At rest — no call, or a quiet one — the band is a single Vexa dot (grey, or green while
-    // listening): one press opens the panel, where everything else lives. It grows into a line only
-    // when something needs the person: a request waiting or answered, the line paused, another chat
-    // listening, or Vexa not connected.
-    if (quiet && !b.buttons.some(k => k === 'here' || k === 'reconnect' || k === 'connect')) {
-      return (
-        <Box flexDirection="row" alignItems="center">
-          <Button key="band-dot-open" plain isDisabled={pressing('open', now) || undefined} onPress={() => { void press($, 'open', act.open!) }}>
-            <Text color={b.tone === 'off' ? 'inactive' : LIVE} size="footnote">{restDot(b)}</Text>
-          </Button>
-        </Box>
-      )
-    }
     return (
       <Box flexDirection="row" gap={1} alignItems="center">
         {pulse(ui, 'band-dot', b.tone)}
         <Box flexGrow={1} flexShrink={1} minWidth={0}>
           <Text color={quiet ? 'inactive' : b.tone === 'warn' ? 'warning' : undefined} weight={b.hot ? 'semibold' : undefined} size="footnote" wrap="truncate-end">{b.line}</Text>
         </Box>
-        {b.buttons.map((k, i) => (
+        {b.buttons.map((k: string, i: number) => (
           <Button key={`band-${k}`} plain isDisabled={pressing(k, now) || undefined} onPress={() => { void press($, k, act[k]!) }}>
             <Text color="inactive" size="footnote">{`${i ? '· ' : ''}${pressing(k, now) ? BUSY_LABEL[k] ?? '…' : BAND_LABEL[k]}`}</Text>
           </Button>
