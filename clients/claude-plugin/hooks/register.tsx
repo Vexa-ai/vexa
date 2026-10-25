@@ -402,7 +402,7 @@ async function poll($: any): Promise<void> {
 // line from Vexa. Nothing is added to a message about anything else.
 const MEETING_LINK = /https?:\/\/(?:meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}|[\w.-]*zoom\.us\/(?:j|my|w)\/\S+|teams\.(?:microsoft|live)\.com\/\S*(?:meetup-join|meet)\S*)/i
 const MEETING_WORDS = /\b(?:meetings?|calls?|zoom|google meet|teams|transcripts?|recordings?|minutes|notes from|follow[- ]?ups?|agenda|standup|what did \w+ say|who said)\b|(?:встреч|звон|созвон|транскрипт|запис[ьи] (?:звонка|встречи)|заметк|протокол|фоллоу|повестк|что говорил|кто сказал)/i
-export const MEETING_CONTEXT_LINK = 'Vexa: this message has a meeting link. Your FIRST tool calls, in one round, before any text: request_meeting_bot with the link, and panel_link with next /panel/meeting/<platform>/<native_meeting_id>?surface=claude-panel (then open its url with preview_start if you have it, otherwise give the person the link). In the SAME turn, right after: start the line from Vexa — start_listening (or listen_token) and run its vexa-link command with run_in_background. Answer in the person\'s own language.'
+export const MEETING_CONTEXT_LINK = 'Vexa: this message has a meeting link. Your FIRST tool calls, in one round, BEFORE loading any skill or reading anything else: request_meeting_bot with the link, and panel_link with next /panel/meeting/<platform>/<native_meeting_id>?surface=claude-panel (open its url in your browser pane with preview_start; with no pane, run `open <url>` — `xdg-open` on Linux, `start` on Windows — and never paste the link into the chat). In the SAME turn, right after: start the line from Vexa — start_listening (or listen_token) and run its vexa-link command with run_in_background. Answer in the person\'s own language.'
 export const MEETING_CONTEXT_WORDS = 'Vexa: this message is about meetings. Your FIRST tool call, before anything else: panel_link with next /panel?surface=claude-panel (then open its url with preview_start if you have it, otherwise give the person the link) — the person follows along there. Then answer with Vexa\'s tools (whats_waiting, list_meetings, get_meeting_transcript, search_transcripts, the workspace). A meeting link means request_meeting_bot at once. Answer in the person\'s own language.'
 
 // A message the person sent in this chat: typed (the terminal's composer, or the desktop app, which
@@ -413,9 +413,17 @@ export function fromPerson(kind: string | undefined, text: string, isMeta = fals
   return !/<(?:cross-session-message|task-notification|agent-message|side-sessions-event|ci-monitor-event)\b|^\[Vexa(?: listener| panel| Live self-test)?[\] ·]|^Vexa UI: /.test(text.trimStart())
 }
 
+// A person or a company asked about by name: what the calls and the workspace know comes first.
+const PERSON_ASK = /\b(?:[Ww]ho(?:'s| is| was)|[Ww]hat about|[Tt]ell me about|[Rr]emind me (?:about|who)|[Ww]hat did|[Ww]hat does)\s+[A-ZА-ЯЁ][\w'’.-]+|\b[A-Z][a-z]+(?: [A-Z][a-z]+)? (?:said|mentioned|asked|promised|wants)\b|(?:кто так(?:ой|ая|ие)|что (?:сказал|говорил|обещал)[аи]?|напомни (?:про|о)|что известно (?:про|о))\s+[A-ZА-ЯЁ]/u
+const FOLLOW_UP = /\b(?:follow[- ]?up|recap|thank[- ]you (?:note|email))\b.*\b(?:to|for|with)\s+[A-ZА-ЯЁ]|\b(?:write|draft)\b.*\b(?:email|note|message)\b.*\bto\s+[A-ZА-ЯЁ]|(?:фоллоу-?ап|письмо|напиши)\s.*(?:для|к|Ивану|[А-ЯЁ][а-яё]+у)\b/u
+export const PERSON_CONTEXT = 'Vexa: this message names a person or company. Check Vexa before answering — search_transcripts for the name and the workspace (entity_get / workspace_search) — and answer from what the calls say; only then say what is not known.'
+export const FOLLOW_UP_CONTEXT = 'Vexa: a follow-up. Find the last call with that person (search_transcripts / list_meetings, then get_meeting_transcript) and write the draft right away from what was said there — decisions, asks, next steps — in the chat, ready to send. Don\'t offer a menu first, and never send it yourself.'
+
 export function meetingContext(text: string): string | null {
   if (MEETING_LINK.test(text)) return MEETING_CONTEXT_LINK
+  if (FOLLOW_UP.test(text)) return FOLLOW_UP_CONTEXT
   if (MEETING_WORDS.test(text)) return MEETING_CONTEXT_WORDS
+  if (PERSON_ASK.test(text)) return PERSON_CONTEXT
   return null
 }
 

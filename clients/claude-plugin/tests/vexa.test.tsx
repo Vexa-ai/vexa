@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { bandState, fromPerson, heardLine, pickOwner, runsListener, withChat, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
+import { bandState, fromPerson, heardLine, pickOwner, runsListener, withChat, FOLLOW_UP_CONTEXT, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, PERSON_CONTEXT, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
 
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 
@@ -307,4 +307,17 @@ test('a chat counts as used only by what the person sends, whatever the app call
   expect(fromPerson('sdk', 'Vexa UI: the person pressed «Summarize».')).toBe(false)
   expect(fromPerson('peer', 'hello')).toBe(false)
   expect(fromPerson('composer', 'x', true)).toBe(false)
+})
+
+
+test('a person or company asked about by name, and a follow-up, carry their own line', () => {
+  expect(meetingContext('Who is Leo?')).toBe(PERSON_CONTEXT)
+  expect(meetingContext('quick one — what about Infobip, did they reply?')).toBe(PERSON_CONTEXT)
+  expect(meetingContext('Ana said the launch slips, can you check')).toBe(PERSON_CONTEXT)
+  expect(meetingContext('кто такой Иван Осман?')).toBe(PERSON_CONTEXT)
+  expect(meetingContext('Write a follow-up to Leo')).toBe(FOLLOW_UP_CONTEXT)
+  expect(meetingContext('draft an email to Ana about the pricing')).toBe(FOLLOW_UP_CONTEXT)
+  expect(meetingContext('rename the variable in parser.ts')).toBeNull()
+  expect(MEETING_CONTEXT_LINK).toMatch(/BEFORE loading any skill/)
+  expect(MEETING_CONTEXT_LINK).toMatch(/never paste the link/)
 })
