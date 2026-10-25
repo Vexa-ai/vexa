@@ -11,6 +11,10 @@ open the link in the browser pane with `preview_start`, or give it to the person
 «Sending Vexa to your call — admit it when it knocks.» Everything below comes after the bot is
 requested; don't read the rest first.
 
+**«Open my Vexa panel»** (the band's button sends it): if Claude's browser pane already has the Vexa
+tab, bring it to the front and show the pane (`preview_start` with the panel's address); mint a new
+`panel_link` only when the tab is gone or signed out. Answer with the tool calls alone, no text.
+
 Then, once per chat, start the line from Vexa: call `listen_token` (it answers `key`, `api_url`;
 use only those) and run, with the Bash tool and `run_in_background: true`:
 

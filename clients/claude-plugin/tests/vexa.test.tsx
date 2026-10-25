@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
+import { bandState, runsListener, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
 
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 
@@ -247,4 +247,25 @@ test('a message about meetings carries one line for the model; anything else car
   expect(meetingContext('What did Ana say about pricing on the call?')).toBe(MEETING_CONTEXT_WORDS)
   expect(meetingContext('fix the failing test in parser.ts')).toBeNull()
   expect(meetingContext('рефакторинг модуля оплаты')).toBeNull()
+})
+
+
+test('the band says what is true: six states, each with its next action', () => {
+  const base = { connected: true, owner: true, linkActive: true, linkState: 'running', call: 'Acme pricing', listening: true, flash: '', answering: false, preset: 'default' }
+  expect(bandState({ ...base, connected: false, linkActive: false })).toMatchObject({ line: 'Vexa not connected', buttons: ['connect'] })
+  expect(bandState({ ...base, call: '', listening: false })).toMatchObject({ tone: 'off', line: 'Vexa · no live call', buttons: ['open', 'send'] })
+  expect(bandState(base)).toMatchObject({ tone: 'live', line: 'Listening · Acme pricing', buttons: ['open', 'stop'] })
+  expect(bandState({ ...base, listening: false })).toMatchObject({ tone: 'warn', line: 'Not listening · Acme pricing', buttons: ['listen', 'open'] })
+  expect(bandState({ ...base, owner: false })).toMatchObject({ line: 'Listening in another chat', buttons: ['here'] })
+  expect(bandState({ ...base, linkState: 'expired' })).toMatchObject({ tone: 'warn', line: 'Line to Vexa paused', buttons: ['reconnect'] })
+  expect(bandState({ ...base, linkActive: false, owner: false, polling: true })).toMatchObject({ tone: 'live' })
+  expect(bandState({ ...base, flash: 'what did we' }).line).toBe('what did we')
+})
+
+test('only a command that runs vexa-link claims the line, never one that names it', () => {
+  expect(runsListener('VEXA_LISTEN_KEY=abc sh "/x/plugins/vexa-live/bin/vexa-link" https://claude-rc.dev.vexa.ai')).toBe(true)
+  expect(runsListener('VEXA_LISTEN_KEY=$K sh /p/bin/vexa-listen https://a vexa_call c-1 0 "t"')).toBe(true)
+  expect(runsListener('grep -n vexa-link clients/claude-plugin/bin/README.md')).toBe(false)
+  expect(runsListener('cat ~/.vexa/link/owner; ls bin/vexa-link')).toBe(false)
+  expect(runsListener('git log --oneline -- clients/claude-plugin/bin/vexa-link')).toBe(false)
 })

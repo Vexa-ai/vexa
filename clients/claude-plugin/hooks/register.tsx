@@ -402,8 +402,8 @@ async function poll($: any): Promise<void> {
 // line from Vexa. Nothing is added to a message about anything else.
 const MEETING_LINK = /https?:\/\/(?:meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}|[\w.-]*zoom\.us\/(?:j|my|w)\/\S+|teams\.(?:microsoft|live)\.com\/\S*(?:meetup-join|meet)\S*)/i
 const MEETING_WORDS = /\b(?:meetings?|calls?|zoom|google meet|teams|transcripts?|recordings?|minutes|notes from|follow[- ]?ups?|agenda|standup|what did \w+ say|who said)\b|(?:встреч|звон|созвон|транскрипт|запис[ьи] (?:звонка|встречи)|заметк|протокол|фоллоу|повестк|что говорил|кто сказал)/i
-export const MEETING_CONTEXT_LINK = 'Vexa: this message has a meeting link. Call request_meeting_bot with it now, in your first tool call, and panel_link (next /panel/meeting/<platform>/<native_meeting_id>?surface=claude-panel) in the same round; open the panel with preview_start. Listener setup (vexa-live:listen) comes after.'
-export const MEETING_CONTEXT_WORDS = 'Vexa: this message is about meetings. Open the Vexa panel first (panel_link, next /panel?surface=claude-panel, then preview_start), then answer with Vexa\'s tools (whats_waiting, list_meetings, get_meeting_transcript, search_transcripts, the workspace). A meeting link means request_meeting_bot at once.'
+export const MEETING_CONTEXT_LINK = 'Vexa: this message has a meeting link. Your FIRST tool calls, in one round, before any text: request_meeting_bot with the link, and panel_link with next /panel/meeting/<platform>/<native_meeting_id>?surface=claude-panel (then open its url with preview_start if you have it, otherwise give the person the link). Listener setup (vexa-live:listen) comes after.'
+export const MEETING_CONTEXT_WORDS = 'Vexa: this message is about meetings. Your FIRST tool call, before anything else: panel_link with next /panel?surface=claude-panel (then open its url with preview_start if you have it, otherwise give the person the link) — the person follows along there. Then answer with Vexa\'s tools (whats_waiting, list_meetings, get_meeting_transcript, search_transcripts, the workspace). A meeting link means request_meeting_bot at once.'
 
 export function meetingContext(text: string): string | null {
   if (MEETING_LINK.test(text)) return MEETING_CONTEXT_LINK
@@ -440,6 +440,35 @@ async function claimLink($: any): Promise<void> {
   try { await $.fs.write(`${localHome}/.vexa/link/owner`, mySession) } catch { /* no claim, no speaking */ }
   ownerCache = { at: -Infinity, owner: '' }
 }
+// A Bash command that runs the listener itself — `sh …/bin/vexa-link <url>` or `…/bin/vexa-listen …` —
+// not one that merely names it (a grep, a cat, a test): only that claims the line for this chat.
+export function runsListener(command: string): boolean {
+  return /(?:^|[;&|(]\s*)(?:nohup\s+)?(?:[A-Z_][A-Z0-9_]*=\S+\s+)*(?:nohup\s+)?(?:sh|bash)\s+["']?[^\s"']*\/bin\/vexa-(?:link|listen)["']?\s+["']?(?:https?:|\$)/m.test(command)
+}
+
+// Presses on the band: one at a time. A press holds its button until the turn it started ends or
+// 10 s pass, and the same text is not submitted twice inside that window.
+const PRESS_MS = 10_000
+const pressedAt: Record<string, number> = {}
+let lastSubmitted = { text: '', at: -Infinity }
+async function press($: any, key: string, act: () => Promise<void>): Promise<void> {
+  const now = await $.clock.now()
+  if (now - (pressedAt[key] ?? -Infinity) < PRESS_MS) return
+  pressedAt[key] = now
+  await updateFlash($, f => ({ ...f }))
+  $.clock.after(PRESS_MS + 50, () => { void updateFlash($, f => ({ ...f })) })
+  await act()
+}
+async function submitOnce($: any, text: string): Promise<void> {
+  const now = await $.clock.now()
+  if (lastSubmitted.text === text && now - lastSubmitted.at < PRESS_MS) return
+  lastSubmitted = { text, at: now }
+  void $.prompt.submit({ text })
+}
+function pressing(key: string, now: number): boolean {
+  return now - (pressedAt[key] ?? -Infinity) < PRESS_MS
+}
+
 // Every message the plugin puts into a chat goes through here: nothing from a session that does not own the line.
 async function say($: any, text: string): Promise<boolean> {
   if (!(await ownsLink($))) return false
@@ -527,6 +556,7 @@ async function syncLink($: any): Promise<void> {
     if (!localHome || !(await $.fs.exists(`${dir}/state.json`))) { linkActive = false; return }
     const st = JSON.parse(await $.fs.read(`${dir}/state.json`))
     linkActive = st.state === 'running' && (await $.clock.now()) - Number(st.ts ?? 0) < 90_000
+    linkState = String(st.state ?? '')
     if (linkActive) byScript = true
     if (!(await ownsLink($))) { linkOffset = -1; return }
     const spool = `${dir}/events.jsonl`
@@ -1064,12 +1094,17 @@ function startRequests($: any): void {
     try {
       const m = await read($)
       if (m.connection !== 'ready' || !m.offers.requests) { requestsRunning = false; return }
-      const r = await call($, 'claude_requests_next', { wait_ms: 8000 })
-      for (const q of r.requests ?? []) {
-        const text = String(q.text ?? '').slice(0, 2000)
-        if (!text) { quiet(call($, 'claude_requests_ack', { id: q.id, outcome: 'dropped' })); continue }
-        await say($, `[Vexa panel] ${text}`)
-        quiet(call($, 'claude_requests_ack', { id: q.id, outcome: 'submitted' }))
+      // A press is taken off the queue by whoever reads it: only the chat that owns the line may,
+      // and only while vexa-link (which carries the presses itself) is not running.
+      if (linkActive || !(await ownsLink($))) pause = 5000
+      else {
+        const r = await call($, 'claude_requests_next', { wait_ms: 8000 })
+        for (const q of r.requests ?? []) {
+          const text = String(q.text ?? '').slice(0, 2000)
+          if (!text) { quiet(call($, 'claude_requests_ack', { id: q.id, outcome: 'dropped' })); continue }
+          await say($, `[Vexa panel] ${text}`)
+          quiet(call($, 'claude_requests_ack', { id: q.id, outcome: 'submitted' }))
+        }
       }
     } catch { pause = 10_000 }
     $.clock.after(pause || 250, () => quiet(loop()))
@@ -1184,12 +1219,45 @@ function panelPath(m: Meeting): string {
 }
 
 const LIVE = 'success'
+const APP_URL = 'https://claude-rc-app.dev.vexa.ai'
+let linkState = ''
 
-function pulse(ui: any, key: string, isOn: boolean): any {
+// THE BAND: this chat's Vexa status and its next action, always from what is true now — the
+// connector, whether this chat owns the line from Vexa, the line's own state, the live call.
+type BandKey = 'connect' | 'open' | 'send' | 'listen' | 'here' | 'stop' | 'reconnect'
+const BAND_LABEL: Record<BandKey, string> = { connect: 'Connect', open: 'Open panel', send: 'Send bot', listen: 'Listen', here: 'Listen here', stop: 'Stop listening', reconnect: 'Reconnect' }
+const BUSY_LABEL: Partial<Record<BandKey, string>> = { connect: 'Connecting…', open: 'Opening…', send: 'Send bot', listen: 'Starting…', here: 'Switching…', reconnect: 'Reconnecting…' }
+export type BandInput = { connected: boolean; owner: boolean; linkActive: boolean; polling?: boolean; linkState: string; call: string; listening: boolean; flash: string; answering: boolean; preset: string }
+export function bandState(x: BandInput): { tone: 'live' | 'warn' | 'off'; line: string; hot: boolean; buttons: BandKey[] } {
+  if (!x.connected) return { tone: 'off', line: 'Vexa not connected', hot: false, buttons: ['connect'] }
+  if (x.owner && ['expired', 'unreachable'].includes(x.linkState)) return { tone: 'warn', line: 'Line to Vexa paused', hot: false, buttons: ['reconnect'] }
+  if (x.linkActive && !x.owner) return { tone: 'off', line: 'Listening in another chat', hot: false, buttons: ['here'] }
+  if (!x.call) return { tone: 'off', line: 'Vexa · no live call', hot: false, buttons: ['open', 'send'] }
+  // Listening is real either through the line this chat owns, or (no vexa-link anywhere) through
+  // the plugin's own reads of the call, where Claude Code lets a plugin call Vexa.
+  if (x.listening && ((x.owner && x.linkActive) || (!x.linkActive && x.polling))) {
+    if (x.answering) return { tone: 'live', line: 'Answering', hot: true, buttons: ['open', 'stop'] }
+    if (x.flash) return { tone: 'live', line: x.flash, hot: true, buttons: ['open', 'stop'] }
+    return { tone: 'live', line: `Listening · ${x.call}${x.preset && x.preset !== 'default' ? ` · ${x.preset}` : ''}`, hot: false, buttons: ['open', 'stop'] }
+  }
+  return { tone: 'warn', line: `Not listening · ${x.call}`, hot: false, buttons: ['listen', 'open'] }
+}
+
+// Listen (or Listen here): this chat takes the line and follows the live call it knows of.
+async function listenHere($: any): Promise<void> {
+  if (!linkActive) { await submitOnce($, 'Vexa: start listening to my call in this chat — call start_listening.'); return }
+  await claimLink($)
+  const m = await read($)
+  await updateListener($, x => ({ ...x, isOn: true, offer: null, declined: x.declined.filter(d => d !== roomKey(m)) }))
+}
+
+function pulse(ui: any, key: string, tone: boolean | 'live' | 'warn' | 'off'): any {
   const { Svg, Text } = ui
-  if (!Svg) return <Text key={key} color={isOn ? LIVE : 'inactive'}>●</Text>
-  const anim = isOn ? '<animate attributeName="r" values="3;5;3" dur="1.4s" repeatCount="indefinite"/><animate attributeName="opacity" values="1;0.45;1" dur="1.4s" repeatCount="indefinite"/>' : ''
-  return <Svg key={key} alt={isOn ? 'live' : 'off'} width={14} height={14} isInteractive={isOn ? true : undefined} source={`<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="4" fill="${isOn ? '#2f9e72' : '#9AA0A6'}">${anim}</circle></svg>`} />
+  const t = tone === true ? 'live' : tone === false ? 'off' : tone
+  const fill = t === 'live' ? '#2f9e72' : t === 'warn' ? '#D9A23A' : '#9AA0A6'
+  if (!Svg) return <Text key={key} color={t === 'live' ? LIVE : t === 'warn' ? 'warning' : 'inactive'}>●</Text>
+  const anim = t === 'live' ? '<animate attributeName="r" values="3;5;3" dur="1.4s" repeatCount="indefinite"/><animate attributeName="opacity" values="1;0.45;1" dur="1.4s" repeatCount="indefinite"/>' : ''
+  return <Svg key={key} alt={t} width={14} height={14} isInteractive={t === 'live' ? true : undefined} source={`<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="4" fill="${fill}">${anim}</circle></svg>`} />
 }
 
 export const register: Register = (on) => {
@@ -1270,7 +1338,7 @@ export const register: Register = (on) => {
   on('tool.call', async ($, e, next) => {
     const ran = await next(e)
     if (!ran.deny && !ran.isError) await learnServer($, e.tool).catch(() => {})
-    if (e.tool === 'Bash' && /vexa-listen|vexa-link/.test(String((e as { command?: unknown }).command ?? ''))) {
+    if (e.tool === 'Bash' && runsListener(String((e as { command?: unknown }).command ?? ''))) {
       byScript = true
       if (!ran.deny) await claimLink($)
     }
@@ -1342,43 +1410,34 @@ export const register: Register = (on) => {
     const l = await readListener($)
     const m = await read($)
     if (e.props.hasSurvey) return next(e)
-    if (!l.isOn && !l.offer) {
-      // Every chat shows Vexa: the call it knows of, and the two things a person reaches for.
-      const ui = $.ui.resolve(e) as any
-      const { Box, Text, Button } = ui
-      const live = isLive(m) && m.nativeId ? (m.title || m.nativeId) : 'no live call'
-      return (
-        <Box flexDirection="row" gap={1} alignItems="center">
-          {pulse(ui, 'band-dot', false)}
-          <Box flexGrow={1} flexShrink={1} minWidth={0}>
-            <Text color="inactive" size="footnote" wrap="truncate-end">{`Vexa · ${live}`}</Text>
-          </Box>
-          <Button key="open-panel" label="Open panel" onPress={() => { void $.prompt.submit({ text: 'Open my Vexa panel.' }) }} />
-          <Button key="send-bot" label="Send bot" onPress={() => { void $.prompt.fill({ text: 'Send Vexa to ', mode: 'replace' }) }} />
-        </Box>
-      )
-    }
     const ui = $.ui.resolve(e) as any
     const { Box, Text, Button } = ui
     const f = await readFlash($)
-    const hot = l.isOn && ['woke', 'queued', 'sent', 'answering'].includes(f.stage)
-    // Founder, 24 Oct: four states only — «Listening», the trigger itself (≤3 words), «Answering»,
-    // «Not listening» — in footnote size, with no «Claude» in the text.
-    const line = !l.isOn ? `${l.offer?.title ?? (m.title || m.nativeId)} · Not listening`
-      : f.stage === 'answering' ? 'Answering'
-        : hot ? (f.line || 'Listening')
-          : `Listening · ${l.preset} · ${m.title || m.nativeId}`
+    const now = await $.clock.now()
+    const b = bandState({
+      connected: m.connection === 'ready' || linkActive, owner: await ownsLink($), linkActive, linkState, polling: !byScript && m.connection === 'ready',
+      call: isLive(m) && m.nativeId ? (m.title || m.nativeId) : '', listening: l.isOn,
+      flash: l.isOn && ['woke', 'queued', 'sent'].includes(f.stage) ? f.line : '', answering: l.isOn && f.stage === 'answering', preset: l.preset,
+    })
+    const act: Record<string, () => Promise<void>> = {
+      connect: () => submitOnce($, 'Connect Vexa.'),
+      open: async () => { if (!(await openInPane($, `${panelOrigin || APP_URL}${panelPath(m)}?surface=claude-panel`))) await submitOnce($, 'Open my Vexa panel.') },
+      send: async () => { await $.prompt.fill({ text: 'Send Vexa to ', mode: 'replace' }) },
+      listen: () => listenHere($),
+      here: () => listenHere($),
+      stop: () => stopListening($),
+      reconnect: () => submitOnce($, 'Reconnect Vexa Live: call start_listening (or listen_token) and start vexa-link again in this chat.'),
+    }
     return (
       <Box flexDirection="row" gap={1} alignItems="center">
-        {pulse(ui, 'band-dot', l.isOn)}
+        {pulse(ui, 'band-dot', b.tone)}
         <Box flexGrow={1} flexShrink={1} minWidth={0}>
-          <Text color={!l.isOn ? 'inactive' : undefined} weight={hot ? 'semibold' : undefined} size="footnote" wrap="truncate-end">{line}</Text>
+          <Text color={b.tone === 'off' ? 'inactive' : b.tone === 'warn' ? 'warning' : undefined} weight={b.hot ? 'semibold' : undefined} size="footnote" wrap="truncate-end">{b.line}</Text>
         </Box>
-        {l.isOn ? <Button key="missed" label="What did I miss?" onPress={() => whatDidIMiss($)} /> : null}
-        {l.isOn
-          ? <Button key="listen-stop" label="Stop" onPress={() => stopListening($)} />
-          : <Button key="listen" label="Listen" hotkey="l" variant="primary" onPress={() => listen($)} />}
-        {!l.isOn ? <Button key="decline" plain onPress={() => decline($)}><Text color="inactive">No</Text></Button> : null}
+        {b.buttons.map(k => (
+          <Button key={`band-${k}`} label={pressing(k, now) ? BUSY_LABEL[k] ?? '…' : BAND_LABEL[k]} isDisabled={pressing(k, now) || undefined}
+            onPress={() => { void press($, k, act[k]!) }} />
+        ))}
       </Box>
     )
   })
