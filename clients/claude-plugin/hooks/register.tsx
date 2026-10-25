@@ -282,12 +282,27 @@ async function heartbeat($: any, event?: 'wake'): Promise<void> {
 }
 
 async function call($: any, tool: string, args: Record<string, unknown>): Promise<any> {
+  // With the person's paired key, over this plugin's own HTTP; with vexa-link carrying the call and
+  // no key, not at all — a plugin's own MCP call is refused in the desktop app's auto mode.
+  if (vexaKey) {
+    const p = rpcPayload(await mcpRpc($, 'tools/call', { name: tool, arguments: args }))
+    if (p.__error) throw new Error(String(p.__error))
+    return p
+  }
+  if (byScript) throw new Error('Vexa is reached through vexa-link here; the plugin makes no MCP calls of its own.')
   if (!server) await connect($)
   if (!server) throw new Error('Vexa is not connected yet.')
   const r = await $.mcp.call(server, tool, args)
   const p = payload(r)
   if (r.isError) throw new Error(typeof p.raw === 'string' ? p.raw : JSON.stringify(p).slice(0, 200))
   return p
+}
+
+// A tools/call result as `call` answers it: the JSON its text carries, or the text itself.
+function rpcPayload(result: any): any {
+  const text = resultText(result)
+  if (result?.isError) return { __error: text.slice(0, 200) }
+  try { return JSON.parse(text) } catch { return { raw: text } }
 }
 
 function isLive(m: Meeting): boolean {
@@ -1068,6 +1083,7 @@ async function flush($: any): Promise<void> {
     return
   }
   let verdict = { yes: false, line: '' }
+  let triageAnswer = ''
   try {
     const l = await readListener($)
     const r = await complete($, 'triage', {
@@ -1075,9 +1091,13 @@ async function flush($: any): Promise<void> {
       system: [{ text: TRIAGE_SYSTEM, cache: true }, { text: `Listen rules: ${rulesText(l.brief)}`, cache: true }],
       prompt: `Trigger: ${reasons}\nRecent lines:\n${lines.slice(-8).join('\n')}`,
     })
-    if (r.isAnswered) verdict = parseTriage(r.text)
-  } catch { verdict = { yes: false, line: '' } }
+    triageAnswer = r.isAnswered ? String(r.text).trim().slice(0, 80) : ''
+    // Only an explicit NO drops a wake; no answer, or one the parser can't read, lets it through.
+    verdict = r.isAnswered && /^\s*no\b/i.test(String(r.text)) ? { yes: false, line: '' }
+      : r.isAnswered ? parseTriage(r.text).yes ? parseTriage(r.text) : { yes: true, line: reasons } : { yes: true, line: reasons }
+  } catch { verdict = { yes: true, line: reasons } }
   if (!verdict.yes) {
+    await logLink($, 'triage', `${reasons}: ${lines.slice(-1)[0] ?? ''}`, `dropped (${triageAnswer || 'no answer'})`)
     busy = false
     await setFlash($, 'done')
     return
@@ -1422,13 +1442,13 @@ export function bandState(x: BandInput): { tone: 'live' | 'hear' | 'react' | 'wa
   // Listening is real either through the line this chat owns, or (no vexa-link anywhere) through
   // the plugin's own reads of the call, where Claude Code lets a plugin call Vexa.
   if (x.listening && ((x.owner && x.linkActive) || (!x.linkActive && x.polling))) {
-    if (x.answering) return { tone: 'react', line: x.flash || 'Answering', hot: true, buttons: ['open', 'stop'] }
-    // A wake this chat can't take yet (it is in the middle of something): said, never silent.
+    const asked = (x.flash || '').replace(/ → (answering|checking)$/, '')
+    if (x.answering) return { tone: 'react', line: asked ? asked.replace(/^(Heard|Caught): /, 'Answering: ') : 'Answering', hot: true, buttons: ['open', 'stop'] }
+    // A request that came while this chat is in the middle of something: shown, with that it waits.
     if (x.flash && (x.stage === 'queued' || (x.busy && x.stage === 'woke'))) {
-      return { tone: 'warn', line: `${x.flash.replace(/ → (answering|checking)$/, '')}${x.heardAt ? ` ${x.heardAt}` : ''} · waiting — I'll answer after this task`, hot: true, buttons: ['open', 'stop'] }
+      return { tone: 'warn', line: `${asked}${x.heardAt ? ` ${x.heardAt}` : ''} · waiting`, hot: true, buttons: ['open', 'stop'] }
     }
     if (x.flash) return { tone: 'react', line: x.flash, hot: true, buttons: ['open', 'stop'] }
-    if (x.busy) return { tone: x.hearing ? 'hear' : 'live', line: `Listening · ${x.call} · busy, I'll answer after this task`, hot: false, buttons: ['open', 'stop'] }
     return { tone: x.hearing ? 'hear' : 'live', line: `Listening · ${x.call}${x.preset && x.preset !== 'default' ? ` · ${x.preset}` : ''}`, hot: false, buttons: ['open', 'stop'] }
   }
   return { tone: 'warn', line: `Not listening · ${x.call}`, hot: false, buttons: ['listen', 'open'] }

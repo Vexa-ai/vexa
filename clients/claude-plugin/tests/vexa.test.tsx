@@ -279,7 +279,7 @@ test('the band shows the listener at work: a pulse while lines arrive, what it c
   expect(bandState(base).tone).toBe('live')
   const caught = heardLine('Клод, ты меня слышишь?', 'Клод', true)
   expect(caught).toBe('Heard: “Клод, ты меня слышишь?” → answering')
-  expect(bandState({ ...base, flash: caught, answering: true })).toMatchObject({ tone: 'react', line: caught })
+  expect(bandState({ ...base, flash: caught, answering: true })).toMatchObject({ tone: 'react', line: 'Answering: “Клод, ты меня слышишь?”' })
   expect(heardLine('a very long line that keeps going well past what the band can hold in one row', 'x', false)).toMatch(/^Caught: .{47}… → checking$/)
 })
 
@@ -334,9 +334,10 @@ test('a chat working with Vexa keeps the wakes over a chat that only typed last'
 
 test('the band never says listening while a wake waits; Listen here moves the line at once', () => {
   const base = { connected: true, owner: true, linkActive: true, linkState: 'running', call: 'gqo-mkdv-dzx', listening: true, flash: '', answering: false, preset: 'default' }
-  expect(bandState({ ...base, busy: true })).toMatchObject({ line: "Listening · gqo-mkdv-dzx · busy, I'll answer after this task" })
+  expect(bandState({ ...base, busy: true })).toMatchObject({ line: 'Listening · gqo-mkdv-dzx' })
   const waiting = bandState({ ...base, busy: true, stage: 'queued', flash: 'Heard: “Клод, что ты слышишь” → answering', heardAt: '21:25' })
-  expect(waiting).toMatchObject({ tone: 'warn', line: "Heard: “Клод, что ты слышишь” 21:25 · waiting — I'll answer after this task" })
+  expect(waiting).toMatchObject({ tone: 'warn', line: 'Heard: “Клод, что ты слышишь” 21:25 · waiting' })
+  expect(bandState({ ...base, answering: true, stage: 'answering', flash: 'Heard: “Клод, что ты слышишь” → answering' }).line).toBe('Answering: “Клод, что ты слышишь”')
   expect(pickOwner({ coordinator: 300, onboarding: 100 }, ['coordinator'], ['coordinator'], 'onboarding')).toBe('onboarding')
   expect(pickOwner({ coordinator: 300 }, [], [], 'gone-chat')).toBe('coordinator')
 })
