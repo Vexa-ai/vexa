@@ -492,7 +492,7 @@ export function uiMessage(req: any, title: string): string {
     ? { id: req.meeting_id ? Number(req.meeting_id) || req.meeting_id : undefined, platform: req.params.platform, native_id: req.params.native_id }
     : req?.meeting_id ? { id: Number(req.meeting_id) || req.meeting_id } : undefined
   const ref = { action: req?.action, label: req?.label, ...(meeting ? { meeting } : {}), ...(req?.params?.page ? { page: req.params.page } : {}), from: 'panel', at: new Date(Number(req?.created_ms ?? 0) || Date.now()).toISOString() }
-  return `Vexa UI: the person pressed «${req?.label ?? req?.action}»${title ? ` on ${title}` : ''}.\n\n\`\`\`vexa-ui:v1\n${JSON.stringify(ref)}\n\`\`\`\n\n${req?.text ?? ''} Answer in the chat in one line.`
+  return `Vexa UI: the person pressed «${req?.label ?? req?.action}»${title ? ` on ${title}` : ''}.\n\n\`\`\`vexa-ui:v1\n${JSON.stringify(ref)}\n\`\`\`\n\n${req?.text ?? ''} Do the work first (the page, the tools it names); the chat gets one line at the end.`
 }
 
 async function follow($: any, mt: NonNullable<LinkEvent['meeting']>, status: string): Promise<void> {
@@ -534,7 +534,7 @@ async function onLinkEvent($: any, ev: LinkEvent): Promise<void> {
       if (ours) { await update($, x => ({ ...x, status })); await updateListener($, x => ({ ...x, isOn: false })) }
       await logLink($, 'system', `${name} ${status}`, ev.previous ? 'wake' : 'log')
       if (ev.previous && status === 'completed') {
-        await say($, `[Vexa] The call «${name}» (${mt.platform} ${mt.native_id}) ended. Offer the summary and action items in one line.`)
+        await say($, `[Vexa] The call «${name}» (${mt.platform} ${mt.native_id}) ended. Write its summary into the call's page now — find it with get_meeting (or create it with entity_upsert kind=meeting and meeting_attach_page), fill decided, committed and open questions with section_update, never the person's notes — then say in one line that the page is ready.`)
       }
       return
     }

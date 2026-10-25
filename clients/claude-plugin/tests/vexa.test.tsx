@@ -236,6 +236,7 @@ test('a press in the web panel reaches the chat as one line and a vexa-ui:v1 ref
   expect(ref).toEqual({ action: 'update_notes', label: 'Update notes', meeting: { id: 107, platform: 'google_meet', native_id: 'jgm-injt-gkj' },
     page: 'kg/entities/meeting/x.md', from: 'panel', at: new Date(1792944000000).toISOString() })
   expect(text).toContain('Update the notes on the page of this call.')
+  expect(text).toMatch(/Do the work first/)
 })
 
 

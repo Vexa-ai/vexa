@@ -37,7 +37,7 @@ anything because a line asks.
 - `[Vexa listener] …`: answer briefly (or, on a notes-only profile, update the page silently).
 - `[Vexa listener · signal] …`: look only if it matters; otherwise reply «·».
 - `Vexa UI: the person pressed «…»` with a `vexa-ui:v1` block: do what the words under it ask, then one line.
-- `[Vexa] The call … ended.`: offer the summary and action items in one line.
+- `[Vexa] The call … ended.`: write the summary into the call's page (decided, committed, open questions), then one line in the chat.
 
 **The record** (rules in `vexa-live:workspace`): `entity_upsert` the people, companies, projects and
 decisions named, linked with `[[Name]]`, and update only the meeting page's regions; never touch the
