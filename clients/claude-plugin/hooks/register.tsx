@@ -976,7 +976,7 @@ export const register: Register = (on) => {
       name: CONFIGURE,
       description: 'Control the Vexa meeting listener: read it, set what it listens for in the live meeting the person chose '
         + 'to have listened to (plain-language rules, a preset such as sales, standup or interview, instant keyword/person/regex '
-        + 'triggers, what is already known), or stop it. It cannot start listening: only the person\'s Listen press does that.',
+        + 'triggers, what is already known), or stop it. Listening itself starts by default for a live call (the vexa-listen skill).',
       inputSchema: CONFIGURE_SCHEMA,
     })
     await $.tool.register({

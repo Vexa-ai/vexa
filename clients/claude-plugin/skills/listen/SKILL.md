@@ -1,6 +1,6 @@
 ---
 name: vexa-listen
-description: Listen to the person's live call in the background with Vexa Live and answer when someone in the call says "Claude". Use when a Vexa meeting of theirs is live (whats_waiting says a meeting is happening, or a bot they sent just went active), unless they said not to listen.
+description: Listen to the person's live call in the background with Vexa Live and answer when someone in the call says "Claude"; open their Vexa call panel. Use when a Vexa meeting of theirs is live (whats_waiting says a meeting is happening, or a bot they sent just went active), unless they said not to listen, and when they say «Open my Vexa panel».
 ---
 
 # Listening to a live call (Vexa Live)
@@ -18,7 +18,12 @@ running until the call ends or they say stop.
    ```
 
    `platform` and `native_meeting_id` are the meeting's; `since_index` is 0 the first time.
-3. When it finishes, read its output:
+3. Open the call panel beside the chat: call Vexa's `panel_link` with
+   `next` = `/panel/meeting/<platform>/<native_meeting_id>?surface=claude-panel` and open the link it
+   returns in Claude's browser pane (`preview_start`) if this app has one; otherwise give the person
+   the link. The link signs the panel in, so do this every time listening starts. «Open my Vexa panel»
+   means the same: `panel_link` (next `/panel?surface=claude-panel` without a call), then open it.
+4. When it finishes, read its output:
    - `addressed <next_index>` and lines: someone said "Claude" to you. Answer them in the chat, briefly,
      reading `get_meeting_transcript` for context if you need it. Then start it again with that
      `next_index`.
