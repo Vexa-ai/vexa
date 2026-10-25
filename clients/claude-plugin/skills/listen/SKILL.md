@@ -7,9 +7,10 @@ description: A meeting link (Google Meet, Zoom, Teams) in the message → send t
 
 **A meeting link in the message: call `request_meeting_bot` with it now, in your first tool call,
 and `panel_link` in the same round** (`next` = `/panel/meeting/<platform>/<native_meeting_id>?surface=claude-panel`;
-open the link in the browser pane with `preview_start`, or give it to the person). Say one line:
-«Sending Vexa to your call — admit it when it knocks.» Everything below comes after the bot is
-requested; don't read the rest first.
+open the link in the browser pane with `preview_start`, or give it to the person). **In the same turn, right
+after:** start the line from Vexa — `start_listening` (or `listen_token`) and run the vexa-link command
+below with `run_in_background`. Say one line, in the person's own language: «Sending Vexa to your
+call — admit it when it knocks.» Read the rest after that.
 
 **«Open my Vexa panel»** (the band's button sends it): if Claude's browser pane already has the Vexa
 tab, bring it to the front and show the pane (`preview_start` with the panel's address); mint a new
