@@ -196,7 +196,7 @@ async function connect($: any): Promise<void> {
     webPanel: has.has(`${prefix}panel_link`) && has.has(BROWSER_TOOL),
   }
   await update($, x => ({ ...x, connection: 'ready', offers, error: '' }))
-  if (was !== 'ready') { quiet(heartbeat($)); if (offers.requests) startRequests($) }
+  if (was !== 'ready') { quiet(heartbeat($)); quiet(probeHttp($)); if (offers.requests) startRequests($) }
 }
 
 // A Vexa tool the model just called names the server: `mcp__<server>__whats_waiting` and the like.
@@ -210,6 +210,16 @@ async function learnServer($: any, tool: string): Promise<void> {
   if (!s || servers.has(s)) return
   servers.add(s)
   if (!server) { seen = s; await connect($) }
+}
+
+// Whether this plugin's own HTTP reaches Vexa from here (`$.http.fetch` is not a tool call, so no
+// permission check stands in front of it): the road a listen token streams over.
+let httpProbe = ''
+async function probeHttp($: any): Promise<void> {
+  try {
+    const r = await $.http.fetch('https://claude-rc.dev.vexa.ai/health')
+    httpProbe = `${r.status} ${String(r.text ?? '').slice(0, 60)}`
+  } catch (err) { httpProbe = `error: ${message(err)}` }
 }
 
 // The server knows this plugin is here (the presence its «Vexa Live» offer reads), and when it
@@ -810,7 +820,7 @@ async function configure($: any, input: any): Promise<unknown> {
     return { listening: l.isOn, meeting, preset, brief }
   }
   const v = await read($)
-  return { vexa: { server: server || null, connection: v.connection, error: v.error || null }, listening: l.isOn, meeting, offer: l.offer, preset: l.preset, presets: l.app.presets, app: l.app.name, appFolder: appDir, brief: l.brief, wakes: l.wakes, lastVerdict: l.lastVerdict, spend: await spendReport($) }
+  return { vexa: { server: server || null, connection: v.connection, error: v.error || null, http: httpProbe || null }, listening: l.isOn, meeting, offer: l.offer, preset: l.preset, presets: l.app.presets, app: l.app.name, appFolder: appDir, brief: l.brief, wakes: l.wakes, lastVerdict: l.lastVerdict, spend: await spendReport($) }
 }
 
 // Web → chat: a panel button in the web («Summarize this call», «Prepare me…») queues a request
