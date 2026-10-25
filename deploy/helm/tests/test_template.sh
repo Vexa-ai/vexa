@@ -1928,9 +1928,7 @@ compat_def="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml")"
 gw_c="$(doc Deployment vexa-vexa-gateway "$compat_def")"; ma_c="$(doc Deployment vexa-vexa-meeting-api "$compat_def")"
 tb "no service is handed a removed compatibility key" \
   '! grep -qE "VEXA_WS_SCOPE_MODE|VEXA_WEBHOOK_STORED_URL_POLICY|VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S" <<< "$compat_def"'
-compat_set="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set compat.wsScopeMode=legacy 2>&1)"
-tb "a values file that still sets compat.* is refused with the page to read" \
-  '! grep -q "^kind: Deployment" <<< "$compat_set" && grep -q "changes-0-13-4-auth" <<< "$compat_set"'
+refuse "a values file that still sets compat.*" "changes-0-13-4-auth" -f "$CHART/values-test.yaml" --set compat.wsScopeMode=legacy
 sx_def="$(doc Deployment vexa-vexa-meeting-api "$compat_def")"
 sx_set="$(doc Deployment vexa-vexa-meeting-api "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set credentialBroker.botSigninExtraHosts='adfs.bank.example\,login.bank.okta.com')")"
 tb "the sign-in browser's extra hosts are empty by default and reach meeting-api when set" \
