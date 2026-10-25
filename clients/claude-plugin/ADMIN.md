@@ -7,17 +7,17 @@ Vexa. The plugin talks to one Vexa, the address you give it, and nothing else of
 
 | Piece | Runs on | What it is |
 |---|---|---|
-| Plugin: band, listener, skills | the person's machine, inside Claude Code | `hooks/register.tsx`, `hooks/listener.ts`, `skills/`; no server process of its own |
+| Plugin: one MCP server entry | the person's machine, inside Claude Code | `.mcp.json`; no code, no server process of its own |
 | Listener's filter model | the person's Claude Code model provider (Anthropic, Bedrock, Vertex, Foundry: whatever Claude Code is set to) | a small-model call per batch of new transcript lines, through Claude Code's own `$.model` |
 | MCP server, sign-in, bots, transcription, storage | **your Vexa** | `<Vexa address>/mcp` and the services behind it |
 
 ## Setting the address
 
-The plugin has no install-time options. Its MCP server is a literal address in `.claude-plugin/plugin.json`
+The plugin has no install-time options. Its MCP server is a literal address in `.mcp.json`
 (`mcpServers.vexa.url`, hosted `https://api.cloud.vexa.ai/mcp`); the Claude desktop app's sign-in compares that exact text with the
 session's server, so it can't hold variables.
 
-- **Your company's address:** ship the plugin from your own marketplace (below) with `mcpServers.vexa.url` set to
+- **Your company's address:** ship the plugin from your own marketplace (below) with `.mcp.json`'s `mcpServers.vexa.url` set to
   `https://vexa.example.com/mcp`. The plugin reads the address from there.
 - **Without a mirror:** declare the server yourself in `managed-mcp.json` (a managed server wins over a plugin server).
 
@@ -52,7 +52,6 @@ DCR (Entra, Okta) needs no client registration for Claude Code. Revoking a perso
 | Claude Code | `<Vexa address>/.well-known/*`, `/oauth/*` | sign-in and token refresh | PKCE code, refresh token |
 | browser | `<Vexa address>` sign-in, your IdP | sign-in only | your SSO session |
 | your authorization server | `claude.ai/oauth/claude-code-client-metadata` | during sign-in, to read Claude Code's client metadata (CIMD) | nothing about the person |
-| Claude Code (listener) | your Claude Code model provider | while the person has pressed **Listen** on a live call | the last transcript lines and the listening rules |
 | browser | a link Vexa returns, e.g. the calendar page | when the person opens it | that page's own traffic, on your Vexa |
 | Claude Code | `github.com/Vexa-ai/vexa` | install and update, unless you mirror the marketplace | nothing about the person |
 
@@ -65,8 +64,7 @@ Foundry it is off by default. If you want usage data, Claude Code's OpenTelemetr
 ## The data
 
 - **On your Vexa:** meetings, recordings, transcripts, chat, calendar connections, workspaces, OAuth grants.
-- **On the person's machine:** OAuth tokens (OS keychain); the plugin's state (Claude Code session state);
-  the app folder `~/.vexa/apps/<name>` (listener presets; editable); a project's `.vexa/app` if they seed one.
+- **On the person's machine:** OAuth tokens (OS keychain).
 - **In the Claude conversation:** whatever transcript or tool result the model reads, under your Claude agreement
   like any other tool output.
 - **For audio to stay with you,** run transcription on your own Vexa (`deploy/transcription`). A

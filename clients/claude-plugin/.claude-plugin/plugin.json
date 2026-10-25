@@ -1,8 +1,8 @@
 {
   "name": "vexa",
   "displayName": "Vexa",
-  "version": "0.2.19-rc",
-  "description": "Send a bot to a Google Meet, Teams or Zoom call and follow the live transcript beside the chat. Nothing to configure: Claude offers to sign you in and gives you the link.",
+  "version": "0.3.0-rc",
+  "description": "Send a bot to a Google Meet, Teams or Zoom call and read its live transcript in Claude. Sign in with your Vexa account; nothing to configure.",
   "author": {
     "name": "Vexa",
     "url": "https://github.com/Vexa-ai"
@@ -20,15 +20,5 @@
     "zoom",
     "meeting-bot",
     "mcp"
-  ],
-  "types": "./types/index.d.ts",
-  "mcpServers": {
-    "vexa": {
-      "type": "http",
-      "url": "https://claude-rc.dev.vexa.ai/mcp",
-      "headers": {
-        "X-API-Key": "${VEXA_API_KEY:-}"
-      }
-    }
-  }
+  ]
 }
