@@ -53,23 +53,6 @@ EDGE_HOPS: Dict[RouteKey, RouteKey] = {
     ("GET", "/bot-accounts/sessions/{session_id}/vnc"): ("GET", "/bot-accounts/sessions/{session_id}"),
 }
 
-#: The ``/ws`` subscribe hop. Under ``VEXA_WS_SCOPE_MODE=strict`` (the default) it takes the
-#: transcript read's scopes, as the gateway does. ``legacy`` is an operator's explicit opt-in to the
-#: 0.12 key contract: the gateway lets any valid key subscribe to the meetings it may read, the hop
-#: reaches this service with a key that may hold only ``bot``, and the same setting read here lets
-#: it through the scope check; ownership is still decided by the handler, row by row. Set both
-#: services to the same value.
-WS_SUBSCRIBE_HOP: RouteKey = ("POST", "/ws/authorize-subscribe")
-WS_SCOPE_MODE_ENV = "VEXA_WS_SCOPE_MODE"
-
-
-def ws_scope_legacy() -> bool:
-    """True only when ``VEXA_WS_SCOPE_MODE`` is exactly ``legacy`` (unset or unknown reads as ``strict``)."""
-    import os
-
-    return (os.environ.get(WS_SCOPE_MODE_ENV) or "strict").strip().lower() == "legacy"
-
-
 #: The answer the edge gives a key without the route's scope (`gateway/app.py`), so a client reads
 #: one refusal whichever side refused it.
 INSUFFICIENT_SCOPE = "Insufficient scope for this endpoint"
@@ -147,8 +130,6 @@ def scope_gate(request: HTTPConnection) -> None:
         raise _refuse()
     held = {s.strip() for s in (request.headers.get("x-user-scopes") or "").split(",") if s.strip()}
     if not held & required:
-        if key == WS_SUBSCRIBE_HOP and ws_scope_legacy():
-            return
         raise _refuse()
 
 

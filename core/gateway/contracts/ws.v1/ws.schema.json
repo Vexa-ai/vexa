@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vexa.ai/contracts/ws.v1",
   "title": "ws.v1 — the public live WebSocket multiplex (/ws), frozen to vexa main",
-  "description": "The /ws endpoint api-gateway serves: api_key auth (x-api-key header or ?api_key=), a subscribe/unsubscribe control protocol, and forwarded live data messages — transcript (the per-speaker confirmed/pending bundle) + transcription_segment from tc:meeting:{id}:mutable, meeting.status from bm:meeting:{id}:status, chat_message from va:meeting:{id}:chat. The gateway forwards the raw redis payload verbatim, so data messages are type-tagged and additive (extra fields allowed). Shapes are the canonical 0.10.6 contract (vexa-0.11 api-gateway + meetings.publish_meeting_status_change).",
+  "description": "The /ws endpoint api-gateway serves: api_key auth (x-api-key header or the vexa.key.<key> subprotocol; a key in the URL is refused), a subscribe/unsubscribe control protocol, and forwarded live data messages — transcript (the per-speaker confirmed/pending bundle) + transcription_segment from tc:meeting:{id}:mutable, meeting.status from bm:meeting:{id}:status, chat_message from va:meeting:{id}:chat. The gateway forwards the raw redis payload verbatim, so data messages are type-tagged and additive (extra fields allowed). Shapes are the canonical 0.10.6 contract (vexa-0.11 api-gateway + meetings.publish_meeting_status_change).",
   "$defs": {
     "MeetingRef": {
       "type": "object",
@@ -222,7 +222,7 @@
     },
     "Error": {
       "type": "object",
-      "description": "server → client: a protocol/auth error. `error` is a fixed code from the vocabulary below (formalized as the enum on the property, so the conformance harness's emitted codes are machine-checked against this contract). Control/auth codes (exercised by the offline /ws conformance harness): missing_api_key, invalid_json, invalid_subscribe_payload, invalid_unsubscribe_payload, unknown_action. Downstream-auth codes — emitted by the deployed gateway's POST /ws/authorize-subscribe path (adapters.AdminApiAuthorizer), so they are PRODUCTION-ONLY and NOT reachable by the synchronous offline harness: authorization_service_error (downstream returned non-200; carries `status` + `detail`), authorization_call_failed (the downstream call raised; carries `details`). Connect-time codes: invalid_api_key (the key resolves to nobody, or is a worker delegation token; close 4401), auth_unavailable (the key could not be resolved now; close 4503), insufficient_scope (the key holds none of the scopes the REST routes for meeting status take — close 4403 — or, on a subscribe, none of the transcript read's; the socket stays open). Live re-authorization: subscription_revoked (an open meeting subscription that no longer passes POST /ws/authorize-subscribe — the owner removed the reader, turned a share off, or a workspace membership ended; carries `details` {platform, native_id}; that meeting's fan-in stops, the socket stays open).",
+      "description": "server → client: a protocol/auth error. `error` is a fixed code from the vocabulary below (formalized as the enum on the property, so the conformance harness's emitted codes are machine-checked against this contract). Control/auth codes (exercised by the offline /ws conformance harness): missing_api_key, invalid_json, invalid_subscribe_payload, invalid_unsubscribe_payload, unknown_action. Downstream-auth codes — emitted by the deployed gateway's POST /ws/authorize-subscribe path (adapters.AdminApiAuthorizer), so they are PRODUCTION-ONLY and NOT reachable by the synchronous offline harness: authorization_service_error (downstream returned non-200; carries `status` + `detail`), authorization_call_failed (the downstream call raised; carries `details`). Connect-time codes: api_key_query_removed (the key is in the URL, ?api_key=; carries changed_in, do_instead and docs; close 4401), invalid_api_key (the key resolves to nobody, or is a worker delegation token; close 4401), auth_unavailable (the key could not be resolved now; close 4503), insufficient_scope (carries changed_in, do_instead and docs; the key holds none of the scopes the REST routes for meeting status take — close 4403 — or, on a subscribe, none of the transcript read's; the socket stays open). Live re-authorization: subscription_revoked (an open meeting subscription that no longer passes POST /ws/authorize-subscribe — the owner removed the reader, turned a share off, or a workspace membership ended; carries `details` {platform, native_id}; that meeting's fan-in stops, the socket stays open).",
       "required": ["type", "error"],
       "properties": {
         "type": { "const": "error" },
@@ -230,6 +230,7 @@
           "type": "string",
           "enum": [
             "missing_api_key",
+            "api_key_query_removed",
             "invalid_json",
             "invalid_subscribe_payload",
             "invalid_unsubscribe_payload",
@@ -244,7 +245,10 @@
         },
         "details": { "anyOf": [{ "type": "string" }, { "type": "array" }, { "type": "object" }] },
         "status": { "type": "integer" },
-        "detail": { "type": "string" }
+        "detail": { "type": "string" },
+        "changed_in": { "type": "string", "description": "the release that changed what this request may do" },
+        "do_instead": { "type": "string", "description": "one line: how to make the call that works now" },
+        "docs": { "type": "string", "format": "uri", "description": "the page that says what changed" }
       }
     }
   }

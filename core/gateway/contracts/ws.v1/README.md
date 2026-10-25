@@ -11,11 +11,13 @@ SDKs, and any client build against.
 - **Connect:** `ws(s)://<host>/ws` with the key in the `x-api-key:<token>` header, **or** — for a
   client that cannot set a header, such as a browser — in the subprotocol list:
   `new WebSocket(url, ["vexa.v1", "vexa.key.<token>"])`; the server answers `vexa.v1`. The key then
-  rides in `Sec-WebSocket-Protocol`, never in the URL. The `?api_key=<token>` query is
-  **deprecated**: still accepted, logged as `ws_query_key_deprecated`, removed in ws.v2. Missing key → `{type:"error", error:"missing_api_key"}` then close `4401`; a key that
+  rides in `Sec-WebSocket-Protocol`, never in the URL. A key in the URL (`?api_key=<token>`) is
+  refused: `{type:"error", error:"api_key_query_removed", changed_in, do_instead, docs}` then close
+  `4401`, whatever else the request carries. Missing key → `{type:"error", error:"missing_api_key"}` then close `4401`; a key that
   resolves to nobody → `invalid_api_key`, close `4401`; the key cannot be resolved now →
   `auth_unavailable`, close `4503`. The socket is held to the REST routes' key scopes: a key that may
-  read no meeting status (`GET /meetings`, `GET /bots/status`) → `insufficient_scope`, close `4403`.
+  read no meeting status (`GET /meetings`, `GET /bots/status`) → `insufficient_scope` (with
+  `changed_in`, `do_instead`, `docs`), close `4403`.
 - **Client → server:** `SubscribeRequest` `{action:"subscribe", meetings:[{platform, native_id}]}`
   (and `UnsubscribeRequest`). A subscription streams the meeting's transcript, so it takes the
   scopes `GET /transcripts/{platform}/{native_meeting_id}` takes (`tx`); otherwise `insufficient_scope`

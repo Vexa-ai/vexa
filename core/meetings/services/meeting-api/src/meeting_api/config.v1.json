@@ -600,39 +600,6 @@
    "targets": []
   },
   {
-   "key": "VEXA_WS_SCOPE_MODE",
-   "class": "defaulted",
-   "default": "strict",
-   "description": "the /ws subscribe hop's key-scope rule, read by the gateway and here. strict (default) = the hop takes the transcript read's scopes (tx). legacy = an explicit opt-in to the 0.12 contract, a residual: POST /ws/authorize-subscribe admits a gateway-signed key whatever its scopes (a bot-only key streams transcripts), and ownership is still checked per meeting. Set the gateway and meeting-api to the same value. A 0.12 compatibility switch, removed in 0.14.0; while it is open every boot prints a warning (compat_switch_open).",
-   "targets": [
-    "compose",
-    "helm",
-    "lite"
-   ]
-  },
-  {
-   "key": "VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S",
-   "class": "defaulted",
-   "default": "0",
-   "description": "upgrade hand-off for meetings a 0.12 bot is still transcribing, a 0.12 compatibility switch (removed in 0.14.0). 0 (the default) is off: an unsigned transcription_segments entry is refused like any other. Above 0, for that many seconds after boot the collector admits UNSIGNED entries (the 0.12 bot shape) of meetings that were in flight and spawned before 0.13 (no data.transcription_language); entries with a signature that does not verify, other meetings, and anything after the window stay refused. The upgrade runbook sets it (14400) for a 0.12 cut-over and unsets it afterwards; while it is above 0 every boot prints a warning (compat_switch_open). Not a number reads as 0.",
-   "targets": [
-    "compose",
-    "helm",
-    "lite"
-   ]
-  },
-  {
-   "key": "VEXA_WEBHOOK_STORED_URL_POLICY",
-   "class": "defaulted",
-   "default": "strict",
-   "description": "which address ranges a stored customer webhook URL may still be delivered to. strict (default) = the outbound-url.v1 guard alone. v012 = an explicit opt-in to the 0.12 delivery rule, a residual: shared (100.64/10, less the 100.100.100.200 metadata address), documentation, benchmarking and protocol-assignment ranges stay reachable for every per-client delivery, as they were on 0.12; loopback, private, link-local/metadata, multicast, reserved and single-label/localhost names stay refused in every form. Saving a URL (admin-api) always uses the outbound-url.v1 guard. A 0.12 compatibility switch, removed in 0.14.0; while it is open every boot prints a warning (compat_switch_open).",
-   "targets": [
-    "compose",
-    "helm",
-    "lite"
-   ]
-  },
-  {
    "key": "SCHEDULER_TICK_INTERVAL",
    "class": "defaulted",
    "default": "1",

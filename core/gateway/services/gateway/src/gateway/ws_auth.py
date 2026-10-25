@@ -9,12 +9,11 @@ log, proxy log or browser history holds it. The edge answers with `vexa.v1` (nev
 own entry). The order a key is taken in:
 
   1. the `x-api-key` header (servers, the terminal's own proxy);
-  2. a `vexa.key.<key>` subprotocol entry (browsers);
-  3. the `?api_key=` query parameter — DEPRECATED. It is still accepted because published clients
-     use it, and each use is logged (`ws_query_key_deprecated`, without the value; log_scrub.py
-     redacts the URL). ws.v2 removes it.
+  2. a `vexa.key.<key>` subprotocol entry (browsers).
 
-A key whose characters cannot form a subprotocol token uses the header.
+A key in the URL (`?api_key=`) is never a credential: the socket is refused with
+`changed.QUERY_KEY_REFUSAL` and close 4401, whatever else it carries (log_scrub.py keeps the value
+out of the access log). A key whose characters cannot form a subprotocol token uses the header.
 """
 from __future__ import annotations
 
@@ -30,7 +29,7 @@ class WsCredential(NamedTuple):
     key: Optional[str]
     #: the subprotocol the edge accepts with (`vexa.v1` when the client offered it), or None
     subprotocol: Optional[str]
-    #: "header" | "subprotocol" | "query" | None
+    #: "header" | "subprotocol" | "query" (a key in the URL: refused, `key` is None) | None
     source: Optional[str]
 
 
@@ -59,13 +58,12 @@ def requested_subprotocols(ws) -> list:
 def ws_credential(ws) -> WsCredential:
     protocols = requested_subprotocols(ws)
     answer = SUBPROTOCOL if SUBPROTOCOL in protocols else None
+    if "api_key" in ws.query_params:
+        return WsCredential(None, answer, "query")
     header = ws.headers.get("x-api-key")
     if header:
         return WsCredential(header, answer, "header")
     for p in protocols:
         if p.startswith(KEY_SUBPROTOCOL_PREFIX) and len(p) > len(KEY_SUBPROTOCOL_PREFIX):
             return WsCredential(p[len(KEY_SUBPROTOCOL_PREFIX):], answer, "subprotocol")
-    query = ws.query_params.get("api_key")
-    if query:
-        return WsCredential(query, answer, "query")
     return WsCredential(None, answer, None)

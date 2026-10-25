@@ -24,7 +24,6 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 from uuid import uuid4
 
 from .ssrf import SSRFError, validate_webhook_url
-from .stored_url_policy import delivers_under_v012
 
 # Frozen wire constants (match webhook.v1 + the parent).
 WEBHOOK_API_VERSION = "2026-03-01"
@@ -235,13 +234,10 @@ class WebhookSink:
             return DeliveryResult(status="suppressed")
 
         # 2. SSRF guard — reject private/internal targets before any HTTP.
-        #    A per-client URL stored before 0.13 that only the 0.12 guard admits is delivered when
-        #    an operator set VEXA_WEBHOOK_STORED_URL_POLICY=v012 (default strict) — see stored_url_policy.py.
         try:
             validate_webhook_url(url, resolver=self._resolver)
         except SSRFError as e:
-            if not (scope == "per-client" and delivers_under_v012(url, resolver=self._resolver)):
-                return DeliveryResult(status="blocked", error=str(e))
+            return DeliveryResult(status="blocked", error=str(e))
 
         # 3. Deliver. 2xx → delivered. 5xx/429/transport-error → enqueue for retry.
         return await _deliver_signed(

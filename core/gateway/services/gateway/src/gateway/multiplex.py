@@ -15,6 +15,7 @@ from typing import Dict, List, Set, Tuple
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+from .changed import QUERY_KEY_REFUSAL, SCOPE_HOW, refusal
 from .delegation import is_delegated
 from .obs import log_event, set_user_id
 from .ws_auth import accept, ws_credential
@@ -49,61 +50,6 @@ DEFAULT_STREAMS = ("transcript",)
 SIGNALS_BACKLOG = 500
 #: How long one blocking read of the signals stream waits before it looks again (ms).
 SIGNALS_BLOCK_MS = 5000
-
-#: How the socket holds a key to the REST routes' scopes (``VEXA_WS_SCOPE_MODE``):
-#:   ``strict`` (default) — the socket takes the scopes of the REST routes it mirrors (below), so a
-#:                          ``bot``-only key cannot stream what REST refuses it.
-#:   ``legacy``           — an explicit operator opt-in to the 0.12 contract: any valid key opens
-#:                          the socket and subscribes to the meetings the authorize hop grants it,
-#:                          whatever its scopes. A key that ``strict`` would refuse is logged
-#:                          (``ws_scope_legacy_allowed``) so the operator can count who still relies
-#:                          on it and switch back. A residual: it widens a key to its owner's streams.
-WS_SCOPE_MODE_ENV = "VEXA_WS_SCOPE_MODE"
-WS_SCOPE_MODES = ("legacy", "strict")
-
-
-#: The release that removes ``VEXA_WS_SCOPE_MODE=legacy`` (a 0.12 compatibility switch).
-WS_SCOPE_LEGACY_REMOVED_IN = "0.14.0"
-
-
-def warn_ws_scope_legacy_at_boot(env: "dict | None" = None, stream=None) -> bool:
-    """While ``legacy`` is open, print a banner on stderr and log ``compat_switch_open`` at boot.
-    True when it printed. Never raises: a warning never stops the gateway."""
-    import sys
-
-    if ((env if env is not None else os.environ).get(WS_SCOPE_MODE_ENV) or "").strip().lower() != "legacy":
-        return False
-    rule = "#" * 96
-    lines = [
-        "WARNING: gateway runs with a 0.12 compatibility switch OPEN.",
-        "",
-        f"  {WS_SCOPE_MODE_ENV}=legacy",
-        "    re-opens: any valid key, a bot-only one included, streams its owner's transcripts over /ws",
-        "",
-        f"It is a residual risk while it is set, and it is removed in {WS_SCOPE_LEGACY_REMOVED_IN}. Unset it once",
-        "the 0.12 callers have moved: https://docs.vexa.ai/upgrade-from-0-12#compatibility-switches",
-    ]
-    out = sys.stderr if stream is None else stream
-    out.write("\n".join([rule, *(f"##  {line}".rstrip() for line in lines), rule]) + "\n")
-    out.flush()
-    try:
-        log_event("compat_switch_open", audience="system", level="warning", span="boot",
-                  fields={"key": WS_SCOPE_MODE_ENV, "value": "legacy",
-                          "removed_in": WS_SCOPE_LEGACY_REMOVED_IN})
-    except Exception:  # noqa: BLE001 — the banner above already said it
-        pass
-    return True
-
-
-def ws_scope_mode(env: "dict | None" = None) -> str:
-    """The configured mode; unset or an unknown value reads as ``strict`` (an unknown one is logged)."""
-    raw = ((env if env is not None else os.environ).get(WS_SCOPE_MODE_ENV) or "strict").strip().lower()
-    if raw not in WS_SCOPE_MODES:
-        log_event("ws_scope_mode_unknown", audience="system", level="warning", span="ws",
-                  fields={"value_ignored": True, "using": "strict"})
-        return "strict"
-    return raw
-
 
 def _num(value, cast=float):
     try:
@@ -210,10 +156,16 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
     credential = ws_credential(ws)
     await accept(ws, credential.subprotocol)
 
-    api_key = credential.key
     if credential.source == "query":
-        log_event("ws_query_key_deprecated", audience="system", level="warning", span="ws",
-                  fields={"path": "/ws", "use": "x-api-key header or the vexa.key.<key> subprotocol"})
+        log_event("ws_query_key_refused", audience="system", level="warning", span="ws",
+                  fields={"path": "/ws"})
+        try:
+            await ws.send_text(json.dumps(QUERY_KEY_REFUSAL))
+        finally:
+            await ws.close(code=4401)  # Unauthorized: the URL carries no credential
+        return
+
+    api_key = credential.key
     if not api_key:
         try:
             await ws.send_text(json.dumps({"type": "error", "error": "missing_api_key"}))
@@ -258,15 +210,11 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
     held = {str(s) for s in (user_data.get("scopes") or [])}
     status_scopes = frozenset().union(*(table.get(r, frozenset()) for r in STATUS_ROUTES))
     transcript_scopes = frozenset(table.get(TRANSCRIPT_ROUTE, frozenset()))
-    strict = ws_scope_mode() == "strict"
-    if not held & status_scopes and not strict:
-        log_event("ws_scope_legacy_allowed", audience="system", level="info", span="ws",
-                  user_id=user_id, fields={"path": "/ws", "required": sorted(status_scopes)})
-    elif not held & status_scopes:
+    if not held & status_scopes:
         log_event("request_denied_scope", audience="user", level="warning", span="ws",
                   user_id=user_id, fields={"path": "/ws", "required": sorted(status_scopes)})
         try:
-            await ws.send_text(json.dumps({"type": "error", "error": "insufficient_scope",
+            await ws.send_text(json.dumps({**refusal("insufficient_scope", SCOPE_HOW),
                                            "details": "this key reads no meeting status"}))
         finally:
             await ws.close(code=4403)  # Forbidden
@@ -528,16 +476,12 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
                         "type": "error", "error": "invalid_subscribe_payload",
                         "details": f"'streams' must be a non-empty list of {list(STREAM_NAMES)}"}))
                     continue
-                if not held & transcript_scopes and not strict:
-                    log_event("ws_scope_legacy_allowed", audience="system", level="info", span="ws",
-                              user_id=user_id,
-                              fields={"path": "/ws subscribe", "required": sorted(transcript_scopes)})
-                elif not held & transcript_scopes:
+                if not held & transcript_scopes:
                     log_event("request_denied_scope", audience="user", level="warning", span="ws",
                               user_id=user_id,
                               fields={"path": "/ws subscribe", "required": sorted(transcript_scopes)})
                     await ws.send_text(json.dumps({
-                        "type": "error", "error": "insufficient_scope",
+                        **refusal("insufficient_scope", SCOPE_HOW),
                         "details": "subscribing streams a meeting's transcript; this key may not "
                                    "read transcripts"}))
                     continue

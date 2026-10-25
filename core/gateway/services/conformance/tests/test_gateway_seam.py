@@ -18,7 +18,7 @@ backend, no sockets:
 Test groups:
   1. REST auth + anti-spoofing      — missing/invalid/empty key fail-closed; client identity headers stripped
   2. REST proxy faults              — 5xx verbatim; ConnectError→502; TimeoutException→504; non-JSON body; oversized body
-  3. WS auth                        — missing/empty key; valid ?api_key=; authz non-200 + authz raise (socket survives)
+  3. WS auth                        — missing/empty key; ?api_key= refused; authz non-200 + authz raise (socket survives)
   4. WS protocol abuse              — invalid_json (incl. non-object JSON); unknown/missing action; bad subscribe/unsubscribe; hostile redis payload
   5. WS lifecycle                   — ping/pong; subscribe→deliver→unsubscribe; disconnect mid-stream cleans up fan-in
 """
@@ -260,7 +260,7 @@ def test_rest_oversized_body_is_forwarded_ok():
 # GROUP 3 — WS auth
 # ===========================================================================
 async def test_ws_missing_api_key_header_and_query_closes_4401():
-    """No x-api-key header AND no ?api_key= → missing_api_key error frame + close 4401."""
+    """No x-api-key header and no key subprotocol → missing_api_key error frame + close 4401."""
     ws = FakeWebSocket(inbound=[], api_key=None)
     h = WSMultiplexHarness(ws, FakeRedis(), FakeAuthorizer(AUTH_MAP))
     await h.run()
@@ -279,16 +279,19 @@ async def test_ws_empty_api_key_is_rejected():
     assert ws.close_code == 4401
 
 
-async def test_ws_query_param_api_key_is_accepted():
-    """A valid ?api_key= (no header) is accepted — the loop runs and acks a subscribe."""
+async def test_ws_query_param_api_key_is_refused():
+    """A key in the URL (?api_key=) is never a credential: api_key_query_removed (with what to do
+    instead and where to read) + close 4401, and no subscribe is acked."""
     ws = FakeWebSocket(inbound=[json.dumps(SUBSCRIBE)], api_key=None)
     ws.query_params = {"api_key": WS_API_KEY}
     h = WSMultiplexHarness(ws, FakeRedis(), FakeAuthorizer(AUTH_MAP))
     await h.run()
-    assert not any(f.get("error") == "missing_api_key" for f in ws.sent), f"frames={ws.sent}"
-    acks = [f for f in ws.sent if f.get("type") == "subscribed"]
-    assert acks, f"no subscribed ack with ?api_key=; frames={ws.sent}"
-    assert_ws_conforms("Subscribed", acks[0])
+    assert ws.sent and ws.sent[0]["error"] == "api_key_query_removed", f"frames={ws.sent}"
+    assert ws.sent[0]["changed_in"] == "0.13.4" and ws.sent[0]["do_instead"]
+    assert ws.sent[0]["docs"] == "https://docs.vexa.ai/changes-0-13-4-auth"
+    assert_ws_conforms("Error", ws.sent[0])
+    assert ws.close_code == 4401
+    assert not any(f.get("type") == "subscribed" for f in ws.sent)
 
 
 async def test_ws_authz_service_error_yields_error_frame_not_empty_ack():

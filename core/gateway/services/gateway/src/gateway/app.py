@@ -334,7 +334,7 @@ def create_app(
     ``vnc_connect`` — opens the upstream websocket of a bot-account sign-in session's live view
                       (``vnc_relay.py``); ``None`` is the ``websockets`` client, a test injects a fake.
     """
-    # M7: a credential in a query string (`/ws?api_key=…`) never reaches a log line.
+    # M7: a credential in a query string (`/ws?api_key=…`, refused) never reaches a log line.
     from . import log_scrub as _log_scrub  # noqa: PLC0415
     _log_scrub.install()
     # ── WHICH DOMAINS THIS DEPLOYMENT FRONTS (PRD decisions 40.6 + 40.7) ─────────────────────

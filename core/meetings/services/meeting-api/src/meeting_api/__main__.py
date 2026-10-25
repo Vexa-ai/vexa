@@ -225,9 +225,9 @@ def build_production_app():
     _auto_join_block_at_boot()  # a malformed auto-join block list refuses the boot
     _meeting_host_allow_at_boot()  # a malformed meeting-host allowance refuses the boot
     _transcription_language_at_boot()  # a refused default language stops the boot, not the first spawn
-    from .compat_switches import warn_at_boot
+    from .removed_config import warn_at_boot
 
-    warn_at_boot()  # an open 0.12 compatibility switch is printed at every boot, with its removal release
+    warn_at_boot()  # a configuration key this release does not read is named at every boot
 
     import redis.asyncio as aioredis
 
@@ -305,11 +305,10 @@ def build_production_app():
     # dials the validated IP (preserving Host + TLS SNI), closing the DNS-rebinding TOCTOU window
     # between submit-time validate_webhook_url and the actual socket connect.
     from .webhooks import RetryQueue, WebhookSink
-    from .webhooks.stored_url_policy import pinned_transport_for
+    from .webhooks.ssrf import build_pinned_transport
 
     async def _webhook_transport(url: str, body: bytes, headers: dict):
-        # VEXA_WEBHOOK_STORED_URL_POLICY: a URL stored before 0.13 may dial under the 0.12 guard.
-        async with httpx.AsyncClient(timeout=10.0, transport=pinned_transport_for()) as client:
+        async with httpx.AsyncClient(timeout=10.0, transport=build_pinned_transport()) as client:
             return await client.post(url, content=body, headers=headers)
 
     webhook_sink = WebhookSink(_webhook_transport, queue=RetryQueue(redis_client))
@@ -566,22 +565,9 @@ def _attach_background_loops(
 
     async def _segment_consumer_loop() -> None:
         # Drain the transcription_segments stream → persist + publish tc:…:mutable.
-        from .collector import legacy_unsigned
-
-        # Upgrade hand-off: a 0.12 bot still in a meeting writes unsigned entries; admit them for the
-        # meetings spawned before 0.13, for a bounded window (collector/legacy_unsigned.py).
-        try:
-            await legacy_unsigned.open_from_db(session_factory)
-        except Exception:
-            log.exception("legacy segment hand-off: could not read in-flight meetings")
         tick_n = 0
         while True:
             try:
-                if tick_n % 60 == 0:
-                    try:
-                        await legacy_unsigned.refresh_from_db(session_factory)
-                    except Exception:
-                        log.exception("legacy segment hand-off: refresh failed")
                 await consume_segments(transcript_store, segment_bus)
                 # #636: every N ticks, reclaim any ORPHANED (crashed-replica) un-acked batch idle
                 # past RECLAIM_MIN_IDLE_MS and drain it through the same ingest→ack path. Bounded to
@@ -636,14 +622,14 @@ def _attach_background_loops(
         import httpx
 
         from .webhooks.retry import drain_retry_queue
-        from .webhooks.stored_url_policy import pinned_transport_for
+        from .webhooks.ssrf import build_pinned_transport
 
         # The injected Transport: POST the signed envelope; return the response (its .status_code
         # drives the retry/permanent decision in retry._deliver_one). WH2: IP-pinned at connect
         # (re-resolve + re-validate + dial the validated IP) so a rebinding flip can't slip an
         # internal target into a retry sweep either.
         async def _transport(url: str, body: bytes, headers: dict):
-            async with httpx.AsyncClient(timeout=10.0, transport=pinned_transport_for()) as client:
+            async with httpx.AsyncClient(timeout=10.0, transport=build_pinned_transport()) as client:
                 return await client.post(url, content=body, headers=headers)
 
         async def _tick():

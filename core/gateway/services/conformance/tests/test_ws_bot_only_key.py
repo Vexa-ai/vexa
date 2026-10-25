@@ -1,9 +1,8 @@
-"""A 0.12 `bot`-only key subscribes over `/ws`, end to end through the gateway and meeting-api.
+"""A `bot`-only key streams no transcript over `/ws`, end to end through the gateway and meeting-api.
 
-0.12.28's `/ws` checked no key scope: a key minted with only `bot` (the account page's default)
-opened the socket and streamed the live transcript of the meetings its owner may read. Under
-`VEXA_WS_SCOPE_MODE=legacy` (an explicit opt-in on both services; the default is `strict`) 0.13
-keeps that contract.
+`GET /transcripts/{platform}/{native_meeting_id}` takes `tx`; a `/ws` subscription streams the same
+transcript, so both services hold it to the same scopes. A `bot`-only key gets `insufficient_scope`
+with what to do instead; `VEXA_WS_SCOPE_MODE` is not read by either service.
 
 This drives the SHIPPED pieces together, offline:
   the gateway's `/ws` loop (`gateway.run_multiplex`)
@@ -11,7 +10,7 @@ This drives the SHIPPED pieces together, offline:
     signed `/ws/authorize-subscribe` hop (gateway-identity.v1)
   → the unified meeting-api (`meeting_api.create_app` with the gateway's public key), whose
     route-scope gate and ownership check decide.
-Only `/internal/validate` is a stub: it answers what identity answers for a `bot`-only key.
+Only `/internal/validate` is a stub: it answers what identity answers for the key's scopes.
 """
 from __future__ import annotations
 
@@ -28,7 +27,7 @@ from meeting_api import create_app, identity_token
 from meeting_api.collector.fakes import InMemoryTranscriptStore
 
 KEY = identity_token.generate_signing_key()
-API_KEY = "vxa_bot_only_key_from_0_12"
+API_KEY = "vxa_bot_only_key"
 MINE = {"platform": "google_meet", "native_id": "abc-defg-hij"}
 THEIRS = {"platform": "google_meet", "native_id": "xyz-wxyz-xyz"}
 
@@ -84,36 +83,26 @@ async def _subscribe(scopes, meeting):
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
     monkeypatch.setenv("INTERNAL_API_SECRET", "conformance-internal")
-    monkeypatch.setenv("VEXA_WS_SCOPE_MODE", "legacy")
 
 
-async def test_a_0_12_bot_only_key_subscribes_to_its_own_meeting():
+@pytest.mark.parametrize("old_setting", [None, "legacy"])
+async def test_a_bot_only_key_is_refused_with_what_to_do(monkeypatch, old_setting):
+    if old_setting:
+        monkeypatch.setenv("VEXA_WS_SCOPE_MODE", old_setting)
     ws = await _subscribe(["bot"], MINE)
-    errors = [f for f in ws.sent if f.get("type") == "error"]
-    assert not errors, errors
-    subscribed = [f for f in ws.sent if f.get("type") == "subscribed"]
-    assert subscribed and subscribed[0]["meetings"], ws.sent
-
-
-async def test_legacy_mode_still_refuses_a_meeting_the_key_may_not_read():
-    ws = await _subscribe(["bot"], THEIRS)
-    assert not any(f.get("type") == "subscribed" and f.get("meetings") for f in ws.sent), ws.sent
-
-
-@pytest.mark.parametrize("mode", ["strict", None])
-async def test_strict_on_both_sides_refuses_the_bot_only_key(monkeypatch, mode):
-    """Strict — set, or the default with nothing set — refuses the `bot`-only key end to end."""
-    if mode is None:
-        monkeypatch.delenv("VEXA_WS_SCOPE_MODE", raising=False)
-    else:
-        monkeypatch.setenv("VEXA_WS_SCOPE_MODE", mode)
-    ws = await _subscribe(["bot"], MINE)
-    assert any(f.get("error") == "insufficient_scope" for f in ws.sent), ws.sent
+    refused = [f for f in ws.sent if f.get("error") == "insufficient_scope"]
+    assert refused, ws.sent
+    assert refused[0]["changed_in"] == "0.13.4"
+    assert refused[0]["docs"] == "https://docs.vexa.ai/changes-0-13-4-auth"
     assert not any(f.get("type") == "subscribed" and f.get("meetings") for f in ws.sent)
 
 
-async def test_a_transcript_key_subscribes_in_either_mode(monkeypatch):
-    for mode in ("legacy", "strict"):
-        monkeypatch.setenv("VEXA_WS_SCOPE_MODE", mode)
-        ws = await _subscribe(["tx"], MINE)
-        assert any(f.get("type") == "subscribed" and f.get("meetings") for f in ws.sent), (mode, ws.sent)
+async def test_a_transcript_key_subscribes_to_its_own_meeting():
+    ws = await _subscribe(["tx"], MINE)
+    assert not [f for f in ws.sent if f.get("type") == "error"], ws.sent
+    assert any(f.get("type") == "subscribed" and f.get("meetings") for f in ws.sent), ws.sent
+
+
+async def test_a_transcript_key_is_refused_a_meeting_it_may_not_read():
+    ws = await _subscribe(["tx"], THEIRS)
+    assert not any(f.get("type") == "subscribed" and f.get("meetings") for f in ws.sent), ws.sent

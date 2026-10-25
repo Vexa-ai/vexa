@@ -158,7 +158,6 @@ async def test_deny_a_reader_removed_mid_meeting_stops_receiving_annotations(mon
 async def test_deny_a_key_that_may_not_read_transcripts_gets_no_annotations(monkeypatch):
     """Signals ride the transcript's scope: strict mode refuses a key without it, before the hop."""
     _fast(monkeypatch)
-    monkeypatch.setenv("VEXA_WS_SCOPE_MODE", "strict")
     redis = FakeRedis()
     await _write(redis, 42)
     auth = FakeAuthorizer(user={"user_id": 7, "scopes": ["bot"], "max_concurrent": 3}, valid_key=API_KEY,

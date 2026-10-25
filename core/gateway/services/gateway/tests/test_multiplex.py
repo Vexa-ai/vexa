@@ -10,6 +10,8 @@ proving the carve of ``main.websocket_multiplex``:
 from __future__ import annotations
 
 import asyncio
+
+import pytest
 import json
 from typing import Optional
 
@@ -238,29 +240,37 @@ class _ScopedAuthorizer(FakeAuthorizer):
         return await super().authorize_subscribe(api_key, meetings)
 
 
-async def test_a_bot_only_key_cannot_subscribe_to_a_transcript(monkeypatch):
+@pytest.mark.parametrize("old_setting", [None, "legacy"])
+async def test_a_bot_only_key_cannot_subscribe_to_a_transcript(monkeypatch, old_setting):
     """`GET /transcripts/{platform}/{native_meeting_id}` takes `tx`; a subscription streams the same
     transcript, so a `bot`-only key is refused it — and nothing is asked downstream or fanned in.
-    (`VEXA_WS_SCOPE_MODE` UNSET: strict is the default; the opt-in `legacy` is tested below.)"""
-    monkeypatch.delenv("VEXA_WS_SCOPE_MODE", raising=False)
+    The removed `VEXA_WS_SCOPE_MODE=legacy` changes nothing, and the refusal says what to do."""
+    if old_setting:
+        monkeypatch.setenv("VEXA_WS_SCOPE_MODE", old_setting)
     ws = _WS(inbound=[SUBSCRIBE], api_key=API_KEY)
     redis, auth = FakeRedis(), _ScopedAuthorizer(["bot"])
     await _run_multiplex(ws, auth, redis)
     errs = [f for f in ws.sent if f.get("type") == "error"]
     assert errs and errs[0]["error"] == "insufficient_scope", ws.sent
+    assert errs[0]["changed_in"] == "0.13.4" and "tx" in errs[0]["do_instead"]
+    assert errs[0]["docs"] == "https://docs.vexa.ai/changes-0-13-4-auth"
     assert not any(f.get("type") == "subscribed" for f in ws.sent)
     assert auth.asked == 0
     assert ws.close_code is None                     # the socket stays open for status frames
 
 
-async def test_a_browser_only_key_opens_no_socket(monkeypatch):
+@pytest.mark.parametrize("old_setting", [None, "legacy"])
+async def test_a_browser_only_key_opens_no_socket(monkeypatch, old_setting):
     """A key that may read no meeting status over REST (`GET /meetings` takes `tx`, `GET /bots/status`
-    takes `bot`) opens no socket: `insufficient_scope`, then close 4403 (strict, the default)."""
-    monkeypatch.delenv("VEXA_WS_SCOPE_MODE", raising=False)
+    takes `bot`) opens no socket: `insufficient_scope`, then close 4403, whatever the removed
+    `VEXA_WS_SCOPE_MODE` says."""
+    if old_setting:
+        monkeypatch.setenv("VEXA_WS_SCOPE_MODE", old_setting)
     ws = _WS(inbound=[SUBSCRIBE], api_key=API_KEY)
     redis, auth = FakeRedis(), _ScopedAuthorizer(["browser"])
     await _run_multiplex(ws, auth, redis)
     assert ws.sent and ws.sent[0]["error"] == "insufficient_scope"
+    assert ws.sent[0]["docs"] == "https://docs.vexa.ai/changes-0-13-4-auth"
     assert ws.close_code == 4403
     assert auth.asked == 0
 
@@ -291,65 +301,3 @@ async def test_the_socket_reads_the_scopes_from_the_route_table():
     await asyncio.wait_for(task, timeout=2)
 
 
-# ── 0.12 compatibility: `VEXA_WS_SCOPE_MODE=legacy` (an explicit opt-in) ────────────────────────
-# 0.12.28's /ws resolved the key and asked the authorize hop per meeting; it checked no scope. A
-# customer whose dashboard-minted key holds only `bot` streamed live transcripts that way; an
-# operator who must keep that for an upgrade sets `legacy`. Ownership is still enforced by the
-# authorize hop.
-
-async def _subscribe_with(scopes, monkeypatch, mode=None):
-    if mode is None:
-        monkeypatch.delenv("VEXA_WS_SCOPE_MODE", raising=False)
-    else:
-        monkeypatch.setenv("VEXA_WS_SCOPE_MODE", mode)
-    ws = _WS(inbound=[SUBSCRIBE], api_key=API_KEY, close_when_drained=False)
-    redis, auth = FakeRedis(), _ScopedAuthorizer(scopes)
-    task = asyncio.ensure_future(_run_multiplex(ws, auth, redis))
-    for _ in range(10):
-        await asyncio.sleep(0)
-    ws.disconnect()
-    await asyncio.wait_for(task, timeout=2)
-    return ws, auth
-
-
-async def test_legacy_opt_in_a_bot_only_key_subscribes_as_on_0_12(monkeypatch):
-    ws, auth = await _subscribe_with(["bot"], monkeypatch, mode="legacy")
-    assert any(f.get("type") == "subscribed" and f["meetings"] for f in ws.sent), ws.sent
-    assert not any(f.get("error") == "insufficient_scope" for f in ws.sent)
-    assert auth.asked == 1                       # ownership is still asked of the authorize hop
-    assert ws.close_code is None
-
-
-async def test_legacy_opt_in_a_browser_only_key_opens_the_socket_as_on_0_12(monkeypatch):
-    ws, _ = await _subscribe_with(["browser"], monkeypatch, mode="legacy")
-    assert ws.close_code != 4403
-    assert any(f.get("type") == "subscribed" for f in ws.sent), ws.sent
-
-
-async def test_legacy_mode_still_refuses_a_meeting_the_key_does_not_own(monkeypatch):
-    monkeypatch.setenv("VEXA_WS_SCOPE_MODE", "legacy")
-    other = {"action": "subscribe", "meetings": [{"platform": "google_meet", "native_id": "not-mine"}]}
-    ws = _WS(inbound=[other], api_key=API_KEY, close_when_drained=False)
-    redis, auth = FakeRedis(), _ScopedAuthorizer(["bot"])
-    task = asyncio.ensure_future(_run_multiplex(ws, auth, redis))
-    for _ in range(10):
-        await asyncio.sleep(0)
-    ws.disconnect()
-    await asyncio.wait_for(task, timeout=2)
-    assert not any(f.get("type") == "subscribed" and f.get("meetings") for f in ws.sent), ws.sent
-
-
-def test_unset_or_unknown_mode_reads_as_strict():
-    from gateway.multiplex import ws_scope_mode
-    assert ws_scope_mode({"VEXA_WS_SCOPE_MODE": "Legacy"}) == "legacy"
-    assert ws_scope_mode({"VEXA_WS_SCOPE_MODE": "bogus"}) == "strict"
-    assert ws_scope_mode({}) == "strict"
-
-
-async def test_default_a_bot_only_key_cannot_stream_a_transcript(monkeypatch):
-    """10-A: with nothing configured, a `bot`-only key gets on /ws exactly what REST gives it — no
-    transcript subscription."""
-    ws, auth = await _subscribe_with(["bot"], monkeypatch)
-    assert any(f.get("error") == "insufficient_scope" for f in ws.sent), ws.sent
-    assert not any(f.get("type") == "subscribed" and f.get("meetings") for f in ws.sent)
-    assert auth.asked == 0

@@ -158,10 +158,21 @@ def test_the_upstream_is_meeting_api_at_the_same_path_with_the_signed_identity()
     assert "x-internal-secret" not in headers
 
 
-def test_the_key_may_ride_the_query_string_as_on_ws():
+def test_a_key_in_the_query_string_is_refused_as_on_ws():
     connector = FakeConnector()
     client, _ = _client(connector)
     with client.websocket_connect(f"{VNC}?api_key={VALID_KEY}") as ws:
+        frame = ws.receive_json()
+        assert ws.receive()["code"] == 4401
+    assert frame["error"] == "api_key_query_removed" and frame["changed_in"] == "0.13.4"
+    assert frame["docs"] == "https://docs.vexa.ai/changes-0-13-4-auth" and "vexa.key." in frame["do_instead"]
+    assert connector.calls == []
+
+
+def test_the_key_may_ride_the_subprotocol_list():
+    connector = FakeConnector()
+    client, _ = _client(connector)
+    with client.websocket_connect(VNC, subprotocols=["vexa.v1", f"vexa.key.{VALID_KEY}"]) as ws:
         assert ws.receive_bytes() == GREETING
     assert len(connector.calls) == 1
 
