@@ -79,6 +79,6 @@ export type Flash = { stage: 'idle' | 'woke' | 'queued' | 'sent' | 'answering' |
 
 declare module 'claude-code' {
   interface PluginState {
-    vexa: { meeting: Meeting; listener: Listener; flash: Flash }
+    'vexa-live': { meeting: Meeting; listener: Listener; flash: Flash }
   }
 }

@@ -19,17 +19,15 @@ import type { Register } from 'claude-code'
 import type { AppInfo, Flash, Listener, Meeting, Seg } from '../types'
 import {
   DECIDE_MAX_TOKENS, DECIDE_SYSTEM, FALLBACK_APP, briefFor, buildApp, calibrationSummary, decidePrompt, isDirect,
-  DEFAULT_MODELS, EMPTY_MAP, MAP_SYSTEM, TRIAGE_SYSTEM, norm, normalize, parseDecision, parseManifest, parseMap, parseTriage, renderMap, ruleHit, rulesText, triggerWords,
+  DEFAULT_MODELS, TRIAGE_SYSTEM, norm, normalize, parseDecision, parseManifest, parseTriage, ruleHit, rulesText, triggerWords,
 } from './listener'
-import type { App, CallMap, Labelled, Models, Row } from './listener'
+import type { App, Labelled, Models, Row } from './listener'
 
-const SERVER_KEY = 'vexa'
-const HOSTED_URL = 'https://api.cloud.vexa.ai'
 const EMPTY: Meeting = {
   connection: 'connecting', url: '', platform: '', nativeId: '', dbId: 0, attachedTo: '', offers: { calendar: false, workspaces: false, demo: false, requests: false, webPanel: false }, title: '', isDemo: false,
   status: 'idle', nextIndex: 0, liveCursor: '', liveFeed: true, segments: [], error: '',
 }
-const MEETING = { plugin: 'vexa', key: 'meeting' } as const
+const MEETING = { plugin: 'vexa-live', key: 'meeting' } as const
 
 async function read($: any): Promise<Meeting> {
   const { value } = await $.state.get(MEETING)
@@ -54,7 +52,7 @@ const IDLE: Listener = {
   brief: briefFor(FALLBACK_APP, FALLBACK_APP.defaultPreset), triaged: [], lastWakeAt: 0, wakes: [],
   lastVerdict: '', lastMs: 0, error: '', app: info(FALLBACK_APP),
 }
-const LISTENER = { plugin: 'vexa', key: 'listener' } as const
+const LISTENER = { plugin: 'vexa-live', key: 'listener' } as const
 
 async function readListener($: any): Promise<Listener> {
   const { value } = await $.state.get(LISTENER)
@@ -70,7 +68,7 @@ async function updateListener($: any, fn: (l: Listener) => Listener): Promise<vo
 }
 
 // The pane's other values, one pair of helpers each (a state reference must be a literal).
-const FLASH = { plugin: 'vexa', key: 'flash' } as const
+const FLASH = { plugin: 'vexa-live', key: 'flash' } as const
 const NO_FLASH: Flash = { stage: 'idle', at: 0, line: '' }
 
 async function readFlash($: any): Promise<Flash> {
@@ -98,66 +96,21 @@ const BROWSER_SERVER = 'Claude_Browser'
 const BROWSER_TOOL = 'mcp__Claude_Browser__preview_start'
 const LIVE_WAIT_MS = 1200
 
-// Tools that only read. A model call to any of them is approved; everything else asks.
-export const READ_ONLY = new Set([
-  'whats_waiting', 'parse_meeting_link', 'list_meetings', 'get_meeting', 'get_meeting_transcript',
-  'get_meeting_participants', 'get_meeting_chat', 'search_transcripts', 'list_recordings',
-  'get_recording', 'get_bot_status', 'timeline', 'reactions_list', 'flows_list', 'friction_so_far',
-  'bot_accounts_list', 'open_meeting', 'calendar_status', 'workspace_list', 'workspace_read', 'workspace_search',
-])
 
-// Tools whose effect other people see or that end the call: a model call always asks the person,
-// whatever the mode (a hook's ask is a person's; no auto-mode check settles it).
-export const ASK_PERSON: Record<string, string> = {
-  speak_in_meeting: 'Vexa will say this out loud to everyone in the meeting.',
-  stop_bot: 'Vexa will leave the meeting and stop transcribing it.',
-}
-
-// Where Claude keeps what it learns, as the person said it in chat (kept across sessions in
-// $.store, so the next session knows): `cloud` = a Vexa workspace (the account's default write
-// target, the same one the web's «Writes to …» shows), `local` = a folder on this computer,
-// `ask` = only when they ask; unset = not asked yet.
-type Settings = { write: '' | 'cloud' | 'local' | 'ask'; workspace: string; localPath: string }
-const NO_SETTINGS: Settings = { write: '', workspace: '', localPath: '' }
-let settings: Settings = NO_SETTINGS
-// What the session-start context says about the server: its «Writes to …» line and workspaces.
-let writesLine = ''
-const SETTINGS_TOOL = 'mcp__vexa__vexa_settings'
-const reported = new Set<number>()
 
 // The module's own: a reload reconnects and reloads the app.
 let server = ''
-// The Vexa the plugin's server points at, read from the manifest's literal server URL (the desktop
-// app's sign-in compares that text with the session's server, so it holds no variables). A company
-// running its own Vexa ships the plugin from its own marketplace with its address there.
-let vexaUrl = HOSTED_URL
 
-export function vexaUrlOf(manifest: string): string {
-  try {
-    const url = String(JSON.parse(manifest)?.mcpServers?.vexa?.url ?? '')
-    return /^https?:\/\//.test(url) ? url.replace(/\/mcp\/?$/, '') : HOSTED_URL
-  } catch { return HOSTED_URL }
-}
 let polling = false
 let app: App = FALLBACK_APP
 let appDir = ''
 
-// `plugin:vexa:vexa` → `mcp__plugin_vexa_vexa__`, the prefix the model's calls carry.
-export function toolPrefix(name: string): string {
-  return `mcp__${name.replace(/[^A-Za-z0-9_-]/g, '_')}__`
-}
 
-let prefix = toolPrefix(`plugin:vexa:${SERVER_KEY}`)
-// While the server needs sign-in, Claude Code gives Claude these two in its place: `authenticate`
-// answers the sign-in link (callback on this session's localhost), `complete_authentication` takes
-// a pasted callback URL. The session connects live; no reload.
-const SIGNIN_TOOL = `${prefix}authenticate`
-const SIGNIN_TOOLS = new Set([SIGNIN_TOOL, `${prefix}complete_authentication`])
-// Whether this session offers those tools (the terminal does). The desktop app doesn't: there the
-// person signs the plugin's server in from /mcp in the chat.
-let signinByTool = false
-// Whether Claude's browser pane is here (the desktop app), so the panel can show the sign-in steps.
-let hasBrowser = false
+let prefix = ''
+// This plugin's version, from its manifest: what the server's presence records.
+let pluginVersion = ''
+// Whether this plugin has woken Claude yet, for the server's first-wake mark.
+let firstWake = false
 
 // MCP results come back as content blocks; Vexa returns one JSON text block, sometimes followed by
 // a notice in plain text («\n\n<notice>»): parse the leading JSON value and ignore what follows.
@@ -194,53 +147,51 @@ function quiet(p: Promise<unknown>): void {
   p.catch(() => {})
 }
 
-function vexaHost(): string {
-  return vexaUrl.replace(/^[a-z]+:\/\//i, '').replace(/[/?#].*$/, '')
-}
-
-function isHosted(): boolean {
-  return vexaUrl.replace(/\/+$/, '') === HOSTED_URL
-}
-
 function message(err: unknown): string {
   return String((err as Error)?.message ?? err).slice(0, 300)
 }
 
+// The person's Vexa, however it is connected — the claude.ai connector, the Vexa plugin's server, or
+// one added by hand: the server whose tools include Vexa's transcript read and its queue. This plugin
+// lists no server of its own and signs in to nothing; it calls that one with the engine's own
+// connection (`$.mcp.call` takes the tool-name spelling). Servers connect after the session starts,
+// so the poll looks again until one is there.
+export function vexaServerOf(names: readonly string[]): string {
+  const hit = names.find(n => /^mcp__.+__get_meeting_transcript$/.test(n)
+    && names.includes(n.replace(/get_meeting_transcript$/, 'whats_waiting')))
+  return hit ? hit.slice('mcp__'.length, -'__get_meeting_transcript'.length) : ''
+}
+
 async function connect($: any): Promise<void> {
-  const r = await $.mcp.connect(SERVER_KEY)
-  if (r.isConnected) {
-    const was = (await read($)).connection
-    server = r.server
-    prefix = toolPrefix(r.server)
-    const names = new Set((await $.tool.list()).map((t: { name: string }) => t.name))
-    const offers = {
-      calendar: names.has(`${prefix}calendar_status`),
-      workspaces: names.has(`${prefix}workspace_list`),
-      demo: names.has(`${prefix}start_demo_meeting`),
-      requests: names.has(`${prefix}claude_requests_next`),
-      // Our web panel opens in Claude's browser pane, signed in by a one-time link, when the server
-      // mints those links and this Claude has the browser pane (the desktop app).
-      webPanel: names.has(`${prefix}panel_link`) && names.has(BROWSER_TOOL),
-    }
-    await update($, x => ({ ...x, connection: 'ready', offers, error: '' }))
-    // The sign-in Claude just ran from the chat went through: show the person their Vexa.
-    if (was === 'signin') quiet(openPanel($, '/panel'))
-    if (offers.requests) startRequests($)
+  const names: string[] = (await $.tool.list()).map((t: { name: string }) => t.name)
+  const found = vexaServerOf(names)
+  if (!found) {
+    server = ''
+    await update($, x => ({ ...x, connection: 'refused', error: '' }))
     return
   }
-  server = ''
-  if (r.reason === 'auth') {
-    try {
-      const names = new Set((await $.tool.list()).map((t: { name: string }) => t.name))
-      signinByTool = names.has(SIGNIN_TOOL)
-      hasBrowser = names.has(BROWSER_TOOL)
-    } catch { signinByTool = false }
+  const was = (await read($)).connection
+  server = found
+  prefix = `mcp__${found}__`
+  const has = new Set(names)
+  const offers = {
+    calendar: has.has(`${prefix}calendar_status`),
+    workspaces: has.has(`${prefix}workspace_list`),
+    demo: has.has(`${prefix}start_demo_meeting`),
+    requests: has.has(`${prefix}claude_requests_next`),
+    // Our web panel opens in Claude's browser pane, signed in by a one-time link, when the server
+    // mints those links and this Claude has the browser pane (the desktop app).
+    webPanel: has.has(`${prefix}panel_link`) && has.has(BROWSER_TOOL),
   }
-  await update($, x => ({
-    ...x,
-    connection: r.reason === 'auth' ? 'signin' : 'refused',
-    error: r.reason === 'auth' ? '' : r.message,
-  }))
+  await update($, x => ({ ...x, connection: 'ready', offers, error: '' }))
+  if (was !== 'ready') { quiet(heartbeat($)); if (offers.requests) startRequests($) }
+}
+
+// The server knows this plugin is here (the presence its «Vexa Live» offer reads), and when it
+// first woke Claude: `live_heartbeat`, where the server has it.
+async function heartbeat($: any, event?: 'wake'): Promise<void> {
+  if (!server || !(await $.tool.list()).some((t: { name: string }) => t.name === `${prefix}live_heartbeat`)) return
+  await call($, 'live_heartbeat', { version: pluginVersion, ...(event ? { event } : {}) })
 }
 
 async function call($: any, tool: string, args: Record<string, unknown>): Promise<any> {
@@ -351,10 +302,6 @@ async function poll($: any): Promise<void> {
     }
     if (['completed', 'failed', 'stopped'].includes(status)) {
       await updateListener($, x => ({ ...x, isOn: false }))
-      if (m.status !== 'past' && status === 'completed') {
-        await mapStep($, true)
-        if (!maps.has(m.dbId)) await afterCall($, { ...m, status })
-      }
     }
   } catch (err) {
     await update($, x => ({ ...x, error: message(err) }))
@@ -450,7 +397,6 @@ async function loadApp($: any): Promise<void> {
 
 // --- Listener ---------------------------------------------------------------------------------
 
-const PLATFORM: Record<string, string> = { google_meet: 'Meet', teams: 'Teams', zoom: 'Zoom', jitsi: 'Jitsi', vexa_call: 'Vexa call' }
 const roomKey = (r: { platform: string; nativeId: string }) => `${r.platform}/${r.nativeId}`
 
 // A live meeting of the person's, not yet offered or declined, becomes the band's offer.
@@ -725,7 +671,7 @@ async function triage($: any): Promise<void> {
       wakes: canWake ? [...x.wakes, { at: new Date(now).toISOString().slice(11, 19), reason: v.reason }].slice(-20) : x.wakes,
     }))
     if (canWake) {
-      mapDirty = true
+      if (!firstWake) { firstWake = true; quiet(heartbeat($, 'wake')) }
       await setFlash($, 'woke', triggerWords(v.reason))
       batch.push({ reason: v.reason, lines: [...context.slice(-2), ...lines], direct, index: Math.max(0, m.segments.length - fresh.length) })
       await flush($)
@@ -825,48 +771,6 @@ async function configure($: any, input: any): Promise<unknown> {
   return { listening: l.isOn, meeting, offer: l.offer, preset: l.preset, presets: l.app.presets, app: l.app.name, appFolder: appDir, brief: l.brief, wakes: l.wakes, lastVerdict: l.lastVerdict, spend: await spendReport($) }
 }
 
-// The person's answer to «where should I keep what I learn», saved by Claude in chat. Cloud also
-// sets the account's default write target on the server, so the web shows the same choice.
-async function saveSettings($: any, input: any): Promise<unknown> {
-  const write = ['cloud', 'local', 'ask'].includes(input.write) ? input.write : settings.write
-  const next: Settings = {
-    write,
-    workspace: typeof input.workspace === 'string' ? input.workspace : settings.workspace,
-    localPath: typeof input.local_path === 'string' ? input.local_path : settings.localPath,
-  }
-  if (input.write === undefined && input.workspace === undefined && input.local_path === undefined) return { settings, writes: writesLine }
-  if (next.write === 'cloud') {
-    if (!next.workspace) return { error: 'Cloud needs a workspace slug: workspace_list shows them; workspace_new makes one.' }
-    await call($, 'workspace_defaults_set', { target: next.workspace })
-  }
-  if (next.write === 'local' && !next.localPath) {
-    const home = await $.env.get('HOME')
-    next.localPath = `${home ?? '~'}/Vexa`
-  }
-  settings = next
-  await $.store.set('settings', settings)
-  return { saved: settings }
-}
-
-// Two or three lines at the end of the system prompt: what Vexa is connected to, where Claude
-// writes and whose rules apply, or which setup question to ask next. Read from memory: no calls.
-function contextText(m: Meeting): string {
-  if (m.connection !== 'ready') {
-    return `Vexa (meeting bot, live transcripts, team workspaces) is installed${isHosted() ? '' : `, pointed at the company's Vexa ${vexaHost()},`} but not signed in. `
-      + (isHosted() && m.connection === 'refused'
-        ? 'Hosted Vexa has no sign-in yet: if the person wants Vexa, tell them to create an API key at https://vexa.ai/account and set it as VEXA_API_KEY in the env block of ~/.claude/settings.json, then restart Claude Code; never take the key in the chat.'
-        : `Required: unless you already offered in this conversation, begin your next reply, whatever the person wrote, with this exact line: «Vexa is installed. Sign in?» ${signinByTool
-          ? `If they say yes, sign in, connect or set up Vexa, call ${SIGNIN_TOOL} right away, write the full link it returns in your reply (the person cannot see tool results) and say «open it, press Allow, then come back»; the Vexa panel then opens by itself. If the page after Allow shows an error, ask them to paste its address and pass it to ${prefix}complete_authentication. Never run claude mcp login.`
-          : 'If they say yes, sign in, connect or set up Vexa, tell them in one line: «Type /mcp here, choose plugin:vexa:vexa and sign in; your browser opens, press Allow, then come back.» There is no sign-in tool for you to call here, so do not look for one; the Vexa panel opens by itself once they are signed in.'} Never mention API keys, never send the person to /reload-plugins or plugin settings; follow the vexa-setup skill.`)
-  }
-  const lines = ['Vexa is connected.']
-  if (settings.write === 'cloud') lines.push(`You write what you learn to the Vexa workspace «${settings.workspace}» (${writesLine || 'the account default'}). Before writing, read its rules: workspace_read CLAUDE.md and workspace_purpose; follow the vexa-workspace skill.`)
-  else if (settings.write === 'local') lines.push(`You write what you learn as markdown under ${settings.localPath} (the vexa-workspace layout). Read ${settings.localPath}/CLAUDE.md first if it exists.`)
-  else if (settings.write === 'ask') lines.push('Write to a workspace only when the person asks; then follow the vexa-workspace skill.')
-  else lines.push('Setup is not finished: when it fits, ask in chat «Where should I keep what I learn from your calls: on this computer, or in a cloud workspace you can share?» and save the answer with vexa_settings (vexa-setup skill).')
-  return lines.join('\n')
-}
-
 // Web → chat: a panel button in the web («Summarize this call», «Prepare me…») queues a request
 // for this person's Claude. The plugin long-polls claude_requests_next (each call is also the
 // presence heartbeat the web reads as «Claude is running»), turns each request into a turn and
@@ -917,107 +821,6 @@ async function spendReport($: any): Promise<Record<string, unknown>> {
   return { models, listened_minutes: Math.round(hours * 60), filter: per(spend.filter), writer: per(spend.writer), triage: per(spend.triage) }
 }
 
-// --- The live map ---------------------------------------------------------------------------
-// While the person listens (unless they said «only when I ask»): every filter hit marks the map
-// dirty and the writer runs within MAP_AFTER_HIT_MS; MAP_SWEEP_MS is a safety sweep for what the
-// filter missed. Each pass merges the new transcript into the call's map and writes the README onto
-// the meeting's page (its note page, else calls/<date>-<id>.md in personal) and the changed people
-// and companies as linked cards in personal. The personal workspace's own rules go with the pass.
-const MAP_AFTER_HIT_MS = 15_000
-const MAP_SWEEP_MS = 120_000
-const MAP_MIN_LINES = 3
-type MapRun = { data: CallMap; lastIdx: number; lastAt: number; path: string; notePath: string; sent: Set<string>; title: string; found: boolean }
-const maps = new Map<number, MapRun>()
-let mapping = false
-let mapDirty = false
-let workspaceRules: string | null = null
-
-function mapAllowed(m: Meeting): boolean {
-  return settings.write !== 'ask' && m.offers.workspaces
-}
-
-async function rulesForPersonal($: any): Promise<string> {
-  if (workspaceRules !== null) return workspaceRules
-  try {
-    const r = await call($, 'workspace_read', { slug: 'personal', path: 'CLAUDE.md' })
-    workspaceRules = String(r.content ?? '').slice(0, 4000)
-  } catch { workspaceRules = '' }
-  return workspaceRules
-}
-
-async function mapStep($: any, final: boolean): Promise<void> {
-  const m = await read($)
-  const l = await readListener($)
-  if (mapping || !m.dbId || m.isDemo || !mapAllowed(m) || !(l.isOn || final)) return
-  const now = await $.clock.now()
-  const day = new Date(now).toISOString().slice(0, 10)
-  const run = maps.get(m.dbId) ?? {
-    data: EMPTY_MAP, lastIdx: 0, lastAt: 0, notePath: '', sent: new Set<string>(), found: false,
-    title: m.title || `${PLATFORM[m.platform] ?? m.platform} call`,
-    path: `calls/${day}-${m.nativeId.replace(/[^a-zA-Z0-9-]/g, '-')}.md`,
-  }
-  const segs = m.segments.filter(x => !x.pending && x.text)
-  const since = now - run.lastAt
-  const due = final || (mapDirty ? since >= MAP_AFTER_HIT_MS : since >= MAP_SWEEP_MS && segs.length - run.lastIdx >= MAP_MIN_LINES)
-  if (!due || segs.length <= run.lastIdx) return
-  mapDirty = false
-  mapping = true
-  maps.set(m.dbId, run)
-  try {
-    const rules = await rulesForPersonal($)
-    const slice = segs.slice(run.lastIdx).slice(-150).map(x => `[${x.time}] ${x.speaker}: ${x.text}`).join('\n')
-    const r = await complete($, 'writer', {
-      maxTokens: 2000,
-      system: [{ text: MAP_SYSTEM, cache: true }, ...(rules ? [{ text: `The workspace's own rules (they win):\n${rules}`, cache: true }] : [])],
-      prompt: `Current map:\n${JSON.stringify(run.data)}\n\nNew transcript:\n${slice}`,
-    })
-    run.lastAt = await $.clock.now()
-    const j = r.isAnswered ? parseMap(r.text) : null
-    if (!j) return
-    run.data = j
-    run.lastIdx = segs.length
-    run.found = run.found || j.people.length + j.companies.length > 0
-    // 1) The call's README goes on the meeting's own page (the app shows it as Notes).
-    if (!run.notePath) {
-      try {
-        const g = await call($, 'get_meeting', { meeting_db_id: m.dbId })
-        run.notePath = String(g?.data?.metadata?.note_path ?? g?.metadata?.note_path ?? '')
-      } catch { /* the personal calls/ page below */ }
-    }
-    const readme = (j.readme || renderMap(run.title, j)).slice(0, 1500)
-    if (run.notePath) await call($, 'workspace_write', { path: run.notePath, content: readme })
-    else await call($, 'workspace_write', { path: run.path, content: readme, slug: 'personal' })
-    // 2) People and companies become linked cards in personal (only what changed).
-    const source = `call ${day} «${run.title}» (meeting ${m.dbId})`
-    const cards = [
-      ...j.people.map(x => ({ kind: 'person', name: x.name, fact: [x.role, x.org, x.notes].filter(Boolean).join(', '), fields: { ...(x.role ? { role: x.role } : {}), ...(x.org ? { company: x.org } : {}) } })),
-      ...j.companies.map(x => ({ kind: 'company', name: x.name, fact: [x.what, x.notes].filter(Boolean).join('. '), fields: x.what ? { what: x.what } : {} })),
-    ].filter(c => c.name && c.fact)
-    for (const c of cards.slice(0, 12)) {
-      const sig = `${c.kind}|${c.name}|${c.fact}`
-      if (run.sent.has(sig)) continue
-      run.sent.add(sig)
-      const connections = j.relations.filter(x => x.from === c.name).map(x => ({ name: x.to, relation: x.rel }))
-      quiet(call($, 'entity_upsert', { kind: c.kind, name: c.name, facts: [c.fact], fields: c.fields, connections, source, slug: 'personal' }))
-    }
-  } catch (err) {
-    await updateListener($, x => ({ ...x, error: `map: ${message(err)}` }))
-  } finally {
-    mapping = false
-  }
-}
-
-// After a real call ends, when writing is allowed: one turn for the main Claude to file it.
-async function afterCall($: any, m: Meeting): Promise<void> {
-  if (!m.dbId || m.isDemo || reported.has(m.dbId) || !['cloud', 'local'].includes(settings.write)) return
-  reported.add(m.dbId)
-  const where = settings.write === 'cloud' ? `the Vexa workspace «${settings.workspace}»` : `the local folder ${settings.localPath}`
-  void $.prompt.submit({
-    text: `[Vexa] The call «${m.title || m.nativeId}» (${m.platform} ${m.nativeId}, meeting_db_id ${m.dbId}) just ended. `
-      + `Writing is allowed to ${where}. Follow the vexa-workspace skill: read the workspace's rules first, then write the notes, `
-      + `decisions, commitments and the people in it, link the meeting page to them, and reply with one line and a link. Skip personal talk.`,
-  })
-}
 
 const TRIGGERS_SCHEMA = {
   type: 'array', maxItems: 20,
@@ -1061,10 +864,6 @@ function callTitle(x: any): string {
 // The panel origin the plugin is about to open (from panel_link's answer): the plugin's own
 // preview_start call is approved for that origin only.
 let panelOrigin = ''
-// Where each Vexa's web panel lives, for the sign-in steps shown before panel_link can answer.
-const PANEL_ORIGINS: Record<string, string> = {
-  'https://claude-rc.dev.vexa.ai': 'https://claude-rc-app.dev.vexa.ai',
-}
 // Origins the person said Yes to once: Claude Code's dialog for a hook's ask offers no «always»,
 // so the plugin keeps that answer itself ($.store, across sessions).
 let panelAllowed: string[] = []
@@ -1084,14 +883,6 @@ async function openPanel($: any, next: string): Promise<boolean> {
     } catch { /* not opened: the caller says so in one plain line, or nothing */ }
   }
   return false
-}
-
-// The panel's three sign-in steps, before the server is signed in: a plain address, as it reads no
-// account. Only where the browser pane is (the desktop app) and the panel's address is known.
-async function openSetup($: any): Promise<boolean> {
-  const origin = PANEL_ORIGINS[vexaUrl]
-  if (!origin || !hasBrowser) return false
-  return openInPane($, `${origin}/panel?surface=claude-panel&setup=1`)
 }
 
 async function openInPane($: any, url: string): Promise<boolean> {
@@ -1122,7 +913,7 @@ function pulse(ui: any, key: string, isOn: boolean): any {
 
 export const register: Register = (on) => {
   on('session.start', async ($, e, next) => {
-    try { vexaUrl = vexaUrlOf(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)) } catch { vexaUrl = HOSTED_URL }
+    try { pluginVersion = String(JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`))?.version ?? '') } catch { pluginVersion = '' }
     await $.command.register({ name: 'vexa', description: 'Open the Vexa call panel beside the chat' })
     await $.tool.register({
       name: CONFIGURE,
@@ -1137,37 +928,19 @@ export const register: Register = (on) => {
         + 'ones) and return precision, recall, per-call latency and the misses. No meeting needed.',
       inputSchema: { type: 'object', properties: { rules: { type: 'string' }, fixture: { type: 'string', description: 'Path to a JSON list of {speaker, text, wake}.' } } },
     })
-    await $.tool.register({
-      name: 'vexa_settings',
-      description: 'Read or save where Claude keeps what it learns from Vexa calls, exactly as the person answered in chat: '
-        + 'write "cloud" (a Vexa workspace, by slug; also becomes the account\'s default write target, shared with the web), '
-        + '"local" (markdown in a folder on this computer, default ~/Vexa), or "ask" (only when they ask). No arguments reads it.',
-      inputSchema: { type: 'object', properties: {
-        write: { enum: ['cloud', 'local', 'ask'] },
-        workspace: { type: 'string', description: 'For cloud: the workspace slug (workspace_list).' },
-        local_path: { type: 'string', description: 'For local: the folder; default ~/Vexa.' },
-      } },
-    })
     try {
       const savedPanel = await $.store.get('panelAllowed')
       if (Array.isArray(savedPanel)) panelAllowed = savedPanel.filter((o): o is string => typeof o === 'string')
       const savedModels = await $.store.get('models')
       if (savedModels && typeof savedModels === 'object') models = { ...DEFAULT_MODELS, ...(savedModels as Models) }
     } catch { /* defaults */ }
-    try {
-      const saved = await $.store.get('settings')
-      if (saved && typeof saved === 'object') settings = { ...NO_SETTINGS, ...(saved as Settings) }
-    } catch { /* no saved choice: the context asks for one */ }
     await loadApp($)
     await connect($)
-    // Not signed in where the browser pane is (also the install chat, which the desktop app reloads
-    // the plugin into): the panel opens at its sign-in steps, with the person's permission.
-    if ((await read($)).connection === 'signin') quiet(openSetup($))
     if (!polling) {
       polling = true
       $.clock.every(1500, () => quiet((async () => { await poll($); await findLive($) })()))
       $.clock.every(3000, () => quiet(followWeb($)))
-      $.clock.every(5000, () => quiet(mapStep($, false)))
+      $.clock.every(300_000, () => quiet(heartbeat($)))
       // Signing in happens in the browser, outside the pane: notice it without a button press.
       $.clock.every(5000, async () => {
         try { if ((await read($)).connection !== 'ready') await connect($) } catch { /* the next tick tries again */ }
@@ -1193,9 +966,7 @@ export const register: Register = (on) => {
   on('command.run', { command: 'vexa' }, async $ => {
     await connect($)
     const m = await read($)
-    if (m.connection !== 'ready') {
-      return { text: (await openSetup($)) ? "Vexa's sign-in steps are open beside the chat." : "Vexa isn't signed in yet. Ask Claude to set up Vexa." }
-    }
+    if (m.connection !== 'ready') return { text: "Connect Vexa first: ask Claude to set up Vexa." }
     if (!m.offers.webPanel) return { text: "Vexa's call panel opens beside the chat in the Claude desktop app." }
     return { text: (await openPanel($, panelPath(m))) ? 'Vexa opened.' : "Vexa's panel didn't open." }
   })
@@ -1222,14 +993,6 @@ export const register: Register = (on) => {
     return ran
   })
 
-  on('tool.call', { tool: 'mcp__vexa__vexa_settings' }, async ($, e) => ({ result: JSON.stringify(await saveSettings($, e)) }))
-    .catch(($, e, next) => (next.called ? next(e) : { deny: 'Saving the Vexa setting failed; try again.' }))
-
-  on('prompt.compose', async ($, e, next) => {
-    const r = await next(e)
-    return { ...r, sections: [...r.sections, { id: 'vexa:context', text: contextText(await read($)), scope: 'session' }] }
-  }).catch(($, e, next) => next(e))
-
   on('tool.call', { tool: 'mcp__vexa__listener_configure' }, async ($, e) => ({ result: JSON.stringify(await configure($, e)) }))
     .catch(($, e, next) => (next.called ? next(e) : { deny: 'The Vexa listener control failed; try again.' }))
 
@@ -1244,9 +1007,7 @@ export const register: Register = (on) => {
   // only for a read-only tool or the listener's own controls; speaking and leaving always ask the
   // person; the rest goes to the session's decider as it would without us.
   on('tool.check', async ($, e, next) => {
-    if (e.tool === CONFIGURE_TOOL || e.tool === CALIBRATE_TOOL || e.tool === SETTINGS_TOOL) return { decision: 'allow', reason: "Vexa plugin's own control" }
-    // Starting sign-in only answers a link; the person signs in and presses Allow in their browser.
-    if (SIGNIN_TOOLS.has(e.tool)) return { decision: 'allow', reason: 'Vexa sign-in link' }
+    if (e.tool === CONFIGURE_TOOL || e.tool === CALIBRATE_TOOL) return { decision: 'allow', reason: "Vexa Live's own control" }
     // The plugin opening its web panel in the browser pane, for the panel origin it just got from
     // panel_link: the person decides (founder, 24 Oct), in Claude Code's own dialog — a hook's ask
     // goes to a person, not to auto mode's classifier. Once they said Yes, the same origin opens silently.
@@ -1255,13 +1016,11 @@ export const register: Register = (on) => {
       if (panelAllowed.includes(panelOrigin)) return { decision: 'allow', reason: 'Vexa call panel, opened before with your Yes' }
       return { decision: 'ask', reason: 'Vexa wants to open its call panel beside the chat' }
     }
-    if (!e.tool.startsWith(prefix)) return next(e)
-    if (next.origin.plugin === $.plugin.name) return { decision: 'allow', reason: 'Vexa pane button' }
-    const name = e.tool.slice(prefix.length)
-    // A sign-in link is a credential: only the plugin opens it, straight into the browser pane.
-    if (name === 'panel_link') return { decision: 'deny', reason: 'panel_link is opened by the Vexa plugin itself (/vexa), never by a model call.' }
-    if (READ_ONLY.has(name)) return { decision: 'allow', reason: 'Vexa read-only tool' }
-    if (ASK_PERSON[name]) return { decision: 'ask', reason: ASK_PERSON[name] }
+    // This plugin's own calls to the person's Vexa (the listener's reads, the band's presses) are
+    // the grant; what the model calls on that server is the session's to decide, as without us.
+    if (prefix && e.tool.startsWith(prefix) && next.origin.plugin === $.plugin.name) {
+      return { decision: 'allow', reason: "Vexa Live's own call" }
+    }
     return next(e)
   }).catch(($, e, next) => next(e))
 

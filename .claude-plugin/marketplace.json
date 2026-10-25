@@ -1,14 +1,24 @@
 {
   "name": "vexa",
-  "owner": { "name": "Vexa", "url": "https://github.com/Vexa-ai" },
+  "owner": {
+    "name": "Vexa",
+    "url": "https://github.com/Vexa-ai"
+  },
   "plugins": [
     {
-      "name": "vexa",
+      "name": "vexa-live",
       "source": "./clients/claude-plugin",
-      "description": "Send a bot to a Google Meet, Teams or Zoom call and follow the live transcript in a pane beside the chat. Sign in with your Vexa account; no API key.",
-      "version": "0.2.0",
+      "description": "Vexa Live: background listening for your live calls; wakes Claude when it matters. Needs the Vexa connector or the vexa plugin.",
+      "version": "0.1.0-rc",
       "category": "productivity",
-      "tags": ["meetings", "transcription", "google-meet", "microsoft-teams", "zoom", "mcp"],
+      "tags": [
+        "meetings",
+        "transcription",
+        "google-meet",
+        "microsoft-teams",
+        "zoom",
+        "mcp"
+      ],
       "homepage": "https://docs.vexa.ai/vexa-mcp",
       "repository": "https://github.com/Vexa-ai/vexa",
       "license": "Apache-2.0"

@@ -4,7 +4,7 @@ import { applyLive, mergeSegs } from '../hooks/register'
 import { FALLBACK_APP, briefFor, buildApp, calibrationSummary, isDirect, normalize, parseDecision, parseManifest, ruleHit, rulesText, triggerWords } from '../hooks/listener'
 
 const BAND = {
-  plugin: 'vexa',
+  plugin: 'vexa-live',
   component: 'AbovePrompt',
   props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 80, scroll: { offset: 0, bodyRows: 10 }, view: {} },
 } as const
@@ -36,7 +36,7 @@ function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<s
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('env.get', (_: unknown, e: any) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
   on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:vexa:vexa' } }))
-  on('tool.list', () => ({ value: ['calendar_status', 'workspace_list', 'start_demo_meeting', 'get_meeting_transcript'].map(n => ({ name: `mcp__plugin_vexa_vexa__${n}` })) }))
+  on('tool.list', () => ({ value: ['calendar_status', 'workspace_list', 'start_demo_meeting', 'get_meeting_transcript', 'whats_waiting'].map(n => ({ name: `mcp__plugin_vexa_vexa__${n}` })) }))
   on('mcp.call', (_: unknown, e: any) => {
     seen.tools.push(e.tool)
     seen.args.push({ tool: e.tool, args: e.args })
@@ -179,32 +179,6 @@ test('web and plugin share the listener through meeting metadata: state, heartbe
   meta.listener_want_ts = now + 1
   await clock.advance(3_000)
   expect(seen.annotations.at(-1).listener_state).toBe('off')
-  await ui.unmount()
-})
-
-test('while listening, the live map upserts people and companies into personal and keeps one meeting page', async ($, on) => {
-  const clock = mock.clock(on)
-  let lines = [seg('1', 'Ann', 'Morning all.')]
-  const seen = engine(on, () => lines)
-  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  await sendBot($)
-  await clock.advance(31_500)
-  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  await ui.press({ key: 'listen' })
-  lines = [...lines, seg('2', 'Ann', 'I lead procurement at Acme.'), seg('3', 'Bob', 'We agreed the annual plan at 38k.'), seg('4', 'Bob', 'I will send the contract by Friday.')]
-  await clock.advance(121_500)
-  expect(seen.maps.length).toBe(1)
-  expect(seen.maps[0]).toMatch(/Current map:/)
-  expect(seen.maps[0]).toMatch(/procurement at Acme/)
-  expect(seen.pages.at(-1)).toMatchObject({ slug: 'personal', content: expect.stringMatching(/annual plan at 38k/) })
-  expect(seen.pages.at(-1).path).toMatch(/^calls\/\d{4}-\d{2}-\d{2}-abc-defg-hij\.md$/)
-  const kinds = seen.upserts.map(u => `${u.kind}:${u.name}`)
-  expect(kinds).toEqual(['person:Ann Lee', 'company:Acme'])
-  expect(seen.upserts[0]).toMatchObject({ slug: 'personal', fields: { role: 'Procurement lead', company: 'Acme' }, connections: [{ name: 'Acme', relation: 'works at' }] })
-  expect(seen.upserts.every(u => /meeting 41/.test(u.source))).toBe(true)
-  const r: any = { result: JSON.parse(((await $.tool.call({ tool: 'mcp__vexa__listener_configure', models: { writer: 'haiku' } } as any)) as any).result) }
-  expect(r.result.models).toEqual({ filter: 'haiku', writer: 'haiku', triage: 'sonnet' })
-  expect(r.result.spend.writer).toMatchObject({ calls: 1, input: 900, output: 300 })
   await ui.unmount()
 })
 
