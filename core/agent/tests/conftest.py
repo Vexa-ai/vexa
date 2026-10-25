@@ -230,11 +230,13 @@ def git_broker(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _subscription_route_allowed_in_tests(monkeypatch):
-    """A dispatch with no model key runs on the deployment's SUBSCRIPTION route, which an install
-    refuses by default (VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY off). Most of the suite dispatches that
-    way without being about the route, so it runs with the route allowed; the setting's own tests
-    (test_subscription_token_proxy.py) unset it."""
-    monkeypatch.setenv("VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY", "true")
+    """A dispatch with no model key runs on the deployment's SUBSCRIPTION route, which the company
+    policy `subscription_token_proxy` refuses by default. Most of the suite dispatches that way
+    without being about the route, so it runs with the route allowed; the policy's own tests
+    (test_subscription_token_proxy.py) put the real reading back."""
+    from control_plane import dispatch  # noqa: PLC0415
+
+    monkeypatch.setattr(dispatch, "subscription_proxy_allowed", lambda settings: True)
 
 
 @pytest.fixture(autouse=True)

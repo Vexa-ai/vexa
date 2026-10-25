@@ -287,12 +287,14 @@ def test_process_backend_reads_the_mount_set_without_binding(tmp_path):
 # ── k8s: file-shaped credential mounts for agent workers (the codex seam) ─────
 
 _SM = '[{"secret": "codex-auth", "file": "auth.json", "mountPath": "/tmp/.codex/auth.json"}]'
+#: A worker whose turn runs on the deployment's subscription: the one route the Secrets are mounted on.
+_SUB = {"VEXA_MODEL_ROUTE": "subscription"}
 
 
 def test_k8s_secret_mounts_reach_agent_worker_pods_read_only():
     """An agent-worker Pod + RUNTIME_K8S_SECRET_MOUNTS ⇒ the worker Pod carries the Secret volume
     mounted read-only at the harness's credential path."""
-    env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1",
+    env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1", **_SUB,
            "RUNTIME_K8S_SECRET_MOUNTS": _SM}
     spec = pod_overrides(env, container_name="w", credential_mounts=True)["spec"]
     assert {"name": "cred-0-codex-auth", "secret": {
@@ -343,7 +345,7 @@ def test_k8s_submitted_container_survives_the_mount_overlay():
     owns the object and merges the overlay BY CONTAINER NAME, so image, command and env survive while
     the workspace + credential mounts are added — and the runtime's knobs, which ride overlay_env
     only, never become container config."""
-    env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1", "FOO": "bar"}
+    env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1", "FOO": "bar", **_SUB}
     pod = build_pod(
         name="w", workload_id="w", namespace=None, resources=None,
         runnable=_profiles.agent("img:1"),
@@ -368,7 +370,7 @@ def test_k8s_pod_overrides_needs_no_image():
 def test_k8s_secret_mount_file_uses_subpath_and_keeps_dir_writable():
     """{'file': ...} mounts ONE key at mountPath via subPath — the directory stays writable (codex
     keeps sqlite state under ~/.codex; a whole-dir read-only mount killed its app-server on launch)."""
-    env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1",
+    env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1", **_SUB,
            "RUNTIME_K8S_SECRET_MOUNTS":
                '[{"secret": "codex-auth", "mountPath": "/tmp/.codex/auth.json", "file": "auth.json"}]'}
     c = pod_overrides(env, container_name="w", credential_mounts=True)["spec"]["containers"][0]
@@ -386,7 +388,7 @@ def _content_check(tmp_path, content: str) -> int:
     """Build an agent-worker Pod with one Secret mount and run its mount check against a local file
     holding ``content``, the way the init container runs it against the projected Secret key."""
     import subprocess
-    env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1"}
+    env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1", **_SUB}
     pod = build_pod(name="w", workload_id="w", namespace=None, resources=None,
                     runnable=_profiles.agent("img:1"), env=env,
                     overlay_env={**env, "RUNTIME_K8S_SECRET_MOUNTS": _SM})
@@ -441,7 +443,7 @@ def test_k8s_a_subscription_file_passes_the_mount_check(tmp_path, content):
 
 
 def test_k8s_no_secret_mount_no_mount_check():
-    env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1"}
+    env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1", **_SUB}
     pod = build_pod(name="w", workload_id="w", namespace=None, resources=None,
                     runnable=_profiles.agent("img:1"), env=env)
     assert "initContainers" not in pod["spec"]
@@ -458,3 +460,17 @@ def test_the_s3_backend_binds_nothing_on_docker_and_a_private_emptydir_on_k8s(mo
     assert volumes == [{"name": "workspace-cache", "emptyDir": {"sizeLimit": "2Gi"}}]
     assert vmounts == [{"name": "workspace-cache", "mountPath": "/workspaces"}]
     assert not any("persistentVolumeClaim" in v for v in volumes)
+
+
+@pytest.mark.parametrize("route", ["", "proxy", "subject"])
+def test_k8s_secret_mounts_reach_no_worker_off_the_subscription_route(route):
+    """The Secrets are subscription files. agent-api stamps the subscription route only when the
+    company's ``subscription_token_proxy`` policy allows it (deny by default), so a worker on any
+    other route carries none — and a bad entry is still refused."""
+    env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1",
+           "RUNTIME_K8S_SECRET_MOUNTS": _SM, **({"VEXA_MODEL_ROUTE": route} if route else {})}
+    spec = pod_overrides(env, container_name="w", credential_mounts=True)["spec"]
+    assert not any(v.get("secret") for v in spec["volumes"])
+    with pytest.raises(ValueError):
+        pod_overrides({"RUNTIME_K8S_SECRET_MOUNTS": '[{"secret": "x"}]'}, container_name="w",
+                      credential_mounts=True)

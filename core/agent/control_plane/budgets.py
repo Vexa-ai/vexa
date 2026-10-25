@@ -37,6 +37,8 @@ THE KEYS (one line each, also documented in POLICIES.md):
                                    filled from the allowed models by market price
     model_intent_router            the small model the fast intent router asks when its rules are unsure
                                    (a catalog id or `cheapest`; empty: `model_home`)
+    subscription_token_proxy       whether a model subscription credential may reach agent workers:
+                                   `deny` (the default) or `allow`
 """
 from __future__ import annotations
 
@@ -74,6 +76,10 @@ STR_KEYS = {
     "model_levels": ("", ""),
     # THE FAST INTENT ROUTER (QB-5, `intent_router`): its small model; empty falls back to `model_home`.
     "model_intent_router": ("VEXA_MODEL_INTENT_ROUTER", ""),
+    # A MODEL SUBSCRIPTION IN AGENT WORKERS (`dispatch.subscription_proxy_allowed`): a consumer
+    # subscription is one person's licence, so `deny` unless the admin says `allow`. The company layer
+    # is the one place it is set; a person cannot change it (`narrow` leaves it the admin's).
+    "subscription_token_proxy": ("", "deny"),
     # THE COMPANY'S APPEARANCE DEFAULT (Settings → Appearance): what a person sees until they pick
     # their own. No environment variable — the company layer is the one place it is set.
     "appearance_accent": ("", ""),

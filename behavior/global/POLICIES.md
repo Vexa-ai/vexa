@@ -89,6 +89,7 @@ models_for:
 model_rules:
 model_levels:
 model_intent_router:
+subscription_token_proxy: deny
 appearance_accent: clay
 appearance_font_ui: geist
 appearance_font_reading: ui
@@ -869,6 +870,7 @@ not offer shows as *unavailable* in Company mode and is skipped.
 - `model_rules` — the router's rules, one task type to one model: `{routines: cheapest, events: 'level:2', home: cheapest, chat: <id>}`. A value is `cheapest` (the allowed model with the lowest market price), a catalog id, or `level:N`. It overlays `model_chat_default`, `model_routines`, `model_event_agents` and `model_home`; a rule naming a model `models_allowed` leaves out routes to the person's default, never around the policy. Empty: those four keys decide, as before.
 - `model_levels` — for hosted plans (the `levels` feature): the model each level 1 (fastest) to 5 (most capable) runs on, `{1: <id>, 3: <id>, 5: <id>}`. A level left out, or naming a model that is not allowed, is filled from the allowed models ordered by market price. Empty: all five come from that order.
 - `model_intent_router` — the small model the fast intent router (the `intent_router` feature) asks when its rules cannot tell whether a short message is one simple ask: a catalog id or `cheapest`. Empty: `model_home`. It must answer within 0.7 s or the message goes to the full agent.
+- `subscription_token_proxy` — whether a model subscription credential may reach agent workers: a Claude subscription token (`CLAUDE_CODE_OAUTH_TOKEN`, the claude CLI's credentials file) or Codex's `auth.json`. `deny` (the default): a turn that would run on one — the catalog's `auth: subscription`, or the deployment's own route with no API key — is refused with a message naming this policy, and no worker is given a subscription file. A consumer subscription is one person's licence and may not be proxied for others (see Model credentials & licensing). `allow`: those turns run on the subscription, for an install that serves the subscription's own holder. A person cannot change it.
 
 ## What the agent may spend on model calls
 
@@ -1015,6 +1017,7 @@ product does not yet check.
 | `event_agent_max_trust` | **declared, not yet enforced** |
 | `appearance_accent`, `appearance_font_ui`, `appearance_font_reading` | agent-api's `GET /api/user/appearance` — the company default under each person's own choice |
 | `model_chat_default`, `models_allowed`, `models_for`, `model_routines`, `model_event_agents` | agent-api's model catalog (`model_providers/catalog.py`) and dispatch, on every turn |
+| `subscription_token_proxy` | agent-api's dispatch, where a turn's model route is decided (`dispatch.apply_model_route`); the runtime mounts a subscription file only into a worker on the route it allowed |
 | `transcript_signals`, `signals_wakes_per_meeting` | agent-api's event door, before a `meeting.signal` wakes a meeting's agent (`routers/ingress.py`), and the `signals` service |
 | `model_signals`, `signals_cost_per_meeting_usd`, `signals_default_brief` | the `signals` service, read through agent-api's `GET /internal/meetings/{row}/listen` |
 

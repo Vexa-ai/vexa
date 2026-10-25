@@ -164,12 +164,6 @@ class Settings(BaseSettings):
     # identity to answer the id, a room's turn gets no toolbelt (fail closed). Off: a room token is
     # the owner's, narrowed by its ceiling, `shared` and D3.
     room_ws_principal: bool = True
-    # Whether a model SUBSCRIPTION credential (the claude CLI's `CLAUDE_CODE_OAUTH_TOKEN` or
-    # `.credentials.json`, Codex's `auth.json`) may be handed to agent workers. Off: a turn whose
-    # route is a subscription is refused before anything is spawned (dispatch.apply_model_route).
-    # A consumer subscription belongs to one person and its licence forbids proxying it
-    # (docs/docs/model-credentials-licensing.mdx); an operator turns this on for their own install.
-    allow_subscription_token_proxy: bool = False
 
     # ── secrets (never logged, committed, or in goldens) — P14 / P15 ─────────
     # Brokered, scoped identity the worker presents (ADR-0003): a port, not a raw key here.

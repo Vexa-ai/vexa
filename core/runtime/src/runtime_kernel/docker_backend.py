@@ -24,7 +24,7 @@ import requests_unixsocket
 from .backend import WorkloadHandle
 from .models import Resources
 from .mounts import workspace_binds
-from .profiles import Runnable
+from .profiles import Runnable, hands_subscription
 from .userns import container_profile
 from .workload_env import forwarded_env, name_component
 
@@ -273,10 +273,11 @@ class DockerBackend:
             host_config["Mounts"] = api_mounts
 
         # The Runtime BROKERS model credentials into the workloads whose profile asks for them: the
-        # profile's credential files are mounted read-only where it says. API-style provider env
+        # profile's credential files are mounted read-only where it says, into a worker whose model
+        # route is the subscription (profiles.hands_subscription). API-style provider env
         # rides the profile's forward list below. A profile that asks for none (a meeting bot) is
         # given none.
-        if runnable.credential_mounts:
+        if hands_subscription(runnable, env):
             for cred in runnable.credential_files:
                 binds.append(f"{cred.source}:{cred.target}:ro")
         # DEV hot-mount (parallels the dev.yml service hot-reload): bind a HOST source tree over the

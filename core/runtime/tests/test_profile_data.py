@@ -38,7 +38,7 @@ def test_docker_applies_a_profiles_data_and_nothing_more(monkeypatch):
     monkeypatch.setenv("DOCKER_NETWORK", "default_net")
     monkeypatch.setenv("TUNED_NETWORK", "tuned_net")
     monkeypatch.setenv("TUNED_DIAL", "7")
-    tuned = _create_payload(monkeypatch, TUNED, "job-1")
+    tuned = _create_payload(monkeypatch, TUNED, "job-1", {"VEXA_MODEL_ROUTE": "subscription"})
     assert tuned["Labels"]["tier"] == "batch"
     assert tuned["HostConfig"]["NetworkMode"] == "tuned_net"
     assert _env(tuned)["TUNED_DIAL"] == "7" and _env(tuned)["CRED_HOME"] == "/creds"
@@ -62,7 +62,8 @@ def test_credential_data_reaches_only_a_profile_that_asks_for_credentials(monkey
 
 
 def test_k8s_applies_a_profiles_data_and_nothing_more():
-    overlay = {"RUNTIME_K8S_SECRET_MOUNTS": '[{"secret": "cred", "file": "auth.json", "mountPath": "/m"}]'}
+    overlay = {"RUNTIME_K8S_SECRET_MOUNTS": '[{"secret": "cred", "file": "auth.json", "mountPath": "/m"}]',
+               "VEXA_MODEL_ROUTE": "subscription"}
     tuned = build_pod(name="vexa-job-1", workload_id="job-1", runnable=TUNED, env={}, namespace=None,
                       resources=None, overlay_env=overlay)
     assert tuned["metadata"]["labels"]["tier"] == "batch"
@@ -134,7 +135,6 @@ def test_the_shipped_agent_profile_carries_the_configured_credentials(monkeypatc
 
     monkeypatch.setenv("HOST_CLAUDE_DIR", "/host/.claude")
     monkeypatch.setenv("HOST_CODEX_CREDENTIALS", "/host/.codex/auth.json")
-    monkeypatch.setenv("VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY", "true")
     registry = default_registry()
     agent, bot = registry.get("agent").runnable, registry.get("meeting-bot").runnable
     assert agent.credential_files == (
@@ -194,9 +194,10 @@ def test_the_process_backend_stages_credential_files_only_for_a_profile_that_ask
     monkeypatch.setattr(pb, "group_ids", lambda names: ())
     monkeypatch.setattr(pb, "make_home", lambda uid, gid, **kw: staged.append(kw["staged"]) or ("/h", "/h/tmp"))
     backend = ProcessBackend(homes_root=str(tmp_path / "homes"))
-    backend._identity("job-tuned", TUNED, {})
-    backend._identity("job-withheld", Runnable(**{**TUNED.__dict__, "credential_mounts": False}), {})
-    assert [[f.home_path for f in s] for s in staged] == [[".creds/auth.json"], []]
+    backend._identity("job-tuned", TUNED, {"VEXA_MODEL_ROUTE": "subscription"})
+    backend._identity("job-withheld", Runnable(**{**TUNED.__dict__, "credential_mounts": False}), {"VEXA_MODEL_ROUTE": "subscription"})
+    backend._identity("job-api-key", TUNED, {"VEXA_MODEL_ROUTE": "proxy"})   # not the subscription route
+    assert [[f.home_path for f in s] for s in staged] == [[".creds/auth.json"], [], []]
 
 
 def test_docker_drops_every_capability_but_the_profiles(monkeypatch):
@@ -219,23 +220,3 @@ def test_docker_drops_every_capability_but_the_profiles(monkeypatch):
     assert profile["defaultAction"] == "SCMP_ACT_ERRNO"
     assert any(sorted(r["names"]) == ["chroot", "clone", "unshare"] and r["action"] == "SCMP_ACT_ALLOW"
                and r.get("excludes") == {"caps": ["CAP_SYS_ADMIN"]} for r in profile["syscalls"])
-
-
-def test_no_subscription_file_reaches_a_worker_unless_the_install_allows_it(monkeypatch):
-    """VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY off (the default): the agent profile carries no
-    subscription file however the operator configured one; on, it carries them."""
-    from runtime_kernel import default_registry
-    from runtime_kernel.profiles import configured_credentials
-
-    monkeypatch.setenv("HOST_CLAUDE_DIR", "/host/.claude")
-    monkeypatch.setenv("HOST_CODEX_CREDENTIALS", "/host/.codex/auth.json")
-    for off in (None, "", "false", "0"):
-        if off is None:
-            monkeypatch.delenv("VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY", raising=False)
-        else:
-            monkeypatch.setenv("VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY", off)
-        assert configured_credentials() == ()
-        assert default_registry().get("agent").runnable.credential_files == ()
-    monkeypatch.setenv("VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY", "1")
-    assert len(configured_credentials()) == 2
-    assert len(default_registry().get("agent").runnable.credential_files) == 2

@@ -665,13 +665,15 @@ def route_context(model_config: Optional[dict], *,
         secret=model_providers.secret_from_env(os.environ if env is None else env))
 
 
-# ── a subscription route is the install's to allow ───────────────────────────────────────────
-#: The install's switch (``Settings.allow_subscription_token_proxy``) that lets a model SUBSCRIPTION
-#: credential reach agent workers: the claude CLI's OAuth token or credential file, Codex's
-#: ``auth.json``. Off by default, because a consumer subscription belongs to one person and its
-#: licence forbids proxying it (docs/docs/model-credentials-licensing.mdx). The runtime reads the
-#: same switch before it mounts a subscription file into any worker (runtime_kernel.profiles).
-ALLOW_SUBSCRIPTION_ENV = "VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY"
+# ── a subscription route is the company's to allow ───────────────────────────────────────────
+#: The company policy (``_global/POLICIES.md``, read through ``budgets``) that lets a model
+#: SUBSCRIPTION credential reach agent workers: the claude CLI's OAuth token or credential file,
+#: Codex's ``auth.json``. ``deny`` by default, because a consumer subscription belongs to one person
+#: and its licence forbids proxying it (docs/docs/model-credentials-licensing.mdx); the admin sets
+#: ``allow`` for their own install. A refused route is never stamped, so no worker carries the
+#: subscription route mark, and the runtime mounts a subscription file only into a worker that does
+#: (runtime_kernel.profiles.hands_subscription).
+SUBSCRIPTION_POLICY = "subscription_token_proxy"
 _SUBSCRIPTION_VENDOR = {model_proxy.SUB_CLAUDE: "Claude", model_proxy.SUB_CODEX: "ChatGPT (Codex)"}
 
 
@@ -691,8 +693,21 @@ def subscription_refusal(env: dict[str, str], route: Optional["model_providers.M
         model=route.model_id if route is not None else eff.get("VEXA_AGENT_MODEL", ""),
         provider=route.provider if route is not None else "",
         detail=(f"This Vexa does not pass a {_SUBSCRIPTION_VENDOR.get(sub, sub)} subscription "
-                f"token to agents ({ALLOW_SUBSCRIPTION_ENV} is off)."),
-        remedy="Use a model API key, or ask the operator to allow it.")
+                f"token to agents (the company policy {SUBSCRIPTION_POLICY} is deny)."),
+        remedy="Use a model API key, or ask the admin to allow it.")
+
+
+def subscription_proxy_allowed(settings) -> bool:
+    """``subscription_token_proxy`` from ``_global/POLICIES.md``: ``allow`` lets a subscription route
+    run. Anything else, or a policy that cannot be read, is the default: deny."""
+    try:
+        from control_plane import budgets  # noqa: PLC0415
+        from control_plane import system_mounts  # noqa: PLC0415
+
+        pol = budgets.read(system_mounts.global_root(settings))
+        return str(pol.get(SUBSCRIPTION_POLICY) or "").strip().lower() == "allow"
+    except Exception:  # noqa: BLE001 — a policy that cannot be read is the default
+        return False
 
 
 def apply_model_route(env: dict[str, str], model_config: Optional[dict], *,
@@ -714,7 +729,7 @@ def apply_model_route(env: dict[str, str], model_config: Optional[dict], *,
 
     A route that resolves to a model SUBSCRIPTION — the catalog's ``auth: subscription``, or the
     deployment's own route with no API key — raises ``ModelChoiceFault`` unless the install allows
-    one (``allow_subscription``, ``VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY``): the turn is refused with
+    one (``allow_subscription``, the company policy ``subscription_token_proxy``): the turn is refused with
     a sentence naming the setting, and no subscription credential is stamped for any worker."""
     cfg = model_config or {}
     route = None
@@ -1259,7 +1274,7 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     _route = apply_model_route(env, model_config, catalog=catalog, choice=model_choice, admin=admin,
                                allowlist=settings.model_allowlist, friction=friction, subject=subject,
                                session=chat_session(invocation), effort=effort_choice, person=person,
-                               allow_subscription=settings.allow_subscription_token_proxy)
+                               allow_subscription=subscription_proxy_allowed(settings))
     if _route is not None:
         # Read back (and removed) by the dispatcher: which catalog model this unit's worker runs.
         env[MODEL_ID_ENV] = _route.model_id

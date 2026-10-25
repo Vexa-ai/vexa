@@ -468,18 +468,7 @@
       "class": "capability",
       "capability": "model_inference",
       "secret": true,
-      "description": "claude CLI subscription OAuth token (`claude setup-token`). agent-api stamps it into a worker only on the deployment's SUBSCRIPTION route, and only while VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY is on, where the claude CLI reads it itself (a consumer credential is never moved into the model proxy); on every other route it is stamped empty"
-    },
-    {
-      "key": "VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY",
-      "class": "defaulted",
-      "default": "false",
-      "description": "whether a model SUBSCRIPTION credential (CLAUDE_CODE_OAUTH_TOKEN, the claude CLI's .credentials.json, Codex's auth.json) may be handed to agent workers. A consumer subscription belongs to one person and its licence forbids proxying it (docs/docs/model-credentials-licensing.mdx), so it is off: a turn whose route is a subscription (the catalog's auth: subscription, or the deployment's own route with no API key) is refused before anything is spawned, with a sentence naming this setting (dispatch.apply_model_route). true is the operator's call for their own install. The runtime reads the same setting before it mounts a subscription file",
-      "targets": [
-        "compose",
-        "helm",
-        "lite"
-      ]
+      "description": "claude CLI subscription OAuth token (`claude setup-token`). agent-api stamps it into a worker only on the deployment's SUBSCRIPTION route, where the claude CLI reads it itself (a consumer credential is never moved into the model proxy); on every other route it is stamped empty"
     },
     {
       "key": "ANTHROPIC_BASE_URL",

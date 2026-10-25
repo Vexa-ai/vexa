@@ -366,7 +366,7 @@ def test_the_qwen_lane_dials_are_declared():
 # 164: +1 VEXA_ON_BEHALF_OF (H10: the person a room's agent turn answered, the commit trailer).
 # 165: +1 VEXA_SUBJECT_TICKET_KEY_FILE (subject-ticket.v1: agent-api's own ticket key).
 # 166: +1 VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY (a subscription route is the install's to allow, off).
-EXPECTED_DECLARED_KEYS = 166
+EXPECTED_DECLARED_KEYS = 165
 
 
 def test_connections_keys_are_capabilities_on_real_surfaces():

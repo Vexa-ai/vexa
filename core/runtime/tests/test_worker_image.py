@@ -11,6 +11,8 @@ These never touch a real daemon: the unix-socket session is faked so we can asse
 /images/create pull call. Also exercises the worker create spec using the worker image name."""
 from __future__ import annotations
 
+import pytest
+
 from runtime_kernel.docker_backend import DockerBackend
 from runtime_kernel.profiles import Runnable
 
@@ -203,7 +205,12 @@ def test_worker_create_spec_carries_the_dispatchs_model_route_and_nothing_of_the
     assert "ANTHROPIC_AUTH_TOKEN" not in env and "ANTHROPIC_MODEL" not in env
 
 
-def _create_payload(monkeypatch, runnable, workload_id):
+#: The route agent-api stamps on a worker whose turn runs on the deployment's subscription — the one
+#: route a subscription file is handed to (``profiles.hands_subscription``).
+_SUB = {"VEXA_MODEL_ROUTE": "subscription"}
+
+
+def _create_payload(monkeypatch, runnable, workload_id, env=None):
     routes = {
         ("POST", "/containers/create"): FakeResp(201, body={"Id": "cid123"}),
         ("POST", "/containers/cid123/start"): FakeResp(204),
@@ -218,7 +225,7 @@ def _create_payload(monkeypatch, runnable, workload_id):
         return orig(method, url, **kw)
 
     sess.request = spy
-    b.start(workload_id, runnable, {})
+    b.start(workload_id, runnable, env or {})
     return captured
 
 
@@ -240,14 +247,14 @@ def test_each_workload_class_joins_its_own_network(monkeypatch):
 def test_a_bot_receives_no_model_credential(monkeypatch, tmp_path):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "model-key")
     monkeypatch.setenv("HOST_CLAUDE_CREDENTIALS", "/host/.claude/.credentials.json")
-    monkeypatch.setenv("VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY", "true")   # the install allows it
     bot = _create_payload(monkeypatch, _profiles.bot("bot:1"), "mtg-1-abcdef12")
     env = dict(item.split("=", 1) for item in bot["Env"])
     assert "ANTHROPIC_API_KEY" not in env
     assert not (bot["HostConfig"].get("Binds") or [])
-    worker = _create_payload(monkeypatch, _profiles.agent(TARGET), "agent-foo-chat")
+    worker = _create_payload(monkeypatch, _profiles.agent(TARGET), "agent-foo-chat", _SUB)
     env = dict(item.split("=", 1) for item in worker["Env"])
-    # no API key reaches a worker either (H5/W1); the subscription FILE does, for the official CLI
+    # no API key reaches a worker either (H5/W1); on the subscription route the subscription FILE
+    # does, for the official CLI
     assert "ANTHROPIC_API_KEY" not in env
     assert "/host/.claude/.credentials.json:/root/.claude/.credentials.json:ro" in worker["HostConfig"]["Binds"]
 
@@ -263,8 +270,7 @@ def test_the_codex_credential_lands_where_the_worker_looks(monkeypatch):
     from runtime_kernel.workload_env import CODEX_HOME_ENV, WORKER_CODEX_HOME
 
     monkeypatch.setenv("HOST_CODEX_CREDENTIALS", "/host/.codex/auth.json")
-    monkeypatch.setenv("VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY", "true")   # the install allows it
-    worker = _create_payload(monkeypatch, _profiles.agent(TARGET), "agent-foo-chat")
+    worker = _create_payload(monkeypatch, _profiles.agent(TARGET), "agent-foo-chat", _SUB)
     env = dict(item.split("=", 1) for item in worker["Env"])
     assert env[CODEX_HOME_ENV] == WORKER_CODEX_HOME
     assert f"/host/.codex/auth.json:{WORKER_CODEX_HOME}/auth.json:ro" in worker["HostConfig"]["Binds"]
@@ -280,12 +286,13 @@ def test_the_codex_credential_lands_where_the_worker_looks(monkeypatch):
     assert re.search(rf"mkdir -p -m 1777 {re.escape(WORKER_CODEX_HOME)}\b", dockerfile)
 
 
-def test_no_subscription_file_is_bound_into_a_worker_unless_the_install_allows_it(monkeypatch):
-    """VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY off (the default): the docker backend binds neither
-    subscription file into a worker, however the operator configured them."""
-    monkeypatch.delenv("VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY", raising=False)
+@pytest.mark.parametrize("route", ["", "proxy", "subject"])
+def test_a_worker_off_the_subscription_route_is_bound_no_subscription_file(monkeypatch, route):
+    """The company's ``subscription_token_proxy`` policy is deny by default, so agent-api stamps no
+    worker with the subscription route; a worker on any other route gets neither file."""
     monkeypatch.setenv("HOST_CLAUDE_CREDENTIALS", "/host/.claude/.credentials.json")
     monkeypatch.setenv("HOST_CODEX_CREDENTIALS", "/host/.codex/auth.json")
-    worker = _create_payload(monkeypatch, _profiles.agent(TARGET), "agent-foo-chat")
+    worker = _create_payload(monkeypatch, _profiles.agent(TARGET), "agent-foo-chat",
+                             {"VEXA_MODEL_ROUTE": route} if route else {})
     binds = worker["HostConfig"].get("Binds") or []
     assert not any("/host/.claude" in b or "/host/.codex" in b for b in binds)

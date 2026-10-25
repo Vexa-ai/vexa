@@ -358,11 +358,6 @@ models:
   # bot, reading a transcript, writing a page — is a tool call, and a model served without it ends
   # each turn with the typed fault `model-provider / no_tool_calling`.
   runner: ""            # VEXA_RUNNER: "" (claude-code) | openai-agent | codex
-  # VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY: whether a model SUBSCRIPTION credential (CLAUDE_CODE_OAUTH_TOKEN,
-  # a claude or codex auth file in runtime.workerSecretMounts) may reach agent workers. A consumer
-  # subscription belongs to one person and its licence forbids proxying it, so it is off: no
-  # subscription file is mounted and a turn on a subscription route is refused, naming this setting.
-  allowSubscriptionTokenProxy: false
   llmBaseUrl: ""        # VEXA_LLM_BASE_URL, e.g. http://litellm.ai.svc:4000/v1 — the /v1 base
   llmExtraBody: ""      # VEXA_LLM_EXTRA_BODY: a JSON object merged into every request, e.g.
                         # '{"chat_template_kwargs":{"enable_thinking":false}}' for a Qwen

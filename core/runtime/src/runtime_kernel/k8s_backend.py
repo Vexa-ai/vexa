@@ -22,7 +22,7 @@ from . import pod_scheduling, workload_env
 from .backend import WorkloadHandle
 from .models import Resources
 from .mounts import k8s_volume_mounts
-from .profiles import ProfileResources, Runnable, subscription_proxy_allowed
+from .profiles import MODEL_ROUTE_ENV, ROUTE_SUBSCRIPTION, ProfileResources, Runnable
 from .workload_env import forwarded_env
 
 MANAGED_LABEL = "runtime.managed"
@@ -288,12 +288,9 @@ def _runtime_scheduling_env() -> dict[str, str]:
     """The runtime's own scheduling knobs from its PROCESS env (set by the chart on the runtime
     Deployment). Overlaid onto the per-workload spawn env for ``pod_overrides`` — spec.env cannot
     carry these: it is built per-workload by different producers (meeting-api for a bot, agent-api for
-    an agent worker), whereas the scheduling constraints are a property of the runtime/backend.
-    The credential-file Secrets are among them only while the install allows a subscription
-    credential into workers (``profiles.subscription_proxy_allowed``)."""
-    names = (TOLERATIONS_ENV, NODE_SELECTOR_ENV, EXTRA_CA_ENV,
-             *((SECRET_MOUNTS_ENV,) if subscription_proxy_allowed(os.environ) else ()))
-    return {k: os.environ[k] for k in names if os.environ.get(k)}
+    an agent worker), whereas the scheduling constraints are a property of the runtime/backend."""
+    return {k: os.environ[k] for k in (TOLERATIONS_ENV, NODE_SELECTOR_ENV, SECRET_MOUNTS_ENV, EXTRA_CA_ENV)
+            if os.environ.get(k)}
 
 
 def _kubectl(*args: str, check: bool = True, stdin: Optional[str] = None) -> subprocess.CompletedProcess:
@@ -340,7 +337,8 @@ def pod_overrides(env: dict[str, str], *, container_name: str,
     to merge). Building it for scheduling alone is load-bearing: a plain meeting bot has no workspace
     PVC, so a volumes-only early return would silently drop its tolerations and re-create the bug.
     ``credential_mounts`` (the profile's, never the spec's) decides whether the runtime's
-    credential-file Secrets are mounted. Pure/env-driven → unit-tested offline (no kubectl)."""
+    credential-file Secrets are mounted, and only into a workload whose model route is the
+    subscription (``profiles.hands_subscription``). Pure/env-driven → unit-tested offline (no kubectl)."""
     pvc = env.get("VEXA_WORKSPACE_MOUNT_SOURCE")
     root = env.get("VEXA_WORKSPACE_MOUNT_TARGET")
     volumes, volume_mounts = k8s_volume_mounts(env, pvc_name=pvc or "", store_target=root or "")
@@ -353,6 +351,11 @@ def pod_overrides(env: dict[str, str], *, container_name: str,
         why = refused_secret_mount(sm)
         if why:
             raise ValueError(f"{SECRET_MOUNTS_ENV}[{i}] refused: {why}")
+    # the Secrets are subscription files: checked for every worker, mounted only into one whose
+    # model route is the subscription (profiles.hands_subscription)
+    if (env.get(MODEL_ROUTE_ENV) or "") != ROUTE_SUBSCRIPTION:
+        secret_mounts = None
+    for i, sm in enumerate(secret_mounts or ()):
         name = f"{CRED_VOLUME_PREFIX}{i}-{sm['secret']}"[:63].rstrip("-")
         # only the named key is projected into the volume, so nothing else of the Secret is there
         volumes.append({"name": name, "secret": {"secretName": sm["secret"],

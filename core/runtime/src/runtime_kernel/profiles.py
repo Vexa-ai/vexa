@@ -289,17 +289,21 @@ def host_claude_credentials(env: Optional[Mapping[str, str]] = None) -> Optional
     return f"{host_dir.rstrip('/')}/{CLAUDE_CREDENTIALS_FILENAME}" if host_dir else None
 
 
-#: The install's switch that lets a model SUBSCRIPTION credential reach agent workers. Off by default:
-#: a consumer subscription belongs to one person and its licence forbids proxying it
-#: (docs/docs/model-credentials-licensing.mdx). agent-api reads the same switch and refuses a turn
-#: whose route is a subscription (control_plane.dispatch.apply_model_route).
-ALLOW_SUBSCRIPTION_ENV = "VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY"
+#: The route agent-api stamps on every worker it dispatches (``VEXA_MODEL_ROUTE``:
+#: ``control_plane.model_proxy.confine``), and the one value of it that is the deployment's
+#: SUBSCRIPTION. agent-api decides that route once, under the company's ``subscription_token_proxy``
+#: policy (deny unless the admin allows it), so a worker whose spec does not name the subscription
+#: route is handed no subscription file: a route that never runs on it never carries it.
+MODEL_ROUTE_ENV = "VEXA_MODEL_ROUTE"
+ROUTE_SUBSCRIPTION = "subscription"
 
 
-def subscription_proxy_allowed(env: Optional[Mapping[str, str]] = None) -> bool:
-    """Whether the install allows a subscription credential into workers (``1``/``true``/``yes``/``on``)."""
-    env = os.environ if env is None else env
-    return (env.get(ALLOW_SUBSCRIPTION_ENV) or "").strip().lower() in ("1", "true", "yes", "on")
+def hands_subscription(runnable: "Runnable", env: Mapping[str, str]) -> bool:
+    """Whether this workload receives the runtime's subscription credentials — its profile's files
+    and, on k8s, the ``RUNTIME_K8S_SECRET_MOUNTS`` Secrets: a profile that asks for credentials, on
+    a spec whose model route is the subscription. A spec can only withhold them; the files
+    themselves are the operator's."""
+    return runnable.credential_mounts and (env.get(MODEL_ROUTE_ENV) or "") == ROUTE_SUBSCRIPTION
 
 
 def configured_credentials(env: Optional[Mapping[str, str]] = None) -> tuple[CredentialFile, ...]:
@@ -308,11 +312,8 @@ def configured_credentials(env: Optional[Mapping[str, str]] = None) -> tuple[Cre
     the one place that knows which harness reads which file: the claude CLI's credential
     (``HOST_CLAUDE_CREDENTIALS`` / ``HOST_CLAUDE_DIR``) and the Codex ``auth.json``
     (``HOST_CODEX_CREDENTIALS``, inside ``WORKER_CODEX_HOME`` in a container, ``~/.codex`` for a
-    process-backend child). None while the install does not allow a subscription credential into
-    workers (:func:`subscription_proxy_allowed`)."""
+    process-backend child)."""
     env = os.environ if env is None else env
-    if not subscription_proxy_allowed(env):
-        return ()
     files: list[CredentialFile] = []
     claude = host_claude_credentials(env)
     if claude:

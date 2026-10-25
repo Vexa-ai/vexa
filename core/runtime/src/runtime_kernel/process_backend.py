@@ -33,7 +33,7 @@ from .isolation import (
 )
 from .models import Resources
 from .mounts import mount_set
-from .profiles import Runnable
+from .profiles import Runnable, hands_subscription
 from .workload_env import child_environment, name_component
 
 log = logging.getLogger("runtime_kernel.process")
@@ -138,7 +138,7 @@ class ProcessBackend:
         else:
             uid, groups = self._uids.acquire(workload_id), group_ids(runnable.process_groups)
         staged = [StagedFile(source=c.source, home_path=c.home_path)
-                  for c in runnable.credential_files if c.home_path] if runnable.credential_mounts else []
+                  for c in runnable.credential_files if c.home_path] if hands_subscription(runnable, env) else []
         home, tmp = make_home(uid, uid, homes_root=self._homes_root, staged=staged)
         return ChildIdentity(uid=uid, gid=uid, groups=tuple(groups), home=home, tmp=tmp)
 
