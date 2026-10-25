@@ -154,7 +154,11 @@ def test_least_recently_used_workspaces_are_evicted_and_come_back_intact(tmp_pat
     cache = tmp_path / "cache"
     for rel in ("a", "b", "c"):
         assert wpaths.read_text_inside(cache / rel, "f.md")[0] == rel.upper()
-    run.cache.max_bytes = run.cache.sizes["a"] + run.cache.sizes["b"] + run.cache.sizes["_global"] + 1
+    # Room for the pinned _global and any two of a, b, c, never all three: the trees differ by a
+    # byte or two (a compressed commit's length follows its timestamp), so size the budget off
+    # the largest one.
+    largest = max(run.cache.sizes[rel] for rel in ("a", "b", "c"))
+    run.cache.max_bytes = run.cache.sizes["_global"] + 2 * largest
     assert run.cache.maybe_evict() == 1
     assert is_stub(cache / "a") and not is_stub(cache / "b") and not is_stub(cache / "c"), "a was used longest ago"
     assert not is_stub(cache / "_global"), "pinned"
