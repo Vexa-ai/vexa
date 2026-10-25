@@ -9,8 +9,8 @@ Listening is on by default: when the person's Vexa bot is in a live call, start 
 say one line («Listening to <call> — say "Claude" in the call and I'll answer here»), and keep it
 running until the call ends or they say stop.
 
-1. Get a key: call Vexa's `listen_token` (no arguments). It answers `key`, `expires_at` and usually
-   `api_url`; without `api_url`, use the address of the Vexa server you call (its origin, no `/mcp`).
+1. Get a key: call Vexa's `listen_token` (no arguments); it answers `key` and `expires_at`. The
+   `api_url` is the address Vexa's own instructions name («This Vexa's API address, for vexa-listen»).
 2. Start the listener with the Bash tool, `run_in_background: true`:
 
    ```
