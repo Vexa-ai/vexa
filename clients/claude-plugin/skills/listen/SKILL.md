@@ -9,15 +9,17 @@ Listening is on by default: when the person's Vexa bot is in a live call, start 
 say one line («Listening to <call> — say "Claude" in the call and I'll answer here»), and keep it
 running until the call ends or they say stop.
 
-1. Get a key: call Vexa's `listen_token` (no arguments); it answers `key` and `expires_at`. The
-   `api_url` is the address Vexa's own instructions name («This Vexa's API address, for vexa-listen»).
+1. Call Vexa's `listen_token` (no arguments). It answers everything the listener needs: `key`,
+   `api_url`, and `meeting` (`platform`, `native_meeting_id` of the call a bot of theirs is in now;
+   `meetings` lists every live one). Take these from that answer only; don't look for the address
+   anywhere else. `meeting` null means no bot is in a call: say so in one line and stop.
 2. Start the listener with the Bash tool, `run_in_background: true`:
 
    ```
    VEXA_LISTEN_KEY=<key> sh "${CLAUDE_PLUGIN_ROOT}/bin/vexa-listen" <api_url> <platform> <native_meeting_id> <since_index>
    ```
 
-   `platform` and `native_meeting_id` are the meeting's; `since_index` is 0 the first time.
+   `since_index` is 0 the first time.
 3. Open the call panel beside the chat: call Vexa's `panel_link` with
    `next` = `/panel/meeting/<platform>/<native_meeting_id>?surface=claude-panel` and open the link it
    returns in Claude's browser pane (`preview_start`) if this app has one; otherwise give the person
