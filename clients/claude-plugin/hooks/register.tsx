@@ -89,8 +89,8 @@ const WINDOW = 6
 const OFFER_EVERY_MS = 30_000
 const CONFIGURE = 'listener_configure'
 const CALIBRATE = 'listener_calibrate'
-const CONFIGURE_TOOL = 'mcp__vexa__listener_configure'
-const CALIBRATE_TOOL = 'mcp__vexa__listener_calibrate'
+const CONFIGURE_TOOL = 'mcp__vexa-live__listener_configure'
+const CALIBRATE_TOOL = 'mcp__vexa-live__listener_calibrate'
 const PROJECT_APP = '.vexa/app'
 const BROWSER_SERVER = 'Claude_Browser'
 const BROWSER_TOOL = 'mcp__Claude_Browser__preview_start'
@@ -162,9 +162,13 @@ export function vexaServerOf(names: readonly string[]): string {
   return hit ? hit.slice('mcp__'.length, -'__get_meeting_transcript'.length) : ''
 }
 
+// A server the model has called Vexa's tools on (`learnServer`): the desktop app defers MCP tools,
+// so a connector's are not in `$.tool.list()` until the model loads them.
+let seen = ''
+
 async function connect($: any): Promise<void> {
   const names: string[] = (await $.tool.list()).map((t: { name: string }) => t.name)
-  const found = vexaServerOf(names)
+  const found = vexaServerOf(names) || seen
   if (!found) {
     server = ''
     await update($, x => ({ ...x, connection: 'refused', error: '' }))
@@ -185,6 +189,19 @@ async function connect($: any): Promise<void> {
   }
   await update($, x => ({ ...x, connection: 'ready', offers, error: '' }))
   if (was !== 'ready') { quiet(heartbeat($)); if (offers.requests) startRequests($) }
+}
+
+// A Vexa tool the model just called names the server: `mcp__<server>__whats_waiting` and the like.
+export function serverOfCall(tool: string): string {
+  const m = /^mcp__(.+)__(whats_waiting|get_meeting_transcript|list_meetings|request_meeting_bot|start_demo_meeting|get_meeting)$/.exec(tool)
+  return m && m[1] !== 'vexa-live' ? m[1] : ''
+}
+
+async function learnServer($: any, tool: string): Promise<void> {
+  const s = serverOfCall(tool)
+  if (!s || s === server) return
+  seen = s
+  await connect($)
 }
 
 // The server knows this plugin is here (the presence its «Vexa Live» offer reads), and when it
@@ -976,7 +993,8 @@ export const register: Register = (on) => {
   // own buttons do: «Claude opens the call beside the chat».
   on('tool.call', async ($, e, next) => {
     const ran = await next(e)
-    const name = e.tool.startsWith(prefix) ? e.tool.slice(prefix.length) : ''
+    if (!ran.deny && !ran.isError) await learnServer($, e.tool).catch(() => {})
+    const name = prefix && e.tool.startsWith(prefix) ? e.tool.slice(prefix.length) : ''
     if ((name === 'request_meeting_bot' || name === 'start_demo_meeting') && !ran.deny && !ran.isError) try {
       const bot = leadingJson(String(ran.text ?? ''))
       const m = await read($)
@@ -993,10 +1011,10 @@ export const register: Register = (on) => {
     return ran
   })
 
-  on('tool.call', { tool: 'mcp__vexa__listener_configure' }, async ($, e) => ({ result: JSON.stringify(await configure($, e)) }))
+  on('tool.call', { tool: CONFIGURE_TOOL }, async ($, e) => ({ result: JSON.stringify(await configure($, e)) }))
     .catch(($, e, next) => (next.called ? next(e) : { deny: 'The Vexa listener control failed; try again.' }))
 
-  on('tool.call', { tool: 'mcp__vexa__listener_calibrate' }, async ($, e) => {
+  on('tool.call', { tool: CALIBRATE_TOOL }, async ($, e) => {
     const input = e as any
     const l = await readListener($)
     const rules = typeof input.rules === 'string' && input.rules.trim() ? input.rules.trim() : rulesText(l.brief)

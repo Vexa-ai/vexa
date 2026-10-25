@@ -232,7 +232,7 @@ test('listener_configure: plain rules, triggers and presets; it cannot start lis
   mock.clock(on)
   engine(on, () => [])
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const r: any = { result: JSON.parse(((await $.tool.call({ tool: 'mcp__vexa__listener_configure', rules: 'Wake on any price.', triggers: [{ kind: 'keyword', value: 'discount' }] } as any)) as any).result) }
+  const r: any = { result: JSON.parse(((await $.tool.call({ tool: 'mcp__vexa-live__listener_configure', rules: 'Wake on any price.', triggers: [{ kind: 'keyword', value: 'discount' }] } as any)) as any).result) }
   expect(r.result.listening).toBe(false)
   expect(r.result.brief.focus).toBe('Wake on any price.')
   expect(r.result.brief.rules[0].value).toBe('discount')
@@ -260,7 +260,7 @@ test('first run seeds ~/.vexa/apps/<name>; an update keeps edited files and land
   expect(seen.written[`${dir}/listener/default.json`]).toBeUndefined()
   expect(seen.written[`${dir}/listener/default.json.upstream`]).toBe('{"focus":"new default rules"}')
   expect(seen.written[`${dir}/.upstream/vexa-app.json`]).toBe(manifest('0.3.0'))
-  const r: any = { result: JSON.parse(((await $.tool.call({ tool: 'mcp__vexa__listener_configure' } as any)) as any).result) }
+  const r: any = { result: JSON.parse(((await $.tool.call({ tool: 'mcp__vexa-live__listener_configure' } as any)) as any).result) }
   expect(r.result.appFolder).toBe(dir)
   expect(r.result.brief.focus).toBe('my own rules')
 })

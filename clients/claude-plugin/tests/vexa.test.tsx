@@ -1,13 +1,13 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { leadingJson, vexaServerOf } from '../hooks/register'
+import { leadingJson, serverOfCall, vexaServerOf } from '../hooks/register'
 
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 
 // `refuse`: every mod call fails the way auto mode refuses one in the desktop app.
 function engine(on: any, connect: unknown | (() => unknown), calls: { tool: string; args: unknown }[] = [], opened: string[] = [], env: Record<string, string> = {}, tools = ['calendar_status', 'workspace_list', 'start_demo_meeting', 'get_meeting_transcript', 'whats_waiting'], browser = false, refuse = false) {
   on('command.register', () => ({ value: { command: 'vexa' } }))
-  on('tool.register', () => ({ value: { tool: 'mcp__vexa__listener_configure' } }))
+  on('tool.register', () => ({ value: { tool: 'mcp__vexa-live__listener_configure' } }))
   on('ui.open', (_: unknown, e: any) => { opened.push(e.id); return { value: { isPlaced: true } } })
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('mcp.connect', () => ({ value: typeof connect === 'function' ? connect() : connect }))
@@ -153,4 +153,34 @@ test('a call Claude starts from the chat opens in the web panel at that meeting'
   expect(calls.find(c => c.tool === 'panel_link')?.args).toEqual({ next: '/panel/meeting/vexa_call/call-d7be66819bdd' })
   expect(calls.find(c => c.tool === 'preview_start')).toBeTruthy()
   expect(opened).toEqual([])
+})
+
+test("a connector whose tools are deferred is found by the model's first call to it", async ($, on) => {
+  const clock = mock.clock(on)
+  const calls: { server?: string; tool: string }[] = []
+  const uuid = 'cbaaef3d-c1de-4a5b-9ac0-29235c68ec0d'
+  expect(serverOfCall(`mcp__${uuid}__whats_waiting`)).toBe(uuid)
+  expect(serverOfCall('mcp__vexa-live__listener_configure')).toBe('')
+  on('command.register', () => ({ value: { command: 'vexa' } }))
+  on('tool.register', () => ({ value: { tool: 'mcp__vexa-live__listener_configure' } }))
+  on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
+  on('fs.exists', () => ({ value: false }))
+  on('env.get', () => ({ value: undefined }))
+  on('tool.list', () => ({ value: [{ name: 'Bash' }] }))
+  on('tool.call', () => ({ result: {}, text: JSON.stringify({ waiting: 0, items: [] }) }))
+  on('mcp.call', (_: unknown, e: any) => { calls.push({ server: e.server, tool: e.tool }); return { value: text({ meetings: [] }) } })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await clock.advance(31_500)
+  expect(calls).toEqual([])
+  await $.tool.call({ tool: `mcp__${uuid}__whats_waiting` } as any)
+  await clock.advance(31_500)
+  expect(calls.find(c => c.tool === 'list_meetings')?.server).toBe(uuid)
+})
+
+test("the plugin's own tools answer under its own name", async ($, on) => {
+  mock.clock(on)
+  engine(on, { isConnected: true, server: 'plugin:vexa:vexa' })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const r: any = await $.tool.call({ tool: 'mcp__vexa-live__listener_configure', action: 'status' } as any)
+  expect(JSON.parse(r.result)).toMatchObject({ listening: false, preset: 'default' })
 })
