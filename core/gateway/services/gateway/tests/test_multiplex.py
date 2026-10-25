@@ -270,6 +270,7 @@ async def test_a_browser_only_key_opens_no_socket(monkeypatch, old_setting):
     redis, auth = FakeRedis(), _ScopedAuthorizer(["browser"])
     await _run_multiplex(ws, auth, redis)
     assert ws.sent and ws.sent[0]["error"] == "insufficient_scope"
+    assert ws.sent[0]["changed_in"] == "0.13.4" and "scope" in ws.sent[0]["do_instead"]
     assert ws.sent[0]["docs"] == "https://docs.vexa.ai/changes-0-13-4-auth"
     assert ws.close_code == 4403
     assert auth.asked == 0

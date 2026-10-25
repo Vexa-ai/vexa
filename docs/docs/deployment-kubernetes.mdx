@@ -1056,8 +1056,8 @@ helm upgrade --install vexa deploy/helm/charts/vexa -n vexa \
 
 It runs the pinned external image `vexaai/dashboard` on its own tag — `global.imageTag` does
 not apply to it — and talks to the gateway's hosted-compat surface. It is **deprecated**: when
-the Terminal covers its remaining flows, the component is deleted, not ported. On Compose the
-same option is `docker compose --profile dashboard up -d` (port 13001).
+the Terminal covers its remaining flows, the component is deleted, not ported. Compose has no
+dashboard; use the Terminal.
 
 ## Enterprise and OpenShift installs
 

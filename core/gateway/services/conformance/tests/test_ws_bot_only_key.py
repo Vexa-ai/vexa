@@ -93,6 +93,7 @@ async def test_a_bot_only_key_is_refused_with_what_to_do(monkeypatch, old_settin
     refused = [f for f in ws.sent if f.get("error") == "insufficient_scope"]
     assert refused, ws.sent
     assert refused[0]["changed_in"] == "0.13.4"
+    assert "tx" in refused[0]["do_instead"] and "bot-only" in refused[0]["do_instead"]
     assert refused[0]["docs"] == "https://docs.vexa.ai/changes-0-13-4-auth"
     assert not any(f.get("type") == "subscribed" and f.get("meetings") for f in ws.sent)
 

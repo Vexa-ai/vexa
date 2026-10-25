@@ -25,8 +25,6 @@
       "reason": "the Compose runtime spawns bot and worker containers through the host's Docker socket" },
     { "file": "deploy/compose/mint-dev-env.sh", "demand": "docker-socket", "row": "X1",
       "reason": "reads the socket's group into DOCKER_GID so the runtime reaches it as uid 10001; mounts nothing" },
-    { "file": "deploy/compose/bin/dashboard-harness.sh", "demand": "docker-socket", "row": "X1",
-      "reason": "the dashboard harness reads the socket's group into DOCKER_GID, as mint-dev-env.sh does; mounts nothing" },
     { "file": "deploy/compose/docker-compose.yml", "demand": "root-user", "row": "X2",
       "reason": "one-shot key generators (network_mode none) run as 0:0 only to chown the generated keys to uid 10001, then exit" },
     { "file": "core/runtime/src/runtime_kernel/__main__.py", "demand": "docker-socket", "row": "F3",

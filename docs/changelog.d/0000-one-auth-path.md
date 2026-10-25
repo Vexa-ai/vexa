@@ -7,3 +7,10 @@
   every webhook delivery is held to the outbound-url.v1 guard, and a transcript entry is stored only
   when it is signed. A service still given one names it at start (`config_key_removed`); Helm refuses
   `compat.*`. Upgrade from 0.12 with no meeting in flight. See [What changed in 0.13.4: auth](/changes-0-13-4-auth).
+- **The `ws.v1` socket protocol changed in place.** Refusing a key in the URL is a breaking change to
+  `ws.v1`; it ships as `ws.v1`, re-sealed, rather than as a `ws.v2` beside it, so there stays one socket
+  protocol. Clients that already send the key in a header or the subprotocol list need no change. See
+  [What changed in 0.13.4: auth](/changes-0-13-4-auth).
+- **Compose has no dashboard profile.** The deprecated 0.10 dashboard (`--profile dashboard`,
+  `vexaai/dashboard:0.10.6.3.14`) sent its key in the `/ws` URL and is gone from Compose; use the
+  Terminal.

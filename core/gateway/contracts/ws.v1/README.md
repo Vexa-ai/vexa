@@ -81,3 +81,10 @@ basis for an actionable control.
 Shapes are pinned by main's gate test. To re-verify: `node gateway/contracts/ws.v1/validate.mjs`
 (goldens ≡ `$defs`). A deliberate main change → update the schema/goldens + `pnpm seal:contracts`
 on a `lane:contract` PR; a breaking change opens `ws.v2`, leaving `ws.v1` until no consumer pins it.
+
+**Re-sealed in place in 0.13.4 (a recorded exception to P4).** Refusing `?api_key=` is a breaking
+change, which this rule would open as `ws.v2`. The founder ruled to change `ws.v1` in place and keep
+one socket protocol: «вычищай, пожалуйста, все… Нужно чтобы все было состояло из минимального
+количества примитивов». The change is the `api_key_query_removed` code, the `changed_in` / `do_instead`
+/ `docs` fields on `Error`, and the removed query-key credential; see
+[What changed in 0.13.4: auth](https://docs.vexa.ai/changes-0-13-4-auth).

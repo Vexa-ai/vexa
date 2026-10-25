@@ -14,12 +14,11 @@ COMPOSE  = docker compose -p $(PROJECT) -f docker-compose.yml
 REPO_ROOT := $(abspath ../..)
 BOT_IMAGE ?= vexa/vexa-bot:dev
 
-.PHONY: stack-test stack-test-bot stack-test-mock stack-test-v010 dashboard-harness provision-token up dev digest-audit down destroy help build ps logs bot _preflight _bot_check _creds_check _access _storage_note migrate-storage rotate-db-password
+.PHONY: stack-test stack-test-bot stack-test-mock stack-test-v010 provision-token up dev digest-audit down destroy help build ps logs bot _preflight _bot_check _creds_check _access _storage_note migrate-storage rotate-db-password
 
-## provision-token — mint (idempotently) the self-host dashboard's API token (compose bring-up step 2).
-## Needs ADMIN_TOKEN (the stack admin secret). Prints ONLY the token, so it pipes into the deploy:
-##   DASHBOARD_API_KEY=$$(make -s provision-token ADMIN_TOKEN=<secret>) \
-##     docker compose -f docker-compose.yml -f docker-compose.dashboard.yml up -d dashboard
+## provision-token — mint (idempotently) an API token on this deployment.
+## Needs ADMIN_TOKEN (the stack admin secret). Prints ONLY the token, so it pipes into a command:
+##   KEY=$$(make -s provision-token ADMIN_TOKEN=<secret>)
 ## ADMIN_API_URL is resolved HERE, from this deployment's own .env, because the script has no
 ## default any more: it mints a token, and a guessed host port mints it on a neighbouring stack.
 ## Same resolution `_access` already does — one deployment, one place that knows its port.
@@ -45,13 +44,6 @@ rotate-db-password:
 	   | $(COMPOSE) exec -T postgres psql -U "$$user" -d postgres -v ON_ERROR_STOP=1 -q; \
 	 $(COMPOSE) up -d --no-build; \
 	 echo "rotated the database password of $$user; the new value is in .env"
-
-## dashboard-harness — the dashboard FULL-SURFACE proof: send-bot + live WS transcript through the
-## vendored dashboard, against the real stack + the mock bot (deterministic, no browser/STT/meeting).
-## Needs mock-bot:dev + vexa-dashboard:dev (docker build -f clients/dashboard/Dockerfile --build-arg
-## VEXA_API_URL=http://gateway:8000 -t vexa-dashboard:dev ../.. from the repo root).
-dashboard-harness:
-	./bin/dashboard-harness.sh
 
 ## stack-test — the always-on gate:compose proof (brings the stack up + down itself).
 stack-test:
