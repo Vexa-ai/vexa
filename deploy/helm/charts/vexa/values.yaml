@@ -173,22 +173,6 @@ vexaEnv: "development"
 # on just those ("crm,calls"); "all,-crm" takes one back. Rendered into agent-api, mcp, meeting-api
 # and crm-api.
 features: ""
-# 0.12 compatibility switches. Each ships CLOSED; the open value is an explicit, documented opt-in
-# for an upgrade that still needs the 0.12 behaviour, and each one is a residual while set (docs:
-# upgrade-from-0-12 → "Compatibility switches"). Every boot with one open prints a warning, and
-# every one of them is removed in 0.14.0.
-compat:
-  # /ws key scopes (VEXA_WS_SCOPE_MODE, gateway + meeting-api). strict = the REST routes' scopes;
-  # legacy = any valid key, a bot-only one included, streams its owner's transcripts.
-  wsScopeMode: "strict"
-  # Per-client webhook delivery (VEXA_WEBHOOK_STORED_URL_POLICY, meeting-api). strict = the
-  # outbound-url.v1 guard; v012 = also 100.64/10 and the TEST-NET/benchmark ranges, as 0.12 did.
-  webhookStoredUrlPolicy: "strict"
-  # Upgrade hand-off for meetings a 0.12 bot is still in (VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S,
-  # meeting-api). 0 = off: an unsigned transcript entry is refused. The 0.12 → 0.13 upgrade sets it
-  # to 14400 for the cut-over and back to 0 afterwards (docs: upgrade-from-0-12).
-  legacyUnsignedWindowSeconds: 0
-
 secrets:
   existingSecretName: ""
   adminApiToken: ""                 # admin-api auth; meeting-api (ADMIN_TOKEN) derives the MeetingToken key

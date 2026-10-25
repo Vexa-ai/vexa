@@ -99,8 +99,7 @@ def test_the_answer_still_carries_the_0_12_user_record(client):
     "http://[64:ff9b::a9fe:a9fe]/", "http://[2002:a9fe:a9fe::1]/", "http://[::10.0.0.1]/",
     "http://169.254.169.254/latest", "http://2130706433/", "http://redis:6379/", "http://localhost/hook",
     "http://metadata.google.internal/", "ftp://example.com/hook",
-    # 0.13's ranges: refused when SAVED, whatever VEXA_WEBHOOK_STORED_URL_POLICY says about URLs
-    # stored before (meeting-api webhooks/stored_url_policy.py).
+    # the outbound-url.v1 ranges: refused when SAVED, as every delivery is (meeting-api webhooks/ssrf.py).
     "http://100.64.1.5/hook", "http://198.18.0.7/hook", "http://internal-receiver/hook",
 ])
 def test_an_internal_webhook_destination_is_refused_when_saved(client, url):

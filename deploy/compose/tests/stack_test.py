@@ -187,10 +187,10 @@ def test_04_transcript_dataflow(stack):
     meeting_id, _session = _insert_meeting(stack, user_id, platform, native_id)
     STATE["tx_meeting_id"] = meeting_id
 
-    # Connect /ws THROUGH the gateway, authenticate via api_key query param, subscribe to the meeting.
+    # Connect /ws THROUGH the gateway, authenticate with the X-API-Key header, subscribe to the meeting.
     # Derive the ws origin from the (env-parametrized) gateway URL so the suite isolates on a shared host.
     ws_base = stack.gateway.replace("http://", "ws://").replace("https://", "wss://")
-    ws = WS(f"{ws_base}/ws?api_key={token}", timeout=15)
+    ws = WS(f"{ws_base}/ws", timeout=15, headers={"X-API-Key": token})
     try:
         ws.send_text(json.dumps({"action": "subscribe",
                                  "meetings": [{"platform": platform, "native_id": native_id}]}))

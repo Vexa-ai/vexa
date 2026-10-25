@@ -1923,20 +1923,14 @@ tb "no rendered image ends in a bare ':' (an empty tag)" '! grep -nE "image: \"?
 tb "agent-api, its session-schema Job and the crm containers pull the chart's release tag" \
   '[ "$(grep -cE "image: \"vexaai/vexa-agent-api:${REL_TAG//./\\.}\"$" <<< "$img_all")" -ge 3 ] && [ "$(grep -cE "image: \"vexaai/vexa-crm:${REL_TAG//./\\.}\"$" <<< "$img_all")" -ge 3 ]'
 
-# ── 0.12 COMPATIBILITY SWITCHES SHIP CLOSED (10-A, 10-B, 10-F) ──────────────────────────────────────
+# ── THE REMOVED compat.* VALUES ─────────────────────────────────────────────────────────────────────
 compat_def="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml")"
 gw_c="$(doc Deployment vexa-vexa-gateway "$compat_def")"; ma_c="$(doc Deployment vexa-vexa-meeting-api "$compat_def")"
-tb "default: /ws takes the REST scopes on the gateway and meeting-api (strict)" \
-  '[ "$(envval VEXA_WS_SCOPE_MODE "$gw_c")" = "\"strict\"" ] && [ "$(envval VEXA_WS_SCOPE_MODE "$ma_c")" = "\"strict\"" ]'
-tb "default: stored webhook URLs get the outbound-url.v1 guard (strict)" '[ "$(envval VEXA_WEBHOOK_STORED_URL_POLICY "$ma_c")" = "\"strict\"" ]'
-compat_open="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set compat.wsScopeMode=legacy --set compat.webhookStoredUrlPolicy=v012)"
-tb "the opt-ins reach both services" \
-  '[ "$(envval VEXA_WS_SCOPE_MODE "$(doc Deployment vexa-vexa-gateway "$compat_open")")" = "\"legacy\"" ] && [ "$(envval VEXA_WEBHOOK_STORED_URL_POLICY "$(doc Deployment vexa-vexa-meeting-api "$compat_open")")" = "\"v012\"" ]'
-# 10-E: the upgrade hand-off for 0.12 bots' unsigned transcript entries ships off; the runbook opens it.
-tb "default: the unsigned-segment hand-off is off (VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S=0)" \
-  '[ "$(envval VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S "$ma_c")" = "\"0\"" ]'
-tb "compat.legacyUnsignedWindowSeconds opens it for the cut-over" \
-  '[ "$(envval VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S "$(doc Deployment vexa-vexa-meeting-api "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set compat.legacyUnsignedWindowSeconds=14400)")")" = "\"14400\"" ]'
+tb "no service is handed a removed compatibility key" \
+  '! grep -qE "VEXA_WS_SCOPE_MODE|VEXA_WEBHOOK_STORED_URL_POLICY|VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S" <<< "$compat_def"'
+compat_set="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set compat.wsScopeMode=legacy 2>&1)"
+tb "a values file that still sets compat.* is refused with the page to read" \
+  '! grep -q "^kind: Deployment" <<< "$compat_set" && grep -q "changes-0-13-4-auth" <<< "$compat_set"'
 sx_def="$(doc Deployment vexa-vexa-meeting-api "$compat_def")"
 sx_set="$(doc Deployment vexa-vexa-meeting-api "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set credentialBroker.botSigninExtraHosts='adfs.bank.example\,login.bank.okta.com')")"
 tb "the sign-in browser's extra hosts are empty by default and reach meeting-api when set" \

@@ -7,3 +7,7 @@ names what to set.
 {{- include "vexa.agentSessions.validate" . -}}
 {{- include "vexa.adminPhotos.validate" . -}}
 {{- include "vexa.workspaceStore.validate" . -}}
+{{- /* compat.* is not read: a values file that still sets it is refused, never silently ignored. */ -}}
+{{- if .Values.compat -}}
+{{- fail "compat.* (wsScopeMode, webhookStoredUrlPolicy, legacyUnsignedWindowSeconds) is not read since 0.13.4: remove it from your values. /ws always takes the REST key scopes, every webhook delivery is held to the outbound-url.v1 guard, and a transcript entry is stored only when it is signed. https://docs.vexa.ai/changes-0-13-4-auth" -}}
+{{- end -}}

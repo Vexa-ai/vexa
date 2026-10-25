@@ -73,8 +73,7 @@ def main() -> int:
     print(f"[2/send-bot] {code} · meeting id={meeting['id']} status={meeting.get('status')} — mock bot spawned")
 
     # 3. live WS transcript — connect to the EXACT wsUrl the dashboard prescribed (its self-host authToken).
-    ws_url = f"{cfg['wsUrl']}?api_key={cfg['authToken']}"
-    ws = WS(ws_url, timeout=25)
+    ws = WS(cfg["wsUrl"], timeout=25, headers={"X-API-Key": cfg["authToken"]})
     try:
         ws.send_text(json.dumps({"action": "subscribe",
                                  "meetings": [{"platform": "google_meet", "native_id": native}]}))

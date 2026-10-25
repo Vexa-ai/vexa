@@ -159,13 +159,6 @@ spec:
               value: {{ .Values.meetingApi.systemWebhookAllowPrivateHttp | default "false" | quote }}
             - name: VEXA_SYSTEM_WEBHOOK_TIMEOUT_S
               value: {{ .Values.meetingApi.systemWebhookTimeoutSeconds | default "10" | quote }}
-            # 0.12 compatibility switches (values: compat.*), closed by default.
-            - name: VEXA_WS_SCOPE_MODE
-              value: {{ .Values.compat.wsScopeMode | default "strict" | quote }}
-            - name: VEXA_WEBHOOK_STORED_URL_POLICY
-              value: {{ .Values.compat.webhookStoredUrlPolicy | default "strict" | quote }}
-            - name: VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S
-              value: {{ .Values.compat.legacyUnsignedWindowSeconds | default 0 | quote }}
             # diagnostics.captureSignal (default "false"): no captured-signal tape unless turned on.
             - name: VEXA_CAPTURE_SIGNAL_DEFAULT
               value: {{ include "vexa.captureSignalDefault" . | quote }}

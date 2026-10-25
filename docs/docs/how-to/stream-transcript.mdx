@@ -20,9 +20,9 @@ ws://localhost:18056/ws          # header:  X-API-Key: <API_KEY>
 const ws = new WebSocket("ws://localhost:18056/ws", ["vexa.v1", `vexa.key.${API_KEY}`]);
 ```
 
-The `?api_key=<API_KEY>` query parameter still works but is **deprecated**: a URL ends up in proxy
-and access logs. Move to the header or the subprotocol; the query parameter is removed in the next
-major version of the socket protocol.
+A key in the URL (`?api_key=<API_KEY>`) is refused: the socket gets an `api_key_query_removed` error
+frame, with what to do instead, and closes with **4401**. See
+[What changed in 0.13.4: auth](/changes-0-13-4-auth).
 
 A missing key gets a `missing_api_key` error frame; an invalid key is rejected with close code **4401**.
 

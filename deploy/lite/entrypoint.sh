@@ -158,14 +158,6 @@ export VEXA_SYSTEM_WEBHOOK_SECRET="${VEXA_SYSTEM_WEBHOOK_SECRET:-}"
 export VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP="${VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP:-false}"
 export VEXA_SYSTEM_WEBHOOK_TIMEOUT_S="${VEXA_SYSTEM_WEBHOOK_TIMEOUT_S:-10}"
 
-# 0.12 compatibility switches, closed by default (docs: upgrade-from-0-12 → compatibility switches).
-# -e VEXA_WS_SCOPE_MODE=legacy / -e VEXA_WEBHOOK_STORED_URL_POLICY=v012 /
-# -e VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S=14400 (a 0.12 cut-over only) are explicit opt-ins, each
-# printed at every boot and removed in 0.14.0.
-export VEXA_WS_SCOPE_MODE="${VEXA_WS_SCOPE_MODE:-strict}"
-export VEXA_WEBHOOK_STORED_URL_POLICY="${VEXA_WEBHOOK_STORED_URL_POLICY:-strict}"
-export VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S="${VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S:-0}"
-
 # A company IdP the bot-account sign-in browser may also reach (comma-separated exact hosts; no wildcards).
 export VEXA_BOT_SIGNIN_EXTRA_HOSTS="${VEXA_BOT_SIGNIN_EXTRA_HOSTS:-}"
 

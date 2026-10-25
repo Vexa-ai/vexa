@@ -125,9 +125,6 @@ spec:
             # independent WS ban set.
             - name: GUARD_ENABLED
               value: {{ .Values.gateway.guard.enabled | quote }}
-            # compat.wsScopeMode (default strict) — meeting-api reads the same value.
-            - name: VEXA_WS_SCOPE_MODE
-              value: {{ .Values.compat.wsScopeMode | default "strict" | quote }}
             - name: GUARD_WS_ENABLED
               value: {{ .Values.gateway.guard.wsEnabled | quote }}
             - name: GUARD_ENABLE_REDIS

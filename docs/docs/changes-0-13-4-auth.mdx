@@ -1,0 +1,65 @@
+---
+title: "What changed in 0.13.4: auth"
+description: "One way to send an API key, and no compatibility switches. What a refused call is told, and what to send instead."
+---
+
+From 0.13.4 there is one way to authenticate and one behaviour per concern. A call in an older form is
+refused with an answer that says what to do, never silently.
+
+## A refused call says what to do
+
+Every refusal below carries the same fields, so a client (or an agent) reading it can fix its own call:
+
+```json
+{
+  "type": "error",
+  "error": "api_key_query_removed",
+  "changed_in": "0.13.4",
+  "do_instead": "send the key in the x-api-key header, or (a browser) in the subprotocol list: new WebSocket(url, ['vexa.v1', 'vexa.key.' + key])",
+  "docs": "https://docs.vexa.ai/changes-0-13-4-auth"
+}
+```
+
+## The websocket key goes in a header or the subprotocol list
+
+`/ws` and the bot-account live view (`/bot-accounts/sessions/{id}/vnc`) no longer read a key from the
+URL. A key in the URL ends up in proxy and access logs.
+
+| Before | Now |
+|---|---|
+| `wss://<host>/ws?api_key=<API_KEY>` | `api_key_query_removed` frame, then close `4401`, even when a header or subprotocol key is also sent |
+
+Send the key one of two ways:
+
+```bash
+# a server: the X-API-Key header
+wscat -c "wss://<host>/ws" -H "X-API-Key: <API_KEY>"
+```
+
+```js
+// a browser: the key travels in Sec-WebSocket-Protocol; the server answers "vexa.v1"
+const ws = new WebSocket("wss://<host>/ws", ["vexa.v1", `vexa.key.${API_KEY}`]);
+```
+
+See [Stream a transcript](/how-to/stream-transcript).
+
+## `/ws` takes the same scopes as REST
+
+A socket that can read no meeting status is closed with `4403`; a transcript subscription takes the
+`tx` scope, as `GET /transcripts/{platform}/{native_meeting_id}` does. A `bot`-only key gets
+`insufficient_scope`, with `changed_in`, `do_instead` and `docs`. Use a key that holds `tx`; `GET /auth/me`
+lists the scopes yours holds. See [Authentication → Scopes](/authentication#scopes).
+
+## The compatibility switches are gone
+
+Three settings that re-opened a 0.12 behaviour are not read any more. A service that is still given
+one prints a line naming it at start and logs `config_key_removed`; Helm refuses a values file that
+still sets `compat.*`.
+
+| Setting (Helm value) | What holds now |
+|---|---|
+| `VEXA_WS_SCOPE_MODE` (`compat.wsScopeMode`) | `/ws` always takes the REST routes' key scopes |
+| `VEXA_WEBHOOK_STORED_URL_POLICY` (`compat.webhookStoredUrlPolicy`) | every webhook delivery is held to the outbound-url.v1 guard: a URL that resolves into 100.64/10 or the documentation and benchmarking ranges is recorded `blocked`; save it again with a public address |
+| `VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S` (`compat.legacyUnsignedWindowSeconds`) | a transcript entry is stored only when it is signed, so a 0.12 bot still in a call after an upgrade keeps its live frames but stores nothing more; upgrade from 0.12 with no meeting in flight ([Upgrading from 0.12](/upgrade-from-0-12#upgrade-every-component-together)) |
+
+Remove them from `.env`, `docker run -e` and your Helm values.

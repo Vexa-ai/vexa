@@ -1,9 +1,3 @@
-- **Two 0.12 compatibility switches now ship closed.** `/ws` takes the REST key scopes by default
-  (`VEXA_WS_SCOPE_MODE=strict`), so a `bot`-only key no longer streams transcripts. Per-client
-  webhooks are delivered under the outbound-url.v1 guard by default
-  (`VEXA_WEBHOOK_STORED_URL_POLICY=strict`), so 100.64/10 and the documentation and benchmarking
-  ranges are refused. `legacy` and `v012` are explicit opt-ins, wired on Compose, Lite and Helm
-  (`compat.*`). See [Compatibility switches](/upgrade-from-0-12#compatibility-switches).
 - **Meeting import and restore are bounded.** An uploaded bundle is spooled to a temporary file, and
   recordings are checked as a stream instead of being held in memory. Each process reads at most two
   bundles at once and answers the next `429 busy` with `Retry-After`. See

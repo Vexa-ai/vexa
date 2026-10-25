@@ -159,6 +159,7 @@
           "upgrade-from-minio",
           "upgrade-from-0-12",
           "upgrade-image-names",
+          "changes-0-13-4-auth",
           "authenticated-bots",
           "model-catalog",
           "model-credentials-licensing",

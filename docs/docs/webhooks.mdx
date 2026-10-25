@@ -121,11 +121,7 @@ required. Self-hosted: `make all` prints a key when the stack comes up.
    events you did not select.
 4. **Guard.** It resolves the host, checks every address, and posts through a transport that
    resolves again and dials a checked address, with the original Host header and TLS name. The
-   delivery check is the save check, whenever the URL was saved. An operator upgrading from 0.12
-   can opt in to the 0.12 delivery (`VEXA_WEBHOOK_STORED_URL_POLICY=v012`), which also admits
-   shared (100.64/10), documentation and benchmarking addresses but never loopback, private,
-   link-local or metadata ones. See
-   [compatibility switches](/upgrade-from-0-12#compatibility-switches).
+   delivery check is the save check, whenever the URL was saved.
 5. **Sign and send.** It signs `"<timestamp>." + body` with your secret and posts (10 s timeout).
 6. **Retry.** A `5xx`, `429` or transport error goes on a Redis retry queue and is tried again
    after 1 min, 5 min, 30 min and 2 h; an entry older than 24 h is dropped. Each outcome is logged
