@@ -134,6 +134,7 @@ def test_the_shipped_agent_profile_carries_the_configured_credentials(monkeypatc
 
     monkeypatch.setenv("HOST_CLAUDE_DIR", "/host/.claude")
     monkeypatch.setenv("HOST_CODEX_CREDENTIALS", "/host/.codex/auth.json")
+    monkeypatch.setenv("VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY", "true")
     registry = default_registry()
     agent, bot = registry.get("agent").runnable, registry.get("meeting-bot").runnable
     assert agent.credential_files == (
@@ -218,3 +219,23 @@ def test_docker_drops_every_capability_but_the_profiles(monkeypatch):
     assert profile["defaultAction"] == "SCMP_ACT_ERRNO"
     assert any(sorted(r["names"]) == ["chroot", "clone", "unshare"] and r["action"] == "SCMP_ACT_ALLOW"
                and r.get("excludes") == {"caps": ["CAP_SYS_ADMIN"]} for r in profile["syscalls"])
+
+
+def test_no_subscription_file_reaches_a_worker_unless_the_install_allows_it(monkeypatch):
+    """VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY off (the default): the agent profile carries no
+    subscription file however the operator configured one; on, it carries them."""
+    from runtime_kernel import default_registry
+    from runtime_kernel.profiles import configured_credentials
+
+    monkeypatch.setenv("HOST_CLAUDE_DIR", "/host/.claude")
+    monkeypatch.setenv("HOST_CODEX_CREDENTIALS", "/host/.codex/auth.json")
+    for off in (None, "", "false", "0"):
+        if off is None:
+            monkeypatch.delenv("VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY", raising=False)
+        else:
+            monkeypatch.setenv("VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY", off)
+        assert configured_credentials() == ()
+        assert default_registry().get("agent").runnable.credential_files == ()
+    monkeypatch.setenv("VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY", "1")
+    assert len(configured_credentials()) == 2
+    assert len(default_registry().get("agent").runnable.credential_files) == 2

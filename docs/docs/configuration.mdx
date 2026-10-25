@@ -273,6 +273,7 @@ and the [chart README](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/cha
 | `ANTHROPIC_API_KEY` | — | Key for Anthropic-backed runners. Read by agent-api only and sealed per turn for the model proxy; no worker holds it. |
 | `ANTHROPIC_MODEL` · `ANTHROPIC_DEFAULT_OPUS_MODEL` · `…_SONNET_MODEL` · `…_HAIKU_MODEL` | — | Per-tier model overrides. |
 | `HOST_CLAUDE_CREDENTIALS` | — | Host path to Claude credentials mounted into agent containers (see below). |
+| `VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY` | `false` | Whether a model subscription credential (`CLAUDE_CODE_OAUTH_TOKEN`, `HOST_CLAUDE_CREDENTIALS`, Codex's `auth.json`) may reach agent workers. A consumer subscription is one person's licence and may not be proxied for others, so it is off: a turn on a subscription route is refused with a message naming this setting, and no subscription file is mounted. Set `true` only when the install serves the subscription's own holder. Helm: `models.allowSubscriptionTokenProxy`. See [Model credentials & licensing](/model-credentials-licensing). |
 | `VEXA_MODEL_BASE_URL_ALLOW` | — (the deployment's own gateway, `api.anthropic.com`, `openrouter.ai`) | Comma-separated host globs a user's own **Settings → Models** endpoint may name. The hosts of `ANTHROPIC_BASE_URL` and `VEXA_LLM_BASE_URL` are always allowed. Setting the key replaces the two hosted defaults, so list them again if you still want them. A private inference server must be named here: loopback, private and link-local addresses and single-label names (`redis`) need an exact entry, never a wildcard. Anything else is refused at dispatch. A host admitted only by a wildcard is resolved at dispatch and refused when it leads to a private, loopback or metadata address; the model proxy then resolves it again on every request and dials the address it checked, so a record that changes after the dispatch reaches nothing inside the deployment. |
 | `VEXA_MCP_URL` | the gateway's `/mcp` | The MCP server each agent worker attaches as its `vexa` toolbelt — the gateway's one assembled MCP server on every shipped surface. |
 | `VEXA_MCP_DELEGATION_SECRET` | generated at install | Signs each worker's short-lived delegation token (agent-api) and verifies it (admin-api, where the gateway resolves it). Empty: workers run without vexa tools, and every spawn says so in its log. |
@@ -286,7 +287,8 @@ and the [chart README](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/cha
 
 Setting `HOST_CLAUDE_CREDENTIALS=~/.claude/.credentials.json` mounts your Claude Code
 sign-in into the agent containers (read-only), so the agent runs on your subscription
-instead of an API key. Whether that file stays valid depends on the host OS:
+instead of an API key. It needs `VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY=true`: with the default
+`false`, the file is not mounted and a subscription turn is refused. Whether that file stays valid depends on the host OS:
 
 - **Linux** (and **Windows via WSL2** — run the stack and the `claude` CLI inside WSL):
   the file is Claude Code's own store; the CLI refreshes it in place. Nothing to do.

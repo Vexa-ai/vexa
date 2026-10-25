@@ -22,7 +22,7 @@ from . import pod_scheduling, workload_env
 from .backend import WorkloadHandle
 from .models import Resources
 from .mounts import k8s_volume_mounts
-from .profiles import ProfileResources, Runnable
+from .profiles import ProfileResources, Runnable, subscription_proxy_allowed
 from .workload_env import forwarded_env
 
 MANAGED_LABEL = "runtime.managed"
@@ -288,9 +288,12 @@ def _runtime_scheduling_env() -> dict[str, str]:
     """The runtime's own scheduling knobs from its PROCESS env (set by the chart on the runtime
     Deployment). Overlaid onto the per-workload spawn env for ``pod_overrides`` — spec.env cannot
     carry these: it is built per-workload by different producers (meeting-api for a bot, agent-api for
-    an agent worker), whereas the scheduling constraints are a property of the runtime/backend."""
-    return {k: os.environ[k] for k in (TOLERATIONS_ENV, NODE_SELECTOR_ENV, SECRET_MOUNTS_ENV, EXTRA_CA_ENV)
-            if os.environ.get(k)}
+    an agent worker), whereas the scheduling constraints are a property of the runtime/backend.
+    The credential-file Secrets are among them only while the install allows a subscription
+    credential into workers (``profiles.subscription_proxy_allowed``)."""
+    names = (TOLERATIONS_ENV, NODE_SELECTOR_ENV, EXTRA_CA_ENV,
+             *((SECRET_MOUNTS_ENV,) if subscription_proxy_allowed(os.environ) else ()))
+    return {k: os.environ[k] for k in names if os.environ.get(k)}
 
 
 def _kubectl(*args: str, check: bool = True, stdin: Optional[str] = None) -> subprocess.CompletedProcess:

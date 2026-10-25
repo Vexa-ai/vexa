@@ -240,6 +240,7 @@ def test_each_workload_class_joins_its_own_network(monkeypatch):
 def test_a_bot_receives_no_model_credential(monkeypatch, tmp_path):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "model-key")
     monkeypatch.setenv("HOST_CLAUDE_CREDENTIALS", "/host/.claude/.credentials.json")
+    monkeypatch.setenv("VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY", "true")   # the install allows it
     bot = _create_payload(monkeypatch, _profiles.bot("bot:1"), "mtg-1-abcdef12")
     env = dict(item.split("=", 1) for item in bot["Env"])
     assert "ANTHROPIC_API_KEY" not in env
@@ -262,6 +263,7 @@ def test_the_codex_credential_lands_where_the_worker_looks(monkeypatch):
     from runtime_kernel.workload_env import CODEX_HOME_ENV, WORKER_CODEX_HOME
 
     monkeypatch.setenv("HOST_CODEX_CREDENTIALS", "/host/.codex/auth.json")
+    monkeypatch.setenv("VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY", "true")   # the install allows it
     worker = _create_payload(monkeypatch, _profiles.agent(TARGET), "agent-foo-chat")
     env = dict(item.split("=", 1) for item in worker["Env"])
     assert env[CODEX_HOME_ENV] == WORKER_CODEX_HOME
@@ -276,3 +278,14 @@ def test_the_codex_credential_lands_where_the_worker_looks(monkeypatch):
 
     dockerfile = (pathlib.Path(__file__).resolve().parents[3] / "core" / "agent" / "worker" / "Dockerfile").read_text()
     assert re.search(rf"mkdir -p -m 1777 {re.escape(WORKER_CODEX_HOME)}\b", dockerfile)
+
+
+def test_no_subscription_file_is_bound_into_a_worker_unless_the_install_allows_it(monkeypatch):
+    """VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY off (the default): the docker backend binds neither
+    subscription file into a worker, however the operator configured them."""
+    monkeypatch.delenv("VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY", raising=False)
+    monkeypatch.setenv("HOST_CLAUDE_CREDENTIALS", "/host/.claude/.credentials.json")
+    monkeypatch.setenv("HOST_CODEX_CREDENTIALS", "/host/.codex/auth.json")
+    worker = _create_payload(monkeypatch, _profiles.agent(TARGET), "agent-foo-chat")
+    binds = worker["HostConfig"].get("Binds") or []
+    assert not any("/host/.claude" in b or "/host/.codex" in b for b in binds)

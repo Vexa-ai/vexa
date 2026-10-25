@@ -163,6 +163,9 @@ spec:
             {{- end }}
             {{- end }}
             {{- end }}
+            # The Secrets above are subscription files: mounted only when the install allows it.
+            - name: VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY
+              value: {{ .Values.models.allowSubscriptionTokenProxy | default false | quote }}
             - name: RUNTIME_K8S_SECRET_MOUNTS
               value: {{ .Values.runtime.workerSecretMounts | default list | toJson | quote }}
             # Per-class sizing for SPAWNED Pods (#1005). A namespace whose policy requires every

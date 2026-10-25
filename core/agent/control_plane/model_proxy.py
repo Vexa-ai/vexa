@@ -605,6 +605,14 @@ def grant_ttl_sec(env: Mapping[str, str] = os.environ) -> int:
                _sec("VEXA_AGENT_MAX_TURN_SEC", _TURN_SEC_DEFAULT)) + QUEUE_ALLOWANCE_SEC
 
 
+def effective_env(env: Mapping[str, str], source: Mapping[str, str] = os.environ) -> dict[str, str]:
+    """The route names of a dispatched worker env as :func:`route_of` reads them: what the dispatch
+    stamped, else agent-api's own environment (``source``) for a name it left absent."""
+    eff = {n: (env[n] if n in env else source.get(n, "")) or "" for n in ROUTE_ENV}
+    eff["VEXA_MODEL_ROUTE"] = env.get("VEXA_MODEL_ROUTE", "")
+    return eff
+
+
 def confine(env: dict, *, url: str, grants: Optional[Grants], unit: str, cold: bool,
             toolbelt: str = "", spend: Optional[tuple] = None,
             source: Mapping[str, str] = os.environ) -> str:
@@ -614,8 +622,7 @@ def confine(env: dict, *, url: str, grants: Optional[Grants], unit: str, cold: b
     The route is read from what the dispatch stamped, falling back to agent-api's own environment
     (``source``) for a name it left absent — the deployment's route. A cold spawn seals that route
     for the unit; a message to a running worker gets a token to the route that worker runs."""
-    eff = {n: (env[n] if n in env else source.get(n, "")) or "" for n in ROUTE_ENV}
-    eff["VEXA_MODEL_ROUTE"] = env.get("VEXA_MODEL_ROUTE", "")
+    eff = effective_env(env, source)
     bearer = (env.get("VEXA_MCP_DELEGATION_TOKEN") or "").strip()
     route = route_of(eff).with_toolbelt(toolbelt.strip() if bearer else "", bearer)
     if eff["VEXA_MODEL_ROUTE"] == "subject" and route.base_url:

@@ -493,6 +493,8 @@ services:
       # bind from this when HOST_CLAUDE_CREDENTIALS is unset.
       - HOST_CLAUDE_DIR=${HOST_CLAUDE_DIR:-}
       - HOST_CODEX_CREDENTIALS=${HOST_CODEX_CREDENTIALS:-}
+      # Those subscription files are mounted into workers only when this install allows it.
+      - VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY=${VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY:-false}
       - VEXA_MIDTURN_INJECT=${VEXA_MIDTURN_INJECT:-}
       # The runtime caller credential: every route but /health requires it, and agent-api and
       # meeting-api present it. No default — the runtime refuses to boot without one (mint-dev-env.sh
@@ -644,6 +646,8 @@ services:
       - VEXA_ADMIN_API_URL=http://admin-api:8001
       # A room's turn runs as its workspace's own principal (D2); false runs it as the owner's account.
       - VEXA_ROOM_WS_PRINCIPAL=${VEXA_ROOM_WS_PRINCIPAL:-true}
+      # A turn on a model SUBSCRIPTION route is refused unless this install allows one (off).
+      - VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY=${VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY:-false}
       # NO PLACEHOLDER FALLBACK. F95 removed the published `vexa-internal-secret` default from
       # every service that REFUSES it at boot; this line kept it, so an unconfigured stack still
       # PRESENTED the published literal as internal-tier authority. Unset is unset (A19). The KEY

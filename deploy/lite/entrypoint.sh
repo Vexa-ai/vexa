@@ -223,6 +223,9 @@ export VEXA_MODEL_CATALOG="${VEXA_MODEL_CATALOG:-}"
 # a new file over it: after the host CLI refreshes, re-create the container (`make up`).
 # Alternative: leave empty and set ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN instead.
 export HOST_CLAUDE_CREDENTIALS="${HOST_CLAUDE_CREDENTIALS:-}"
+# A subscription (that file, or CLAUDE_CODE_OAUTH_TOKEN) reaches no worker unless this is true: off,
+# the runtime stages no subscription file and agent-api refuses a turn on a subscription route.
+export VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY="${VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY:-false}"
 export CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
 export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 export ANTHROPIC_AUTH_TOKEN="${ANTHROPIC_AUTH_TOKEN:-}"

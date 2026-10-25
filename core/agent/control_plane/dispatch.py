@@ -665,11 +665,41 @@ def route_context(model_config: Optional[dict], *,
         secret=model_providers.secret_from_env(os.environ if env is None else env))
 
 
+# ── a subscription route is the install's to allow ───────────────────────────────────────────
+#: The install's switch (``Settings.allow_subscription_token_proxy``) that lets a model SUBSCRIPTION
+#: credential reach agent workers: the claude CLI's OAuth token or credential file, Codex's
+#: ``auth.json``. Off by default, because a consumer subscription belongs to one person and its
+#: licence forbids proxying it (docs/docs/model-credentials-licensing.mdx). The runtime reads the
+#: same switch before it mounts a subscription file into any worker (runtime_kernel.profiles).
+ALLOW_SUBSCRIPTION_ENV = "VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY"
+_SUBSCRIPTION_VENDOR = {model_proxy.SUB_CLAUDE: "Claude", model_proxy.SUB_CODEX: "ChatGPT (Codex)"}
+
+
+def subscription_refusal(env: dict[str, str], route: Optional["model_providers.ModelRoute"] = None,
+                         *, source=None) -> Optional["model_providers.ModelChoiceFault"]:
+    """The refusal of a turn whose model route is a subscription, or ``None`` when it is not one.
+
+    The route is read exactly as ``model_proxy.confine`` will read it (what the dispatch stamped,
+    else agent-api's own environment), so a route refused here is the only kind that would have
+    carried a subscription credential into the worker."""
+    eff = model_proxy.effective_env(env, os.environ if source is None else source)
+    sub = model_proxy.route_of(eff).subscription
+    if not sub:
+        return None
+    return model_providers.ModelChoiceFault(
+        model_providers.NOT_PERMITTED,
+        model=route.model_id if route is not None else eff.get("VEXA_AGENT_MODEL", ""),
+        provider=route.provider if route is not None else "",
+        detail=(f"This Vexa does not pass a {_SUBSCRIPTION_VENDOR.get(sub, sub)} subscription "
+                f"token to agents ({ALLOW_SUBSCRIPTION_ENV} is off)."),
+        remedy="Use a model API key, or ask the operator to allow it.")
+
+
 def apply_model_route(env: dict[str, str], model_config: Optional[dict], *,
                       catalog: Optional["model_providers.Catalog"] = None, choice: str = "",
                       admin=False, allowlist: str = "", friction=None, subject: str = "",
-                      session: str = "", effort: str = "",
-                      person=None) -> Optional["model_providers.ModelRoute"]:
+                      session: str = "", effort: str = "", person=None,
+                      allow_subscription: bool = False) -> Optional["model_providers.ModelRoute"]:
     """THE ONE PLACE A WORKER'S MODEL ROUTE IS DECIDED, with or without a catalog.
 
     No catalog: the person's Settings → Models overlays the deployment env exactly as it always has
@@ -680,26 +710,35 @@ def apply_model_route(env: dict[str, str], model_config: Optional[dict], *,
     (``route_env``). A pick that cannot run raises ``ModelChoiceFault`` BEFORE anything is spawned:
     the caller refuses the turn out loud rather than run it on a model the person did not choose.
     The person's own endpoint (Settings → Models ``mode: custom``) is not a catalog route: with a
-    catalog, every turn runs on a model the catalog names."""
+    catalog, every turn runs on a model the catalog names.
+
+    A route that resolves to a model SUBSCRIPTION — the catalog's ``auth: subscription``, or the
+    deployment's own route with no API key — raises ``ModelChoiceFault`` unless the install allows
+    one (``allow_subscription``, ``VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY``): the turn is refused with
+    a sentence naming the setting, and no subscription credential is stamped for any worker."""
     cfg = model_config or {}
-    if catalog is None or catalog.empty:
-        if cfg:
-            overlay_model_config(env, cfg, allowlist=allowlist, friction=friction,
-                                 subject=subject, session=session)
-        return None
-    ctx = route_context(cfg)
+    route = None
     try:
-        route = catalog.route(choice, ctx, admin=admin, effort=effort, person=person)
+        if catalog is None or catalog.empty:
+            if cfg:
+                overlay_model_config(env, cfg, allowlist=allowlist, friction=friction,
+                                     subject=subject, session=session)
+        else:
+            route = catalog.route(choice, route_context(cfg), admin=admin, effort=effort,
+                                  person=person)
+            env.update(route_env(route))
+            logger.info(json.dumps({"event": "model_route", "model": route.model_id,
+                                    "provider": route.provider, "adapter": route.adapter,
+                                    "harness": route.harness, "credential": route.credential_source,
+                                    "effort": route.effort, "subject": subject}))
+        refusal = None if allow_subscription else subscription_refusal(env, route)
+        if refusal is not None:
+            raise refusal
     except model_providers.ModelChoiceFault as fault:
         logger.warning(json.dumps({"event": "model_choice_refused", "source": fault.source,
                                    "kind": fault.kind, "model": fault.model,
                                    "provider": fault.provider, "subject": subject}))
         raise
-    env.update(route_env(route))
-    logger.info(json.dumps({"event": "model_route", "model": route.model_id,
-                            "provider": route.provider, "adapter": route.adapter,
-                            "harness": route.harness, "credential": route.credential_source,
-                            "effort": route.effort, "subject": subject}))
     return route
 
 
@@ -1219,7 +1258,8 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     # defaults to "main" for a non-message trigger, so this is never empty.
     _route = apply_model_route(env, model_config, catalog=catalog, choice=model_choice, admin=admin,
                                allowlist=settings.model_allowlist, friction=friction, subject=subject,
-                               session=chat_session(invocation), effort=effort_choice, person=person)
+                               session=chat_session(invocation), effort=effort_choice, person=person,
+                               allow_subscription=settings.allow_subscription_token_proxy)
     if _route is not None:
         # Read back (and removed) by the dispatcher: which catalog model this unit's worker runs.
         env[MODEL_ID_ENV] = _route.model_id

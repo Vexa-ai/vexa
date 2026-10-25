@@ -191,6 +191,9 @@ spec:
             # Needs VEXA_ADMIN_API_URL; without identity a room's turn gets no toolbelt (fail closed).
             - name: VEXA_ROOM_WS_PRINCIPAL
               value: {{ .Values.agentApi.roomWsPrincipal | default false | quote }}
+            # A turn on a model SUBSCRIPTION route is refused unless the install allows one.
+            - name: VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY
+              value: {{ .Values.models.allowSubscriptionTokenProxy | default false | quote }}
             # The runtime caller credential agent-api presents on every runtime.v1 / schedule.v1 call.
             - name: RUNTIME_API_TOKEN
               valueFrom:

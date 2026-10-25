@@ -560,6 +560,17 @@
       ]
     },
     {
+      "key": "VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY",
+      "class": "defaulted",
+      "default": "false",
+      "description": "whether the subscription files (HOST_CLAUDE_CREDENTIALS / HOST_CLAUDE_DIR, HOST_CODEX_CREDENTIALS, and on k8s the RUNTIME_K8S_SECRET_MOUNTS Secrets) are mounted into agent workers. A consumer subscription belongs to one person and its licence forbids proxying it (docs/docs/model-credentials-licensing.mdx), so it is off and no worker receives one; agent-api refuses a subscription route under the same setting. true is the operator's call for their own install",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
       "key": "VEXA_MODEL_ALLOWLIST",
       "class": "defaulted",
       "default": "(empty — allow any workspace-pinned model)",

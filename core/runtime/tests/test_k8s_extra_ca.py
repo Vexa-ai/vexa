@@ -177,9 +177,21 @@ def test_every_spawned_class_trusts_the_ca(monkeypatch, profile):
 
 def test_spawned_pod_keeps_its_secret_mounts_beside_the_ca(monkeypatch):
     """RUNTIME_K8S_SECRET_MOUNTS (one named key per mount) and the CA land in the same Pod."""
+    monkeypatch.setenv("VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY", "true")
     monkeypatch.setenv("RUNTIME_K8S_SECRET_MOUNTS",
                        json.dumps([{"secret": "codex-auth", "file": "auth.json", "mountPath": "/home/w/.codex/auth.json"}]))
     pod = _spawned(monkeypatch, "agent", {"LOG_LEVEL": "info"})
     names = [v["name"] for v in pod["spec"]["volumes"]]
     assert "vexa-extra-ca" in names and "vexa-ca-bundle" in names and len(names) == len(set(names))
     assert any(v.get("secret", {}).get("secretName") == "codex-auth" for v in pod["spec"]["volumes"])
+
+
+def test_spawned_pod_carries_no_secret_mount_unless_the_install_allows_it(monkeypatch):
+    """The credential-file Secrets are subscription files: with VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY
+    off (the default) none is mounted into a worker Pod, whatever RUNTIME_K8S_SECRET_MOUNTS names."""
+    monkeypatch.delenv("VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY", raising=False)
+    monkeypatch.setenv("RUNTIME_K8S_SECRET_MOUNTS",
+                       json.dumps([{"secret": "codex-auth", "file": "auth.json", "mountPath": "/home/w/.codex/auth.json"}]))
+    pod = _spawned(monkeypatch, "agent", {"LOG_LEVEL": "info"})
+    assert not any(v.get("secret", {}).get("secretName") == "codex-auth"
+                   for v in pod["spec"].get("volumes", []))

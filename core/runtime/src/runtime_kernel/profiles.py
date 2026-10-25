@@ -289,14 +289,30 @@ def host_claude_credentials(env: Optional[Mapping[str, str]] = None) -> Optional
     return f"{host_dir.rstrip('/')}/{CLAUDE_CREDENTIALS_FILENAME}" if host_dir else None
 
 
+#: The install's switch that lets a model SUBSCRIPTION credential reach agent workers. Off by default:
+#: a consumer subscription belongs to one person and its licence forbids proxying it
+#: (docs/docs/model-credentials-licensing.mdx). agent-api reads the same switch and refuses a turn
+#: whose route is a subscription (control_plane.dispatch.apply_model_route).
+ALLOW_SUBSCRIPTION_ENV = "VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY"
+
+
+def subscription_proxy_allowed(env: Optional[Mapping[str, str]] = None) -> bool:
+    """Whether the install allows a subscription credential into workers (``1``/``true``/``yes``/``on``)."""
+    env = os.environ if env is None else env
+    return (env.get(ALLOW_SUBSCRIPTION_ENV) or "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def configured_credentials(env: Optional[Mapping[str, str]] = None) -> tuple[CredentialFile, ...]:
     """The model-SUBSCRIPTION files the operator configured for the runtime to hand to workers (never
     an API key: those reach no worker, H5/W1) —
     the one place that knows which harness reads which file: the claude CLI's credential
     (``HOST_CLAUDE_CREDENTIALS`` / ``HOST_CLAUDE_DIR``) and the Codex ``auth.json``
     (``HOST_CODEX_CREDENTIALS``, inside ``WORKER_CODEX_HOME`` in a container, ``~/.codex`` for a
-    process-backend child)."""
+    process-backend child). None while the install does not allow a subscription credential into
+    workers (:func:`subscription_proxy_allowed`)."""
     env = os.environ if env is None else env
+    if not subscription_proxy_allowed(env):
+        return ()
     files: list[CredentialFile] = []
     claude = host_claude_credentials(env)
     if claude:

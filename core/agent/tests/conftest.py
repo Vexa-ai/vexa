@@ -229,6 +229,15 @@ def git_broker(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _subscription_route_allowed_in_tests(monkeypatch):
+    """A dispatch with no model key runs on the deployment's SUBSCRIPTION route, which an install
+    refuses by default (VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY off). Most of the suite dispatches that
+    way without being about the route, so it runs with the route allowed; the setting's own tests
+    (test_subscription_token_proxy.py) unset it."""
+    monkeypatch.setenv("VEXA_ALLOW_SUBSCRIPTION_TOKEN_PROXY", "true")
+
+
+@pytest.fixture(autouse=True)
 def _home_cards_on_in_tests(monkeypatch):
     """The home's cards are OFF by default for the release (founder 2026-10-15); the suites that
     exercise the composition switch them on, and the switch's own test switches them back off."""
