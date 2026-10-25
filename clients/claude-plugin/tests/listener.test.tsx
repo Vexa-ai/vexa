@@ -195,7 +195,7 @@ test('listening ends with the meeting: the band goes back to every chat\'s Vexa 
   expect(await ui.find({ type: 'Text', text: /^Listening( · |$)/ })).toBeFalsy()
   // With nothing listened to, the band stays as every chat's Vexa band: no live call, Open panel, Send bot.
   expect((await ui.find({ type: 'Text', text: /^Vexa · / }))?.text).toBe('Vexa · no live call')
-  expect(await ui.find({ type: 'Button', label: 'Open panel' })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: 'Panel' })).toBeTruthy()
   await ui.unmount()
 })
 

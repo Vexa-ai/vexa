@@ -607,7 +607,9 @@ async function markUsed($: any): Promise<void> {
 }
 
 // This chat works with Vexa: it sent a bot, started listening, opened the panel, or took the line.
+let usedVexaHere = false
 async function markActive($: any): Promise<void> {
+  usedVexaHere = true
   if (!mySession) return
   try { await $.fs.write(`${await linkDir($)}/active/${mySession}`, String(await $.clock.now())) } catch { /* not recorded */ }
   ownerCache = { at: -Infinity, owner: '' }
@@ -690,6 +692,7 @@ async function follow($: any, mt: NonNullable<LinkEvent['meeting']>, status: str
     status: status || 'active', segments: parked.get(`${platform}/${nativeId}`) ?? [], nextIndex: 0, liveCursor: '', liveFeed: true, error: '' }))
   const l = await readListener($)
   if (!l.declined.includes(`${platform}/${nativeId}`)) {
+    usedVexaHere = true
     await updateListener($, x => ({ ...x, offer: null, isOn: true, triaged: (parked.get(`${platform}/${nativeId}`) ?? []).map(s => s.id) }))
   }
 }
@@ -960,6 +963,7 @@ async function listen($: any, auto = false): Promise<void> {
     await poll($)
   }
   const heard = (await read($)).segments.filter(s => s.id).map(s => s.id)
+  usedVexaHere = true
   lastAuditAt = await $.clock.now()
   auditCount = heard.length
   await updateListener($, x => ({ ...x, offer: null, isOn: true, triaged: heard.slice(-500), wakes: [], lastWakeAt: 0, error: '' }))
@@ -1465,7 +1469,7 @@ let linkState = ''
 // THE BAND: this chat's Vexa status and its next action, always from what is true now — the
 // connector, whether this chat owns the line from Vexa, the line's own state, the live call.
 type BandKey = 'connect' | 'open' | 'send' | 'listen' | 'here' | 'stop' | 'reconnect'
-const BAND_LABEL: Record<BandKey, string> = { connect: 'Connect', open: 'Open panel', send: 'Send bot', listen: 'Listen', here: 'Listen here', stop: 'Stop listening', reconnect: 'Reconnect' }
+const BAND_LABEL: Record<BandKey, string> = { connect: 'Connect', open: 'Panel', send: 'Send bot', listen: 'Listen', here: 'Listen here', stop: 'Stop', reconnect: 'Reconnect' }
 const BUSY_LABEL: Partial<Record<BandKey, string>> = { connect: 'Connecting…', open: 'Opening…', send: 'Send bot', listen: 'Starting…', here: 'Switching…', reconnect: 'Reconnecting…' }
 export type BandInput = { connected: boolean; owner: boolean; linkActive: boolean; polling?: boolean; hearing?: boolean; busy?: boolean; stage?: string; heardAt?: string; linkState: string; call: string; listening: boolean; flash: string; answering: boolean; preset: string }
 export function bandState(x: BandInput): { tone: 'live' | 'hear' | 'react' | 'warn' | 'off'; line: string; hot: boolean; buttons: BandKey[] } {
@@ -1532,6 +1536,7 @@ export const register: Register = (on) => {
     try { pluginVersion = String(JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`))?.version ?? '') } catch { pluginVersion = '' }
     lastSurface = String((e as { surface?: unknown }).surface ?? '')
     try { mySession = String(await $.session.id()) } catch { mySession = '' }
+    try { usedVexaHere = Boolean(mySession) && await $.fs.exists(`${await linkDir($)}/active/${mySession}`) } catch { usedVexaHere = false }
     await $.command.register({ name: 'vexa', description: 'Open the Vexa call panel beside the chat' })
     await $.tool.register({
       name: CONFIGURE,
@@ -1717,15 +1722,20 @@ export const register: Register = (on) => {
       stop: () => stopListening($),
       reconnect: () => submitOnce($, 'Reconnect Vexa Live: call start_listening (or listen_token) and start vexa-link again in this chat.'),
     }
+    // A chat that never worked with Vexa shows nothing until there is a call; otherwise one slim line
+    // — a dot, small text, actions as small links — that stands out only when something waits.
+    const quiet = !b.hot && b.tone !== 'warn'
+    if (!usedVexaHere && !isLive(m) && !linkActive) return next(e)
     return (
       <Box flexDirection="row" gap={1} alignItems="center">
         {pulse(ui, 'band-dot', b.tone)}
         <Box flexGrow={1} flexShrink={1} minWidth={0}>
-          <Text color={b.tone === 'off' ? 'inactive' : b.tone === 'warn' ? 'warning' : undefined} weight={b.hot ? 'semibold' : undefined} size="footnote" wrap="truncate-end">{b.line}</Text>
+          <Text color={quiet ? 'inactive' : b.tone === 'warn' ? 'warning' : undefined} weight={b.hot ? 'semibold' : undefined} size="footnote" wrap="truncate-end">{b.line}</Text>
         </Box>
-        {b.buttons.map(k => (
-          <Button key={`band-${k}`} label={pressing(k, now) ? BUSY_LABEL[k] ?? '…' : BAND_LABEL[k]} isDisabled={pressing(k, now) || undefined}
-            onPress={() => { void press($, k, act[k]!) }} />
+        {b.buttons.map((k, i) => (
+          <Button key={`band-${k}`} plain isDisabled={pressing(k, now) || undefined} onPress={() => { void press($, k, act[k]!) }}>
+            <Text color="inactive" size="footnote">{`${i ? '· ' : ''}${pressing(k, now) ? BUSY_LABEL[k] ?? '…' : BAND_LABEL[k]}`}</Text>
+          </Button>
         ))}
       </Box>
     )
