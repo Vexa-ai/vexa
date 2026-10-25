@@ -396,6 +396,21 @@ async function poll($: any): Promise<void> {
   }
 }
 
+// --- Meetings in a message ----------------------------------------------------------------------
+// A meeting link, or the words people use about meetings, in what the person sends: the model gets
+// one line of context with the order that works — panel first, a link means the bot now, then the
+// line from Vexa. Nothing is added to a message about anything else.
+const MEETING_LINK = /https?:\/\/(?:meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}|[\w.-]*zoom\.us\/(?:j|my|w)\/\S+|teams\.(?:microsoft|live)\.com\/\S*(?:meetup-join|meet)\S*)/i
+const MEETING_WORDS = /\b(?:meetings?|calls?|zoom|google meet|teams|transcripts?|recordings?|minutes|notes from|follow[- ]?ups?|agenda|standup|what did \w+ say|who said)\b|(?:встреч|звон|созвон|транскрипт|запис[ьи] (?:звонка|встречи)|заметк|протокол|фоллоу|повестк|что говорил|кто сказал)/i
+export const MEETING_CONTEXT_LINK = 'Vexa: this message has a meeting link. Call request_meeting_bot with it now, in your first tool call, and panel_link (next /panel/meeting/<platform>/<native_meeting_id>?surface=claude-panel) in the same round; open the panel with preview_start. Listener setup (vexa-live:listen) comes after.'
+export const MEETING_CONTEXT_WORDS = 'Vexa: this message is about meetings. Open the Vexa panel first (panel_link, next /panel?surface=claude-panel, then preview_start), then answer with Vexa\'s tools (whats_waiting, list_meetings, get_meeting_transcript, search_transcripts, the workspace). A meeting link means request_meeting_bot at once.'
+
+export function meetingContext(text: string): string | null {
+  if (MEETING_LINK.test(text)) return MEETING_CONTEXT_LINK
+  if (MEETING_WORDS.test(text)) return MEETING_CONTEXT_WORDS
+  return null
+}
+
 // --- vexa-link: the one line from Vexa ----------------------------------------------------------
 // The script appends every event to ~/.vexa/link/events.jsonl; this reads what is new each second
 // and puts it through the listener: a call's lines into the transcript the filter judges, a call
@@ -1220,6 +1235,14 @@ export const register: Register = (on) => {
     return next(e)
   })
 
+  // A message the person sends about meetings carries one line for the model (context, not their text).
+  on('prompt.submit', async ($, e, next) => {
+    const kind = (e as any).origin?.kind
+    if (e.command || !['composer', 'bridge', 'sdk'].includes(kind)) return next(e)
+    const line = meetingContext(String(e.text ?? ''))
+    return line ? next({ ...e, context: [...(e.context ?? []), line] }) : next(e)
+  }).catch(($, e, next) => next(e))
+
   on('turn.start', async ($, e, next) => {
     busy = true
     if ((await readFlash($)).stage === 'sent') await setFlash($, 'answering')
@@ -1318,7 +1341,23 @@ export const register: Register = (on) => {
     }
     const l = await readListener($)
     const m = await read($)
-    if (e.props.hasSurvey || (!l.isOn && !l.offer)) return next(e)
+    if (e.props.hasSurvey) return next(e)
+    if (!l.isOn && !l.offer) {
+      // Every chat shows Vexa: the call it knows of, and the two things a person reaches for.
+      const ui = $.ui.resolve(e) as any
+      const { Box, Text, Button } = ui
+      const live = isLive(m) && m.nativeId ? (m.title || m.nativeId) : 'no live call'
+      return (
+        <Box flexDirection="row" gap={1} alignItems="center">
+          {pulse(ui, 'band-dot', false)}
+          <Box flexGrow={1} flexShrink={1} minWidth={0}>
+            <Text color="inactive" size="footnote" wrap="truncate-end">{`Vexa · ${live}`}</Text>
+          </Box>
+          <Button key="open-panel" label="Open panel" onPress={() => { void $.prompt.submit({ text: 'Open my Vexa panel.' }) }} />
+          <Button key="send-bot" label="Send bot" onPress={() => { void $.prompt.fill({ text: 'Send Vexa to ', mode: 'replace' }) }} />
+        </Box>
+      )
+    }
     const ui = $.ui.resolve(e) as any
     const { Box, Text, Button } = ui
     const f = await readFlash($)

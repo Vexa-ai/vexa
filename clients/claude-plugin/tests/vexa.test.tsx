@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { leadingJson, localBand, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
+import { MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
 
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 
@@ -236,4 +236,15 @@ test('a press in the web panel reaches the chat as one line and a vexa-ui:v1 ref
   expect(ref).toEqual({ action: 'update_notes', label: 'Update notes', meeting: { id: 107, platform: 'google_meet', native_id: 'jgm-injt-gkj' },
     page: 'kg/entities/meeting/x.md', from: 'panel', at: new Date(1792944000000).toISOString() })
   expect(text).toContain('Update the notes on the page of this call.')
+})
+
+
+test('a message about meetings carries one line for the model; anything else carries none', () => {
+  expect(meetingContext('https://meet.google.com/gaf-ejgk-yna')).toBe(MEETING_CONTEXT_LINK)
+  expect(meetingContext('join https://us02web.zoom.us/j/73792195000?pwd=x')).toBe(MEETING_CONTEXT_LINK)
+  expect(meetingContext('встреча с Иваном завтра')).toBe(MEETING_CONTEXT_WORDS)
+  expect(meetingContext('что говорил Петя про цену?')).toBe(MEETING_CONTEXT_WORDS)
+  expect(meetingContext('What did Ana say about pricing on the call?')).toBe(MEETING_CONTEXT_WORDS)
+  expect(meetingContext('fix the failing test in parser.ts')).toBeNull()
+  expect(meetingContext('рефакторинг модуля оплаты')).toBeNull()
 })

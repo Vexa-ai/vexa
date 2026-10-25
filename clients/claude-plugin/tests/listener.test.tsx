@@ -182,7 +182,7 @@ test('web and plugin share the listener through meeting metadata: state, heartbe
   await ui.unmount()
 })
 
-test('listening ends with the meeting instead of staying on the band', async ($, on) => {
+test('listening ends with the meeting: the band goes back to every chat\'s Vexa band', async ($, on) => {
   const clock = mock.clock(on)
   engine(on, () => [])
   on('ui.render', ($: any, e: any) => { const { Text } = $.ui.resolve(e); return <Text>engine</Text> })
@@ -193,7 +193,9 @@ test('listening ends with the meeting instead of staying on the band', async ($,
   endedLive.value = true
   await clock.advance(31_500)
   expect(await ui.find({ type: 'Text', text: /^Listening( · |$)/ })).toBeFalsy()
-  expect(await ui.find({ type: 'Text', text: /^engine$/ })).toBeTruthy()
+  // With nothing listened to, the band stays as every chat's Vexa band: no live call, Open panel, Send bot.
+  expect((await ui.find({ type: 'Text', text: /^Vexa · / }))?.text).toBe('Vexa · no live call')
+  expect(await ui.find({ type: 'Button', label: 'Open panel' })).toBeTruthy()
   await ui.unmount()
 })
 
