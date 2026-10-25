@@ -7,6 +7,9 @@
 # Vexa's `wait_for_signal` (≤25 s); every read also tells Vexa this call is being listened to, which
 # is what the call panel shows. Output, then exit:
 #   addressed <next_index>   then the lines that named Claude, one per line   (exit 0)
+#   noted <next_index>       then `[kinds] speaker: text` per line worth keeping on the meeting page:
+#                            decision, commitment, price, date, new (a name not heard before);
+#                            at most once a minute                            (exit 0)
 #   ended <next_index>                                                         (exit 0)
 #   expired                  the key no longer works: get a new one           (exit 2)
 #   unreachable              Vexa did not answer for a while                   (exit 3)
@@ -16,7 +19,7 @@ key=${VEXA_LISTEN_KEY:?VEXA_LISTEN_KEY}
 fails=0
 while :; do
   body=$(curl -sS --max-time 40 -w '\n%{http_code}' -H "X-API-Key: $key" \
-    "$api/transcripts/$platform/$native/signal?since_index=$since&timeout_sec=25&listener=1&format=text" 2>/dev/null)
+    "$api/transcripts/$platform/$native/signal?since_index=$since&timeout_sec=25&listener=1&notes=1&format=text" 2>/dev/null)
   code=$(printf '%s\n' "$body" | tail -n 1)
   text=$(printf '%s\n' "$body" | sed '$d')
   case "$code" in
@@ -27,7 +30,7 @@ while :; do
   set -- $(printf '%s\n' "$text" | head -n 1)
   signal=${1:-quiet}; next=${2:-$since}
   case "$signal" in
-    addressed) printf '%s\n' "$text"; exit 0 ;;
+    addressed|noted) printf '%s\n' "$text"; exit 0 ;;
     ended) echo "ended $next"; exit 0 ;;
     *) since=$next ;;
   esac
