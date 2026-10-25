@@ -825,7 +825,8 @@ async function configure($: any, input: any): Promise<unknown> {
     return { listening: l.isOn, meeting, preset, brief }
   }
   const v = await read($)
-  return { vexa: { server: server || null, connection: v.connection, error: v.error || null, http: httpProbe || null }, listening: l.isOn, meeting, offer: l.offer, preset: l.preset, presets: l.app.presets, app: l.app.name, appFolder: appDir, brief: l.brief, wakes: l.wakes, lastVerdict: l.lastVerdict, spend: await spendReport($) }
+  await probeHttp($)
+  return { version: pluginVersion || null, vexa: { server: server || null, connection: v.connection, error: v.error || null, http: httpProbe || null }, listening: l.isOn, meeting, offer: l.offer, preset: l.preset, presets: l.app.presets, app: l.app.name, appFolder: appDir, brief: l.brief, wakes: l.wakes, lastVerdict: l.lastVerdict, spend: await spendReport($) }
 }
 
 // Web → chat: a panel button in the web («Summarize this call», «Prepare me…») queues a request
