@@ -122,7 +122,6 @@ const NO_SETTINGS: Settings = { write: '', workspace: '', localPath: '' }
 let settings: Settings = NO_SETTINGS
 // What the session-start context says about the server: its «Writes to …» line and workspaces.
 let writesLine = ''
-let workspaceNames: string[] = []
 const SETTINGS_TOOL = 'mcp__vexa__vexa_settings'
 const reported = new Set<number>()
 
@@ -154,6 +153,9 @@ let prefix = toolPrefix(`plugin:vexa:${SERVER_KEY}`)
 // a pasted callback URL. The session connects live; no reload.
 const SIGNIN_TOOL = `${prefix}authenticate`
 const SIGNIN_TOOLS = new Set([SIGNIN_TOOL, `${prefix}complete_authentication`])
+// Whether this session offers those tools (the terminal does). The desktop app doesn't: there the
+// person signs the plugin's server in from /mcp in the chat.
+let signinByTool = false
 
 // MCP results come back as content blocks; Vexa returns one JSON text block, sometimes followed by
 // a notice in plain text («\n\n<notice>»): parse the leading JSON value and ignore what follows.
@@ -225,6 +227,9 @@ async function connect($: any): Promise<void> {
     return
   }
   server = ''
+  if (r.reason === 'auth') {
+    try { signinByTool = (await $.tool.list()).some((t: { name: string }) => t.name === SIGNIN_TOOL) } catch { signinByTool = false }
+  }
   await update($, x => ({
     ...x,
     connection: r.reason === 'auth' ? 'signin' : 'refused',
@@ -844,9 +849,11 @@ function contextText(m: Meeting): string {
     return `Vexa (meeting bot, live transcripts, team workspaces) is installed${isHosted() ? '' : `, pointed at the company's Vexa ${vexaHost()},`} but not signed in. `
       + (isHosted() && m.connection === 'refused'
         ? 'Hosted Vexa has no sign-in yet: if the person wants Vexa, tell them to create an API key at https://vexa.ai/account and set it as VEXA_API_KEY in the env block of ~/.claude/settings.json, then restart Claude Code; never take the key in the chat.'
-        : `Required: unless you already offered in this conversation, begin your next reply, whatever the person wrote, with this exact line: «Vexa is installed. Sign in?» If they say yes, sign in, connect or set up Vexa, call ${SIGNIN_TOOL} right away, write the full link it returns in your reply (the person cannot see tool results) and say «open it, press Allow, then come back»; the Vexa panel then opens by itself. If the page after Allow shows an error, ask them to paste its address and pass it to ${prefix}complete_authentication. Never send the person to /mcp, /reload-plugins or plugin settings, and never run claude mcp login; follow the vexa-setup skill.`)
+        : `Required: unless you already offered in this conversation, begin your next reply, whatever the person wrote, with this exact line: «Vexa is installed. Sign in?» ${signinByTool
+          ? `If they say yes, sign in, connect or set up Vexa, call ${SIGNIN_TOOL} right away, write the full link it returns in your reply (the person cannot see tool results) and say «open it, press Allow, then come back»; the Vexa panel then opens by itself. If the page after Allow shows an error, ask them to paste its address and pass it to ${prefix}complete_authentication. Never run claude mcp login.`
+          : 'If they say yes, sign in, connect or set up Vexa, tell them in one line: «Type /mcp here, choose plugin:vexa:vexa and sign in; your browser opens, press Allow, then come back.» There is no sign-in tool for you to call here, so do not look for one; the Vexa panel opens by itself once they are signed in.'} Never mention API keys, never send the person to /reload-plugins or plugin settings; follow the vexa-setup skill.`)
   }
-  const lines = [`Vexa is connected. Workspaces: ${workspaceNames.slice(0, 8).join('; ') || 'not loaded yet'}.`]
+  const lines = ['Vexa is connected.']
   if (settings.write === 'cloud') lines.push(`You write what you learn to the Vexa workspace «${settings.workspace}» (${writesLine || 'the account default'}). Before writing, read its rules: workspace_read CLAUDE.md and workspace_purpose; follow the vexa-workspace skill.`)
   else if (settings.write === 'local') lines.push(`You write what you learn as markdown under ${settings.localPath} (the vexa-workspace layout). Read ${settings.localPath}/CLAUDE.md first if it exists.`)
   else if (settings.write === 'ask') lines.push('Write to a workspace only when the person asks; then follow the vexa-workspace skill.')

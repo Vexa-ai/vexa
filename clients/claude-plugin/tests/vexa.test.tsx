@@ -220,7 +220,7 @@ test('sign-in from the chat: Claude offers it and calls authenticate; when it la
   let signedIn = false
   const calls: { tool: string; args: any }[] = []
   const opened: string[] = []
-  engine(on, () => signedIn ? { isConnected: true, server: 'plugin:vexa:vexa' } : { isConnected: false, reason: 'auth', message: 'needs sign-in' }, calls, opened, {}, ['panel_link'], true)
+  engine(on, () => signedIn ? { isConnected: true, server: 'plugin:vexa:vexa' } : { isConnected: false, reason: 'auth', message: 'needs sign-in' }, calls, opened, {}, ['panel_link', 'authenticate'], true)
   on('prompt.compose', () => ({ sections: [] }))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const ctx: any = await $.prompt.compose({ model: 'claude-sonnet-5-5', promptModel: 'claude-sonnet-5-5', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [], sections: [] } as any)
@@ -232,4 +232,17 @@ test('sign-in from the chat: Claude offers it and calls authenticate; when it la
   await clock.advance(5000)
   expect(calls.find(c => c.tool === 'preview_start')).toBeTruthy()
   expect(opened).toEqual([])
+})
+
+test('the desktop app has no authenticate tool: Claude sends the person to /mcp in one line, never to an API key', async ($, on) => {
+  mock.clock(on)
+  engine(on, { isConnected: false, reason: 'auth', message: 'needs sign-in' })
+  on('prompt.compose', () => ({ sections: [] }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ctx: any = await $.prompt.compose({ model: 'claude-sonnet-5-5', promptModel: 'claude-sonnet-5-5', surfaces: ['desktop'], tools: [], outputStyle: null, traits: [], sections: [] } as any)
+  const t = ctx.sections.at(-1).text
+  expect(t).toMatch(/Vexa is installed\. Sign in\?/)
+  expect(t).toMatch(/Type \/mcp here, choose plugin:vexa:vexa and sign in/)
+  expect(t).not.toMatch(/call mcp__plugin_vexa_vexa__authenticate/)
+  expect(t).not.toMatch(/API key at|VEXA_API_KEY/)
 })
