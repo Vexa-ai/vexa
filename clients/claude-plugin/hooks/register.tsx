@@ -517,7 +517,7 @@ export const MEETING_CONTEXT_WORDS = 'Vexa: this message is about meetings. Your
 // message, a task's notification or a plugin's prompt, which the desktop app also delivers as `sdk`.
 export function fromPerson(kind: string | undefined, text: string, isMeta = false): boolean {
   if (isMeta || !['composer', 'bridge', 'sdk'].includes(String(kind))) return false
-  return !/<(?:cross-session-message|task-notification|agent-message|side-sessions-event|ci-monitor-event|system-reminder)\b|^The app was quit|^\[Vexa(?: listener| panel| Live self-test)?[\] ·]|^Vexa UI: /.test(text.trimStart())
+  return !/<(?:cross-session-message|task-notification|agent-message|side-sessions-event|ci-monitor-event|system-reminder|command-name|command-message|local-command-stdout|user-prompt-submit-hook)\b|^The app was quit|^\[SYSTEM NOTIFICATION|^This session is being continued|^\[Request interrupted|^Tool loaded\.|^\[Vexa(?: listener| panel| Live self-test)?[\] ·]|^Vexa UI: /.test(text.trimStart())
 }
 
 // A person or a company asked about by name: what the calls and the workspace know comes first.
