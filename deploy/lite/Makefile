@@ -48,7 +48,7 @@ HOST_AGENT_PORT     ?= 8100
 # under data/<bucket>/ in STORAGE_VOLUME; S3 metadata (content type, ETag) rides in extended
 # attributes, so back the volume up with an attribute-preserving copy (rsync -aX, cp -a).
 # meeting-api keeps its MINIO_* variable names; they now point at this sidecar.
-STORAGE_IMAGE     ?= versity/versitygw:v1.9.0@sha256:eb7f786fcd91e72194e48fcf1ac16302d686bf8e3a71434bdbc067a6efd3fdc7
+STORAGE_IMAGE     ?= versity/versitygw:v1.10.0@sha256:89cad13cc981986ee284cbafea4613f9533ce6fd5f37a2c96c4c4fb8adb3a316
 STORAGE_VOLUME    ?= vexa-lite-storagedata
 # The storage root credentials have no default: they live in .env (MINIO_ACCESS_KEY, MINIO_SECRET_KEY),
 # minted there by storage-credentials.sh when unset or published. Set both here to use your own; a

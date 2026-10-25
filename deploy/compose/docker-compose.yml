@@ -104,7 +104,7 @@ services:
     # saved session, with the scoped account storage-init makes (BOT_S3_*, read-only on its own
     # prefix); a bot's rotated session comes back through meeting-api. No bot or worker is ever given
     # the root pair.
-    image: versity/versitygw:v1.9.0@sha256:eb7f786fcd91e72194e48fcf1ac16302d686bf8e3a71434bdbc067a6efd3fdc7
+    image: versity/versitygw:v1.10.0@sha256:89cad13cc981986ee284cbafea4613f9533ce6fd5f37a2c96c4c4fb8adb3a316
     entrypoint:
       - /bin/sh
       - -c
@@ -2256,7 +2256,7 @@ services:
     profiles: ["search"]
     # PINNED BY DIGEST, deliberately: an unmodified third-party artifact we vouch for by its exact
     # bytes, not by a moving tag. Bump it on purpose, never implicitly.
-    image: ${SEARXNG_IMAGE:-searxng/searxng:2026.9.5-c7f3080aa@sha256:55e1fa15a63ff04e79e213e6aa2837549877b0c6d60757cdb633ae9111cb5fea}
+    image: ${SEARXNG_IMAGE:-searxng/searxng:2026.10.24-ef0ec03da@sha256:7c7cbe509429e82755104b2a95f52085a98633c95d53f44e4e905fa3a59f08c8}
     networks: [vexa, workers]     # MUST match the stack: workers resolve it on `workers`
     ports:
       - "127.0.0.1:${SEARXNG_HOST_PORT:-18481}:8080"
