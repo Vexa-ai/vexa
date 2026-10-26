@@ -90,7 +90,7 @@ def build(**d) -> APIRouter:
         from control_plane import transcription_watcher as _txw
         return _txw.relay_health()
     @router.get("/api/meeting/note")
-    def meeting_note(meeting_id: str, request: Request):
+    def meeting_note(request: Request, meeting_id: str = "", native: str = "", meeting_url: str = ""):
         """WHERE THIS MEETING'S REPORT LIVES ON THE CALLER'S DESK — `{"path", "transcript", "cursor"}`.
 
         The client asks; it does not spell. `kg/entities/meeting/<meeting-day>-<title-slug>.md` is
@@ -113,8 +113,19 @@ def build(**d) -> APIRouter:
         declares the transcript widget (`<!-- vexa:transcript meeting=… -->`) IS the meeting's one
         page — the live transcript renders inside it — so the room shows no separate Transcript tab.
         Both are `""` for every report written before the widget existed, and that absence is what
-        keeps those meetings on the two-page room they have today instead of losing the transcript."""
+        keeps those meetings on the two-page room they have today instead of losing the transcript.
+
+        BEFORE THE MEETING EXISTS — `native` and/or `meeting_url`, no `meeting_id`: the page the
+        person prepared for a call nobody has sent a bot to yet (an upcoming calendar meeting opened
+        from the panel). The lookup is the one the bot's mint ADOPTS by (`meeting_attach_page` stamps
+        the identity, `resolve_exact_in` matches it), over the caller's OWN note places only — no row,
+        so nothing anybody else holds is read, and `null` is the ordinary answer."""
         subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
+        if not meeting_id.strip():
+            row = meeting_note_mod.pending_row(native, meeting_url)
+            if row is None:
+                raise HTTPException(status_code=400, detail="give meeting_id, or the meeting's native id or link")
+            return meeting_note_mod.describe(wsr.root, subject, row, exact=True)
         row = _meeting_access(subject, meeting_id, within=_within(request))
         if row is None:
             raise HTTPException(status_code=403, detail="not authorized for this meeting")

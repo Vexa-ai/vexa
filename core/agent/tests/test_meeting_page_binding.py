@@ -210,3 +210,24 @@ def test_attach_in_a_shared_workspace_is_still_refused_without_write(tmp_path):
         r = _attach(c, who, SHARED)
         assert r.status_code == 404, (who, r.text)
     assert (ws / AGENDA).read_text() == before, "a caller without write stamped a shared page"
+
+
+def test_the_page_prepared_before_the_bot_is_found_by_its_room(tmp_path):
+    """An upcoming meeting opened in the panel has no row yet: its page is found by the identity
+    `meeting_attach_page` stamped — the same match the mint adopts by — and only on the caller's own
+    note places; a look-alike title is not enough, and another person finds nothing."""
+    root, desk, other = _root(tmp_path)
+    _agenda(other)
+    c = _client(root, {}, [])
+    r = c.post("/api/meeting/note/attach", headers={"X-User-Id": JANE},
+               json={"path": AGENDA, "workspace": SLOT, "native": "jmk-qxpo-yzg", "meeting_url": MEET_URL,
+                     "platform": "google_meet"})
+    assert r.status_code == 200, r.text
+    got = c.get("/api/meeting/note", headers={"X-User-Id": JANE}, params={"native": "jmk-qxpo-yzg"})
+    assert got.status_code == 200 and got.json()["path"] == AGENDA and got.json()["workspace"] == SLOT
+    by_link = c.get("/api/meeting/note", headers={"X-User-Id": JANE}, params={"meeting_url": MEET_URL + "?authuser=1"})
+    assert by_link.json()["path"] == AGENDA
+    assert c.get("/api/meeting/note", headers={"X-User-Id": JANE}, params={"native": "zzz-zzzz-zzz"}).json()["path"] is None
+    assert c.get("/api/meeting/note", headers={"X-User-Id": "u_mallory"}, params={"native": "jmk-qxpo-yzg"}).json()["path"] is None
+    assert c.get("/api/meeting/note", headers={"X-User-Id": JANE}, params={"native": "../x"}).status_code == 400
+    assert c.get("/api/meeting/note", headers={"X-User-Id": JANE}).status_code == 400

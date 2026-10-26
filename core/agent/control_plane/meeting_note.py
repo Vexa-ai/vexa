@@ -394,7 +394,24 @@ def resolve_in(desk: Path, row) -> "str | None":
     return f"{MEETING_DIR}/{sorted(n for _d, n in by_title)[-1]}"
 
 
-def describe(workspaces_root, subject: str, row) -> dict:
+#: a room's id as a platform spells one (a Meet code, a Zoom number, a Teams thread) — anything else
+#: names no meeting and is refused before a directory is read
+_NATIVE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:@%-]{0,199}\Z")
+
+
+def pending_row(native=None, meeting_url=None) -> "dict | None":
+    """A meeting that has no row yet, as the identity match reads one: its native id and its link.
+    None when neither names a room. Used to find the page prepared for a call before a bot is sent."""
+    n = str(native or "").strip()
+    u = str(meeting_url or "").strip()[:500]
+    if n and not _NATIVE.match(n):
+        n = ""
+    if not (n or normal_url(u)):
+        return None
+    return {"native_meeting_id": n, "data": {"meeting_url": u} if u else {}}
+
+
+def describe(workspaces_root, subject: str, row, exact: bool = False) -> dict:
     """The note, PLUS the two facts that decide whether it is the meeting's ONE page (#1598).
 
     `transcript` is the meeting the page's own widget slot names — non-empty means the live
@@ -430,7 +447,7 @@ def describe(workspaces_root, subject: str, row) -> dict:
                 pass
     if path is None:
         # then a page that names the meeting by identity, then the older lookups
-        for finder in (resolve_exact_in, resolve_in):
+        for finder in ((resolve_exact_in,) if exact else (resolve_exact_in, resolve_in)):
             for p in places:
                 hit = finder(p["dir"], row)
                 if hit:
