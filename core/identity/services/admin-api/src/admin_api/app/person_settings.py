@@ -25,7 +25,7 @@ caused by the file being wired up halfway.
     somebody or states a time. The PERSON facts; `bot_name` is not among them.
   * ``PUT  /internal/users/{id}/settings`` → `apply` — the write half, partial and validated
     all-or-nothing. Body: any subset of ``timezone``, ``mail_minutes``, ``mail_join``,
-    ``mail_rsvp``, ``mail_prep``, ``presence``. `bot_name` is REFUSED there (422): it is a fact about the bot,
+    ``mail_rsvp``, ``mail_prep``, ``presence``, ``upcoming_calls``. `bot_name` is REFUSED there (422): it is a fact about the bot,
     meetings owns it, and it already has a door.
   * ``GET  /internal/presence?ids=1,2`` → `presence_choice` — agent-api's batch read of the
     `presence` choice for the members of one desktop; ``null`` is "never chosen".
@@ -59,7 +59,14 @@ VOCAB: Dict[str, Tuple[Any, str, str]] = {
     "presence":     (True, "on/off",
                      "whether colleagues see that they were active (now / today, never a time) in "
                      "a chat or workspace they share"),
+    # How many of their next calendar meetings the panel's Calls list shows above the past calls
+    # (founder, 2026-10-26: "просто следующие три встречи"); 0 hides the section.
+    "upcoming_calls": (3, "count",
+                       "how many upcoming calendar meetings the Calls list shows (0 to 10; 0 hides them)"),
 }
+
+#: the largest `count` a setting takes
+COUNT_MAX = 10
 
 #: Settings only the person changes, with their own credential — a worker acting for them, even
 #: with the person in the loop, may read them and may not change them.
@@ -147,6 +154,14 @@ def coerce(key: str, value: Any) -> Any:  # noqa: C901
         if v not in _TRUE + _FALSE:
             raise Refused({"refused": f"{key} is on or off", "you_sent": value})
         return v in _TRUE
+    if kind == "count":
+        try:
+            n = int(str(value).strip())
+        except ValueError:
+            raise Refused({"refused": f"{key} is a whole number from 0 to {COUNT_MAX}", "you_sent": value})
+        if not 0 <= n <= COUNT_MAX:
+            raise Refused({"refused": f"{key} is a whole number from 0 to {COUNT_MAX}", "you_sent": value})
+        return n
     val = str(value).strip()
     if key == "timezone" and val:
         try:

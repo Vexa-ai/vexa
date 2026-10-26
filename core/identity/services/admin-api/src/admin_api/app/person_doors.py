@@ -33,7 +33,7 @@ _MCP_MANIFEST = Path(__file__).resolve().parents[1] / "mcp.tools.v1.json"
 class UserSettingChange(BaseModel):
     """One of the person's settings, changed — the body behind `settings_set`."""
     model_config = ConfigDict(extra="forbid")
-    setting: str = Field(..., description="The setting: timezone, mail_minutes, mail_join, mail_rsvp, mail_prep or presence.")
+    setting: str = Field(..., description="The setting: timezone, mail_minutes, mail_join, mail_rsvp, mail_prep, presence or upcoming_calls.")
     value: str = Field(..., description="Its new value — an IANA zone for timezone; on/off for the rest.")
 
 

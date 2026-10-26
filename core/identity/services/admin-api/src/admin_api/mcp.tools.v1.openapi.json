@@ -6,7 +6,7 @@
         "description": "One of the person's settings, changed \u2014 the body behind `settings_set`.",
         "properties": {
           "setting": {
-            "description": "The setting: timezone, mail_minutes, mail_join, mail_rsvp, mail_prep or presence.",
+            "description": "The setting: timezone, mail_minutes, mail_join, mail_rsvp, mail_prep, presence or upcoming_calls.",
             "title": "Setting",
             "type": "string"
           },

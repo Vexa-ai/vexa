@@ -77,7 +77,7 @@ def test_the_write_door_changes_what_the_read_door_serves(client):
     first.pop("notifications", None)      # S6's notification settings ride the same answer (tested there)
     assert first == {
         "timezone": "", "mail_minutes": True, "mail_join": False,
-        "mail_rsvp": True, "mail_prep": True, "presence": True}
+        "mail_rsvp": True, "mail_prep": True, "presence": True, "upcoming_calls": 3}
 
     r = client.put(f"/internal/users/{uid}/settings", headers=_internal(),
                    json={"mail_minutes": "off", "timezone": "Europe/Lisbon"})
@@ -169,3 +169,4 @@ def test_dev_mode_does_not_open_the_cross_user_settings_doors(client, monkeypatc
     assert client.get(f"/internal/users/{uid}/settings").status_code == 503
     assert client.put(f"/internal/users/{uid}/settings",
                       json={"mail_minutes": "off"}).status_code == 503
+

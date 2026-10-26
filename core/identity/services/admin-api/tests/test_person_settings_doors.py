@@ -122,7 +122,7 @@ def test_apply_validates_every_key_before_writing_any():
 
 def test_the_person_facts_are_what_the_read_door_serves():
     facts = ps.read_person_facts({})
-    assert set(facts) == {"timezone", "mail_minutes", "mail_join", "mail_rsvp", "mail_prep", "presence"}
+    assert set(facts) == {"timezone", "mail_minutes", "mail_join", "mail_rsvp", "mail_prep", "presence", "upcoming_calls"}
     assert ps.BOT_NAME_KEY not in facts
 
 
@@ -151,3 +151,16 @@ def test_plan_import_carries_bot_name_into_the_bots_own_store_only_when_empty():
     new2, imported2, kept2, _ = ps.plan_import({ps.BOT_NAME_STORE: "Mine"}, {"bot_name": "Notes"})
     assert new2[ps.BOT_NAME_STORE] == "Mine"
     assert imported2 == {} and kept2 == ["bot_name"]
+
+
+def test_upcoming_calls_is_a_count_from_zero_to_ten():
+    """The panel's Upcoming list: how many next meetings it shows, 3 unless the person says."""
+    assert ps.read({})["upcoming_calls"] == 3
+    assert ps.apply({}, {"upcoming_calls": "5"})["person_settings"]["upcoming_calls"] == 5
+    assert ps.apply({}, {"upcoming_calls": 0})["person_settings"]["upcoming_calls"] == 0
+    for bad in ("many", "-1", "11", "2.5"):
+        try:
+            ps.apply({}, {"upcoming_calls": bad})
+        except ps.Refused:
+            continue
+        raise AssertionError(f"{bad!r} was accepted")
