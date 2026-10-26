@@ -1343,6 +1343,7 @@ function startRequests($: any): void {
       if (linkActive || !(await ownsLink($))) pause = 5000
       else {
         const r = await call($, 'claude_requests_next', { wait_ms: 8000 })
+        if (Array.isArray(r?.panels)) ownPanels = { ts: await $.clock.now(), panels: r.panels }
         for (const q of r.requests ?? []) {
           const text = String(q.text ?? '').slice(0, 2000)
           if (!text) { quiet(call($, 'claude_requests_ack', { id: q.id, outcome: 'dropped' })); continue }
@@ -1456,6 +1457,41 @@ async function openInPane($: any, url: string): Promise<boolean> {
     }
     return true
   } catch { return false }
+}
+
+// THE PANEL STAYS SIGNED IN (founder, 26 Oct: «Session ended» twice in one call). The pane's sign-in
+// is a key that ends within an hour; only this plugin holds the person's own key. Each open panel
+// tells the server when its sign-in ends and where it is; the relay hands that to every poll (the line's
+// panels.json, or this plugin's own poll). Before the end, the chat whose panel it is opens it again
+// with a fresh panel_link on the same path: the pane reloads once, signed in for another hour.
+const RENEW_BEFORE_MS = 5 * 60_000
+type OpenPanel = { chat?: unknown; ends_ms?: unknown; path?: unknown }
+let ownPanels: { ts: number; panels: OpenPanel[] } = { ts: 0, panels: [] }
+let renewedFor = 0
+
+// This chat's panel that ends within RENEW_BEFORE_MS (and not long ago): the path to open it on, else ''.
+export function panelToRenew(panels: OpenPanel[], chat: string, now: number, done = 0): string {
+  if (!chat) return ''
+  const mine = panels.find(x => String(x?.chat ?? '') === chat)
+  const ends = Number(mine?.ends_ms ?? 0)
+  if (!mine || !Number.isFinite(ends) || ends <= 0 || ends === done) return ''
+  if (ends - now > RENEW_BEFORE_MS || now - ends > RENEW_BEFORE_MS) return ''
+  const path = typeof mine.path === 'string' && /^\/panel(\/[A-Za-z0-9_.~%@:-]+)*$/.test(mine.path) && !/\/\.\.?(\/|$)/.test(mine.path) ? mine.path : '/panel'
+  return path
+}
+
+async function renewPanel($: any): Promise<void> {
+  if (!mySession) return
+  const now = await $.clock.now()
+  let panels: OpenPanel[] = now - ownPanels.ts < PANELS_FRESH_MS ? ownPanels.panels : []
+  try {
+    const p = JSON.parse(String(await $.fs.read(`${await linkDir($)}/panels.json`)))
+    if (now - Number(p.ts ?? 0) < PANELS_FRESH_MS && Array.isArray(p.panels)) panels = p.panels
+  } catch { /* no line from Vexa: this plugin's own poll, if any */ }
+  const mine = panels.find(x => String(x?.chat ?? '') === mySession)
+  const path = panelToRenew(panels, mySession, now, renewedFor)
+  if (!path) return
+  if (await openPanel($, withChat(path, mySession))) renewedFor = Number(mine?.ends_ms ?? 0)
 }
 
 function panelPath(m: Meeting): string {
@@ -1620,6 +1656,7 @@ export const register: Register = (on) => {
         try { if ((await read($)).connection !== 'ready') await connect($) } catch { /* the next tick tries again */ }
       })
       $.clock.every(30_000, () => quiet(audit($)))
+      $.clock.every(30_000, () => quiet(renewPanel($)))
       $.clock.every(1000, () => quiet(syncLocal($)))
       $.clock.every(1000, () => quiet(syncLink($)))
     }

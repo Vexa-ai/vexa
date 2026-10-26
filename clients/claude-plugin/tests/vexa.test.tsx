@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { bandState, fromPerson, heardLine, pickOwner, runsListener, withChat, FOLLOW_UP_CONTEXT, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, PERSON_CONTEXT, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
+import { bandState, fromPerson, heardLine, panelToRenew, pickOwner, runsListener, withChat, FOLLOW_UP_CONTEXT, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, PERSON_CONTEXT, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
 
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 
@@ -346,4 +346,15 @@ test('the band never says listening while a wake waits; Listen here moves the li
   expect(bandState({ ...base, answering: true, stage: 'answering', flash: 'Heard: “Клод, что ты слышишь” → answering' }).line).toBe('Answering: “Клод, что ты слышишь”')
   expect(pickOwner({ coordinator: 300, onboarding: 100 }, ['coordinator'], ['coordinator'], 'onboarding')).toBe('onboarding')
   expect(pickOwner({ coordinator: 300 }, [], [], 'gone-chat')).toBe('coordinator')
+})
+
+test('a panel is opened again on its own path before its sign-in ends, once per end, only by its own chat', () => {
+  const now = 1_793_030_000_000
+  const panels = [{ chat: 'me', ends_ms: now + 4 * 60_000, path: '/panel/meeting/google_meet/jqc-cput-yvf' }, { chat: 'other', ends_ms: now + 60_000 }]
+  expect(panelToRenew(panels, 'me', now)).toBe('/panel/meeting/google_meet/jqc-cput-yvf')
+  expect(panelToRenew(panels, 'me', now, now + 4 * 60_000)).toBe('')
+  expect(panelToRenew(panels, 'me', now - 10 * 60_000)).toBe('')
+  expect(panelToRenew(panels, 'nobody', now)).toBe('')
+  expect(panelToRenew([{ chat: 'me', ends_ms: now + 60_000, path: '/panel/../x' }], 'me', now)).toBe('/panel')
+  expect(panelToRenew([{ chat: 'me' }], 'me', now)).toBe('')
 })
