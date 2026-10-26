@@ -226,6 +226,8 @@ DEFAULTS: dict = {
     "model_rules": "",
     "model_levels": "",
     "model_intent_router": "",
+    "model_scope_unpinned": "runner_family",
+    "subscription_token_proxy": "deny",
     "appearance_accent": "clay",
     "appearance_font_ui": "geist",
     "appearance_font_reading": "ui",
