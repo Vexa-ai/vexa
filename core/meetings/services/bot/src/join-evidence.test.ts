@@ -225,6 +225,11 @@ check(
   attributeJoinFailure('awaiting_admission_timeout', 'host did not admit within the waiting-room timeout') === 'host_action',
 );
 check(
+  'Meet ending an unanswered knock ("No one responded") stays with the host, not our selectors',
+  attributeJoinFailure('awaiting_admission_timeout', 'Google Meet ended the join request, nobody admitted the bot: Meet showed "No one responded to your request to join the call"') === 'host_action'
+    && attributeJoinFailure('awaiting_admission_timeout', 'Google Meet ended the join request, nobody admitted the bot: redirected off Google Meet to workspace.google.com') === 'host_action',
+);
+check(
   'the override is scoped: the same admission-flow words do not move a REJECTION',
   attributeJoinFailure('awaiting_admission_rejected', 'no meeting indicators found') === 'host_action',
 );
