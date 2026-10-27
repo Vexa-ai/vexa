@@ -15,7 +15,7 @@ import type { ChatSendResult } from './capture-bridge.js';
 import type { ChatSendReport } from './ports.js';
 
 export interface ActControllers {
-  speak: { speak(text: string, voice?: string): Promise<void>; stop(): Promise<void> };
+  speak: { speak(text: string, voice?: string, id?: string): Promise<void>; stop(): Promise<void> };
   chat: { send(text: string): Promise<ChatSendResult> };
   /** Where a chat send that carried an `id` reports its outcome. */
   report?: (r: ChatSendReport) => Promise<void>;
@@ -28,7 +28,8 @@ export function createActDispatch(c: ActControllers): (act: Act) => Promise<void
     await c.report(r).catch((e) => console.error(`[bot] chat_send_result not reported: ${String(e)}`));
   };
   return async (act) => {
-    if (act.action === 'speak') await c.speak.speak(act.text, act.voice);
+    // The act's id is meeting-api's request_id: every log line about the utterance carries it.
+    if (act.action === 'speak') await c.speak.speak(act.text, act.voice, act.id);
     else if (act.action === 'speak_stop') await c.speak.stop();
     else if (act.action === 'chat_send') {
       const id = typeof act.id === 'string' && act.id ? act.id : undefined;

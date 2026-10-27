@@ -484,5 +484,15 @@ export const googlePeopleButtonSelectors: string[] = [
 export const browserContextSelectorArrays: string[] = [
   'googleLeaveButtonMatchers',
   'googleLobbyIconGlyphSelectors',
+  'googleMicButtonSelectors',
 ];
 
+// ---- In-meeting microphone control (#1866: a voice bot reads it before it clicks it) ----
+// Meet labels the toggle by the action it performs: "Turn off microphone (ctrl + d)" while the mic is
+// on, "Turn on microphone (ctrl + d)" while it is off. Other controls also mention the microphone
+// (device settings); the bot uses the first whose label states on or off. Read in page.evaluate.
+export const googleMicButtonSelectors: string[] = [
+  'button[aria-label*="microphone" i]',
+  '[role="button"][aria-label*="microphone" i]',
+  'button[data-tooltip*="microphone" i]',
+];

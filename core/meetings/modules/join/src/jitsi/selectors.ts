@@ -116,3 +116,13 @@ export const jitsiPostMeetingIndicators: string[] = [
   'text=Rejoin',
   'text=Thank you for using',
 ];
+
+// ---- In-meeting microphone control (#1866: a voice bot reads it before it clicks it) ----
+// The toolbox audio toggle, labelled by its action ("Mute microphone" while on, "Unmute microphone"
+// while off). Read in page.evaluate.
+export const jitsiMicButtonSelectors: string[] = [
+  '.toolbox-button[aria-label*="microphone" i]',
+  '[role="button"][aria-label*="mute microphone" i]',
+];
+
+export const browserContextSelectorArrays: string[] = ['jitsiMicButtonSelectors'];

@@ -18,7 +18,7 @@ const check = (name: string, cond: boolean, detail?: string) => {
 const calls: string[] = [];
 const dispatch = createActDispatch({
   speak: {
-    async speak(text, voice) { calls.push(`speak:${text}:${voice ?? ''}`); },
+    async speak(text, voice, id) { calls.push(`speak:${text}:${voice ?? ''}${id ? `:${id}` : ''}`); },
     async stop() { calls.push('speak_stop'); },
   },
   chat: { async send(text) { calls.push(`chat:${text}`); return { sent: true, via: 'test' }; } },
@@ -32,6 +32,11 @@ const run = async (act: Act) => { calls.length = 0; await dispatch(act); return 
 {
   const got = await run({ action: 'speak', text: 'say this', voice: 'alloy' });
   check('speak still routes to the SpeakController', JSON.stringify(got) === JSON.stringify(['speak:say this:alloy']), JSON.stringify(got));
+}
+{
+  // #1866: the act's id (meeting-api's request_id) reaches the SpeakController, so its log lines carry it.
+  const got = await run({ action: 'speak', text: 'say this', id: '3f2a9c0d1b2e4f5a' });
+  check('speak passes the act id to the SpeakController', JSON.stringify(got) === JSON.stringify(['speak:say this::3f2a9c0d1b2e4f5a']), JSON.stringify(got));
 }
 {
   const got = await run({ action: 'speak_stop' });
