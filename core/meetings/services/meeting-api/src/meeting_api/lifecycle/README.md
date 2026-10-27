@@ -54,6 +54,16 @@ parent's FM-003 discipline). `active → joining` (and any re-open of a terminal
   to the bot; `GET …/chat/{request_id}` reads the send's outcome (`queued` · `posted` · `failed` +
   the bot's reason · `unconfirmed` after `UNCONFIRMED_AFTER_SEC`), sender only, from the record
   `../chat_delivery.py` keeps and the collector settles from the bot's `chat_send_result`.
+- `speak_router.py` — `POST /bots/{platform}/{native_meeting_id}/speak`: an acts.v1 `speak` (carrying
+  the answer's `request_id` as `id`) to exactly ONE bot — the owner's newest admitted, voice-enabled
+  (`data.voice_agent_enabled`, set at spawn) row, else one bound to a workspace the caller edits
+  (owner/contributor, the `reconfigure_router` rule). 409 when that bot is not `active`, was spawned
+  without the voice flag, or no bot received the act; `text` ≤ `MAX_SPEAK_CHARS`, body ≤
+  `MAX_SPEAK_BODY_BYTES` (413); 429 + `Retry-After` past `SPEAK_POSTS_PER_WINDOW` per
+  `SPEAK_WINDOW_SEC` s per meeting (`ChatRateLimit` on its own `speak:rate:meeting:` key).
+  `DELETE …/speak` publishes acts.v1 `speak_stop` to every bot it resolves — no status, flag or rate
+  check, so stopping always works. Audit lines `bot_speak_queued` / `bot_speak_refused` /
+  `bot_speak_stop_sent` carry the request id and length, never the text.
 - `retry.py` (P3d) — `JoinRetryController` + the transient/permanent taxonomy
   (`classify_retry` / `is_transient`): on a TRANSIENT join-failure schedule a fresh re-spawn (a new
   `meeting_session`) through the runtime scheduler with bounded exponential backoff; a PERMANENT

@@ -457,10 +457,51 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
   -d '{"text":"Thanks everyone, wrapping up."}'
 ```
 
-<Note>
-**Speak** (`POST …/speak`, TTS into the call) rides the live bot-control plane and is not yet wired in
-the open-core stack — it returns `404`. Everything else above is live.
-</Note>
+The bot says `text` aloud in the call, as its own participant tile under its bot name. It speaks only
+if it was **started with `"voice_agent_enabled": true`** on `POST /bots`, and only while it is in the
+meeting. The deployment needs a TTS endpoint (`TTS_SERVICE_URL`, see
+[Configuration](/configuration#bot-speech-tts)); without one the bot stays silent.
+
+| Field | Rule |
+|---|---|
+| `text` | Required. Not blank, at most **500** characters (about thirty seconds of speech). |
+| `voice` | Optional TTS preset id (`^[A-Za-z0-9_.-]{1,64}$`), passed to the TTS server. Absent or `"auto"`: the deployment's `TTS_VOICE`. |
+| `audio_base64`, `audio_url` | Refused with `422` — supplied audio is not served by this route ([#514](https://github.com/Vexa-ai/vexa/issues/514)). |
+
+The whole body is at most 16 KiB. Other fields are ignored.
+
+`200` means a bot in the meeting **received** the line — not that it has finished playing:
+
+```json
+{"status": "queued", "request_id": "3f2a9c0d1b2e4f5a…", "meeting_id": 123,
+ "platform": "google_meet", "native_meeting_id": "abc-defg-hij", "chars": 29}
+```
+
+The bot's log lines for the utterance carry the same `request_id`. It plays one line at a time and holds
+at most three more; a fourth is dropped, never played late.
+
+| Code | When |
+|---|---|
+| `401` | No caller identity. |
+| `413` | Body over 16 KiB. |
+| `422` | A platform with no call to speak into (only `google_meet`, `teams`, `zoom`, `jitsi`), or a body that breaks the rules above. |
+| `404` | No running bot in this meeting that you own or that is bound to a workspace you can edit. |
+| `403` | You are a member of the meeting's workspace but not an `owner` or `contributor` (the answer names your role). |
+| `409` | The bot is not in the meeting yet (or is leaving), it was started without `voice_agent_enabled: true`, or no bot was listening. Nothing was said. |
+| `429` | The meeting already took 6 speak requests in the last 60 seconds. `Retry-After` says when to try again. Nothing was said. |
+| `503` | The command bus, or your workspace role, could not be reached. Nothing was said — retry. |
+
+Who may make a bot speak: the meeting's owner, or an `owner`/`contributor` of the workspace the meeting is
+bound to (the same rule as `PUT …/config`). Use it for the bot's own voice — do not make it pose as a
+person in the call.
+
+```bash Stop speaking — DELETE /bots/{platform}/{native_meeting_id}/speak
+curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij/speak" -H "X-API-Key: $API_KEY"
+```
+
+Stop cuts the line playing, drops the ones waiting, and turns the bot's mic off. It works in any bot
+state and is never rate-limited: `200` with `{"status": "stop_sent", "bots": 1}`, `409` when no bot was
+listening, and the same `401`/`403`/`404`/`503` as above.
 
 ```bash List meetings — GET /meetings
 curl -H "X-API-Key: $API_KEY" "$API_BASE/meetings"
