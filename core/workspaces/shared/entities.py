@@ -40,7 +40,7 @@ INDEX_PATH = "kg/INDEX.md"
 MISSING_PATH = "kg/MISSING.md"
 
 _FRONTMATTER = re.compile(r"^---\n([\s\S]*?)\n---\n?")
-_WIKILINK = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]*)?\]\]")
+_WIKILINK = re.compile(r"\[\[([^\[\]|]+)(?:\|[^\]]*)?\]\]")
 # `## 2026-09-02` was the whole page before decision 24.6; `### 2026-09-02` under `## Timeline`
 # is where the same entry lives now. BOTH are read, because "when was this page last actually
 # learned about" has to keep answering across a migration that happens one page at a time —
@@ -371,7 +371,7 @@ def _normalise(fact: str) -> str:
 # fact the caller passes are never byte-identical. Comparing them raw made "idempotent on identical facts"
 # quietly false: the same sentence, re-stated next turn, appended again with a second source. Strip
 # the attribution before comparing — the fact is the claim, not the provenance of this telling.
-_SOURCE_SUFFIX = re.compile(r"\s+—\s+source:\s.*$")
+_SOURCE_SUFFIX = re.compile(r"(?<!\s)\s+—\s+source:\s.*$")
 
 
 def existing_facts(text: str) -> set[str]:
@@ -695,7 +695,7 @@ _RECIPROCAL = {"works at": "works here", "works here": "works at",
                "part of": "includes", "includes": "part of",
                "decided in": "decided", "decided": "decided in"}
 
-_H2 = re.compile(r"^##\s+(.+?)\s*$")
+_H2 = re.compile(r"^##\s(.+)$")      # group(1) is .strip()ped by every reader
 _H3 = re.compile(r"^###\s+(.+?)\s*$")
 _ISO_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
