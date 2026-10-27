@@ -240,7 +240,7 @@ async def test_request_bot_quota_propagates(monkeypatch):
 async def test_request_bot_dead_on_arrival_fails_the_row(monkeypatch):
     """C2: the kernel answers 201 but with a workload that never started (state=stopped/start_failed).
     ``create_workload`` catches the dead body → ``SpawnFailed``; ``request_bot`` marks the meeting
-    row ``failed`` with the reason so NO ``requested`` row remains, and creates no session.
+    row ``failed`` with the reason so NO ``requested`` row remains.
 
     Negative control (the bug): before the fix the dead 201 sailed through, the row stayed
     ``requested``, and the reaper flipped it reason-less 5 minutes later."""
@@ -259,7 +259,7 @@ async def test_request_bot_dead_on_arrival_fails_the_row(monkeypatch):
     assert row["status"] == "failed"
     assert row["data"]["completion_reason"] == "start_failed"
     assert "start_failed" in row["data"]["failure_reason"]
-    assert repo.sessions == [], "no MeetingSession for a workload that never started"
+    assert [s["meeting_id"] for s in repo.sessions] == [row["id"]], "the session row is committed before the spawn"
 
 
 async def test_request_bot_spawnfailed_fails_the_row(monkeypatch):
