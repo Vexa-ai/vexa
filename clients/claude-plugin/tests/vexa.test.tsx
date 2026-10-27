@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { IN_THIS_CALL_SEEDED, inThisCallAsk, inThisCallDue, inThisCallKnobs, bandState, fromPerson, heardLine, pickOwner, runsListener, withChat, FOLLOW_UP_CONTEXT, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, PERSON_CONTEXT, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
+import { AFTER_CALL_PAGE, afterCallAsk, IN_THIS_CALL_SEEDED, inThisCallAsk, inThisCallDue, inThisCallKnobs, bandState, fromPerson, heardLine, pickOwner, runsListener, withChat, FOLLOW_UP_CONTEXT, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, PERSON_CONTEXT, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
 
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 
@@ -373,4 +373,11 @@ test('the wake points at the _global page and carries what was heard, never the 
   expect(ask).toContain('possible decisions: we decided to wait for V1')
   for (const format of ['**Who:**', 'HH:MM', 'section_update', 'entity_upsert', 'eight', 'sub-bullet', 'Decided']) expect(ask).not.toContain(format)
   expect(inThisCallAsk('x', { names: [], decisions: [] })).not.toContain('new names')
+})
+
+test('the end of a call points at the _global after-call page, never the steps', () => {
+  const ask = afterCallAsk('Northwind pilot', 'google_meet abc-defg-hij')
+  expect(ask).toContain(`${AFTER_CALL_PAGE.slug} ${AFTER_CALL_PAGE.path}`)
+  expect(ask).toContain('ended')
+  for (const step of ['entity_upsert', 'annotate_meeting', 'section_update', 'links_report', 'Action items', 'Decided']) expect(ask).not.toContain(step)
 })
