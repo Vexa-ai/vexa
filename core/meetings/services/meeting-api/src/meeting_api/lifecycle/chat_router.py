@@ -83,18 +83,22 @@ def chat_send_payload(text: str, request_id: str) -> dict:
 
 
 class ChatRateLimit:
-    """Counts a meeting's chat posts in fixed ``window``-second windows and refuses past ``limit``.
+    """Counts a meeting's posts in fixed ``window``-second windows and refuses past ``limit``.
 
     In Redis when the store is a Redis client (one ``INCR`` per post on the window's own key, which
     expires with it, so every meeting-api replica draws on the same count), else in this process.
+    ``prefix`` names the count: chat's is the default; the speak route keeps its own
+    (``speak_router.SPEAK_RATE_PREFIX``), so neither draws on the other's.
     """
 
     PREFIX = "chat:rate:meeting:"
 
     def __init__(self, store: Any = None, *, limit: int = CHAT_POSTS_PER_WINDOW,
-                 window: int = CHAT_WINDOW_SEC, clock: Optional[Callable[[], float]] = None) -> None:
+                 window: int = CHAT_WINDOW_SEC, clock: Optional[Callable[[], float]] = None,
+                 prefix: str = PREFIX) -> None:
         if limit <= 0 or window <= 0:
             raise ValueError("limit and window must be > 0")
+        self.prefix = prefix
         self._redis = store if store is not None and hasattr(store, "pipeline") else None
         self.limit = limit
         self.window = window
@@ -108,7 +112,7 @@ class ChatRateLimit:
         slot = int(now // self.window)
         key = str(meeting_id)
         if self._redis is not None:
-            redis_key = f"{self.PREFIX}{key}:{slot}"
+            redis_key = f"{self.prefix}{key}:{slot}"
             async with self._redis.pipeline(transaction=True) as pipe:
                 pipe.incr(redis_key)
                 pipe.expire(redis_key, self.window + 1)

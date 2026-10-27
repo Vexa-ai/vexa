@@ -119,6 +119,7 @@ def build_invocation(
     call: Optional[dict] = None,
     session_restore_url: Optional[str] = None,
     meeting_host_allow: Optional[list[str]] = None,
+    voice_agent_enabled: Optional[bool] = None,
 ) -> dict:
     """Assemble the bot's ``invocation.v1`` Invocation (the parent's ``BOT_CONFIG``).
 
@@ -193,6 +194,10 @@ def build_invocation(
         # and networks the bot's navigation guard admits. Absent: every navigation must reach a
         # public address.
         "meetingHostAllow": list(meeting_host_allow) if meeting_host_allow else None,
+        # Arms the bot's SpeakController (#1866): it acts on `speak` only when spawned with
+        # `voice_agent_enabled: true`. None (absent) is stripped, so an unarmed bot's invocation is
+        # byte-identical to one from before the flag was wired.
+        "voiceAgentEnabled": voice_agent_enabled,
     }
     # `meetingUrl` is required and nullable: a voice note has nothing to join and says so with null.
     invocation = {k: v for k, v in invocation.items() if v is not None or k == "meetingUrl"}

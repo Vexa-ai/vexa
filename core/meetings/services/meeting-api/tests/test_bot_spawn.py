@@ -1382,3 +1382,68 @@ def test_a_workers_default_into_a_read_only_workspace_stays_private(monkeypatch)
                        json={"platform": "google_meet", "native_meeting_id": "ro-aaaa-bbb"})
     assert r.status_code == 201, r.text
     assert "workspace_id" not in (r.json().get("data") or {})
+
+
+# ── #1866 C2: a spawn can arm the bot's voice ───────────────────────────────────────────────────
+
+
+def _spawn_voice(monkeypatch, extra: dict):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    r = _client(repo, runtime).post(
+        "/bots", headers=HEADERS,
+        json={"platform": "google_meet", "native_meeting_id": "voice-bot", **extra})
+    return r, repo, runtime
+
+
+def test_post_bots_voice_agent_enabled_arms_the_invocation_and_the_row(monkeypatch):
+    r, repo, runtime = _spawn_voice(monkeypatch, {"voice_agent_enabled": True})
+
+    assert r.status_code == 201, r.text
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert inv["voiceAgentEnabled"] is True
+    conforms_invocation(inv)
+    (row,) = repo._meetings.values()
+    assert row["data"]["voice_agent_enabled"] is True
+
+
+@pytest.mark.parametrize("extra", [{}, {"voice_agent_enabled": None}, {"voice_agent_enabled": False}])
+def test_post_bots_without_the_voice_flag_carries_none(monkeypatch, extra):
+    r, repo, runtime = _spawn_voice(monkeypatch, extra)
+
+    assert r.status_code == 201, r.text
+    inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
+    assert "voiceAgentEnabled" not in inv
+    (row,) = repo._meetings.values()
+    assert "voice_agent_enabled" not in row["data"]
+
+
+@pytest.mark.parametrize("value", ["yes", 1, "true", [True]])
+def test_post_bots_voice_agent_enabled_must_be_a_boolean(monkeypatch, value):
+    r, _, runtime = _spawn_voice(monkeypatch, {"voice_agent_enabled": value})
+
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == "voice_agent_enabled must be true or false"
+    assert runtime.specs == []
+
+
+async def test_a_continued_run_carries_its_own_voice_not_the_previous_runs(monkeypatch):
+    from meeting_api.bot_spawn import service as spawn_service
+
+    async def no_context(_user_id):
+        return {}
+
+    monkeypatch.setattr(spawn_service, "_fetch_bot_context", no_context)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    kw = dict(user_id=USER, platform="google_meet", native_meeting_id="continued-voice",
+              redis_url="redis://redis:6379/0", token_secret=SECRET)
+    first = await request_bot(repo, runtime, voice_agent_enabled=True, **kw)
+    assert repo._meetings[first["id"]]["data"]["voice_agent_enabled"] is True
+
+    repo.set_status(first["id"], "completed")
+    await request_bot(repo, runtime, continue_meeting=True, **kw)
+
+    assert repo._meetings[first["id"]]["data"].get("voice_agent_enabled") is not True
+    assert "voiceAgentEnabled" not in json.loads(runtime.specs[-1]["env"]["BOT_CONFIG"])

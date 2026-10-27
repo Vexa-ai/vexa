@@ -86,6 +86,7 @@ LIVE_BOT_VERBS = {
     ("PUT", "/bots/{platform}/{native_meeting_id}/config"): "",
     ("POST", "/bots/{platform}/{native_meeting_id}/chat"): "",
     ("POST", "/bots/{platform}/{native_meeting_id}/speak"): "",
+    ("DELETE", "/bots/{platform}/{native_meeting_id}/speak"): "",
 }
 
 
