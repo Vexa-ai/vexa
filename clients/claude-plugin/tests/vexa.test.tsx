@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { bandState, fromPerson, heardLine, pickOwner, runsListener, withChat, FOLLOW_UP_CONTEXT, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, PERSON_CONTEXT, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
+import { IN_THIS_CALL_SEEDED, inThisCallAsk, inThisCallDue, inThisCallKnobs, bandState, fromPerson, heardLine, pickOwner, runsListener, withChat, FOLLOW_UP_CONTEXT, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, PERSON_CONTEXT, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
 
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 
@@ -349,4 +349,28 @@ test('the band never says listening while a wake waits; Listen here moves the li
   expect(bandState({ ...base, answering: true, stage: 'answering', flash: 'Heard: “Клод, что ты слышишь” → answering' }).line).toBe('Answering: “Клод, что ты слышишь”')
   expect(pickOwner({ coordinator: 300, onboarding: 100 }, ['coordinator'], ['coordinator'], 'onboarding')).toBe('onboarding')
   expect(pickOwner({ coordinator: 300 }, [], [], 'gone-chat')).toBe('coordinator')
+})
+
+test('«In this call» is asked for as the call moves on, on the page\'s own timing', () => {
+  const k = inThisCallKnobs('---\nlabel: in-this-call\n# when\nlines: 4\nevery_s: 90\nsoon_s: 30\n---\n[in this call] …')
+  expect(k).toEqual({ lines: 4, everyMs: 90_000, soonMs: 30_000 })
+  expect(inThisCallKnobs('no frontmatter')).toEqual(IN_THIS_CALL_SEEDED)
+  const at = (o: Partial<Parameters<typeof inThisCallDue>[0]>) => inThisCallDue({ lines: 1, hit: false, lastAt: 0, now: 1_000_000, busy: false, ...o }, k)
+  expect(at({ lines: 4 })).toBe(true)
+  expect(at({ lines: 3 })).toBe(false)                                        // not enough talk yet
+  expect(at({ lines: 50, lastAt: 1_000_000 - 90_000 + 1 })).toBe(false)       // asked a moment ago
+  expect(at({ hit: true, lastAt: 1_000_000 - 30_000 })).toBe(true)            // a new name or a decision
+  expect(at({ hit: true, lastAt: 1_000_000 - 1000 })).toBe(false)
+  expect(at({ lines: 50, busy: true })).toBe(false)                           // never over a turn
+  expect(at({ lines: 0, hit: true })).toBe(false)
+})
+
+test('the wake points at the _global page and carries what was heard, never the format', () => {
+  const ask = inThisCallAsk('DNA Dev Check-in', { names: ['Olga Avramenko'], decisions: ['we decided to wait for V1'] })
+  expect(ask).toContain('_global asks/in-this-call.md')
+  expect(ask).toContain('workspace_read slug "_global", path "asks/in-this-call.md"')
+  expect(ask).toContain('new names: Olga Avramenko')
+  expect(ask).toContain('possible decisions: we decided to wait for V1')
+  for (const format of ['**Who:**', 'HH:MM', 'section_update', 'entity_upsert', 'eight', 'sub-bullet', 'Decided']) expect(ask).not.toContain(format)
+  expect(inThisCallAsk('x', { names: [], decisions: [] })).not.toContain('new names')
 })

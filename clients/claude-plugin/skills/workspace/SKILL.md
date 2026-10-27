@@ -25,14 +25,15 @@ card: skip anything it already says in other words, and when the call adds a det
 fact once. The demo call's speakers (Maya, Leo) and other scripted voices are not people: never give
 them pages.
 
-**The meeting's page links the call.** Its «In this call» block (the `people` region) lists every
-person, company, project and decision of the call as `[[links]]`, so the page is the call's index.
+**«In this call»: the call's live summary on its page.** What it is, its shape and when to rewrite
+it are the page `_global/asks/in-this-call.md` (`workspace_read` slug `_global`): follow it whenever
+Vexa Live wakes you with «[Vexa · in this call]», and answer those wakes with «·» and no chat message.
 
 **The meeting's page is the call's live report.** Find it with `get_meeting` (its attached page);
 if there is none, write `meetings/<YYYY-MM-DD>-<title>.md` with `workspace_write` and attach it with
 `meeting_attach_page`. Write only inside its regions — `<!-- meeting:decisions:start/end -->`,
-`commitments` (who, what, by when), `people` (with `[[links]]`), `questions`, and `report` after the
-call. Everything outside them is the person's: above all the block from
+`commitments` (who, what, by when), `people` (with `[[links]]`), `questions`, `report` after the
+call, and the `## In this call` section. Everything outside them is the person's: above all the block from
 `<!-- vexa:human-notes:start -->` to `<!-- vexa:human-notes:end -->`, which you never touch, and the
 transcript slot.
 
