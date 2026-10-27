@@ -153,6 +153,37 @@ _FORBIDDEN_GLOBAL = ("-C", "--git-dir", "--work-tree", "--exec-path", "--namespa
                      "--config-env", "--super-prefix", "--attr-source", "-p", "--paginate")
 
 
+#: Subcommand options that name a program git runs (the remote side's ``upload-pack`` /
+#: ``receive-pack``, which a local-path transport starts on this host; ``rebase --exec``), or the
+#: configuration and template a new repository starts with before its config is reduced. No caller
+#: passes one, and a value that reaches ``args`` from outside must never be read as one: long forms
+#: are matched by git's unambiguous-prefix rule, short forms after any no-argument flags bundled
+#: before them (``-qu<program>``).
+_PROGRAM_OPTIONS = {
+    "clone": ("--upload-pack", "--config", "--template"), "init": ("--template",),
+    "fetch": ("--upload-pack",), "pull": ("--upload-pack",), "fetch-pack": ("--upload-pack", "--exec"),
+    "ls-remote": ("--upload-pack", "--exec"), "archive": ("--exec",),
+    "push": ("--receive-pack", "--exec"), "send-pack": ("--receive-pack", "--exec"),
+    "rebase": ("--exec",),
+}
+#: ``subcommand: (its no-argument short flags, the short forms refused)``.
+_PROGRAM_SHORT = {"clone": ("lsqvn", "uc"), "ls-remote": ("qhtb", "u"), "rebase": ("iqvn", "x")}
+
+
+def _names_a_program(sub: str, arg: str) -> bool:
+    """True when ``arg`` is one of ``sub``'s :data:`_PROGRAM_OPTIONS` or :data:`_PROGRAM_SHORT`."""
+    if arg.startswith("--"):
+        name = arg.split("=", 1)[0]
+        return len(name) > 2 and any(f.startswith(name) for f in _PROGRAM_OPTIONS.get(sub, ()))
+    if not arg.startswith("-") or sub not in _PROGRAM_SHORT:
+        return False
+    flags, refused = _PROGRAM_SHORT[sub]
+    for ch in arg[1:]:
+        if ch not in flags:
+            return ch in refused
+    return False
+
+
 class GitRefused(subprocess.CalledProcessError):
     """Raised (with ``check=True``) when the repository at ``cwd`` is refused before git runs."""
 
@@ -295,6 +326,11 @@ def _split_args(args: Sequence[str]) -> tuple[list[str], str, list[str]]:
         if sub in _FORBIDDEN_GLOBAL or any(sub.startswith(f + "=") for f in _FORBIDDEN_GLOBAL):
             raise ValueError(f"run_git: {sub} is not allowed; the repository is cwd")
         raise ValueError(f"run_git: unexpected global option {sub}")
+    for arg in rest[1:]:
+        if arg == "--":
+            break
+        if _names_a_program(sub, arg):
+            raise ValueError(f"run_git: {sub} {arg.split('=', 1)[0]} names a program; not allowed")
     return caller_config, sub, rest[1:]
 
 
