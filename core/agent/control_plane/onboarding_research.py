@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from control_plane.path_confine import within
 from shared.atomic_json import write_json_atomic
 from workspaces.shared import workspace_paths as wpaths
 
@@ -53,7 +54,8 @@ class Research:
     def _write_audit(self, batch_id, receipts):
         """The batch's receipts, in this workspace's checkpoint directory (the platform's, beside
         the work tree, never inside it)."""
-        audit = self.directory / (batch_id + '.json')
+        audit = within(self.directory, batch_id + '.json',
+                       ResearchError('Batch does not match the pending page'))
         audit.write_text(json.dumps({'batch': batch_id, 'receipts': receipts}))
         os.chmod(audit, 0o600)
         wpaths.notify_written(audit)   # WS-S3: durable in the bucket before this returns
