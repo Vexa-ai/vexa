@@ -137,6 +137,13 @@ const ADMISSION_FLOW_FAULT_MARKERS = [
   'no admission signal',
 ];
 
+/** Markers that identify the PLATFORM ending an unanswered knock on its own clock (Meet's
+ *  "No one responded to your request to join the call", about 10 min in). Nobody refused: the
+ *  wait expired, whatever share of our own budget it burned. */
+const PLATFORM_ENDED_KNOCK_MARKERS = [
+  'google meet ended the join request',
+];
+
 /** Default owner per typed reason; moved only by positive evidence in `detail`. */
 const ATTRIBUTION_BY_REASON: Record<JoinFailureReason, JoinFailureAttribution> = {
   awaiting_admission_rejected: 'host_action',
@@ -199,6 +206,9 @@ export function classifyJoinFailure(
     // A typed denial (or a bot-detection block, which is the platform refusing us just as flatly)
     // is a verdict, not an inference — it outranks any timing.
     if (outcome === 'rejected' || outcome === 'blocked') return 'awaiting_admission_rejected';
+
+    // The platform's own expiry, positively identified: a timeout, not the timing guess below.
+    if (outcome === 'timeout' && matches(detail, PLATFORM_ENDED_KNOCK_MARKERS)) return 'awaiting_admission_timeout';
 
     if (signals.reachedLobby) {
       const inLobby = millis(signals.timeInLobbyMs);
