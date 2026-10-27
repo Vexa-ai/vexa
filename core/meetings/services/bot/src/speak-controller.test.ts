@@ -146,6 +146,21 @@ function setup(o: { platform?: string; mic?: ReturnType<typeof fakeMic>; enabled
     lines.includes('[bot] speak id=m3 mic_controls=["Audio settings","Microphone problem. Show more info"]'), lines.join(' | '));
 }
 {
+  // #1866 live: Meet sometimes relabels its toggle well after the click; one read 400 ms later saw
+  // the old label and a playable line was refused. The label is re-read until it settles.
+  const mic = fakeMic('off');
+  let lag = 0;
+  const read = mic.read;
+  mic.toggle = async () => { mic.clicks++; lag = 3; };
+  mic.read = async () => { if (lag > 0 && --lag === 0) mic.state = mic.state === 'on' ? 'off' : 'on'; return read(); };
+  const { speak, tts, lines } = setup({ mic });
+  const p = speak.speak('hi', undefined, 'm5');
+  for (let i = 0; i < 10; i++) await tick();
+  check('a toggle Meet relabels late still plays, after one click', tts.plays.length === 1 && mic.clicks === 1,
+    `${lines.join(' | ')} clicks ${mic.clicks}`);
+  tts.finish(); await p;
+}
+{
   const { speak, tts, lines } = setup({ mic: fakeMic('off', { stuck: true }) });
   await speak.speak('hi', undefined, 'm4');
   check('a mic that will not switch on means no play', tts.plays.length === 0 && lines.includes('[bot] speak id=m4 failed reason=mic_unverified'), lines.join(' | '));

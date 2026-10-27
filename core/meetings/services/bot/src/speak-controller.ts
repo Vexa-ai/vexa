@@ -93,9 +93,12 @@ export function createSpeakQueue(o: SpeakQueueOptions): SpeakController {
     let state = await o.mic.read().catch((): MicState => 'unknown');
     if (state === want) return true;
     if (state === 'unknown') return false;
-    await o.mic.toggle().catch(() => { /* the read below decides */ });
-    await settle();
-    state = await o.mic.read().catch((): MicState => 'unknown');
+    await o.mic.toggle().catch(() => { /* the reads below decide */ });
+    // Meet sometimes relabels the toggle well after the click: re-read (never re-click) for ~2 s.
+    for (let i = 0; i < 5 && state !== want; i++) {
+      await settle();
+      state = await o.mic.read().catch((): MicState => 'unknown');
+    }
     return state === want;
   };
 
