@@ -62,8 +62,9 @@ pulseaudio --daemonize=no --exit-idle-time=-1 --disallow-exit -n --use-pid-file=
     --disallow-module-loading &
 for _ in $(seq 1 50); do pactl info >/dev/null 2>&1 && break; sleep 0.1; done
 pactl set-default-source virtual_mic 2>/dev/null || true
+# Silent at rest by muting tts_sink only (#819). Never mute virtual_mic: Meet shows a muted source as
+# "Microphone problem" instead of the mic toggle, and a voice bot can then never speak (#1866).
 pactl set-sink-mute tts_sink 1 2>/dev/null || true
-pactl set-source-mute virtual_mic 1 2>/dev/null || true
 
 screenshots="$home/screenshots"
 mkdir -p "$screenshots"

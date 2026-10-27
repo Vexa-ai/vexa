@@ -5,8 +5,10 @@
  * speak-controller.ts; this is the audio half: synthesize `text` with the deployment's
  * OpenAI-compatible TTS and play the returned PCM through the container's PulseAudio `tts_sink`
  * (→ `virtual_mic`, which Chromium captures as its mic). The `tts_sink → virtual_mic` graph is
- * created by entrypoint.sh (and Lite's vexa-bot-launch); here we only unmute it during playback,
- * stream PCM to `paplay`, and re-mute after.
+ * created by entrypoint.sh (and Lite's vexa-bot-launch); here we only unmute `tts_sink` during
+ * playback, stream PCM to `paplay`, and re-mute it after. `virtual_mic` itself is never muted: Meet
+ * shows a muted source as "Microphone problem" in place of the mic toggle, and a muted tts_sink
+ * already feeds it silence (and keeps the browser's own audio, which also lands in tts_sink, out — #819).
  *
  * Config is infrastructure, read from env (forwarded to every spawned bot by the runtime's
  * meeting-bot profile, #1866 C6), NOT the sealed invocation.v1:
@@ -30,6 +32,8 @@ import type { TtsOutcome, TtsPort } from './speak-controller.js';
 
 const PAPLAY_ARGS = ['--raw', '--format=s16le', '--rate=24000', '--channels=1', '--device=tts_sink'];
 const DEFAULT_VOICE = 'alloy';
+
+export const pactlMuteCommand = (muted: boolean): string => `pactl set-sink-mute tts_sink ${muted ? '1' : '0'}`;
 
 /** POSTs the synthesis request; resolves with the status and the (streamed) body. Rejects when the
  *  server cannot be reached. */
@@ -76,10 +80,8 @@ export function createTtsPlayback(log: (m: string) => void = () => { /* */ }, po
   const startPlayer = ports.player ?? paplay;
   const now = ports.now ?? Date.now;
   const setMute = ports.setMute ?? ((muted: boolean): void => {
-    const v = muted ? '1' : '0';
     try {
-      execSync(`pactl set-sink-mute tts_sink ${v}`, { stdio: 'pipe' });
-      execSync(`pactl set-source-mute virtual_mic ${v}`, { stdio: 'pipe' });
+      execSync(pactlMuteCommand(muted), { stdio: 'pipe' });
     } catch (err) {
       log(`[tts] pactl ${muted ? 'mute' : 'unmute'} failed: ${(err as Error).message}`);
     }

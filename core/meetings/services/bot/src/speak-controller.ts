@@ -27,6 +27,8 @@ export interface MicPort {
   read(): Promise<MicState>;
   /** Click the control once. The caller reads the state again to learn what the click did. */
   toggle(): Promise<void>;
+  /** The labels of the mic-like controls the page shows, logged when the mic cannot be read. */
+  describe?(): Promise<string[]>;
 }
 
 export type TtsFailure = 'tts_not_configured' | `tts_http_${number}` | 'tts_unreachable' | 'stopped' | 'playback_failed';
@@ -106,9 +108,11 @@ export function createSpeakQueue(o: SpeakQueueOptions): SpeakController {
     const gen = generation;
     log(`[bot] speak id=${u.id} started chars=${u.text.length}`);
     if (leaveUiMic) {
-      log(`[bot] speak id=${u.id} mic=zoom_ui_left_on (Zoom grants a voice bot audio only with its mic on; the PulseAudio source is muted at rest)`);
+      log(`[bot] speak id=${u.id} mic=zoom_ui_left_on (Zoom grants a voice bot audio only with its mic on; tts_sink is muted at rest)`);
     } else if (!(await ensureMic('on'))) {
       log(`[bot] speak id=${u.id} failed reason=mic_unverified`);
+      const labels = await o.mic.describe?.().catch(() => [] as string[]);
+      if (labels) log(`[bot] speak id=${u.id} mic_controls=${JSON.stringify(labels)}`);
       await micOff(u.id);
       return;
     }

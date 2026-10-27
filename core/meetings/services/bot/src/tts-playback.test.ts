@@ -9,7 +9,7 @@
  */
 import { PassThrough, Writable } from 'node:stream';
 import { EventEmitter } from 'node:events';
-import { createTtsPlayback, type TtsHttp, type TtsPlayer } from './tts-playback.js';
+import { createTtsPlayback, pactlMuteCommand, type TtsHttp, type TtsPlayer } from './tts-playback.js';
 
 let failed = 0;
 const check = (name: string, cond: boolean, detail?: string) => {
@@ -54,6 +54,14 @@ function harness(env: Record<string, string>, status = 200, opts: { fail?: boole
     request: h.http, player: p.player, setMute: (m) => mutes.push(m), env, now: (() => { let t = 0; return () => (t += 500); })(),
   });
   return { tts, h, p, mutes, lines };
+}
+
+{
+  // #1866 live: a muted virtual_mic shows in Meet as "Microphone problem" in place of the mic toggle,
+  // so the bot can never read (or switch on) its mic. Silence comes from muting tts_sink alone.
+  check('muting touches tts_sink only, never the virtual_mic source',
+    pactlMuteCommand(true) === 'pactl set-sink-mute tts_sink 1' && pactlMuteCommand(false) === 'pactl set-sink-mute tts_sink 0',
+    pactlMuteCommand(true));
 }
 
 const URL_ENV = { TTS_SERVICE_URL: 'http://tts.local:8880/', TTS_API_TOKEN: 'tok-123' };

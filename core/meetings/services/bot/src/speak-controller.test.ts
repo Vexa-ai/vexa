@@ -17,11 +17,12 @@ const check = (name: string, cond: boolean, detail?: string) => {
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
 /** A meeting-UI mic: `state` is what the page shows; a click flips it unless `stuck`. */
-function fakeMic(initial: MicState = 'off', opts: { stuck?: boolean } = {}) {
+function fakeMic(initial: MicState = 'off', opts: { stuck?: boolean; labels?: string[] } = {}) {
   const m = {
     state: initial,
     clicks: 0,
     async read(): Promise<MicState> { return m.state; },
+    async describe(): Promise<string[]> { return opts.labels ?? []; },
     async toggle(): Promise<void> {
       m.clicks++;
       if (opts.stuck || m.state === 'unknown') return;
@@ -137,10 +138,12 @@ function setup(o: { platform?: string; mic?: ReturnType<typeof fakeMic>; enabled
   tts.finish(); await p;
 }
 {
-  const { speak, tts, lines } = setup({ mic: fakeMic('unknown') });
+  const { speak, tts, lines } = setup({ mic: fakeMic('unknown', { labels: ['Audio settings', 'Microphone problem. Show more info'] }) });
   await speak.speak('hi', undefined, 'm3');
   check('an unverifiable mic means no play', tts.plays.length === 0);
   check('…failed reason=mic_unverified', lines.includes('[bot] speak id=m3 failed reason=mic_unverified'), lines.join(' | '));
+  check('…and the mic controls the page shows are logged',
+    lines.includes('[bot] speak id=m3 mic_controls=["Audio settings","Microphone problem. Show more info"]'), lines.join(' | '));
 }
 {
   const { speak, tts, lines } = setup({ mic: fakeMic('off', { stuck: true }) });

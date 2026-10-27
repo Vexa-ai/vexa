@@ -32,8 +32,9 @@ pactl load-module module-null-sink sink_name=tts_sink \
 pactl load-module module-remap-source master=tts_sink.monitor source_name=virtual_mic \
   source_properties=device.description="VirtualMicrophone" 2>/dev/null || true
 pactl set-default-source virtual_mic 2>/dev/null || true
+# Silent at rest by muting tts_sink only (#819). Never mute virtual_mic: Meet shows a muted source as
+# "Microphone problem" instead of the mic toggle, and a voice bot can then never speak (#1866).
 pactl set-sink-mute tts_sink 1 2>/dev/null || true
-pactl set-source-mute virtual_mic 1 2>/dev/null || true
 
 # CORPORATE TLS INSPECTION (chart global.extraCA → VEXA_EXTRA_CA_FILE): Chromium on Linux trusts
 # only its NSS store, never SSL_CERT_FILE, so a page re-signed by the operator's root CA fails with

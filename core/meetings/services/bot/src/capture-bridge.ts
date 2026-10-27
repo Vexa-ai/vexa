@@ -1552,6 +1552,16 @@ export function createSpeakController(page: Page, inv: Invocation): SpeakControl
         visible[index]?.click();
       }, { sels: selectors, index }).catch(() => { /* the next read decides */ });
     },
+    // Every visible button that mentions the mic, audio or mute — wider than the selectors, so a
+    // relabelled toggle still shows up in the log.
+    describe: () => page.evaluate(() => {
+      const doc = (globalThis as any).document;
+      return (Array.from(doc?.querySelectorAll('button,[role="button"]') ?? []) as any[])
+        .filter((el) => { const r = el.getBoundingClientRect?.(); return !r || (r.width > 0 && r.height > 0); })
+        .map((el) => String(el.getAttribute('aria-label') || el.getAttribute('data-tooltip') || '').slice(0, 80))
+        .filter((l) => /mic|audio|mute/i.test(l))
+        .slice(0, 10);
+    }).catch(() => [] as string[]),
   };
 
   return createSpeakQueue({
