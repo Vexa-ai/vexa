@@ -8,3 +8,8 @@
   `tts_sink` and `virtual_mic` at rest; Google Meet shows a muted source as "Microphone problem" in
   place of the mic toggle, so a voice bot could never switch its mic on. Only `tts_sink` is muted now,
   which still keeps the bot silent and its own meeting audio out of the call (#819).
+- **Stopping a line also stops its synthesis (#1866).** `DELETE …/speak` killed the playback but left
+  the TTS answer open, so a CPU TTS server finished synthesizing the stopped text first and every later
+  line waited behind it. The bot now closes the answer on stop.
+- **The gateway keeps a 429's `Retry-After`.** The speak and chat per-meeting limits sent it; the
+  gateway dropped it on the way out.

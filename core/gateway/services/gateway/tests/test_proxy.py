@@ -144,6 +144,17 @@ def test_range_response_preserves_content_range_headers():
     assert r.headers["content-type"].startswith("audio/webm")
 
 
+def test_downstream_429_keeps_its_retry_after():
+    """meeting-api's per-meeting 429 (speak, chat) says when to retry; the proxy must not eat that
+    header (#1866 live run: the speak 429 reached the caller without it)."""
+    downstream = FakeDownstream(status_code=429, body={"detail": "retry after 47 s"},
+                                extra_headers={"retry-after": "47"})
+    client, _ = _client(downstream=downstream)
+    r = client.post("/bots/google_meet/abc-defg-hij/speak", headers=AUTH, json={"text": "hi"})
+    assert r.status_code == 429
+    assert r.headers["retry-after"] == "47"
+
+
 def test_rate_limit_returns_429_past_the_per_user_cap():
     """WS-6: with a per-user limiter injected, requests up to the bucket pass (verbatim), the next is
     throttled with 429 + Retry-After — closing the unlimited-requests-on-a-valid-key DoS gap."""
