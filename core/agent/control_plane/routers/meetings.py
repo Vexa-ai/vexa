@@ -130,6 +130,16 @@ def build(**d) -> APIRouter:
         if row is None:
             raise HTTPException(status_code=403, detail="not authorized for this meeting")
         return meeting_note_mod.describe(wsr.root, subject, row)
+    @router.get("/api/meeting/prepared")
+    def meetings_prepared(request: Request):
+        """THE MEETINGS THE CALLER PREPARED A PAGE FOR — `{"prepared": [...]}` (`meeting_note.prepared`).
+
+        What the panel's Calls list shows for a call with no calendar event and no bot yet: before its
+        start under Upcoming, after it as a past call (or a no-show, when the page's Decided says so).
+        Read off the caller's OWN note places, by the identity `meeting_attach_page` stamps; a bot's
+        row or a calendar event naming the same room is the same call, merged by the client."""
+        subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
+        return {"prepared": meeting_note_mod.prepared(wsr.root, subject)}
     @router.post("/api/meeting/note")
     def mint_meeting_note(request: Request, body: dict = Body(default={})):
         """MINT this meeting's page on the caller's desk if it is not there — `{"path", "created"}`.

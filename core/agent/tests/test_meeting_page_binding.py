@@ -231,3 +231,27 @@ def test_the_page_prepared_before_the_bot_is_found_by_its_room(tmp_path):
     assert c.get("/api/meeting/note", headers={"X-User-Id": "u_mallory"}, params={"native": "jmk-qxpo-yzg"}).json()["path"] is None
     assert c.get("/api/meeting/note", headers={"X-User-Id": JANE}, params={"native": "../x"}).status_code == 400
     assert c.get("/api/meeting/note", headers={"X-User-Id": JANE}).status_code == 400
+
+
+def test_prepared_meetings_are_listed_by_room_and_start_with_their_no_show(tmp_path):
+    """Calls shows a prepped meeting with no calendar event and no bot (founder, 2026-10-27): every
+    meeting page that names its room and its start, across the caller's own places only."""
+    root, desk, other = _root(tmp_path)
+    (desk / "kg/entities/meeting").mkdir(parents=True, exist_ok=True)
+    (desk / "kg/entities/meeting/vexa-intro.md").write_text(
+        "---\ntype: meeting\ntitle: Vexa intro\nscheduled_at: 2026-10-27T11:00:00Z\nnative: hox-hiwe-mdd\n"
+        "meeting_url: meet.google.com/hox-hiwe-mdd\nplatform: google_meet\n---\n# Vexa intro\n\n## Decided\n\n"
+        "- No-show: she did not join.\n\n## Committed\n\n- send the key (not a no-show)\n")
+    _agenda(other, "native: jmk-qxpo-yzg\ndates:\n  scheduled_at: 2026-10-28T09:00:00Z\n")
+    (desk / "kg/entities/meeting/no-room.md").write_text("---\ntype: meeting\nscheduled_at: 2026-10-28T09:00:00Z\n---\n")
+    (desk / "kg/entities/meeting/no-start.md").write_text("---\ntype: meeting\nnative: abc-defg-hij\n---\n")
+    c = _client(root, {}, [])
+    got = c.get("/api/meeting/prepared", headers={"X-User-Id": JANE}).json()["prepared"]
+    by = {p["path"].rsplit("/", 1)[-1]: p for p in got}
+    assert set(by) == {"vexa-intro.md", AGENDA.rsplit("/", 1)[-1]}
+    intro = by["vexa-intro.md"]
+    assert intro["no_show"] is True and intro["scheduled_at"] == "2026-10-27T11:00:00Z" and intro["native"] == "hox-hiwe-mdd"
+    assert intro["workspace"] == "" and intro["title"] == "Vexa intro"
+    agenda = by[AGENDA.rsplit("/", 1)[-1]]
+    assert agenda["workspace"] == SLOT and agenda["scheduled_at"] == "2026-10-28T09:00:00Z" and agenda["no_show"] is False
+    assert c.get("/api/meeting/prepared", headers={"X-User-Id": "u_mallory"}).json()["prepared"] == []

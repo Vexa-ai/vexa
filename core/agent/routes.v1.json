@@ -1872,6 +1872,12 @@
       "shared": "refuse"
     },
     {
+      "method": "GET",
+      "path": "/agent/meeting/prepared",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
       "method": "POST",
       "path": "/agent/meeting/note",
       "person": false,

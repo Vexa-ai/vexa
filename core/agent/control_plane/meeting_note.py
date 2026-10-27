@@ -411,6 +411,70 @@ def pending_row(native=None, meeting_url=None) -> "dict | None":
     return {"native_meeting_id": n, "data": {"meeting_url": u} if u else {}}
 
 
+#: how much of a prepared page is read for its start and its Decided section, and how many pages a place
+#: lists at most — a desk of a thousand reports is not read whole to draw the Calls list
+_PREPARED_BYTES = 16384
+_PREPARED_MAX = 200
+_DECIDED = re.compile(r"(?ms)^##\s+Decided\s*$(.*?)(?=^##\s|\Z)")
+_NO_SHOW = re.compile(r"\bno[- ]?show\b", re.I)
+
+
+def _scheduled_at(head: str, fm: dict) -> str:
+    """The page's start: `scheduled_at`, flat or under `dates:` — the two shapes our writers use."""
+    flat = str(fm.get("scheduled_at") or "").strip()
+    if flat:
+        return flat
+    m = _FRONT_MATTER.match(head or "")
+    if not m:
+        return ""
+    under = False
+    for line in m.group(1).splitlines():
+        if not line[:1].strip():
+            if under:
+                kv = _KV.match(line.strip())
+                if kv and kv.group(1).strip().lower() == "scheduled_at":
+                    return _unquote(kv.group(2)).strip()
+            continue
+        under = line.strip().lower().rstrip() == "dates:"
+    return ""
+
+
+def prepared(workspaces_root, subject: str) -> list[dict]:
+    """THE MEETINGS THIS PERSON PREPARED A PAGE FOR (founder, 2026-10-27: «show prepped meetings in Calls
+    without a calendar or bot»). Every meeting page in their note places that names its room
+    (`native`, `meeting_url` or `calendar_event`, as `meeting_attach_page` stamps them) and its start
+    (`scheduled_at`): `{path, workspace, title, scheduled_at, native?, meeting_url?, calendar_event?,
+    platform?, no_show}`. `no_show` is the page's own Decided section saying so. Read-only, the caller's
+    own places only; a page with no room or no start is not a call to list."""
+    out: list[dict] = []
+    for place in note_places(workspaces_root, subject):
+        try:
+            names = sorted(wpaths.list_files_inside(Path(place["dir"]), MEETING_DIR, suffix=".md") or [])
+        except (OSError, ValueError):
+            continue
+        for name in [n for n in names if n != "index.md"][-_PREPARED_MAX:]:
+            rel = f"{MEETING_DIR}/{name}"
+            try:
+                head = wpaths.read_head_inside(Path(place["dir"]), rel, _PREPARED_BYTES)
+            except (OSError, ValueError):
+                continue
+            if not head:
+                continue
+            fm = front_matter(head)
+            if str(fm.get("type") or "").strip().lower() not in ("", "meeting"):
+                continue
+            room = {k: str(fm.get(k) or "").strip() for k in ("native", "meeting_url", "calendar_event", "platform")}
+            at = _scheduled_at(head, fm)
+            if not at or not (room["native"] or room["meeting_url"] or room["calendar_event"]):
+                continue
+            decided = _DECIDED.search(_FRONT_MATTER.sub("", head, count=1))
+            out.append({"path": rel, "workspace": place["slug"], "title": str(fm.get("title") or "").strip(),
+                        "scheduled_at": at, **{k: v for k, v in room.items() if v},
+                        "no_show": bool(decided and _NO_SHOW.search(decided.group(1))),
+                        **({"readonly": True} if place["hidden"] else {})})
+    return out
+
+
 def describe(workspaces_root, subject: str, row, exact: bool = False) -> dict:
     """The note, PLUS the two facts that decide whether it is the meeting's ONE page (#1598).
 
