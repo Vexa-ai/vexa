@@ -508,6 +508,7 @@ def release_confirmed_files(subject: str, text: str, root: Path) -> list[dict]:
     encrypted here by the session saver): agent-api writes those files into the workspace and
     commits them, once, before the turn runs. Returns what was released."""
     from control_plane import held_store  # noqa: PLC0415
+    from control_plane.path_confine import within  # noqa: PLC0415
     from workspaces.shared import workspace_paths as wpaths  # noqa: PLC0415
     from shared.gitexec import run_git  # noqa: PLC0415
     import base64  # noqa: PLC0415
@@ -522,8 +523,13 @@ def release_confirmed_files(subject: str, text: str, root: Path) -> list[dict]:
             continue
         p = item.get("payload") or {}
         slug = str(p.get("workspace") or "")
-        ws = Path(root) / slug
-        if not slug or "/" in slug or slug.startswith(".") or not (ws / ".git").is_dir():
+        if not slug or "/" in slug or slug.startswith("."):
+            continue
+        try:
+            ws = within(root, slug, ValueError(slug))
+        except ValueError:
+            continue
+        if not (ws / ".git").is_dir():
             continue
         # only into a workspace the person may still write (their roster role is not reader)
         from control_plane import workspace_membership as m  # noqa: PLC0415
