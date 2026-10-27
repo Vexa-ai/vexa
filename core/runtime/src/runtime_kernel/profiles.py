@@ -356,6 +356,12 @@ def default_registry() -> ProfileRegistry:
             "BOT_TRANSCRIPTION_LATENCY",
             "BOT_STT_CONFIDENCE_FILTER",
             "BOT_TRANSCRIPT_RECONFIRM_SEC",
+            # The bot's OpenAI-compatible TTS (#1866): a bot spawned with voice_agent_enabled speaks
+            # through it. The token is a deployment credential, like the transcription token the
+            # invocation carries; it is never logged and never put in the invocation.
+            "TTS_SERVICE_URL",
+            "TTS_API_TOKEN",
+            "TTS_VOICE",
         )
         if os.environ.get(key, "").strip()
     }
