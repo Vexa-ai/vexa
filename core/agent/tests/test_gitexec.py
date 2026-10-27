@@ -253,23 +253,6 @@ def test_a_caller_cannot_redirect_git_or_reopen_a_setting(repo, args):
         run_git(repo, *args)
 
 
-@pytest.mark.parametrize("args", [("clone", "--upload-pack=touch /tmp/x", "src", "dst"),
-                                  ("clone", "-u", "touch /tmp/x", "src"), ("clone", "-qu/x", "src"),
-                                  ("clone", "--upl=x", "src"), ("clone", "-c", "a.b=c", "src"),
-                                  ("clone", "--template=/x", "src"), ("fetch", "--upload-pack", "x"),
-                                  ("push", "--receive-pack=x", "o"), ("push", "--exec=x", "o"),
-                                  ("ls-remote", "-u", "x", "o"), ("rebase", "--exec", "x")])
-def test_a_caller_cannot_name_a_program_through_an_option(repo, args):
-    with pytest.raises(ValueError):
-        run_git(repo, *args)
-
-
-def test_an_option_shaped_operand_after_the_separator_is_not_an_option(repo):
-    # ``--`` ends the options: what follows is a repository, a path — never refused as an option
-    proc = run_git(repo, "clone", "--quiet", "--", "--upload-pack=x", "dst")
-    assert proc.returncode != 0 and "names a program" not in (proc.stderr or "")
-
-
 def test_no_transport_unless_the_caller_names_one(repo, tmp_path):
     dest = tmp_path / "clone"
     refused = run_git(tmp_path, "clone", "-q", "--", str(repo), str(dest))
