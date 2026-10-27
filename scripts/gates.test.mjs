@@ -579,7 +579,7 @@ test("licenses RED: a shipped Python version with no licence row reds", () => {
   const key = firstKey("anyio==");
   const r = withEdited(PY_INDEX, `"${key}"`, `"${key}.0"`, () => runGate("licenses"));
   assert.equal(r.green, false, "a locked version the index has never read passed");
-  assert.match(r.out, new RegExp(`${key.replace(/[.]/g, "\\.")} ships but has no licence row`));
+  assert.match(r.out, new RegExp(`${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} ships but has no licence row`));
 });
 
 test("licenses RED: a pip install line with no recorded closure reds", () => {

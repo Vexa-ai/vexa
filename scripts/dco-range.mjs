@@ -108,7 +108,7 @@ export function readRange({ head, exclude = [], cwd = process.cwd() }) {
     });
 }
 
-const cell = (text) => String(text).replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ");
+const cell = (text) => String(text).replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ");
 const subjectOf = (row) => (row.subject.length > 80 ? `${row.subject.slice(0, 77)}...` : row.subject);
 const tableRow = (row) => `| \`${row.sha.slice(0, 12)}\` | ${cell(ident(row.author))} | ${row.ok ? "ok" : "**FAIL**"}: ${cell(row.detail)} | ${cell(subjectOf(row))} |`;
 const HEADER = ["| Commit | Author | Verdict | Subject |", "|---|---|---|---|"];

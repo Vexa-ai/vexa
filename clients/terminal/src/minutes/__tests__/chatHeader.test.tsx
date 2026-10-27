@@ -88,7 +88,7 @@ describe("the header", () => {
   });
   it("the title keeps a floor and truncates; chips give way first", () => {
     const CSS = readFileSync(join(__dirname, "..", "minutes.css"), "utf8");
-    const rule = (sel: string) => CSS.match(new RegExp(`${sel.replace(/[.]/g, "\\.")}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+    const rule = (sel: string) => CSS.match(new RegExp(`${sel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
     expect(rule(".vx-ctx-title")).toMatch(/min-width:\s*\d+(\.\d+)?(em|rem|px)/);
     expect(rule(".vx-ctx-title")).toMatch(/flex:\s*1\s+1/);
     expect(rule(".vx-live-chip")).toMatch(/min-width:\s*0/);

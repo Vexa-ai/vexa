@@ -29,6 +29,7 @@ import {
   createGmeetCapture, GmeetCapture, GmeetChannelBinder,
   createPcmCaptureNode,
 } from '@vexa/gmeet-capture';
+import { onHost } from './meeting';
 import { createZoomSpeakers, ZoomSpeakers, createZoomChat, ZoomChat } from '@vexa/zoom-capture';
 import { createTeamsSpeakers, TeamsSpeakers, createTeamsChat, TeamsChat } from '@vexa/teams-capture';
 import { createRecordingTap, type RecordingTap } from '@vexa/record-chunker';
@@ -94,13 +95,13 @@ import { createRecordingTap, type RecordingTap } from '@vexa/record-chunker';
   // Teams hosts (mirrors 0.11 isTeamsHost): teams.live.com, teams.microsoft.com
   // (+ subdomains), teams.cloud.microsoft.
   function isTeamsHost(): boolean {
-    return location.hostname.endsWith('teams.live.com')
-      || location.hostname.endsWith('teams.microsoft.com')
+    return onHost(location.hostname, 'teams.live.com')
+      || onHost(location.hostname, 'teams.microsoft.com')
       || location.hostname === 'teams.cloud.microsoft';
   }
 
   function startSpeakerAttribution(): void {
-    if (location.hostname.endsWith('meet.google.com')) {
+    if (onHost(location.hostname, 'meet.google.com')) {
       if (speakers) return;
       const selfName = (document.querySelector('[data-self-name]') as HTMLElement | null)
         ?.getAttribute('data-self-name')?.trim() || undefined;
@@ -119,7 +120,7 @@ import { createRecordingTap, type RecordingTap } from '@vexa/record-chunker';
       });
       (window as any).__vexaGmeetSpeakers = speakers;
       console.log(`${TAG} shared gmeet-speakers HINT emitter started (self="${selfName || 'unknown'}")`);
-    } else if (location.hostname.endsWith('zoom.us')) {
+    } else if (onHost(location.hostname, 'zoom.us')) {
       if (zoomSpeakers) return;
       const selfName = (document.querySelector('[data-self-name]') as HTMLElement | null)
         ?.getAttribute('data-self-name')?.trim() || undefined;
@@ -223,7 +224,7 @@ import { createRecordingTap, type RecordingTap } from '@vexa/record-chunker';
     // (999) captured by the OFFSCREEN document, so the inpage captures no audio
     // for them. (Teams Web does expose per-participant WebRTC tracks, but we
     // deliberately do NOT use them — Teams follows Zoom's mixed path exactly.)
-    if (location.hostname.endsWith('meet.google.com')) {
+    if (onHost(location.hostname, 'meet.google.com')) {
       gmeetCapture = createGmeetCapture({
         log: (m) => console.log(`${TAG} ${m}`),
         // Name this channel by PER-CHANNEL correlation: the tile whose glow ONSET
