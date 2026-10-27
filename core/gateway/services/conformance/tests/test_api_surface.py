@@ -41,6 +41,7 @@ CORE_CASES = [
     ("DELETE", "/bots/google_meet/abc-defg-hij", 200, "MeetingResponse"),
     ("PUT", "/bots/google_meet/abc-defg-hij/config", 202, "MeetingResponse"),
     ("POST", "/bots/google_meet/abc-defg-hij/speak", 200, "MeetingResponse"),
+    ("DELETE", "/bots/google_meet/abc-defg-hij/speak", 200, None),
     ("GET", "/transcripts/google_meet/abc-defg-hij", 200, "TranscriptionResponse"),
     ("GET", "/recordings", 200, None),
     ("GET", "/recordings/1", 200, None),
@@ -64,13 +65,14 @@ def test_core_paths_match_validate_mjs():
         ("/bots/{platform}/{native_meeting_id}", "delete"),
         ("/bots/{platform}/{native_meeting_id}/config", "put"),
         ("/bots/{platform}/{native_meeting_id}/speak", "post"),
+        ("/bots/{platform}/{native_meeting_id}/speak", "delete"),
         ("/transcripts/{platform}/{native_meeting_id}", "get"),
         ("/recordings", "get"), ("/recordings/{recording_id}", "get"),
         ("/recordings/{recording_id}", "delete"),
         ("/meetings", "get"),
     }
     assert driven == sealed, f"driven set != sealed CORE set: {driven ^ sealed}"
-    assert len(driven) == 11
+    assert len(driven) == 12
 
 
 @pytest.mark.parametrize("method,url,ok_status,component", CORE_CASES,
