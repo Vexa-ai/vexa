@@ -88,12 +88,16 @@ export function createTtsPlayback(log: (m: string) => void = () => { /* */ }, po
   });
 
   let proc: TtsPlayer | null = null;
+  // The TTS answer being played. Closed on stop, so the server stops synthesizing what nobody will hear.
+  let audio: Readable | null = null;
   // Settles the utterance in flight; `stop()` settles it as `stopped`.
   let settle: ((o: TtsOutcome) => void) | null = null;
 
   const kill = (): void => {
     const p = proc;
     proc = null;
+    audio?.destroy();
+    audio = null;
     if (p) { try { p.stdin?.destroy(); p.kill(); } catch { /* already gone */ } }
   };
 
@@ -124,7 +128,7 @@ export function createTtsPlayback(log: (m: string) => void = () => { /* */ }, po
       const finish = (o: TtsOutcome) => { if (finished) return; finished = true; if (settle === finish) settle = null; resolve(o); };
       settle = finish;
       request(url, { headers, body }).then((res) => {
-        if (finished) { res.body.resume?.(); return; }
+        if (finished) { res.body.destroy(); return; }
         if (res.status !== 200) {
           res.body.resume?.();
           log(`[tts] service answered ${res.status}`);
@@ -135,8 +139,9 @@ export function createTtsPlayback(log: (m: string) => void = () => { /* */ }, po
         setMute(false);                                   // open the mic only during playback
         const p = startPlayer();
         proc = p;
+        audio = res.body;
         const done = (code: number | null) => {
-          if (proc === p) proc = null;
+          if (proc === p) { proc = null; audio = null; }
           setMute(true);
           finish(code === 0 ? { ok: true, ms: Math.max(1, now() - started) } : { ok: false, reason: 'playback_failed' });
         };

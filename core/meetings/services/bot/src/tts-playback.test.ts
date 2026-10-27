@@ -136,6 +136,23 @@ const URL_ENV = { TTS_SERVICE_URL: 'http://tts.local:8880/', TTS_API_TOKEN: 'tok
   check('…and the chain is muted', mutes[mutes.length - 1] === true);
 }
 {
+  // #1866 live: a CPU TTS kept synthesizing a stopped paragraph while the answer stayed open, and every
+  // later line waited behind it. Stop must close the answer, so the server can drop the work.
+  const { tts, h } = harness(URL_ENV);
+  const playing = tts.play('a long paragraph');
+  await tick(); await tick();
+  tts.stop();
+  await playing;
+  check('stop during playback closes the TTS answer', h.audio()?.destroyed === true);
+}
+{
+  const { tts, h } = harness(URL_ENV);
+  const playing = tts.play('a long paragraph');
+  tts.stop();                                    // before the server has answered
+  await playing; await tick(); await tick();
+  check('stop before the answer closes it when it arrives (never drained)', h.audio()?.destroyed === true);
+}
+{
   const { tts, p } = harness(URL_ENV);
   void tts.play('one'); await tick(); await tick();
   void tts.play('two'); await tick(); await tick();
