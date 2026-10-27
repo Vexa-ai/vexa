@@ -1,0 +1,9 @@
+# GitGuardian (ggshield and the GitHub app). Paths here hold no credentials by construction:
+#   contracts.seal.json        sha256 digests of the sealed contracts
+#   contracts/*/golden/        published test vectors, signed with a key documented as test-only
+#                              in each golden README; never a deployment secret
+version: 2
+secret:
+  ignored_paths:
+    - "contracts.seal.json"
+    - "**/contracts/**/golden/**"
