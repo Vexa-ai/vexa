@@ -256,3 +256,16 @@ def test_the_answer_is_kept_per_url_for_the_ttl():
 
     asyncio.run(run())
     assert calls == ["a", "b", "a"]
+
+
+# ── the image: catalog.json ships where this module reads it ───────────────────────────────────────
+
+def test_the_image_carries_the_catalog_where_this_module_reads_it():
+    """The module walks up from its own file for ``meetings/contracts/…/catalog.json``; meeting-api's
+    image copies the sealed file to that path under ``/app``."""
+    root = Path(__file__).resolve().parents[5]
+    lines = (root / "core/meetings/services/meeting-api/Dockerfile").read_text().splitlines()
+    dest = "./meetings/contracts/transcription-language.v1/catalog.json"
+    assert any(line.startswith("COPY core/meetings/contracts/transcription-language.v1/catalog.json")
+               and line.split()[-1] == dest for line in lines)
+    assert dest.endswith(str(lc._CATALOG_PATH))
