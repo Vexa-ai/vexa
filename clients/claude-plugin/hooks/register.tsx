@@ -1474,7 +1474,9 @@ const BUSY_LABEL: Partial<Record<BandKey, string>> = { connect: 'Connecting…',
 export type BandInput = { connected: boolean; owner: boolean; linkActive: boolean; polling?: boolean; hearing?: boolean; busy?: boolean; stage?: string; heardAt?: string; linkState: string; call: string; listening: boolean; flash: string; answering: boolean; preset: string }
 export function bandState(x: BandInput): { tone: 'live' | 'hear' | 'react' | 'warn' | 'off'; line: string; hot: boolean; buttons: BandKey[] } {
   if (!x.connected) return { tone: 'off', line: 'Vexa not connected', hot: false, buttons: ['connect'] }
-  if (x.owner && ['expired', 'unreachable'].includes(x.linkState)) return { tone: 'warn', line: 'Line to Vexa paused', hot: false, buttons: ['reconnect'] }
+  if (x.owner && ['revoked', 'expired', 'unreachable'].includes(x.linkState)) return { tone: 'warn', line: 'Line to Vexa paused', hot: false, buttons: ['reconnect'] }
+  // Vexa is not answering (the network, a redeploy): the line waits for it by itself, nothing to press.
+  if (x.owner && x.linkActive && x.linkState === 'reconnecting') return { tone: 'warn', line: 'Reconnecting to Vexa…', hot: false, buttons: ['open'] }
   if (x.linkActive && !x.owner) return { tone: 'off', line: 'Listening in another chat', hot: false, buttons: ['here'] }
   if (!x.call) return { tone: 'off', line: 'Vexa · no live call', hot: false, buttons: ['open', 'send'] }
   // Listening is real either through the line this chat owns, or (no vexa-link anywhere) through

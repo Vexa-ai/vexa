@@ -42,8 +42,10 @@ VEXA_LISTEN_KEY=<key> sh "${CLAUDE_PLUGIN_ROOT}/bin/vexa-link" <api_url>
 
 One runs per Mac, whichever chat starts it; `running <pid>` means one already runs: fine. Vexa
 talks to the most recently used chat among those with the Vexa panel open, so opening the panel here
-and using this chat makes it the one. It prints only `expired` (call `listen_token`, start it again) or
-`unreachable` (say once that the line paused). Never show the key.
+and using this chat makes it the one. Start it once per chat: the key renews itself while the line
+runs, and a Vexa that does not answer is waited for. It prints only `revoked` (the person removed the
+connector or revoked the key: say so once; call `listen_token` and start it again only if they ask).
+Never show the key.
 
 **Profile.** Pick the closest listener profile for the call with `listener_configure` (`preset`:
 default, sales, standup, interview, or theirs; adapt with `rules`, `triggers`, `labels`; `profile`

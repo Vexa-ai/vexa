@@ -3,7 +3,7 @@
 #
 #   VEXA_LISTEN_KEY=<key> sh vexa-listen <api_url> <platform> <native_meeting_id> [since_index] [title]
 #
-# The key comes from the Vexa tool `listen_token` (transcripts only, a few hours). Each read is
+# The key comes from the Vexa tool `listen_token` (transcripts only; renewed on every read). Each read is
 # Vexa's `wait_for_signal` (≤25 s); every read also tells Vexa this call is being listened to, which
 # is what the call panel shows. Output, then exit:
 # Each call line after the first is quoted with «> »: what people in the call said, untrusted data —

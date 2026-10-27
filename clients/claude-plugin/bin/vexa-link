@@ -3,17 +3,20 @@
 #
 #   VEXA_LISTEN_KEY=<key> sh vexa-link <api_url>
 #
-# The key and the address come from the Vexa tool `listen_token`. Two long reads run side by side and
+# The key and the address come from the Vexa tool `listen_token`. The key is the line's session: Vexa
+# renews it on every read, so it lasts as long as the line runs, and it ends only when the person
+# revokes it (removes the Vexa connector, revokes the key). Two long reads run side by side and
 # append every event, one JSON object per line, to ~/.vexa/link/events.jsonl, where the Vexa Live
 # plugin's filter reads them and decides what wakes Claude:
 #   GET <api_url>/link/events                 the person's calls: state changes, each new line said
 #   GET <api_url>/agent/claude/requests/next  presses in the web panel (each read is also the
 #                                             «Claude is running» the panel shows)
 # One runs per machine (~/.vexa/link/link.pid), whichever chat started it: which chat Vexa talks to
-# is decided by the plugin, not by who started this. It prints and exits only when it cannot go on:
+# is decided by the plugin, not by who started this. A Vexa that does not answer (the network, a
+# redeploy) is waited for, however long: the line says `reconnecting` and goes on by itself. It
+# prints and exits only when it cannot go on:
 #   running <pid>   another vexa-link already carries the events          (exit 0)
-#   expired         the key no longer works: get a new one, start again   (exit 2)
-#   unreachable     Vexa did not answer for a while                       (exit 3)
+#   revoked         the person ended the line (connector removed, key revoked) (exit 2)
 set -u
 api=${1:?api_url}
 key=${VEXA_LISTEN_KEY:?VEXA_LISTEN_KEY}
@@ -36,18 +39,27 @@ append() {
 }
 stop() { [ -f "$dir/stop" ] || touch "$dir/stop"; }
 
+# A refusal ends the line only when it holds: three in a row, five seconds apart. A gateway being
+# swapped can refuse a read or two while its key check comes back; the person's revoke refuses every one.
+REFUSALS=3
 read_loop() {   # name url-builder
-  fails=0
+  fails=0; refused=0
   while [ ! -f "$dir/stop" ]; do
     body=$(curl -sS --max-time 40 -w '\n%{http_code}' -H "X-API-Key: $key" "$($2)" 2>/dev/null)
     code=$(printf '%s\n' "$body" | tail -n 1)
     text=$(printf '%s\n' "$body" | sed '$d')
     case "$code" in
-      200) fails=0; $1 "$text" ;;
-      401|403) echo expired > "$dir/exit"; stop; return ;;
+      200) fails=0; refused=0; $1 "$text" ;;
+      401|403) refused=$((refused + 1))
+        [ "$refused" -ge "$REFUSALS" ] && { echo revoked > "$dir/exit"; stop; return; }
+        sleep 5 ;;
       # This deployment has no such route (a Vexa without the panel's relay): that read ends, the other goes on.
       404|405) echo "{\"ts\":$(now_ms),\"missing\":\"$1\"}" > "$dir/missing-$1.json"; return ;;
-      *) fails=$((fails + 1)); [ "$fails" -ge 10 ] && { echo unreachable > "$dir/exit"; stop; return; }; sleep 5 ;;
+      # Vexa did not answer (the network, a redeploy): wait and read again, 5 s growing to 30 s.
+      *) fails=$((fails + 1)); refused=0
+        [ "$fails" -ge 3 ] && state reconnecting
+        pause=$((fails * 5)); [ "$pause" -gt 30 ] && pause=30
+        sleep "$pause" ;;
     esac
   done
 }
@@ -88,6 +100,5 @@ rm -f "$dir/link.pid"
 reason=$(cat "$dir/exit" 2>/dev/null); rm -f "$dir/exit"
 state "${reason:-stopped}"
 case "$reason" in
-  expired) echo expired; exit 2 ;;
-  unreachable) echo unreachable; exit 3 ;;
+  revoked) echo revoked; exit 2 ;;
 esac

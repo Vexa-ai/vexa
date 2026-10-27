@@ -260,6 +260,9 @@ test('the band says what is true: six states, each with its next action', () => 
   expect(bandState({ ...base, listening: false })).toMatchObject({ tone: 'warn', line: 'Not listening · Acme pricing', buttons: ['listen', 'open'] })
   expect(bandState({ ...base, owner: false })).toMatchObject({ line: 'Listening in another chat', buttons: ['here'] })
   expect(bandState({ ...base, linkState: 'expired' })).toMatchObject({ tone: 'warn', line: 'Line to Vexa paused', buttons: ['reconnect'] })
+  expect(bandState({ ...base, linkState: 'revoked' })).toMatchObject({ tone: 'warn', line: 'Line to Vexa paused', buttons: ['reconnect'] })
+  // a Vexa that does not answer is waited for: nothing to press, and never «Listening» meanwhile
+  expect(bandState({ ...base, linkState: 'reconnecting' })).toMatchObject({ tone: 'warn', line: 'Reconnecting to Vexa…', buttons: ['open'] })
   expect(bandState({ ...base, linkActive: false, owner: false, polling: true })).toMatchObject({ tone: 'live' })
   expect(bandState({ ...base, flash: 'what did we' }).line).toBe('what did we')
 })
