@@ -26,7 +26,7 @@ _VALUES = {"platform": "google_meet", "native_meeting_id": "abc-defg-hij", "meet
            "account_id": "fedcba9876543210fedcba9876543210", "path:path": "vnc.html"}
 #: Rows the edge declares whose meeting-api route does not exist yet (api.v1 known gaps): the hop
 #: answers 404 and no scope is read. Held exactly, so a row that loses its route is noticed.
-_KNOWN_UNSERVED = {("POST", "/bots/{platform}/{native_meeting_id}/speak")}
+_KNOWN_UNSERVED: set[tuple[str, str]] = set()
 
 
 @pytest.fixture
