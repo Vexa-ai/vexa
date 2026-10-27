@@ -16,7 +16,7 @@ mkdir -p "$WORK/bot-logs"
 UV=${UV:-uv}
 REDIS_PORT=${REDIS_PORT:-16391}; MA_PORT=${MA_PORT:-18892}; GW_PORT=${GW_PORT:-18893}
 LK_PORT=${LK_PORT:-17880}; LK_TCP=${LK_TCP:-17881}; LK_UDP_START=${LK_UDP_START:-51000}; LK_UDP_END=${LK_UDP_END:-51060}
-LK_IMAGE=${LK_IMAGE:-livekit/livekit-server:v1.13.7@sha256:6fd3b7088874c4d119160dd688798dfec852bc014786d392caad15f6f63912a3}
+LK_IMAGE=${LK_IMAGE:-livekit/livekit-server:v1.13.11@sha256:25cd902de7cacbd5f1f779f6a6ac1eae20ba8f56b0935934ce6b0ab80d1e3d20}
 RNAME=call-e2e-redis-$$; LNAME=call-e2e-livekit-$$
 REDIS_PASS=$(openssl rand -hex 16)
 export ADMIN_TOKEN=$(openssl rand -hex 24) E2E_API_KEY=vxa_e2e_$(openssl rand -hex 12)
