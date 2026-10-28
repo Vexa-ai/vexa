@@ -54,9 +54,9 @@ async def _http_post(url: str, headers: dict, body: str) -> tuple[bool, int]:
         return res.is_success, res.status_code
 
 
-async def _transcribe_post(url: str, *, data: dict, files: dict, timeout: float) -> Any:
+async def _transcribe_post(url: str, *, data: dict, files: dict, headers: dict, timeout: float) -> Any:
     async with httpx.AsyncClient() as client:
-        return await client.post(url, data=data, files=files, timeout=timeout)
+        return await client.post(url, data=data, files=files, headers=headers, timeout=timeout)
 
 
 async def _no_callback_post(url: str, headers: dict, body: str) -> tuple[bool, int]:
@@ -129,23 +129,37 @@ async def run(env: Optional[dict[str, str]] = None) -> int:
 
     redis_client = redis_asyncio.from_url(inv["redisUrl"])
     meeting_id = inv.get("meeting_id") or native_meeting_id or inv.get("connectionId") or "session"
-    transcript = TranscriptSink(redis_client, meeting_id, native_meeting_id=native_meeting_id)
+    # The session's MeetingToken (invocation.v1 `token`): the bearer on every lifecycle callback and
+    # the key that signs every transcript stream entry. Never logged.
+    meeting_token = inv.get("token")
+    transcript = TranscriptSink(redis_client, meeting_id, native_meeting_id=native_meeting_id, token=meeting_token)
 
     callback_url = inv.get("meetingApiCallbackUrl")
     if callback_url:
-        lifecycle = LifecycleSink(callback_url, internal_secret=inv.get("internalSecret"), post=_http_post, log=_log)
+        lifecycle = LifecycleSink(callback_url, token=meeting_token, post=_http_post, log=_log)
     else:
         lifecycle = LifecycleSink("", post=_no_callback_post, log=_log)
 
     transcription_url = inv.get("transcriptionServiceUrl")
+    if inv.get("transcribeEnabled") is False:
+        transcription_url = None
+    elif transcription_url and inv.get("transcriptionServiceOwner") == "customer":
+        # The person's own Settings endpoint: the TS bot holds every request to it to the outbound URL
+        # guard (modules/whisper url-guard.ts — no private, link-local or metadata address, the socket
+        # pinned to the checked address). This service has no port of that guard yet, so it sends a
+        # customer-owned endpoint nothing rather than audio from inside the deployment's network.
+        _log("transcription refused: a customer-owned STT endpoint needs the outbound URL guard, "
+             "which the discord-bot does not have yet")
+        transcription_url = None
     transcription_token = inv.get("transcriptionServiceToken")
+    transcription_model = inv.get("transcriptionModel") or "whisper-1"
 
     async def transcribe_fn(wav: bytes, language: Optional[str]) -> Optional[str]:
         if not transcription_url:
             return None
         return await transcribe_http(
             wav, url=transcription_url, token=transcription_token, language=language,
-            post=_transcribe_post, log=_log,
+            model=transcription_model, post=_transcribe_post, log=_log,
         )
 
     name_cache: dict[int, str] = {}

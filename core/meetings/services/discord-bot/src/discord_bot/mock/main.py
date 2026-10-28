@@ -67,12 +67,12 @@ async def run_mock(
 
     redis_client = redis_client if redis_client is not None else redis_asyncio.from_url(inv["redisUrl"])
     meeting_id = inv.get("meeting_id") or inv.get("nativeMeetingId") or inv.get("connectionId") or "session"
-    transcript = TranscriptSink(redis_client, meeting_id, native_meeting_id=inv.get("nativeMeetingId"))
+    transcript = TranscriptSink(redis_client, meeting_id, native_meeting_id=inv.get("nativeMeetingId"), token=inv.get("token"))
 
     callback_url = inv.get("meetingApiCallbackUrl")
     post = http_post or _real_http_post
     lifecycle = (
-        LifecycleSink(callback_url, internal_secret=inv.get("internalSecret"), post=post, log=log)
+        LifecycleSink(callback_url, token=inv.get("token"), post=post, log=log)
         if callback_url
         else LifecycleSink("", post=post, log=log)
     )

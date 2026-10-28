@@ -204,6 +204,9 @@ def worker_image_for(agent_image: str) -> str:
 # an agent worker is a code harness — they are sized independently, never off one shared knob.
 _RESOURCE_ENV = {
     "meeting-bot": ("RUNTIME_BOT_CPU", "RUNTIME_BOT_MEMORY_MB"),
+    # A discord bot is a meeting bot (same quota, same pool): sized by the bot knobs until it has
+    # its own measured size. It needs far less than a browser, so the bot size is a ceiling.
+    "discord-bot": ("RUNTIME_BOT_CPU", "RUNTIME_BOT_MEMORY_MB"),
     "agent": ("RUNTIME_AGENT_WORKER_CPU", "RUNTIME_AGENT_WORKER_MEMORY_MB"),
 }
 
@@ -212,6 +215,7 @@ _RESOURCE_ENV = {
 # average and bursts onto the node's idle cores.
 _CPU_LIMIT_ENV = {
     "meeting-bot": "RUNTIME_BOT_CPU_LIMIT",
+    "discord-bot": "RUNTIME_BOT_CPU_LIMIT",
 }
 
 
@@ -262,6 +266,7 @@ def _profile_resources(profile: str) -> Optional[Resources]:
 # RUNTIME_K8S_, which a spec's env can never set (workload_env.RUNTIME_OWNED_PREFIXES).
 _SCHEDULING_ENV_PREFIX = {
     "meeting-bot": "RUNTIME_K8S_BOT_",
+    "discord-bot": "RUNTIME_K8S_BOT_",
     "agent": "RUNTIME_K8S_AGENT_WORKER_",
 }
 
@@ -443,9 +448,15 @@ def default_registry() -> ProfileRegistry:
                 runnable=Runnable(
                     image=discord_bot_image,
                     command=["python", "-m", "discord_bot"],
+                    # The bot class: the bot network fences (meeting-api, redis, the open web — the
+                    # Discord gateway and its voice servers), the bot pool and the bot quota.
+                    labels={CLASS_LABEL: "bot"},
+                    scheduling=_profile_scheduling("discord-bot"),
+                    run_as_non_root=True,
                 ),
                 idle_timeout_sec=0,  # 0 ⇒ managed externally; enforcement skips it
                 base_env=discord_bot_env,
+                resources=_profile_resources("discord-bot"),
             ),
         }
     )

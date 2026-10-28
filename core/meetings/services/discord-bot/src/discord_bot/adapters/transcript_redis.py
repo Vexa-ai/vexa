@@ -6,6 +6,9 @@ identically to every other platform's:
 
   1. STREAM ``transcription_segments`` (XADD) — the durable feed the collector consumes. The
      collector's ``ingest`` requires the envelope ``{type, meeting_id, segments:[...]}``.
+     Every entry is signed (``auth`` + ``sig`` beside ``payload``, ``segment_entry.py`` — a byte copy
+     of transcript.v1's signer held by ``gate:fact-parity``) with the session's MeetingToken; the
+     collector drops an unsigned entry, or one whose ``meeting_id`` is not the token's.
   2. PUB/SUB ``tc:meeting:{meetingId}:mutable`` — the live channel the gateway forwards to the
      dashboard.
 
@@ -17,6 +20,8 @@ from __future__ import annotations
 
 import json
 from typing import Any, Optional, Protocol
+
+from discord_bot.adapters.segment_entry import signed_entry
 
 #: The redis stream the collector consumes (durable transcript.v1 feed).
 TRANSCRIPTION_STREAM = "transcription_segments"
@@ -36,8 +41,16 @@ class TranscriptSink:
     """The live transcript sink. ``publish`` XADDs the durable feed AND publishes the live mutable
     channel for one segment — the same two-leg fan-out the TS bot's adapter performs."""
 
-    def __init__(self, client: RedisTranscriptClient, meeting_id: Any, native_meeting_id: Optional[str] = None):
+    def __init__(
+        self,
+        client: RedisTranscriptClient,
+        meeting_id: Any,
+        native_meeting_id: Optional[str] = None,
+        *,
+        token: Optional[str] = None,
+    ):
         self._client = client
+        self._token = token
         self._meeting_id = meeting_id
         self._native_meeting_id = native_meeting_id
         self._channel = mutable_channel(meeting_id)
@@ -51,6 +64,6 @@ class TranscriptSink:
                 "segments": [segment],
             }
         )
-        await self._client.xadd(TRANSCRIPTION_STREAM, {"payload": payload})
+        await self._client.xadd(TRANSCRIPTION_STREAM, signed_entry(self._token or "", payload))
         msg = json.dumps({"type": "transcript", "meeting": {"id": self._meeting_id}, "segment": segment})
         await self._client.publish(self._channel, msg)

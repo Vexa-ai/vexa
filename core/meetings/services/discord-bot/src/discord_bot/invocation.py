@@ -36,7 +36,12 @@ def parse_invocation(raw: Optional[str]) -> dict[str, Any]:
     try:
         conforms_invocation(data)
     except jsonschema.ValidationError as e:
-        raise InvocationError(f"invocation.v1: VEXA_BOT_CONFIG failed validation — {e.message}") from e
+        # The field and the rule, never e.message: it quotes the offending value, and the
+        # invocation carries secrets (token, redisUrl, transcriptionServiceToken, s3SecretKey).
+        where = "/".join(str(p) for p in e.absolute_path) or "(root)"
+        raise InvocationError(
+            f"invocation.v1: VEXA_BOT_CONFIG failed validation at {where} ({e.validator})"
+        ) from None
     # The schema's Platform enum is shared by every meeting-bot kind; this service only ever
     # speaks for "discord" (a stray dispatch to the wrong profile's image is a config bug, not
     # something to silently join anyway).

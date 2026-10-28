@@ -3215,8 +3215,11 @@
      "description": "STT is first-party and self-hostable; default destination is tenant-hosted, so audio need not leave the tenant",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/no-egress.requirement.json",
+       "requirement-url": "calm/controls/no-egress.requirement.json",
        "config": {
+        "control-id": "vexa-no-egress",
+        "name": "Tenant data egress",
+        "description": "The posture of tenant data on this edge: where it goes and whether leaving the tenant is approved.",
         "dataClass": "audio",
         "destination": "tenant-hosted",
         "egressApproved": true
@@ -3242,6 +3245,28 @@
    "metadata": [
     {
      "access": "read"
+    }
+   ]
+  },
+  {
+   "unique-id": "discord-bot-ma",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "discord-bot"
+     },
+     "destination": {
+      "node": "meeting-api",
+      "interface": "meeting-api-rest"
+     }
+    }
+   },
+   "description": "the discord bot's calls back: every lifecycle.v1 event to POST /bots/internal/callback/lifecycle with Authorization: Bearer <MeetingToken> (invocation.v1 token), bound to the bot's own session, as on bot-ma; it uploads no recording",
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "req",
+     "contract": "lifecycle.v1"
     }
    ]
   },

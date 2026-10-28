@@ -20,7 +20,7 @@ from typing import Any, Awaitable, Callable, Optional, Protocol
 #: adapter wraps httpx.AsyncClient.post.
 class PostFn(Protocol):
     async def __call__(
-        self, url: str, *, data: dict[str, str], files: dict[str, Any], timeout: float
+        self, url: str, *, data: dict[str, str], files: dict[str, Any], headers: dict[str, str], timeout: float
     ) -> Any: ...
 
 
@@ -43,9 +43,11 @@ async def transcribe(
     if language:
         data["language"] = language
     files = {"file": ("utterance.wav", wav, "audio/wav")}
+    # transcriptionServiceToken, sent the way the TS bot's TranscriptionClient sends it.
+    headers = {"authorization": f"Bearer {token}"} if token else {}
     for attempt in range(attempts):
         try:
-            res = await post(url, data=data, files=files, timeout=timeout)
+            res = await post(url, data=data, files=files, headers=headers, timeout=timeout)
         except ConnectionError as e:
             if attempt < attempts - 1:
                 await sleep(2 * (attempt + 1))  # 2s, 4s backoff

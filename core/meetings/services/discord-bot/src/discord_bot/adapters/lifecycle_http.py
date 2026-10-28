@@ -1,8 +1,9 @@
 """lifecycle.v1 egress adapter — HTTP callback to meeting-api.
 
 Mirrors ``services/bot/src/adapters/lifecycle-http.ts``: POSTs each lifecycle.v1 event verbatim to
-``meetingApiCallbackUrl`` (headers: ``content-type: application/json`` + optional
-``x-internal-secret``), with bounded retry/backoff. ``emit`` never raises — a dropped status report
+``meetingApiCallbackUrl`` (headers: ``content-type: application/json`` + ``authorization: Bearer
+<token>``, the sessions MeetingToken, invocation.v1 token — the bots only credential; meeting-api
+refuses a callback without it with 401), with bounded retry/backoff. ``emit`` never raises — a dropped status report
 must not crash the bot or strand a seated meeting; it is logged and swallowed (P14).
 
 Injected with a minimal async ``post(url, headers, body) -> (ok, status)`` callable so this is
@@ -24,7 +25,7 @@ class LifecycleSink:
         self,
         callback_url: str,
         *,
-        internal_secret: Optional[str] = None,
+        token: Optional[str] = None,
         post: PostFn,
         retries: int = 5,
         backoff_s: float = 0.5,
@@ -33,8 +34,8 @@ class LifecycleSink:
     ):
         self._url = callback_url
         self._headers = {"content-type": "application/json"}
-        if internal_secret:
-            self._headers["x-internal-secret"] = internal_secret
+        if token:
+            self._headers["authorization"] = f"Bearer {token}"
         self._post = post
         self._retries = max(1, retries)
         self._backoff_s = backoff_s

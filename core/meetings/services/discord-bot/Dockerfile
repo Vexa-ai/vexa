@@ -45,5 +45,9 @@ COPY core/meetings/contracts/transcript.v1/transcript.schema.json ./meetings/con
 COPY core/meetings/contracts/lifecycle.v1/lifecycle.schema.json   ./meetings/contracts/lifecycle.v1/lifecycle.schema.json
 COPY core/meetings/contracts/acts.v1/acts.schema.json             ./meetings/contracts/acts.v1/acts.schema.json
 
+# Non-root, like the browser bot: the runtime profile sets run_as_non_root.
+RUN useradd --system --uid 10001 --no-create-home discordbot
+USER 10001
+
 # python -m discord_bot → discord_bot.bot.run(): validate config, join, receive, report, die.
 CMD ["python", "-m", "discord_bot"]

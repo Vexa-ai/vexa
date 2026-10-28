@@ -6,6 +6,8 @@ from pathlib import Path
 
 from discord_bot.adapters.acts_redis import ActsSource, acts_channel
 from discord_bot.adapters.lifecycle_http import LifecycleSink
+from discord_bot.adapters.segment_entry import signature
+from discord_bot.adapters.transcribe_http import transcribe
 from discord_bot.adapters.transcript_redis import TRANSCRIPTION_STREAM, TranscriptSink, mutable_channel
 from discord_bot.contracts import conforms_lifecycle_event, conforms_transcript_segment
 
@@ -73,6 +75,65 @@ async def test_transcript_publish_also_publishes_the_live_mutable_channel():
     assert msg == {"type": "transcript", "meeting": {"id": 7}, "segment": segment}
 
 
+async def test_transcript_entry_is_signed_with_the_meeting_token():
+    # The 0.13 collector (meeting_api/collector/ingest.py _verify_entry) admits an entry only when it
+    # carries auth = the token's header.payload and sig = HMAC-SHA256(payload) keyed with the token.
+    token = "aGVhZGVy.cGF5bG9hZA.c2ln"
+    client = FakeRedisTranscriptClient()
+    sink = TranscriptSink(client, meeting_id=7, token=token)
+    await sink.publish(_segment())
+
+    _, fields = client.xadds[0]
+    assert fields["auth"] == "aGVhZGVy.cGF5bG9hZA"
+    assert fields["sig"] == signature(token, fields["payload"])
+    assert token not in fields.values()  # the bearer itself never enters Redis
+
+
+async def test_transcript_entry_without_a_token_carries_only_its_payload():
+    client = FakeRedisTranscriptClient()
+    sink = TranscriptSink(client, meeting_id=7)
+    await sink.publish(_segment())
+    _, fields = client.xadds[0]
+    assert set(fields) == {"payload"}
+
+
+# ── transcription (OpenAI-compatible multipart POST) ─────────────────────────────────────────
+
+
+class _Res:
+    def __init__(self, status_code, body):
+        self.status_code, self._body = status_code, body
+
+    def json(self):
+        return self._body
+
+
+async def test_transcribe_sends_the_service_token_and_model():
+    seen = []
+
+    async def fake_post(url, *, data, files, headers, timeout):
+        seen.append((url, data, headers))
+        return _Res(200, {"text": " hi "})
+
+    text = await transcribe(b"wav", url="http://stt/v1/audio/transcriptions", post=fake_post,
+                            token="stt-key", model="large-v3", language="en")
+    assert text == "hi"
+    url, data, headers = seen[0]
+    assert headers == {"authorization": "Bearer stt-key"}
+    assert data == {"model": "large-v3", "language": "en"}
+
+
+async def test_transcribe_without_a_token_sends_no_authorization():
+    seen = []
+
+    async def fake_post(url, *, data, files, headers, timeout):
+        seen.append(headers)
+        return _Res(200, {"text": ""})
+
+    assert await transcribe(b"wav", url="http://stt", post=fake_post) == ""
+    assert seen == [{}]
+
+
 # ── lifecycle.v1 (HTTP callback, bounded retry, never raises) ────────────────────────────────
 
 
@@ -85,14 +146,15 @@ async def test_lifecycle_emit_posts_the_event_verbatim():
 
     event = {"connection_id": "sess-1", "status": "active", "timestamp": "2026-01-01T00:00:00Z"}
     conforms_lifecycle_event(event)
-    sink = LifecycleSink("http://meeting-api/callback", internal_secret="s3cr3t", post=fake_post)
+    sink = LifecycleSink("http://meeting-api/callback", token="h.p.s", post=fake_post)
     await sink.emit(event)
 
     assert len(seen) == 1
     url, headers, body = seen[0]
     assert url == "http://meeting-api/callback"
     assert headers["content-type"] == "application/json"
-    assert headers["x-internal-secret"] == "s3cr3t"
+    assert headers["authorization"] == "Bearer h.p.s"
+    assert "x-internal-secret" not in headers
     assert body == event
 
 

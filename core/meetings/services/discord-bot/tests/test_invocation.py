@@ -86,3 +86,19 @@ def test_load_invocation_prefers_vexa_bot_config_over_legacy_alias():
     env = {"VEXA_BOT_CONFIG": json.dumps(good), "BOT_CONFIG": json.dumps(bad_alias)}
     inv = load_invocation(env)
     assert inv["platform"] == "discord"
+
+
+def test_a_validation_failure_never_quotes_the_offending_value():
+    import json as _json
+
+    import pytest as _pytest
+
+    from discord_bot.invocation import InvocationError, parse_invocation
+
+    secret = "super-secret-token-value"
+    bad = {"platform": "discord", "meetingUrl": None, "botName": "Vexa",
+           "redisUrl": "redis://redis:6379", "nativeMeetingId": "1", "meeting_id": secret}
+    with _pytest.raises(InvocationError) as exc:
+        parse_invocation(_json.dumps(bad))
+    assert secret not in str(exc.value)
+    assert "meeting_id" in str(exc.value)

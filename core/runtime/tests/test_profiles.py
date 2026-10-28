@@ -245,3 +245,16 @@ def test_command_overrides_ignore_blank_env(monkeypatch):
     assert reg.resolve("meeting-bot").command is None  # image ENTRYPOINT is authoritative (#675)
     assert reg.resolve("agent").command == ["python", "-m", "worker"]
     assert reg.resolve("discord-bot").command == ["python", "-m", "discord_bot"]
+
+
+def test_discord_bot_is_held_to_the_bot_class(monkeypatch):
+    # The bot network fences, the bot pool and quota, non-root: what the meeting-bot profile carries.
+    monkeypatch.setenv("RUNTIME_BOT_CPU", "0.5")
+    monkeypatch.setenv("RUNTIME_BOT_MEMORY_MB", "512")
+    monkeypatch.setenv("RUNTIME_K8S_BOT_NODE_SELECTOR", "{\"pool\": \"bots\"}")
+    reg = default_registry()
+    discord, browser = reg.get("discord-bot"), reg.get("meeting-bot")
+    assert discord.runnable.labels == browser.runnable.labels == {"vexa.role": "bot"}
+    assert discord.runnable.scheduling == browser.runnable.scheduling
+    assert discord.runnable.run_as_non_root is True
+    assert discord.resources == browser.resources

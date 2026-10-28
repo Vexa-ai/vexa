@@ -812,6 +812,9 @@
         },
         {
           "path": "deploy/compose/tests/_segment_entry.py"
+        },
+        {
+          "path": "core/meetings/services/discord-bot/src/discord_bot/adapters/segment_entry.py"
         }
       ]
     },
