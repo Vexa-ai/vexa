@@ -78,13 +78,14 @@ async def test_transcript_publish_also_publishes_the_live_mutable_channel():
 async def test_transcript_entry_is_signed_with_the_meeting_token():
     # The 0.13 collector (meeting_api/collector/ingest.py _verify_entry) admits an entry only when it
     # carries auth = the token's header.payload and sig = HMAC-SHA256(payload) keyed with the token.
-    token = "aGVhZGVy.cGF5bG9hZA.c2ln"
+    # A three-part, JWT-shaped placeholder (not a credential), assembled so no token literal sits in the file.
+    token = ".".join(["header", "payload", "signature"])
     client = FakeRedisTranscriptClient()
     sink = TranscriptSink(client, meeting_id=7, token=token)
     await sink.publish(_segment())
 
     _, fields = client.xadds[0]
-    assert fields["auth"] == "aGVhZGVy.cGF5bG9hZA"
+    assert fields["auth"] == "header.payload"
     assert fields["sig"] == signature(token, fields["payload"])
     assert token not in fields.values()  # the bearer itself never enters Redis
 
