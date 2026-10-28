@@ -188,7 +188,7 @@ def _tidy(text: str) -> str:
     A picture on a line of its own leaves a blank line between two blank lines; a picture inside a
     sentence leaves a double space. Both are invisible to a reader and neither is worth a rewrite of
     the page, so this is the whole repair: it never reflows, re-wraps or re-orders anything."""
-    out = re.sub(r"[ \t]+\n", "\n", text)
+    out = re.sub(r"(?<![ \t])[ \t]+\n", "\n", text)
     out = re.sub(r"[ \t]{2,}", " ", out)
     return re.sub(r"\n{3,}", "\n\n", out)
 

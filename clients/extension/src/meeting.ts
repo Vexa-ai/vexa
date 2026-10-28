@@ -9,6 +9,12 @@ export interface MeetingRef {
   nativeMeetingId: string;
 }
 
+/** True when `hostname` is `domain` itself or a subdomain of it: a label-boundary
+ *  match, so a look-alike such as `notyoutube.com` never passes. */
+export function onHost(hostname: string, domain: string): boolean {
+  return hostname === domain || hostname.endsWith('.' + domain);
+}
+
 export function detectMeeting(url: string): MeetingRef | null {
   let u: URL;
   try {
@@ -18,7 +24,7 @@ export function detectMeeting(url: string): MeetingRef | null {
   }
 
   // Google Meet — meet.google.com/abc-defg-hij
-  if (u.hostname.endsWith('meet.google.com')) {
+  if (onHost(u.hostname, 'meet.google.com')) {
     const seg = u.pathname.split('/').filter(Boolean)[0];
     if (seg && /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/i.test(seg)) {
       return { platform: 'google_meet', nativeMeetingId: seg };
@@ -28,7 +34,7 @@ export function detectMeeting(url: string): MeetingRef | null {
 
   // YouTube — youtube.com/watch?v=ID. The MIXED lane: the tab's <video> is one
   // mixed audio stream the desktop diarizes with pyannote (no per-speaker channels).
-  if (u.hostname.endsWith('youtube.com')) {
+  if (onHost(u.hostname, 'youtube.com')) {
     const v = u.searchParams.get('v');
     if (v) return { platform: 'youtube', nativeMeetingId: v };
     return null;
@@ -40,7 +46,7 @@ export function detectMeeting(url: string): MeetingRef | null {
   // (services/meeting-api/meeting_api/schemas.py): /j/<id>, /w/<id>, /wc/join/<id>,
   // and the web-client /wc/<id>/... shape. Hosts include zoom.us subdomains
   // (us02web.zoom.us, app.zoom.us, <company>.zoom.us).
-  if (u.hostname.endsWith('zoom.us')) {
+  if (onHost(u.hostname, 'zoom.us')) {
     const parts = u.pathname.split('/').filter(Boolean);
     let id = '';
     if (parts.length >= 2 && (parts[0] === 'j' || parts[0] === 'w')) {
@@ -62,8 +68,8 @@ export function detectMeeting(url: string): MeetingRef | null {
   // hosts' /meet/<id> short URL + /v2/...#/meet/<id> deep-link fragment. Hosts:
   // teams.live.com, teams.microsoft.com (+subdomains), teams.cloud.microsoft.
   if (
-    u.hostname.endsWith('teams.live.com') ||
-    u.hostname.endsWith('teams.microsoft.com') ||
+    onHost(u.hostname, 'teams.live.com') ||
+    onHost(u.hostname, 'teams.microsoft.com') ||
     u.hostname === 'teams.cloud.microsoft'
   ) {
     // /meet/<10-16 digits> on the path (personal + enterprise short URL) — the lengths meeting-api
@@ -85,8 +91,8 @@ export function detectMeeting(url: string): MeetingRef | null {
 export function isMixedHost(url: string): boolean {
   try {
     const h = new URL(url).hostname;
-    return h.endsWith('youtube.com') || h.endsWith('zoom.us')
-      || h.endsWith('teams.microsoft.com') || h.endsWith('teams.live.com') || h === 'teams.cloud.microsoft';
+    return onHost(h, 'youtube.com') || onHost(h, 'zoom.us')
+      || onHost(h, 'teams.microsoft.com') || onHost(h, 'teams.live.com') || h === 'teams.cloud.microsoft';
   } catch {
     return false;
   }

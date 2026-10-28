@@ -65,6 +65,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Protocol
 
+from control_plane.path_confine import within
 from workspaces.shared import workspace_paths as wpaths
 
 log = logging.getLogger(__name__)
@@ -581,11 +582,7 @@ def _ws_dir(root: Path, workspace_id: str) -> Path:
     wid = str(workspace_id or "")
     if not wpaths.is_workspace_name(wid):               # the one workspace name rule
         raise MembershipError("invalid workspace id", status=400)
-    root = Path(root).resolve()
-    ws = (root / workspace_id).resolve()
-    if ws != root and root not in ws.parents:
-        raise MembershipError("invalid workspace id", status=400)
-    return ws
+    return within(root, wid, MembershipError("invalid workspace id", status=400))
 
 
 # The policy files sit in the work tree, which the model's tools may write during a turn. So below
@@ -686,7 +683,7 @@ class FilePolicyStore:
         for name in STORE_NAMES:
             dropped = wpaths.unlink_inside(root, _store_rel(workspace_id, name)) or dropped
         try:
-            os.rmdir(root / _store_rel(workspace_id))
+            os.rmdir(within(root, _store_rel(workspace_id), OSError(workspace_id)))
         except OSError:
             pass
         return dropped
@@ -1202,11 +1199,8 @@ def invites_path(root: Path, workspace_id: str) -> Path:
     slug = str(workspace_id or "").strip()
     if not wpaths.is_workspace_name(slug):              # the one workspace name rule
         raise MembershipError("invalid workspace id", status=400)
-    root = Path(root).resolve()
-    path = (root / INVITE_STORE_DIR / f"{slug}.json").resolve()
-    if root not in path.parents:
-        raise MembershipError("invalid workspace id", status=400)
-    return path
+    return within(root, f"{INVITE_STORE_DIR}/{slug}.json",
+                  MembershipError("invalid workspace id", status=400))
 
 
 def read_invites(root: Path, workspace_id: str) -> list[dict]:

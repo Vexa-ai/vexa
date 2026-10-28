@@ -95,7 +95,7 @@ describe("expanded: the flow in human terms", () => {
 describe("it never covers the chat", () => {
   const CSS = readFileSync(join(__dirname, "..", "minutes.css"), "utf8");
   const rule = (sel: string) => {
-    const m = CSS.match(new RegExp(`${sel.replace(/[.]/g, "\\.")}\\s*\\{([^}]*)\\}`));
+    const m = CSS.match(new RegExp(`${sel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{([^}]*)\\}`));
     expect(m, `${sel} has a rule`).not.toBeNull();
     return m![1];
   };

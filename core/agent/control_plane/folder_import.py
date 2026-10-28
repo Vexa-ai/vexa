@@ -36,6 +36,7 @@ from pathlib import Path, PurePosixPath
 from typing import Iterable, Optional
 
 from control_plane import front_page
+from control_plane.path_confine import within
 from shared.atomic_json import write_json_atomic
 from workspaces.shared import workspace_paths as wpaths
 
@@ -371,7 +372,7 @@ def store_dir(root: "str | Path", subject: str) -> Path:
     """`<root>/.imports/<subject>/folders` — one person's imports, never another's."""
     if not wpaths.is_workspace_name(subject, tier=False):
         raise ValueError("invalid subject")
-    path = Path(root) / ".imports" / subject / "folders"
+    path = within(root, f".imports/{subject}/folders", ValueError("invalid subject"))
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     return path
 
@@ -384,20 +385,20 @@ def save(root, subject: str, record: dict) -> None:
 def load(root, subject: str, plan_id: str) -> Optional[dict]:
     if not valid_id(plan_id):
         return None
-    path = store_dir(root, subject) / f"{plan_id}.json"
+    path = within(store_dir(root, subject), f"{plan_id}.json", ValueError("invalid plan id"))
     if not path.is_file():
         return None
     return json.loads(path.read_text())
 
 
 def staging(root, subject: str, plan_id: str) -> Path:
-    path = store_dir(root, subject) / f"{plan_id}.files"
+    path = within(store_dir(root, subject), f"{plan_id}.files", ValueError("invalid plan id"))
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     return path
 
 
 def drop_staging(root, subject: str, plan_id: str) -> None:
-    path = store_dir(root, subject) / f"{plan_id}.files"
+    path = within(store_dir(root, subject), f"{plan_id}.files", ValueError("invalid plan id"))
     if path.exists():
         wpaths.remove_tree(path, ignore_errors=True)
 

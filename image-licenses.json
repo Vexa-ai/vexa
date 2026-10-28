@@ -84,7 +84,7 @@
       "name": "nginx",
       "license": "BSD-2-Clause",
       "disposition": "sidecar",
-      "note": "The transcription stack's load balancer (deploy/transcription/docker-compose*.yml, nginx:alpine, pinned by digest). nginx is BSD-2-Clause, Category A; operator-pulled and not redistributed."
+      "note": "The transcription stack's load balancer (deploy/transcription/docker-compose*.yml, nginx:alpine-slim, pinned by digest). nginx is BSD-2-Clause, Category A; operator-pulled and not redistributed."
     }
   ],
   "bundled": [

@@ -27,7 +27,7 @@ describe("the inline card, polished", () => {
   });
   it("is light and its chips are padded pills", () => {
     const css = readFileSync(join(__dirname, "../layout/layout.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
-    const rule = (sel: string) => new RegExp(`${sel.replace(/[.[\]]/g, "\\$&")}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? "";
+    const rule = (sel: string) => new RegExp(`${sel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? "";
     expect(rule(".vx-icard")).toMatch(/max-width\s*:\s*520px/);
     expect(rule(".vx-icard-chip")).toMatch(/padding\s*:\s*6px 12px/);
     expect(rule(".vx-icard-chip")).toMatch(/border-radius\s*:\s*999px/);
