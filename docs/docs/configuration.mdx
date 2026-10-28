@@ -67,6 +67,20 @@ does **not** strip it — the comment becomes part of the value, so `TERMINAL_PO
 sets the port to the literal string `13000  # the UI`.
 </Warning>
 
+## Bot speech (TTS)
+
+A bot started with `"voice_agent_enabled": true` can say a line in the call
+(`POST /bots/{platform}/{native_meeting_id}/speak`, see the [Meetings API](/api/meetings)). The runtime
+forwards these to every bot it starts:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `TTS_SERVICE_URL` | — | An **OpenAI-compatible** TTS base URL. The bot calls `{TTS_SERVICE_URL}/v1/audio/speech` with `response_format: "pcm"` and plays the answer as **24 kHz 16-bit mono PCM**. Unset: a voice-enabled bot stays silent and logs `speak failed reason=tts_not_configured`. |
+| `TTS_API_TOKEN` | — | The endpoint's credential, sent as both `Authorization: Bearer` and `X-API-Key`. A deployment credential in each bot's environment, like the transcription token; never logged. |
+| `TTS_VOICE` | `alloy` | The voice used when a speak request names none (or names `auto`). Must be a voice your TTS server has. |
+
+A server that answers with another sample rate plays too fast or too slow; the bot does not resample.
+
 ## Optional service authority
 
 Stock self-hosted Vexa has no external service authority and continues to admit bots exactly as

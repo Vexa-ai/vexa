@@ -70,6 +70,31 @@ def test_meeting_bot_forwards_speaker_stream_tuning(monkeypatch):
     }
 
 
+def test_meeting_bot_forwards_the_tts_settings_so_a_voice_bot_can_speak(monkeypatch):
+    """#1866 C6: an armed bot synthesises speech with the deployment's OpenAI-compatible TTS. The
+    three settings reach every spawned bot when set, and are absent (not empty) when not."""
+    for key in ("BOT_ALONE_SILENCE_WINDOW_MS", "BOT_SPEAKER_MIN_AUDIO_SEC", "BOT_SPEAKER_CONFIRM_THRESHOLD"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("TTS_SERVICE_URL", "http://tts:8880")
+    monkeypatch.setenv("TTS_API_TOKEN", "tts-token-0123")
+    monkeypatch.setenv("TTS_VOICE", "af_bella")
+    reg = default_registry()
+    assert reg.get("meeting-bot").base_env == {
+        "TTS_SERVICE_URL": "http://tts:8880",
+        "TTS_API_TOKEN": "tts-token-0123",
+        "TTS_VOICE": "af_bella",
+    }
+    # An agent worker never speaks in a meeting and is never handed the TTS credential.
+    assert "TTS_API_TOKEN" not in reg.get("agent").base_env
+
+
+def test_meeting_bot_without_tts_settings_carries_none(monkeypatch):
+    for key in ("TTS_SERVICE_URL", "TTS_API_TOKEN", "TTS_VOICE"):
+        monkeypatch.setenv(key, "  ")
+    reg = default_registry()
+    assert not {"TTS_SERVICE_URL", "TTS_API_TOKEN", "TTS_VOICE"} & set(reg.get("meeting-bot").base_env)
+
+
 def test_meeting_bot_env_is_a_valid_invocation():
     """The bot's whole config is delivered as VEXA_BOT_CONFIG — a JSON-encoded Invocation. Build the
     env the control plane would hand the profile and prove the payload conforms to invocation.v1."""

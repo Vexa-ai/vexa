@@ -45,6 +45,7 @@ API_V1_MEETING_SURFACE: set[tuple[str, str]] = {
     ("DELETE", "/bots/{platform}/{native_meeting_id}"),
     ("PUT", "/bots/{platform}/{native_meeting_id}/config"),
     ("POST", "/bots/{platform}/{native_meeting_id}/speak"),
+    ("DELETE", "/bots/{platform}/{native_meeting_id}/speak"),
     ("GET", "/bots/{platform}/{native_meeting_id}/chat"),
     ("POST", "/bots/{platform}/{native_meeting_id}/chat"),
     ("GET", "/bots/{platform}/{native_meeting_id}/chat/{request_id}"),
@@ -65,9 +66,6 @@ WAIVED: dict[tuple[str, str], str] = {
         "actually maps GET /meetings/{meeting_id} → meeting-api GET /meetings/{meeting_id}; the "
         "dashboard meeting-detail reads /meetings/{id}. Deferred reconcile (drop or implement) is a "
         "lane:contract change (A1/A2, MATURITY-FINDINGS.md).",
-    ("POST", "/bots/{platform}/{native_meeting_id}/speak"):
-        "Voice Agent TTS — a bot-command-channel path (acts.v1 PUBLISH), not meeting-api persistence. "
-        "Deferred with the voice-agent carve; the gateway forwards it.",
 }
 
 

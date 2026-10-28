@@ -112,7 +112,7 @@ export function canTransition(from: BotStatus, to: BotStatus): boolean {
 export type Act =
   | { action: 'leave' }
   | { action: 'reconfigure'; language?: string | null; task?: string | null; allowedLanguages?: string[] }
-  | { action: 'speak'; text: string; voice?: string }
+  | { action: 'speak'; text: string; voice?: string; id?: string }
   | { action: 'speak_audio'; url?: string; audioBase64?: string }
   | { action: 'speak_stop' }
   | { action: 'chat_send'; text: string; id?: string }

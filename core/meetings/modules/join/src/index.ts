@@ -34,6 +34,9 @@ import {
   UiLocaleMismatchError, checkUiLocale, uiLocaleMismatchOf, type UiLocaleReading,
 } from "./shared/ui-locale";
 import { redactMeetingUrl } from "./shared/url-redaction";
+import { googleMicButtonSelectors } from "./googlemeet/selectors";
+import { teamsMicButtonSelectors } from "./msteams/selectors";
+import { jitsiMicButtonSelectors } from "./jitsi/selectors";
 
 export type { BotConfig, Hooks, JoinState };
 export { startDebugView, setHooks };
@@ -210,3 +213,13 @@ export {
 export { joinZoomMeeting, buildZoomWebClientUrl, waitForZoomMeetingAdmission, checkForZoomAdmissionSilent, leaveZoomMeeting, dismissZoomPopups, startZoomRemovalMonitor };
 export { stopZoomIncomingVideo, incomingVideoStep, ZOOM_INCOMING_VIDEO_SELECTORS };
 export { joinJitsiMeeting, buildJitsiMeetingUrl, waitForJitsiMeetingAdmission, checkForJitsiAdmissionSilent, leaveJitsiMeeting, startJitsiRemovalMonitor };
+
+/** The in-meeting microphone control's selectors on `platform` (#1866), for a voice bot that READS
+ *  the mic's state before it clicks it. Zoom has none on purpose: its join leaves a voice bot's mic
+ *  on (Zoom grants audio only then) and the bot does not touch it. */
+export function micButtonSelectors(platform: string): string[] {
+  if (platform === "google_meet") return [...googleMicButtonSelectors];
+  if (platform === "teams") return [...teamsMicButtonSelectors];
+  if (platform === "jitsi") return [...jitsiMicButtonSelectors];
+  return [];
+}

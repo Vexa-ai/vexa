@@ -397,14 +397,20 @@ def create_app(
     #     transcription-language.v1) over the same command bus ---
     from .lifecycle.reconfigure_router import build_reconfigure_router, workspace_roles_from_env
 
-    app.include_router(build_reconfigure_router(
-        meeting_repo, command_publisher, workspace_roles or workspace_roles_from_env()))
+    roles = workspace_roles or workspace_roles_from_env()
+    app.include_router(build_reconfigure_router(meeting_repo, command_publisher, roles))
 
     # --- chat-send: POST /bots/{platform}/{native_meeting_id}/chat → acts.v1 `chat_send` on the same
     #     command bus (lifecycle/chat_router.py) ---
     from .lifecycle.chat_router import build_chat_router
 
     app.include_router(build_chat_router(meeting_repo, command_publisher))
+
+    # --- speak: POST/DELETE /bots/{platform}/{native_meeting_id}/speak → acts.v1 `speak` /
+    #     `speak_stop` on the same command bus (lifecycle/speak_router.py) ---
+    from .lifecycle.speak_router import build_speak_router
+
+    app.include_router(build_speak_router(meeting_repo, command_publisher, roles))
 
     # Resolve the shared recording storage before mounting the collector: completed-meeting erasure
     # uses this same port to delete objects before its transcript/JSONB finalization.

@@ -289,4 +289,16 @@ export const teamsLeaveButtonMatchers: BrowserContextButtonMatcher[] = [
 // `css` field: a Playwright-only `:has-text()` — invalid in that context —
 // would otherwise ship green as a dead selector. `text` fields are raw strings
 // matched against textContent in-page, never parsed as selectors.
-export const browserContextSelectorArrays: string[] = ['teamsLeaveButtonMatchers'];
+export const browserContextSelectorArrays: string[] = ['teamsLeaveButtonMatchers', 'teamsMicButtonSelectors'];
+
+// ---- In-meeting microphone control (#1866: a voice bot reads it before it clicks it) ----
+// The meeting toolbar's mic toggle, labelled by its action ("Mute mic" / "Mute (Ctrl+Shift+M)" while the
+// mic is on, "Unmute mic" / "Unmute (Ctrl+Shift+M)" while it is off). Read in page.evaluate. Current
+// Teams web carries no id on it, so the label is what finds it.
+export const teamsMicButtonSelectors: string[] = [
+  '#microphone-button',
+  'button[data-tid="microphone-button"]',
+  'button[data-tid="toggle-mute"]',
+  'button[aria-label*="mute mic" i]',
+  'button[aria-label*="Ctrl+Shift+M" i]',
+];

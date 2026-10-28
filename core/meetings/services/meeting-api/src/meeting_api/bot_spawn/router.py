@@ -125,6 +125,14 @@ def _resolve_transcribe_enabled(value: Optional[object]) -> bool:
         raise HTTPException(status_code=422, detail=str(e))
 
 
+def _resolve_voice_agent_enabled(value: Optional[object]) -> bool:
+    """POST /bots ``voice_agent_enabled`` (#1866): ``true`` arms the bot's voice; ``false``, ``null``
+    or absent leave it off. Anything else is a 422 — consent is never inferred from a string."""
+    if value is None or isinstance(value, bool):
+        return bool(value)
+    raise HTTPException(status_code=422, detail="voice_agent_enabled must be true or false")
+
+
 def _resolve_automatic_leave(value: Optional[object]) -> dict:
     """Translate the public snake_case timeout names into invocation.v1's camelCase shape.
 
@@ -544,6 +552,7 @@ def build_router(
             )
 
         transcribe_enabled = _resolve_transcribe_enabled(body.get("transcribe_enabled"))
+        voice_agent_enabled = _resolve_voice_agent_enabled(body.get("voice_agent_enabled"))
         if prepared_call is not None:
             # A call's transcription is the room's notice: one source, set when the room was made.
             transcribe_enabled = prepared_call.transcribed
@@ -652,6 +661,7 @@ def build_router(
                     transcription_tier=body.get("transcription_tier", "realtime"),
                     recording_enabled=_resolve_recording_enabled(body.get("recording_enabled")),
                     transcribe_enabled=transcribe_enabled,
+                    voice_agent_enabled=voice_agent_enabled,
                     automatic_leave=_resolve_automatic_leave(body.get("automatic_leave")),
                     # P3c — continue_meeting is accepted off the OPEN api.v1 request body (MeetingCreate
                     # has no additionalProperties:false), so the wire is not rejected; documenting it as

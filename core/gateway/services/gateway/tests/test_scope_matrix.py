@@ -52,6 +52,7 @@ CASES = [
     ("DELETE", "/bots/google_meet/abc-defg-hij", "/bots/{platform}/{native_meeting_id}"),
     ("PUT", "/bots/google_meet/abc-defg-hij/config", "/bots/{platform}/{native_meeting_id}/config"),
     ("POST", "/bots/google_meet/abc-defg-hij/speak", "/bots/{platform}/{native_meeting_id}/speak"),
+    ("DELETE", "/bots/google_meet/abc-defg-hij/speak", "/bots/{platform}/{native_meeting_id}/speak"),
     ("GET", "/bots/google_meet/abc-defg-hij/chat", "/bots/{platform}/{native_meeting_id}/chat"),
     ("POST", "/bots/google_meet/abc-defg-hij/chat", "/bots/{platform}/{native_meeting_id}/chat"),
     ("GET", "/bots/google_meet/abc-defg-hij/chat/0f1e2d3c4b5a69788796a5b4c3d2e1f0",

@@ -25,7 +25,7 @@
   "core/identity/contracts/delegation.v1": "087b102c525ec9775f3515fa2fc7f5a4438445a964387b0440d97e20b090655d",
   "core/identity/contracts/identity.v1": "bf9dc370279d7eca50d48bf5554aa6fdbfe68fe3c7ebca9b27503b3bf6965565",
   "core/identity/contracts/signin.v1": "28540ac861b5a343512f8f87a0b645218fbe64fda9ec8d1677a78718ea24c73d",
-  "core/meetings/contracts/acts.v1": "ce80f76fe0449338312987d4c27b7b3cdf64cead7292a34718174cfc69ea9ef8",
+  "core/meetings/contracts/acts.v1": "90008e456aec912e4b7a9e09c46276c28700080f943465638686b696b2d65b61",
   "core/meetings/contracts/captured-signal.v1": "976b79778e50ae5bbfea2cd968a936df628cce025475aca54587122332b62972",
   "core/meetings/contracts/flagged-issue.v1": "4b868f57298131f8eec8246d86d57251f259927d8bfd7df5a0f6016a10f16211",
   "core/meetings/contracts/invocation.v1": "3de8027722c5ad021fd3db68c573f6f02c0c7ee540154ddf8223b805cce3979f",

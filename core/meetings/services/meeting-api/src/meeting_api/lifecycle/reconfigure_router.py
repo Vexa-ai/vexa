@@ -161,7 +161,8 @@ def build_reconfigure_router(repo, publisher: CommandPublisher, roles: Workspace
 
 
 async def _editable_member_rows(repo, roles: WorkspaceRoles, user_id: int, platform: str,
-                                native_meeting_id: str, x_user_workspaces: Optional[str]) -> list:
+                                native_meeting_id: str, x_user_workspaces: Optional[str],
+                                action: str = "change the transcription language") -> list:
     """The running rows bound to a workspace the caller edits, or [] when there are none to see.
 
     403 when the caller is a member but not an editor of every bound workspace that has one; 503
@@ -189,6 +190,6 @@ async def _editable_member_rows(repo, roles: WorkspaceRoles, user_id: int, platf
             refused_role = role or "none"
     if not editable:
         raise HTTPException(status_code=403, detail=(
-            "only the meeting's owner or an owner or contributor of its workspace can change the "
-            f"transcription language (your role: {refused_role})"))
+            f"only the meeting's owner or an owner or contributor of its workspace can {action} "
+            f"(your role: {refused_role})"))
     return editable

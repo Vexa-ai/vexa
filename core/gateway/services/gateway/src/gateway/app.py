@@ -722,9 +722,10 @@ def create_app(
         # Content-Length from the (already httpx-decoded) body; a stale one would corrupt it.
         # ``mcp-session-id``/``mcp-protocol-version`` join them for the same reason: they are the
         # MCP transport's session binding, and a forward that eats them breaks the handshake.
+        # ``retry-after`` is how a downstream 429 (speak, chat) says when to try again.
         passthrough = {
             k: resp_headers[k]
-            for k in ("content-range", "accept-ranges", "content-disposition") + _MCP_HEADERS
+            for k in ("content-range", "accept-ranges", "content-disposition", "retry-after") + _MCP_HEADERS
             if k in resp_headers
         }
         return Response(
@@ -877,6 +878,11 @@ def create_app(
 
     @app.post("/bots/{platform}/{native_meeting_id}/speak")
     async def speak(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
+
+    # Stop speaking (acts.v1 `speak_stop`): meeting-api resolves the bots and publishes it (#1866).
+    @app.delete("/bots/{platform}/{native_meeting_id}/speak")
+    async def stop_speaking(platform: MeetingPlatform, native_meeting_id: str, request: Request):
         return await _forward_meeting(request)
 
     # P0 (cross-tenant leak fix): the by-ROW-id transcript read the terminal uses to fetch EXACTLY the

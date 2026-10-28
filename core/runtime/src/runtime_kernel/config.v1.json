@@ -485,6 +485,37 @@
       ]
     },
     {
+      "key": "TTS_SERVICE_URL",
+      "class": "defaulted",
+      "default": "(unset — voice-enabled bots stay silent and log `speak failed reason=tts_not_configured`)",
+      "description": "the OpenAI-compatible TTS base URL a bot spawned with voice_agent_enabled: true speaks through (POST /bots/{platform}/{native_meeting_id}/speak): the bot calls {TTS_SERVICE_URL}/v1/audio/speech with response_format \"pcm\" and plays the 24 kHz 16-bit mono PCM answer into the call; forwarded to spawned bots",
+      "targets": [
+        "compose",
+        "lite"
+      ]
+    },
+    {
+      "key": "TTS_API_TOKEN",
+      "class": "defaulted",
+      "secret": true,
+      "default": "(unset — the TTS request carries no credential)",
+      "description": "the TTS endpoint's credential, sent as `Authorization: Bearer` and `X-API-Key`; a deployment credential placed in each spawned bot's environment like the transcription token, never logged and never in the invocation; forwarded to spawned bots",
+      "targets": [
+        "compose",
+        "lite"
+      ]
+    },
+    {
+      "key": "TTS_VOICE",
+      "class": "defaulted",
+      "default": "alloy",
+      "description": "the TTS voice preset a bot uses when a speak request names none (or names \"auto\"); must be a voice the TTS server has; forwarded to spawned bots",
+      "targets": [
+        "compose",
+        "lite"
+      ]
+    },
+    {
       "key": "BOT_STT_CONFIDENCE_FILTER",
       "class": "defaulted",
       "default": "(unset — the always-on low-confidence rule only)",

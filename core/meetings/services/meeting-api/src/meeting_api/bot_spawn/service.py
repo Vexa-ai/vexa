@@ -437,6 +437,8 @@ async def request_bot(
     transcribe_enabled: bool = True,
     automatic_leave: Optional[dict] = None,
     continue_meeting: bool = False,
+    # POST /bots `voice_agent_enabled` (#1866): the bot may speak in the call. Off unless asked for.
+    voice_agent_enabled: bool = False,
     max_concurrent: Optional[int] = None,
     redis_url: Optional[str] = None,
     meeting_api_url: Optional[str] = None,
@@ -798,6 +800,9 @@ async def request_bot(
         # The account this run joins as; None clears a prior run's, so a continued guest run is not
         # mistaken for an account's bot by the restore, the write-back or the signed-out hook.
         reopen_patch["bot_account_id"] = bot_account_id
+        # This run's voice, not a prior run's: None clears it, so a continued unarmed bot is not
+        # taken for one that can speak.
+        reopen_patch["voice_agent_enabled"] = True if voice_agent_enabled else None
         row = await repo.reopen_meeting(meeting_id=reused_row["id"], data_patch=reopen_patch)
     else:
         meeting_data: dict[str, Any] = {}
@@ -820,6 +825,10 @@ async def request_bot(
         # the workspace's from its first row rather than from whenever someone remembered to bind it.
         if workspace_id:
             meeting_data["workspace_id"] = workspace_id
+        # The speak route's consent gate reads this (lifecycle/speak_router.py): written only when
+        # the bot was armed, so an unarmed row carries no field at all.
+        if voice_agent_enabled:
+            meeting_data["voice_agent_enabled"] = True
         if room_principal:
             meeting_data["room_principal"] = {k: str(room_principal.get(k) or "")
                                               for k in ("principal", "principal_workspace")}
@@ -921,6 +930,7 @@ async def request_bot(
         redis_url=redis_url,
         meeting_api_callback_url=f"{meeting_api_url}/bots/internal/callback/lifecycle",
         transcribe_enabled=transcribe_enabled,
+        voice_agent_enabled=True if voice_agent_enabled else None,
         transcription_service_url=transcription_service_url,
         transcription_service_token=transcription_service_token,
         transcription_model=transcription_model,
