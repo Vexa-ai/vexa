@@ -26,7 +26,9 @@ import {
   passRow,
   cardOk,
   renderCard,
+  versionBump,
 } from "./merge-card-gate.mjs";
+import { VERSION_FILES, applyVersion } from "../release/version.mjs";
 import { guardTree } from "./test-tree.mjs";
 
 guardTree();
@@ -750,4 +752,129 @@ test("R2-A1, R2-A2: the comment workflow and the enforcement map say what GitHub
   const map = readFileSync(new URL("../docs/docs/governance/delivery.mdx", import.meta.url), "utf8");
   const row = map.split("\n").find((l) => l.startsWith("| Merge bar — value + diff accepted"));
   assert.match(row, /commit bit/);
+});
+
+// ── RELEASE VERSION BUMP: the value row without a label ─────────────────────────────────────────
+
+// The version files as they stand in this tree (the merge base), and what `set` makes of them.
+const BASE = Object.fromEntries(VERSION_FILES.map((f) => [f, readFileSync(new URL(`../${f}`, import.meta.url), "utf8")]));
+const FROM = JSON.parse(BASE["package.json"]).version;
+const TO = FROM.replace(/(\d+)$/, (n) => String(Number(n) + 1));
+const modified = (...files) => files.map((filename) => ({ filename, status: "modified" }));
+const bumped = (v = TO) => applyVersion(BASE, v);
+
+test("version bump: exactly what `release/version.mjs set` writes, to a higher version → no label needed", () => {
+  const r = versionBump(modified(...VERSION_FILES), BASE, bumped());
+  assert.deepEqual(r, { ok: true, from: FROM, to: TO });
+});
+
+test("version bump: one extra changed line in a version file → not a bump", () => {
+  const head = bumped();
+  head["docs/docs/changelog.mdx"] += "\nOne more line.\n";
+  const r = versionBump(modified(...VERSION_FILES), BASE, head);
+  assert.equal(r.ok, false);
+  assert.match(r.why, /changelog\.mdx differs from what `release\/version\.mjs set/);
+});
+
+test("version bump: one extra file → not a bump", () => {
+  const r = versionBump(modified(...VERSION_FILES, "scripts/merge-card-gate.mjs"), BASE, bumped());
+  assert.equal(r.ok, false);
+  assert.match(r.why, /scripts\/merge-card-gate\.mjs is not a file release\/version\.mjs writes/);
+});
+
+test("version bump: a non-version edit inside package.json → not a bump", () => {
+  const head = bumped();
+  head["package.json"] = head["package.json"].replace(/"private": true/, '"private": false');
+  assert.notEqual(head["package.json"], bumped()["package.json"]);
+  const r = versionBump(modified(...VERSION_FILES), BASE, head);
+  assert.equal(r.ok, false);
+  assert.match(r.why, /package\.json differs/);
+});
+
+test("version bump: a downgrade, or the same version, → not a bump", () => {
+  const down = FROM.replace(/(\d+)$/, (n) => String(Number(n) - 1));
+  const r = versionBump(modified(...VERSION_FILES), BASE, bumped(down));
+  assert.equal(r.ok, false);
+  assert.match(r.why, /is not an upgrade/);
+  const same = versionBump(modified("docs/docs/changelog.mdx"), BASE, { ...BASE });
+  assert.equal(same.ok, false);
+  assert.match(same.why, /is not an upgrade/);
+  const pre = versionBump(modified(...VERSION_FILES), BASE, bumped(`${FROM}-rc.1`));
+  assert.equal(pre.ok, false, "a pre-release of the current version sorts below it");
+});
+
+test("version bump: a surface left behind (a partial bump) → not a bump", () => {
+  const head = bumped();
+  head["docs/docs/configuration.mdx"] = BASE["docs/docs/configuration.mdx"];
+  const r = versionBump(modified(...VERSION_FILES.filter((f) => f !== "docs/docs/configuration.mdx")), BASE, head);
+  assert.equal(r.ok, false);
+  assert.match(r.why, /configuration\.mdx differs/);
+});
+
+test("version bump: an added, removed or renamed file, or one the API could not read → not a bump", () => {
+  const head = bumped();
+  assert.match(versionBump([{ filename: "package.json", status: "added" }], BASE, head).why, /package\.json is added, not modified/);
+  assert.match(versionBump([{ filename: "package.json", status: "renamed" }], BASE, head).why, /renamed/);
+  const unread = { ...head };
+  delete unread["deploy/compose/.env.example"];
+  assert.match(versionBump(modified(...VERSION_FILES), BASE, unread).why, /\.env\.example could not be read/);
+  assert.equal(versionBump([], BASE, head).ok, false);
+});
+
+// A stand-in for the API of one PR whose base and head are given as version-file texts.
+function bumpApi({ head = bumped(), files = modified(...VERSION_FILES), labels = [], valueFsm = "success", comments = [passes(HEAD)] } = {}) {
+  const trees = { base000: BASE, [HEAD]: head };
+  const api = (path) => {
+    let m;
+    if (/\/pulls\/\d+$/.test(path))
+      return { number: 4242, draft: false, user: { login: "maint" }, base: { sha: "tip000" }, head: { sha: HEAD }, labels: labels.map((name) => ({ name })), comments: comments.length };
+    if ((m = path.match(/\/pulls\/\d+\/files\?per_page=100&page=(\d+)$/))) return m[1] === "1" ? files : [];
+    if (path.endsWith(`/compare/tip000...${HEAD}`)) return { merge_base_commit: { sha: "base000" } };
+    if ((m = path.match(/\/contents\/(.+)\?ref=(\w+)$/))) {
+      const text = trees[m[2]]?.[m[1]];
+      if (text === undefined) throw new Error(`404 ${m[1]}@${m[2]}`);
+      return { encoding: "base64", content: Buffer.from(text, "utf8").toString("base64") };
+    }
+    if (/\/commits\/[^/]+\/check-runs/.test(path))
+      return { check_runs: [run({ status: "completed", conclusion: valueFsm })] };
+    if ((m = path.match(/\/collaborators\/([^/]+)\/permission$/))) return { permission: MAINTAINERS.has(m[1]) ? "write" : "read" };
+    if (/\/pulls\/\d+\/reviews/.test(path)) return [];
+    if ((m = path.match(/\/issues\/\d+\/comments\?per_page=100&page=(\d+)$/))) return comments.slice((m[1] - 1) * 100, m[1] * 100);
+    throw new Error(`unexpected API path ${path}`);
+  };
+  return api;
+}
+
+test("card: a version-only bump clears VALUE without the label, and the row says why", async () => {
+  const c = await gate.card(4242, { api: bumpApi(), expectedHead: HEAD, readClosing: () => [] });
+  assert.equal(c.valueOk, true);
+  assert.equal(c.ok, true);
+  assert.equal(c.valueWhy, `value-fsm green + version-only bump ${FROM} → ${TO} (release/version.mjs), no label needed`);
+  assert.match(renderCard(c), /version-only bump .* no label needed/);
+});
+
+test("card: a version-only bump still needs value-fsm green and both passes", async () => {
+  const red = await gate.card(4242, { api: bumpApi({ valueFsm: "failure" }), expectedHead: HEAD, readClosing: () => [] });
+  assert.equal(red.valueOk, false);
+  assert.match(red.valueWhy, /version-only bump .* but value-fsm is failure/);
+  const nopass = await gate.card(4242, { api: bumpApi({ comments: [] }), expectedHead: HEAD, readClosing: () => [] });
+  assert.equal(nopass.valueOk, true);
+  assert.equal(nopass.ok, false);
+  assert.equal(nopass.architecture.ok, false);
+  assert.equal(nopass.security.ok, false);
+});
+
+test("card: anything else falls back to the label, and the row names what broke the bump", async () => {
+  const head = bumped();
+  head["package.json"] = head["package.json"].replace(/"private": true/, '"private": false');
+  const c = await gate.card(4242, { api: bumpApi({ head }), expectedHead: HEAD, readClosing: () => [] });
+  assert.equal(c.valueOk, false);
+  assert.match(c.valueWhy, /missing `state: value-signed`.*not a version-only bump: package\.json differs/);
+  const extra = await gate.card(4242, { api: bumpApi({ files: modified(...VERSION_FILES, "core/x.py") }), expectedHead: HEAD, readClosing: () => [] });
+  assert.equal(extra.valueOk, false);
+  assert.equal(extra.valueWhy, "missing `state: value-signed` (the value sign-off)");
+  // the label still works as before, and with it the bump is never read
+  const labelled = await gate.card(4242, { api: bumpApi({ head, labels: ["state: value-signed"] }), expectedHead: HEAD, readClosing: () => [] });
+  assert.equal(labelled.valueOk, true);
+  assert.equal(labelled.valueWhy, "value-fsm green + value-signed");
 });
