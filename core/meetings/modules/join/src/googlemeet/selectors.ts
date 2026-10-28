@@ -90,6 +90,27 @@ export const googleConsentPromptIndicators: string[] = [
   // gate (it would suppress admission for the entire call).
   '[role="dialog"]:has-text("taking notes")',
   '[role="alertdialog"]:has-text("taking notes")',
+  // Another notetaker in the call (#1727, @manoloalvarez): Meet shows every joiner "Your call
+  // audio and video will be shared with <notetaker>" with Leave / Join now and hands out no media
+  // until it is answered. Dialog-scoped, like "taking notes" above.
+  '[role="dialog"]:has-text("will be shared with")',
+  '[role="alertdialog"]:has-text("will be shared with")',
+];
+
+// The "Join now" inside Meet's JOIN NOTICES: "Gemini is taking notes" (#1251, @jbschooley) and
+// "Your call audio and video will be shared with <notetaker>" (#1727, @manoloalvarez). Both read
+// Leave / Join now, and both tell a joiner that someone else in the call is taking notes; every
+// human participant clicks "Join now" to enter. The founder waived #429 for exactly these notices
+// (28 Oct 2026): the bot clicks "Join now" inside them and NEVER "Leave". Scoped to the dialog's
+// copy so it can't hit the pre-join screen's own "Join now", and so a different prompt (e.g.
+// "take notes for me", which asks to START notes) finds no match and still holds for a human.
+export const googleJoinNoticeJoinNowSelectors: string[] = [
+  '[role="dialog"]:has-text("taking notes") :is(button, [role="button"]):has-text("Join now")',
+  '[role="alertdialog"]:has-text("taking notes") :is(button, [role="button"]):has-text("Join now")',
+  '[role="dialog"]:has-text("Gemini") :is(button, [role="button"]):has-text("Join now")',
+  '[role="alertdialog"]:has-text("Gemini") :is(button, [role="button"]):has-text("Join now")',
+  '[role="dialog"]:has-text("will be shared with") :is(button, [role="button"]):has-text("Join now")',
+  '[role="alertdialog"]:has-text("will be shared with") :is(button, [role="button"]):has-text("Join now")',
 ];
 
 export const googleRejectionIndicators: string[] = [
