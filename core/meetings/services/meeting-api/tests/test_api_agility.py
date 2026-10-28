@@ -683,3 +683,24 @@ def test_list_envelopes_consistent_meetings_key():
     assert "meetings" in c.get("/meetings", headers=HEADERS).json()
     assert "meetings" in c.get("/bots", headers=HEADERS).json()
     assert "recordings" in c.get("/recordings", headers=HEADERS).json()
+
+
+def test_post_bots_overlong_bot_name_is_422():
+    c = _client()
+    r = c.post(
+        "/bots",
+        headers=HEADERS,
+        json={"platform": "google_meet", "native_meeting_id": "abc-defg-hij", "bot_name": "x" * 5000},
+    )
+    assert r.status_code == 422
+    assert "the maximum is 100" in r.json()["detail"]
+
+
+def test_post_bots_bot_name_at_cap_is_accepted():
+    c = _client()
+    r = c.post(
+        "/bots",
+        headers=HEADERS,
+        json={"platform": "google_meet", "native_meeting_id": "abc-defg-hij", "bot_name": "x" * 100},
+    )
+    assert r.status_code == 201
