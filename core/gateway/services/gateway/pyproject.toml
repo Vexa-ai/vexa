@@ -10,10 +10,12 @@ dependencies = [
     # TestClient transport for the unit tests (httpx is also the real DownstreamClient runtime).
     "httpx>=0.27",
     "pydantic>=2",
-    # fastapi-guard — per-IP rate limiting + auto-IP-ban at the edge (edge_guard.py).
-    # Pinned <8.0 so a major bump (which may rename SecurityConfig fields) can't silently
-    # break the gateway on a `uv sync --frozen` image rebuild.
-    "fastapi-guard>=7.2,<8.0",
+    # fastapi-guard: per-IP rate limiting + auto-IP-ban at the edge. edge_guard.py builds the one
+    # SecurityConfig and installs SecurityMiddleware; the /ws connect runs the library's own
+    # guard_websocket (run_multiplex in multiplex.py) against that same config. 8.1.2 is the
+    # floor and declares guard-core>=4.4.0. Pinned <9.0 so a major bump (which may rename
+    # SecurityConfig fields) can't silently break the gateway on a `uv sync --frozen` rebuild.
+    "fastapi-guard>=8.1.2,<9.0",
     # guard-core redacts Authorization, Cookie, X-API-Key and query credentials in the request
     # context it logs for every block; 3.x wrote them verbatim.
     "guard-core>=4.4,<5",

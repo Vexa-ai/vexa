@@ -226,6 +226,16 @@
       ]
     },
     {
+      "key": "GUARD_AUTO_BAN_RATE_LIMIT",
+      "class": "defaulted",
+      "default": "false",
+      "description": "auto-ban IPs that exceed the rate limit (reason: rate_limit_exceeded). One knob governing both the HTTP pipeline and the WS connect primitive; off by default, as in guard-core. Enable only when every caller reaches the gateway with its own client IP (GUARD_TRUSTED_PROXIES set behind a proxy). Requires the ban store (GUARD_ENABLE_REDIS / ip_ban_manager)",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
       "key": "GUARD_AUTO_BAN_THRESHOLD",
       "class": "defaulted",
       "default": "10",
@@ -249,7 +259,7 @@
       "key": "GUARD_IP_WHITELIST",
       "class": "defaulted",
       "default": "",
-      "description": "comma-separated IPs never rate-limited/banned",
+      "description": "allow-list: comma-separated IPs/CIDRs. When non-empty, every other IP is refused (403); listed IPs are exempt from the rate limit",
       "targets": [
         "compose",
         "helm"
@@ -299,6 +309,15 @@
       "class": "defaulted",
       "default": "",
       "description": "block known cloud/hosting provider ranges",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "GUARD_BLOCK_CLOUD_PROVIDERS_STRICT",
+      "class": "defaulted",
+      "default": "false",
+      "description": "opt-in strict validation (case-normalize, reject unrecognized names) for GUARD_BLOCK_CLOUD_PROVIDERS",
       "targets": [
         "compose"
       ]
