@@ -73,6 +73,12 @@ export function sandboxTree() {
     const here = join(root, dir, "node_modules");
     if (existsSync(real) && !existsSync(here)) symlinkSync(real, here);
   }
+  // pnpm picks its store by the project's filesystem. A copy on another one (os.tmpdir() is a tmpfs on
+  // the ubuntu-26.04 runners) looks in that filesystem's own store, which holds none of the linked
+  // packages, so `pnpm licenses list` there fails. Everything run in the copy uses the checkout's store.
+  const modules = join(REPO, "node_modules", ".modules.yaml");
+  const store = existsSync(modules) && /"?storeDir"?:\s*"?([^"\n,]+)"?/.exec(readFileSync(modules, "utf8"))?.[1];
+  if (store && !process.env.pnpm_config_store_dir) process.env.pnpm_config_store_dir = dirname(store.trim());
   git(root, ["init", "-q"]);
   git(root, ["add", "-A"]);
   sandbox = root;
