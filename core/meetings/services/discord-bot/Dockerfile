@@ -13,14 +13,14 @@
 # the sealed invocation.v1 / transcript.v1 / lifecycle.v1 / acts.v1 schemas are loaded BY PATH at
 # import (discord_bot/contracts.py walks up from the module to find `meetings/contracts/...`), so
 # those frozen contract files must be vendored into the image alongside src/.
-FROM python:3.11-slim
+FROM python:3.11-slim@sha256:673719e071ecf27434fd2635bbd8d00f49f4fdd81f243143438a42ced8bedf60
 
 # libopus is needed to DECODE incoming Discord voice (dave_voice/opus_decode.py, via py-cord).
 RUN apt-get update && apt-get install -y --no-install-recommends libopus0 \
     && rm -rf /var/lib/apt/lists/*
 
 # uv via PyPI (ghcr.io is unreachable in this build env) — pinned for deterministic resolves.
-RUN pip install --no-cache-dir uv==0.9.22
+RUN pip install --no-cache-dir uv==0.11.33
 
 ENV UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/opt/venv \

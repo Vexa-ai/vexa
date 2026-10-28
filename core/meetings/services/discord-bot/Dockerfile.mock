@@ -12,9 +12,9 @@
 #
 # Build (REPO ROOT context):
 #   docker build -f core/meetings/services/discord-bot/Dockerfile.mock -t discord-mock-bot:dev .
-FROM python:3.11-slim
+FROM python:3.11-slim@sha256:673719e071ecf27434fd2635bbd8d00f49f4fdd81f243143438a42ced8bedf60
 
-RUN pip install --no-cache-dir uv==0.9.22
+RUN pip install --no-cache-dir uv==0.11.33
 
 ENV UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
@@ -24,12 +24,11 @@ ENV UV_LINK_MODE=copy \
 
 WORKDIR /app
 
-# The mock only needs the REAL adapters' own deps (redis/httpx/jsonschema/referencing) — never
-# dave.py/py-cord/PyNaCl (no real Discord join happens in this image). A minimal local install, so
-# the mock image stays small and builds without the DAVE/opus native deps the real image needs.
+# The same locked environment as the real image (gate:image-licenses: nothing installs beside the
+# lock). dave.py/py-cord ship as wheels; the mock never joins Discord, so it needs no libopus.
+COPY core/meetings/services/discord-bot/pyproject.toml core/meetings/services/discord-bot/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system \
-      "httpx>=0.27,<1" "redis>=5,<6" "jsonschema>=4.21,<5" "referencing>=0.34,<1"
+    uv sync --frozen --no-install-project --no-default-groups
 
 COPY core/meetings/services/discord-bot/src ./src
 
