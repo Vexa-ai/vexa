@@ -601,6 +601,16 @@ async function ownsLink($: any): Promise<boolean> {
   return ownerCache.owner === mySession
 }
 
+// Vexa says this chat already has its panel open on this page (~/.vexa/link/panels.json, fresh).
+export function panelShownHere(panels: unknown, now: number, chat: string, path: string): boolean {
+  const p = panels as { ts?: unknown; panels?: unknown } | null
+  if (!chat || !p || now - Number(p.ts ?? 0) >= PANELS_FRESH_MS || !Array.isArray(p.panels)) return false
+  return p.panels.some((x: any) => x && String(x.chat ?? '') === chat && String(x.path ?? '') === path)
+}
+async function panelOpenHere($: any, path: string): Promise<boolean> {
+  try { return panelShownHere(JSON.parse(String(await $.fs.read(`${await linkDir($)}/panels.json`))), await $.clock.now(), mySession, path) } catch { return false }
+}
+
 // The person used this chat: it is now the most recent (and so, with a panel open or none open
 // anywhere, the one Vexa talks to). A message they send, or «Listen here» on the band.
 async function markUsed($: any): Promise<void> {
@@ -1624,7 +1634,10 @@ type BandView =
 async function bandView($: any): Promise<BandView> {
   const now = await $.clock.now()
   const m = await read($)
-  const open = async () => { if (!(await openInPane($, `${panelOrigin || APP_URL}${panelPath(m)}?surface=claude-panel`))) await submitOnce($, 'Open my Vexa panel.') }
+  const open = async () => {
+    if (await panelOpenHere($, panelPath(m))) return
+    if (!(await openInPane($, `${panelOrigin || APP_URL}${panelPath(m)}?surface=claude-panel`))) await submitOnce($, 'Open my Vexa panel.')
+  }
   const local = await readLocal($)
   if (local.any) return local.hot ? { kind: 'local', line: local.line } : { kind: 'rest', dot: local.isOn ? '●' : '○', now, open }
   if (!usedVexaHere && !isLive(m) && !linkActive) return { kind: 'none' }
@@ -1708,8 +1721,8 @@ async function runVexa($: any): Promise<string> {
   await connect($)
   if (!canCallVexa()) return vexaSignIn($)
   const m = await read($)
-  let panel = false
-  try {
+  let panel = await panelOpenHere($, panelPath(m))
+  if (!panel) try {
     const r = await call($, 'panel_link', { next: withChat(`${panelPath(m)}?surface=claude-panel`, mySession) })
     panel = Boolean(r?.url) && await openInPane($, String(r.url))
   } catch (err) { return `Vexa: the panel did not open (${message(err)}). Sign this chat in to Vexa: /vexa signin` }

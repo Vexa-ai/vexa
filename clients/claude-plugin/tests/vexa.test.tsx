@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { AFTER_CALL_PAGE, afterCallAsk, inThisCallAsk, inThisCallDue, inThisCallKnobs, inThisCallTiming, bandState, fromPerson, heardLine, pickOwner, runsListener, withChat, FOLLOW_UP_CONTEXT, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, PERSON_CONTEXT, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
+import { AFTER_CALL_PAGE, afterCallAsk, inThisCallAsk, inThisCallDue, inThisCallKnobs, inThisCallTiming, bandState, fromPerson, heardLine, panelShownHere, pickOwner, runsListener, withChat, FOLLOW_UP_CONTEXT, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, PERSON_CONTEXT, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
 
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 
@@ -332,6 +332,17 @@ test('which chat Vexa talks to: the most recently used one among those with the 
   expect(withChat('/panel?surface=claude-panel', 's-1')).toBe('/panel?surface=claude-panel&chat=s-1')
   expect(withChat('/panel', 's-1')).toBe('/panel?chat=s-1')
   expect(withChat('/panel?chat=x', 's-1')).toBe('/panel?chat=x')
+})
+
+test('a panel Vexa says is open in this chat on this page is not opened again', () => {
+  const path = '/panel/meeting/google_meet/qkd-cxvb-jgj'
+  const panels = { ts: 1000, panels: [{ chat: 'eb1c', path }] }
+  expect(panelShownHere(panels, 2000, 'eb1c', path)).toBe(true)
+  expect(panelShownHere(panels, 2000, 'eb1c', '/panel')).toBe(false)
+  expect(panelShownHere(panels, 2000, 'other', path)).toBe(false)
+  expect(panelShownHere(panels, 1000 + 90_000, 'eb1c', path)).toBe(false)
+  expect(panelShownHere(null, 2000, 'eb1c', path)).toBe(false)
+  expect(panelShownHere(panels, 2000, '', path)).toBe(false)
 })
 
 
