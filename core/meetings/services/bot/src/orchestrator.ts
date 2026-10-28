@@ -27,6 +27,7 @@ import { buildJoinEvidence } from './join-evidence.js';
 import { redactUrlsIn } from '@vexa/join/url-redaction';
 import type {
   JoinDriver,
+  JoinReport,
   JoinOutcome,
   JoinResult,
   JoinSignals,
@@ -182,6 +183,9 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
   const recordingKey = `${inv.platform}/${inv.nativeMeetingId ?? inv.connectionId ?? 'session'}`;
 
   let cur: BotStatus = 'joining';
+  // Whether this run ever REPORTED the waiting room. `cur` cannot answer it once an escalation
+  // happened: `needs_help` is reachable from `joining` too (a consent gate in front of the lobby).
+  let lobbyReported = false;
   const eventTime = (): string => deps.now?.() ?? new Date().toISOString();
 
   const emit = async (status: BotStatus, extra: Partial<LifecycleEvent> = {}): Promise<void> => {
@@ -189,6 +193,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
       throw new Error(`lifecycle.v1: illegal transition ${cur} → ${status}`);
     }
     cur = status;
+    if (status === 'awaiting_admission') lobbyReported = true;
     // A terminal event is the LAST thing anyone hears from this bot — if the meeting was degraded,
     // it says so here or the reason dies with the container. A reporter fault must never change the
     // exit path (P18: report, but never at the cost of the report itself).
@@ -289,8 +294,9 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     // when the driver fire-and-forgets, and SURFACE a contract-illegal transition (log) rather
     // than silently dropping it.
     let reportChain: Promise<void> = Promise.resolve();
-    const report = (s: BotStatus): Promise<void> => {
-      reportChain = reportChain.then(() => emit(s)).catch((e) => {
+    const report: JoinReport = (s, detail) => {
+      const extra: Partial<LifecycleEvent> = detail?.reason ? { reason: detail.reason } : {};
+      reportChain = reportChain.then(() => emit(s, extra)).catch((e) => {
         console.error(`[bot] lifecycle report '${s}' rejected: ${String(e)}`);
       });
       return reportChain;
@@ -323,7 +329,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
           deps.join.withdraw('stopped').catch(() => { /* best-effort */ }),
           new Promise<void>((resolve) => setTimeout(resolve, 8000)),
         ]);
-        const stage = cur === 'awaiting_admission' ? 'awaiting_admission' : 'joining';
+        const stage = lobbyReported ? 'awaiting_admission' : 'joining';
         const abortDetail = 'stopped while awaiting admission (withdrew the join request)';
         await emit('failed', {
           failure_stage: stage, completion_reason: 'stopped',
@@ -366,7 +372,8 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
       // control plane re-derives it server-side anyway (FM-003), so a truthful payload simply stops
       // the two from disagreeing — and it is the field the taxonomy reads to tell a lobby expiry
       // from a bot that never got there, the exact conflation #1058 measured.
-      const stage = cur === 'awaiting_admission' || cur === 'needs_help' ? 'awaiting_admission' : 'joining';
+      // `needs_help` alone is not a lobby: a pre-lobby consent gate escalates from `joining`.
+      const stage = lobbyReported ? 'awaiting_admission' : 'joining';
       await emit('failed', {
         failure_stage: stage, completion_reason: reason, reason: reasonText, exit_code: 1,
         ...joinEvidenceFor(outcome, stage, joinSignals, reasonText),

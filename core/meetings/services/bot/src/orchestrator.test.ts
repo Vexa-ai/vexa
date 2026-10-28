@@ -524,6 +524,64 @@ async function main(): Promise<void> {
     check('gate reachable: secondary channel NEVER probed (fast path, zero added latency)', secondaryProbed === 0, `probed=${secondaryProbed}`);
   }
 
+  // ── pre-lobby escalation (Meet "Gemini is taking notes"): joining → needs_help(consent_required) → failed ──
+  // Prod, 24 h to 28 Oct 2026: 9 of 41 Google Meet failures sat in `joining` ~15 min and failed without
+  // ever reporting `awaiting_admission` — the join layer's `consent_required` escalation was thrown away
+  // as an illegal `joining → needs_help`. The escalation must reach the control plane WITH its reason,
+  // and the terminal must still say the bot never got past `joining` (ours, not a host who didn't admit).
+  {
+    check('contract: joining → needs_help is legal', canTransition('joining', 'needs_help'));
+    check('contract: needs_help → awaiting_admission stays illegal (unchanged)', !canTransition('needs_help', 'awaiting_admission'));
+    const lc = recordingSink();
+    const consentGate: JoinDriver = {
+      async join(report) {
+        await report('needs_help', { reason: 'consent_required' });
+        return {
+          outcome: 'error',
+          reason: 'Bot failed to join the Google Meet meeting — no meeting indicators found within timeout',
+          signals: { reachedLobby: false, totalMs: 900_000, detail: 'no meeting indicators found within timeout' },
+        };
+      },
+      onRemoval() { return () => { /* */ }; },
+      async leave() { /* */ },
+      async withdraw() { /* */ },
+    };
+    const o = createOrchestrator(inv(), { lifecycle: lc, join: consentGate, pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness() });
+    const res = await o.run();
+    check('consent gate: sequence joining→needs_help→failed',
+      JSON.stringify(seq(lc.events)) === JSON.stringify(['joining', 'needs_help', 'failed']), JSON.stringify(seq(lc.events)));
+    check('consent gate: every transition legal', allLegal(seq(lc.events)));
+    check('consent gate: every event conforms to lifecycle.v1', allConform(lc.events), ajv.errorsText(validateLifecycle.errors));
+    check('consent gate: needs_help carries reason=consent_required', lc.events[1]?.reason === 'consent_required', JSON.stringify(lc.events[1]));
+    const term = last(lc.events);
+    check('consent gate: failed with exit 1', res.status === 'failed' && res.exitCode === 1, JSON.stringify(res));
+    check('consent gate: failure_stage=joining (never reported the lobby)', term.failure_stage === 'joining', String(term.failure_stage));
+    check('consent gate: join_evidence stage=joining', term.join_evidence?.stage === 'joining', JSON.stringify(term.join_evidence));
+    check('consent gate: join_evidence is not a host outcome',
+      term.join_evidence?.reason === 'never_reached_lobby' && term.join_evidence?.attribution === 'system_fault',
+      JSON.stringify(term.join_evidence));
+  }
+
+  // ── lobby escalation keeps its lobby: awaiting_admission → needs_help → (timeout) failed ──
+  {
+    const lc = recordingSink();
+    const lobbyThenHelp: JoinDriver = {
+      async join(report) {
+        await report('awaiting_admission');
+        await report('needs_help', { reason: 'waiting_room_timeout_approaching' });
+        return { outcome: 'timeout', reason: 'Bot is still in the Google Meet waiting room after timeout', signals: { reachedLobby: true } };
+      },
+      onRemoval() { return () => { /* */ }; },
+      async leave() { /* */ },
+      async withdraw() { /* */ },
+    };
+    const o = createOrchestrator(inv(), { lifecycle: lc, join: lobbyThenHelp, pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness() });
+    await o.run();
+    check('lobby escalation: sequence joining→awaiting_admission→needs_help→failed',
+      JSON.stringify(seq(lc.events)) === JSON.stringify(['joining', 'awaiting_admission', 'needs_help', 'failed']), JSON.stringify(seq(lc.events)));
+    check('lobby escalation: failure_stage=awaiting_admission', last(lc.events).failure_stage === 'awaiting_admission', String(last(lc.events).failure_stage));
+  }
+
   // ── #865: missing required port fails loud with the port name (not a TypeError on .onAlone) ──
   {
     let threw: unknown;
