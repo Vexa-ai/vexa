@@ -31,6 +31,7 @@ from typing import Callable, Optional
 
 from shared.atomic_json import write_json_atomic
 from shared.git_redaction import redact
+from control_plane.path_confine import within
 from control_plane.repo_ref import assert_not_credential, assert_public_host, valid_ref
 from shared.git_egress import GitEgressRefused
 from shared.gitenv import git_transport
@@ -122,11 +123,7 @@ def _slot(store: Path, slug: Optional[str]) -> Path:
     s = (slug or "").strip()
     if not wpaths.is_workspace_name(s, tier=False):
         raise KeyError(s)
-    try:
-        wpaths.resolve_inside(store, s)
-    except wpaths.PathRefused:
-        raise KeyError(s) from None
-    return store / s
+    return within(store, s, KeyError(s))
 
 
 def _slug_dir(root: Path, subject: str, state: dict, slug: str) -> Path:
@@ -221,16 +218,14 @@ def _git_clone(repo_url: str, ref: str, dest: Path, token: Optional[str] = None,
 def _safe_subject_dir(root: Path, subject: str) -> Path:
     if not subject or "/" in subject or "\\" in subject:   # one name, never a path
         raise ValueError("invalid subject")
-    ws = (root / subject).resolve()
-    if ws != root.resolve() and root.resolve() not in ws.parents:
-        raise ValueError("invalid subject")
+    ws = within(root, subject, ValueError("invalid subject"))
     if subject.startswith("."):  # reserved namespace (the store lives at a dotname)
         raise ValueError("invalid subject")
     return ws
 
 
 def _store(root: Path, subject: str) -> Path:
-    return root / STORE_DIRNAME / subject
+    return within(Path(root) / STORE_DIRNAME, subject, ValueError("invalid subject"))
 
 
 def _load_state(store: Path) -> dict:
@@ -389,7 +384,7 @@ def swap_workspace(
             wpaths.remove_tree(staged)
         _reseed(staged)
     elif repo_url:                     # first attach of this repo → clone it fresh
-        staged = store / f".staging-{target_slug}"
+        staged = within(store, f".staging-{target_slug}", KeyError(target_slug))
         if staged.exists():
             wpaths.remove_tree(staged)
         cloned = _build_attached(staged, repo_url, ref, token, clone)  # may raise CloneError (safe)
@@ -492,14 +487,15 @@ def create_shared_workspace_dir(root: str | Path, name: str) -> str:
     rootp = Path(root)
     base = _slugify_name(name)
     wid = f"{base}-{secrets.token_hex(3)}"
-    while (rootp / wid).exists():
+    while within(rootp, wid, ValueError(wid)).exists():
         wid = f"{base}-{secrets.token_hex(3)}"
-    staged = rootp / f".staging-shared-{wid}"
+    dest = within(rootp, wid, ValueError(wid))
+    staged = within(rootp, f".staging-shared-{wid}", ValueError(wid))
     if staged.exists():
         wpaths.remove_tree(staged)
     _reseed(staged)  # git init + seed the layout template
-    (rootp / wid).parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(staged), str(rootp / wid))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(staged), str(dest))
     return wid
 
 
@@ -580,7 +576,7 @@ def ensure_workspace_shareable(root: str | Path, subject: str, slug: str) -> tup
     if slug in membership.RESERVED_SLUGS:
         raise ValueError(f"'{slug}' is a system workspace and can't be shared")
     # already a top-level shared workspace the caller is a member of → nothing to do
-    if (rootp / slug).exists() and membership.is_member(rootp, slug, subject) is not None:
+    if within(rootp, slug, KeyError(slug)).exists() and membership.is_member(rootp, slug, subject) is not None:
         return slug, False
 
     # ONLY A SLOT THIS STORE RECORDS. Anything else that happens to sit in the subject's store (a
@@ -593,9 +589,10 @@ def ensure_workspace_shareable(root: str | Path, subject: str, slug: str) -> tup
 
     base = _slugify_name((state["slots"].get(slug, {}).get("name") or slug))
     new_id = f"{base}-{secrets.token_hex(3)}"
-    while (rootp / new_id).exists():
+    while within(rootp, new_id, KeyError(slug)).exists():
         new_id = f"{base}-{secrets.token_hex(3)}"
-    shutil.move(str(src), str(rootp / new_id))  # re-home the tree top-level (git history intact)
+    dest = within(rootp, new_id, KeyError(slug))
+    shutil.move(str(src), str(dest))  # re-home the tree top-level (git history intact)
 
     # drop the now-migrated private slot from the subject's state — it re-enters as a shared MEMBERSHIP.
     state["slots"].pop(slug, None)
@@ -641,8 +638,8 @@ def delete_workspace(root: str | Path, subject: str, slug: str) -> None:
         raise ValueError("the baseline workspace can't be deleted")
     if slug not in state["slots"]:
         raise KeyError(slug)
-    slot_dir = _slot(store, slug).resolve()
-    if store.resolve() in slot_dir.parents and slot_dir.exists():  # only ever a slot under this subject's store
+    slot_dir = _slot(store, slug)
+    if slot_dir.exists():  # only ever a slot under this subject's store
         wpaths.remove_tree(slot_dir, ignore_errors=True)
     state["slots"].pop(slug, None)
     state["active_set"] = [s for s in state.get("active_set", []) if s != slug]
@@ -662,15 +659,19 @@ def delete_shared_workspace(root: str | Path, subject: str, workspace_id: str) -
     if (not wpaths.is_workspace_name(workspace_id or "", tier=False)
             or workspace_id in membership.RESERVED_SLUGS):
         raise KeyError(workspace_id)
-    if (workspace_id == subject or (rootp / STORE_DIRNAME / workspace_id).is_dir()
-            or (rootp / ".system" / workspace_id).is_dir()):
+    refused = KeyError(workspace_id)
+    if (workspace_id == subject or within(rootp / STORE_DIRNAME, workspace_id, refused).is_dir()
+            or within(rootp / ".system", workspace_id, refused).is_dir()):
         raise KeyError(workspace_id)
-    ws = (rootp / workspace_id).resolve()
-    if not ws.is_dir() or rootp not in ws.parents:
+    ws = within(rootp, workspace_id, KeyError(workspace_id))
+    if not ws.is_dir():
         raise KeyError(workspace_id)
     wpaths.remove_tree(ws)
-    parked = (rootp / SHARED_STORE_DIRNAME / workspace_id)
-    if parked.is_dir() and rootp in parked.resolve().parents:
+    try:
+        parked = within(rootp / SHARED_STORE_DIRNAME, workspace_id, KeyError(workspace_id))
+    except KeyError:
+        return
+    if parked.is_dir():
         wpaths.remove_tree(parked, ignore_errors=True)
 
 
@@ -685,16 +686,17 @@ def ensure_workspace_private(root: str | Path, subject: str, workspace_id: str) 
         raise KeyError(workspace_id)
     # A DESK IS NEVER UN-SHARED. A subject's own `<root>/<subject>` is their baseline, whatever a
     # member list inside it says: a subject is known by its private store or its system tier.
-    if (workspace_id == subject or (rootp / STORE_DIRNAME / workspace_id).is_dir()
-            or (rootp / ".system" / workspace_id).is_dir()):
+    refused = KeyError(workspace_id)
+    if (workspace_id == subject or within(rootp / STORE_DIRNAME, workspace_id, refused).is_dir()
+            or within(rootp / ".system", workspace_id, refused).is_dir()):
         raise KeyError(workspace_id)
-    ws = (rootp / workspace_id).resolve()
-    if not ws.exists() or rootp not in ws.parents:
+    ws = within(rootp, workspace_id, KeyError(workspace_id))
+    if not ws.exists():
         raise KeyError(workspace_id)
     store = _store(rootp, subject)
     state = _load_state(store)
     new_slug = _unique_new_slug(state)
-    slot_dir = store / new_slug
+    slot_dir = _slot(store, new_slug)
     slot_dir.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(ws), str(slot_dir))  # re-home the tree into the private .attached store
     from control_plane import workspace_membership as membership
@@ -857,7 +859,7 @@ def activate_workspace(
     cloned = False
     if not slot_dir.exists():
         if repo_url:
-            staged = store / f".staging-{target_slug}"
+            staged = within(store, f".staging-{target_slug}", KeyError(target_slug))
             if staged.exists():
                 wpaths.remove_tree(staged)
             cloned = _build_attached(staged, repo_url, ref, token, clone)  # may raise CloneError (safe)
@@ -969,11 +971,11 @@ def create_workspace(
         target_slug = chosen
     else:
         target_slug = _named_new_slug(state, subject, name or "") or _unique_new_slug(state)
-    slot_dir = store / target_slug
+    slot_dir = _slot(store, target_slug)
 
     # Materialize OUT OF PLACE, then move into the slot — a seeding failure leaves the active set untouched
     # (mirrors activate's phase discipline). The seed primitive git-inits + commits the fresh tree.
-    staged = store / f".staging-{target_slug}"
+    staged = within(store, f".staging-{target_slug}", KeyError(target_slug))
     if staged.exists():
         wpaths.remove_tree(staged)
     _reseed(staged)
@@ -1424,7 +1426,8 @@ _POLICY_ALLOW = (POLICY_DIRNAME,)
 def shared_store(root: str | Path, workspace_id: str) -> Path:
     """Where a shared workspace's parked trees live. Dot-prefixed at the top level, so it is invisible
     to ``scan_workspace_subjects``, the Workspace tree and the membership listing alike."""
-    return Path(root) / SHARED_STORE_DIRNAME / _safe_workspace_id(workspace_id)
+    return within(Path(root) / SHARED_STORE_DIRNAME, _safe_workspace_id(workspace_id),
+                  ValueError("invalid workspace id"))
 
 
 def _safe_workspace_id(workspace_id: str) -> str:
@@ -1436,11 +1439,7 @@ def _safe_workspace_id(workspace_id: str) -> str:
 
 def _shared_dir(root: Path, workspace_id: str) -> Path:
     """``<root>/<workspace_id>``, traversal-guarded (mirrors ``workspace_membership._ws_dir``)."""
-    rootp = Path(root).resolve()
-    ws = (rootp / _safe_workspace_id(workspace_id)).resolve()
-    if ws == rootp or rootp not in ws.parents:
-        raise ValueError("invalid workspace id")
-    return ws
+    return within(root, _safe_workspace_id(workspace_id), ValueError("invalid workspace id"))
 
 
 def _plain_state(store: Path) -> dict:
@@ -1562,7 +1561,7 @@ def attach_repo_at(
             wpaths.remove_tree(staged)
         _reseed(staged)
     elif repo_url:
-        staged = store / f".staging-{target_slug}"
+        staged = within(store, f".staging-{target_slug}", KeyError(target_slug))
         if staged.exists():
             wpaths.remove_tree(staged)
         cloned = _build_attached(staged, repo_url, ref, token, clone)  # may raise CloneError

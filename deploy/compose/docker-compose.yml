@@ -2155,7 +2155,7 @@ services:
     profiles: ["llm-shim"]
     # PINNED, deliberately: this is a third-party compatibility surface we vouch for, and both
     # dialects move. Bump it on purpose, never implicitly.
-    image: ${LLM_SHIM_IMAGE:-litellm/litellm:v1.97.2@sha256:200baef4b77d3f15cabab3d3202f8fe993ae695e1c0f3ef1f5c9592f91239df8}
+    image: ${LLM_SHIM_IMAGE:-litellm/litellm:v1.103.9@sha256:e5173d12ab1bbfaac623a499716d69a7a134f4732fa0faa527ee07861468f22f}
     networks: [vexa, workers]     # MUST match the stack: workers resolve it on `workers`
     ports:
       - "127.0.0.1:${LLM_SHIM_PORT:-14000}:4000"
@@ -2242,8 +2242,8 @@ services:
   # Docs: docs/docs/minutes/calls.mdx. Lite does not carry calls.
   livekit:
     profiles: ["calls"]
-    # PINNED BY DIGEST (= livekit/livekit-server:v1.13.7). Bump it on purpose, never implicitly.
-    image: ${LIVEKIT_IMAGE:-livekit/livekit-server:v1.13.7@sha256:6fd3b7088874c4d119160dd688798dfec852bc014786d392caad15f6f63912a3}
+    # PINNED BY DIGEST (= livekit/livekit-server:v1.13.11). Bump it on purpose, never implicitly.
+    image: ${LIVEKIT_IMAGE:-livekit/livekit-server:v1.13.11@sha256:25cd902de7cacbd5f1f779f6a6ac1eae20ba8f56b0935934ce6b0ab80d1e3d20}
     networks: [vexa, bots]
     ports:
       - "${LIVEKIT_SIGNAL_BIND:-127.0.0.1}:${LIVEKIT_SIGNAL_PORT:-7880}:7880"

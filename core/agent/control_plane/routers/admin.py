@@ -254,7 +254,8 @@ def build(**d) -> APIRouter:
                 cfg = mc.resolve(subject) or {}
             except Exception as exc:  # resolver down → still test the env floor, but SAY so
                 out = _ct.run_models_test({})
-                out["summary"] += f" (settings resolver unavailable: {exc} — tested env defaults)"
+                out["summary"] += (f" (settings resolver unavailable: {type(exc).__name__}"
+                                   " — tested env defaults)")
                 return out
         return _ct.run_models_test(cfg)
     @router.get("/api/transcription/test")

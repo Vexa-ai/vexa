@@ -110,8 +110,9 @@ def model_error_event(message: object, *, model: str | None, stage: str) -> dict
 def _mismatch(tok: str, host: str, *, key_var: str, url_var: str) -> str | None:
     """The known-bad prefix/host combinations. Conservative by design: only fires on a pair that
     WILL 401, never nags on a legitimate custom gateway."""
-    is_openrouter_host = "openrouter.ai" in host
-    is_anthropic_host = "api.anthropic.com" in host
+    name = host.rsplit("@", 1)[-1].split(":", 1)[0].rstrip(".")   # netloc → bare host name
+    is_openrouter_host = name == "openrouter.ai" or name.endswith(".openrouter.ai")
+    is_anthropic_host = name == "api.anthropic.com"
     if tok.startswith("sk-or-") and is_anthropic_host:
         return (
             f"PROVIDER MISMATCH: {key_var} looks like an OpenRouter key (sk-or-…) but "

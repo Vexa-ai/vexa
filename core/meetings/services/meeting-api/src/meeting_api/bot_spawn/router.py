@@ -60,6 +60,11 @@ from .service import (
 #: 422 here rather than an asyncpg truncation 500 deep in the spawn path (#843).
 NATIVE_MEETING_ID_MAX_LEN = 255
 
+#: Max length of a requested bot display name. A meeting UI shows a few dozen characters; an
+#: unbounded name used to ride the whole spawn path into the runtime (a 12 MB name failed there
+#: with a 502 and left a created container behind; a 5,000-char one spawned a bot).
+BOT_NAME_MAX_LEN = 100
+
 #: The words that keep a bot's meeting private to the caller, whatever workspace their chat works in.
 PRIVATE_WORKSPACE_WORDS = frozenset({"personal", "desk"})
 
@@ -578,6 +583,17 @@ def build_router(
         # decision, bot name), and the deployment default underneath that. A FAILED LOOKUP NEVER
         # STOPS THE SPAWN: a name is a nicety, joining the call is the product.
         bot_name = body.get("bot_name")
+        if bot_name is not None:
+            if not isinstance(bot_name, str):
+                raise HTTPException(status_code=422, detail="bot_name must be a string")
+            if len(bot_name) > BOT_NAME_MAX_LEN:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"bot_name is {len(bot_name)} characters; "
+                        f"the maximum is {BOT_NAME_MAX_LEN}"
+                    ),
+                )
 
         # WHICH WORKSPACE THIS MEETING BELONGS TO. Optional and additive: a caller that sends nothing
         # gets exactly the meeting it got before — its own, visible to itself alone.

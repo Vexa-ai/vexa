@@ -49,6 +49,7 @@ const {
   checkForGoogleAdmissionIndicators,
   hasConsentPrompt,
   waitForGoogleMeetingAdmission,
+  checkForGoogleKnockExpired,
 } = admission;
 const GRACE_MS: number = (admission as any).CAPTCHA_SOLVE_GRACE_MS ?? 120_000;
 
@@ -70,7 +71,7 @@ const GRACE_MS: number = (admission as any).CAPTCHA_SOLVE_GRACE_MS ?? 120_000;
 type CaptchaMode = false | 'invisible' | 'live';
 const RECAPTCHA_IFRAME = 'iframe[src*="recaptcha"]';
 
-function mockPage(visible: string[], captcha: CaptchaMode = false, participantLabels: string[] = []): any {
+function mockPage(visible: string[], captcha: CaptchaMode = false, participantLabels: string[] = [], url = 'https://meet.google.com/abc-defg-hij'): any {
   const captchaIframes: { visible: boolean; box: { x: number; y: number; width: number; height: number } | null }[] =
     captcha === 'live' ? [{ visible: true, box: { x: 300, y: 120, width: 400, height: 580 } }]
       : captcha === 'invisible' ? [{ visible: false, box: null }]
@@ -97,7 +98,7 @@ function mockPage(visible: string[], captcha: CaptchaMode = false, participantLa
         evaluateAll: async () => participantLabels,
       },
     mouse: { move: async () => {} },
-    url: () => 'https://meet.google.com/abc-defg-hij',
+    url: () => url,
     screenshot: async () => {},
     waitForTimeout: async (_ms: number) => {},
     frames: () => (captcha
@@ -321,6 +322,37 @@ async function outcomeOf(run: Promise<unknown>, watchdogMs = 10_000): Promise<st
   await check(
     'participant tiles, no consent prompt → admitted (control)',
     await checkForGoogleAdmissionIndicators(mockPage([], false, ['John Doe'])),
+    true,
+  );
+
+  console.log('\n=== Meet ended the knock unanswered ("No one responded", lobby test 27 Oct 2026) ===');
+
+  // 12. About 10 min into an unanswered knock Meet replaces the lobby with "No one responded to
+  //     your request to join the call" (plus a "Return to home screen" button), then redirects
+  //     to workspace.google.com. Pre-fix neither matched anything: the wait ran to its 900 s
+  //     budget and threw join_failure "no meeting indicators found", which join-evidence
+  //     attributes to us (system_fault). It is the host not answering: lobby_timeout.
+  {
+    resetEscalation();
+    const page = mockPage(['text=No one responded to your request to join', 'button:has-text("Return to home screen")']);
+    const got = await outcomeOf(waitForGoogleMeetingAdmission(page, 20_000, {} as any));
+    check('"No one responded" screen → AdmissionError(\'lobby_timeout\')', got === 'AdmissionError:lobby_timeout', true, got);
+  }
+  {
+    resetEscalation();
+    const page = mockPage([], false, [], 'https://workspace.google.com/products/meet/');
+    const got = await outcomeOf(waitForGoogleMeetingAdmission(page, 20_000, {} as any));
+    check('redirected to workspace.google.com → AdmissionError(\'lobby_timeout\')', got === 'AdmissionError:lobby_timeout', true, got);
+  }
+  // Controls: a sign-in redirect and a normal lobby are NOT an expired knock.
+  await check(
+    'accounts.google.com page → not an expired knock (control)',
+    (await checkForGoogleKnockExpired(mockPage([], false, [], 'https://accounts.google.com/signin'))) === null,
+    true,
+  );
+  await check(
+    'normal lobby ("Asking to be let in" + "Return to home screen") → not an expired knock (control)',
+    (await checkForGoogleKnockExpired(mockPage(['text=Asking to be let in', 'button:has-text("Return to home screen")']))) === null,
     true,
   );
 

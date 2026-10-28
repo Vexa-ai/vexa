@@ -37,6 +37,7 @@ import httpx  # the downstream adapter's transport errors are mapped to 502/504 
 from fastapi import FastAPI, Path, Request, Response, WebSocket
 
 from . import identity_token, routes_manifest
+from .body_limit import BodyLimitMiddleware
 from .agent_admission import AgentAllow, refused_response as _agent_tier_refused
 from . import taint as taint_mod
 from .delegation import (McpReentry, delegated_route_response, is_delegated, reentry_unlisted_response,
@@ -375,6 +376,8 @@ def create_app(
     app = FastAPI(title="Vexa API Gateway (v0.12)")
     # The edge: mint/read X-Trace-Id and bind it for the request (logevent.v1 trace_id).
     app.add_middleware(TraceMiddleware)
+    # Refuse an over-size body (413) before any route reads it (`body_limit.py`).
+    app.add_middleware(BodyLimitMiddleware)
 
     # --- liveness probe (gate:health): the edge is up. No auth (mirrors a real LB health
     # check), no downstream call. 200 + {status:"ok", service:"gateway"} = process is up.

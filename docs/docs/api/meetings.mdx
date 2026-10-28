@@ -324,7 +324,7 @@ request/response schemas, compatibility endpoints, error statuses, and metadata 
 <ParamField body="platform" type="string" required>`google_meet` · `zoom` · `teams` · `jitsi` · `voice_note` · `vexa_call` (see [Platforms](#platforms)).</ParamField>
 <ParamField body="native_meeting_id" type="string">The meeting id from the join URL (e.g. `abc-defg-hij`). Required for `google_meet` and `teams` unless `meeting_url` is sent. Optional for `voice_note`: omitted, a `vn-…` id is minted and returned. Refused with `422` for `vexa_call`, whose id is always minted.</ParamField>
 <ParamField body="meeting_url" type="string">The full join link. Required for `zoom` and `jitsi`. Refused with `422` for `voice_note` and `vexa_call`.</ParamField>
-<ParamField body="bot_name" type="string">Display name the bot uses in the call. Defaults to `Vexa`.</ParamField>
+<ParamField body="bot_name" type="string">Display name the bot uses in the call, at most 100 characters (longer is a `422`). Defaults to `Vexa`.</ParamField>
 <ParamField body="language" type="string">Language code (e.g. `de`). **Set** = every STT call is pinned
 to this code and every segment carries it. `"auto"` = each window's language is detected independently,
 overriding the person's and the deployment's default. **Omitted** = the person's default (Settings), then

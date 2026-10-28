@@ -225,6 +225,22 @@ check(
   attributeJoinFailure('awaiting_admission_timeout', 'host did not admit within the waiting-room timeout') === 'host_action',
 );
 check(
+  'Meet ending an unanswered knock ("No one responded") stays with the host, not our selectors',
+  attributeJoinFailure('awaiting_admission_timeout', 'Google Meet ended the join request, nobody admitted the bot: Meet showed "No one responded to your request to join the call"') === 'host_action'
+    && attributeJoinFailure('awaiting_admission_timeout', 'Google Meet ended the join request, nobody admitted the bot: redirected off Google Meet to workspace.google.com') === 'host_action',
+);
+check(
+  'Meet ending the knock at ~10 min against a 15 min budget is a timeout, not a rejection',
+  classifyJoinFailure('timeout', {
+    reachedLobby: true, timeInLobbyMs: 602_000, lobbyBudgetMs: 900_000,
+    detail: 'Google Meet ended the join request, nobody admitted the bot: Meet showed "No one responded to your request to join the call"',
+  }) === 'awaiting_admission_timeout',
+);
+check(
+  'control: the same early exit WITHOUT that evidence still reads as the platform refusing (#1058)',
+  classifyJoinFailure('timeout', { reachedLobby: true, timeInLobbyMs: 602_000, lobbyBudgetMs: 900_000 }) === 'awaiting_admission_rejected',
+);
+check(
   'the override is scoped: the same admission-flow words do not move a REJECTION',
   attributeJoinFailure('awaiting_admission_rejected', 'no meeting indicators found') === 'host_action',
 );

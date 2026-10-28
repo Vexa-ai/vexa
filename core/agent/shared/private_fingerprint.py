@@ -31,10 +31,10 @@ SHINGLE = 6
 MAX_DIGESTS = 200_000
 
 _WORD = re.compile(r"[^\W_]+(?:['’.\-@+][^\W_]+)*", re.UNICODE)
-_EMAIL = re.compile(r"[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+", re.UNICODE)
+_EMAIL = re.compile(r"[\w.+\-]{1,64}@[\w\-]+(?:\.[\w\-]+)+", re.UNICODE)  # 64: RFC 5321 local part
 _LONG_NUMBER = re.compile(r"(?<![\w])\+?\d[\d ()\-./]{3,}\d(?![\w])")
 _AMOUNT = re.compile(
-    r"(?i)(?:[$€£¥₽]\s?\d[\d,.\s]*\d|\d[\d,.\s]*\s?(?:[$€£¥₽]|eur|usd|gbp|chf|rub)\b|\d[\d,.]*\d?\s?k?\s?(?:euros?|dollars?|pounds?))")
+    r"(?i)(?:[$€£¥₽]\s?\d[\d,.\s]{0,40}\d|\d[\d,.\s]{0,40}\s?(?:[$€£¥₽]|eur|usd|gbp|chf|rub)\b|\d[\d,.]{0,40}\d?\s?k?\s?(?:euros?|dollars?|pounds?))")
 _NAME = re.compile(r"\b[A-ZÀ-ÖØ-ÞА-ЯЁ][a-zà-öø-ÿа-яё'’\-]+(?:\s+[A-ZÀ-ÖØ-ÞА-ЯЁ][a-zà-öø-ÿа-яё'’\-]+)+\b")
 
 

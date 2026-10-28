@@ -68,7 +68,7 @@ export function render(schema = JSON.parse(readFileSync(SCHEMA, "utf8"))) {
     "",
   ].join("\n");
   const ts = [
-    `/** ${HEADER.replace("\n", "\n *  ")}`,
+    `/** ${HEADER.replaceAll("\n", "\n *  ")}`,
     " *",
     " *  The reason vocabularies of the sign-in admission wire (signin.v1), shared with admin-api's",
     " *  core/identity/services/admin-api/src/admin_api/app/signin_wire.py, generated from the same schema. */",

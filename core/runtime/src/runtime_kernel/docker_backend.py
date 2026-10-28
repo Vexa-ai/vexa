@@ -327,6 +327,9 @@ class DockerBackend:
 
         s = self._req("POST", f"/containers/{cid}/start")
         if s.status_code not in (204, 304):
+            # The container was created a moment ago and will never run: remove it here, or every
+            # failed start leaves a `Created` container behind (a 12 MB env failed this way, F2).
+            self._req("DELETE", f"/containers/{cid}?force=true")
             raise RuntimeError(f"docker start {name} failed ({s.status_code}): {s.text.strip()}")
         return WorkloadHandle(id=workload_id, impl=name)
 
