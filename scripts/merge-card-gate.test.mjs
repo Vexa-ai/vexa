@@ -843,6 +843,8 @@ test("SCANNERS: newest run per name decides; red disagrees, unfinished is pendin
   assert.match(scannerVerdict([]).why, /no scanner ran/);
   assert.equal(scannerVerdict([scan("analyze (python)", "completed", "success"), scan("osv-full", "completed", "skipped"), scan("gates", "completed", "failure")]).state, "agree");
   assert.equal(scannerVerdict([scan("analyze (python)", "completed", "failure")]).state, "disagree");
+  // main names CodeQL's jobs "Analyze (…)", the 0.13 line "analyze (…)": both are scanners
+  assert.equal(scannerVerdict([scan("Analyze (actions)", "completed", "failure")]).state, "disagree");
   assert.equal(scannerVerdict([scan("GitGuardian Security Checks", "completed", "action_required")]).state, "disagree");
   assert.equal(scannerVerdict([scan("dependency-review", "in_progress", null)]).state, "pending");
   // a re-run that went green supersedes the old red

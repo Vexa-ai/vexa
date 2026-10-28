@@ -176,7 +176,7 @@ const readValueFsmRuns = readCheckRuns;
 
 // The check runs that scan the head for vulnerabilities and secrets, by name (codeql.yml,
 // cve-scanning.yml, dependency-review.yml, GitGuardian's app). Each name's newest run is its verdict.
-export const SCANNERS = [/^analyze \(/, /^CodeQL$/, /^GitGuardian/, /^dependency-review$/, /^osv-/, /^third-party-images/, /^Trivy/i];
+export const SCANNERS = [/^analyze \(/i, /^CodeQL$/, /^GitGuardian/, /^dependency-review$/, /^osv-/, /^third-party-images/, /^Trivy/i];
 const AGREES = new Set(["success", "neutral", "skipped"]);
 
 // { state: agree | disagree | pending, why }, pure over a raw check-runs array. A scanner that has
