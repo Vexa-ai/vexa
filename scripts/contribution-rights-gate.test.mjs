@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
-import { editedOnlyByAuthor, evaluatePullRequest, mergedDeclaration, registeredStanding, run } from "./contribution-rights-gate.mjs";
+import { editedOnlyByAuthor, evaluatePullRequest, mergedDeclaration, rangeVerdict, registeredStanding, run } from "./contribution-rights-gate.mjs";
 import { guardTree } from "./test-tree.mjs";
 
 guardTree();
@@ -261,6 +264,109 @@ test("DCO App manual override is rejected", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+// The DCO App gives up past 250 commits. Only that report is decided again, from git history.
+const incompleteSummary = "The DCO check could not be evaluated because the complete pull request commit list could not be retrieved.\n\nGitHub returned 250 commits from the REST API, so the app attempted to retrieve the full list through GraphQL before evaluating the pull request. That fallback did not complete, so the DCO verdict is unknown.";
+
+function dcoEvent(conclusion, summary) {
+  return {
+    repository: { full_name: "Vexa-ai/vexa" },
+    check_run: {
+      name: "DCO", app: { slug: "dco" }, head_sha: sha, conclusion, output: { summary },
+      pull_requests: [{ number: 1863, base: { sha: "b".repeat(40) } }],
+    },
+  };
+}
+
+async function publishedFor(event, dcoRange) {
+  const originalFetch = globalThis.fetch;
+  let published;
+  globalThis.fetch = async (_url, options = {}) => {
+    published = JSON.parse(options.body);
+    return { ok: true, status: 201, json: async () => ({}), text: async () => "" };
+  };
+  try {
+    const ok = await run({ event, config, token: "test", apiBase: "https://example.test", dcoRange });
+    return { ok, published };
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+const allSigned = { ok: true, checked: 254, merges: 20, failing: [] };
+
+test("an incomplete DCO App list passes when every commit in the git range is signed off", async () => {
+  const seen = [];
+  const { ok, published } = await publishedFor(dcoEvent("failure", incompleteSummary), (pr, head) => {
+    seen.push([pr.number, head]);
+    return allSigned;
+  });
+  assert.equal(ok, true);
+  assert.deepEqual(seen, [[1863, sha]]);
+  assert.equal(published.name, "dco-no-override");
+  assert.equal(published.conclusion, "success");
+  assert.match(published.output.summary, /254 commits checked, 20 merge commits skipped, 0 failing/);
+});
+
+test("an incomplete DCO App list still fails when a commit in the git range is not signed off", async () => {
+  const failing = [{ sha: "d".repeat(40), author: { name: "A", email: "a@example.test" }, detail: "no Signed-off-by" }];
+  const { ok, published } = await publishedFor(dcoEvent("failure", incompleteSummary), () => ({ ok: false, checked: 3, merges: 0, failing }));
+  assert.equal(ok, false);
+  assert.equal(published.conclusion, "failure");
+  assert.match(published.output.summary, /`dddddddddddd` A <a@example.test>: no Signed-off-by/);
+});
+
+test("an incomplete DCO App list fails closed when git cannot read the range", async () => {
+  const { ok, published } = await publishedFor(dcoEvent("failure", incompleteSummary), () => { throw new Error("fetch failed"); });
+  assert.equal(ok, false);
+  assert.equal(published.conclusion, "failure");
+  assert.match(published.output.summary, /fails closed[\s\S]*fetch failed/);
+});
+
+test("a manual override is never re-decided from git, even when the range is signed off", async () => {
+  let called = false;
+  const recheck = () => { called = true; return allSigned; };
+  for (const [conclusion, summary] of [
+    ["success", "Commit sign-off was manually approved."],
+    ["failure", "There is one commit incorrectly signed off."],
+    ["success", incompleteSummary],
+  ]) {
+    const { ok, published } = await publishedFor(dcoEvent(conclusion, summary), recheck);
+    assert.equal(ok, false, summary);
+    assert.equal(published.conclusion, "failure");
+  }
+  assert.equal(called, false);
+});
+
+test("rangeVerdict reads the pull request's commits from git, excluding the base and the checkout", () => {
+  const root = mkdtempSync(join(tmpdir(), "dco-range-"));
+  const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const origin = join(root, "origin");
+  git(root, "init", "-q", "-b", "main", origin);
+  git(origin, "config", "user.name", "Ada");
+  git(origin, "config", "user.email", "ada@example.test");
+  git(origin, "commit", "-q", "--allow-empty", "-m", "base (unsigned, already on main)");
+  const base = git(origin, "rev-parse", "HEAD");
+  git(origin, "checkout", "-q", "-b", "feature");
+  git(origin, "commit", "-q", "--allow-empty", "-s", "-m", "signed");
+  const signedHead = git(origin, "rev-parse", "HEAD");
+  git(origin, "update-ref", "refs/pull/7/head", signedHead);
+  const clone = join(root, "clone");
+  git(root, "clone", "-q", "--branch", "main", origin, clone);
+
+  const pr = { number: 7, base: { sha: base } };
+  const signed = rangeVerdict(pr, signedHead, clone);
+  assert.equal(signed.ok, true);
+  assert.equal(signed.checked, 1);
+
+  git(origin, "commit", "-q", "--allow-empty", "-m", "unsigned");
+  const unsignedHead = git(origin, "rev-parse", "HEAD");
+  git(origin, "update-ref", "refs/pull/7/head", unsignedHead);
+  const unsigned = rangeVerdict(pr, unsignedHead, clone);
+  assert.equal(unsigned.ok, false);
+  assert.equal(unsigned.failing.length, 1);
+  assert.equal(unsigned.failing[0].sha, unsignedHead);
 });
 
 test("merge-group run resolves its PR from the queue ref and publishes on the group head", async () => {
