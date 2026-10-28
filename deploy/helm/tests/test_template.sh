@@ -1321,7 +1321,9 @@ if grep -q "POSTGRES_PASSWORD: \"$good\"" <<< "$good_render"; then
 else echo "  FAIL: an explicit database.password was not rendered"; fail=1; fi
 # The rotation hook renders only on an upgrade whose live Secret holds a published value (lookup);
 # an offline render never sees one, so it renders none. Its run is proven on a live cluster.
-upgrade_render="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --is-upgrade)"
+# (an offline upgrade render cannot look up the at-rest key either, so it names one: see below)
+upgrade_render="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --is-upgrade \
+  --set atRest.existingSecret=my-at-rest)"
 if grep -qE 'name: vexa-vexa-postgres-password$' <<< "$upgrade_render"; then
   echo "  FAIL: the postgres-password hook rendered without a published live Secret"; fail=1
 else echo "  OK: no postgres-password hook without a published live Secret"; fi
