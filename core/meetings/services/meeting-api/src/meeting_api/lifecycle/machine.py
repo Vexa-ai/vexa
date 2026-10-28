@@ -111,10 +111,16 @@ class TransitionSource(str, Enum):
 # domain lifecycle: drop `requested`/`stopping` (server-side, not bot-emitted), keep the
 # escalation path (`needs_help`, parent's `needs_human_help`). The bot's first emitted
 # status is `joining`, so that is the machine's de-facto entry.
+#
+# `joining -> needs_help`: a blocker the bot cannot pass alone can stand BEFORE the waiting room
+# (Google Meet's "Gemini is taking notes" dialog, a captcha). The join layer escalates the moment it
+# sees one; without this edge the escalation was rejected, the user saw `joining` for the whole
+# admission budget, and the run then failed with no trace of why. `needs_help` is therefore NOT
+# evidence of a lobby on its own — see `_reached_lobby`.
 LEGAL_TRANSITIONS: Dict[Optional[BotStatus], frozenset[BotStatus]] = {
     None: frozenset({BotStatus.JOINING}),  # initial: a record's first event must be `joining`
     BotStatus.JOINING: frozenset(
-        {BotStatus.AWAITING_ADMISSION, BotStatus.ACTIVE, BotStatus.FAILED}
+        {BotStatus.AWAITING_ADMISSION, BotStatus.ACTIVE, BotStatus.NEEDS_HELP, BotStatus.FAILED}
     ),
     BotStatus.AWAITING_ADMISSION: frozenset(
         {BotStatus.ACTIVE, BotStatus.NEEDS_HELP, BotStatus.FAILED}
@@ -162,14 +168,43 @@ def bot_status_from_persisted(status: Optional[str]) -> Optional[BotStatus]:
 
 # Stage a record was in maps to the FailureStage to record if it terminates `failed`.
 # (Mirrors the parent's `_failure_stage_from_status`: derive server-side from current
-# state, never trust the bot's stale payload value.)
+# state, never trust the bot's stale payload value.) `needs_help` is absent on purpose: it is an
+# escalation, not a stage, and the stage it stands for depends on where it was entered from
+# (`_failure_stage_for`).
 _STATUS_TO_FAILURE_STAGE: Dict[Optional[BotStatus], FailureStage] = {
     None: FailureStage.REQUESTED,
     BotStatus.JOINING: FailureStage.JOINING,
     BotStatus.AWAITING_ADMISSION: FailureStage.AWAITING_ADMISSION,
-    BotStatus.NEEDS_HELP: FailureStage.AWAITING_ADMISSION,
     BotStatus.ACTIVE: FailureStage.ACTIVE,
 }
+
+
+def _reached_lobby(rec: "MeetingRecord") -> bool:
+    """Did this run ever report standing in the waiting room?
+
+    Answered from the record's OWN history: the in-process `history`, and the persisted
+    `status_transition[]` trail, which survives a meeting-api restart (rehydration seeds the trail,
+    not `history`). A payload's claim about its stage is never consulted (FM-003).
+    """
+    if BotStatus.AWAITING_ADMISSION in rec.history:
+        return True
+    return any(
+        isinstance(entry, dict) and entry.get("to") == BotStatus.AWAITING_ADMISSION.value
+        for entry in rec.status_transition
+    )
+
+
+def _failure_stage_for(rec: "MeetingRecord", frm: Optional[BotStatus]) -> FailureStage:
+    """The furthest stage a run reached, for a `failed` terminal entered from `frm`.
+
+    `needs_help` resolves through the history: entered from the waiting room it is still an
+    admission wait (`awaiting_admission`); entered from `joining` (a consent gate or captcha in
+    front of the lobby) the bot never got past `joining`, and saying otherwise would file it as
+    "the host did not let us in".
+    """
+    if frm is BotStatus.NEEDS_HELP:
+        return FailureStage.AWAITING_ADMISSION if _reached_lobby(rec) else FailureStage.JOINING
+    return _STATUS_TO_FAILURE_STAGE.get(frm, FailureStage.ACTIVE)
 
 
 def can_transition(frm: Optional[BotStatus], to: BotStatus) -> bool:
@@ -211,23 +246,18 @@ def _capture_join_evidence(
     non-admitted verdict). Same discipline as `failure_stage`: derive server-side, never trust a
     stale payload field (FM-003).
 
-    `needs_help` is deliberately NOT proof of a lobby on its own. It implies one only while
-    `LEGAL_TRANSITIONS` permits reaching it from `awaiting_admission` alone — and #1251 adds
-    `joining -> needs_help` precisely so a PRE-lobby blocker (a consent gate, a captcha) can
-    escalate. The day that lands, a bot that never saw a waiting room would be stamped
-    `reached_lobby` -> `awaiting_admission_timeout` -> `host_action`: filed as *the host did not let us in*,
-    and excluded from `system_failure_rate` — the metric under-reporting our own defects in exactly
-    the cohort #1251 exists to investigate. So the test is how `needs_help` was ENTERED, not that it
-    occurred.
+    `needs_help` is deliberately NOT proof of a lobby on its own: `LEGAL_TRANSITIONS` admits it
+    from `joining` too, so a PRE-lobby blocker (a consent gate, a captcha) can escalate. Read as a
+    lobby, a bot that never saw a waiting room would be stamped `reached_lobby` ->
+    `awaiting_admission_timeout` -> `host_action`: filed as *the host did not let us in*, and excluded
+    from `system_failure_rate` — the metric under-reporting our own defects in exactly the cohort the
+    edge exists for. So the test is whether `awaiting_admission` was ever reported, not whether
+    `needs_help` occurred.
     """
     try:
         from .join_evidence import evidence_from_event
 
-        reached_lobby = (
-            BotStatus.AWAITING_ADMISSION in rec.history
-            or frm is BotStatus.AWAITING_ADMISSION
-            or (frm is BotStatus.NEEDS_HELP and BotStatus.AWAITING_ADMISSION in rec.history)
-        )
+        reached_lobby = _reached_lobby(rec) or frm is BotStatus.AWAITING_ADMISSION
         if rec.failure_stage is FailureStage.ACTIVE:
             # A bot that reached `active` was ADMITTED — whatever killed it afterwards (a pipeline
             # fault, an eviction) is not a join failure. The join taxonomy has nothing truthful to
@@ -619,7 +649,7 @@ class LifecycleSink:
             rec.completion_reason = self._terminal_reason(rec, event)
         elif to is BotStatus.FAILED:
             # FM-003: derive failure_stage from the stage we were IN, not the payload.
-            rec.failure_stage = _STATUS_TO_FAILURE_STAGE.get(frm, FailureStage.ACTIVE)
+            rec.failure_stage = _failure_stage_for(rec, frm)
             rec.completion_reason = self._terminal_reason(rec, event)
             # The parent builds an `error_details` string on a failed exit when none supplied.
             if rec.error_details is None and (rec.exit_code is not None or rec.reason):
@@ -675,6 +705,12 @@ class LifecycleSink:
         }
         if rec.reason is not None and to in _TERMINAL:
             entry["reason"] = rec.reason
+        elif to is BotStatus.NEEDS_HELP and event.get("reason") is not None:
+            # WHY the bot summoned a human (`consent_required`, `unknown_blocking_state`, …). The
+            # terminal that follows overwrites `rec.reason` with its own cause, so this hop is the
+            # only durable place the escalation reason lives: the `data.status_transition[]` entry
+            # whose `to` is `needs_help`.
+            entry["reason"] = str(event["reason"])
         if rec.completion_reason is not None:
             entry["completion_reason"] = rec.completion_reason.value
         if rec.failure_stage is not None:

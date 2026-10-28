@@ -5,13 +5,20 @@ control-plane callback. The kernel never interprets it (ADR-0001: separate chann
 
 ## States & legal transitions (the machine)
 ```
-joining            → awaiting_admission · active · failed
+joining            → awaiting_admission · active · needs_help · failed
 awaiting_admission → active · needs_help · failed
-needs_help   → active · failed
+needs_help         → active · failed
 active             → completed · failed
 completed          ∅   (terminal)
 failed             ∅   (terminal)
 ```
+`needs_help` is the bot asking for a human: a blocker it must not or cannot pass alone (Google
+Meet's "Gemini is taking notes" dialog, a captcha, an unreadable lobby). It can appear before the
+waiting room, so it is reachable from `joining`; it is not evidence of a lobby. The event carries
+the escalation's `reason` (`consent_required`, `unknown_blocking_state`, …), which the control plane
+keeps on that hop of `data.status_transition[]`. A `failed` entered from `needs_help` records the
+stage the run actually reached: `awaiting_admission` if it ever reported the lobby, else `joining`.
+
 `completed` carries a `completion_reason`; `failed` carries a `failure_stage`. Pre-active teardown
 attribution (the control plane's reconcile path, when the workload dies before the bot reports
 `active`): `awaiting_admission` → `awaiting_admission_timeout` (reaped while waiting in the lobby —

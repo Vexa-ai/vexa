@@ -12,7 +12,7 @@ server-side `requested`/`stopping` states.
 ## The machine
 ```
 <new>              → joining
-joining            → awaiting_admission · active · failed
+joining            → awaiting_admission · active · needs_help · failed
 awaiting_admission → active · needs_help · failed
 needs_help         → active · failed
 active             → completed · failed
@@ -22,6 +22,14 @@ failed             ∅   (terminal)
 `completed` records the bot-reported `completion_reason`; `failed` records a `failure_stage`
 **derived server-side from the state we were in** — never trusted from the bot's payload (the
 parent's FM-003 discipline). `active → joining` (and any re-open of a terminal record) is rejected.
+
+`needs_help` is an escalation, not a stage. It is reachable from `joining` (a consent gate or captcha
+in front of the waiting room), so a `failed` off it is staged `awaiting_admission` only when the run
+ever reported `awaiting_admission` (in-process history or the persisted `status_transition[]` trail),
+else `joining`. The escalation's `reason` is kept on the `needs_help` hop of `status_transition[]`
+(the terminal overwrites the top-level `reason`). Downstream, `needs_help` is PRE-ACTIVE everywhere:
+a user stop keeps it (never `stopping`), and a dead workload or a stale sweep fails it rather than
+completing it.
 
 ## Surface
 - `machine.py` — `BotStatus`/`CompletionReason`/`FailureStage` (the lifecycle.v1 enums),

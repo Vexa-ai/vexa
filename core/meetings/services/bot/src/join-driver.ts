@@ -62,6 +62,13 @@ function mapState(s: JoinState): BotStatus | null {
   }
 }
 
+/** The reason the join layer attached to a state (its `needs_human_help` / `blocked` detail), if any. */
+export function joinStateReason(detail: unknown): string | undefined {
+  if (!detail || typeof detail !== 'object') return undefined;
+  const r = (detail as { reason?: unknown }).reason;
+  return typeof r === 'string' && r.trim() ? r.trim() : undefined;
+}
+
 /** Map the bot's platform string to @vexa/join's Platform ('teams' | 'zoom' | 'jitsi' | 'google_meet'). */
 function joinPlatform(p: string): JoinPlatform {
   return (p === 'teams' || p === 'zoom' || p === 'jitsi') ? p : 'google_meet';
@@ -134,14 +141,18 @@ export function createBrowserJoinDriver(
           authenticated: inv.authenticated,            // join as a signed-in user (persistent context)
           waitingRoomTimeoutMs: inv.automaticLeave?.waitingRoomTimeout,
           hooks: {
-            onState: (s: JoinState) => {
+            onState: (s: JoinState, detail?: unknown) => {
               // Stamp the lobby arrival BEFORE reporting: `report` is fire-and-forget and may be
               // serialized behind an in-flight HTTP callback, so timing it would measure our own
               // callback latency rather than the platform's. Best-effort — a stopwatch fault must
               // never interfere with the state report it accompanies.
               try { if (s === 'awaiting_admission') timer.markLobby(); } catch { /* fail-open */ }
               const bs = mapState(s);
-              if (bs) void report(bs);
+              if (!bs) return;
+              // An escalation carries WHY (`consent_required`, `unknown_blocking_state`, …): the
+              // control plane keeps it on the `needs_help` hop, the only durable place it can live.
+              const reason = bs === 'needs_help' ? joinStateReason(detail) : undefined;
+              void report(bs, reason ? { reason } : undefined);
             },
           },
         });

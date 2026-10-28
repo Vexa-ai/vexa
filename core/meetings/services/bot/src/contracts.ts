@@ -87,7 +87,10 @@ export interface LifecycleEvent {
 
 /** The legal transitions — the machine the bot MUST obey (lifecycle.v1/README.md). */
 export const LIFECYCLE_TRANSITIONS: Record<BotStatus, readonly BotStatus[]> = {
-  joining: ['awaiting_admission', 'active', 'failed'],
+  // `needs_help` straight from `joining`: a blocker can stand in front of the waiting room (Meet's
+  // "Gemini is taking notes" dialog, a captcha), and the escalation must reach the user instead of
+  // being dropped as illegal while the bot polls out its whole admission budget.
+  joining: ['awaiting_admission', 'active', 'needs_help', 'failed'],
   awaiting_admission: ['active', 'needs_help', 'failed'],
   needs_help: ['active', 'failed'],
   active: ['completed', 'failed'],
