@@ -551,6 +551,59 @@ test("gate:python GREEN: multiple passing planted packages do not red the gate",
   assert.equal(r.green, true, `two genuinely green planted packages reded the gate:\n${r.out}`);
 });
 
+// ── gate:python SHARDS (PY_SHARD="i/n", the CI python leg's matrix) ─────────────────────────────
+// The sharded gate is only worth its speed if the shards together run every test file exactly once.
+// Each planted file fails with its own name, so a shard's output names exactly the files it ran:
+// across the shards every file must be named once — none dropped, none run twice.
+function runPyShard(shard, tree) {
+  try { return { green: true, out: execFileSync("node", [join(ROOT, "scripts", "gates.mjs"), "python"], { cwd: tree, encoding: "utf8", env: { ...process.env, PY_SHARD: shard } }) }; }
+  catch (e) { return { green: false, out: `${e.stdout || ""}${e.stderr || ""}` }; }
+}
+function withPlantedPyFiles(files, fn, pyproject = PY_PYPROJECT) {
+  const tree = mkdtempSync(join(tmpdir(), "vexa-gatepy-shard-"));
+  try {
+    for (const [dir, names] of Object.entries(files)) {
+      mkdirSync(join(tree, dir, "tests"), { recursive: true });
+      writeFileSync(join(tree, dir, "pyproject.toml"), pyproject(dir.replace(/[^a-z0-9]+/gi, "-")));
+      for (const f of names) writeFileSync(join(tree, dir, "tests", f), `def test_zz():\n    assert False, "planted ${dir}/${f}"\n`);
+    }
+    return fn(tree);
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
+}
+
+test("gate:python shards: every planted test file runs in exactly one of the n shards", () => {
+  const files = { [PKG_A]: ["test_a1.py", "test_a2.py", "test_a3.py"], [PKG_B]: ["test_b1.py", "b2_test.py"] };
+  withPlantedPyFiles(files, (tree) => {
+    const outs = [1, 2, 3].map((i) => runPyShard(`${i}/3`, tree));
+    for (const [dir, names] of Object.entries(files)) for (const f of names) {
+      const hits = outs.filter((r) => r.out.includes(`planted ${dir}/${f}`)).length;
+      assert.equal(hits, 1, `${dir}/${f} ran in ${hits} shard(s), not exactly one:\n${outs.map((r) => r.out).join("\n---\n")}`);
+    }
+    assert.ok(outs.every((r) => !r.green), "every shard got a planted red file, so every shard must be red");
+  });
+});
+
+test("gate:python shards: shard 1 reds when pytest collects a file the plan never dealt", () => {
+  const sneaky = (name) => PY_PYPROJECT(name).replace('testpaths = ["tests"]', 'testpaths = ["tests"]\npython_files = ["check_*.py", "test_*.py"]');
+  withPlantedPyFiles({ [PKG_A]: ["test_a1.py", "check_hidden.py"] }, (tree) => {
+    const r = runPyShard("1/2", tree);
+    assert.equal(r.green, false, `a file pytest collects but no shard runs did not red shard 1:\n${r.out}`);
+    assert.match(r.out, /no shard runs: tests\/check_hidden\.py/, r.out);
+  }, sneaky);
+});
+
+test("gate:python shards: a malformed PY_SHARD reds instead of running nothing", () => {
+  withPlantedPyFiles({ [PKG_A]: ["test_a1.py"] }, (tree) => {
+    for (const bad of ["0/2", "3/2", "two"]) {
+      const r = runPyShard(bad, tree);
+      assert.equal(r.green, false, `PY_SHARD=${bad} was green:\n${r.out}`);
+      assert.match(r.out, /is not i\/n/, r.out);
+    }
+  });
+});
+
 // ── gate:licenses, Python half (scripts/check-python-licenses.mjs) ──────────────────────────────
 // Planted through the real gate: a Dockerfile, the licence index or the exception log is edited in
 // place and restored byte-for-byte, so each red is the one the committed tree would produce.
