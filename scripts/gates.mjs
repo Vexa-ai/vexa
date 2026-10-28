@@ -1933,8 +1933,8 @@ function gateDocsLinks() {
 // gate:secret-logs — no log line carries any part of a credential (#1868; scripts/check-secret-logs.mjs).
 function gateSecretLogs() {
   const hits = checkSecretLogs(ROOT);
-  if (hits.length) return fail(["secret-logs — a log line interpolates a credential's value or a slice of it (log its presence or length):", ...hits]);
-  console.log("  ✓ gate:secret-logs — no log call interpolates a key, token, secret or password");
+  if (hits.length) return fail(["secret-logs — a log call carries a credential's value or a slice of it — interpolated, passed as an argument, concatenated, or read from a header (log its presence or length):", ...hits]);
+  console.log("  ✓ gate:secret-logs — no log call carries a key, token, secret or password");
   return true;
 }
 
