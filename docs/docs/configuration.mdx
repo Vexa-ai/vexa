@@ -376,7 +376,7 @@ See [Routines](/flows/routines) for what each refusal looks like to the person.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `IMAGE_TAG` | the release, e.g. `v0.13.3` | Tag of the service images (`vexaai/vexa-<service>`). `make dev` builds `dev`. See [Image names](/upgrade-image-names). |
+| `IMAGE_TAG` | the release, e.g. `v0.13.4` | Tag of the service images (`vexaai/vexa-<service>`). `make dev` builds `dev`. See [Image names](/upgrade-image-names). |
 | `BROWSER_IMAGE` | `vexaai/vexa-bot:${IMAGE_TAG}` | Browser/bot container the runtime spawns per meeting. `make up` / `make all` pull it at `IMAGE_TAG` (release-validated); `make bot` builds it from source as `vexa/vexa-bot:dev` for development. The published `vexaai/vexa-bot:dev` is the old 0.10 line and is incompatible. |
 | `AGENT_IMAGE` / `AGENT_WORKER_IMAGE` | `vexaai/vexa-agent-*` | Agent container the runtime spawns per dispatch. |
 | `DOCKER_GID` | `0` | The Docker socket's group: the runtime runs as uid 10001 and reaches the socket through it. `mint-dev-env.sh` sets it on Linux; `0` is the socket's group on Docker Desktop. |
