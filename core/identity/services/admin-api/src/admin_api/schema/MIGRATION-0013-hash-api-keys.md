@@ -32,6 +32,39 @@ it, and the row matches.
   the hash and the hint. The value is in the mint answer and nowhere else.
 - Lists (`GET /admin/users/{id}/tokens`) answer `token_hint`; they never carried the value.
 
+## How the backfill runs, and what `/internal/validate` sees while it does
+
+- **Where.** In the boot convergence (`ensure_schema`), one transaction, after the column sync and
+  before the index sync. The order is:
+  1. `ADD COLUMN token_hash, token_hint`;
+  2. `ALTER COLUMN token DROP NOT NULL`;
+  3. one `UPDATE … SET token_hash, token_hint, token = NULL WHERE id = :id` per plaintext row (one
+     executemany);
+  4. the unique index on `token_hash`, built in-band.
+
+  MIGRATION-0014's classify and sweep run in the same transaction, right after.
+- **Locks.** Steps 1 and 2 take `ACCESS EXCLUSIVE` on `api_tokens` and hold it until the convergence
+  commits. Each lock is asked for with a 500 ms `lock_timeout`, retried with backoff (`sync.py`
+  `LOCK_TIMEOUT_MS`), so the convergence never queues behind live reads. Once it holds the lock,
+  every `/internal/validate` read of `api_tokens` waits. Validate bounds its own read at 1 s
+  (`READ_BOUNDS`), so a key presented in that window gets the gateway's typed `503 Authentication
+  temporarily unavailable`; the client retries.
+- **Measured.** bbb, 28 Oct 2026; Postgres 16 in testcontainers, host load average 35–40.
+  - **Setup:** 12,000 synthetic plaintext keys in the pre-0013 column shape. Prod held about 11,000
+    on 23 Oct (identity PRD, § Prod counts).
+  - **The convergence:** about 1.9 s for the whole of it, MIGRATION-0013 and 0014 included. Every
+    row hashed, none left in plaintext.
+  - **A concurrent read** using validate's bounds, 67 reads: one hit the 1 s lock timeout, the
+    slowest took 1.00 s, and 2 took over 200 ms.
+  - **Expected in prod:** about 1–2 s of 503s on key validation, once, at the upgrade's boot.
+  - The probe was `test_zz_lock_timing_pg.py`, a throwaway kept on bbb at `~/ci/ik135-timing`; it is
+    not in the repo.
+- **Nulling the plaintext is the same step, not a second one.** The statement that writes the hash
+  also clears `token`. That keeps the window in which a value sits beside its hash to zero, at the
+  cost of rollback (below). A two-step rollout would need one release that writes the hash and keeps
+  `token`, then a later one that clears it. That makes the old admin-api a valid rollback target,
+  but keeps every key readable in the database until the second release.
+
 ## Operator-visible
 
 Nothing for key holders: every key keeps working. A key's value can no longer be read back from the
