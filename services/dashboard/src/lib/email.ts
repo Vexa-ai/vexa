@@ -34,8 +34,10 @@ function createTransporter() {
 
 /** The bare address out of `Name <a@b>` or `a@b`, lower-cased. */
 function bareAddress(addr: string): string {
-  const m = /<([^>]+)>/.exec(addr || "");
-  return (m ? m[1] : addr || "").trim().toLowerCase();
+  const s = addr || "";
+  const open = s.indexOf("<");
+  const close = open >= 0 ? s.indexOf(">", open + 1) : -1;
+  return (close > open + 1 ? s.slice(open + 1, close) : s).trim().toLowerCase();
 }
 
 /**

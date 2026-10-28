@@ -46,7 +46,7 @@ def note_path_of(ref: str) -> str:
     The shape check is `meeting_note.is_note_path` — the alphabet the minter writes — so a ref with
     `..`, a nested folder or the directory's `index.md` is not a meeting link."""
     s = str(ref or "").strip()
-    s = re.sub(r"[?#].*\Z", "", s)
+    s = re.split(r"[?#]", s, maxsplit=1)[0]
     m = _NOTE_TAIL.search(s)
     tail = m.group(1) if m else ""
     return tail if meeting_note.is_note_path(tail) else ""

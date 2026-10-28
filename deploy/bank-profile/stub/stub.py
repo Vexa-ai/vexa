@@ -125,7 +125,8 @@ class Handler(BaseHTTPRequestHandler):
         chunked = r.getheader("Transfer-Encoding", "").lower() == "chunked"
         for k, v in r.getheaders():
             if k.lower() not in ("transfer-encoding", "connection", "keep-alive"):
-                self.send_header(k, v)
+                # a folded upstream header must not become a second header line downstream
+                self.send_header(k.replace("\r", "").replace("\n", ""), v.replace("\r", "").replace("\n", ""))
         if chunked or r.getheader("Content-Length") is None:
             self.send_header("Connection", "close")
             self.close_connection = True
@@ -349,6 +350,7 @@ if __name__ == "__main__":
         raise SystemExit(__doc__)
     KEY = load_rsa("/idp-key/key.pem") if MODE == "idp" else None
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain("/tls/tls.crt", "/tls/tls.key")
     srv = ThreadingHTTPServer(("0.0.0.0", int(os.environ.get("PORT", "8443"))), Handler)
     srv.socket = ctx.wrap_socket(srv.socket, server_side=True)

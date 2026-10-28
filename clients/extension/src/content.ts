@@ -9,7 +9,7 @@
  * governed by the extension's host permissions, not Google Meet's page CSP.
  */
 
-import { detectMeeting } from './meeting';
+import { detectMeeting, onHost } from './meeting';
 
 const VEXA = '[vexa-content]';
 
@@ -96,8 +96,8 @@ setInterval(checkAutoStart, 2000);
 // from the page (DOM + same-origin storage) and report it so the background can key
 // the session. Scan until found (stable per meeting), then stop.
 function isTeamsHost(): boolean {
-  return location.hostname.endsWith('teams.microsoft.com')
-    || location.hostname.endsWith('teams.live.com')
+  return onHost(location.hostname, 'teams.microsoft.com')
+    || onHost(location.hostname, 'teams.live.com')
     || location.hostname === 'teams.cloud.microsoft';
 }
 let teamsReported = false;

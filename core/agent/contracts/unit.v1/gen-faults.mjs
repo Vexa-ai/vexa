@@ -89,7 +89,7 @@ export function render(schema = JSON.parse(readFileSync(SCHEMA, "utf8"))) {
     "",
   ].join("\n");
   const ts = [
-    `/** ${HEADER.replace("\n", "\n *  ")}`,
+    `/** ${HEADER.replaceAll("\n", "\n *  ")}`,
     " *",
     " *  The typed-fault vocabulary (unit.v1 `Fault`): every `source` a fault may name — WHO failed — and, per",
     " *  source, every `kind` — HOW. Shared with the worker and agent-api through",

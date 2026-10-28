@@ -143,7 +143,7 @@ export const LITERAL_SERVICES = {
   terminal: "terminal",
 };
 const LITERAL_RE = new RegExp(
-  `https?://(${Object.keys(LITERAL_SERVICES).map((s) => s.replace(/[-]/g, "\\-")).join("|")}):`,
+  `https?://(${Object.keys(LITERAL_SERVICES).map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")}):`,
   "g",
 );
 

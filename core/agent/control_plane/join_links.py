@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from control_plane import workspace_membership as membership_mod
+from control_plane.path_confine import within
 from workspaces.shared import workspace_paths as wpaths
 
 TARGET_KINDS = ("workspace", "chat")
@@ -141,11 +142,8 @@ def _chat_path(root: Path, chat_id: str) -> Path:
     cid = str(chat_id or "").strip()
     if not _CHAT_ID.match(cid):
         raise LinkError("invalid chat id", status=400)
-    base = (Path(root).resolve() / membership_mod.INVITE_STORE_DIR / CHAT_STORE_DIR)
-    path = (base / f"{cid}.json").resolve()
-    if base not in path.parents:
-        raise LinkError("invalid chat id", status=400)
-    return path
+    return within(root, f"{membership_mod.INVITE_STORE_DIR}/{CHAT_STORE_DIR}/{cid}.json",
+                  LinkError("invalid chat id", status=400))
 
 
 def _read_chat(root: Path, chat_id: str) -> list[dict]:

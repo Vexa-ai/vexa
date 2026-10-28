@@ -112,6 +112,7 @@ import subprocess
 import time
 import uuid
 from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
 from typing import Callable, Iterable, Iterator, Optional
 
 import httpx
@@ -349,7 +350,8 @@ def _images_on(base: str = "") -> bool:
         return True
     if v in ("off", "0", "false"):
         return False
-    return "api.openai.com" in str(base or "")
+    base = str(base or "").strip()
+    return (urlsplit(base if "://" in base else "//" + base).hostname or "") == "api.openai.com"
 
 
 def _user_content(prompt: str, base: str = ""):
