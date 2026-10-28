@@ -354,16 +354,99 @@ function gateContractVersion() {
 // result, run the WHOLE population every time, then fail once naming every red package — so one
 // `pnpm gate:python` run shows the real blast radius instead of red → fix → push → discover the
 // next one.
+//
+// SHARDS (PY_SHARD="i/n", the CI python leg's matrix). Run serially the population took ~46 min on
+// one runner, every PR. With PY_SHARD set, every test FILE of every package is one unit, weighted by
+// its `def test_` count, and the units are dealt across n shards largest-first (LPT). The plan is a
+// pure function of the checked-out tree, so the n shards compute the same plan and their union is
+// every file exactly once. What the plan cannot see, pytest can: shard 1 also collects every package
+// and fails if pytest would run a file the plan never dealt — a test the sharding silently dropped.
+const PY_TEST_FILE = /^(test_.*|.*_test)\.py$/;   // pytest's default python_files; no package overrides it
+function pyTestFiles(pkg) {
+  const out = [];
+  const walk = (dir) => {
+    for (const name of readdirSync(dir).sort()) {
+      if (skippable(name)) continue;
+      const p = join(dir, name);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (PY_TEST_FILE.test(name)) out.push(p.slice(pkg.length + 1).replace(/\\/g, "/"));
+    }
+  };
+  walk(join(pkg, "tests"));
+  return out;
+}
+function pyShardPlan(pkgs, n) {
+  const units = [];
+  for (const d of pkgs) {
+    const files = pyTestFiles(d);
+    if (!files.length) { units.push({ pkg: d, file: null, weight: 1 }); continue; }   // whole package: pytest decides
+    for (const f of files) {
+      const tests = (readFileSync(join(d, f), "utf8").match(/^\s*(async\s+)?def test_/gm) || []).length;
+      units.push({ pkg: d, file: f, weight: tests + 2 });   // +2: a file's own import/fixture cost
+    }
+  }
+  units.sort((a, b) => b.weight - a.weight || rel(a.pkg).localeCompare(rel(b.pkg)) || String(a.file).localeCompare(String(b.file)));
+  const load = Array(n).fill(0);
+  const shards = Array.from({ length: n }, () => []);
+  for (const u of units) {
+    const s = load.indexOf(Math.min(...load));
+    shards[s].push(u); load[s] += u.weight;
+  }
+  return { shards, load };
+}
+// pytest's own view of a package's test files — the plan's coverage check
+function pyCollectedFiles(pkg) {
+  const out = execSync("uv run pytest -q --collect-only", { cwd: pkg, stdio: "pipe" }).toString();
+  return new Set(out.split("\n").map((l) => /^([^\s:][^:]*\.py)::/.exec(l)).filter(Boolean).map((m) => m[1]));
+}
 function gatePython() {
   const pkgs = walkDirs().filter((d) => existsSync(join(d, "pyproject.toml")) && existsSync(join(d, "tests")));
   if (!pkgs.length) { console.log("  ✓ gate:python — no Python packages yet (green-on-empty)"); return true; }
-  const failures = [];
-  for (const d of pkgs) {
-    try { execSync("uv run pytest -q", { cwd: d, stdio: "pipe" }); }
-    catch (e) { failures.push(`pytest ${rel(d)}:\n${errText(e)}`); }
+  const shard = process.env.PY_SHARD;
+  if (shard === undefined || shard === "") {
+    const failures = [];
+    for (const d of pkgs) {
+      try { execSync("uv run pytest -q", { cwd: d, stdio: "pipe" }); }
+      catch (e) { failures.push(`pytest ${rel(d)}:\n${errText(e)}`); }
+    }
+    if (failures.length) return fail([`${failures.length}/${pkgs.length} package(s) failed pytest:`, ...failures]);
+    console.log(`  ✓ gate:python — ${pkgs.length} package(s) · pytest green`);
+    return true;
   }
-  if (failures.length) return fail([`${failures.length}/${pkgs.length} package(s) failed pytest:`, ...failures]);
-  console.log(`  ✓ gate:python — ${pkgs.length} package(s) · pytest green`);
+  const m = /^(\d+)\/(\d+)$/.exec(shard);
+  if (!m || +m[1] < 1 || +m[1] > +m[2]) return fail([`gate:python — PY_SHARD="${shard}" is not i/n with 1 ≤ i ≤ n`]);
+  const i = +m[1], n = +m[2];
+  const { shards, load } = pyShardPlan(pkgs, n);
+  const mine = shards[i - 1];
+  const failures = [];
+  if (i === 1) {
+    const dealt = new Set(shards.flat().map((u) => `${u.pkg}\0${u.file}`));
+    for (const d of pkgs) {
+      if (dealt.has(`${d}\0null`)) continue;   // dealt whole: pytest runs everything it finds
+      let seen;
+      try { seen = pyCollectedFiles(d); }
+      catch (e) { failures.push(`pytest --collect-only ${rel(d)}:\n${errText(e)}`); continue; }
+      const missed = [...seen].filter((f) => !dealt.has(`${d}\0${f}`));
+      if (missed.length) failures.push(`gate:python shard plan — pytest collects file(s) in ${rel(d)} that no shard runs: ${missed.join(", ")}`);
+    }
+  }
+  const byPkg = new Map();
+  for (const u of mine) byPkg.set(u.pkg, [...(byPkg.get(u.pkg) || []), ...(u.file ? [u.file] : [])]);
+  let ran = 0;
+  for (const d of pkgs) {
+    if (!byPkg.has(d)) continue;
+    const files = byPkg.get(d);
+    const t0 = Date.now();
+    try {
+      const out = execFileSync("uv", ["run", "pytest", "-q", ...files], { cwd: d, stdio: "pipe" }).toString();
+      const summary = out.trim().split("\n").pop();
+      console.log(`    ${rel(d)} · ${files.length || "all"} file(s) · ${summary} · ${Math.round((Date.now() - t0) / 1000)}s`);
+      ran++;
+    }
+    catch (e) { failures.push(`pytest ${rel(d)} (shard ${i}/${n}, ${files.length || "all"} file(s)):\n${errText(e)}`); }
+  }
+  if (failures.length) return fail([`gate:python shard ${i}/${n} — ${failures.length} failure(s):`, ...failures]);
+  console.log(`  ✓ gate:python — shard ${i}/${n} · ${mine.length} unit(s) in ${ran} package(s) · weight ${load[i - 1]} of ${load.reduce((a, b) => a + b, 0)} · pytest green`);
   return true;
 }
 

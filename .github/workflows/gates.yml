@@ -94,20 +94,45 @@ jobs:
       - name: gate script tests
         run: node --test scripts/*.test.mjs release/*.test.mjs
 
-  python:
+  # Eight runners, one shard each (PY_SHARD, scripts/gates.mjs gatePython): one runner took ~46 min
+  # for the whole Python population (run 40697825325), and every PR and rebase waited on it. Every
+  # test file runs in exactly one shard; shard 1 also proves pytest collects no file the plan
+  # missed. fail-fast off, so one red shard still lets the other seven report.
+  python-shard:
+    name: python (${{ matrix.shard }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: 22, cache: pnpm }
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with: { enable-cache: true } # eight shards each sync every package they touch: reuse the wheels
       - run: pnpm install --frozen-lockfile
         env: { ONNXRUNTIME_NODE_INSTALL: skip }
       # the runtime docker-backend lifecycle test creates containers via the docker socket API,
       # which (unlike `docker run`) does NOT implicit-pull — pre-pull its fixture image
       - run: docker pull alpine
       - run: pnpm gate:python
+        env: { PY_SHARD: "${{ matrix.shard }}/${{ strategy.job-total }}" }
+
+  # `python` is a required check by name on the release branch. The matrix jobs report as
+  # `python (1)`…`python (8)`, so this job keeps the `python` context alive: green only when every
+  # shard is (always(), because a skipped required check would read as satisfied).
+  python:
+    needs: [python-shard]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: All python shards green?
+        env: { R_SHARDS: "${{ needs.python-shard.result }}" }
+        run: |
+          echo "python shards: $R_SHARDS"
+          [ "$R_SHARDS" = "success" ] || { echo "::error ::a python shard failed or was cancelled"; exit 1; }
 
   node:
     runs-on: ubuntu-latest
