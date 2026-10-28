@@ -111,6 +111,7 @@ async def get_current_user(api_key: str = Security(USER_KEY_HEADER),
     row = (await db.execute(select(APIToken).where(token_matches(APIToken, api_key)))).scalars().first()
     if not row or row.audience is not None:   # a transit key opens only its target (ADR-0051)
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid API Key")
+    await key_store.hash_in_place(db, row, api_key)
     token_scopes = set(row.scopes) if row.scopes else set()
     if not token_scopes & VALID_SCOPES:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Token scope not authorized for this endpoint")
@@ -962,7 +963,7 @@ def create_app() -> FastAPI:
         return {
             "webhook_url": data.get("webhook_url"),
             "webhook_secret_set": bool(secret),
-            "webhook_secret": _mask_secret(secret),
+            "webhook_secret": masked,
             "webhook_events": data.get("webhook_events"),
         }
 

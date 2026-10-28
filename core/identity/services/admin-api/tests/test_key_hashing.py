@@ -201,8 +201,11 @@ def test_a_plaintext_row_written_since_the_last_boot_still_validates(world):
     """A writer that has not moved to hashes yet (transcription-gateway during its rollout) still
     finds its key honoured; the next convergence hashes the row."""
     client, session = world
-    session.tokens["vxa_tx_writtenInPlaintext1234"] = APIToken(
-        id=99, token="vxa_tx_writtenInPlaintext1234", user_id=42, scopes=["tx"], kind="key")
+    row = APIToken(id=99, token="vxa_tx_writtenInPlaintext1234", user_id=42, scopes=["tx"], kind="key")
+    session.tokens["vxa_tx_writtenInPlaintext1234"] = row
     # the fake answers by the first string bound — the hash — so this proves the lookup asks by hash
     # first and by value as the fallback (`key_store.token_matches`)
     assert _validate(client, "vxa_tx_writtenInPlaintext1234").status_code == 200
+    # and the lookup that found it hashed it in place (`key_store.hash_in_place`)
+    assert row.token is None and row.token_hash == hash_token("vxa_tx_writtenInPlaintext1234")
+    assert row.token_hint == "vxa_tx_…1234"

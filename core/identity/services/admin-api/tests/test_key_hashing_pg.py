@@ -111,9 +111,29 @@ def test_the_upgrade_is_idempotent_and_new_keys_are_hashed_from_birth(client_aft
                   headers={"X-Internal-Secret": INTERNAL_SECRET}).status_code == 200
 
 
-def test_a_plaintext_row_a_legacy_writer_adds_is_honoured_then_hashed(client_after_upgrade):
+def test_a_plaintext_row_a_legacy_writer_adds_is_hashed_by_its_first_lookup(client_after_upgrade):
     """transcription-gateway writes `api_tokens` directly; until it ships hashes, its rows arrive in
-    plaintext. They validate at once, and the next boot hashes them."""
+    plaintext. The first lookup that finds one validates it AND hashes it in place: it does not sit in
+    plaintext until the next boot."""
+    c = client_after_upgrade
+    key = "vxa_tx_writtenAndThenLookedUp00099"
+    _sql(c.pg_url, "INSERT INTO api_tokens (token, user_id, scopes, kind) VALUES (:t, :u, ARRAY['tx'], 'key')",
+         t=key, u=c.uid)
+    assert c.post("/internal/validate", json={"token": key},
+                  headers={"X-Internal-Secret": INTERNAL_SECRET}).status_code == 200
+    assert _sql(c.pg_url, "SELECT token, token_hash FROM api_tokens WHERE token_hash = :h",
+                h=hash_token(key)) == [(None, hash_token(key))]       # no boot in between
+    assert c.post("/internal/validate", json={"token": key},
+                  headers={"X-Internal-Secret": INTERNAL_SECRET}).status_code == 200
+    key2 = "vxa_tx_seenFirstBySelfServe000088"                        # the self-serve tier too
+    _sql(c.pg_url, "INSERT INTO api_tokens (token, user_id, scopes, kind) VALUES (:t, :u, ARRAY['tx'], 'key')",
+         t=key2, u=c.uid)
+    c.get("/user/webhook", headers={"X-API-Key": key2})
+    assert _sql(c.pg_url, "SELECT token FROM api_tokens WHERE token_hash = :h", h=hash_token(key2)) == [(None,)]
+
+
+def test_a_plaintext_row_a_legacy_writer_adds_is_honoured_then_hashed(client_after_upgrade):
+    """The boot hashes any such row no lookup has reached yet."""
     c = client_after_upgrade
     key = "vxa_tx_writtenByAnOldGateway00042"
     _sql(c.pg_url, "INSERT INTO api_tokens (token, user_id, scopes, kind) VALUES (:t, :u, ARRAY['tx'], 'key')",

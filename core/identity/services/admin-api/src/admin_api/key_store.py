@@ -28,7 +28,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import delete, or_
+from sqlalchemy import delete, or_, text
 
 from .token_scope import TOKEN_PATTERN
 
@@ -57,8 +57,38 @@ def stored_fields(value: str) -> dict:
 
 def token_matches(model, value: str):
     """The WHERE clause that finds a presented key's row. A row another writer stored in plaintext
-    since the last convergence still matches on ``token``; the next boot hashes it."""
+    still matches on ``token``; the lookup that finds it hashes it (``hash_in_place``)."""
     return or_(model.token_hash == hash_token(value), model.token == value)
+
+
+_HASH_IN_PLACE = text(
+    "UPDATE api_tokens SET token_hash = :h, token_hint = :hint, token = NULL "
+    "WHERE id = (SELECT id FROM api_tokens WHERE id = :id AND token IS NOT NULL FOR UPDATE SKIP LOCKED)")
+_HASH_BOUNDS = ("SET LOCAL lock_timeout = '100ms'", "SET LOCAL synchronous_commit = off")
+
+
+async def hash_in_place(db, row, value: str) -> None:
+    """A row found by its plaintext ``token`` (a writer that does not hash yet) is hashed and cleared
+    by the lookup that found it, not left until the next boot. It never waits for a lock and never
+    fails the answer: a row it cannot take now is taken by the next lookup."""
+    if getattr(row, "token", None) is None:
+        return
+    try:
+        postgres = db.get_bind().dialect.name == "postgresql"
+    except Exception:  # noqa: BLE001 — a session with no bind (a test fake) is not Postgres
+        postgres = False
+    try:
+        if postgres:
+            for stmt in _HASH_BOUNDS:
+                await db.execute(text(stmt))
+            await db.execute(_HASH_IN_PLACE, {"h": hash_token(value), "hint": token_hint(value), "id": row.id})
+        else:
+            row.token, row.token_hash, row.token_hint = None, hash_token(value), token_hint(value)
+        await db.commit()
+    except Exception:  # noqa: BLE001 — advisory: the key already answered
+        rollback = getattr(db, "rollback", None)
+        if rollback is not None:
+            await rollback()
 
 
 KIND_KEY = "key"

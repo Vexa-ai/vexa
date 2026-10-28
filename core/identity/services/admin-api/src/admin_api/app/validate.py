@@ -38,7 +38,7 @@ from sqlalchemy.future import select
 from .. import delegation as delegation_mod
 from .. import obs
 from .. import at_rest
-from ..key_store import token_matches
+from ..key_store import hash_in_place, token_matches
 from ..schema.models import APIToken, User
 from . import delegation_revocation as revocation
 from . import admin_account
@@ -421,6 +421,7 @@ async def validate_token(payload: ValidateRequest, request: Request,
     if api_token.expires_at is not None and api_token.expires_at < datetime.utcnow():
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Token expired")
 
+    await hash_in_place(db, api_token, token)
     await _stamp_last_used(db, api_token)
 
     scopes = list(api_token.scopes) if api_token.scopes else ["legacy"]

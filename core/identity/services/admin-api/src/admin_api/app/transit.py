@@ -52,7 +52,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import at_rest
-from ..key_store import KIND_KEY, hash_token, stored_fields, token_matches
+from ..key_store import KIND_KEY, hash_in_place, hash_token, stored_fields, token_matches
 from ..schema.models import APIToken, TransitTarget, User
 from ..token_scope import parse_token_scope
 from .db import get_db
@@ -299,6 +299,7 @@ def build_router(verify_admin_token) -> APIRouter:
         if body.action not in actions:
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail=f"this key may not {body.action!r}")
         from .validate import _stamp_last_used  # noqa: PLC0415
+        await hash_in_place(db, tok, body.token)
         await _stamp_last_used(db, tok)
         secret = at_rest.unseal(target.secret, SECRET_PURPOSE)   # opened above to authenticate
         now = int(time.time())
