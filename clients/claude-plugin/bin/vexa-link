@@ -11,6 +11,10 @@
 #   GET <api_url>/link/events                 the person's calls: state changes, each new line said
 #   GET <api_url>/agent/claude/requests/next  presses in the web panel (each read is also the
 #                                             «Claude is running» the panel shows)
+#   GET <api_url>/agent/workspace/file        _global asks/in-this-call.md, once an hour: when the
+#                                             plugin brings «In this call» up to date
+#                                             (~/.vexa/link/in-this-call.json; its `error` when it
+#                                             cannot be read)
 # One runs per machine (~/.vexa/link/link.pid), whichever chat started it: which chat Vexa talks to
 # is decided by the plugin, not by who started this. A Vexa that does not answer (the network, a
 # redeploy) is waited for, however long: the line says `reconnecting` and goes on by itself. It
@@ -54,7 +58,9 @@ read_loop() {   # name url-builder
         [ "$refused" -ge "$REFUSALS" ] && { echo revoked > "$dir/exit"; stop; return; }
         sleep 5 ;;
       # This deployment has no such route (a Vexa without the panel's relay): that read ends, the other goes on.
-      404|405) echo "{\"ts\":$(now_ms),\"missing\":\"$1\"}" > "$dir/missing-$1.json"; return ;;
+      404|405) echo "{\"ts\":$(now_ms),\"missing\":\"$1\"}" > "$dir/missing-$1.json"
+        [ "$1" = on_asks ] && echo "{\"ts\":$(now_ms),\"error\":\"this Vexa has no _global asks/in-this-call.md ($code)\"}" > "$dir/in-this-call.json"
+        return ;;
       # Vexa did not answer (the network, a redeploy): wait and read again, 5 s growing to 30 s.
       *) fails=$((fails + 1)); refused=0
         [ "$fails" -ge 3 ] && state reconnecting
@@ -91,8 +97,17 @@ on_requests() {
   state running
 }
 
+asks_url() { echo "$api/agent/workspace/file?slug=_global&path=asks/in-this-call.md"; }
+# Kept as Vexa answered it; read again in an hour, waking every few seconds to see the line stopped.
+on_asks() {
+  printf '%s\n' "$1" > "$dir/in-this-call.json.tmp" && mv "$dir/in-this-call.json.tmp" "$dir/in-this-call.json"
+  n=0; while [ "$n" -lt 720 ] && [ ! -f "$dir/stop" ]; do sleep 5; n=$((n + 1)); done
+}
+
 state running
+rm -f "$dir/in-this-call.json" "$dir/missing-on_asks.json"
 read_loop on_events events_url &
+read_loop on_asks asks_url &
 read_loop on_requests requests_url &
 trap 'stop; rm -f "$dir/link.pid"' INT TERM
 wait

@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { AFTER_CALL_PAGE, afterCallAsk, IN_THIS_CALL_SEEDED, inThisCallAsk, inThisCallDue, inThisCallKnobs, bandState, fromPerson, heardLine, pickOwner, runsListener, withChat, FOLLOW_UP_CONTEXT, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, PERSON_CONTEXT, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
+import { AFTER_CALL_PAGE, afterCallAsk, inThisCallAsk, inThisCallDue, inThisCallKnobs, inThisCallTiming, bandState, fromPerson, heardLine, pickOwner, runsListener, withChat, FOLLOW_UP_CONTEXT, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, PERSON_CONTEXT, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
 
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 
@@ -354,7 +354,8 @@ test('the band never says listening while a wake waits; Listen here moves the li
 test('«In this call» is asked for as the call moves on, on the page\'s own timing', () => {
   const k = inThisCallKnobs('---\nlabel: in-this-call\n# when\nlines: 4\nevery_s: 90\nsoon_s: 30\n---\n[in this call] …')
   expect(k).toEqual({ lines: 4, everyMs: 90_000, soonMs: 30_000 })
-  expect(inThisCallKnobs('no frontmatter')).toEqual(IN_THIS_CALL_SEEDED)
+  expect(inThisCallKnobs('no frontmatter')).toBeNull()
+  expect(inThisCallKnobs('---\nlines: 4\nevery_s: 90\n---\n')).toBeNull()        // all three or none
   const at = (o: Partial<Parameters<typeof inThisCallDue>[0]>) => inThisCallDue({ lines: 1, hit: false, lastAt: 0, now: 1_000_000, busy: false, ...o }, k)
   expect(at({ lines: 4 })).toBe(true)
   expect(at({ lines: 3 })).toBe(false)                                        // not enough talk yet
@@ -363,6 +364,17 @@ test('«In this call» is asked for as the call moves on, on the page\'s own tim
   expect(at({ hit: true, lastAt: 1_000_000 - 1000 })).toBe(false)
   expect(at({ lines: 50, busy: true })).toBe(false)                           // never over a turn
   expect(at({ lines: 0, hit: true })).toBe(false)
+})
+
+test('without the page there is no timing, and why says so: nothing stands in for it', () => {
+  const page = '---\nlines: 6\nevery_s: 120\nsoon_s: 60\n---\n'
+  expect(inThisCallTiming(JSON.stringify({ path: 'asks/in-this-call.md', content: page }))).toEqual({ knobs: { lines: 6, everyMs: 120_000, soonMs: 60_000 } })
+  expect(inThisCallTiming(JSON.stringify({ error: 'this Vexa has no _global asks/in-this-call.md (404)' }))).toEqual({ why: 'this Vexa has no _global asks/in-this-call.md (404)' })
+  expect(inThisCallTiming(JSON.stringify({ content: 'no frontmatter' }))).toEqual({ why: 'no timing in its frontmatter' })
+  expect(inThisCallTiming('not json')).toEqual({ why: 'unreadable' })
+  const band = (inThisCallOff: string) => bandState({ connected: true, owner: true, linkActive: true, linkState: 'running', call: 'Pilot', listening: true, flash: '', answering: false, preset: 'default', inThisCallOff })
+  expect(band('unreadable')).toMatchObject({ tone: 'warn', line: 'Listening · Pilot · «In this call» off: unreadable' })
+  expect(band('')).toMatchObject({ tone: 'live', line: 'Listening · Pilot' })
 })
 
 test('the wake points at the _global page and carries what was heard, never the format', () => {

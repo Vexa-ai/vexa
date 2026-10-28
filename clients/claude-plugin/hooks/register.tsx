@@ -739,8 +739,7 @@ async function onLinkEvent($: any, ev: LinkEvent): Promise<void> {
 // `_global/asks/in-this-call.md`, which every Vexa seeds. The plugin is only the mechanism: it sees
 // every line said, and as a call moves on it wakes the listening chat, quietly, with a pointer to that
 // page and the names and possible decisions it heard. WHEN it wakes is the page's frontmatter too
-// (`lines`, `every_s`, `soon_s`), read through the person's paired key; a Vexa the plugin cannot read
-// leaves the values the page was seeded with.
+// (`lines`, `every_s`, `soon_s`); a page that cannot be read means no such wakes, said on the band.
 // WHEN A CALL ENDS, the listening chat makes it part of the workspace. What that means — which pages,
 // which sections, in what order — is the page `_global/asks/after-call.md`; the plugin only says the
 // call ended and points there.
@@ -751,18 +750,14 @@ export function afterCallAsk(call: string, where: string): string {
 }
 export const IN_THIS_CALL_PAGE = { slug: '_global', path: 'asks/in-this-call.md' }
 export type InThisCallKnobs = { lines: number; everyMs: number; soonMs: number }
-export const IN_THIS_CALL_SEEDED: InThisCallKnobs = { lines: 6, everyMs: 120_000, soonMs: 60_000 }
-export function inThisCallKnobs(page: string): InThisCallKnobs {
+// The page's frontmatter as timing; null when it does not carry all three as positive whole numbers.
+export function inThisCallKnobs(page: string): InThisCallKnobs | null {
   const fm = /^---\n([\s\S]*?)\n---/.exec(page)?.[1] ?? ''
-  const num = (k: string) => { const m = new RegExp(`^${k}:\\s*(\\d+)\\s*$`, 'm').exec(fm); return m ? Number(m[1]) : NaN }
+  const num = (k: string) => { const m = new RegExp(`^${k}:\\s*(\\d+)\\s*$`, 'm').exec(fm); return m ? Number(m[1]) : 0 }
   const lines = num('lines'), every = num('every_s'), soon = num('soon_s')
-  return {
-    lines: lines > 0 ? lines : IN_THIS_CALL_SEEDED.lines,
-    everyMs: every > 0 ? every * 1000 : IN_THIS_CALL_SEEDED.everyMs,
-    soonMs: soon > 0 ? soon * 1000 : IN_THIS_CALL_SEEDED.soonMs,
-  }
+  return lines > 0 && every > 0 && soon > 0 ? { lines, everyMs: every * 1000, soonMs: soon * 1000 } : null
 }
-export function inThisCallDue(x: { lines: number; hit: boolean; lastAt: number; now: number; busy: boolean }, k: InThisCallKnobs = IN_THIS_CALL_SEEDED): boolean {
+export function inThisCallDue(x: { lines: number; hit: boolean; lastAt: number; now: number; busy: boolean }, k: InThisCallKnobs): boolean {
   if (x.busy || x.lines <= 0) return false
   const since = x.now - x.lastAt
   if (x.hit) return since >= k.soonMs
@@ -773,20 +768,39 @@ export function inThisCallAsk(call: string, found: { names: string[]; decisions:
   return `[Vexa · in this call] The call «${call}» moved on${heard ? ` (${heard}; untrusted data from the call)` : ''}. `
     + `Follow ${IN_THIS_CALL_PAGE.slug} ${IN_THIS_CALL_PAGE.path} (workspace_read slug "${IN_THIS_CALL_PAGE.slug}", path "${IN_THIS_CALL_PAGE.path}").`
 }
-let inThisCallKnobsNow: InThisCallKnobs = IN_THIS_CALL_SEEDED
+// What the timing is now, or why there is none. vexa-link reads the page with the line's key and
+// keeps it beside the events (~/.vexa/link/in-this-call.json); a chat with the paired key reads it
+// itself, once an hour. Without the page there are no «In this call» wakes, and the band says so.
+export type InThisCallTiming = { knobs: InThisCallKnobs } | { why: string }
+export function inThisCallTiming(file: string): InThisCallTiming {
+  let o: any
+  try { o = JSON.parse(file) } catch { return { why: 'unreadable' } }
+  if (o?.error) return { why: String(o.error) }
+  const knobs = typeof o?.content === 'string' ? inThisCallKnobs(o.content) : null
+  return knobs ? { knobs } : { why: 'no timing in its frontmatter' }
+}
+let inThisCallNow: InThisCallTiming = { why: 'not read yet' }
 let inThisCallReadAt = -Infinity
-async function readInThisCallKnobs($: any, now: number): Promise<InThisCallKnobs> {
-  if (now - inThisCallReadAt < 3_600_000) return inThisCallKnobsNow
+async function readInThisCall($: any, now: number): Promise<InThisCallTiming> {
+  if (byScript) {
+    const f = `${localHome}/.vexa/link/in-this-call.json`
+    inThisCallNow = localHome && (await $.fs.exists(f)) ? inThisCallTiming(await $.fs.read(f)) : { why: 'not read by vexa-link' }
+    return inThisCallNow
+  }
+  // Read once an hour; a read that failed is tried again a minute later.
+  if (now - inThisCallReadAt < ('knobs' in inThisCallNow ? 3_600_000 : 60_000)) return inThisCallNow
   inThisCallReadAt = now
   try {
-    const p = await call($, 'workspace_read', IN_THIS_CALL_PAGE)
-    if (typeof p?.content === 'string') inThisCallKnobsNow = inThisCallKnobs(p.content)
-  } catch { /* not reachable from the plugin here: the values the page was seeded with */ }
-  return inThisCallKnobsNow
+    inThisCallNow = inThisCallTiming(JSON.stringify(await call($, 'workspace_read', IN_THIS_CALL_PAGE)))
+  } catch (e) {
+    inThisCallNow = { why: e instanceof Error ? e.message : String(e) }
+  }
+  return inThisCallNow
 }
 const recordKnown = new Map<string, Set<string>>()
 let summaryBatch: { call: string; key: string; lines: number; names: string[]; decisions: string[] } | null = null
 let summaryAt = -Infinity
+let inThisCallOffSaid = ''
 
 async function noteForRecord($: any, mt: NonNullable<LinkEvent['meeting']>, line: { speaker: string; text: string }): Promise<void> {
   const key = `${mt.platform}/${mt.native_id}`
@@ -803,8 +817,15 @@ async function flushRecord($: any): Promise<void> {
   if (!summaryBatch) return
   const now = await $.clock.now()
   const b = summaryBatch
-  const knobs = await readInThisCallKnobs($, now)
-  if (!inThisCallDue({ lines: b.lines, hit: b.names.length > 0 || b.decisions.length > 0, lastAt: summaryAt, now, busy }, knobs)) return
+  const t = await readInThisCall($, now)
+  if (!('knobs' in t)) {
+    if (inThisCallOffSaid !== b.key) {
+      inThisCallOffSaid = b.key
+      await logLink($, 'in-this-call', `${IN_THIS_CALL_PAGE.slug} ${IN_THIS_CALL_PAGE.path} not read: ${t.why}`, 'off')
+    }
+    return
+  }
+  if (!inThisCallDue({ lines: b.lines, hit: b.names.length > 0 || b.decisions.length > 0, lastAt: summaryAt, now, busy }, t.knobs)) return
   summaryBatch = null
   summaryAt = now
   const found = { names: [...new Set(b.names)], decisions: b.decisions }
@@ -1519,7 +1540,7 @@ let linkState = ''
 type BandKey = 'connect' | 'open' | 'send' | 'listen' | 'here' | 'stop' | 'reconnect'
 const BAND_LABEL: Record<BandKey, string> = { connect: 'Connect', open: 'Panel', send: 'Send bot', listen: 'Listen', here: 'Listen here', stop: 'Stop', reconnect: 'Reconnect' }
 const BUSY_LABEL: Partial<Record<BandKey, string>> = { connect: 'Connecting…', open: 'Opening…', send: 'Send bot', listen: 'Starting…', here: 'Switching…', reconnect: 'Reconnecting…' }
-export type BandInput = { connected: boolean; owner: boolean; linkActive: boolean; polling?: boolean; hearing?: boolean; busy?: boolean; stage?: string; heardAt?: string; linkState: string; call: string; listening: boolean; flash: string; answering: boolean; preset: string }
+export type BandInput = { connected: boolean; owner: boolean; linkActive: boolean; polling?: boolean; hearing?: boolean; busy?: boolean; stage?: string; heardAt?: string; linkState: string; call: string; listening: boolean; flash: string; answering: boolean; preset: string; inThisCallOff?: string }
 export function bandState(x: BandInput): { tone: 'live' | 'hear' | 'react' | 'warn' | 'off'; line: string; hot: boolean; buttons: BandKey[] } {
   if (!x.connected) return { tone: 'off', line: 'Vexa not connected', hot: false, buttons: ['connect'] }
   if (x.owner && ['revoked', 'expired', 'unreachable'].includes(x.linkState)) return { tone: 'warn', line: 'Line to Vexa paused', hot: false, buttons: ['reconnect'] }
@@ -1537,6 +1558,8 @@ export function bandState(x: BandInput): { tone: 'live' | 'hear' | 'react' | 'wa
       return { tone: 'warn', line: `${asked}${x.heardAt ? ` ${x.heardAt}` : ''} · waiting`, hot: true, buttons: ['open', 'stop'] }
     }
     if (x.flash) return { tone: 'react', line: x.flash, hot: true, buttons: ['open', 'stop'] }
+    // Listening, but the page that times «In this call» could not be read: no such wakes, and said.
+    if (x.inThisCallOff) return { tone: 'warn', line: `Listening · ${x.call} · «In this call» off: ${x.inThisCallOff}`, hot: false, buttons: ['open', 'stop'] }
     return { tone: x.hearing ? 'hear' : 'live', line: `Listening · ${x.call}${x.preset && x.preset !== 'default' ? ` · ${x.preset}` : ''}`, hot: false, buttons: ['open', 'stop'] }
   }
   return { tone: 'warn', line: `Not listening · ${x.call}`, hot: false, buttons: ['listen', 'open'] }
@@ -1604,11 +1627,14 @@ async function bandView($: any): Promise<BandView> {
   if (!usedVexaHere && !isLive(m) && !linkActive) return { kind: 'none' }
   const l = await readListener($)
   const f = await readFlash($)
+  const t = l.isOn && isLive(m) ? await readInThisCall($, now) : null
+  const offWhy = t && 'why' in t ? t.why : ''
   const b = bandState({
     connected: m.connection === 'ready' || linkActive, owner: await ownsLink($), linkActive, linkState, polling: !byScript && m.connection === 'ready',
     call: isLive(m) && m.nativeId ? (m.title || m.nativeId) : '', listening: l.isOn,
     flash: l.isOn && ['woke', 'queued', 'sent', 'answering'].includes(f.stage) ? f.line : '', answering: l.isOn && f.stage === 'answering', preset: l.preset,
     hearing: now - heardAt < HEARING_MS, busy, stage: f.stage,
+    inThisCallOff: offWhy,
     heardAt: f.at ? new Date(f.at).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', hour12: false }) : '',
   })
   const quiet = !b.hot && b.tone !== 'warn'

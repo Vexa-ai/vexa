@@ -55,6 +55,10 @@ function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<s
       const from = Number(e.args?.since_index ?? 0)
       return { value: text({ status: endedLive.value ? 'completed' : 'active', since_index: from, next_index: all.length, segments: all.slice(from) }) }
     }
+    // Every Vexa carries the _global page that times «In this call».
+    if (e.tool === 'workspace_read' && e.args?.slug === '_global' && e.args?.path === 'asks/in-this-call.md') {
+      return { value: text({ path: e.args.path, content: '---\nlabel: in-this-call\nlines: 6\nevery_s: 120\nsoon_s: 60\n---\n' }) }
+    }
     if (e.tool === 'workspace_write') { seen.pages.push(e.args); return { value: text({ path: e.args.path, written: true }) } }
     if (e.tool === 'entity_upsert') { seen.upserts.push(e.args); return { value: text({ path: e.args.kind === 'meeting' ? 'kg/entities/meeting/x.md' : `kg/entities/${e.args.kind}/y.md` }) } }
     if (e.tool === 'annotate_meeting') { Object.assign(meta, e.args.metadata); seen.annotations.push({ ...e.args.metadata }); return { value: text({ ok: true }) } }
