@@ -7,10 +7,15 @@ credential broker's store key. A database or backup without that file yields no 
 
   sealed form   ``vxe1:`` + base64url(nonce[12] || ciphertext+tag), AAD = ``vexa-at-rest.v1\\0<purpose>``
 
-``seal`` and ``unseal`` are the only two doors. A value without the ``vxe1:`` prefix is a legacy
-plaintext value and is answered as it is, so rows written before this keep working until the
-convergence seals them. With no key configured nothing is sealed (and ``key_configured()`` says
-so, for the boot warning); a sealed value read without the key is unreadable and answers None.
+``seal`` and ``unseal`` are the only two doors, and both need the key:
+
+  * ``load_key()`` reads and checks the file once; the service calls it at boot and refuses to
+    start without a usable key (``AtRestKeyUnavailable``). Later calls reuse the key read.
+  * ``seal`` never writes a secret unsealed: with no key it raises.
+  * ``unseal`` answers a legacy plaintext value (no ``vxe1:`` prefix) as it is, so rows written
+    before the convergence sealed them keep working, and raises ``SealedSecretUnreadable`` for a
+    sealed value it cannot open (no key, another key, tampered). The caller fails the delivery
+    visibly; it never signs with nothing.
 
 This file is vendored byte for byte into admin-api (``admin_api/at_rest.py``) and meeting-api
 (``meeting_api/at_rest.py``); both read the same key file.
@@ -30,22 +35,43 @@ PREFIX = "vxe1:"
 WEBHOOK_SECRET_PURPOSE = "webhook_secret"
 _AAD = b"vexa-at-rest.v1\0"
 
+#: The key read from the file named by KEY_FILE_ENV, keyed by that path: read once, re-read only if
+#: the path itself changes.
+_loaded: dict = {}
 
-def _load_key() -> Optional[bytes]:
+
+class AtRestKeyUnavailable(RuntimeError):
+    """No usable at-rest key: the variable is unset, the file is unreadable, or it is not 64 hex."""
+
+
+class SealedSecretUnreadable(RuntimeError):
+    """A sealed value that does not open under this service's key."""
+
+
+def load_key() -> bytes:
+    """The at-rest key, read once. Raises AtRestKeyUnavailable when there is none to read."""
     path = (os.environ.get(KEY_FILE_ENV) or "").strip()
     if not path:
-        return None
+        raise AtRestKeyUnavailable(f"{KEY_FILE_ENV} is not set")
+    if path in _loaded:
+        return _loaded[path]
     try:
         key = bytes.fromhex(Path(path).read_text().strip())
     except (OSError, ValueError):
-        raise RuntimeError(f"{KEY_FILE_ENV} does not hold 64 hex characters") from None
+        raise AtRestKeyUnavailable(f"{KEY_FILE_ENV} does not name a file of 64 hex characters") from None
     if len(key) != 32:
-        raise RuntimeError(f"{KEY_FILE_ENV} does not hold 64 hex characters")
+        raise AtRestKeyUnavailable(f"{KEY_FILE_ENV} does not name a file of 64 hex characters")
+    _loaded.clear()
+    _loaded[path] = key
     return key
 
 
 def key_configured() -> bool:
-    return _load_key() is not None
+    try:
+        load_key()
+        return True
+    except AtRestKeyUnavailable:
+        return False
 
 
 def is_sealed(value: object) -> bool:
@@ -53,12 +79,10 @@ def is_sealed(value: object) -> bool:
 
 
 def seal(value: Optional[str], purpose: str) -> Optional[str]:
-    """The stored form of a secret: sealed when a key is configured, as given otherwise."""
+    """The stored form of a secret. Raises AtRestKeyUnavailable rather than store it unsealed."""
     if not value or is_sealed(value):
         return value
-    key = _load_key()
-    if key is None:
-        return value
+    key = load_key()
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: PLC0415
 
     nonce = secrets.token_bytes(12)
@@ -67,13 +91,14 @@ def seal(value: Optional[str], purpose: str) -> Optional[str]:
 
 
 def unseal(value: Optional[str], purpose: str) -> Optional[str]:
-    """The secret itself: a sealed value opened, a legacy plaintext value as it is, None when a
-    sealed value cannot be opened (no key, another key, or tampered)."""
+    """The secret itself: a sealed value opened, a legacy plaintext value as it is. Raises
+    SealedSecretUnreadable for a sealed value that cannot be opened."""
     if not value or not is_sealed(value):
         return value
-    key = _load_key()
-    if key is None:
-        return None
+    try:
+        key = load_key()
+    except AtRestKeyUnavailable as e:
+        raise SealedSecretUnreadable(str(e)) from None
     from cryptography.exceptions import InvalidTag  # noqa: PLC0415
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: PLC0415
 
@@ -82,4 +107,4 @@ def unseal(value: Optional[str], purpose: str) -> Optional[str]:
         blob = base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))
         return AESGCM(key).decrypt(blob[:12], blob[12:], _AAD + purpose.encode()).decode("utf-8")
     except (InvalidTag, ValueError):
-        return None
+        raise SealedSecretUnreadable("a sealed value does not open under this key") from None

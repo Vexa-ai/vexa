@@ -20,6 +20,18 @@ os.environ.setdefault("VEXA_FEATURES", "all")
 
 
 @pytest.fixture(autouse=True)
+def _at_rest_key(tmp_path_factory, monkeypatch):
+    """Every deployment mounts the at-rest key (MIGRATION-0015, required at boot): so does every test.
+    A test about a missing or replaced key deletes or replaces the variable itself."""
+    import secrets as _secrets
+    if not os.environ.get("VEXA_AT_REST_KEY_FILE", "").startswith(str(tmp_path_factory.getbasetemp())):
+        f = tmp_path_factory.getbasetemp() / "at-rest.key"
+        if not f.exists():
+            f.write_text(_secrets.token_hex(32))
+        monkeypatch.setenv("VEXA_AT_REST_KEY_FILE", str(f))
+
+
+@pytest.fixture(autouse=True)
 def _stt_configured(monkeypatch):
     """CC4 baseline: the product transcribes by default, so the suite runs as a TRANSCRIPTION-configured
     deployment — STT creds present → a default `transcribe_enabled=true` spawn is served (not 503). A test

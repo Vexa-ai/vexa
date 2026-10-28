@@ -951,7 +951,11 @@ def create_app() -> FastAPI:
         whether a secret is set (masked to its last 4 chars). Nothing else in ``users.data`` — a key
         scoped to bots or transcripts reads its own webhook here, never the account's stored model
         key, transcription token or calendar feed URLs."""
-        secret = at_rest.unseal(data.get("webhook_secret"), WEBHOOK_SECRET_PURPOSE)
+        try:
+            secret = at_rest.unseal(data.get("webhook_secret"), WEBHOOK_SECRET_PURPOSE)
+            masked = _mask_secret(secret)
+        except at_rest.SealedSecretUnreadable:
+            secret, masked = data.get("webhook_secret"), "****"   # stored, but not readable here
         return {
             "webhook_url": data.get("webhook_url"),
             "webhook_secret_set": bool(secret),
@@ -1838,13 +1842,8 @@ def create_app() -> FastAPI:
         resp["capture_signal"] = _resolve_capture_signal(
             data, await read_platform_setting("diagnostics", db)
         )
-        if data.get("webhook_url"):
-            resp["webhook_url"] = data["webhook_url"]
-            secret = at_rest.unseal(data.get("webhook_secret"), WEBHOOK_SECRET_PURPOSE)
-            if secret:
-                resp["webhook_secret"] = secret
-            if data.get("webhook_events"):
-                resp["webhook_events"] = data["webhook_events"]
+        from .validate import webhook_config  # noqa: PLC0415
+        resp.update(webhook_config(data, user_id=user.id))
         # The effective transcription backend (user pref > platform setting) — bot_spawn overrides
         # its env-derived TRANSCRIPTION_SERVICE_URL/TOKEN with this when present. The token crosses
         # ONLY this internal hop.

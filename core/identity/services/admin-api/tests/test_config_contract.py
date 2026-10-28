@@ -28,14 +28,16 @@ def test_preflight_refuses_boot_without_internal_api_secret():
 def test_preflight_passes_when_required_set():
     # defaulted keys (DB_HOST…, ADMIN_API_TOKEN, LOG_LEVEL, …) never block; only the required ones do.
     cp.preflight({"INTERNAL_API_SECRET": "a-real-secret", "DB_PASSWORD": "a-real-db-password",
-                  "VEXA_TERMINAL_SESSION_SECRET": "a-real-session-secret"})
+                  "VEXA_TERMINAL_SESSION_SECRET": "a-real-session-secret",
+                  "VEXA_AT_REST_KEY_FILE": "/run/vexa-at-rest/key"})
 
 
 def test_preflight_refuses_boot_without_the_terminal_session_secret():
     """Without it no sign-in ends in a session, so every decision that needs one is refused for
     everybody, while the service looks healthy. Every surface generates it at install; a deploy
     that lost it refuses to boot and names the key (never the value)."""
-    env = {"INTERNAL_API_SECRET": "a-real-secret", "DB_PASSWORD": "a-real-db-password"}
+    env = {"INTERNAL_API_SECRET": "a-real-secret", "DB_PASSWORD": "a-real-db-password",
+           "VEXA_AT_REST_KEY_FILE": "/run/vexa-at-rest/key"}
     for value in ("", "changeme", "vexa-internal-secret"):
         with pytest.raises(cp.ConfigError) as ei:
             cp.preflight({**env, "VEXA_TERMINAL_SESSION_SECRET": value} if value else env)
@@ -100,6 +102,7 @@ def test_preflight_refuses_every_published_admin_token(published):
         with pytest.raises(cp.ConfigError) as ei:
             cp.preflight({"DB_PASSWORD": "a-real-db-password", "INTERNAL_API_SECRET": "a-real-secret",
                           "VEXA_TERMINAL_SESSION_SECRET": "a-real-session-secret",
+                  "VEXA_AT_REST_KEY_FILE": "/run/vexa-at-rest/key",
                           "ADMIN_API_TOKEN": value})
         said = str(ei.value)
         assert "ADMIN_API_TOKEN" in said
@@ -110,6 +113,7 @@ def test_preflight_refuses_every_published_admin_token(published):
 def test_preflight_keeps_a_real_admin_token():
     cp.preflight({"DB_PASSWORD": "a-real-db-password", "INTERNAL_API_SECRET": "a-real-secret",
                   "VEXA_TERMINAL_SESSION_SECRET": "a-real-session-secret",
+                  "VEXA_AT_REST_KEY_FILE": "/run/vexa-at-rest/key",
                   "ADMIN_API_TOKEN": "0123456789abcdef" * 4})
 
 
@@ -137,7 +141,8 @@ def test_the_flows_publish_edge_is_declared_and_never_blocks_the_boot():
 
     # The boot with nothing but the genuinely-required values. No flows, no key, no error.
     cp.preflight({"INTERNAL_API_SECRET": "a-real-secret", "DB_PASSWORD": "a-real-db-password",
-                  "VEXA_TERMINAL_SESSION_SECRET": "a-real-session-secret"})
+                  "VEXA_TERMINAL_SESSION_SECRET": "a-real-session-secret",
+                  "VEXA_AT_REST_KEY_FILE": "/run/vexa-at-rest/key"})
 
     required = {k["key"] for k in decl["keys"] if k["class"] == "required-explicit"}
     assert not ({"VEXA_FLOWS_API_URL", "VEXA_FLOWS_API_KEY"} & required), \
@@ -162,7 +167,9 @@ def test_the_flows_url_key_matches_meeting_api_and_agent_api():
 PUBLISHED_DB_PASSWORDS = ("postgres", "changeme", "change-me", "CHANGE-ME", "default", "secret",
                           "password")
 REQUIRED = {"INTERNAL_API_SECRET": "a-real-secret", "DB_PASSWORD": "a-real-db-password",
-            "VEXA_TERMINAL_SESSION_SECRET": "a-real-session-secret"}
+            "VEXA_TERMINAL_SESSION_SECRET": "a-real-session-secret",
+                  "VEXA_AT_REST_KEY_FILE": "/run/vexa-at-rest/key",
+            "VEXA_AT_REST_KEY_FILE": "/run/vexa-at-rest/key"}
 
 
 def test_db_password_is_required_explicit_with_no_published_default():

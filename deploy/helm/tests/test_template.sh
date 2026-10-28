@@ -1418,6 +1418,13 @@ if [ "$ar_holders" = "vexa/templates/deployment-admin-api.yaml vexa/templates/de
    && [ "$(grep -c 'value: /run/vexa-at-rest/key' <<< "$RENDER")" -eq 2 ]; then
   echo "  OK: the at-rest key is kept, and mounted by admin-api and meeting-api only"
 else echo "  FAIL: at-rest key wiring (holders: $ar_holders)"; fail=1; fi
+# An upgrade that cannot find the key must not mint a new one (every sealed secret would be lost).
+if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --is-upgrade >/dev/null 2>&1; then
+  echo "  FAIL: an upgrade with no at-rest key Secret rendered (it would generate a new key)"; fail=1
+else echo "  OK: an upgrade with no at-rest key Secret refuses to render"; fi
+if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --is-upgrade --set atRest.existingSecret=my-at-rest >/dev/null 2>&1; then
+  echo "  OK: an upgrade naming atRest.existingSecret renders"
+else echo "  FAIL: an upgrade naming atRest.existingSecret did not render"; fail=1; fi
 ARX="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set atRest.existingSecret=my-at-rest)"
 if ! grep -q 'secret-at-rest-key.yaml' <<< "$ARX" && [ "$(grep -c 'secretName: my-at-rest$' <<< "$ARX")" -eq 2 ]; then
   echo "  OK: atRest.existingSecret replaces the generated key in both consumers"

@@ -150,7 +150,10 @@ async def authenticated_target(request: Request, db: AsyncSession = Depends(get_
     name = (request.headers.get(TARGET_HEADER) or "").strip()
     given = request.headers.get(TARGET_SECRET_HEADER) or ""
     t = await db.get(TransitTarget, name) if _NAME.fullmatch(name) else None
-    stored = at_rest.unseal(t.secret, SECRET_PURPOSE) if t is not None else None
+    try:
+        stored = at_rest.unseal(t.secret, SECRET_PURPOSE) if t is not None else None
+    except at_rest.SealedSecretUnreadable:
+        stored = None   # the at-rest key does not open it: nobody authenticates as this target
     if not stored or not given or not hmac.compare_digest(given.encode(), stored.encode()):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="unknown transit target or credential")
     return t
@@ -298,11 +301,15 @@ def build_router(verify_admin_token) -> APIRouter:
         if body.action not in actions:
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail=f"this key may not {body.action!r}")
         from .validate import _stamp_last_used  # noqa: PLC0415
+        await hash_in_place(db, tok, body.token)
         await _stamp_last_used(db, tok)
-        secret = at_rest.unseal(target.secret, SECRET_PURPOSE) or ""
+        secret = at_rest.unseal(target.secret, SECRET_PURPOSE)   # opened above to authenticate
         now = int(time.time())
+        # `token_sha256` binds the answer to the key the target presented (an answer cannot be
+        # replayed for another key); `nonce` makes every answer unique.
         claims = {"aud": target.name, "sub": user.id, "email": user.email, "actions": actions,
-                  "key_id": tok.id, "iat": now, "exp": now + ANSWER_TTL_SECONDS}
+                  "key_id": tok.id, "token_sha256": hash_token(body.token), "nonce": secrets.token_hex(8),
+                  "iat": now, "exp": now + ANSWER_TTL_SECONDS}
         return sign_answer(secret, claims)
 
     return router

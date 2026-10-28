@@ -174,3 +174,17 @@ class HashedTokens(dict):
 
     def get(self, key, default=None):
         return super().get(self._k(key), default)
+
+
+
+@pytest.fixture(autouse=True)
+def _at_rest_key(tmp_path_factory, monkeypatch):
+    """Every deployment mounts the at-rest key (MIGRATION-0015, required at boot): so does every test.
+    A test about a missing or replaced key deletes or replaces the variable itself."""
+    import os
+    import secrets as _secrets
+    if not os.environ.get("VEXA_AT_REST_KEY_FILE"):
+        f = tmp_path_factory.getbasetemp() / "at-rest.key"
+        if not f.exists():
+            f.write_text(_secrets.token_hex(32))
+        monkeypatch.setenv("VEXA_AT_REST_KEY_FILE", str(f))

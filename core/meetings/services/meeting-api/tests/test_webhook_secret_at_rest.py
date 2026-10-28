@@ -59,30 +59,60 @@ def test_existing_webhooks_keep_verifying_after_the_migration(key):
         assert headers["Authorization"] == f"Bearer {SUBSCRIBER_SECRET}"
 
 
-def test_wrong_key_purpose_or_tamper_opens_to_nothing(key, tmp_path, monkeypatch):
+def test_wrong_key_purpose_or_tamper_never_opens_to_a_secret(key, tmp_path, monkeypatch):
     sealed = at_rest.seal(SUBSCRIBER_SECRET, PURPOSE)
-    assert at_rest.unseal(sealed, "another_purpose") is None
-    assert at_rest.unseal(sealed[:-2] + ("A" if sealed[-2] != "A" else "B") + sealed[-1], PURPOSE) is None
+    with pytest.raises(at_rest.SealedSecretUnreadable):
+        at_rest.unseal(sealed, "another_purpose")
+    with pytest.raises(at_rest.SealedSecretUnreadable):
+        at_rest.unseal(sealed[:-2] + ("A" if sealed[-2] != "A" else "B") + sealed[-1], PURPOSE)
     other = tmp_path / "other.key"
     other.write_text(secrets.token_hex(32))
     monkeypatch.setenv(at_rest.KEY_FILE_ENV, str(other))
-    assert at_rest.unseal(sealed, PURPOSE) is None
+    with pytest.raises(at_rest.SealedSecretUnreadable):
+        at_rest.unseal(sealed, PURPOSE)
     monkeypatch.delenv(at_rest.KEY_FILE_ENV)
-    assert at_rest.unseal(sealed, PURPOSE) is None                 # no key: unreadable, not plaintext
+    with pytest.raises(at_rest.SealedSecretUnreadable):           # no key: unreadable, never plaintext
+        at_rest.unseal(sealed, PURPOSE)
 
 
-def test_without_a_key_nothing_is_sealed(monkeypatch):
+def test_without_a_key_nothing_is_stored_unsealed(monkeypatch):
     monkeypatch.delenv(at_rest.KEY_FILE_ENV, raising=False)
     assert not at_rest.key_configured()
-    assert at_rest.seal(SUBSCRIBER_SECRET, PURPOSE) == SUBSCRIBER_SECRET
+    with pytest.raises(at_rest.AtRestKeyUnavailable):
+        at_rest.seal(SUBSCRIBER_SECRET, PURPOSE)
 
 
 def test_a_malformed_key_file_is_refused_loudly(tmp_path, monkeypatch):
     bad = tmp_path / "k"
     bad.write_text("not-hex")
     monkeypatch.setenv(at_rest.KEY_FILE_ENV, str(bad))
-    with pytest.raises(RuntimeError):
+    with pytest.raises(at_rest.AtRestKeyUnavailable):
         at_rest.seal(SUBSCRIBER_SECRET, PURPOSE)
+
+
+def test_meeting_api_refuses_to_boot_without_the_key(monkeypatch, tmp_path):
+    from meeting_api.__main__ import _at_rest_key_at_boot
+    from meeting_api.config_preflight import ConfigError
+
+    monkeypatch.delenv(at_rest.KEY_FILE_ENV, raising=False)
+    with pytest.raises(ConfigError, match="refuses to boot"):
+        _at_rest_key_at_boot()
+    (tmp_path / "k").write_text("too-short")
+    monkeypatch.setenv(at_rest.KEY_FILE_ENV, str(tmp_path / "k"))
+    with pytest.raises(ConfigError, match="refuses to boot"):
+        _at_rest_key_at_boot()
+    (tmp_path / "k").write_text(secrets.token_hex(32))
+    _at_rest_key_at_boot()
+
+
+def test_the_key_file_is_read_once(key, monkeypatch):
+    at_rest.seal(SUBSCRIBER_SECRET, PURPOSE)
+    reads = []
+    real = Path.read_text
+    monkeypatch.setattr(Path, "read_text", lambda self, *a, **k: reads.append(self) or real(self, *a, **k))
+    for _ in range(5):
+        at_rest.unseal(at_rest.seal(SUBSCRIBER_SECRET, PURPOSE), PURPOSE)
+    assert reads == []
 
 
 class _Redis:
@@ -113,3 +143,65 @@ def test_the_retry_queue_holds_the_sealed_form_and_still_signs(key):
     legacy_entry = {**entry, "webhook_secret": SUBSCRIBER_SECRET}  # queued before the upgrade
     asyncio.run(retry_mod._deliver_one(legacy_entry, transport))
     assert verify_signature(seen["body"], seen["headers"], SUBSCRIBER_SECRET)
+
+
+class _QueueRedis:
+    """Enough of Redis for one sweep of the retry queue."""
+
+    def __init__(self, entries):
+        self.lists = {retry_mod.RETRY_QUEUE_KEY: [json.dumps(e) for e in entries]}
+
+    def _l(self, k):
+        return self.lists.setdefault(k, [])
+
+    async def llen(self, k):
+        return len(self._l(k))
+
+    async def rpoplpush(self, src, dst):
+        if not self._l(src):
+            return None
+        v = self._l(src).pop()
+        self._l(dst).insert(0, v)
+        return v
+
+    async def lset(self, k, i, v):
+        self._l(k)[i] = v
+
+    async def lrem(self, k, n, v):
+        if v in self._l(k):
+            self._l(k).remove(v)
+
+    async def lpush(self, k, v):
+        self._l(k).insert(0, v)
+
+    async def rpush(self, k, v):
+        self._l(k).append(v)
+
+    async def lrange(self, k, a, b):
+        return list(self._l(k))
+
+    async def ltrim(self, k, a, b):
+        pass
+
+    async def expire(self, *a):
+        pass
+
+
+def test_a_queued_secret_that_does_not_open_is_dead_lettered_never_sent_unsigned(key, tmp_path, monkeypatch):
+    sealed = at_rest.seal(SUBSCRIBER_SECRET, PURPOSE)
+    entry = {"url": "https://hooks.example/x", "payload": {"event": "meeting.completed"}, "webhook_secret": sealed,
+             "attempt": 0, "next_retry_at": 0, "created_at": 1_000_000_000}
+    other = tmp_path / "replaced.key"
+    other.write_text(secrets.token_hex(32))
+    monkeypatch.setenv(at_rest.KEY_FILE_ENV, str(other))          # the key file was replaced
+    sent = []
+
+    async def transport(url, body, headers):
+        sent.append(headers)
+        return type("R", (), {"status_code": 200})()
+
+    redis = _QueueRedis([entry])
+    asyncio.run(retry_mod.drain_retry_queue(redis, transport, now=1_000_000_100))
+    assert sent == []                                             # nothing went out, signed or not
+    dead = [json.loads(v) for v in redis.lists.get(retry_mod.DEAD_LETTER_KEY, [])]
+    assert dead and dead[0].get("reason") == retry_mod.SECRET_UNREADABLE

@@ -126,6 +126,13 @@ def build_production_app():
         feed_allowance()
     except ValueError as e:
         raise ConfigError(f"admin-api refuses to boot: {e}") from None
+    # Webhook signing secrets are stored sealed (at_rest.py, MIGRATION-0015): without a usable key
+    # nothing could be written or read, so the service does not start.
+    from . import at_rest
+    try:
+        at_rest.load_key()
+    except at_rest.AtRestKeyUnavailable as e:
+        raise ConfigError(f"admin-api refuses to boot: {e}") from None
     if open_to_everyone():
         logger.warning("VEXA_SIGNIN_ALLOW contains '*': ANY email address may sign in to this "
                        "instance and get an account. Meant for dev/demo stacks only.")
@@ -171,19 +178,8 @@ def build_production_app():
         await _announce_admin_claim()
         await _warn_stored_open_signin()
         await _warn_admin_account_state()
-        _warn_at_rest_key()
 
     return app
-
-
-def _warn_at_rest_key() -> None:
-    """Say at boot when webhook signing secrets are stored as written (no VEXA_AT_REST_KEY_FILE)."""
-    from . import at_rest  # noqa: PLC0415
-
-    if not at_rest.key_configured():
-        logger.error("%s is not set: webhook signing secrets are stored unsealed in the database "
-                     "(MIGRATION-0015). Mount a 64-hex-character key file in admin-api and meeting-api.",
-                     at_rest.KEY_FILE_ENV)
 
 
 async def _warn_admin_account_state() -> None:

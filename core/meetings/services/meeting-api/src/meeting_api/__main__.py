@@ -101,6 +101,18 @@ def _auth_session_at_boot(env: "os._Environ | dict | None" = None) -> None:
         raise ConfigError(f"meeting-api refuses to boot: {e}") from None
 
 
+def _at_rest_key_at_boot() -> None:
+    """The at-rest key, read once at boot (at_rest.py, MIGRATION-0015). Webhook signing secrets are
+    stored sealed under it; without it none can be sealed or opened, so the service does not start."""
+    from . import at_rest
+    from .config_preflight import ConfigError
+
+    try:
+        at_rest.load_key()
+    except at_rest.AtRestKeyUnavailable as e:
+        raise ConfigError(f"meeting-api refuses to boot: {e}") from None
+
+
 def _capture_signal_default_at_boot(env: "os._Environ | dict | None" = None) -> bool:
     """``VEXA_CAPTURE_SIGNAL_DEFAULT``, read once at boot (P18). An unrecognized value refuses the
     boot naming the key: whether meetings are taped is a data-protection decision, and neither side
@@ -221,6 +233,7 @@ def build_production_app():
     workload_acl = _redis_workload_acl()  # S51: an unknown mode refuses the boot, as agent-api's does
     _auth_session_at_boot()  # S64: a broken authenticated-bot store refuses the boot, not the first spawn
     _capture_signal_default_at_boot()  # a typo in the tape switch refuses the boot, never guesses
+    _at_rest_key_at_boot()  # MIGRATION-0015: no key, no sealed webhook secret is readable
     _calendar_feed_allow_at_boot()  # a malformed internal-feed allowance refuses the boot
     _auto_join_block_at_boot()  # a malformed auto-join block list refuses the boot
     _meeting_host_allow_at_boot()  # a malformed meeting-host allowance refuses the boot
