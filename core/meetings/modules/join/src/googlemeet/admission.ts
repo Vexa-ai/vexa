@@ -6,7 +6,8 @@ import {
   googleInitialAdmissionIndicators,
   googleWaitingRoomIndicators,
   googleRejectionIndicators,
-  googleConsentPromptIndicators
+  googleConsentPromptIndicators,
+  googleKnockExpiredIndicators
 } from "./selectors";
 
 // AdmissionError + AdmissionOutcome moved to ../shared/admission so every platform (jitsi/zoom/
@@ -342,6 +343,34 @@ async function throwIfGoogleAdmissionRejected(page: Page, context: string): Prom
   }
 }
 
+// Meet ended the knock itself: the "No one responded" screen, or the page already left
+// meet.google.com for workspace.google.com (where that screen sends the bot after its 60 s countdown). Either way the host
+// never admitted the bot, so the wait is a lobby timeout, never "no meeting indicators found".
+export async function checkForGoogleKnockExpired(page: Page): Promise<string | null> {
+  try {
+    const url = typeof (page as any).url === "function" ? page.url() : "";
+    let host = "";
+    try { host = url ? new URL(url).hostname : ""; } catch { host = ""; }
+    // Only the landing that screen sends the bot to: a sign-in or other off-Meet page is not this.
+    if (host === "workspace.google.com") return `redirected off Google Meet to ${host}`;
+    for (const selector of googleKnockExpiredIndicators) {
+      const visible = await page.locator(selector).first().isVisible().catch(() => false);
+      if (visible) return 'Meet showed "No one responded to your request to join the call"';
+    }
+  } catch {
+    // An unreadable page is not evidence of an expired knock.
+  }
+  return null;
+}
+
+async function throwIfGoogleKnockExpired(page: Page, context: string): Promise<void> {
+  const why = await checkForGoogleKnockExpired(page);
+  if (why) {
+    log(`⌛ Google Meet ended the join request unanswered (${why}, ${context})`);
+    throw new AdmissionError("lobby_timeout", `Google Meet ended the join request, nobody admitted the bot: ${why}`);
+  }
+}
+
 // New function to wait for Google Meet meeting admission (canonical Teams-style)
 export async function waitForGoogleMeetingAdmission(
   page: Page,
@@ -430,6 +459,7 @@ export async function waitForGoogleMeetingAdmission(
         // Host denial can leave stale waiting-room text in the DOM. Check the
         // terminal rejection state before treating the page as still waiting.
         await throwIfGoogleAdmissionRejected(page, "waiting-room polling");
+        await throwIfGoogleKnockExpired(page, "waiting-room polling");
 
         // Check if we're still in waiting room using visibility
         const stillWaiting = await checkForWaitingRoomIndicators(page);
@@ -485,6 +515,7 @@ export async function waitForGoogleMeetingAdmission(
 
         // Rejection check first
         await throwIfGoogleAdmissionRejected(page, "polling mode");
+        await throwIfGoogleKnockExpired(page, "polling mode");
 
         // Admission indicators — if meeting controls are visible, bot is admitted
         // regardless of any residual lobby-like elements in the DOM
@@ -530,6 +561,7 @@ export async function waitForGoogleMeetingAdmission(
         const startTime2 = Date.now();
         while (Date.now() - startTime2 < timeout) {
           await throwIfGoogleAdmissionRejected(page, "late waiting-room polling");
+          await throwIfGoogleKnockExpired(page, "late waiting-room polling");
 
           const stillWaiting = await checkForWaitingRoomIndicators(page);
           if (!stillWaiting) {
@@ -555,6 +587,7 @@ export async function waitForGoogleMeetingAdmission(
     // Before concluding failure, check for rejection one last time
     log("No admission indicators after timeout - checking rejection one last time...");
     await throwIfGoogleAdmissionRejected(page, "final check");
+    await throwIfGoogleKnockExpired(page, "final check");
 
     // Distinguish lobby-timeout from join-failure by checking waiting-room state
     const lobbyStillVisible = await checkForWaitingRoomIndicators(page);

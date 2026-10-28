@@ -54,6 +54,15 @@ export const googleWaitingRoomIndicators: string[] = [
   'button:has-text("Return to home screen")',
 ];
 
+// Meet's own end of an unanswered knock (lobby test, app.dev meeting 366, 27 Oct 2026): about
+// 10 min after "Ask to join", with nobody admitting, Meet swaps the lobby for "No one responded
+// to your request to join the call", counts down 60 s, then redirects off meet.google.com
+// (workspace.google.com). Nobody said no and nothing broke: the host never answered. The screen
+// also shows "Return to home screen" (a waiting indicator, #471), so admission checks this first.
+export const googleKnockExpiredIndicators: string[] = [
+  'text=No one responded to your request to join',
+];
+
 // Google's Gemini "take notes for me" in-call consent prompt (Vexa-ai/vexa#454,
 // @thatditsyboy; issue #429). This is a consent gate, not mere chrome: until a
 // human accepts or declines, the bot is not truly participating, yet the
