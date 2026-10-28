@@ -1,0 +1,149 @@
+---
+title: "Sensors and keyed schedules"
+description: "Turn what changes in your calendar into events with no model call, and send a bot a minute before each meeting, following reschedules."
+---
+
+A **sensor** watches something of yours — today, your Google Calendar — and turns each change into an
+event. It never calls a model and never acts. You make it from chat, test it on your real data, then
+switch it on and connect it to a chat or a flow.
+
+## Make one from chat
+
+Say what you want, for example: *"Watch my calendar for meetings with a video link that I haven't
+declined, and send a bot one minute before each."* The agent then:
+
+1. **Designs the sensor** with `sensor_create`: kind `calendar`, and a filter such as
+   `payload.video_url exists and payload.self_response != 'declined'`. It starts as a draft.
+2. **Asks you to let it read your calendar.** A sensor reads your calendar only under a grant you
+   give: `calendar_sensor_grant` lets your sensors read one Google Calendar connection of yours,
+   calendar read only, for up to 90 days. Only you can give it, in a chat you are watching; a
+   routine, a background run or a chat other people read cannot. Until you do, `sensor_test`
+   answers that the sensor may not read your calendar. `calendar_sensor_grants` lists your grants
+   and `calendar_sensor_grant_revoke` ends one now.
+3. **Tests it** with `sensor_test`. The test reads your recent calendar and shows which events the
+   sensor would emit and which it would drop, with the reason for each. It stores nothing and starts
+   nothing.
+4. **Switches it on** with `sensor_action enable`. Only a version that passed its test can be
+   enabled. Any change makes a new version, which has to pass its own test before it runs.
+5. **Connects it.** `sensor_connect` puts each event in a chat as a card, and the chat's agent wakes as
+   you choose (`per_event`, `batch:<minutes>`, `match:<text>` or `never`). Or a flow listens on
+   `calendar.event.*`.
+
+For a bot before every meeting, no agent is needed per meeting. The flow is
+`trigger: {kind: relative, event: "calendar.event.*", filter, at: "payload.start - 60s", key: "payload.event_id"}`
+with `steps: ["request_meeting_bot"]` and `params: {meeting_url: "{{payload.video_url}}", grants: ["bot.request"]}`.
+
+The routine strip shows each sensor's status, when it last checked and when it checks next, and the
+next bots that are armed.
+
+## Invitations to the shared mailbox
+
+When you invite Vexa (the shared mailbox) to a meeting, the company flow `invite_join` keeps one
+pending bot for that meeting:
+
+- an updated invitation moves the bot to the new time;
+- a cancellation removes it;
+- one minute before the start, the bot joins and the meeting is attached to the workspace the
+  invitation names (otherwise to the organiser's default).
+
+`invite_join` belongs to the company. The company account changes it from chat with `flows_submit`
+and `scope: instance`, using the same tools anyone uses for their own flows.
+
+## What is on after an upgrade
+
+- **Sensors run only when a person makes one.** A sensor starts as a draft, and only a tested
+  version can be switched on. Until then the worker has nothing to check.
+- **Calendar sensors need the broker's `sensors` role.** On Docker Compose, flows-api and
+  flows-worker reach the broker as that role (`VEXA_FLOWS_SENSORS_BROKER_URL`,
+  `VEXA_FLOWS_SENSORS_KEY_FILE`); `connections-keys` writes the role key on the next `up`. The Helm
+  chart gives the broker its `sensors.key` but does not wire flows to it in this release, so on Helm
+  a calendar sensor's test answers that the broker is not configured and the sensor stays a draft.
+- **Calendar sensors read only under your grant (0.13.4).** The broker no longer reads the calendar
+  of whoever flows names: a read needs a live grant from the sensor's person on that connection. At
+  upgrade the broker gives a 30-day grant, once, to each calendar its own audit shows a sensor read
+  successfully in the 14 days before; those sensors keep running, and their people re-grant within
+  30 days. A sensor with no grant stops with the reason *this sensor may not read your calendar*,
+  and runs again after its person grants it in chat and enables it again. Reconnecting the calendar
+  creates a new connection, which needs its own grant.
+- **Invitations to the shared mailbox now go through a keyed schedule.** On its first start the
+  flows worker writes the company flow `invite_join` once (`created_by: seed`); an upgrade never
+  overwrites it. `invite_intake` becomes version 4 (account, RSVP, acknowledgement, prepare note),
+  and `invite_join` sends the bot one minute before the start. Invitations admitted before the
+  upgrade finish on version 3.
+- **Two tables are added at startup**, `sensor` and `keyed_schedule` (`CREATE TABLE IF NOT EXISTS`).
+  A stack that ran the first cut of `keyed_schedule` gains its `person` column
+  (`flows/migrations.py`).
+
+## How it works
+
+- **Sensors.** Each sensor is a row of its owner's (`sensor`). The flows worker checks the ones that
+  are due. For a calendar sensor it asks the credential broker what changed since the sensor's
+  cursor (a Google sync token). The broker reads only under a live grant from the sensor's person on
+  that connection (not revoked, not expired, the connection still ready); it holds the token, makes
+  the read and answers with events, never a credential. The sensor keeps only the cursor, and a check that finds nothing writes nothing.
+  Each change passes the sensor's filter and is admitted as `calendar.event.created|updated|cancelled`.
+  It is deduplicated by event id and version, so a replay emits nothing twice. After three failures
+  in a row the sensor reads `degraded`, says why, and backs off.
+- **Keyed schedules.** A `relative` trigger keeps one pending fire per key (`keyed_schedule`). Every
+  matching event moves it, and a cancellation or an event that stops passing the filter removes it.
+  The worker fires a due row into one run, keyed by the slot, so it fires at most once. A row moved
+  after it fired re-arms once.
+- **Light runs.** A flow made only of steps that call no model (`request_meeting_bot`) counts on its
+  own daily budget, not the agent-run one.
+- **Late and missed fires.** A due row fires within ten minutes of its time, counted from the
+  slot or from when the row was armed or moved, whichever is later: an invitation that arrives after
+  its meeting started still sends the bot. A row the worker could have fired and did not (the worker
+  was down) is marked `missed` and logged, and sends nothing.
+- **Caps.** One person may hold 500 pending keyed fires in a scope, their own or their share of a
+  company flow, and a company flow holds at most 20,000 for everyone. A fire over the cap is refused
+  and logged.
+
+**Who owns which data.**
+
+| Data | Written by | Read by |
+|---|---|---|
+| `sensor` rows (definition, tested version, cursor, health) | flows: flows-api for design, test and switching; the worker's pool for cursor and health | flows-api (`sensor_list`, the routine strip) |
+| `keyed_schedule` rows (one pending fire per key) | flows admission (arm, move, cancel) and the worker (fire, miss) | flows-api (`GET /flows`, the strip's next fires) |
+| The provider token and the Google sync | the credential broker | nobody else: the broker answers with events, never a credential |
+| Sensor grants (person, connection, `calendar.read`, expiry, revoked) | the credential broker, on the person's own signed call (`calendar_sensor_grant`, `calendar_sensor_grant_revoke`) or once at upgrade | the broker, on every sensor read |
+| `calendar.event.*` and `invite.*` events | the sensor pool and the mailbox | flows admission |
+
+**Contracts.** `flows.v1` carries the trigger shapes (`relative`, and `event` with a `filter`) and
+the `invite.cancelled` carrier; `invite.received` gains `event_key` and `sequence`.
+`credential-broker.v1` adds the `sensors` role and `POST /api/internal/sensor/calendar-changes`,
+and the person's sensor grants (`/api/sensor-grants`, roles `agent` and `human`; reason
+`sensor_grant_required` when a read has none).
+Both are re-sealed as back-compatible changes.
+
+**Configuration.**
+
+| Key | Where | Meaning |
+|---|---|---|
+| `VEXA_FLOWS_SENSORS_BROKER_URL` | flows-api, flows-worker | The broker's URL for sensor reads. Unset: no sensor reads a connection. |
+| `VEXA_FLOWS_SENSORS_KEY_FILE` | flows-api, flows-worker | The broker's `sensors` role key, the same file the broker holds (`VEXA_CONNECTIONS_SENSORS_KEY_FILE`). |
+
+## Why it complies
+
+### Architecture
+
+| Rule | How it is met | Enforced by |
+|---|---|---|
+| P4 (couple through sealed contracts) | `flows.v1` (trigger shapes, `invite.cancelled`) and `credential-broker.v1` (`sensors` role and route) changed additively and were re-sealed | `gate:schema`, `gate:contract-version` |
+| P14 (config is a validated contract) | the two sensor keys are declared in flows' `config.v1.json` as the `sensors` capability, with what happens when they are unset | `gate:config-contract` |
+| P23 (one writer per carrier) | `sensor` and `keyed_schedule` are written by flows only; the provider token stays in the broker | `gate:dataflow`, `gate:db-schema` (schema seal) |
+| P18 (fail loud) | a failing sensor reads `degraded` with its reason; a missed or refused keyed fire is logged | `test_sensors_triggers.py::test_a_failing_sensor_degrades_with_its_reason_and_recovers`, `test_invite_follows_meeting.py::test_a_row_armed_in_time_and_left_unfired_past_the_catch_up_is_missed` |
+| P20 (authorize every access) | every sensor verb is the owner's, and a worker with nobody in the loop is refused it | the deny tests below |
+
+### Protections and their deny tests
+
+| Rule | How it is met | Tests |
+|---|---|---|
+| Least privilege; tokens stay in the broker | the broker's `sensors` role reads changes only, for exactly the person each request is signed for, and returns no credential | `core/agent/services/credential-broker/tests/test_sensor_calendar.py::test_a_sensor_key_cannot_read_another_person`, `::test_every_other_role_is_refused`, `::test_the_sensor_reads_changes_for_the_person_it_is_signed_for` |
+| The person decides whose calendar is read, not the sensors key | a read needs the person's live grant on that connection; only the person's own signed, watched, private call issues one; revoked and expired grants read nothing | `core/agent/services/credential-broker/tests/test_sensor_grants.py` (`::test_holding_only_A_s_grant_the_sensors_service_is_refused_B_s_calendar`, `::test_a_revoked_grant_reads_nothing`, `::test_an_expired_grant_reads_nothing`, `::test_only_the_person_issues_a_grant`, `::test_upgrade_adopts_only_calendars_a_sensor_was_reading`), `core/agent/tests/test_connection_routes.py`, `core/flows/tests/test_sensor_grant_refusal.py` |
+| A person's events start only their own flows | the pool stamps the owner's uid on every event, and admission matches only the owner's flows | `core/flows/tests/test_sensors_triggers.py::test_a_sensor_cannot_speak_for_another_person`, `::test_someone_elses_event_arms_nothing` |
+| Test before it runs | enabling needs `tested_version == version`, and every change makes a new version | `::test_design_test_enable_then_it_feeds_the_keyed_schedule_with_no_model_call`, `::test_a_change_needs_a_new_test` |
+| Nobody unwatched creates a sensor | every sensor verb is person-only for a worker with nobody in the loop | `core/flows/tests/test_subject_bearer.py` (every route classified), `test_routine_phase0.py::test_sensor_design_test_enable_connect_over_the_api` |
+| Fires at most once, follows the meeting | the slot key is unique, an update moves the row and a cancel removes it | `test_invite_follows_meeting.py`, `test_sensors_triggers.py::test_a_bot_one_minute_before_each_video_meeting_follows_reschedules_and_skips_declined` |
+| Filters cannot run code | the filter is a closed grammar parsed in one pass, with no regex and no evaluation of code | `test_sensors_triggers.py::test_a_filter_this_engine_cannot_read_is_refused` |
+
+Design: [ADR-0050](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0050-flows-sensors-events-triggers.md).

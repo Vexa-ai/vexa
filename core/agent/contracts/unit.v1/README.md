@@ -9,7 +9,7 @@ This **supersedes the sealed, meeting-shaped `invoke.v1`** (which required `meet
 frozen for the meetings path (`bridge.py`) and is retired once that path migrates; `dispatch.py` emits
 `unit.v1`. See `clients/terminal/docs/FOUNDATION.md`.
 
-- **`Trigger`** — `message` (chat turn) · `scheduled` (a `schedule.v1` cron fired) · `event` (an
+- **`Trigger`** — `message` (chat turn) · `scheduled` (a schedule fired — a flow's `agent_run`, ADR-0046) · `event` (an
   event-source published, e.g. `email.received`) · `transcription` (a live transcript beat, or
   `session_end`). **All four are frozen now** so MVP stages add behavior, not enum members.
 - **`Context`** — `kind` discriminates: `none` (a bare chat) · `meeting` (`MeetingRef`, by id —
@@ -25,6 +25,70 @@ The envelope carries *why + what + who + where*, **never domain bytes** (transcr
 `transcript.v1`; emails/docs ride as opaque `SourceRef`s). Every optional field is present from day one;
 MVPs **populate** them — they must never re-cut this envelope. No tenancy beyond `subject` (ADR-0003).
 
-**Status: UNSEALED** (in development) — not yet pinned in `contracts.seal.json`; `gate:schema` validates
-its goldens, `gate:contract-version` reports it unsealed. Sealed via `pnpm seal:contracts` on a
-`lane:contract` review at the end of the Foundation phase.
+## The live unit's input stream (`InputEntry`)
+A warm unit takes the person's next message from `unit:<id>:in`. agent-api is the stream's only writer,
+and Redis cannot say who wrote an entry, so each entry is signed:
+
+| Field | Value |
+|---|---|
+| `turn` | the message, as a JSON string |
+| `sig` | HMAC-SHA256 of the `turn` string, keyed with the unit's input key, 64 lowercase hex digits |
+
+The unit key is HMAC-SHA256(`INTERNAL_API_SECRET`, `"vexa-unit-input.v1:" + <unit id>`), hex. agent-api
+derives it per unit and hands it to that unit's worker as `VEXA_UNIT_IN_KEY`; no other worker holds it.
+A worker runs only entries that verify under its key, and none when it has no key; the chat's pending
+list shows only verifying entries too. The implementation is `core/agent/shared/unit_input.py`;
+`InputVector.chat-follow-up.json` pins it, and `validate.mjs` re-derives it in Node.
+
+**Upgrade agent-api and the worker image together** (v0.13.2 or later on both). A v0.13.2 worker under
+an older agent-api finds every follow-up unsigned and drops it, silently. Compose's
+`AGENT_WORKER_IMAGE` can pin the worker apart from agent-api; when it is pinned, move it in the same
+upgrade.
+
+## The unit's typed faults (`Fault`)
+When something on the chat path fails, the person is told WHO failed (`source`), HOW (`kind`), one safe
+sentence (`detail`) and what can be done (`remedy`) — P18. The fault crosses two process boundaries,
+worker → agent-api → terminal, on the unit's output stream and around it:
+
+| Carrier | Writer | `$def` |
+|---|---|---|
+| a failed turn's `done` on `unit:<id>:out`, relayed to the chat stream | the worker — `llm/faults.py` (every harness), `worker/tool_access.py`, `llm/claude_code.py` | `DoneFrame` |
+| the chat stream's `error` frame | agent-api's relay (`control_plane/unit_faults.error_event`); the terminal's proxy (`src/app/api/chat/route.ts`) | `ErrorFrame` |
+| agent-api's 502/503 answer to a refused dispatch | `control_plane/unit_faults.answer` | `DispatchRefusal` |
+| a blocked inbox row and the pending list's banner (`unit:<id>:fault`, with `at`) | agent-api | `Fault` |
+
+`FaultSource` names every source; each source's kinds are the `$def` named after it
+(`model-provider` → `ModelProviderFaultKind`), and a `kind` outside its source's vocabulary does not
+conform. The kinds are listed once, in the schema (and, held to it by `gate:fact-parity`, in
+`docs/docs/api/agent.mdx`).
+
+| source | who failed |
+|---|---|
+| `runtime` | the agent runtime agent-api asks to start a worker |
+| `model-provider` | the model's provider |
+| `vexa-tools` | the turn's Vexa tool access |
+| `agent-worker` | the worker, refusing to start a turn in the environment it was given (tools it cannot confine, a model credential it cannot remove) |
+| `agent-api` | agent-api, answering a 5xx with no typed fault (named by the terminal's proxy) |
+| `gateway` | the gateway, unreachable from the terminal |
+
+**No side spells a kind.** `gen-faults.mjs` generates the vocabulary into `core/agent/llm/fault_wire.py`
+(the model provider's side — `llm/` imports nothing from product code), `core/agent/shared/fault_wire.py`
+(the runtime's and the tool-access side) and `clients/terminal/src/surfaces/faultWire.ts`, whose types
+key the terminal's label tables. A kind added here reaches every side on the next
+`node gen-faults.mjs`; a generated file that no longer matches fails `validate.mjs --check`
+(gate:schema), as does a kind with no `Fault.<source>.<kind>.json` golden.
+
+**Status: sealed** in `contracts.seal.json` (gate:contract-version). An additive change re-seals with
+`pnpm seal:contracts` in a `lane:contract` PR; a breaking one is `unit.v2`.
+
+## The conversation, carried (`SessionBundle`, `SessionBundleEvent`) — ADR-0048
+When agent-api runs with a session store, a chat turn's message carries the conversation as
+`session_bundle` (`SessionBundle`: the session id, the transcript version, and the files under the
+harness's continuity root, base64). The worker materialises it outside every mount and runs the turn
+on it. Before `turn-complete` it hands the conversation back on its output stream as a
+`session-bundle` event (`SessionBundleEvent`), naming the version it was based on; agent-api saves it
+as the next version only while that version is still the head, and never relays the event to a
+client. A turn without a bundle (no store, or an older agent-api) keeps the workspace layout.
+When the store refused the conversation's last hand-back, the next bundle carries `replace: true`:
+the worker's copy is ahead of a head that never took it, so the worker adopts the bundle whatever
+version it holds (`SessionBundle.replace.json`).

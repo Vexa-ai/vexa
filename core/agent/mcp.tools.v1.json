@@ -1,0 +1,1974 @@
+{
+  "contract": "mcp.tools.v1",
+  "domain": "agent",
+  "source": "oss",
+  "owner": "core/agent",
+  "base_url_env": "AGENT_API_URL",
+  "served_at": "/.well-known/mcp-tools.json",
+  "depends_on": [
+    "identity"
+  ],
+  "forward": {
+    "edge_prefix": "/agent/",
+    "upstream_prefix": "/api/"
+  },
+  "note": "ADR-0037 / PRD decision 40.5 \u2014 the agent domain's cut at the assembled edge: every tool an agent has here is a route agent-api serves, bound by `bind.py` from the route's own OpenAPI (`parameters` and a named pydantic `requestBody`). The gateway's one MCP server serves them to a person's own client and to a cloud worker alike; a worker's delegation token reaches them as the person it acts for, and the routes that need a person in the loop refuse it when it was dispatched without one. The page verbs default an omitted `slug` to the chat's target, which the worker's signed identity carries as `x-user-delegation-target`. The gateway fronts this domain wholesale, so `forward` (the same mapping as `routes.v1.json`'s) sends each tool call back through the gateway at /agent/<path> rather than to agent-api directly.",
+  "tools": [
+    {
+      "name": "workspace_tree",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/workspace/tree"
+      },
+      "arguments": [
+        "hidden",
+        "slug"
+      ],
+      "note": "The file listing for the caller's own workspace, or one of their shared workspaces named by `slug`. `hidden` includes dotfiles."
+    },
+    {
+      "name": "workspace_read",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/workspace/file"
+      },
+      "arguments": [
+        "path",
+        "slug"
+      ],
+      "note": "Read one file's content by its relative path. `slug` selects a shared workspace; omitted, it is the caller's own."
+    },
+    {
+      "name": "workspace_write",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "PUT",
+        "path": "/api/workspace/file"
+      },
+      "arguments": [
+        "path",
+        "content",
+        "slug"
+      ],
+      "note": "Create a page or replace it whole, committed in the workspace. An omitted `slug` is where the conversation is working (the chat's target on a worker's identity, the person's personal workspace otherwise); `personal` names it."
+    },
+    {
+      "name": "workspace_delete",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/remove"
+      },
+      "arguments": [
+        "path",
+        "slug"
+      ],
+      "note": "Remove one page as a commit; it stays in the workspace's history. Same `slug` rule as workspace_write."
+    },
+    {
+      "name": "workspace_move",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/move"
+      },
+      "arguments": [
+        "path",
+        "to",
+        "slug",
+        "to_slug"
+      ],
+      "note": "Move one page to another path or workspace in one call; inside one workspace a pointer stays at the old path. Same `slug` rule as workspace_write; an omitted `to_slug` is the same workspace."
+    },
+    {
+      "name": "entity_upsert",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/entity"
+      },
+      "arguments": [
+        "kind",
+        "name",
+        "facts",
+        "source",
+        "slug",
+        "dates",
+        "summary",
+        "fields",
+        "section",
+        "connections",
+        "open_questions"
+      ],
+      "note": "Create or update one knowledge-graph card (PRD decision 24). Same `slug` rule as workspace_write."
+    },
+    {
+      "name": "fetch_asset",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/asset"
+      },
+      "arguments": [
+        "url",
+        "path",
+        "slug"
+      ],
+      "note": "The server fetches a picture into the workspace, so a page references it relatively instead of hotlinking (Vexa-ai/vexa#1612). Same `slug` rule as workspace_write."
+    },
+    {
+      "name": "workspace_icon_state",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/workspaces/{slug}/identity/state"
+      },
+      "arguments": [
+        "slug"
+      ],
+      "note": "A workspace's image (UI decision 15f): `source` is `workspace` (its own), `company` (its bound company's logo) or null (only the generated monogram), plus any pending proposal. `slug` = `personal` for the person's own."
+    },
+    {
+      "name": "workspace_icon_set",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "PUT",
+        "path": "/api/workspaces/{slug}/identity/icon"
+      },
+      "arguments": [
+        "slug",
+        "svg",
+        "data_b64",
+        "type",
+        "url",
+        "site",
+        "use",
+        "reset",
+        "propose"
+      ],
+      "note": "Give a workspace its image, stored in the workspace (never hot-linked): `site` finds that company's or project's logo, `url` fetches one image, `use=company_logo` takes the bound company's, `svg` is a simple mark you designed. In a shared workspace it answers 202 `proposed` and the owner accepts; in a private one it is set. For a workspace that was just created pass `propose: true`: the person accepts it on the workspace's card. Say which in one line."
+    },
+    {
+      "name": "company_context",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/claims"
+      },
+      "note": "WHAT THIS PERSON HAS STOOD BEHIND about their company: claims they confirmed or corrected, and how many still wait on them. Rely on these and nothing proposed; read it before writing anything that describes the company."
+    },
+    {
+      "name": "propose",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/claims"
+      },
+      "arguments": [
+        "claims"
+      ],
+      "note": "What an agent believes about the person's company, recorded as PROPOSED and published once per claim as `claim.proposed`; never company context until the person answers."
+    },
+    {
+      "name": "validate",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/claims/verdicts"
+      },
+      "arguments": [
+        "verdicts"
+      ],
+      "note": "The person's word on proposed claims; the first one they stand behind makes their personal workspace ready (`.scaffolded`)."
+    },
+    {
+      "name": "transcript_terms",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/meeting/terms/scan"
+      },
+      "arguments": [
+        "meeting_id",
+        "since",
+        "keep"
+      ],
+      "note": "The Highlight layer (PRD decision 35): a first call LOOKS at what the meeting named and whether each has a page this reader can open; a call with `keep` PUBLISHES those as chips, durably. The answer's `emit` is what the harness turns into the chat's `terms` event."
+    },
+    {
+      "name": "meeting_attach_page",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/meeting/note/attach"
+      },
+      "arguments": [
+        "path",
+        "workspace",
+        "meeting_id",
+        "meeting_url",
+        "native",
+        "platform",
+        "calendar_event",
+        "replace"
+      ],
+      "note": "Make a page THE meeting's page \u2014 the one the meeting sidebar shows, Update notes rewrites and the post-meeting report lands in. Use it whenever you write a page for a known meeting (an agenda, a brief): with meeting_id when the meeting exists; before the bot is sent, with the meeting's link (meeting_url) or its native id and platform from parse_meeting_link, and the bot's meeting adopts the page when it is created. The page must be at kg/entities/meeting/<name>.md in one of the person's workspaces. A meeting has one page: a 409 names the page it already has \u2014 merge, then attach with replace=true."
+    },
+    {
+      "name": "workspaces",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/workspace/shared"
+      }
+    },
+    {
+      "name": "workspace_purpose",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/workspace/purpose"
+      },
+      "arguments": [
+        "slug"
+      ],
+      "note": "Reads the one-line PURPOSE a workspace carries. The SET side (`POST /api/workspace/purpose`) IS bindable now (`WorkspacePurposeBody` is a named pydantic model) but is not wired in as a tool here: it would need a name of its own \u2014 this GET's name is already `workspace_purpose` in the worker's allow-list (`core/agent/worker/mcp_tools.v1.json`) \u2014 and minting a new one is a worker-capability decision, not an assembler one. Left as the concrete next step in the issue this manifest shipped with."
+    },
+    {
+      "name": "workspace_new",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/new"
+      },
+      "arguments": [
+        "name",
+        "slug"
+      ],
+      "note": "CREATE a brand-new blank workspace, seeded from the template, and add it to the caller's active set. `name` is optional (`WorkspaceNewBody.name`) \u2014 omitted, the route mints a unique default label."
+    },
+    {
+      "name": "workspace_templates_list",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/workspace/templates"
+      },
+      "note": "The workspace templates a person can start from (Vexa-ai/vexa#1783): the company's in `_global/workspace-templates/` and their own in `templates/workspaces/`, each with what it creates, the questions to ask and suggested routines."
+    },
+    {
+      "name": "workspace_create",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/create"
+      },
+      "arguments": [
+        "name",
+        "template",
+        "answers",
+        "use_in_this_chat"
+      ],
+      "note": "CREATE a workspace scaffolded from a template with the host's answers (Vexa-ai/vexa#1783). The same create as `workspace_new`, then the template's pages; suggested routines come back as suggestions, nothing is switched on."
+    },
+    {
+      "name": "workspace_template_save",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/templates/save"
+      },
+      "arguments": [
+        "name",
+        "slug",
+        "description",
+        "when",
+        "replace"
+      ],
+      "note": "Save a workspace's pages as the person's own template, in their Personal workspace under `templates/workspaces/<name>/` (Vexa-ai/vexa#1783)."
+    },
+    {
+      "name": "workspace_rename",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/rename"
+      },
+      "arguments": [
+        "slug",
+        "name"
+      ],
+      "note": "Rename one of the person's own private workspaces (Vexa-ai/vexa#1783); the slug is unchanged."
+    },
+    {
+      "name": "workspace_remove",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "DELETE",
+        "path": "/api/workspace/{slug}"
+      },
+      "arguments": [
+        "slug",
+        "confirm"
+      ],
+      "note": "Delete a workspace irreversibly, only after the person confirms it in the chat (Vexa-ai/vexa#1783): their own private one, or a shared one they own \u2014 a shared one with other members first answers 409 naming them, and confirm=true deletes it for everyone. Personal is refused. To get one out of the way, hide it instead. A person-in-the-loop verb."
+    },
+    {
+      "name": "workspace_forget",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/forget"
+      },
+      "arguments": [
+        "slug",
+        "paths",
+        "text",
+        "identifiers",
+        "confirm",
+        "push"
+      ],
+      "note": "Forget an item everywhere it is kept: workspace tree and git history, stored chat transcripts, recently opened (Vexa-ai/vexa#1783). Two calls: preview, then confirm after the person says yes. A person-in-the-loop verb."
+    },
+    {
+      "name": "workspace_members",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/workspace/members"
+      },
+      "arguments": [
+        "workspace_id"
+      ],
+      "note": "The roster of one shared workspace, by its slug: who is in it and as what. The two verbs below are answered against it."
+    },
+    {
+      "name": "workspace_invite",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/invite"
+      },
+      "arguments": [
+        "slug",
+        "email",
+        "role",
+        "room"
+      ],
+      "note": "Invite one address as owner, contributor or reader (Vexa-ai/vexa#1632). Owner-only. Somebody who already has an account here is added at once and told in the app (no link to hand over); anyone else gets a link, and the answer says whether it was mailed or is to be handed over."
+    },
+    {
+      "name": "workspace_invite_link_create",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/invite-link"
+      },
+      "arguments": [
+        "slug",
+        "max_uses",
+        "expires_in_days",
+        "role"
+      ],
+      "note": "A join link for a workspace that up to max_uses people can open (sign in if needed, then join), revocable, with an optional expiry (#1783). For a calendar event or a message the person will send. The url is returned once."
+    },
+    {
+      "name": "workspace_invite_links",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/workspace/invite-links"
+      },
+      "arguments": [
+        "slug"
+      ],
+      "note": "A workspace's join links with uses, expiry and state; never their URLs."
+    },
+    {
+      "name": "workspace_invite_link_revoke",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/invite-link/revoke"
+      },
+      "arguments": [
+        "slug",
+        "link_id"
+      ],
+      "note": "Stop one join link working, when the person asks. People who joined stay members."
+    },
+    {
+      "name": "workspace_policy_propose",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/policy/proposals"
+      },
+      "arguments": [
+        "workspace",
+        "session",
+        "change",
+        "value",
+        "reason"
+      ],
+      "note": "Propose a change to a workspace's policy (change: visibility, connect, disconnect, member_role, member_remove or rules) for its owner to approve. Nothing changes until the owner approves it in their own browser session; never say it is done."
+    },
+    {
+      "name": "workspace_membership",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/membership"
+      },
+      "arguments": [
+        "slug",
+        "email",
+        "role"
+      ],
+      "note": "Change what a member is, or `remove` them (Vexa-ai/vexa#1632). Owner-only; the last owner cannot be demoted."
+    },
+    {
+      "name": "workspace_member_add",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/members/add"
+      },
+      "arguments": [
+        "workspace",
+        "person",
+        "role"
+      ],
+      "note": "Give someone who already has an account read or write access to one of your workspaces, named by slug or by name. `person` is the account id an @-mention in the chat carries (or their email); the workspace's owner adds, a person must be in the loop, and somebody with no account is refused here and invited with `workspace_invite` instead."
+    },
+    {
+      "name": "chat_participants",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/sessions/{session}/participants"
+      },
+      "arguments": [
+        "session"
+      ],
+      "note": "Who is in a chat, with their roles. `session` is the chat's id or name; this chat's is in the turn's context."
+    },
+    {
+      "name": "chat_participant_add",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/sessions/{session}/participants"
+      },
+      "arguments": [
+        "session",
+        "subject",
+        "email",
+        "role",
+        "history",
+        "pressed"
+      ],
+      "note": "Add a person to a chat, by the account id an @-mention carries (`subject`), with a person in the loop. For a chat only its owner is in, `history` is the owner's choice: `all` (the default: they join this chat, history included), `from:<turn>` (a new shared chat with the visible text from that turn on) or `none` (a new empty chat). Before sharing a chat with history, say in ONE line what in it is sensitive (figures, mail, internal documents) and proceed on the owner's yes. Anyone but the owner adding a person starts a new empty chat. Sharing a chat grants no workspace; the person is notified. A ROOM IS JUST A CHAT WITH MORE THAN ONE PERSON: adding someone to your private chat that writes to a workspace makes it a room of that workspace, and they must be a member of it (else invite them with workspace_invite on the same card). Offer it as a ```ask card first \u2014 summary: they will see this chat's history from the start; primary \"Add <name>\", secondary \"Start a fresh room\" (history `none`: a new empty room with them, this chat stays private) \u2014 and call this only on the person's press, with `pressed` = the `#<pending>` of their answer (`[answer <card> #<pending>] \u2026`): without that press, on a card that does not name the person, or a second time on one press, it is refused (403 `press_required`). Name the workspace by its title."
+    },
+    {
+      "name": "chat_participant_remove",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "DELETE",
+        "path": "/api/sessions/{session}/participants/{principal}"
+      },
+      "arguments": [
+        "session",
+        "principal"
+      ],
+      "note": "Take a person out of a chat, or leave it by naming yourself. Only the owner removes others, and the owner stays."
+    },
+    {
+      "name": "rooms_list",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/rooms/list"
+      },
+      "arguments": [
+        "workspace"
+      ],
+      "note": "THE ROOMS OF A WORKSPACE, when the person asks what rooms there are, who is in them, or wants them on a page: each room you may see there (its open rooms, and the closed ones the person is in) with its name, its `ref` (write it as is to link the room), its people by name, `call_live` when a call is running in it now, and the recurring meetings bound to it with their links (`recurring_meetings`, also at the top level for the workspace itself). `workspace` is the workspace's slug. A closed room the person is not in is not listed and does not exist for you; never guess one. In a room or shared chat only the workspace's open rooms are listed, without meetings."
+    },
+    {
+      "name": "call_person",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/rooms/call"
+      },
+      "arguments": [
+        "person",
+        "room"
+      ],
+      "note": "CALL SOMEONE: start a Vexa call (Vexa's own call, not Meet, Zoom or a calendar invite) with a person, when the person asks you to call, ring or start a call with them (\"Call tester-b\", \"call Maya\"). `person` is the account id an @-mention carries, or the name or address they said; only people they share a workspace with are matched. It opens your room of two with them (made once), starts the call there and rings them in the app. Reply in ONE line with the room reference it returns so the person can open the room and join; it rings for 30 s. 404 `not_in_directory` or 409 `ambiguous_person`: ask ONE short question (which person, or their email to invite) and call again with the chosen account id. Never refuse, and never offer a calendar or Meet link instead. `room` instead of `person` starts the call in an existing room and rings its members. If you are only suggesting a call the person did not ask for, offer it as a ```ask card first. 429 `ring_rate_limited`: this person was rung too often in the last 10 minutes; say so in one line with when they can be rung again (`Retry-After`), and do not retry."
+    },
+    {
+      "name": "call_show",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/sessions/{session}/call/show"
+      },
+      "arguments": [
+        "session",
+        "workspace",
+        "path",
+        "anchor"
+      ],
+      "note": "Show a page to everyone in this chat's call: it opens in every participant's panel, titled 'Shown by' the person, and follows them as they scroll. Only when the person asks for it in this turn (\"show the sponsor plan to everyone\"). `workspace` + `path` name the page; `anchor` (a heading or a short quote on it) is scrolled to and highlighted. Only a page every person in the chat can already read is shown: a 409 `not_shared` names who cannot \u2014 say so in one line and offer to share that workspace with them (with their confirmation) before showing it. Nothing is stored except one line in the chat."
+    },
+    {
+      "name": "call_highlight",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/sessions/{session}/call/highlight"
+      },
+      "arguments": [
+        "session",
+        "anchor"
+      ],
+      "note": "Highlight a heading or a short quote on the page being shown in this chat's call, for everyone, and scroll it into view. Only when the person asks for it in this turn. Transient: the next highlight replaces it."
+    },
+    {
+      "name": "mark_global_ready",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/global/ready"
+      },
+      "note": "Accept the company layer written into `_global`: it re-reads the five files, refuses naming what is missing, and commits them authored by the calling admin. Optional; nothing waits for it."
+    },
+    {
+      "name": "workspace_import",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/import"
+      },
+      "arguments": [
+        "repo",
+        "ref",
+        "credential_workspace"
+      ],
+      "note": "Import a repository as a NEW separate workspace with original files and Git history at root. Use for private URLs too; do not WebFetch to test access. Uses configured credentials. Returns operation_id; poll workspace_import_status until completed before claiming success."
+    },
+    {
+      "name": "workspace_import_status",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/workspace/import/{operation_id}/status"
+      },
+      "arguments": [
+        "operation_id"
+      ],
+      "note": "Check your import operation. queued/running is not success. completed returns workspace identity; failed/interrupted must be reported. Do not repeat the import to poll."
+    },
+    {
+      "name": "workspace_folder_import_status",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/workspace/folder/{plan_id}/status"
+      },
+      "arguments": [
+        "plan_id"
+      ],
+      "note": "Read a folder import the person started by dropping or picking a folder in the app (the plan_id is in their message). completed returns the workspace slug and what was skipped and why; planned means files are still arriving; blocked carries the reason. You cannot upload files yourself: the browser does that."
+    },
+    {
+      "name": "workspace_push",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/push"
+      },
+      "arguments": [
+        "slug"
+      ],
+      "note": "Send a workspace's commits back to the repository it came from, fast-forward only \u2014 never a force push. `slug` names one of the caller's workspaces; omitted, their own. Uses the workspace's deploy key or the caller's saved token; a token is never an argument. A diverged remote is refused: pull first."
+    },
+    {
+      "name": "workspace_status",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/status"
+      },
+      "arguments": [
+        "slug"
+      ],
+      "note": "Look before you sync: fetches the workspace's repository into its remote-tracking ref only and reports ahead/behind, the commits on each side and uncommitted paths. Changes no file and no branch, so it is allowed with nobody watching. `slug` names one of the caller's workspaces; omitted, their own. Any member may look."
+    },
+    {
+      "name": "workspace_pull",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/pull"
+      },
+      "arguments": [
+        "slug",
+        "merge"
+      ],
+      "note": "Fetch and FAST-FORWARD a workspace from its repository; when both sides moved, merge=true merges the repository in (never a rebase or force) and a conflict changes nothing and names the files. `slug` names one of the caller's workspaces; omitted, their own. A viewer of a shared workspace is refused: a pull rewrites the tree."
+    },
+    {
+      "name": "workspace_attach",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/shared/{workspace_id}/attach"
+      },
+      "arguments": [
+        "workspace_id",
+        "repo",
+        "ref",
+        "slug"
+      ],
+      "note": "LOAD AN EXISTING repository as a group workspace's tree. The current tree is parked, not deleted, and the member list is carried across; `repo` empty with `slug` swaps back to a parked tree. Contributor or owner only. An ssh repo authenticates with the workspace's deploy key; a token is never an argument."
+    },
+    {
+      "name": "git_providers",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/workspace/git-providers"
+      },
+      "note": "The git providers this deployment reaches (GitHub, a GitHub Enterprise, a self-hosted GitLab) with whether the person saved a token for each. Read before workspace_publish to pick `provider` and the owner shape. No token is ever returned."
+    },
+    {
+      "name": "workspace_publish",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/publish"
+      },
+      "arguments": [
+        "slug",
+        "repo_name",
+        "provider",
+        "org",
+        "private",
+        "remote_url"
+      ],
+      "note": "Give a vexa-born workspace a repository on one of the deployment's git providers: create it under `org` (a GitHub org or a GitLab group path, nested allowed) and push the full history. Uses the person's saved token for that provider; a token is never an argument. A person-in-the-loop verb: confirm the provider and name with the person first. From a chat the repository is always created private under the person's own account; `org`, `remote_url` and `private: false` apply only to the person's own client, so to publish under an organisation or into an existing repository tell the person to use the workspace's Publish dialog. A chat other people read cannot publish. Publishing from a chat needs the person's press: offer it as a ```ask card naming the workspace or the repository first, and call this with `pressed` = the `#<pending>` of their answer; without it it is refused (403 `press_required`)."
+    },
+    {
+      "name": "open_page",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/page/open"
+      },
+      "arguments": [
+        "target",
+        "meeting"
+      ],
+      "note": "OPEN something in the person's pages panel when they ask to open, show or pull up a page, a note or the transcript. `target` is `meeting:transcript`, `meeting:note`, a desk path, or `<slug>/<path>`; `meeting` is the row id for the two meeting targets. Answers `opened` or why not \u2014 say that, in one line."
+    },
+    {
+      "name": "meeting_listen",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/meeting/listen"
+      },
+      "arguments": [
+        "meeting",
+        "brief"
+      ],
+      "note": "SET OR REVISE WHAT VEXA LISTENS FOR in a live meeting: the brief a small signal model scores each new line against, which wakes you in the meeting's chat when enough new information has built up. Set it when the bot starts, from the meeting's context (its agenda page, workspace, people, the last meeting), and again whenever the focus shifts; when a signal wakes you, update the meeting page and put what you now know in `known`. `addressed_to_vexa` is always kept. Written to the meeting page's front matter, where the people in the meeting can read it."
+    },
+    {
+      "name": "workspace_target",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/target"
+      },
+      "arguments": [
+        "slug"
+      ],
+      "note": "Do NOT use to move this chat's writes: only the person switches them (UI decision 6b). Call propose_write_target(workspace, reason) instead; this verb answers with that instruction and changes nothing."
+    },
+    {
+      "name": "propose_write_target",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/propose-target"
+      },
+      "arguments": [
+        "workspace",
+        "reason"
+      ],
+      "note": "Before your FIRST write in a turn, if the request is about a different workspace than this chat writes to (a workspace it names, the meeting's or open page's workspace, the people involved) or you are unsure the target is right, call this with the workspace's name and a one-clause reason, then WAIT: the person sees 'Write to X instead of Y?' with Switch / Keep and only their click moves the target. Write nothing to the current target meanwhile; reading is fine."
+    },
+    {
+      "name": "workspace_list",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/workspace/states"
+      },
+      "arguments": [
+        "hidden"
+      ],
+      "note": "Every workspace with its state (active, inactive, hidden), this chat's target and reads, and the person's defaults for new chats (Vexa-ai/vexa#1783). Hidden ones only with hidden=true."
+    },
+    {
+      "name": "workspace_state_set",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/state"
+      },
+      "arguments": [
+        "workspaces",
+        "excluding",
+        "state",
+        "scope"
+      ],
+      "note": "Hide, unhide, select or unselect workspaces when the person asks (Vexa-ai/vexa#1783). Hidden is per person and everywhere; active/inactive change this chat unless scope is default. A person-in-the-loop verb."
+    },
+    {
+      "name": "workspace_defaults_set",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/defaults"
+      },
+      "arguments": [
+        "target",
+        "active"
+      ],
+      "note": "Where new chats write and which workspaces they read, when the person asks (Vexa-ai/vexa#1783). A person-in-the-loop verb."
+    },
+    {
+      "name": "chat_profile_list",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/workspace/profiles"
+      },
+      "note": "The person's chat profiles (work, study, hobby, incognito, their own): what each writes to and reads, and the default for new chats (Vexa-ai/vexa#1783)."
+    },
+    {
+      "name": "chat_profile_set",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/profile"
+      },
+      "arguments": [
+        "name",
+        "workspace",
+        "new_chat"
+      ],
+      "note": "Use a profile in this chat, or start a NEW chat in it with new_chat=true (\"start an incognito chat\"); `workspace` binds a profile's {{workspace}} variable (\"use shared work for Collab Room\") (Vexa-ai/vexa#1783). A person-in-the-loop verb."
+    },
+    {
+      "name": "chat_profile_edit",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/profiles/edit"
+      },
+      "arguments": [
+        "name",
+        "target",
+        "reads",
+        "default"
+      ],
+      "note": "Change what a profile writes to and reads, or make it the default for new chats (Vexa-ai/vexa#1783). A person-in-the-loop verb."
+    },
+    {
+      "name": "chat_profile_delete",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/profiles/delete"
+      },
+      "arguments": [
+        "name"
+      ],
+      "note": "Remove a chat profile the person made, or put a starter back as it was, when they say so (Vexa-ai/vexa#1783). A person-in-the-loop verb."
+    },
+    {
+      "name": "connection_request",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/connections/request"
+      },
+      "arguments": [
+        "provider",
+        "label",
+        "new_account",
+        "setup"
+      ],
+      "note": "Opens the trusted Connections panel for Gmail, Calendar or a custom secret (Git tokens are added by the person in Connections \u2192 Git, not requested). The verb for any request to connect or reconnect an account, and for a tool failure with reason reconnect_required; while the credential store is unavailable it opens nothing. Secrets are entered there, never in chat. Refused for a worker dispatched without a person."
+    },
+    {
+      "name": "connections_status",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/connections"
+      },
+      "note": "Connection metadata only; no tokens and no mail or calendar contents."
+    },
+    {
+      "name": "gmail_search",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/connections/gmail/search"
+      },
+      "arguments": [
+        "query",
+        "limit",
+        "connection_id",
+        "page_token"
+      ],
+      "note": "Link to a message or event only with its web_url; never construct a provider URL."
+    },
+    {
+      "name": "gmail_read",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/connections/gmail/read"
+      },
+      "arguments": [
+        "message_id",
+        "connection_id"
+      ],
+      "note": "Link to a message or event only with its web_url; never construct a provider URL."
+    },
+    {
+      "name": "gmail_thread",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/connections/gmail/thread"
+      },
+      "arguments": [
+        "thread_id",
+        "connection_id",
+        "limit",
+        "page_token"
+      ],
+      "note": "Link to a message or event only with its web_url; never construct a provider URL."
+    },
+    {
+      "name": "calendar_events",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/connections/calendar/events"
+      },
+      "arguments": [
+        "time_min",
+        "time_max",
+        "limit",
+        "connection_id",
+        "page_token"
+      ],
+      "note": "Link to a message or event only with its web_url; never construct a provider URL. An event with a call carries meeting_url (Zoom, Teams or Meet): to join that call pass it to request_meeting_bot directly, never ask the person to paste the link."
+    },
+    {
+      "name": "mail_inbox",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/connections/gmail/inbox"
+      },
+      "arguments": [
+        "limit",
+        "connection_id"
+      ],
+      "note": "Link to a message or event only with its web_url; never construct a provider URL."
+    },
+    {
+      "name": "mail_read",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/connections/gmail/read"
+      },
+      "arguments": [
+        "message_id",
+        "connection_id"
+      ],
+      "alias_of": "gmail_read",
+      "note": "An alias of gmail_read (the same door), under the name the inbox tool pairs with. Link to a message or event only with its web_url; never construct a provider URL."
+    },
+    {
+      "name": "gmail_draft_create",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/connections/gmail/draft"
+      },
+      "arguments": [
+        "recipient",
+        "subject",
+        "body",
+        "request_id",
+        "connection_id",
+        "cc",
+        "bcc",
+        "thread_id",
+        "in_reply_to",
+        "attachments"
+      ],
+      "note": "Saves an unsent draft, optionally as a reply in a thread; never sends."
+    },
+    {
+      "name": "gmail_draft_update",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/connections/gmail/draft/update"
+      },
+      "arguments": [
+        "draft_id",
+        "replace_person_draft",
+        "pressed",
+        "recipient",
+        "subject",
+        "body",
+        "request_id",
+        "connection_id",
+        "cc",
+        "bcc",
+        "thread_id",
+        "in_reply_to",
+        "attachments"
+      ],
+      "note": "Replaces a draft Vexa created, or the person's own draft when they ask; never sends."
+    },
+    {
+      "name": "calendar_event_create",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/connections/calendar/event/create"
+      },
+      "arguments": [
+        "title",
+        "start",
+        "end",
+        "request_id",
+        "calendar_id",
+        "description",
+        "location",
+        "attendees",
+        "conference",
+        "notify",
+        "connection_id"
+      ],
+      "note": "Creates an event; needs the calendar change permission; attendees are not emailed by default. An event with attendees, or with notify needs the person's press: offer it as a ```ask card that names every attendee first, and call this with `pressed` = the `#<pending>` of their answer (`[answer <card> #<pending>] \u2026`); without it, on a card that does not name each of them, or a second time on one press, it is refused (403 `press_required`)."
+    },
+    {
+      "name": "calendar_event_update",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/connections/calendar/event/update"
+      },
+      "arguments": [
+        "event_id",
+        "request_id",
+        "calendar_id",
+        "title",
+        "start",
+        "end",
+        "description",
+        "location",
+        "attendees",
+        "conference",
+        "notify",
+        "connection_id"
+      ],
+      "note": "Changes an event the user can edit; needs the calendar change permission. A change with attendees, or with notify needs the person's press: offer it as a ```ask card that names every attendee first, and call this with `pressed` = the `#<pending>` of their answer (`[answer <card> #<pending>] \u2026`); without it, on a card that does not name each of them, or a second time on one press, it is refused (403 `press_required`)."
+    },
+    {
+      "name": "calendar_event_cancel",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/connections/calendar/event/cancel"
+      },
+      "arguments": [
+        "event_id",
+        "request_id",
+        "calendar_id",
+        "notify",
+        "connection_id"
+      ],
+      "note": "Cancels an event the user organizes; needs the calendar change permission. A cancellation with notify needs the person's press: offer it as a ```ask card that names the event first, and call this with `pressed` = the `#<pending>` of their answer (`[answer <card> #<pending>] \u2026`); without it, on a card that does not name it, or a second time on one press, it is refused (403 `press_required`)."
+    },
+    {
+      "name": "calendar_sensor_grant",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/connections/sensor-grant"
+      },
+      "arguments": [
+        "connection_id",
+        "days"
+      ],
+      "note": "Lets the person's sensors read their Google Calendar (calendar read only, one connection, at most 90 days). Only when the person asked; a sensor without it is refused. A worker with nobody in the loop, or a turn other people read, is refused."
+    },
+    {
+      "name": "calendar_sensor_grants",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/connections/sensor-grants"
+      },
+      "note": "The person's sensor grants: connection, expiry, active / revoked / expired."
+    },
+    {
+      "name": "calendar_sensor_grant_revoke",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/connections/sensor-grant/revoke"
+      },
+      "arguments": [
+        "grant_id"
+      ],
+      "note": "Ends one of the person's sensor grants now."
+    },
+    {
+      "name": "connection_policy_get",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/connections/policy"
+      },
+      "note": "What the agent may do with Gmail and Calendar: the deployment's policy, the user's setting, the effective answer."
+    },
+    {
+      "name": "connection_policy_set",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "PUT",
+        "path": "/api/connections/policy"
+      },
+      "arguments": [
+        "connection_actions",
+        "connection_actions_unattended",
+        "calendar_notify_attendees",
+        "calendar_attendee_domains",
+        "calendar_ids",
+        "draft_recipient_domains",
+        "draft_attachments",
+        "draft_attachment_max_kb"
+      ],
+      "note": "Narrows the user's own setting; never wider than the deployment's policy. The user's own client only: every delegated caller (an agent) is refused."
+    },
+    {
+      "name": "onboarding_research",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/onboarding/research"
+      },
+      "arguments": [
+        "action",
+        "connection_ids",
+        "batch_id",
+        "receipts"
+      ]
+    },
+    {
+      "name": "secret_service_call",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/connections/service/call"
+      },
+      "arguments": [
+        "connection_id",
+        "parameters",
+        "body"
+      ],
+      "note": "Calls the endpoint the person configured with their stored credential; the agent never sees the credential or chooses the destination."
+    },
+    {
+      "name": "current_time",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/time"
+      },
+      "note": "The clock, in the timezone identity remembers for this person."
+    },
+    {
+      "name": "models_list",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/models/catalog"
+      },
+      "note": "The models this person may pick per chat (models.v1 ModelList, ADR-0043), the one they run on before picking, and the effort levels each model offers (capabilities.reasoning_efforts, empty when it has none). Read-only; picking is the person's, in the terminal."
+    },
+    {
+      "name": "timezone_set",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "PUT",
+        "path": "/api/time/zone"
+      },
+      "arguments": [
+        "timezone"
+      ],
+      "note": "Writes the person's timezone to identity."
+    },
+    {
+      "name": "chat_name",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/chat/name/agent"
+      },
+      "arguments": [
+        "session",
+        "title"
+      ],
+      "note": "The agent's name for the current chat; a name the person chose is never overwritten."
+    },
+    {
+      "name": "chat_folders_list",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/chat/folders"
+      },
+      "arguments": [],
+      "note": "The person's chat folders and where each of their chats sits: the rail's sections in order (Pinned, their folders, Ungrouped, Hidden) and every chat with its `row`, `label` and `folder`. Call it first to find chats by name for `chat_move`. Folders are the person's own; nobody sees another's."
+    },
+    {
+      "name": "chat_folder_create",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/chat/folders"
+      },
+      "arguments": [
+        "name"
+      ],
+      "note": "Make a chat folder on the person's rail, named as they said it (\"put the Acme chats in an Acme folder\"). A name they already have returns that folder, so it is safe to call before filing. Then `chat_move` the chats in and confirm in one line."
+    },
+    {
+      "name": "chat_folder_update",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/chat/folders/update"
+      },
+      "arguments": [
+        "folder",
+        "name",
+        "collapsed",
+        "position"
+      ],
+      "note": "Rename one of the person's chat folders, fold it shut or open, or move it (`position` 0 = first). Pinned, Ungrouped and Hidden only fold."
+    },
+    {
+      "name": "chat_folder_delete",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/chat/folders/delete"
+      },
+      "arguments": [
+        "folder"
+      ],
+      "note": "Dissolve one of the person's chat folders when they ask. Its chats move to Ungrouped; no chat is deleted."
+    },
+    {
+      "name": "chat_move",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/chat/move"
+      },
+      "arguments": [
+        "rows",
+        "to",
+        "before"
+      ],
+      "note": "Move chats on the person's rail: into a folder (its id from `chat_folders_list`), to `pinned`, back to `ungrouped`, or to `hidden` (that is how a chat is hidden; moving it out un-hides it). A chat lives in one place. Confirm in one line."
+    },
+    {
+      "name": "notifications_list",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/notifications"
+      },
+      "arguments": [
+        "unread",
+        "limit"
+      ],
+      "note": "What happened to the person while they were away: who added them to a chat or shared one, mentioned them, invited or added them to a workspace, accepted or declined their invite, started a call or posted a routine run in a chat they are in. Newest first, with the unread count. Use it to answer \"what did I miss?\" in a few lines, naming who and where; it never carries what was said, so open the chat to read it. Then offer to mark them read."
+    },
+    {
+      "name": "notifications_mark_read",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/notifications/read"
+      },
+      "arguments": [
+        "ids",
+        "all"
+      ],
+      "note": "Mark the person's notifications read: the ids from `notifications_list`, or `all`. Do it when they say they have seen them, or after you summarised them and they agreed."
+    },
+    {
+      "name": "notifications_act",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/notifications/act"
+      },
+      "arguments": [
+        "id",
+        "action"
+      ],
+      "note": "Do what one of the person's notifications offers, when THEY ask (\"accept the invite from Alice\", \"open the meeting she shared\"): find it with `notifications_list`, then pass its `id` and one of its own `actions` \u2014 accept or decline a workspace invite, join or decline a call, or open. Accepting makes them a member at once. The answer says what to open; confirm in one line (\"Joined Acme.\"). Never act on a notification they did not ask about."
+    },
+    {
+      "name": "notify",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/notifications/notify"
+      },
+      "arguments": [
+        "text",
+        "session",
+        "to",
+        "link"
+      ],
+      "note": "Light up the person's bell (and a toast) when something needs them: an important email, a finished job, a decision waiting. One line naming the act and the object, never pasted content. Pass the current chat `session` so a click opens this chat; `to` only for other people in this chat. A routine's run posts at most one: put everything important in that one line. Reaching other people needs the person's press: offer it as a ```ask card that names each person in `to` first, and call this with `pressed` = the `#<pending>` of their answer (`[answer <card> #<pending>] \u2026`); without it, on a card that does not name them, or a second time on one press, it is refused (403 `press_required`)."
+    },
+    {
+      "name": "message_agent",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/agents/message"
+      },
+      "arguments": [
+        "thread",
+        "text",
+        "from_thread",
+        "person"
+      ],
+      "note": "Agents speak to each other (ADR-0046 decision 13): the message is published as `thread.message` and flows queues it as a turn in the target thread, marked as from the sending agent. Asynchronous \u2014 the answer comes back later as a turn in `from_thread`. Who may message whom is `_global/POLICIES.md`; refusals are typed. With no flows deployed the route answers `flows:not_present`. Writing into another person's conversation needs the person's press: offer it as a ```ask card that names the other person first, and call this with `pressed` = the `#<pending>` of their answer (`[answer <card> #<pending>] \u2026`); without it, on a card that does not name them, or a second time on one press, it is refused (403 `press_required`)."
+    },
+    {
+      "name": "chats_search",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/chats/search"
+      },
+      "arguments": [
+        "query",
+        "limit"
+      ],
+      "note": "Find the person's own chats by their words \u2014 titles and what was said \u2014 newest first: session id, title, last activity and a snippet; an empty query lists the newest chats. Only chats the person is in; in a chat other people read, only chats all of them are in. Then `chat_read` one."
+    },
+    {
+      "name": "chat_read",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/chats/{session}/turns"
+      },
+      "arguments": [
+        "session",
+        "since",
+        "limit"
+      ],
+      "note": "Read one of the person's chats (a session id, or a `c:` row from `chat_folders_list`): what they said and what the agent answered, oldest first, `limit` turns from `since`; `next` is where the following page starts. Same rules as `chats_search`; quote what you use and say which chat it came from."
+    },
+    {
+      "name": "ref_resolve",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/refs/resolve"
+      },
+      "arguments": [
+        "ref"
+      ],
+      "note": "What a reference points at, for the person: a /r/<kind>/<id> link, a [[kind:id]] chip or a join link (#1783). Answers access (readable with label and where it opens; not-yours with nothing about it and whether an owner can be asked; unavailable; gone; grant for a join link). Use it before quoting or opening anything a reference names; write references as [[kind:id|label]] in replies and as URLs in mail or calendar bodies."
+    },
+    {
+      "name": "home_history",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/home/history"
+      },
+      "arguments": [
+        "days"
+      ],
+      "note": "What the person's new-chat home suggested over the last `days` (default 7) and what came of each card: clicked, sent into which chat, dismissed and why (wrong, done already, not now), snoozed, done. Ids and titles only. Use it to answer \"what did you suggest last week and what came of it?\" in a few lines."
+    },
+    {
+      "name": "customer_profile",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/home/customer"
+      },
+      "arguments": [],
+      "note": "What Vexa knows about the person you work for, as a customer (home-customer.v1): lifecycle stage and why, capabilities adopted and not yet, jobs and goals, working patterns, preferences learned from what they act on or dismiss, friction, open loops, health, next-best-actions with the hypothesis behind each, and the experiment log. Each field has evidence ids, a confidence and when it changed. Read it to tailor help; when the person asks what Vexa knows about them, show it plainly and offer customer_correct."
+    },
+    {
+      "name": "customer_correct",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/home/customer/correct"
+      },
+      "arguments": [
+        "field",
+        "value"
+      ],
+      "note": "Record the person's own correction of one field of their customer profile (stage, capabilities, jobs, patterns, preferences, friction, open_loops, health, next_best_actions, goals). The correction wins over anything inferred until they correct it again; value null withdraws it. Only on the person's explicit words."
+    },
+    {
+      "name": "home_item_update",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/home/item"
+      },
+      "arguments": [
+        "item",
+        "state",
+        "chat",
+        "page"
+      ],
+      "note": "When work that came from the person's home finishes or moves on, record where it got to: prepared (a prep exists), follow_up (a recap or proposals are drafted), replied (the reply was sent), done (nothing left), in_progress. Pass the home item id the prompt named and this chat's thread id as `chat` (or the page you wrote as `page`), so the home's card continues this work instead of starting it again. One call, then carry on."
+    },
+    {
+      "name": "my_limits",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/budgets"
+      },
+      "arguments": [],
+      "note": "The person's limits today (the company's budgets and model policy, narrowed by their own settings), the tokens their agents used in the last 24 hours with the percent of the budget, and every model the policy names marked available or unavailable. Use it when they ask how much they have left or why something paused."
+    },
+    {
+      "name": "usage_summary",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/budgets/usage"
+      },
+      "arguments": [],
+      "note": "ADMIN ONLY (Company mode): one line per person \u2014 tokens their agents used in the last 24 hours, the percent of the daily budget, and how much was background work. Refused for anyone but the instance admin."
+    },
+    {
+      "name": "plan_usage",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/usage"
+      },
+      "arguments": [],
+      "note": "How much of the person's plan is used: the 5-hour and weekly windows as a percentage, when each resets, and whether extra usage is on. Use it when they ask how much they have left or why a turn was refused with a limit. Answers feature_disabled where Vexa credits are switched off."
+    },
+    {
+      "name": "model_levels",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/models/levels"
+      },
+      "arguments": [
+        "session"
+      ],
+      "note": "The model levels this deployment offers on hosted plans: 1 fastest to 5 most capable, each with the model it runs on, and (given a chat) the chat's level. A chat's level is chosen once; the person changes it from the composer. Answers feature_disabled where levels are switched off (self-host picks models directly)."
+    },
+    {
+      "name": "people_followups",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/people/followups"
+      },
+      "arguments": [
+        "limit"
+      ],
+      "note": "Who the person you work for should follow up with, most overdue first: direct chats with colleagues left unanswered, meetings that ended with no follow-up recorded, their queue naming someone (unanswered mail), and contacts gone quiet against their usual cadence. Each item has the person, why, evidence, and actions; a follow-up is only ever DRAFTED \u2014 sending needs their explicit go on the final text. Use it to answer \"who should I follow up with?\"; for a live check of mail also search their inbox with the mail tools."
+    },
+    {
+      "name": "people_discover",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/people/discover"
+      },
+      "arguments": [
+        "limit"
+      ],
+      "note": "People worth knowing, only within what the person may see: colleagues they share a workspace with but never messaged, frequent attendees of their meetings who have no person page yet (offer to create one), and introductions between two of their contacts who met them about the same subject (drafted only). Never other organisations' users; colleagues who opted out of discovery are left out."
+    }
+  ]
+}

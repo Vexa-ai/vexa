@@ -18,10 +18,20 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: runtime
       annotations:
-        {{- toYaml .Values.global.podAnnotations | nindent 8 }}
+        checksum/secrets: {{ include "vexa.checksum" (list . .Values.secrets) }}
+        {{- with .Values.global.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
-      securityContext:
-        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      enableServiceLinks: false
+      {{- if eq .Values.runtime.backend "k8s" }}
+      # The k8s backend only calls the API server (kubectl, its ServiceAccount): it holds no engine
+      # socket and starts no process as another uid, so it runs as the chart's unprivileged uid. The
+      # docker backend keeps root (the image's user) to open the engine's socket.
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
+      {{- else }}
+      {{- include "vexa.podSecurityContext" . | nindent 6 }}
+      {{- end }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -30,16 +40,19 @@ spec:
       # The runtime spawns bot/agent Pods via kubectl — bind the SA carrying the pod-spawn RBAC.
       serviceAccountName: {{ include "vexa.componentName" (list . "runtime") }}
       {{- end }}
+      {{- with include "vexa.extraCA.initContainer" . }}
+      initContainers:{{ . | trim | nindent 8 }}
+      {{- end }}
       containers:
         - name: runtime
-          securityContext:
-            {{- toYaml .Values.global.securityContext | nindent 12 }}
-          image: "{{ .Values.runtime.image.repository }}:{{ .Values.global.imageTag | default .Values.runtime.image.tag }}"
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
+          image: "{{ .Values.runtime.image.repository }}:{{ .Values.global.imageTag | default .Values.runtime.image.tag | default (include "vexa.releaseTag" .) }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http
               containerPort: 8090
           env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
             - name: RUNTIME_BACKEND
               value: {{ .Values.runtime.backend | quote }}
             {{- if eq .Values.runtime.backend "k8s" }}
@@ -54,6 +67,7 @@ spec:
             - name: DOCKER_NETWORK
               value: {{ .Values.runtime.dockerNetwork | default "" | quote }}
             {{- end }}
+            {{- include "vexa.redisPasswordEnv" . | nindent 12 }}
             - name: REDIS_URL
               value: {{ include "vexa.redisUrl" . | quote }}
             - name: BROWSER_IMAGE
@@ -74,37 +88,48 @@ spec:
               value: {{ .Values.runtime.speakerStream.maxBufferSec | default "" | quote }}
             - name: BOT_SPEAKER_IDLE_TIMEOUT_SEC
               value: {{ .Values.runtime.speakerStream.idleTimeoutSec | default "" | quote }}
-            - name: INTERNAL_API_SECRET
+            - name: BOT_SPEAKER_MIN_FINAL_AUDIO_SEC
+              value: {{ .Values.runtime.speakerStream.minFinalAudioSec | default "" | quote }}
+            - name: BOT_STT_TIMEOUT_SEC
+              value: {{ .Values.runtime.speakerStream.sttTimeoutSec | default "" | quote }}
+            - name: BOT_TRANSCRIPTION_LATENCY
+              value: {{ .Values.runtime.speakerStream.latencyProfile | default "" | quote }}
+            - name: BOT_STT_CONFIDENCE_FILTER
+              value: {{ .Values.runtime.speakerStream.confidenceFilter | default "" | quote }}
+            - name: BOT_TRANSCRIPT_RECONFIRM_SEC
+              value: {{ .Values.runtime.speakerStream.reconfirmSec | default "" | quote }}
+            # The runtime caller credential: every route but /health requires it as a bearer. The
+            # runtime refuses to boot without it.
+            - name: RUNTIME_API_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
-                  key: INTERNAL_API_SECRET
-            - name: ANTHROPIC_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.adminTokenSecretName" . }}
-                  key: ANTHROPIC_API_KEY
-                  optional: true
-            - name: ANTHROPIC_AUTH_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.adminTokenSecretName" . }}
-                  key: ANTHROPIC_AUTH_TOKEN
-                  optional: true
-            - name: ANTHROPIC_BASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.adminTokenSecretName" . }}
-                  key: ANTHROPIC_BASE_URL
-                  optional: true
-            - name: ANTHROPIC_MODEL
-              value: {{ .Values.models.anthropicModel | default "" | quote }}
-            - name: ANTHROPIC_DEFAULT_OPUS_MODEL
-              value: {{ .Values.models.anthropicOpusModel | default "" | quote }}
-            - name: ANTHROPIC_DEFAULT_SONNET_MODEL
-              value: {{ .Values.models.anthropicSonnetModel | default "" | quote }}
-            - name: ANTHROPIC_DEFAULT_HAIKU_MODEL
-              value: {{ .Values.models.anthropicHaikuModel | default "" | quote }}
+                  key: RUNTIME_API_TOKEN
+            # The workspace store as the RUNTIME serves it — never as a workload spec describes it.
+            # Every mount a spec declares must sit under the target, which is agent-api's
+            # VEXA_WORKSPACES_DIR (one helper, vexa.workspacesDir); the only out-of-store source a
+            # spec may name is the _global tier agent-api is configured with.
+            {{- if .Values.agentApi.enabled }}
+            {{- $ws := include "vexa.workspaceStore" . | fromYaml }}
+            {{- if $ws.s3 }}
+            # backend: s3 — no claim backs the store; each worker gets a private emptyDir and hydrates
+            # only its own dispatch's mounts from agent-api (it never holds a bucket credential).
+            - name: VEXA_WORKSPACE_MOUNT_SOURCE
+              value: "emptyDir:"
+            - name: RUNTIME_WORKSPACE_CACHE_SIZE
+              value: {{ $ws.workerCacheSize | quote }}
+            {{- else }}
+            - name: VEXA_WORKSPACE_MOUNT_SOURCE
+              value: {{ include "vexa.componentName" (list . "agent-workspaces") | quote }}
+            {{- end }}
+            {{- end }}
+            - name: VEXA_WORKSPACE_MOUNT_TARGET
+              value: {{ include "vexa.workspacesDir" . | quote }}
+            - name: RUNTIME_EXTRA_MOUNT_SOURCES
+              value: {{ .Values.agentApi.globalSystemWorkspacePath | default "" | quote }}
+            # NO MODEL CREDENTIAL AND NO MODEL ROUTE (H5/W1): the runtime brokers nothing into a worker.
+            # agent-api is the one writer of a worker's model route, and it hands the worker a per-turn
+            # token to the model proxy (deployment-model-proxy.yaml) instead of a key.
             - name: LOG_LEVEL
               value: {{ .Values.runtime.logLevel | default "info" | quote }}
             {{- if eq .Values.runtime.backend "k8s" }}
@@ -119,29 +144,105 @@ spec:
               value: {{ .Values.runtime.tolerations | default .Values.global.tolerations | toJson | quote }}
             - name: RUNTIME_K8S_NODE_SELECTOR
               value: {{ .Values.runtime.nodeSelector | default .Values.global.nodeSelector | toJson | quote }}
+            # A SUBSCRIPTION file an agent worker's harness reads (codex: auth.json), one named Secret
+            # key per entry. Never a whole Secret, never a model API key, the model proxy's sealing key
+            # or the internal tier's secret, and never this chart's own Secret (H5/W1): the render
+            # fails here, and the runtime refuses the spawn if one gets past it.
+            {{- $own := include "vexa.adminTokenSecretName" . }}
+            {{- $refused := list "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "CLAUDE_CODE_OAUTH_TOKEN" "OPENAI_API_KEY" "CODEX_API_KEY" "VEXA_LLM_API_KEY" "VEXA_MODEL_PROXY_SECRET" "INTERNAL_API_SECRET" }}
+            {{- range $i, $m := .Values.runtime.workerSecretMounts }}
+            {{- if not (and $m.secret $m.file $m.mountPath) }}
+            {{- fail (printf "runtime.workerSecretMounts[%d] must name {secret, file, mountPath}: a whole Secret is never mounted into a worker" $i) }}
+            {{- end }}
+            {{- if or (eq $m.secret $own) (has $m.file $refused) (hasPrefix "VEXA_MODEL_SECRET_" $m.file) }}
+            {{- fail (printf "runtime.workerSecretMounts[%d] refused: %s/%s holds a model credential or a control-plane secret, and no worker holds one (H5/W1)" $i $m.secret $m.file) }}
+            {{- end }}
+            {{- range $.Values.models.catalogSecrets }}
+            {{- if eq .secretName $m.secret }}
+            {{- fail (printf "runtime.workerSecretMounts[%d] refused: %s holds a model catalog secret" $i $m.secret) }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            - name: RUNTIME_K8S_SECRET_MOUNTS
+              value: {{ .Values.runtime.workerSecretMounts | default list | toJson | quote }}
             # Per-class sizing for SPAWNED Pods (#1005). A namespace whose policy requires every
             # container to declare CPU/memory requests AND limits rejects an unsized Pod at admission,
             # so both shipped workload classes carry their own — sized independently, since a Chromium
             # meeting bot and a code-harness agent worker are nothing alike. One value per dimension
-            # (runtime.v1's shape) sets BOTH the request and the limit. Empty ⇒ that class emits no
+            # (runtime.v1's shape) sets BOTH the request and the limit; the bot's optional cpuLimit
+            # raises its CPU limit above that request. Empty ⇒ that class emits no
             # resources, preserving the optional contract and the pre-#1005 unbounded spawn.
             - name: RUNTIME_BOT_CPU
               value: {{ .Values.runtime.workloadResources.meetingBot.cpu | default "" | quote }}
+            - name: RUNTIME_BOT_CPU_LIMIT
+              value: {{ .Values.runtime.workloadResources.meetingBot.cpuLimit | default "" | quote }}
             - name: RUNTIME_BOT_MEMORY_MB
               value: {{ .Values.runtime.workloadResources.meetingBot.memoryMb | default "" | quote }}
             - name: RUNTIME_AGENT_WORKER_CPU
               value: {{ .Values.runtime.workloadResources.agentWorker.cpu | default "" | quote }}
             - name: RUNTIME_AGENT_WORKER_MEMORY_MB
               value: {{ .Values.runtime.workloadResources.agentWorker.memoryMb | default "" | quote }}
+            # Per-class placement for SPAWNED Pods (runtime.workloadScheduling): the runtime validates
+            # these at boot and lays them on each class's Pods. Empty ⇒ nothing of the class's own.
+            {{- $placement := .Values.runtime.workloadScheduling | default dict }}
+            {{- $bot := get $placement "meetingBot" | default dict }}
+            {{- $worker := get $placement "agentWorker" | default dict }}
+            - name: RUNTIME_K8S_BOT_NODE_SELECTOR
+              value: {{ $bot.nodeSelector | default dict | toJson | quote }}
+            - name: RUNTIME_K8S_BOT_TOLERATIONS
+              value: {{ $bot.tolerations | default list | toJson | quote }}
+            - name: RUNTIME_K8S_BOT_PRIORITY_CLASS_NAME
+              value: {{ $bot.priorityClassName | default "" | quote }}
+            - name: RUNTIME_K8S_BOT_IMAGE_PULL_SECRETS
+              value: {{ $bot.imagePullSecrets | default list | toJson | quote }}
+            - name: RUNTIME_K8S_AGENT_WORKER_NODE_SELECTOR
+              value: {{ $worker.nodeSelector | default dict | toJson | quote }}
+            - name: RUNTIME_K8S_AGENT_WORKER_TOLERATIONS
+              value: {{ $worker.tolerations | default list | toJson | quote }}
+            - name: RUNTIME_K8S_AGENT_WORKER_PRIORITY_CLASS_NAME
+              value: {{ $worker.priorityClassName | default "" | quote }}
+            - name: RUNTIME_K8S_AGENT_WORKER_IMAGE_PULL_SECRETS
+              value: {{ $worker.imagePullSecrets | default list | toJson | quote }}
+            # The Linux capabilities each class's containers keep (all others are dropped, and none
+            # can be gained). Unset (null) keeps the profile's own; [] keeps none.
+            - name: RUNTIME_K8S_BOT_CAPABILITIES
+              value: {{ if kindIs "invalid" $bot.capabilities }}""{{ else }}{{ $bot.capabilities | toJson | quote }}{{ end }}
+            - name: RUNTIME_K8S_AGENT_WORKER_CAPABILITIES
+              value: {{ if kindIs "invalid" $worker.capabilities }}""{{ else }}{{ $worker.capabilities | toJson | quote }}{{ end }}
+            # The Localhost seccomp profile each class's containers run under (empty: RuntimeDefault).
+            # Bots: the profile that lets Chromium build its sandbox, installed on the nodes
+            # (runtime.botSandbox; daemonset-bot-seccomp.yaml).
+            {{- $sandbox := .Values.runtime.botSandbox | default dict }}
+            - name: RUNTIME_K8S_BOT_SECCOMP_PROFILE
+              value: {{ if $sandbox.enabled }}{{ $sandbox.localhostProfile | default "vexa/seccomp-userns.json" | quote }}{{ else }}{{ $bot.seccompProfile | default "" | quote }}{{ end }}
+            - name: RUNTIME_K8S_AGENT_WORKER_SECCOMP_PROFILE
+              value: {{ $worker.seccompProfile | default "" | quote }}
+            # A toleration with no key, or for a control-plane/system taint, is refused unless this
+            # is true (runtime-wide and per class alike).
+            - name: RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS
+              value: {{ $placement.allowBroadTolerations | default false | quote }}
+            # Which runtime this is: spawned Pods carry it, and the boot-time rediscovery selects on it, so two
+            # releases in one namespace never adopt each other's Pods.
+            - name: RUNTIME_K8S_INSTANCE
+              value: {{ .Release.Name | quote }}
+            {{- if include "vexa.extraCA.enabled" . }}
+            # Corporate TLS inspection (global.extraCA): the runtime gives every Pod it spawns the
+            # same CA mount, bundle init container and trust env as the chart's own Pods.
+            - name: RUNTIME_K8S_EXTRA_CA
+              value: {{ include "vexa.extraCA.runtimeJson" . | quote }}
+            {{- end }}
             {{- end }}
             {{- with .Values.runtime.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if eq .Values.runtime.backend "docker" }}
+          {{- if or (eq .Values.runtime.backend "docker") (include "vexa.extraCA.enabled" .) }}
           volumeMounts:
+          {{- end }}
+          {{- if eq .Values.runtime.backend "docker" }}
             - name: docker-sock
               mountPath: /var/run/docker.sock
           {{- end }}
+            {{- with include "vexa.extraCA.mounts" . }}{{ . | trim | nindent 12 }}{{ end }}
           startupProbe:
             httpGet:
               path: /health
@@ -165,8 +266,11 @@ spec:
             timeoutSeconds: 5
           resources:
             {{- toYaml .Values.runtime.resources | nindent 12 }}
-      {{- if eq .Values.runtime.backend "docker" }}
+      {{- if or (eq .Values.runtime.backend "docker") (include "vexa.extraCA.enabled" .) }}
       volumes:
+      {{- end }}
+        {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{ end }}
+      {{- if eq .Values.runtime.backend "docker" }}
         - name: docker-sock
           hostPath:
             path: /var/run/docker.sock

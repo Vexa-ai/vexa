@@ -1,0 +1,23 @@
+{
+  "why": "only a literal row streams, never the catch-all",
+  "manifest": {
+    "contract": "routes.v1",
+    "domain": "agent",
+    "owner": "core/agent",
+    "edge": "gateway",
+    "forward": {
+      "edge_prefix": "/agent/",
+      "upstream_prefix": "/api/"
+    },
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/agent/{path:path}",
+        "scopes": [
+          "tx"
+        ],
+        "stream": true
+      }
+    ]
+  }
+}

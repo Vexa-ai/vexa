@@ -26,8 +26,8 @@ def test_preflight_refuses_boot_without_internal_api_secret():
 
 
 def test_preflight_passes_when_required_set():
-    # defaulted keys (DB_*, ADMIN_API_TOKEN, LOG_LEVEL, …) never block; only the required one matters.
-    cp.preflight({"INTERNAL_API_SECRET": "a-real-secret"})
+    # defaulted keys (DB_HOST…, ADMIN_API_TOKEN, LOG_LEVEL, …) never block; only the required ones do.
+    cp.preflight({"INTERNAL_API_SECRET": "a-real-secret", "DB_PASSWORD": "a-real-db-password"})
 
 
 def test_db_pool_keys_declared_defaulted():
@@ -53,9 +53,49 @@ def test_preflight_refuses_the_published_placeholder():
     KEY, never the value."""
     for placeholder in ("vexa-internal-secret", "lite-internal-secret", "changeme"):
         with pytest.raises(cp.ConfigError) as ei:
-            cp.preflight({**{}, "INTERNAL_API_SECRET": placeholder})
+            cp.preflight({"DB_PASSWORD": "a-real-db-password", "INTERNAL_API_SECRET": placeholder})
         assert "INTERNAL_API_SECRET" in str(ei.value)
         assert placeholder not in str(ei.value), "a refusal must never echo the value"
+
+
+#: Every value this repository has shipped for the admin key, on any surface: compose's .env.example
+#: (dev-admin-token) and its old fallbacks, the chart's values (CHANGE_ME) and test values, CI, the
+#: dashboard harness, the dashboard's placeholders and the old docs' examples. Held here by hand, so a
+#: value dropped from the declaration fails this test rather than booting.
+PUBLISHED_ADMIN_TOKENS = (
+    "vexa-internal-secret", "lite-internal-secret", "changeme", "change-me", "CHANGE-ME", "default",
+    "secret", "dev-admin-token", "CHANGE_ME", "ci-admin-token", "gate-admin-token", "test-admin-token",
+    "test-admin-token-t3", "vexa-admin-token", "vexa-admin-token-2024", "token", "strong-random-token",
+    "your-secret", "your-secret-token", "your-secret-admin-token", "your-secure-admin-token",
+    "your-admin-token", "your-admin-api-token", "your_admin_api_token", "your_admin_api_key",
+    "your_admin_api_key_here", "YOUR_ADMIN_KEY", "YOUR_ADMIN_API_KEY", "YOUR_ADMIN_TOKEN_FROM_DOTENV",
+    "admin-secret", "admin-key", "test-admin-key",
+)
+
+
+def test_the_admin_token_declaration_forbids_every_published_value():
+    decl = {k["key"]: k for k in cp.load_declaration()["keys"]}
+    assert set(PUBLISHED_ADMIN_TOKENS) <= set(decl["ADMIN_API_TOKEN"]["forbidden_values"])
+
+
+@pytest.mark.parametrize("published", PUBLISHED_ADMIN_TOKENS)
+def test_preflight_refuses_every_published_admin_token(published):
+    """The admin key mints an API key for any user. Unset is allowed (the admin surface answers 500),
+    but a value this repository published is no secret: the boot refuses it by name and never
+    echoes it."""
+    for value in (published, f" {published} "):
+        with pytest.raises(cp.ConfigError) as ei:
+            cp.preflight({"DB_PASSWORD": "a-real-db-password", "INTERNAL_API_SECRET": "a-real-secret",
+                          "ADMIN_API_TOKEN": value})
+        said = str(ei.value)
+        assert "ADMIN_API_TOKEN" in said
+        if published not in ("token", "secret", "default"):  # words the refusal's own prose uses
+            assert published not in said, "a refusal must never echo the value"
+
+
+def test_preflight_keeps_a_real_admin_token():
+    cp.preflight({"DB_PASSWORD": "a-real-db-password", "INTERNAL_API_SECRET": "a-real-secret",
+                  "ADMIN_API_TOKEN": "0123456789abcdef" * 4})
 
 
 def test_the_flows_publish_edge_is_declared_and_never_blocks_the_boot():
@@ -80,8 +120,8 @@ def test_the_flows_publish_edge_is_declared_and_never_blocks_the_boot():
     assert "default" not in edge, "a fallback address to publish to, invented by us — absent means absent"
     assert by_key["VEXA_FLOWS_API_KEY"]["secret"] is True
 
-    # The boot with nothing but the one genuinely-required secret. No flows, no key, no error.
-    cp.preflight({"INTERNAL_API_SECRET": "a-real-secret"})
+    # The boot with nothing but the genuinely-required values. No flows, no key, no error.
+    cp.preflight({"INTERNAL_API_SECRET": "a-real-secret", "DB_PASSWORD": "a-real-db-password"})
 
     required = {k["key"] for k in decl["keys"] if k["class"] == "required-explicit"}
     assert not ({"VEXA_FLOWS_API_URL", "VEXA_FLOWS_API_KEY"} & required), \
@@ -99,3 +139,58 @@ def test_the_flows_url_key_matches_meeting_api_and_agent_api():
         "the bare name is retired from the declaration — app/events.py still reads it for one " \
         "release as a deprecated fallback, but it is not a first-class declared key"
     assert by_key["VEXA_FLOWS_API_URL"]["class"] == "publish-edge"
+
+
+# The literals compose's postgres service refuses to start on (deploy/compose/docker-compose.yml):
+# each one is published in this repository, so none of them is a password.
+PUBLISHED_DB_PASSWORDS = ("postgres", "changeme", "change-me", "CHANGE-ME", "default", "secret",
+                          "password")
+REQUIRED = {"INTERNAL_API_SECRET": "a-real-secret", "DB_PASSWORD": "a-real-db-password"}
+
+
+def test_db_password_is_required_explicit_with_no_published_default():
+    entry = {k["key"]: k for k in cp.load_declaration()["keys"]}["DB_PASSWORD"]
+    assert entry["class"] == "required-explicit"
+    assert entry["secret"] is True
+    assert "default" not in entry, "a declared default password is a published password"
+    assert set(PUBLISHED_DB_PASSWORDS) <= set(entry["forbidden_values"])
+
+
+def test_preflight_refuses_a_boot_with_no_db_password():
+    with pytest.raises(cp.ConfigError) as ei:
+        cp.preflight({"INTERNAL_API_SECRET": "a-real-secret"})
+    assert "DB_PASSWORD" in str(ei.value)
+
+
+@pytest.mark.parametrize("published", PUBLISHED_DB_PASSWORDS)
+def test_preflight_refuses_a_published_db_password_without_echoing_it(published):
+    with pytest.raises(cp.ConfigError) as ei:
+        cp.preflight({**REQUIRED, "DB_PASSWORD": published})
+    assert "DB_PASSWORD" in str(ei.value)
+    assert f"'{published}'" not in str(ei.value) and f'"{published}"' not in str(ei.value)
+
+
+def test_the_boot_refuses_the_published_db_password(monkeypatch):
+    """The process, not just the declaration: `build_production_app` runs the preflight before it
+    builds a database URL, so a stack on the published password never connects with it."""
+    from admin_api.__main__ import build_production_app
+
+    monkeypatch.setenv("INTERNAL_API_SECRET", "a-real-secret")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DB_PASSWORD", "postgres")
+    with pytest.raises(cp.ConfigError):
+        build_production_app()
+    monkeypatch.delenv("DB_PASSWORD")
+    with pytest.raises(cp.ConfigError):
+        build_production_app()
+
+
+def test_the_database_url_has_no_password_fallback(monkeypatch):
+    from admin_api.__main__ import _database_url
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DB_PASSWORD", "a-real-db-password")
+    assert ":a-real-db-password@" in _database_url()
+    monkeypatch.delenv("DB_PASSWORD")
+    with pytest.raises(KeyError):
+        _database_url()

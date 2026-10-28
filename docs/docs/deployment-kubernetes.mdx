@@ -12,7 +12,7 @@ deploys the same control plane as the Compose stack, with the runtime pointed at
 
 | Component | Form |
 |---|---|
-| gateway · admin-api · meeting-api · agent-api · runtime | Deployments (RollingUpdate, `maxUnavailable: 0`) |
+| gateway · admin-api · meeting-api · agent-api · runtime · mcp | Deployments (RollingUpdate, `maxUnavailable: 0`); `mcp` is the one assembled MCP server the gateway relays `/mcp` to |
 | terminal (web workbench) | Deployment + ingress |
 | postgres | StatefulSet (or point values at your managed DB) |
 | redis (Valkey) | Deployment |
@@ -21,14 +21,155 @@ deploys the same control plane as the Compose stack, with the runtime pointed at
 | pgbouncer | optional connection pooling |
 | dashboard (deprecated 0.10 UI) | optional Deployment + Service, **off by default** |
 | RBAC for the k8s spawn backend | Role/RoleBinding scoped to Pod create/watch/delete |
+| NetworkPolicy for agent-api, meeting-api, the runtime and spawned Pods | on by default (`networkPolicy.enabled`): only the gateway, the MCP service, the runtime, the terminal and (for meeting-api) agent-api and meeting bots reach agent-api and meeting-api; the flows tier reaches neither, only the gateway's service door (below); only agent-api and meeting-api reach the runtime. Spawned bots and workers take no inbound connection and reach only DNS, addresses outside `networkPolicy.workloads.privateCidrs`, and their own dependencies — workers the gateway, redis and flows-api, bots meeting-api and redis. **An STT service, LLM endpoint, S3 or proxy your bots or workers reach on a private address must be added** with `networkPolicy.workloads.bot.extraEgress` / `.worker.extraEgress`. Spawned Pods mount no ServiceAccount token. Needs a CNI that enforces NetworkPolicy |
 
-The chart sets no pod security context by default and the service images run as root; set
-`global.podSecurityContext` / `global.securityContext` to run as a non-root UID.
+The gateway, admin-api, meeting-api (and the migrations Job), MCP, terminal and flows images run as
+uid 10001, and their pods set `runAsNonRoot` with that uid and `fsGroup`. So does the runtime on the
+default `k8s` backend, which only calls the API server; with `runtime.backend: docker` it runs as
+root to hold the engine's socket. agent-api runs as root (it moves workspace trees other uids write);
+`global.podSecurityContext` / `global.securityContext` apply on top.
+
+The bundled postgres and redis each have a startup probe; liveness checks begin only after it passes. The first-start budget is `periodSeconds × failureThreshold` under `postgres.probes.startup` (10 min) and `redis.probes.startup` (5 min). Raise it if postgres's initdb or redis's append-only replay runs longer on your nodes.
 Containers have all capabilities dropped, with PodDisruptionBudgets on the control plane and
 rolling updates that never take the last replica down.
 
+The chart generates the gateway's identity keypair on first install and keeps it across upgrades: the
+Ed25519 private key in the `<release>-identity-signing-key` Secret, mounted by the gateway alone, and
+the public key in the `<release>-identity-public-key` ConfigMap, mounted by agent-api, meeting-api and
+the credential broker. The gateway signs every request it forwards; the others can verify that
+signature and cannot make one. If you render with `helm template` (GitOps), set `identity.signingKey`
+to a key from `openssl genpkey -algorithm ed25519`, or every render mints a new pair. The chart Secret
+also generates `VEXA_MCP_DELEGATION_SECRET` and `VEXA_MODEL_PROXY_SECRET`; with
+`secrets.existingSecretName`, your Secret must carry both. With flows on, the chart also generates the
+subject-ticket keypairs (`<release>-subject-ticket-{meetings,agent,mail}-key`, see
+[Secrets the chart generates](#secrets-the-chart-generates)), kept the same way.
+
+## Network policy
+
+With `networkPolicy.enabled` (default `true`) and `networkPolicy.defaultDeny.enabled` (default `true`),
+the chart adds a namespace-wide default-deny in both directions. **Every Pod in the release's namespace**
+then takes no connection and makes none unless a policy allows it. That includes Pods the chart does
+not own. **Install Vexa in a namespace of its own**, or give the other Pods there their own policies.
+
+What the chart allows its own Pods:
+
+| Pod | Takes connections from | May connect to |
+|---|---|---|
+| gateway, terminal, dashboard | anywhere, on their own port | DNS, the chart's Pods, and the endpoints you declare (see [Control-plane egress](#control-plane-egress)); the runtime and the postgres-password hook also reach the Kubernetes API server |
+| gateway, service door (port 8002, the `<release>-gateway-door` ClusterIP Service, only with `flows.enabled`) | flows-api, flows-worker, flows-mailbox, signals and the terminal (`<release>-gateway-door-ingress`) | as the gateway |
+| admin-api | the gateway, terminal, dashboard, MCP, agent-api, meeting-api; with the CRM on, crm-api and crm-outbox | same as above |
+| crm-api | the gateway, MCP, agent-api and admin-api | same as above |
+| mcp, pgbouncer | the chart's Pods | same as above |
+| flows-api, flows-worker, flows-mailbox | flows-api: the chart's Pods and agent workers | DNS, the gateway's service door, their database, the mail hosts (see [Flows egress](#flows-egress)) |
+| agent-api, meeting-api, runtime | their named callers (see the table above) | same as above |
+| credential-broker | agent-api and the terminal; the chart's Pods when `credentialBroker.networkPolicy.enabled` is `false`. Spawned Pods never | same as above |
+| postgres | admin-api, meeting-api, agent-api (the session store), pgbouncer, the flows tier, the migrations Job | nothing |
+| redis | the chart's Pods and the Pods the runtime spawns | nothing |
+| spawned bots and workers | nothing | their own policies (see the table above) |
+
+The settings, all under `networkPolicy`:
+
+| Key | Default | Use |
+|---|---|---|
+| `defaultDeny.enabled` | `true` | `false` turns the namespace default-deny off; the per-service policies stay |
+| `dns.to` / `dns.ports` | the kube-dns/CoreDNS Pods in `kube-system` / `[53]` | where every policy sends name resolution, as NetworkPolicy peers and ports (UDP and TCP). Policies match the DNS Pods' own port, after the Service's translation: OpenShift (`values-openshift.yaml`) selects `openshift-dns` on 53 and 5353. For NodeLocal DNSCache add `- ipBlock: {cidr: 169.254.20.10/32}`; an empty `to` allows the ports to any address |
+| `controlPlane.egress` | `[]` | the endpoints you configure, each `{cidr, ports}`: see [Control-plane egress](#control-plane-egress) |
+| `controlPlane.databaseEgress` / `.redisEgress` / `.storageEgress` | `[]` | the CIDRs of an external database, an external Redis and the object store; each is reached on its own port, at any address when empty |
+| `controlPlane.apiServer.cidrs` / `.ports` | `[]` / `[443, 6443]` | the Kubernetes API server, for the runtime and the postgres-password hook; any address on those ports when `cidrs` is empty |
+| `controlPlane.anyAddress` | `false` | `true` restores the open rule: any address outside `egressExcept`, on any port |
+| `controlPlane.egressExcept.ipv4` / `.ipv6` | `[169.254.0.0/16]` / `["fe80::/10"]` | ranges "any address" never includes; empty them if a control-plane Pod authenticates through the cloud metadata server (GKE Workload Identity, EKS Pod Identity) |
+| `controlPlane.extraEgress` | `[]` | extra egress rules for the chart's Pods, as written (a `namespaceSelector` for a service in another namespace, a proxy) |
+| `controlPlane.extraIngress` | `[]` | ingress rules added to every chart Pod, for example a metrics scraper in another namespace |
+| `postgres.extraFrom` | `[]` | more callers of the bundled database, as NetworkPolicy peers |
+
+`controlPlane.extraIngress` is rendered only while the default-deny is on. All of these policies need
+a CNI that enforces NetworkPolicy; without one they have no effect.
+
+### Flows database
+
+With `flows.enabled`, flows keeps its tables in the main database (`database.name`), as Compose and
+Lite do, so a backup of that database covers it. Vexa never creates a database. To keep flows in a
+database of its own, have your DBA create it, owned by `database.user`, and set
+`flows.databaseName` to its name.
+
+Each flows Pod starts with an `ensure-db` init container that creates nothing and stops the Pod with
+the step to take:
+
+- `flows.databaseName` names a database that does not exist: create it, or unset the value.
+- `flows.databaseName` is empty, the main database has no flows tables, and a database named `flows`
+  has some (or cannot be read).
+
+**Upgrading an install that ran flows.** Until this release flows kept its tables in a database named
+`flows` by default. Set `flows.databaseName: flows` before upgrading, and flows keeps using it. If you
+upgrade without it, the flows Pods stop at `ensure-db` with that instruction and start nothing empty.
+To move flows into the main database instead, copy its tables there first, then set
+`flows.databaseName` to `database.name`.
+
+### Control-plane egress
+
+The chart's Pods (all but postgres, redis and the flows Pods, which have their own policy) reach DNS,
+each other, and only the endpoints the values declare:
+
+- the object store, on the port of `storage.s3.endpoint`;
+- an external database (`postgres.enabled: false`) on `database.port`, and an external Redis
+  (`redis.enabled: false`) on `redisConfig.port`;
+- the Kubernetes API server, for the runtime and the postgres-password hook only;
+- each entry of `networkPolicy.controlPlane.egress`.
+
+Every other endpoint you configure needs an entry: your model providers, speech-to-text, SMTP for the
+terminal's mail, git remotes, the OIDC issuer, Microsoft Graph, Google and Telegram for connections,
+the webhook targets users add, and `openrouter.ai` for the daily model prices (or set
+`VEXA_MODEL_PRICES_URL=off`). An endpoint with no entry is unreachable, and the feature that calls it
+fails.
+
+```yaml
+networkPolicy:
+  controlPlane:
+    egress:
+      - {cidr: 203.0.113.10/32, ports: [443]}   # your model gateway
+      - {cidr: 198.51.100.0/24, ports: [587]}   # your SMTP relay
+    storageEgress: [10.30.0.0/16]               # narrows the object store to its addresses
+    apiServer:
+      cidrs: [172.20.0.1/32]                    # kubectl get endpoints kubernetes -n default
+```
+
+An endpoint the chart knows (object store, database, Redis, API server) with no CIDRs listed is
+reached on its port at any address outside `egressExcept`. A host name cannot be a NetworkPolicy
+peer: list the addresses it resolves to, or route through an egress proxy and list the proxy.
+`anyAddress: true` restores the open rule.
+
+**Upgrading from an earlier 0.13.** Control-plane egress used to be open to any address on any port.
+After the upgrade, everything above that you have not listed is blocked. Before upgrading, list each
+external endpoint under `networkPolicy.controlPlane.egress`, or set `anyAddress: true` to keep the
+old rule while you collect them.
+
+### Flows egress
+
+With `flows.enabled`, the flows Pods get their own egress policy (`<release>-flows-egress`). It applies
+even with the default-deny off. It allows DNS, the gateway's service door (8002) and the database.
+The database is pgbouncer or the in-chart postgres. For an external database, the policy allows
+`database.port`, at `networkPolicy.flows.databaseEgress` when that is set. When
+`flows.mail.smtp.passwordRef` is set, the policy also allows the credential broker. Mail goes to
+`networkPolicy.flows.mailEgress`:
+
+```yaml
+networkPolicy:
+  flows:
+    mailEgress:
+      - {cidr: 10.0.40.12/32, ports: [993, 587]}   # your IMAP and SMTP hosts
+    databaseEgress:
+      - {cidr: 10.20.0.5/32}                       # an external Postgres
+```
+
+If `mailEgress` is empty, the policy allows the mail ports to any public address. These are 25, 143,
+465, 587 and 993, any IMAP or SMTP port you set, and 443 when flows uses Microsoft Graph. That covers
+Gmail and Microsoft 365. A mail server or relay on a private address needs an entry. To put the flows
+Pods back under the control-plane egress, set `networkPolicy.flows.enabled: false`. More callers of
+admin-api and crm-api go in `networkPolicy.adminApi.extraFrom` and `networkPolicy.crmApi.extraFrom`.
+
 ## Install
 
+Install into a namespace that holds nothing else (see [Network policy](#network-policy)).
 Create the bucket first (the chart never creates one) and a Secret holding a key pair for it, then
 install with the bucket in `storage.s3`:
 
@@ -49,6 +190,17 @@ helm install vexa deploy/helm/charts/vexa -n vexa \
 ```
 
 Keep these four secret values: every later `helm upgrade` must pass the same ones (or use `--reuse-values`).
+`secrets.nextauthSecret` and `secrets.dispatchSigningKey` may also be left out: the chart then keeps the
+value its own Secret already holds, or generates one on first install. It refuses a value shorter than
+32 bytes or one published in this repository. When a GitOps tool renders the chart with `helm template`
+(no cluster to look the Secret up in), set them explicitly, or every render generates new ones; the
+full list of what such a render must supply is under
+[One-time steps after upgrading](/deployment#one-time-steps-after-upgrading).
+
+**The chat agent's meeting tools** (send the bot, read the transcript, stop it) are deployed by
+default. The agent also needs a model that does tool calling: for a self-hosted or LiteLLM model, set
+`models.runner: openai-agent`, `models.llmBaseUrl` and, if the endpoint needs a key, `secrets.llmApiKey`. See
+[Agent tools on Kubernetes](/deployment-helm-agent-tools).
 
 `values-staging.yaml` and `values-test.yaml` show environment overlays. Chart tests
 (`helm lint` + template tests) live under `deploy/helm/tests/`.
@@ -72,6 +224,19 @@ GATEWAY_URL=http://<node>:<nodePort> make probe SURFACE=helm   # or drive a Node
 It mints its API key from the release secret's `ADMIN_API_TOKEN` (or pass `VEXA_API_KEY`). The
 same journey runs on the other surfaces: `make probe` (compose, the fast default) and
 `make probe SURFACE=lite`.
+
+### The session store's schema Job
+
+With the session store on, the chart runs `agent-sessions-schema`, a Job that creates the store's
+database role and tables with the admin credential and exits. It is an ordinary release resource, not
+a Helm hook, so `helm install`, `helm install --wait` and Argo CD all create it on the first install;
+agent-api waits for it in its `session-schema` init container. The Job's name ends in a hash of its own
+spec (`vexa-vexa-agent-sessions-schema-<hash>`): an upgrade that changes its image or settings creates
+a new Job and Helm removes the old one; an upgrade that changes neither leaves it as it is.
+
+Upgrading from a chart that ran it as a `pre-upgrade` hook can leave that completed Job,
+`vexa-vexa-agent-sessions-schema`, in place: Helm does not delete a hook the chart no longer declares.
+Delete it when you like (`kubectl -n vexa delete job vexa-vexa-agent-sessions-schema`).
 
 ## Object storage
 
@@ -162,12 +327,113 @@ these steps.
 again and serves the objects on it — provided the MinIO images that revision names can still be
 pulled. Recordings made after the upgrade are in your bucket, not on that volume.
 
+## Captured-signal tapes (off by default)
+
+A bot can tee its raw captured stream (audio, captions, speaker events) to your bucket under
+`signal/`, so a meeting can be replayed when a transcription defect is debugged. On Kubernetes this
+is **off by default**: a bot spawned by this chart tapes nothing unless you turn it on.
+
+```yaml
+diagnostics:
+  captureSignal: "false"   # the default; "true" tapes every meeting unless a setting below says no
+```
+
+| Value | Default | Meaning |
+|---|---|---|
+| `diagnostics.captureSignal` | `"false"` | The deployment's default for taping. `"true"` or `"false"`; any other value stops `helm install` and `helm template` with a message naming the value. |
+
+The value is also listed in the [Helm chart README](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/README.md#configuration-that-matters),
+and the variable it sets, `VEXA_CAPTURE_SIGNAL_DEFAULT`, in [Configuration](/configuration#captured-signal-tapes).
+
+The chart value is the last word only when nobody has said otherwise. An administrator can change
+it without a redeploy, for every account (`PUT /internal/settings/diagnostics` with
+`{"capture_signal": "true"}` or `"false"`; an empty string clears it) or for one account
+(`diagnostics.capture_signal` on the user record). Order of precedence: the account's setting, then
+the platform setting, then `diagnostics.captureSignal`.
+
+**Limits.** The switch decides whether new bots tape; a bot already in a meeting keeps the decision
+it started with. Tapes already in the bucket are not deleted by turning the switch off; delete them
+under `signal/` in your bucket, or with the meeting (the delete control erases a meeting's tapes).
+
+**What you see when it goes wrong.** admin-api and meeting-api refuse to start when
+`VEXA_CAPTURE_SIGNAL_DEFAULT` holds anything but a boolean (`true`/`1`/`yes`/`on`,
+`false`/`0`/`no`/`off`), naming the variable in the log. The chart never renders such a value.
+
+### How it works
+
+1. The chart renders `diagnostics.captureSignal` into `VEXA_CAPTURE_SIGNAL_DEFAULT` on admin-api and
+   on meeting-api (`vexa.captureSignalDefault` in `_helpers.tpl`, which refuses any other value).
+2. When meeting-api spawns a bot (`POST /bots`, or the calendar auto-join sweep), it asks identity
+   for the owner's spawn context: `GET /internal/users/{id}/bot-context` on admin-api.
+3. admin-api answers `capture_signal` as a real boolean, always: the account's
+   `diagnostics.capture_signal`, else the platform setting `diagnostics.capture_signal`, else
+   `VEXA_CAPTURE_SIGNAL_DEFAULT` (`_resolve_capture_signal`).
+4. meeting-api takes that boolean as final. If it got no boolean (identity unreachable, or an older
+   admin-api), it falls back to its own `VEXA_CAPTURE_SIGNAL_DEFAULT`, so on this chart a blip
+   cannot switch taping on (`_capture_signal_from_context`).
+5. The decision travels to the bot as `captureSignalEnabled` in its invocation. With `false`, the bot
+   records no tape and uploads nothing under `signal/`.
+
+Ownership: the account and platform settings are written only by admin-api (identity); the decision
+for one spawn is made once, by meeting-api, from that answer; the tape object is written only through
+meeting-api's upload route. Configuration lives in the chart value above and in the two services'
+`config.v1.json` declarations (`VEXA_CAPTURE_SIGNAL_DEFAULT`, class `defaulted`, target `helm`).
+Compose and Lite do not set the key, so their default stays on.
+
+### Why it complies
+
+| Rule | How | Gate |
+|---|---|---|
+| P14: config is a validated contract, delivered by env, validated at boot | One env key on each service, declared in `config.v1.json`; an unrecognized value refuses the boot; the chart refuses it at render | `gate:config-contract`, `gate:helm` |
+| P15: user data is protected by default | Raw meeting audio is not copied to storage on Kubernetes unless an operator decides so | `gate:helm` (`diagnostics.captureSignal` assertions) |
+| P18: fail loud | A typo stops the render or the boot, naming the value, rather than choosing a side | ungated: reviewed; covered by tests |
+| P23: one writer per carrier | The settings stay identity's; meeting-api reads them through the existing bot-context door and adds no copy | `gate:dataflow` |
+| P2: couple only through contracts | meeting-api reads admin-api's answer over the internal edge; no import crosses services | `gate:isolation-py` |
+
+**Security.** Only an operator can change the deployment value (chart values) and only an
+administrator can change the platform or per-account setting (internal-secret route, admin user
+record); no user route writes either. Deny tests:
+`test_an_unreachable_identity_does_not_turn_tapes_on_where_the_deployment_said_off`,
+`test_no_boolean_answer_falls_to_the_deployment_default_off` and
+`test_a_typo_in_the_switch_refuses_the_boot` (meeting-api, `tests/test_capture_signal_default.py`);
+`test_the_deployment_default_off_means_nothing_is_taped_when_nothing_is_configured` and
+`test_a_typo_in_the_switch_is_refused` (admin-api, `tests/test_capture_signal_default.py`);
+`test_bot_context_answers_off_on_a_deployment_whose_default_is_off` (admin-api,
+`tests/test_capture_signal.py`, against Postgres); and the `diagnostics.captureSignal` block in
+`deploy/helm/tests/test_template.sh`.
+
 ## The runtime on Kubernetes
 
 The runtime kernel owns one `runtime.v1` lifecycle (`starting → running → stopping → stopped →
 destroyed`) and delegates only the substrate question — *how do I start, observe, and stop a
 workload?* — to the backend. On `k8s`, a workload is a bare Pod; the same dispatch, contracts,
 and worker run identically to the Docker backend. See [Execution](/architecture/execution).
+
+### Spawned Pod names
+
+A spawned Pod is named `vexa-<workload id>`. When that is not a valid Kubernetes name (lowercase
+letters, digits and `-`, at most 63 characters), the runtime lowercases it, replaces other characters
+with `-`, cuts it to fit and appends a 10-character hash of the id. Two ids never share a name, and a
+restarted runtime derives the same name again. A chat id carries the client's session, so a chat can
+need this. Ids that were already valid keep their names. The id itself is kept verbatim in the Pod's
+`runtime.workload_id` annotation, and the runtime reads it from there when it re-adopts Pods after a
+restart.
+
+### Codex subscription credentials
+
+A spawned Pod inherits no mounts. To give agent workers a Codex subscription, put its `auth.json` in a
+Secret and name it to the runtime through `runtime.extraEnv`:
+
+```yaml
+runtime:
+  extraEnv:
+    - name: RUNTIME_K8S_SECRET_MOUNTS
+      value: '[{"secret":"codex-auth","mountPath":"/tmp/.codex/auth.json","file":"auth.json"}]'
+```
+
+Workers get `CODEX_HOME=/tmp/.codex`, which the harness and the Codex CLI read. The Secret is mounted
+read-only and only into agent workers, never into bots. A token refresh inside a Pod does not persist,
+so keep the Secret fresh yourself.
 
 ### Scheduling spawned Pods on a tainted / dedicated pool
 
@@ -205,6 +471,60 @@ Set `runtime.tolerations` / `runtime.nodeSelector` only to send spawned workload
 pool than the kernel (e.g. GPU bots). Both values are serialized to JSON; malformed JSON fails the
 spawn loudly rather than dropping the constraint (a dropped constraint is the stranded-Pod bug).
 
+To place one class on its own, set `runtime.workloadScheduling.meetingBot` or `.agentWorker`. For
+example, to put bots and workers on a dedicated tainted pool, pull them with a private registry's
+Secret, and run them below the priority of the workloads they must not displace:
+
+```yaml
+runtime:
+  workloadScheduling:
+    meetingBot:
+      nodeSelector: {vexa.ai/pool: bots}
+      tolerations:
+        - {key: vexa.ai/pool, operator: Equal, value: bots, effect: NoSchedule}
+      priorityClassName: vexa-bots          # a PriorityClass you create
+      imagePullSecrets: [regcred]
+    agentWorker:
+      priorityClassName: vexa-bots
+      imagePullSecrets: [regcred]
+```
+
+| Value (per class) | Env on the runtime | Applied to that class's Pods |
+|---|---|---|
+| `nodeSelector` | `RUNTIME_K8S_BOT_NODE_SELECTOR` / `RUNTIME_K8S_AGENT_WORKER_NODE_SELECTOR` | `spec.nodeSelector`, replacing the runtime-wide one |
+| `tolerations` | `RUNTIME_K8S_BOT_TOLERATIONS` / `RUNTIME_K8S_AGENT_WORKER_TOLERATIONS` | `spec.tolerations`, replacing the runtime-wide ones |
+| `priorityClassName` | `RUNTIME_K8S_BOT_PRIORITY_CLASS_NAME` / `RUNTIME_K8S_AGENT_WORKER_PRIORITY_CLASS_NAME` | `spec.priorityClassName`; Kubernetes' own `system-*` classes are refused |
+| `imagePullSecrets` | `RUNTIME_K8S_BOT_IMAGE_PULL_SECRETS` / `RUNTIME_K8S_AGENT_WORKER_IMAGE_PULL_SECRETS` | `spec.imagePullSecrets`. Kubernetes then skips the ServiceAccount's own pull secrets for that Pod |
+| `capabilities` | `RUNTIME_K8S_BOT_CAPABILITIES` / `RUNTIME_K8S_AGENT_WORKER_CAPABILITIES` | the Linux capabilities the class's containers keep; every other one is dropped. `null` (the default) keeps the profile's own — none for a bot; `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `FSETID`, `KILL`, `SETGID`, `SETUID` for a worker, which a root worker needs to give the model's tools a user of their own. `[]` keeps none (OpenShift's restricted SCC) |
+| `seccompProfile` | `RUNTIME_K8S_BOT_SECCOMP_PROFILE` / `RUNTIME_K8S_AGENT_WORKER_SECCOMP_PROFILE` | a `Localhost` seccomp profile for the class's containers, a path under the kubelet's seccomp root; empty means `RuntimeDefault`. For bots the chart sets it from `runtime.botSandbox` (below) while that is on |
+
+The scheduling values are empty by default and add nothing to a Pod's placement. Every spawned Pod's
+container does get a security context: privilege escalation off, every capability dropped except the
+class's list above, the class's seccomp profile (`RuntimeDefault` unless one is named), and
+`runAsNonRoot` where the profile's image runs non-root (a meeting bot's does).
+
+`runtime.botSandbox` (on by default) gives meeting bots the seccomp profile Chromium needs to build its
+sandbox, `vexa/seccomp-userns.json`, and a `<release>-bot-seccomp` DaemonSet writes that file to
+`runtime.botSandbox.installer.kubeletSeccompDir` on each node; the DaemonSet needs a namespace that
+admits a hostPath volume. Where node files are managed another way, turn the installer off and point
+`localhostProfile` at the installed path (the chart README covers OpenShift). With `botSandbox` off,
+bots take `meetingBot.seccompProfile` if set and `RuntimeDefault` otherwise, and each bot without the
+profile logs that its browser runs without its sandbox.
+
+Two settings apply to the runtime as a whole:
+
+- `runtime.workloadScheduling.allowBroadTolerations` (`RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS`, default
+  `false`): a toleration with no key, which tolerates every taint, or one for a control-plane or
+  system taint (`node-role.kubernetes.io/control-plane`, `…/master`, `CriticalAddonsOnly`) is refused
+  at boot unless this is `true`, in the runtime-wide `runtime.tolerations`/`global.tolerations` too.
+- `RUNTIME_K8S_INSTANCE`, which the chart sets to the Helm release name: every spawned Pod carries it
+  as the label `runtime.instance`, and the runtime's boot-time re-adoption selects on it, so two
+  releases in one namespace never adopt each other's Pods.
+
+The runtime checks all of these when it starts and refuses to boot on a malformed one, naming it. A
+caller cannot set any of them: they are not part of a `runtime.v1` `WorkloadSpec`, and the runtime
+drops a spec's `RUNTIME_K8S_*` env keys.
+
 <Warning>
 **Spawned-workload commands must exist in the target image under k8s (entrypoint-replace)
 semantics.** A runtime profile may carry a `command`; the k8s backend passes it as
@@ -217,6 +537,14 @@ image↔profile conformance gate (`image-identity`) asserts each profile command
 an in-image executable against the published images, so a profile that diverges from its image
 fails the release rather than a customer's install.
 </Warning>
+
+### Bot CPU limit and speech segmentation threads
+
+The bot's speech segmenter (onnxruntime) sizes its thread pool from the bot Pod's CPU limit, read from
+the cgroup (`cpu.max`, or `cpu.cfs_quota_us` / `cpu.cfs_period_us`), rounded up and capped at 4. Without a
+limit it uses the node's CPU count, also capped at 4. The bot logs its choice once at start, for example
+`[mixed] onnx threads=2 (cgroup quota 2.0 cpus)`. Before this, it started one thread per node core, and
+on a large node with a small limit transcripts could stall.
 
 ### Namespace LimitRange defaults
 
@@ -365,6 +693,16 @@ auto-join sweep cannot resolve the per-user cap. The meeting-api then **fails cl
 spawn** rather than spawn uncapped; set `AUTO_JOIN_ALLOW_UNCAPPED=1` only if you deliberately want
 uncapped auto-join spawns on a self-host.
 
+The chart sets the same admin-api address as `VEXA_ADMIN_API_URL` on the **agent-api**
+deployment (while `adminApi.enabled`). Through it agent-api keeps who is in each workspace and
+closed room in identity's registry, and asks identity for the principal a room's turn runs as
+(`agentApi.roomWsPrincipal`, on by default). **Upgrading an install that ran without it:** on its
+first start agent-api copies the roster, visibility, connections and invites it kept in files under
+the workspaces volume (`.policy/`, `.invites/`, `.rooms/`, or a workspace's own `policy/*.json`) into
+the registry, and a workspace it missed is copied on its first read. Keep
+`VEXA_POLICY_LEGACY_READ` unset (on) until agent-api has started once on this release. Members and
+owners keep their access; nothing needs to be run by hand.
+
 ## Exposing the cluster — ingress and TLS
 
 The chart ships an optional Ingress, **off by default**. Enabling it fronts the Terminal, which
@@ -448,9 +786,10 @@ terminal:                                 # the same `terminal:` key as above �
     - name: MICROSOFT_CLIENT_SECRET
       valueFrom:
         secretKeyRef: { name: vexa-oauth, key: microsoft-client-secret }
-    # "common" = work/school + personal; or a single org tenant id. Unset ⇒ common.
+    # Your tenant id (a GUID) admits only that tenant's accounts. "common" (or unset) admits any
+    # tenant, and then each sign-in must carry the xms_edov optional ID-token claim, or it is refused.
     - name: MICROSOFT_TENANT_ID
-      value: "common"
+      value: "<directory (tenant) id>"
     # Google is the same shape, minus the tenant:
     - name: GOOGLE_CLIENT_ID
       value: "<client id>"
@@ -462,10 +801,244 @@ terminal:                                 # the same `terminal:` key as above �
 Register the redirect URI in the provider console as `<publicUrl>/api/auth/callback/microsoft`
 (or `.../google`) — so `terminal.publicUrl` above is a prerequisite, not an optional extra.
 
+The terminal uses a provider's email only when the provider verified it: Google must report
+`email_verified`, and a Microsoft sign-in must come from the pinned tenant, or — with `common` — carry
+the `xms_edov` claim (Entra admin center → App registrations → your app → Token configuration → Add
+optional claim → ID → `xms_edov`). Anything else is refused with a sentence on the sign-in card.
+
+### Sign-in through your own identity provider (ADFS, Keycloak)
+
+The chart has first-class values for a generic OpenID Connect provider — `terminal.oidc` (issuer,
+client id, the client secret from an existing Secret, an optional CA bundle) and
+`terminal.signinMethods` to offer only that door. The full guide, with the checklist for your
+identity-provider team, is [Sign-in with your own identity provider](/sign-in-oidc).
+
+### Who may sign in
+
+A provider vouches for an address; it does not decide whether that address belongs here. Every
+sign-in — Google, Microsoft, or the emailed link — is admitted only for an **existing user** of the
+instance, an **admin**, or an address on the **sign-in allow-list**. Anybody else is refused before an
+account is created. Seed the list with `adminApi.signinAllow` (exact addresses and `@domain`
+entries, comma-separated); the admin can add more in the Terminal under **Settings → Sign-in**, and
+the effective list is both:
+
+```yaml
+adminApi:
+  signinAllow: "@example.com,alice@example.org"
+  adminEmails: "admin@example.com"   # optional: names the admins, no claim code needed
+  adminAccount: "company-admin@example.com"   # optional: the one account that writes _global
+```
+
+`adminAccount` is the deployment's [admin account](/minutes/workspaces#the-admin-account): a fresh
+address, not a person's everyday one. It is the only account that writes the company layer, and it
+has no Personal workspace, shared workspaces or meetings. Leave it empty and nobody writes `_global`.
+
+admin-api reads both and decides every sign-in; the Terminal only asks it. An older install that set
+`VEXA_ADMIN_EMAILS` under `terminal.extraEnv` keeps working: the chart carries it over to admin-api
+while `adminApi.adminEmails` is empty.
+
+<Warning>
+**The first administrator needs the admin claim code.** On an instance nobody has claimed, admin-api
+writes a one-time code to its log at boot. With several replicas, one of them holds it:
+
+```bash
+kubectl -n vexa logs -l app.kubernetes.io/component=admin-api --prefix --tail=-1 | grep -A4 'ADMIN CLAIM CODE'
+```
+
+Open the Terminal, enter the code on the claim screen, then sign in: that sign-in becomes the
+administrator. The code works once; restarting admin-api issues a new one. Without it nobody new can
+sign in and nobody can claim the role. To name the admins instead, set `adminApi.adminEmails` before
+the first install; no code is issued then. A non-empty `adminApi.signinAllow` narrows the claim too:
+only an address on the list may sign in or claim.
+</Warning>
+
 <Note>
 Without an Ingress the Services stay cluster-internal. `helm install` alone does not expose Vexa —
 reach it with `kubectl port-forward` during evaluation, or enable the Ingress above.
 </Note>
+
+## The model catalog
+
+`models.catalog` declares the models people pick per chat (see [Model catalog](/model-catalog)).
+Each provider key it references is delivered to agent-api by `models.catalogSecrets`, from a Secret
+you create and name:
+
+```yaml
+models:
+  catalog:
+    providers:
+      openrouter: { adapter: openrouter, auth: secret, secret_ref: env:VEXA_MODEL_SECRET_OPENROUTER }
+    models:
+      - { id: or-sonnet, display_name: Claude Sonnet via OpenRouter, provider: openrouter, model: anthropic/claude-sonnet-4.5 }
+  catalogSecrets:
+    - env: VEXA_MODEL_SECRET_OPENROUTER   # the name secret_ref uses
+      secretName: model-keys              # required
+      key: openrouter                     # default: the env name
+```
+
+Every `env` must start with `VEXA_MODEL_SECRET_`, and `secretName` is required. The chart refuses
+anything else, so a catalog secret never shares a name, or a Secret, with agent-api's own.
+
+## Calls (optional)
+
+[Calls](/minutes/calls) run on a self-hosted LiveKit media server. It is off by default:
+
+```bash
+helm upgrade --install vexa deploy/helm/charts/vexa -n vexa \
+  --set livekit.enabled=true \
+  --set livekit.url=wss://calls.example.com
+```
+
+When calls are enabled, the chart does four things:
+
+- renders the server, an unmodified upstream image pinned by digest, with `room.auto_create` off;
+- creates its in-cluster Service on 7880;
+- generates `LIVEKIT_API_SECRET` in the release Secret, unless you set `secrets.livekitApiSecret` or
+  carry the secret in `secrets.existingSecretName`;
+- gives meeting-api and agent-api the `LIVEKIT_*` env.
+
+**Values.**
+
+| Value | Default |
+|---|---|
+| `livekit.url` | none; required |
+| `livekit.apiKey` | `vexa` |
+| `livekit.udpPortStart`, `livekit.udpPortEnd` | 50000–50100 |
+| `livekit.tcpPort` | 7881 |
+| `livekit.useExternalIp` | `true` |
+| `livekit.nodeIp` | none |
+| `livekit.turn.enabled`, `livekit.turn.domain`, `livekit.turn.udpPort` | TURN off; port 3478 |
+| `livekit.turn.tlsPort`, `livekit.turn.tlsSecretName` | `0` (TURN over TLS off); none |
+| `livekit.hostNetwork` | `true` |
+| `livekit.bindAddresses` | empty: signalling listens on the pod's own IP only |
+| `livekit.resources` | see `values.yaml` |
+| `meetingApi.calls.maxDurationSeconds` | `14400` (`CALL_MAX_DURATION_SEC`) |
+| `meetingApi.calls.emptyGraceSeconds` | `30` (`CALL_EMPTY_GRACE_SEC`) |
+| `meetingApi.calls.firstJoinTimeoutSeconds` | `30` (`CALL_FIRST_JOIN_TIMEOUT_SEC`) |
+| `meetingApi.calls.maxParticipants` | `50` (`CALL_MAX_PARTICIPANTS`) |
+| `meetingApi.calls.transcriptionSwitchable` | `"false"` (`CALL_TRANSCRIPTION_SWITCHABLE`) |
+| `meetingApi.calls.transcribeSharedScreen` | `"true"` (`CALL_TRANSCRIBE_SHARED_SCREEN`) |
+
+**Network.** Media needs each node's own UDP range, which is why `livekit.hostNetwork` defaults to
+`true`. Route `livekit.url` to the Service's port 7880 through your Ingress as a WebSocket.
+
+The chart runs one LiveKit server (`replicas: 1`), so one node carries every call at a time. The
+chart sets no node selector, so a rescheduled pod can land on another node: open these ports on
+every node it may run on, and keep the DNS names in `livekit.url` and `livekit.turn.domain` pointing
+at the node that runs it. On the node firewall (or your cloud's security group), open to browsers:
+
+| Port | Protocol | When |
+|---|---|---|
+| `livekit.udpPortStart`–`livekit.udpPortEnd` (50000–50100) | UDP | always: media |
+| `livekit.tcpPort` (7881) | TCP | always: ICE over TCP |
+| `livekit.turn.udpPort` (3478) | UDP | with `livekit.turn.enabled` |
+| `livekit.turn.tlsPort` (5349) | TCP | with TURN over TLS |
+
+Block 7880 at the node firewall. With `hostNetwork`, port 7880, which carries both signalling and the
+room service in plain HTTP, listens on the node itself as well as behind the Ingress. The chart binds
+it to the pod's own IP (the node's primary address, not every interface); allow it on that address
+only from your Ingress and the cluster. A NetworkPolicy does not apply to a `hostNetwork` pod.
+
+With `livekit.hostNetwork: false`, the chart exposes no media port at all: only the Service on 7880.
+Browsers then cannot send media unless you expose the UDP range yourself, so keep the default.
+
+**TURN over TLS.** For networks that block UDP, point a DNS name at the LiveKit node, put a
+certificate for it in a `kubernetes.io/tls` Secret, and set:
+
+```bash
+kubectl -n vexa create secret tls livekit-turn --cert=turn.crt --key=turn.key
+helm upgrade --install vexa deploy/helm/charts/vexa -n vexa --reuse-values \
+  --set livekit.turn.enabled=true \
+  --set livekit.turn.domain=turn.example.com \
+  --set livekit.turn.tlsPort=5349 \
+  --set livekit.turn.tlsSecretName=livekit-turn
+```
+
+The chart refuses to render TURN over TLS without the domain and the Secret, or on a port below
+1024. A network that allows only 443 is not covered by the chart; see
+[Calls](/minutes/calls#network-requirements).
+
+**How it runs.** The server runs as uid 10001 with privilege escalation blocked and every
+capability dropped, like the chart's other services. Every port it opens is above 1024, so it needs
+no capability back.
+
+**NetworkPolicy.** With `networkPolicy.enabled` on, bot pods may reach the livekit pod. With
+`hostNetwork`, the server is on its node's address instead, so the listener needs one egress rule
+for that address. Add a `/32` rule for that node's IP, limited to the server's ports, to
+`networkPolicy.workloads.bot.extraEgress`. Do not add the whole node range: that would also open the
+kubelet and every node port to bot pods. Set `livekit.nodeIp` and keep the server on that node so
+the address stays the same.
+
+```yaml
+networkPolicy:
+  workloads:
+    bot:
+      extraEgress:
+        - to:
+            - ipBlock: { cidr: 10.0.0.12/32 }   # the node that runs LiveKit
+          ports:
+            - { port: 7880, protocol: TCP }     # signalling
+            - { port: 7881, protocol: TCP }     # media over TCP
+            - { port: 50000, endPort: 50100, protocol: UDP }   # media
+```
+
+**How it works.** meeting-api creates each call's room on the server and starts the listener, a bot
+pod that transcribes each person's track. agent-api mints each participant's ten-minute room token.
+Browsers reach signalling through your Ingress and send media straight to the node. The full flow is
+on [Calls](/minutes/calls#how-it-works).
+
+**Why it complies.** The server is unmodified LiveKit pinned by digest and runs unprivileged; rooms
+are created only by meeting-api; tokens are minted only for a chat's participants. The rules, gates
+and deny tests are on [Calls](/minutes/calls#why-it-complies).
+
+## The CRM (optional)
+
+Off by default. Turn it on with one organisation per install:
+
+```yaml
+crm:
+  enabled: true
+  orgId: acme
+  orgName: "Acme Ltd"
+  # existingSecret: crm-db   # a Secret with key `password`; required for a `helm template` pipeline
+```
+
+The chart then runs `crm-api`, which logs in to Postgres as its own role (`vexa_crm`); the
+`crm-schema` Job creates that role, the `crm_*` tables and the organisation with the database's admin
+credential, and `crm-api` waits for it. The Job is a release resource, not a hook, so it runs on
+`helm install` as well as on an upgrade that changes it. The gateway fronts the record page's read, history and review
+under `/crm/*`, the MCP adds the `crm_*` tools, the flows pack hands workspace references to it, and
+agent-api publishes each workspace's record links every `crm.referencesPollSeconds`. With agent-api
+on, `crm-api` also reads the desktop's limits from `_global/POLICIES.md` through agent-api
+(`CRM_AGENT_API_URL`, admitted by agent-api's NetworkPolicy). With `flows.enabled` too, the chart also
+runs `crm-outbox`, which hands each record change to `flows-api` and seals card facts with the
+CRM's own Ed25519 private key. That key lives in the `<release>-fact-seal-crm-key` Secret
+(`signing-key.pem`), which only `crm-outbox` mounts (`VEXA_FACT_SEAL_KEY_FILE`). `flows-api` holds
+the public half alone, `crm.pem` in the `<release>-fact-verify-keys` ConfigMap
+(`VEXA_FACT_VERIFY_KEYS_DIR`), so it can verify a fact but never seal one. The chart generates the
+pair on install and keeps it across upgrades. When a GitOps tool renders with `helm template`, set
+`factSeal.crm.signingKey` (`openssl genpkey -algorithm ed25519`), or name your own Secret with
+`factSeal.crm.existingSecret` plus its public key in `factSeal.crm.publicKey`; otherwise every render
+mints a new pair. The outbox posts with the CRM's publish key, `VEXA_FLOWS_CRM_PUBLISH_KEY`, which
+admits the CRM's own facts and opens no other flows route; the outbox never holds flows' operator
+key. The chart generates the publish key in its Secret (`secrets.crmPublishKey`, kept across
+upgrades), and `flows-api` reads the same key. With `secrets.existingSecretName`, your Secret must
+carry `VEXA_FLOWS_CRM_PUBLISH_KEY`; it carries nothing for the fact seal. See [CRM](/minutes/crm).
+
+## Meeting and onboarding facts to flows
+
+With `flows.enabled`, meeting-api tells flows when a bot it dispatched goes active and when it
+completes, and when a meeting is shared by email (`meeting.started`, `meeting.completed`,
+`meeting.shared`); admin-api tells it when a person finishes onboarding (`onboarding.completed`).
+Both reach the in-chart flows-api (`VEXA_FLOWS_API_URL`) with the flows operator key
+(`VEXA_FLOWS_API_KEY`, from the flows Secret or `flows.existingSecret`), as under Docker Compose. The
+publish is best-effort: flows down never stops a meeting or an onboarding. With flows off neither
+service gets the setting.
+
+## Removed values: `compat.*`
+
+The chart has no `compat.*` values. A values file that still sets one is refused at render, with the
+page to read: [What changed in 0.13.4: auth](/changes-0-13-4-auth).
 
 ## The deprecated dashboard (optional)
 
@@ -483,8 +1056,420 @@ helm upgrade --install vexa deploy/helm/charts/vexa -n vexa \
 
 It runs the pinned external image `vexaai/dashboard` on its own tag — `global.imageTag` does
 not apply to it — and talks to the gateway's hosted-compat surface. It is **deprecated**: when
-the Terminal covers its remaining flows, the component is deleted, not ported. On Compose the
-same option is `docker compose --profile dashboard up -d` (port 13001).
+the Terminal covers its remaining flows, the component is deleted, not ported. Compose has no
+dashboard; use the Terminal.
+
+## Enterprise and OpenShift installs
+
+This section collects what a corporate cluster needs beyond the defaults: the rights the person who
+runs `helm install` must hold, the database privileges on your own Postgres, the OpenShift profile, a TLS-inspecting proxy, sign-in through your
+own identity provider, and the settings that change behaviour on upgrade. It starts with the
+restricted environment every bank-ready release is tested against.
+
+### What we test against
+
+This is what we test against. Every release that is called bank-ready has passed the **bank profile**
+([`deploy/bank-profile`](https://github.com/Vexa-ai/vexa/tree/main/deploy/bank-profile)) on its exact
+commit: a cluster set up the way a bank's platform team sets one up, with the chart installed by
+someone who holds only the rights listed under [Required permissions](#required-permissions).
+
+| Constraint | In the profile |
+|---|---|
+| The database user is not a superuser | Your own Postgres 16. Run twice: the user holds only `CREATEROLE`, and the DB team pre-creates the roles while the user holds no role privilege (both ways under [Database privileges](#database-privileges-on-an-external-postgres)). |
+| Non-root Pods under a restricted policy | Pod Security `restricted`, enforced, plus OpenShift `restricted-v2` behaviour: a random uid from the namespace's range, no privilege escalation, every capability dropped, seccomp `RuntimeDefault`, a read-only root filesystem where the chart sets one. The chart runs with `values-openshift.yaml`. |
+| No egress except declared endpoints | A CNI that enforces NetworkPolicy, a namespace default-deny, and the chart's policies with every public address excepted: only DNS, the release's own Pods, the database, object storage, the model, STT, the identity provider and (for the runtime) the Kubernetes API. |
+| A corporate CA | `global.extraCA`. The model, STT and identity provider present certificates only that CA issued. |
+| Sign-in without `email_verified` | An ADFS-like OIDC provider, `requireEmailVerified: "0"`, the OIDC door only. |
+| No Anthropic endpoint | An OpenAI-compatible model inside the cluster (`models.runner: openai-agent`) and an in-cluster STT. |
+
+On it we run: `helm install --wait`, first sign-in through the identity provider, a workspace, one
+chat turn answered by the in-cluster model, and a meeting bot that reaches `active` and writes a
+transcript segment. What it does not cover: it emulates `restricted-v2` on Kubernetes rather than
+running OpenShift; it has one node, so the workspace store is `ReadWriteOnce`; its meeting bot is a
+stand-in, so a real browser join and real audio through your STT are not part of it; flows is off.
+
+### What Vexa requires of your platform
+
+Every requirement Vexa places on your cluster, database, network and nodes, with the component that
+needs it, the reason, and how to avoid it. The rule behind it is
+[P24](/governance/architecture): each requirement is the least that works, and a new one is added
+only with a stated reason. CI holds the chart, Compose, Lite and the services' SQL to this table
+(`gate:host-demands`): a new host-level demand fails the build until it has a row here. The defaults
+are the chart's own `values.yaml`; "opt-in" means off until you set it.
+
+**Database**
+
+| ID | Requirement | Who needs it | Why | Strictly needed? | How to avoid it |
+|---|---|---|---|---|---|
+| D1 | A Postgres database the migration user (`database.user`) owns. The chart ships `postgres:17-alpine`; an external Postgres 14 to 17 works. | admin-api (converges the schema at start), the migration and schema Jobs | Every service's tables live there; from Postgres 15 only the database owner (or a `CREATE` grant on `public`) may create tables. | Yes | Nothing to avoid. No superuser, no `REPLICATION`, no `BYPASSRLS`, no extension: Vexa runs no `CREATE EXTENSION`. |
+| D2 | `CREATEROLE` for the migration user, or two roles your DBA pre-creates | the session-store schema Job (`agentApi.sessions`), the CRM schema Job (`crm.enabled`, opt-in) | Each makes its own login role (`vexa_agent_sessions`, `vexa_crm`) that reaches only its own tables, so agent-api and crm-api never hold the admin credential. | The separate roles: yes. `CREATEROLE`: no. | Pre-create both roles with the passwords in their Secrets; the Jobs then issue no role statement. See [Database privileges on an external Postgres](#database-privileges-on-an-external-postgres). |
+| D3 | Nothing: no role needs `CREATEDB`. Flows keeps its tables in the main database (`flows.databaseName` empty, the default, as Compose and Lite do); a separate one is used only when your DBA has created it and you name it | flows (`flows.enabled`, opt-in) | — | No | Nothing to avoid. Vexa never creates a database: the `ensure-db` init container only checks, and stops with the step to take ([Flows database](#flows-database)). |
+| D4 | A read-only reporting role, created by your DBA from `dashboards/reporting-role.sql` | the optional adoption panel (Grafana) | Grafana's login, limited to the columns the panel reads | No, the panel is optional | Skip the panel. |
+| D5 | Compose and Lite connect as `postgres`, the superuser of the Postgres they bring | every service's migrations there | They own that database server, so the default user is its superuser. | No | Point `DB_HOST`/`DB_USER` at your own Postgres; the user needs only D1 and D2. |
+
+**Network**
+
+| ID | Requirement | Who needs it | Why | Strictly needed? | How to avoid it |
+|---|---|---|---|---|---|
+| N1 | One HTTPS host routed to the terminal (port 3000); optionally a second host for `terminal.canvasHost` | users' browsers | The terminal is the one public front door. The canvas host serves agent-made pages from an origin of their own ([meeting canvas isolation](/meeting-canvas-isolation)). | The first: yes. The canvas host: no, without it the frame shares the terminal's origin and the terminal warns at start. | Ingress is off by default (`ingress.enabled`); bring your own route. |
+| N2 | A CNI that enforces NetworkPolicy | the chart's policies (`networkPolicy.enabled`, on) | Default-deny in the namespace, then one allow per edge ([Network policy](#network-policy)) | No: without enforcement the policies are inert and Vexa still runs. | Nothing to do; or set `networkPolicy.enabled: false` if your platform manages policy. |
+| N3 | Control-plane Pods reach the endpoints the values declare, each on its own port: the object store, an external database and Redis, the Kubernetes API server (runtime and the postgres-password hook only, 443 and 6443), and each `networkPolicy.controlPlane.egress` entry | every chart Deployment (`control-plane-egress`, `api-server-egress`) | The control plane calls the endpoints you configure (N7) | The endpoints you use: yes | List CIDRs (`storageEgress`, `databaseEgress`, `redisEgress`, `apiServer.cidrs`) to narrow the four the chart knows from any address to their own ([Control-plane egress](#control-plane-egress)). |
+| N4 | DNS (TCP/UDP 53) to the cluster DNS Pods only: kube-dns/CoreDNS in `kube-system` by default, `openshift-dns` on 53 and 5353 with `values-openshift.yaml` | every chart Pod and spawned Pod | Name resolution | Yes | Nothing to avoid. A cluster whose DNS runs elsewhere sets `networkPolicy.dns.to` and `.ports`. |
+| N5 | Meeting bots reach the public internet on any port (private ranges refused) | meeting bots (`bot-egress`) | Meeting platforms carry media over UDP and TCP on ports and addresses they choose per call. | Yes | For an on-premises Jitsi, name its host in `VEXA_MEETING_HOST_ALLOW`. |
+| N6 | Agent workers reach the public internet on any port (private ranges refused) | agent workers (`worker-egress`) | The model's tools fetch pages and clone repositories; models are reached through model-proxy. | Yes, while agents may browse | Narrow with your egress proxy. |
+| N7 | The endpoints you configure, and only those: your speech-to-text URL (empty by default); your model providers (none by default); SMTP for mail; Microsoft Graph for a flows mailbox; Google and Telegram for connections (the credential broker); git remotes; the webhook URLs users add (private addresses refused unless allowed) | meeting-api, bots, agent-api, model-proxy, flows, credential broker | Each is a feature you turn on by configuring it. | Only for the features you use | Leave it unset. On Kubernetes each one is reachable only once listed in `networkPolicy.controlPlane.egress` (N3). |
+| N8 | `openrouter.ai` once a day for public model prices | agent-api | Prices the usage it records at market rates | No | `VEXA_MODEL_PRICES_URL=off`: the snapshot bundled with the release prices every call. |
+| N9 | The Codex CLI inside agent workers may contact its vendor besides the model API (telemetry, update checks); Claude Code's non-essential traffic is off in the image (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` in its managed settings) | agent workers running Codex | Default behaviour of the vendor's CLI | No | Block it at your egress proxy. To remove: the same switch for Codex, once its traffic is measured (size S). |
+| N10 | LiveKit on the node's network, with its UDP media range open (`livekit.hostNetwork`, on when calls are on) | calls (`livekit.enabled`, opt-in) | WebRTC media to browsers outside the cluster | Only with calls | Leave calls off. With `livekit.hostNetwork: false` you expose the UDP range yourself ([Calls](#calls-optional)). |
+
+**Filesystem and nodes**
+
+| ID | Requirement | Who needs it | Why | Strictly needed? | How to avoid it |
+|---|---|---|---|---|---|
+| F1 | ReadWriteOnce volumes from the default StorageClass: Postgres 10Gi, Redis 2Gi, agent workspaces 5Gi, credential broker 1Gi | postgres, redis, agent-api and agent workers, credential broker | Durable state | Yes, unless held elsewhere | External Postgres (`postgres.enabled: false`); `agentApi.workspaces.backend: s3` drops the workspace volume. Workers on more than one node need that volume `ReadWriteMany` or the S3 backend. |
+| F2 | A `hostPath` on every bot node (`/var/lib/kubelet/seccomp`), written by a DaemonSet running as root (no capability, read-only root filesystem); its namespace must admit `hostPath` (Pod Security `privileged`) | meeting bots' browser sandbox (`runtime.botSandbox`, on) | The kubelet reads a Localhost seccomp profile only from its own directory; the profile lets Chromium build its sandbox on user namespaces. | The profile: for a sandboxed browser. The DaemonSet: no. | Install the profile yourself (OpenShift MachineConfig, Security Profiles Operator) and set `runtime.botSandbox.installer.enabled: false`, or run the installer in a separate namespace (`installer.namespace`). With `botSandbox.enabled: false` bots run under RuntimeDefault without the browser sandbox, and each logs it. |
+| F3 | The container engine's socket (`/var/run/docker.sock`), root-equivalent on the host | the runtime on Compose, and on the chart only with `runtime.backend: docker` | That backend starts bot and worker containers through the engine | On Compose: yes. On Kubernetes: no, the default `k8s` backend uses the API. | Use the chart (default backend) or Lite. |
+| F4 | `emptyDir` scratch space, each with a size limit where it can grow: agent-api's workspace cache, credential broker and signals temp, the CA bundle (8Mi), workers' workspace with the S3 backend | those components | Temporary files on a read-only or ephemeral root | Yes | Nothing to avoid; no memory-backed volume. |
+| F5 | A shared-memory size for Chromium (`/dev/shm`): Compose and Lite set 2g; on Kubernetes bots get the container runtime's default (64Mi) | meeting bots | Chromium keeps renderer buffers in shared memory | — | Not a demand today; a memory-backed volume for bots is a known gap (size S). |
+
+**Identity and secrets**
+
+| ID | Requirement | Who needs it | Why | Strictly needed? | How to avoid it |
+|---|---|---|---|---|---|
+| I1 | For sign-in through your own provider: an `https` OIDC issuer, a client id and secret, scopes `openid email profile`; ID-token claims `iss`, `sub`, an email (`VEXA_OIDC_EMAIL_CLAIM`), and `email_verified: true`. No group claim is read. | terminal | The account is bound to issuer and subject; an unverified email could claim someone else's records. | Only with OIDC | ADFS and others without `email_verified`: `terminal.oidc.requireEmailVerified: "0"` ([Sign-in and identity](#sign-in-and-identity)). A private CA: `VEXA_OIDC_CA_FILE`, or `global.extraCA` for every Pod. |
+| S1 | A Secret with your object-storage keys (`storage.s3.existingSecret`), created by you | meeting-api, agent-api, runtime | Recordings and workspaces live in your bucket | Yes | — |
+| S2 | Generated Secrets (gateway signing key, admin token, internal secret, database password, credential-broker and CRM keys), kept across upgrades with `lookup` | the chart | Each service's own credential | Yes | Each has an `existingSecret` value to bring your own ([Secrets the chart generates](#secrets-the-chart-generates)). Under GitOps or `helm template`, where `lookup` returns nothing, set them explicitly. |
+
+**Images**
+
+| ID | Requirement | Who needs it | Why | Strictly needed? | How to avoid it |
+|---|---|---|---|---|---|
+| R1 | Pulls from Docker Hub: `vexaai/*` at `v<appVersion>`, plus `postgres:17-alpine`, `valkey/valkey:8-alpine`, `edoburu/pgbouncer` and `livekit/livekit-server` pinned by digest; `imagePullPolicy: Always` | every Pod, spawned bots and workers included | The release images | The images: yes. Docker Hub and `Always`: no. | Mirror them and set each `image.repository` (`runtime.agentWorkerImage` for workers), `global.imagePullSecrets`, a digest in `tag`, and `global.imagePullPolicy: IfNotPresent`. |
+
+**Kubernetes objects and Pod security**
+
+| ID | Requirement | Who needs it | Why | Strictly needed? | How to avoid it |
+|---|---|---|---|---|---|
+| K1 | A namespaced Role: `pods` create, delete, get, list, watch; `pods/log` get; `secrets` create | the runtime (`runtime.backend: k8s`, the default) | One Pod per meeting bot and per agent turn; each Pod's credential env rides a Secret the runtime creates and never reads | Yes | — |
+| K2 | A short-lived hook Role (one Secret, the Postgres Pod's `exec`, named Deployments) | the post-upgrade password-rotation Job, only when the in-chart Postgres still has a published password | Moves an install off a published password | Only then | `database.existingSecret`, or an external Postgres. |
+| K3 | Nothing cluster-scoped: no ClusterRole, no CRD, no namespace | — | — | — | — |
+| K4 | Jobs and Helm hooks: the CRM schema Job (pre-install/pre-upgrade, `crm.enabled`); the session-store schema Job; the migration Job (pre-upgrade, opt-in); the password-rotation Job (K2); the workspace S3 migration Job (opt-in). No CronJob. | the components named | Schema and role setup before the services start | Yes, for the features on | — |
+| K5 | Pod Security `restricted` admits every non-root chart Pod and every meeting bot: each Pod the chart renders sets `seccompProfile: RuntimeDefault` (`global.podSecurityContext`), and each Pod the runtime spawns sets it per container (bots: the Localhost profile, F2). `restricted` still refuses the Pods that run as root or use the host (K6–K9, N10, F2) and the dashboard, whose image names its user | the namespace | Root Pods: see their rows | The profile: yes | External Postgres and Redis (K9), calls off (N10), the installer off or in its own namespace (F2); agent-api and workers need `baseline` (K7, K8). On OpenShift, `values-openshift.yaml` lets the SCC set every context. |
+| K6 | The runtime runs as root, only with `runtime.backend: docker` | runtime | That backend holds the engine's socket. On the default `k8s` backend the runtime only calls the API server and runs as uid 10001. | Only with the docker backend | Keep the default backend. |
+| K7 | agent-api runs as root | agent-api | Moves workspace trees that root-run workers and per-subject uids write | Yes, while workers run as root | — |
+| K8 | Agent workers run as root and keep `CHOWN DAC_OVERRIDE FOWNER FSETID KILL SETGID SETUID` | agent workers | They run the model's tools as a separate uid that cannot read the worker's credentials | Yes, for that separation | `runtime.workloadScheduling.agentWorker.capabilities: []` keeps none, as `values-openshift.yaml` does for `restricted-v2`. |
+| K9 | The in-chart Postgres, Redis and PgBouncer run their images' root entrypoints; the chart sets only their seccomp profile | postgres, redis | Upstream images | No | External Postgres and Redis. |
+
+**Compute**
+
+| ID | Requirement | Who needs it | Why | Strictly needed? | How to avoid it |
+|---|---|---|---|---|---|
+| C1 | Control plane requests 1.6 CPU and 4.1 GiB in total (limits: 14.5 CPU and 14 GiB); gateway, admin-api, meeting-api and terminal run two replicas each | the chart's Deployments | Two replicas keep a rolling upgrade available | The floor: yes | `replicaCount` and `resources` per component. |
+| C2 | Each meeting bot: 1 CPU and 2 GiB, Guaranteed; each agent turn: 0.5 CPU and 1 GiB | spawned Pods | A browser per meeting; a worker per turn | Yes | `runtime.workloadScheduling` per class; see [Bot CPU limit](#bot-cpu-limit-and-speech-segmentation-threads). |
+
+**Compose and Lite, where they differ**
+
+| ID | Requirement | Who needs it | Why | Strictly needed? | How to avoid it |
+|---|---|---|---|---|---|
+| X1 | agent-api runs as root (K7); the runtime runs as uid 10001 and joins the Docker socket's group (`DOCKER_GID`: `mint-dev-env.sh` writes the socket's group on Linux; `0`, the socket's group on Docker Desktop, otherwise) | Compose | The runtime drives the Docker socket (F3) | The socket's group: yes. Root: no | Nothing to avoid beyond F3. Lite has no socket: its runtime starts processes (X3). |
+| X2 | Three one-shot key generators run as `0:0` with no network, then exit | Compose | They write keys owned by uid 10001 | Yes, briefly | — |
+| X3 | One container running as root inside; `--shm-size=2g` and a seccomp profile that allows user namespaces | Lite | supervisord starts every service as its own non-root uid; Chromium's sandbox | Yes, for that design | Without the profile, bots run without the browser sandbox. |
+
+### Required permissions
+
+The person or pipeline that runs `helm install` / `helm upgrade` needs, **in the release namespace**:
+
+| API group | Resources | Verbs | Why |
+|---|---|---|---|
+| `""` | `secrets` | `get`, `list`, `create`, `update`, `patch`, `delete` | Helm keeps its release record in Secrets; the chart creates the generated Secrets (gateway identity key, admin token, CRM fact-seal key, database password) and reads them back with `lookup` on every upgrade so they stay the same. |
+| `""` | `configmaps`, `services`, `persistentvolumeclaims`, `serviceaccounts` | `get`, `list`, `create`, `update`, `patch`, `delete` | The public-key ConfigMaps, every Service, the workspace, Redis and broker volumes, and the runtime's ServiceAccount. |
+| `apps` | `deployments`, `statefulsets`, `daemonsets` | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` | Every service; the in-chart Postgres; the bot seccomp installer (only with `runtime.botSandbox.installer.enabled`). |
+| `apps` | `replicasets` | `get`, `list`, `watch` | `helm install --wait` and `helm upgrade --wait` read a Deployment's ReplicaSets to decide it is ready; without them the upgrade fails with `replicasets.apps is forbidden`. |
+| `batch` | `jobs` | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` | The migration and schema Jobs. Helm deletes a hook Job before it runs it again, and an upgrade prunes the previous hashed-name Job. |
+| `rbac.authorization.k8s.io` | `roles`, `rolebindings` | `get`, `list`, `create`, `update`, `patch`, `delete` | The runtime's Role (below), and on an upgrade that rotates a published database password, a short-lived hook Role. |
+| `policy` | `poddisruptionbudgets` | `get`, `list`, `create`, `update`, `patch`, `delete` | The control plane's disruption budgets. |
+| `networking.k8s.io` | `networkpolicies`, `ingresses` | `get`, `list`, `create`, `update`, `patch`, `delete` | With `networkPolicy.enabled` and `ingress.enabled`. |
+| `""` | `pods`, `pods/log` | `get`, `list`, `watch` | `helm install --wait` and `make probe`. |
+
+Kubernetes lets you create a Role only with rights you hold yourself (or with the `escalate` and
+`bind` verbs). So the deployer also needs every right the chart's Roles grant:
+
+- **The runtime's Role** (`<release>-runtime`, bound to its own ServiceAccount): `pods` create,
+  delete, get, list and watch; `pods/log` get; `secrets` create. The runtime spawns one bare Pod per
+  bot and per agent turn, and each Pod's credential env rides its own Secret, which the runtime
+  creates and never reads, lists or deletes.
+- **The password-rotation hook Role**, only on an upgrade that replaces a published or pending
+  in-chart database password: `get`, `patch` on that one Secret, `get` on the Postgres Pod,
+  `create`, `get` on its `pods/exec`, and `get`, `patch` on the Deployments that read the password.
+  Every rule names its objects by `resourceNames`.
+
+Nothing in the chart is cluster-scoped: no ClusterRole, no CRD, no namespace. The bot seccomp
+installer DaemonSet is the one Pod that needs a namespace admitting `hostPath` (Pod Security
+`privileged`); set `runtime.botSandbox.installer.namespace` to a separate namespace for it, or turn
+the installer off and install the profile on the nodes yourself (below).
+
+### Database privileges on an external Postgres
+
+With an external Postgres (`postgres.enabled: false`), every Job runs as the user in `database.user`
+(the examples call it `vexa`). That user should own the application database (`database.name`): it
+creates the tables and grants on them, and from Postgres 15 only the owner may create tables in the
+`public` schema. Vexa also needs two login roles of its own, and a third you add yourself:
+
+| Role | Who makes it, and when | Why it exists |
+|---|---|---|
+| `vexa_agent_sessions` (`agentApi.sessions.dbUser`) | The `agent-sessions-schema` Job, on install and on every upgrade that changes it. On with the session store. | agent-api logs in as this role and never holds `database.user`. It may read and write only the `agent_session*` tables, so a session's SQL cannot reach accounts, API tokens, meetings or another service's tables. |
+| `vexa_crm` (`crm.dbUser`) | The `crm-schema` Job, likewise. Only with `crm.enabled`. | crm-api's login, limited to the `crm_*` tables and the CRM's own functions. |
+| `vexa_reporting` | You, with `dashboards/reporting-role.sql` from the chart. Only with the adoption panel. | Grafana's login, which can read only the columns the panel shows. |
+
+The Jobs create each role as `LOGIN NOINHERIT` with no admin power (`NOSUPERUSER NOCREATEDB
+NOCREATEROLE NOREPLICATION NOBYPASSRLS`) and the password from its Secret
+(`<release>-agent-sessions-db` and `<release>-crm-db`, key `password`, unless you name your own in
+`agentApi.sessions.existingSecret` and `crm.existingSecret`). On every later run they set the
+password again and re-grant. They refuse a role that holds an admin power.
+
+The database team picks one of two ways.
+
+**Vexa creates the roles.** Give the user `CREATEROLE`:
+
+```sql
+-- Postgres 16 and later
+ALTER ROLE vexa CREATEROLE;
+```
+
+From Postgres 16, `CREATEROLE` reaches only the roles that user created, or holds the `ADMIN` option
+on. If a role already exists because someone else created it, also run, for that role:
+
+```sql
+-- Postgres 16 and later, only for a role vexa did not create
+GRANT vexa_agent_sessions TO vexa WITH ADMIN OPTION;
+GRANT vexa_crm TO vexa WITH ADMIN OPTION;
+```
+
+```sql
+-- Postgres 15 and earlier
+ALTER ROLE vexa CREATEROLE;
+```
+
+Up to Postgres 15, `CREATEROLE` lets the user change any role that is not a superuser and grant
+membership in any role. If your policy does not allow that, use the second way.
+
+**The database team creates the roles.** The user then needs no role privilege. Choose each
+password yourself (24 or more characters; `openssl rand -hex 32` fits), put it in a Secret under
+`password`, name the Secret in the values, and create the role with the same password:
+
+```bash
+kubectl -n vexa create secret generic vexa-sessions-db --from-literal=password="$SESSIONS_PW"
+kubectl -n vexa create secret generic vexa-crm-db --from-literal=password="$CRM_PW"
+# values: agentApi.sessions.existingSecret=vexa-sessions-db, crm.existingSecret=vexa-crm-db
+```
+
+```sql
+-- any Postgres version
+CREATE ROLE vexa_agent_sessions LOGIN NOINHERIT PASSWORD '<SESSIONS_PW>';
+CREATE ROLE vexa_crm LOGIN NOINHERIT PASSWORD '<CRM_PW>';   -- only with crm.enabled
+```
+
+The Job checks that the password logs in, leaves the role as it is, and grants it its tables. To
+change the password later, change it in the Secret and on the role together. If your database team
+has revoked `CONNECT` on the database from `PUBLIC`, also grant `CONNECT` to each role.
+
+**When a privilege is missing**, the Job stops before it writes anything, and its log names the
+statement to run:
+
+```text
+[session-schema] STOP: database user "vexa" may not create the session store's role "vexa_agent_sessions": it lacks CREATEROLE. Have the database team run `ALTER ROLE "vexa" CREATEROLE;`, or pre-create the role with the password in the session store's Secret: ...
+[session-schema] STOP: database user "vexa" may not change role "vexa_agent_sessions" (Postgres 16+ needs CREATEROLE and the ADMIN option on it), and the session store's password does not log in as a LOGIN NOINHERIT "vexa_agent_sessions". Have the database team run `GRANT "vexa_agent_sessions" TO "vexa" WITH ADMIN OPTION;`, ...
+[crm-schema] STOP: database user "vexa" may not create the CRM's role "vexa_crm": it lacks CREATEROLE. ...
+```
+
+Until the Job succeeds, agent-api stays in its `session-schema` init container, and after
+`VEXA_SESSIONS_WAIT_SEC` (600 seconds) that container fails with
+`[session-schema] not ready: cannot log in as the session store's role (...)`. Until then agent-api
+does not start, so no agent session or workspace can be created. crm-api waits the same way in
+`crm-schema-ready`. Read
+the Job's log (`kubectl -n vexa logs job/<the Job>`), run the statement, and delete the failed Job;
+the next `helm upgrade` runs it again.
+
+The flows tables live in their own database, `flows.databaseName` (`flows`), unless you set it to
+`database.name`. The flows Pods' `ensure-db` init container creates that database, which needs
+`CREATEDB`. Without it, have the database team create the database with `vexa` as its owner, or set
+`flows.databaseName` to `database.name`.
+
+### OpenShift
+
+Layer the chart's `values-openshift.yaml` over your values:
+
+```bash
+helm upgrade --install vexa <chart> -n vexa \
+  -f <chart>/values-openshift.yaml -f my-values.yaml \
+  --set agentApi.workspaces.storageClassName=<a ReadWriteMany class>
+```
+
+It does four things, each of which a default install gets wrong on a multi-node `restricted-v2`
+cluster:
+
+- The chart delivers no `securityContext`: `restricted-v2` injects the uid, `runAsNonRoot`,
+  `fsGroup`, dropped capabilities and the seccomp profile, and refuses a uid outside the project's
+  range. Do not add `fsGroup` or `runAsUser` yourself.
+- Agent workers keep no added capability.
+- The agent workspace store is `ReadWriteMany`. Every agent worker mounts the same store as
+  agent-api; on `ReadWriteOnce` block storage a worker scheduled on another node waits for the volume
+  and its chat never answers. Name an RWX class, for example CephFS from OpenShift Data Foundation.
+- The hostPath seccomp installer is off. Meeting bots still run under the Localhost profile
+  `vexa/seccomp-userns.json`, which lets Chromium build its sandbox. Install that file on the nodes
+  with a MachineConfig or the Security Profiles Operator (then point
+  `runtime.botSandbox.localhostProfile` at the path it installs), and give the ServiceAccount the bot
+  Pods run as (the namespace's `default`) an SCC like `restricted-v2` whose `seccompProfiles` also
+  lists `localhost/<that path>`. Without both, set `runtime.botSandbox.enabled=false`: bots then run
+  under `runtime/default` and say in their log that their browser runs without its sandbox.
+
+The bundled Postgres image needs a passwd entry for its uid, which `restricted-v2`'s random uid does
+not have. Use an external Postgres (`postgres.enabled: false`, `database.*`); see the chart's
+[known boundaries](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/README.md).
+
+### A TLS-inspecting proxy: your root CA in every Pod
+
+If a proxy inspects outbound HTTPS and re-signs it with your own root CA, every Pod has to trust that
+CA. Otherwise calls to transcription, the model provider, git hosts, OAuth providers and the meeting
+pages the bot opens fail certificate verification. Put the PEM in a ConfigMap or Secret in the
+release namespace and name it:
+
+```bash
+kubectl -n vexa create configmap corp-root-ca --from-file=ca.crt=<your-root-ca.pem>
+helm upgrade --install vexa <chart> ... --set global.extraCA.configMap=corp-root-ca
+```
+
+`global.extraCA.secret` takes a Secret instead, and `global.extraCA.key` names the key (default
+`ca.crt`). Name one, not both: the chart refuses to render with both. Every Vexa Deployment and Job,
+and every meeting-bot and agent-worker Pod the runtime spawns, then:
+
+- mounts the PEM read-only at `/etc/vexa/extra-ca/ca.crt`;
+- runs an init container that writes the image's system bundle plus your PEM into an `emptyDir` at
+  `/etc/vexa/ca-bundle/ca-bundle.crt`. A key with no certificate in it stops the Pod instead of
+  starting it untrusting;
+- points `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO` and
+  `AWS_CA_BUNDLE` at that bundle (Python, `requests`, `httpx`, curl, git, botocore), and
+  `NODE_EXTRA_CA_CERTS` at your PEM (Node);
+- in the bot, imports the PEM into Chromium's NSS store, since Chromium on Linux reads no bundle file.
+
+It needs no root and no writable root filesystem, so it runs under `restricted-v2`. Unset, the chart
+renders exactly as before. `storage.s3.caBundle`, `terminal.oidc.caBundle`, the flows mail CA and a
+git provider's own `caBundle` still apply to their own endpoints, and when `storage.s3.caBundle` is
+set, `AWS_CA_BUNDLE` is left to it. Third-party infra Pods (Postgres, Redis, PgBouncer, LiveKit) make
+no outbound HTTPS and are left as they are.
+
+On OpenShift you can let the cluster supply the bundle: create an empty ConfigMap labelled
+`config.openshift.io/inject-trusted-cabundle: "true"`, and the cluster fills its `ca-bundle.crt` key
+with the cluster's trusted CAs, including the proxy CA from the cluster proxy configuration.
+
+```bash
+oc -n vexa create configmap trusted-ca
+oc -n vexa label configmap trusted-ca config.openshift.io/inject-trusted-cabundle=true
+helm upgrade --install vexa <chart> ... \
+  --set global.extraCA.configMap=trusted-ca --set global.extraCA.key=ca-bundle.crt
+```
+
+A Secret-sourced key that names a model credential or a control-plane secret is refused when the
+runtime starts, because the CA key is mounted into every workload.
+
+### Sign-in and identity
+
+- **The Terminal needs an `https://` public URL.** A production Terminal sets every sign-in cookie
+  `Secure`, so with an `http://` `terminal.publicUrl` the browser drops them and OIDC sign-in returns
+  to `/?csrf=true` without an error. Front the Terminal with TLS (an ingress or an OpenShift edge
+  route) and set `terminal.publicUrl` to the `https://` address. The Terminal warns in its log at
+  start when the URL is `http://` on a host other than `localhost`.
+- **An OIDC provider that sends no `email_verified`.** Generic OIDC sign-in requires the ID token to
+  say `email_verified: true`. ADFS, and other directories that issue no such claim, need
+  `terminal.oidc.requireEmailVerified: "0"` (`VEXA_OIDC_REQUIRE_EMAIL_VERIFIED=0`); without it
+  nobody can sign in. Accounts signed in that way never claim or match a CRM Person by email. Any
+  value other than empty, `1` or `0` stops the terminal at start. See
+  [Sign-in with your own identity provider](/sign-in-oidc).
+- **Claims and merges.** A CRM profile is claimed only through its `email:` match identifier.
+  Imported records that have only the `Email` field filled are not claimable until they get that
+  identifier. A CRM merge that would move away a record someone signs in with answers `409`, so a
+  cleanup script merges duplicates *into* the sign-in record. See [CRM](/minutes/crm).
+- **Bot accounts signing in through your identity provider.** The bot's sign-in browser opens only
+  the meeting platforms' own sign-in hosts. Name your provider's host in
+  `credentialBroker.botSigninExtraHosts` (`VEXA_BOT_SIGNIN_EXTRA_HOSTS`), for example
+  `adfs.example.com`. A host that resolves to an internal address is dropped, so check how it
+  resolves from inside the cluster. See [Bot accounts](/minutes/bot-accounts).
+- **Bot accounts in English.** Authenticated Teams and Zoom bot accounts must have their UI language
+  set to English. Otherwise joins fail as `ui_locale_mismatch`. Check this on a tenant whose default
+  language is not English. See [Authenticated bots](/authenticated-bots).
+
+### Secrets the chart generates
+
+With `secrets.existingSecretName`, your own Secret has to carry every key the chart would otherwise
+generate; the `secrets` block of `values.yaml` names each one. Keys an older Secret is likely to
+lack:
+
+- `VEXA_MODEL_PROXY_SECRET`. agent-api seals each turn's model route with it for the model proxy,
+  and no agent worker holds a model-provider key. See
+  [Execution](/architecture/execution#the-model-proxy).
+- `VEXA_MCP_DELEGATION_SECRET`, and the CRM outbox's `VEXA_FLOWS_CRM_PUBLISH_KEY` when the CRM is
+  on (without it the outbox does not start).
+- `VEXA_FLOWS_SERVICE_KEY` when flows is on. It is the flows tier's one credential: flows-api,
+  flows-worker and flows-mailbox present it to the gateway's service door, and the gateway holds the
+  same value. Without it flows does not start and the gateway serves no door. Keep `ADMIN_API_TOKEN`
+  and `INTERNAL_API_SECRET` in your Secret for the other services; the flows Pods no longer mount
+  either.
+
+Fact producers sign with their own keys. The CRM outbox signs card facts with its own Ed25519
+private key, kept in `<release>-fact-seal-crm-key`, and flows verifies under the public half in
+`<release>-fact-verify-keys`. `VEXA_FACT_SEAL_SECRET` is gone; remove it from your own Secret. With
+`helm template`, set `factSeal.crm.signingKey`, or `factSeal.crm.existingSecret` with
+`factSeal.crm.publicKey` (see [The CRM](#the-crm-optional)).
+
+With flows on, a flows call that acts for a person passes the gateway's service door only with a
+subject ticket signed by the producer of that person's fact. Each producer has its own Ed25519 key,
+which the chart generates on install and keeps across upgrades and through an uninstall:
+`<release>-subject-ticket-meetings-key` (mounted by meeting-api), `<release>-subject-ticket-agent-key`
+(agent-api) and `<release>-subject-ticket-mail-key` (flows-worker and flows-mailbox, never flows-api).
+The gateway mounts only the public halves, `<issuer>.pem` in the `<release>-subject-ticket-verify-keys`
+ConfigMap. With `helm template`, set `subjectTickets.<issuer>.signingKey` for `meetings`, `agent` and
+`mail` (`openssl genpkey -algorithm ed25519`), or `subjectTickets.<issuer>.existingSecret` with
+`subjectTickets.<issuer>.publicKey`; otherwise every render mints new pairs. `secrets.existingSecretName`
+needs nothing new for them. A changed `subjectTickets.<issuer>.signingKey` rolls that producer and the
+gateway on `helm upgrade` (`checksum/subject-tickets`). To rotate a generated key, delete its Secret, run
+`helm upgrade`, then restart that producer and the gateway (the gateway reads the public keys at start). Rotating the agent key voids
+the routine grants it signed, so each running routine needs its owner to turn it on once more.
+
+### Services that need a setting
+
+- **The flows mailbox on an IMAP server other than Gmail.** Set `flows.mail.authservId` to the
+  authserv-id your receiving server or mail gateway writes in `Authentication-Results`. The mailbox
+  does not start without it. On-premises Exchange usually writes no DMARC verdict itself; ask your
+  mail team which authserv-id the gateway in front of it writes. If nothing writes one, set it
+  anyway: every sender is then unauthenticated and mailed invites are quarantined, not acted on.
+  The Microsoft Graph inbox and the Gmail preset need nothing. See [Flows operations](/flows/operations).
+- **Calls.** The terminal's page policy admits only the LiveKit server named in `livekit.url`
+  (`LIVEKIT_URL` on the terminal, set by the chart). A LiveKit or asset origin outside that value is
+  blocked by the browser. See [Calls](#calls-optional).
+
+### What changes on upgrade
+
+- **Flows calls the other services through the gateway's service door.** With `flows.enabled`, the
+  flows Pods reach agent-api, admin-api, meeting-api and the CRM only through
+  `http://<release>-gateway-door:8002/agent`, `/identity`, `/meetings` and `/crm`, and signals hands
+  facts to flows through `/to-flows` on the same door. The door forwards a fixed list of routes and
+  refuses the rest with 403. Add `VEXA_FLOWS_SERVICE_KEY` to a Secret you bring with
+  `secrets.existingSecretName` (above). If you manage network policies yourself, allow port 8002 on
+  the gateway from flows-api, flows-worker, flows-mailbox, signals and the terminal; the flows Pods
+  no longer need agent-api, and `VEXA_FLOWS_ADMIN_KEY` is gone.
+- **In-chart databases restart once.** The in-chart Postgres and Redis gained a startup probe, so
+  `helm upgrade` restarts each of them once, with a short outage. Postgres keeps its data. Redis loses
+  its keys, including delegation records, if its persistence is off. Nothing restarts when you use
+  external databases. Tune the first-start budget with `postgres.probes` and `redis.probes`.
+- **Private writes when admin-api is down.** A session that has read private data gets
+  `503 policy_unreadable` on page writes and pushes while admin-api cannot answer who reads the
+  target, and nothing is written. A worker's commit is held for the person's share card. Sessions
+  that read nothing private are unaffected. See [Workspaces](/minutes/workspaces).
+- **Zoom bots turn incoming video off.** Once admitted, a Zoom bot stops incoming video through the
+  meeting's More menu, which saves about a core and a half per call with cameras on. Others in the
+  call see no change, attribution still follows the active speaker, and Vexa records no Zoom video.
+  The step looks for the English menu label (bot accounts are pinned to English, above); if it does
+  not find it, the call keeps video on and the join is unaffected.
 
 ## Honest status
 
@@ -499,6 +1484,15 @@ Everything the chart deploys pulls from images you build and host in your own re
 with the [self-hosted transcription unit](/deployment#transcription-the-separate-gpu-unit) — bundled
 GPU or CPU — and your own LLM endpoint ([Configuration](/configuration)) so the audio path never
 calls out. See [Security & compliance](/security-compliance).
+
+With a CNI that enforces NetworkPolicy, the chart's own Pods reach no external address you have not
+declared ([Control-plane egress](#control-plane-egress)); meeting bots and agent workers keep their
+public-internet rules (N5, N6). Two calls leave the cluster unless you stop them. agent-api reads public model prices from
+`openrouter.ai` once a day: set `VEXA_MODEL_PRICES_URL=off` in `agentApi.extraEnv`, and the
+snapshot bundled with the release prices every call. The Codex CLI inside agent workers may contact
+its vendor for telemetry and update checks: block that at your egress proxy. (Claude Code's
+non-essential traffic is already off in the worker image.) The full list is the
+[platform requirements](#what-vexa-requires-of-your-platform) table, rows N3 to N9.
 
 **One gap on this path, and it is this chart's:** `TRANSCRIPTION_MODEL` is **not values-plumbed**
 — set it on the meeting-api and terminal Deployments via `extraEnv` until it lands, which the

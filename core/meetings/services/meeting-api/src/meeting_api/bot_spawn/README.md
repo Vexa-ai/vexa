@@ -8,16 +8,24 @@ eager-creates the `MeetingSession` keyed by the bot's `connectionId`.
 - `build_router(repo, runtime)` — the mountable `POST /bots` router (the unified
   `meeting_api.app.create_app` mounts it).
 - `request_bot(...)` — the spawn flow (the router's core; callable directly in tests).
+- `transcription_language` — transcription-language.v1's reading: checks each tier, resolves meeting >
+  person (bot-context) > deployment (env) > auto, and builds the acts.v1 `reconfigure` for a live change.
 - `build_invocation(...)` / `build_workload_spec(...)` / `mint_meeting_token(...)` — the
-  `invocation.v1` / `runtime.v1` builders + the stateless MeetingToken minter. Both builders
-  validate against the sealed schema **at the seam** before anything ships.
+  `invocation.v1` / `runtime.v1` builders + the session-bound MeetingToken minter (re-exported from
+  `meeting_api.meeting_token`). Both builders validate against the sealed schema **at the seam**
+  before anything ships.
 - `MeetingRepo` / `RuntimeClient` ports + `QuotaExceeded` / `MaxBotsExceeded` / `SpawnFailed` /
   `DuplicateMeeting`.
+- `meeting_host` — the meeting host rule for a caller-supplied `meeting_url`: the host is the
+  platform's (or, for Jitsi and Zoom front doors, the organisation's own) and every address it
+  resolves to is public or listed in `VEXA_MEETING_HOST_ALLOW` (`MeetingHostRefused` → 422; the
+  auto-join stamps it). The operator's entries ride to the bot as invocation.v1 `meetingHostAllow`.
 - `adapters.build_production_router(...)` — wire with real SQLAlchemy + the httpx runtime client.
 - `fakes` — `InMemoryMeetingRepo` / `FakeRuntimeClient` (offline drivers).
 
 ## The flow (P2 core + P3 control-plane)
-construct the meeting URL → dedup (409 on a CONCURRENT active prior) → **max-bots pre-check (429)**
+check a caller-supplied meeting URL's host (422 off the platform or resolving inside) → construct
+the meeting URL → dedup (409 on a CONCURRENT active prior) → **max-bots pre-check (429)**
 → mint a per-run service identity → **optional service-authority admission before any row/runtime
 effect (403 deny, 503 unavailable)**
 → **continue_meeting (reuse a TERMINAL prior row)** or insert a fresh `Meeting` row (status
@@ -53,6 +61,25 @@ Join-retry re-spawns and `continue_meeting` sessions count against the same cap.
 Tests: `../../../tests/test_bot_spawn.py` · `test_continue_meeting.py` · `test_max_bots.py`.
 Join-retry (P3d) lives in the `lifecycle` brick: `lifecycle/retry.py` + `test_join_retry.py`.
 
+### Bot accounts (ADR-0049)
+
+`POST /bots` takes an optional `bot_account`: a bot account id, `"default"` (also when absent) or
+`"none"` (the open api.v1 body, like `continue_meeting`). The router resolves it before any DB write
+through [`bot_accounts`](../bot_accounts/README.md) (`BotAccounts.resolve_for_spawn`): `default` is
+the caller's most recently verified `ok` account for the platform (google_meet→google,
+teams→microsoft, zoom→zoom), else a company account the `VEXA_COMPANY_BOT_USE` policy opens to them,
+else none — today's bot, unchanged, and a store that cannot answer is also none. An explicit id must
+exist, be the caller's or a usable company one (404 / 403), match the platform (422) and be signed in
+(409, naming the remedy `browser_session_open`).
+
+With an account the spawn is authenticated without the deployment knob: `auth_userdata_path` =
+`bot-account:<id>` (so `find_active_by_userdata` → `AuthSessionBusy` serializes one live bot per
+account, and `latest_auth_session` binds the restore and the write-back to it),
+`meeting.data.bot_account_id` = the id, and the invocation carries `sessionRestoreUrl` and
+`sessionWritebackUrl` (both meeting-api's `/internal/browser-session/<session_uid>`) and no userdata
+path or S3 key. Without one, `BOT_AUTHENTICATED` works exactly as before. The auto-join sweep spawns
+without an account.
+
 ### Optional external service authority
 
 `VEXA_SERVICE_AUTHORITY_CONFIG` enables the sealed, policy-free
@@ -69,3 +96,10 @@ Observe-only sessions are never later reinterpreted as enforced sessions.
 No config means explicit stock OSS allow-all. Once configured, unavailable, malformed, stale, or
 cross-bound decisions fail closed. `mode=observe` records the authority response but cannot satisfy
 a hosted hard-spend-cap claim.
+
+## Auto-join block lists
+`auto_join_block.py` — domains and addresses the auto-join sweep never joins: the operator's
+`VEXA_AUTO_JOIN_BLOCK` (parsed at boot) and the owner's `auto_join_block` from bot-context. A due row
+whose organiser, an invitee or the link's host matches is stamped (`data.auto_join_error`, counter
+`blocked`) and never spawned. `POST /bots` is not affected. Docs:
+[Calendar sync → Enterprise settings](../../../../../../../docs/docs/how-to/calendar-sync.mdx).

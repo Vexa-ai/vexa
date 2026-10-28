@@ -1,0 +1,4 @@
+{
+  "code": "hash_mismatch",
+  "detail": "'transcript.json' does not match its manifest length/SHA-256"
+}

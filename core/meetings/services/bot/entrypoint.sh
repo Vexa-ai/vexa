@@ -35,6 +35,29 @@ pactl set-default-source virtual_mic 2>/dev/null || true
 pactl set-sink-mute tts_sink 1 2>/dev/null || true
 pactl set-source-mute virtual_mic 1 2>/dev/null || true
 
+# CORPORATE TLS INSPECTION (chart global.extraCA → VEXA_EXTRA_CA_FILE): Chromium on Linux trusts
+# only its NSS store, never SSL_CERT_FILE, so a page re-signed by the operator's root CA fails with
+# ERR_CERT_AUTHORITY_INVALID unless that CA is in $HOME/.pki/nssdb. Import every certificate in the
+# PEM (certutil -A takes one per call). Node, curl and the AWS CLI read the env the runtime sets.
+if [ -n "${VEXA_EXTRA_CA_FILE:-}" ] && [ -s "${VEXA_EXTRA_CA_FILE}" ]; then
+  NSSDB="${HOME:-/tmp}/.pki/nssdb"
+  CA_SPLIT="$(mktemp -d)"
+  if mkdir -p "${NSSDB}" \
+     && { [ -f "${NSSDB}/cert9.db" ] || certutil -d "sql:${NSSDB}" -N --empty-password; } \
+     && awk -v d="${CA_SPLIT}" '/-----BEGIN CERTIFICATE-----/{n++; f=sprintf("%s/%03d.pem", d, n)} n&&f{print > f} /-----END CERTIFICATE-----/{close(f); f=""}' "${VEXA_EXTRA_CA_FILE}"; then
+    CA_N=0
+    for CA_PEM in "${CA_SPLIT}"/*.pem; do
+      [ -s "${CA_PEM}" ] || continue
+      CA_N=$((CA_N + 1))
+      certutil -d "sql:${NSSDB}" -A -t "C,," -n "vexa-extra-ca-${CA_N}" -i "${CA_PEM}" || echo "[entrypoint] WARNING: certutil refused ${CA_PEM##*/}"
+    done
+    echo "[entrypoint] Chromium trusts ${CA_N} extra CA certificate(s) from ${VEXA_EXTRA_CA_FILE}"
+  else
+    echo "[entrypoint] WARNING: could not import ${VEXA_EXTRA_CA_FILE} into Chromium's NSS store"
+  fi
+  rm -rf "${CA_SPLIT}"
+fi
+
 # Run the worker from its package dir so the schema path (src→../../../contracts)
 # and the pnpm-linked workspace deps resolve. Always emit start + exit breadcrumbs
 # so an instant crash is never silent in container stdout.

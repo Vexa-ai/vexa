@@ -1,0 +1,4 @@
+/* The debug probes' first frame, as the server renders it: classes, never a style attribute (the
+   page's policy refuses those, app/contentSecurityPolicy.ts). */
+.vx-debug-loading { padding: 20px; font-family: monospace; font-size: 12px; color: var(--t3); background: var(--bg); min-height: 100vh; }
+.vx-debug-blank { min-height: 100vh; background: var(--bg); }

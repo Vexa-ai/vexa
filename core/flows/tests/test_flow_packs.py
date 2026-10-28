@@ -8,7 +8,7 @@ delete by accident.
   1. FLOW VERSIONS AS DATA — `POST /flows` / `Registry.flow_by_names`. Existed. Closed to code: a
      step name outside the image's reviewed vocabulary is refused, which is exactly why (3) exists.
   2. QUEUE WORDS FROM OUTSIDE THE IMAGE — `$VEXA_BEHAVIOR_DIR/queue/<flow>.<type>.md`, read before
-     the baked showcase. Existed; asserted in `test_onboarding_flow.py`.
+     the baked showcase. Existed; asserted in `test_queue_waiting.py`.
   3. STEPS OF ITS OWN — `VEXA_FLOWS_DEFS_EXTRA`. THE ONE THAT WAS MISSING.
 
 And the fourth thing a pack needs, which is an absence rather than a seam: event types it invents
@@ -119,8 +119,8 @@ def test_a_flow_version_may_be_authored_from_existing_steps(registry):
     into a flow of its own without an image rebuild (`POST /flows` writes the row, the worker
     hot-loads it within one refresh)."""
     f = registry.flow_by_names(name="tenant_flow", version=9, on_event="tenant.event",
-                               step_names=["first_meeting"])
-    assert f.steps == ("first_meeting",)
+                               step_names=["record_friction"])
+    assert f.steps == ("record_friction",)
     assert ("tenant_flow", 9) in registry.db_versions
 
 

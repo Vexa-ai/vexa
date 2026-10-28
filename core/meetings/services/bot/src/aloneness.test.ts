@@ -3,12 +3,15 @@ import {
   DEFAULT_ALONE_SILENCE_WINDOW_MS,
   DEFAULT_STREAM_PRESENCE_STALENESS_MS,
   createDeafCaptureGuardAdapter,
+  createDeafLaneMonitor,
   createRemoteAudioActivityTap,
   createSilenceAlonenessSource,
   deafCaptureGuardAdapter,
+  deafLaneFault,
   resolveAloneSilenceWindowMs,
   silenceAlonenessAdapter,
 } from './aloneness.js';
+import { createSttFaultReporter } from './stt-faults.js';
 
 let failed = 0;
 const check = (name: string, condition: boolean, detail = ''): void => {
@@ -432,6 +435,111 @@ function fixture(windowMs = 1_000, extra: {
     DEFAULT_ALONE_SILENCE_WINDOW_MS === 600_000);
   check('invalid env falls back to module default',
     resolveAloneSilenceWindowMs(undefined, { BOT_ALONE_SILENCE_WINDOW_MS: 'nope' }, () => {}) === 600_000);
+}
+
+console.log('deaf-lane guard — audio keeps arriving, no STT round-trip settles');
+{
+  const deafFixture = (audibleMs = 1_000) => {
+    const clock = new FakeClock();
+    const scheduler = new FakeScheduler();
+    const activity = createRemoteAudioActivityTap({ now: clock.now });
+    const logs: string[] = [];
+    const incidents: Array<{ audibleMs: number; sinceSttMs: number }> = [];
+    const monitor = createDeafLaneMonitor({
+      activity, audibleMs, now: clock.now, pollMs: 10,
+      setInterval: scheduler.setInterval, clearInterval: scheduler.clearInterval,
+      log: (m) => { logs.push(m); }, onDeaf: (i) => { incidents.push(i); },
+    });
+    const stop = monitor.start();
+    const speakFor = (ms: number): void => {
+      for (let t = 0; t < ms; t += 10) { clock.advance(10); activity.observeRemoteEnergy(loudEnergy); scheduler.tick(); }
+    };
+    return { clock, scheduler, activity, logs, incidents, monitor, stop, speakFor };
+  };
+
+  {
+    const f = deafFixture();
+    f.activity.ready();
+    f.speakFor(1_500);
+    check('heard audio with no STT round-trip raises ONE typed incident', f.incidents.length === 1, JSON.stringify(f.incidents));
+    check('the incident is loud', f.logs.some((m) => m.startsWith('DEAF LANE:')), f.logs.join(' | '));
+    f.speakFor(3_000);
+    check('a persisting incident is not re-reported', f.incidents.length === 1, JSON.stringify(f.incidents));
+    f.monitor.noteTranscribe();
+    check('a settled round-trip clears it', f.logs.some((m) => m.startsWith('DEAF LANE cleared')), f.logs.join(' | '));
+    f.speakFor(500);
+    check('and the count restarts from that round-trip', f.incidents.length === 1, JSON.stringify(f.incidents));
+    f.stop();
+    check('stop releases the poll', f.scheduler.activeCount === 0);
+  }
+  {
+    const f = deafFixture();
+    f.activity.ready();
+    for (let t = 0; t < 5_000; t += 10) {
+      f.clock.advance(10);
+      if (t % 500 === 0) f.monitor.noteTranscribe();
+      f.activity.observeRemoteEnergy(loudEnergy);
+      f.scheduler.tick();
+    }
+    check('a lane transcribing on cadence never trips it', f.incidents.length === 0, JSON.stringify(f.incidents));
+  }
+  {
+    const f = deafFixture();
+    f.activity.ready();
+    for (let t = 0; t < 5_000; t += 10) { f.clock.advance(10); f.activity.observeRemoteEnergy(0); f.scheduler.tick(); }
+    check('a silent room (frames, no energy) never trips it', f.incidents.length === 0, JSON.stringify(f.incidents));
+  }
+  {
+    const f = deafFixture();
+    for (let t = 0; t < 5_000; t += 10) { f.clock.advance(10); f.activity.observeRemoteEnergy(loudEnergy); f.scheduler.tick(); }
+    check('capture not ready yet never trips it', f.incidents.length === 0, JSON.stringify(f.incidents));
+  }
+  {
+    // The incident reaches the terminal lifecycle event as a typed stt_fault (kind lane_deaf).
+    const f = deafFixture();
+    const faults = createSttFaultReporter(() => {});
+    const monitor = createDeafLaneMonitor({
+      activity: f.activity, audibleMs: 1_000, now: f.clock.now, pollMs: 10,
+      setInterval: f.scheduler.setInterval, clearInterval: f.scheduler.clearInterval,
+      log: () => {}, onDeaf: (i) => faults.record(deafLaneFault(i)),
+    });
+    monitor.start();
+    f.activity.ready();
+    f.speakFor(1_500);
+    const report = faults.report() as { stt_fault?: { kinds: Array<{ kind: string; count: number }> }; reason?: string } | undefined;
+    check('a deaf lane is carried as stt_fault kind lane_deaf',
+      report?.stt_fault?.kinds.length === 1 && report.stt_fault.kinds[0].kind === 'lane_deaf' && report.stt_fault.kinds[0].count === 1,
+      JSON.stringify(report));
+    check('and names itself in the lifecycle reason', report?.reason === 'stt_degraded: lane_deaf×1', String(report?.reason));
+  }
+  {
+    // watch(): the lane's transcribe, with every settled round-trip noted — the arguments, the
+    // result, a fault, and the properties the lane reads off the closure all pass through.
+    const f = deafFixture();
+    f.activity.ready();
+    const pressure = { backingOff: () => false };
+    const seen: unknown[][] = [];
+    let fail = false;
+    const base = Object.assign(async (...args: unknown[]) => {
+      seen.push(args);
+      if (fail) throw Object.assign(new Error('refused'), { kind: 'unavailable' });
+      return { text: 'hi' };
+    }, { sttPressure: pressure });
+    const watched = f.monitor.watch(base);
+    check('watch keeps the closure properties (the STT back-pressure gate)', (watched as typeof base).sttPressure === pressure);
+    f.speakFor(1_500);
+    check('(deaf before the round-trip)', f.incidents.length === 1);
+    const out = await watched(new Float32Array(1), 'prompt', { language: 'de' });
+    check('watch passes every argument and the result through',
+      out.text === 'hi' && seen[0][1] === 'prompt' && (seen[0][2] as { language?: string }).language === 'de', JSON.stringify(seen));
+    check('a settled round-trip through watch clears the incident', f.logs.some((m) => m.startsWith('DEAF LANE cleared')), f.logs.join(' | '));
+    f.speakFor(900);
+    fail = true;
+    let threw = false;
+    try { await watched(new Float32Array(1)); } catch { threw = true; }
+    f.speakFor(900);
+    check('a typed STT fault still rethrows, and counts as a round-trip', threw && f.incidents.length === 1, JSON.stringify(f.incidents));
+  }
 }
 
 console.log(failed

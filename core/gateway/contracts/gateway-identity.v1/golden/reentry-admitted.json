@@ -1,0 +1,41 @@
+{
+  "validation": {
+    "user_id": 42,
+    "scopes": [
+      "bot",
+      "tx"
+    ],
+    "max_concurrent": 3,
+    "email": "jane@example.com",
+    "is_admin": false,
+    "delegation": {
+      "regime": "autonomous",
+      "workspaces": [
+        "acme-account"
+      ],
+      "target": "acme-account"
+    },
+    "person_is_admin": false
+  },
+  "signed": {
+    "typ": "vexa-identity",
+    "sub": "42",
+    "email": "jane@example.com",
+    "scopes": [
+      "bot",
+      "tx"
+    ],
+    "limits": 3,
+    "delegation": {
+      "regime": "autonomous",
+      "workspaces": [
+        "acme-account"
+      ],
+      "target": "acme-account"
+    },
+    "iat": 1767225600,
+    "exp": 1767225660
+  },
+  "admitted": true,
+  "what": "the identity the gateway signed onto the worker's /mcp request: same person, same delegation"
+}

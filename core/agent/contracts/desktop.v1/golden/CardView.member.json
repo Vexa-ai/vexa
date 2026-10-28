@@ -1,0 +1,26 @@
+{
+  "id": "r1", "ref": "card:r1", "type": "Card", "revision": 3, "title": "Pricing proposal",
+  "about": {"kind": "page", "ref": "page:client-x-4f2a91/pricing.md"},
+  "state": "Doing", "states": ["To do", "Doing", "Done"], "side_states": ["Dropped"],
+  "next": "Send the revised numbers", "waiting": "Legal review", "summary": "Second round after the call on Tuesday.",
+  "due": "2026-10-22", "progress": 0.5, "workspaces": ["client-x-4f2a91"], "parent": null,
+  "children": {"done": 1, "total": 2, "items": [
+    {"id": "r2", "title": "Draft numbers", "state": "Done", "done": true},
+    {"id": "r3", "title": "Legal check", "state": "Doing", "done": false}
+  ]},
+  "members": [{"subject": "7", "status": "member"}, {"subject": "8", "status": "invited"}],
+  "face": [
+    {"type": "stepper"}, {"type": "next"}, {"type": "waiting"},
+    {"type": "metric", "label": "Amount", "value": "12,000"},
+    {"type": "locked", "label": "Margin"},
+    {"type": "movement"}, {"type": "subcards"}, {"type": "people"}
+  ],
+  "movement": {"by": "7", "kind": "person", "what": "Moved to Doing", "at": "2026-10-15T09:00:00Z"},
+  "stalled": false,
+  "can": {"edit": true, "transition": true, "review": true, "members": true},
+  "href": "/crm?record=r1",
+  "activity": [
+    {"by": "7", "kind": "person", "what": "Moved to Doing", "at": "2026-10-15T09:00:00Z"},
+    {"by": "7", "kind": "person", "what": "Made the card", "at": "2026-10-14T16:00:00Z"}
+  ]
+}

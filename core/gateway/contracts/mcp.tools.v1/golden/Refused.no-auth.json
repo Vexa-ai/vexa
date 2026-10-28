@@ -1,0 +1,26 @@
+{
+  "why": "every tool states which credential its door reads; there is no default",
+  "manifest": {
+    "contract": "mcp.tools.v1",
+    "domain": "agent",
+    "source": "oss",
+    "depends_on": [
+      "identity"
+    ],
+    "base_url_env": "AGENT_API_URL",
+    "tools": [
+      {
+        "name": "t",
+        "identity": "user",
+        "requires": [
+          "identity",
+          "agent"
+        ],
+        "route": {
+          "method": "GET",
+          "path": "/api/t"
+        }
+      }
+    ]
+  }
+}

@@ -32,6 +32,7 @@ def test_boot_reads_db_pool_size_env(monkeypatch):
     # A1 boot leg: DB_POOL_SIZE in env → the engine __main__ builds reflects it (no DB connect —
     # build_production_app only configures the engine + registers the startup schema hook).
     monkeypatch.setenv("INTERNAL_API_SECRET", "a-real-secret")
+    monkeypatch.setenv("DB_PASSWORD", "a-real-db-password")
     monkeypatch.setenv("DATABASE_URL", FAKE_URL)
     monkeypatch.setenv("DB_POOL_SIZE", "7")
     monkeypatch.setenv("DB_MAX_OVERFLOW", "3")

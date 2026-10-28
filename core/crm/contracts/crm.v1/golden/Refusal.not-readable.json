@@ -1,0 +1,5 @@
+{
+  "instruction": "That file is in a workspace this person cannot read here, so it cannot go on their desktop. Say so; do not retry it another way.",
+  "reason": "not_readable",
+  "status": "refused"
+}

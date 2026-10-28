@@ -39,6 +39,9 @@ _INTERNAL_DATA_KEYS = frozenset({
     # Internal rating input. Consumers receive only the privacy-safe, frozen
     # `service_provenance` projection assembled at terminal finalization.
     "transcription_provider",
+    # Stored on the meeting for readers that ask (prod-cutover R4); a 0.12 webhook receiver gets the
+    # payload it always got.
+    "transcript_gaps",
 })
 
 

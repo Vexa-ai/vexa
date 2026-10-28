@@ -1,0 +1,400 @@
+---
+title: "Model catalog"
+description: "Offer several models — a self-hosted Qwen 3, anything on OpenRouter, Anthropic — and let each person pick the one a chat runs on."
+---
+
+The model catalog is the list of models your deployment offers, and the one place they are listed.
+Every entry is a real model, by its name. Each person picks one per chat, in the chat's composer.
+You decide:
+
+- which providers the deployment reaches;
+- which models it offers on each;
+- what each model can do;
+- who may use it;
+- which one people start on.
+
+Without a catalog, nothing changes. Every turn runs on `VEXA_AGENT_MODEL` and each person's
+Settings → Models, as before.
+
+## The catalog
+
+The catalog is one JSON object in agent-api's environment, `VEXA_MODEL_CATALOG`. Its schema is
+`core/agent/contracts/models.v1`, the `Catalog` shape. It has two parts:
+
+- **providers:** one entry per endpoint, each naming the adapter that knows how to reach it;
+- **models:** the models offered on those providers.
+
+```json
+{
+  "providers": {
+    "lab-vllm": {
+      "adapter": "openai_compatible",
+      "base_url": "http://10.0.0.5:8000/v1",
+      "auth": "none",
+      "extra_body": { "chat_template_kwargs": { "enable_thinking": false } }
+    },
+    "openrouter": {
+      "adapter": "openrouter",
+      "auth": "secret",
+      "secret_ref": "env:VEXA_MODEL_SECRET_OPENROUTER"
+    }
+  },
+  "models": [
+    {
+      "id": "qwen3-32b",
+      "display_name": "Qwen 3 32B (self-hosted)",
+      "provider": "lab-vllm",
+      "model": "Qwen/Qwen3-32B",
+      "capabilities": { "tool_calling": true, "streaming": true, "context_tokens": 32768 },
+      "default": true
+    },
+    {
+      "id": "or-sonnet",
+      "display_name": "Claude Sonnet via OpenRouter",
+      "provider": "openrouter",
+      "model": "anthropic/claude-sonnet-4.5",
+      "access": "admins"
+    }
+  ]
+}
+```
+
+### Providers and their adapters
+
+| `adapter` | Reaches | Harness | Fields |
+|---|---|---|---|
+| `openai_compatible` | any OpenAI-compatible endpoint: a self-hosted vLLM or llama.cpp, a LiteLLM proxy, an inference gateway | `openai-agent` | `base_url` (required, the OpenAI root, usually ending `/v1`); `auth: none` or `auth: secret` with `secret_ref`; `extra_body` |
+| `openrouter` | any model OpenRouter serves | `openai-agent` on `/api/v1` (default), or `claude-code` on OpenRouter's Anthropic-compatible `/api` | `harness`; `auth: secret` with `secret_ref` (required); `extra_body` (openai-agent only) |
+| `anthropic` | Anthropic directly | `claude-code` | `auth: secret` with `secret_ref` (an API key), or `auth: subscription` (the deployment's own Claude subscription; read [Model credentials & licensing](/model-credentials-licensing) before offering it to other people) |
+
+On a claude-code route through OpenRouter, every model tier the claude CLI uses is pinned to the
+chosen model, so background calls go to that model too.
+
+### Models
+
+| Field | Meaning |
+|---|---|
+| `id` | What a chat and a person's default name, e.g. `qwen3-32b`: lowercase letters, digits, `.`, `_`, `-`, at most 64 characters. Keep it stable. |
+| `display_name` | What people see in the picker. |
+| `provider` | A key of `providers`. |
+| `model` | The model's id at the provider. Required. |
+| `capabilities` | `tool_calling` (must be true: every harness is an agent loop), `streaming` (default true), `context_tokens` (the openai-agent harness trims history to it), `reasoning_efforts` and `default_effort` (see [Effort levels](#effort-levels)). |
+| `extra_body` | Request fields merged over the provider's, for the openai-agent harness. |
+| `max_output_tokens` | The output-token cap this model's requests ask for. Absent: the deployment's `VEXA_AGENT_MAX_OUTPUT_TOKENS`, else the harness's own default (the claude CLI asks for 32000, which OpenRouter refuses on a small balance with a 402). |
+| `effort_control` | `openai_compatible` only: `reasoning_effort` (default) or `enable_thinking`. See [Effort levels](#effort-levels). |
+| `access` | `everyone` (default) or `admins`. An admins-only model is not shown to, and is refused for, anyone else. |
+| `allowed_subjects` | Optional. The people who may use this model: exact sign-in addresses (any letter case) or subject ids. Nobody else sees it or can run it. Use it for a model on a credential that belongs to one person, such as a personal Claude subscription. It applies on top of `access`, and being an admin does not put you on the list. |
+| `default` | `true` on at most one model: the one people run on before they pick. |
+
+### Effort levels
+
+A model can offer an effort level, picked per chat beside the model. List the levels in
+`capabilities.reasoning_efforts`, and optionally the one a chat starts at in `default_effort`.
+A model without `reasoning_efforts` has no effort control, and the picker shows none for it.
+
+The levels are one vocabulary: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Each
+adapter sends them in its provider's own field and accepts only the levels that field can carry:
+
+| Adapter | Sent as | Levels it can send |
+|---|---|---|
+| `openrouter` (openai-agent harness) | `reasoning.effort` | `none` … `xhigh` |
+| `openrouter` (claude-code harness) | — | none: declare efforts on an openai-agent OpenRouter provider |
+| `openai_compatible`, `effort_control: reasoning_effort` | `reasoning_effort` | `none` … `xhigh` |
+| `openai_compatible`, `effort_control: enable_thinking` | `chat_template_kwargs.enable_thinking` (a Qwen behind vLLM) | `none` (off), `high` (on) |
+| `anthropic` | the claude CLI's `--effort` | `low` … `max` |
+
+A catalog that lists a level its adapter cannot send is refused at boot. A chat that picks a level
+its model does not offer is refused with the typed fault `effort_unsupported`, and the pick is not
+stored. A level is never dropped silently.
+
+The claude CLI decides per model whether it sends the effort at all. Measured on CLI 2.1.293:
+`claude-sonnet-4-6` and `claude-opus-4-6` carry every level, `claude-opus-4-5` sends `max` as
+`high`, and `claude-sonnet-4-5` ignores the flag. List levels only for a model that takes them.
+
+### Credentials are references, never values
+
+A provider's credential is `secret_ref: env:VEXA_MODEL_SECRET_<NAME>`, the name of a variable in
+agent-api's environment. Only that prefix is allowed, so a catalog can never name one of agent-api's
+own secrets. These variables are not in the config contract's declared keys: the operator names
+them, and the prefix is their contract. agent-api reads the value at dispatch. The value never appears in the catalog, in a
+log, in a refusal or in anything the browser receives. It goes only to that provider's endpoint, as
+the header that provider expects:
+
+- a bearer token for an OpenAI-compatible endpoint and for OpenRouter;
+- `x-api-key` for Anthropic.
+
+agent-api refuses a catalog that writes a credential inline: a field named like one (`api_key`,
+`token`…), a credential-shaped value, or credentials in a URL. The refusal names the field, never the
+value.
+
+## Where the catalog is set
+
+The catalog is one value, `VEXA_MODEL_CATALOG`, on agent-api. Each deployment surface sets it in one
+file:
+
+| Surface | Where you write it | How it reaches agent-api |
+|---|---|---|
+| Compose | `deploy/compose/.env`, key `VEXA_MODEL_CATALOG` (documented in `deploy/compose/.env.example`) | compose passes `.env` to the agent-api container |
+| Helm | your values file, key `models.catalog` (default empty in `deploy/helm/charts/vexa/values.yaml`); keys in `models.catalogSecrets` | `deploy/helm/charts/vexa/templates/deployment-agent-api.yaml` renders it as the `VEXA_MODEL_CATALOG` env var and each secret from the Secret you name |
+| Lite | the repository-root `.env` that `make -C deploy/lite up` reads, key `VEXA_MODEL_CATALOG` | `deploy/lite/entrypoint.sh` exports it to agent-api |
+
+A provider's key is never in the catalog. The provider names a variable
+(`secret_ref: env:VEXA_MODEL_SECRET_<NAME>`), and you set that variable beside the catalog: on its
+own line of `.env`, or through `models.catalogSecrets` in Helm.
+
+After a change, recreate agent-api (compose), roll the deployment (Helm), or restart the container
+(Lite). Settings → Models has no model list of its own: it only picks a default from this one.
+
+### A complete example
+
+Four models: a self-hosted Qwen 3 that people start on, Claude Sonnet 4.5 and DeepSeek V3.2 through
+OpenRouter, and Claude Sonnet 4.6 on the deployment's own Anthropic subscription.
+
+<Tabs>
+  <Tab title="Compose and Lite">
+    One line for the catalog, one line per key:
+
+    ```dotenv
+    VEXA_MODEL_CATALOG={"providers":{"lab-vllm":{"adapter":"openai_compatible","base_url":"http://10.0.0.5:8000/v1","auth":"none","extra_body":{"chat_template_kwargs":{"enable_thinking":false}}},"openrouter":{"adapter":"openrouter","auth":"secret","secret_ref":"env:VEXA_MODEL_SECRET_OPENROUTER"},"anthropic":{"adapter":"anthropic","auth":"subscription"}},"models":[{"id":"qwen3-32b","display_name":"Qwen 3 32B (self-hosted)","provider":"lab-vllm","model":"Qwen/Qwen3-32B","capabilities":{"tool_calling":true,"streaming":true,"context_tokens":32768,"reasoning_efforts":["none","high"],"default_effort":"none"},"effort_control":"enable_thinking","default":true},{"id":"or-sonnet","display_name":"Claude Sonnet 4.5 (OpenRouter)","provider":"openrouter","model":"anthropic/claude-sonnet-4.5","capabilities":{"reasoning_efforts":["low","medium","high"],"default_effort":"medium"},"max_output_tokens":8192},{"id":"deepseek-v3.2","display_name":"DeepSeek V3.2 (OpenRouter)","provider":"openrouter","model":"deepseek/deepseek-v3.2","capabilities":{"context_tokens":131072}},{"id":"claude-sonnet-4-6","display_name":"Claude Sonnet 4.6 (subscription)","provider":"anthropic","model":"claude-sonnet-4-6","capabilities":{"reasoning_efforts":["low","medium","high","xhigh","max"]},"access":"admins"}]}
+    VEXA_MODEL_SECRET_OPENROUTER=<your OpenRouter key>
+    ```
+  </Tab>
+  <Tab title="Helm">
+    ```yaml
+    models:
+      catalog:
+        providers:
+          lab-vllm:
+            adapter: openai_compatible
+            base_url: http://vllm.inference.svc:8000/v1
+            auth: none
+            extra_body: {chat_template_kwargs: {enable_thinking: false}}
+          openrouter:
+            adapter: openrouter
+            auth: secret
+            secret_ref: env:VEXA_MODEL_SECRET_OPENROUTER
+          anthropic:
+            adapter: anthropic
+            auth: subscription
+        models:
+          - id: qwen3-32b
+            display_name: Qwen 3 32B (self-hosted)
+            provider: lab-vllm
+            model: Qwen/Qwen3-32B
+            capabilities: {tool_calling: true, streaming: true, context_tokens: 32768,
+                           reasoning_efforts: [none, high], default_effort: none}
+            effort_control: enable_thinking
+            default: true
+          - id: or-sonnet
+            display_name: Claude Sonnet 4.5 (OpenRouter)
+            provider: openrouter
+            model: anthropic/claude-sonnet-4.5
+            capabilities: {reasoning_efforts: [low, medium, high], default_effort: medium}
+            max_output_tokens: 8192
+          - id: deepseek-v3.2
+            display_name: DeepSeek V3.2 (OpenRouter)
+            provider: openrouter
+            model: deepseek/deepseek-v3.2
+            capabilities: {context_tokens: 131072}
+          - id: claude-sonnet-4-6
+            display_name: Claude Sonnet 4.6 (subscription)
+            provider: anthropic
+            model: claude-sonnet-4-6
+            capabilities: {reasoning_efforts: [low, medium, high, xhigh, max]}
+            access: admins
+      catalogSecrets:
+        - env: VEXA_MODEL_SECRET_OPENROUTER   # the name the secret_ref uses
+          secretName: model-keys    # required: the Secret holding the key
+          key: openrouter           # default: the env name
+    ```
+  </Tab>
+</Tabs>
+
+A member sees the first three; an instance admin sees all four.
+
+**agent-api refuses a catalog with anything wrong in it at boot, and names every problem.** The
+checks are:
+
+- an unknown adapter, or `custom`: a person's own endpoint is not a model, and the refusal says to
+  list each model by its real name instead;
+- a field an adapter does not take;
+- an inline credential;
+- a duplicate id;
+- two defaults;
+- a model on an undeclared provider;
+- a model without tool calling;
+- a `secret_ref` that is not set.
+
+A catalog is never half-applied.
+
+## What people see
+
+- **The picker.** A model picker sits in the chat's composer, beside the send button.
+  - It shows only the models the person may use, each by its catalog name. An `admins` model
+    appears only for instance admins, and a model with `allowed_subjects` only for the people it
+    names. The list of names is never sent to the browser.
+  - It shows nothing on a deployment with no catalog.
+- **Settings → Models.** With a catalog, the only model field is the default model. The provider,
+  endpoint, key, model and effort fields are not shown, because every turn runs on a catalog model.
+  Without a catalog they work as before.
+- **A pick is per chat.**
+  - It takes effect on the chat's next message, which starts a fresh agent on that model.
+  - Until that message, the picker names the model that is still answering and says *switching to
+    … on your next message*. A message sent while a turn is still running waits for it, on the
+    model already running; the one after it starts on the pick.
+  - **Every pick is also the person's default for new chats.** The model and effort picked last, in
+    any chat, are what a new chat starts on, on every device. "Use … for new chats" re-picks the
+    current model so it becomes that default.
+  - **A chat keeps what it was last used with.** A chat nobody picked for takes the default at its
+    first message and keeps it, so a later pick elsewhere does not move it.
+  - "Follow my default" un-pins the chat.
+- **Effort.** When the chat's model lists effort levels, an effort selector sits beside the model
+  chip. Changing the model clears the effort pick, so the chat runs at the new model's default.
+- **Defaults.** A new chat starts on the person's last pick, else their Settings default, else the
+  organisation's, else the catalog's `default`, else the first model the person may use. The
+  effort is the one last picked with that model.
+  - A remembered model the catalog no longer offers this person (removed, or narrowed to admins or
+    named people), or an effort the model no longer offers, is skipped without a message: the
+    picker shows the next default, and that is what the turn runs on.
+  - Settings → Models → Default model, which lists the catalog's models, is the fallback when the
+    person has not picked yet.
+  - The organisation's default is the same selector in an admin's global settings.
+  - A person an operator named in an `anthropic` entry's `allowed_subjects` starts on that entry
+    ahead of the catalog's `default`. `model_chat_default: catalog` in the front matter of
+    `_global/POLICIES.md` keeps the catalog's `default` for everyone.
+- **Autonomous runs.** Routines and other runs nobody starts by typing use the person's default.
+  Background jobs a chat starts run on that chat's model.
+
+The same list is available over the API (`GET /api/models/catalog`) and to MCP clients as the
+`models_list` tool. See the [agent API](/api/agent#the-model-catalog-and-a-chats-model).
+
+## When a model cannot run
+
+A pick that cannot run is refused before anything starts, and the chat says why. Its typed fault is
+`source: model-provider`, naming the model and the provider, with one of these kinds:
+
+| `kind` | Meaning |
+|---|---|
+| `unknown_model` | the chat's model is no longer in the catalog |
+| `not_permitted` | an admins-only model, or a model open to named people only, for someone else |
+| `not_configured` | the catalog offers this person nothing |
+| `credential_missing` | the provider's `secret_ref` is not set any more |
+| `effort_unsupported` | the chat's effort level is not one its model offers |
+
+A chat never silently runs on a different model.
+
+A provider that fails mid-turn reports in the same shape, with kinds `unpaid`, `unauthorized`,
+`rate_limited`, `unavailable` and `refused`. In that case the provider is the host the turn went to.
+
+**Settings → Models → Test** probes your default model through the same route a turn on it would
+take, in that route's own dialect, with exactly that route's credential. To test any other model you
+may use, call `GET /api/models/test?model=<id>`.
+
+## How it works
+
+1. **Catalog.** agent-api reads `VEXA_MODEL_CATALOG` once at boot and refuses it whole, naming every
+   problem, if anything in it is wrong.
+2. **Pick.** The picker lists `GET /api/models/catalog` for the person and stores a chat's model and
+   effort with `POST /api/chat/model`, which refuses a pick the next turn could not run. A stored
+   pick is also remembered as the person's last pick. The listing's `default` and `default_effort`
+   are that memory, re-checked on every read against what the person may run now.
+3. **First message.** A chat with no pick resolves the default the same way and stores it as its
+   own pick, without restarting the worker that turn starts.
+4. **Dispatch.** On the chat's next message, agent-api resolves the pick through the provider's
+   adapter, in the one place a worker's route is decided, and refuses the turn before anything
+   starts if the pick can no longer run.
+5. **Worker env.** The route is stamped into the new agent's environment: the endpoint, that
+   provider's one credential, the model, the effort in the provider's own field, and the output cap.
+6. **What a chat's worker runs.** When a dispatch really starts a chat's worker, agent-api records
+   the catalog model it started on (`unit:<id>:model` in Redis, kept seven days). A fresh message
+   whose chat now resolves to another model is sent to a new worker; a message submitted while a
+   turn runs queues on the running worker and its answer carries `running` and `model_pending`.
+   `GET /api/models/catalog?session=<chat>` returns `running`, the model that chat's worker was
+   started on, or `null` before any turn.
+
+**Who owns what.** The catalog is the operator's (agent-api's environment, nothing else writes it).
+A chat's model and effort pick, and a person's last pick, have one writer, agent-api's session index
+(kept per person on the server, never in the browser). A person's Settings default, and the
+organisation's, is admin-api's Settings → Models `default_model`. The catalog and its secrets
+never reach a worker or a bot: a worker receives only its own stamped route.
+
+**Contracts.** `models.v1` (the catalog, the listing with its optional `running`, the effort levels), `unit.v1` `Fault` with the
+`model-provider` kinds, `config.v1` (`VEXA_MODEL_CATALOG`), `routes.v1` (`GET /agent/models/catalog`)
+and `mcp.tools.v1` (`models_list`), all sealed.
+
+**Configuration.** `VEXA_MODEL_CATALOG` and the `VEXA_MODEL_SECRET_<NAME>` variables it references,
+on agent-api only: see [Configuration](/configuration#agent-inference-bring-your-own),
+[Kubernetes: the model catalog](/deployment-kubernetes#the-model-catalog) and the
+[Helm chart README](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/charts/vexa/README.md#the-model-catalog).
+
+**Company policy.** `model_chat_default` in the front matter of `_global/POLICIES.md`, read on
+every listing and dispatch; its one value is `catalog`. Unset or unreadable means the rule above
+(a named person starts on their Claude entry).
+
+The module README
+([`core/agent/control_plane/model_providers/README.md`](https://github.com/Vexa-ai/vexa/blob/main/core/agent/control_plane/model_providers/README.md))
+and [ADR-0043](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0043-model-choice-catalog-behind-a-provider-port.md)
+carry the design in full.
+
+## Why it complies
+
+Rules are the [architecture principles](/governance/architecture).
+
+| Rule | How the catalog meets it | Enforced by |
+|---|---|---|
+| P2 couple through contracts | the browser and MCP see only `models.v1` ModelList; refusals travel as `unit.v1` `Fault` | `gate:isolation` |
+| P4 published schemas | the catalog, the listing and the fault kinds are sealed `.v1` contracts with goldens | `gate:schema` · `gate:contract-version` |
+| P5 adapt at the boundary | each provider's fields and headers are translated inside its adapter; dispatch never names a provider | ungated: reviewed |
+| P6 one front door | consumers import `control_plane.model_providers` only | `gate:exports` |
+| P14 config is a validated contract | one env var, validated at boot; credentials only by reference. The `VEXA_MODEL_SECRET_*` names are operator-chosen and sit outside the declared keys: the prefix is their contract | `gate:config-contract` (the catalog); the prefix: ungated, reviewed and tested |
+| P18 fail loud | a pick that cannot run is a typed `model-provider` fault, never a turn on another model; a bad catalog is refused at boot | `gate:schema` (kinds) · tests below |
+| P20 default-deny | the listing, the pick and the dispatch each check the caller's role, and for an `allowed_subjects` entry the caller's identity from admin-api; an identity that cannot be resolved matches nobody | deny tests below |
+| P23 one writer | a chat's pick and a person's last pick: the session index; a person's Settings default: admin-api; the catalog: the operator | `gate:dataflow` |
+| P21 state from evidence | the composer names the model the chat's worker was started on, recorded only when a dispatch really started it, not the pick; the pick shows as pending until a worker runs it | `test_the_listing_says_what_ran_and_what_is_next`, `test_a_warm_worker_on_another_model_never_answers_the_next_turn`, `test_a_submission_behind_a_running_turn_says_the_switch_is_pending` |
+| P4 / P8 contract change | `running` is an optional field added to `models.v1` ModelList; the contract was re-sealed, not renamed, because the change is additive | `gate:schema` · `gate:contract-version` |
+| P18 never a refused model | a remembered model or effort the person may no longer run is skipped, never sent | `test_a_remembered_model_no_longer_open_falls_back_silently`, `test_a_remembered_effort_the_model_does_not_offer_falls_back_to_its_own` |
+
+**Security, hop by hop.**
+
+1. **Operator → agent-api.** A credential is only ever a reference to a `VEXA_MODEL_SECRET_*`
+   variable; an inline credential is refused without being quoted, and Helm delivers only that
+   prefix, from a Secret the operator names
+   (`test_an_inline_credential_is_refused_and_never_quoted`,
+   `test_a_secret_ref_outside_the_catalog_prefix_is_refused_even_when_it_is_set`,
+   `test_the_resolver_never_reads_a_variable_outside_the_prefix`; chart checks in
+   `deploy/helm/tests/test_template.sh`).
+2. **agent-api → browser and MCP.** The listing carries no endpoint, credential or request setting,
+   and only the models the caller's role allows
+   (`test_no_listing_ever_carries_an_endpoint_or_a_credential`,
+   `test_a_member_sees_only_what_they_may_pick`, `test_the_listing_never_carries_the_list`).
+3. **Browser → agent-api (the pick).** Role and context are resolved again; a pick the next turn
+   could not run is refused and not stored
+   (`test_an_admins_only_model_is_refused_to_a_member_and_runs_for_an_admin`,
+   `test_a_pick_the_next_turn_could_not_run_is_refused_and_not_stored`,
+   `test_an_effort_the_model_cannot_take_is_refused_at_pick_time_and_not_stored`). An entry open to
+   named people only is matched against the caller's subject id and sign-in address, asked of
+   admin-api; anyone else, and anyone identity cannot answer for, is refused
+   (`test_others_are_refused_a_pick`, `test_unknown_identity_fails_closed`,
+   `test_a_stored_pick_by_someone_else_refuses_the_turn_before_spawning`).
+4. **agent-api → worker (dispatch).** One credential, under its provider's header, to its provider
+   only; the deployment's subscription never goes to a gateway; with a catalog, a person's own
+   Settings → Models endpoint and key carry no turn
+   (`test_an_openrouter_entry_sends_the_operators_key_to_openrouter_only`,
+   `test_with_a_catalog_an_own_endpoint_never_carries_a_turn`,
+   `test_a_persons_own_endpoint_is_not_a_route_when_there_is_a_catalog`,
+   `test_a_pick_that_can_no_longer_run_refuses_the_turn_with_a_typed_fault`).
+5. **The Test button.** Anyone but an instance admin gets the verdict and a typed fault, never the
+   operator endpoint's response body or address
+   (`test_a_member_never_sees_the_operator_endpoints_body_or_address`).
+
+## Security
+
+- **People cannot add endpoints.** The catalog is deployment configuration. With a catalog, a turn
+  runs only on an endpoint the catalog declares; a person's own endpoint under Settings → Models
+  is not used.
+- **Each credential goes to one place.**
+  - A provider's credential goes only to that provider's endpoint.
+  - The deployment's credentials never go to a catalog provider's endpoint.
+  - The deployment's subscription goes only to Anthropic.
+- **Nothing sensitive reaches the browser.** No endpoint, credential or request setting is in
+  anything the browser or an MCP client receives.

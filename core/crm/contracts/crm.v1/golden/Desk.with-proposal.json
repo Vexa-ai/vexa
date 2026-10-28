@@ -1,0 +1,65 @@
+{
+  "layout": {
+    "columns": {
+      "desktop": 1,
+      "phone": 1
+    },
+    "filters": {},
+    "groups": {},
+    "order": {},
+    "sections": [
+      {
+        "collapsed": false,
+        "column": 1,
+        "hidden": false,
+        "id": "workspaces",
+        "size": "normal",
+        "span": 1
+      },
+      {
+        "collapsed": false,
+        "column": 1,
+        "hidden": false,
+        "id": "agents",
+        "size": "normal",
+        "span": 1
+      },
+      {
+        "collapsed": false,
+        "column": 1,
+        "hidden": false,
+        "id": "files",
+        "size": "normal",
+        "span": 1
+      },
+      {
+        "collapsed": false,
+        "column": 1,
+        "hidden": false,
+        "id": "cards",
+        "size": "normal",
+        "span": 1
+      }
+    ]
+  },
+  "placements": [],
+  "proposals": [
+    {
+      "author": "agent:flow-9",
+      "created_at": "2026-10-15T09:00:00+00:00",
+      "id": "3d1012fe-11d4-49a0-9bd9-5b6993c77ead",
+      "ops": [
+        {
+          "by": "workspace",
+          "op": "group",
+          "section": "files"
+        }
+      ],
+      "reason": "You have many files",
+      "summary": "Grouped Files by workspace"
+    }
+  ],
+  "saved": [],
+  "undo_version": null,
+  "version": 0
+}

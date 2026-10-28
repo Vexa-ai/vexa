@@ -1,6 +1,6 @@
 """PERSON FACTS — the settings identity owns, and the only place they live.
 
-WHY IDENTITY. These five keys are facts about a PERSON: which clock their times are stated in, and
+WHY IDENTITY. These keys are facts about a PERSON: which clock their times are stated in, and
 how they want to be contacted. They lived in `.settings.json`, a file in a workspace in the AGENT
 domain, written by the control MCP and read by flows. That made two domains depend on a third for a
 fact about a person — so a deployment without the agent domain had people with no timezone and no
@@ -15,18 +15,20 @@ it to this vocabulary would make a fourth store for one fact.
 THE VOCABULARY IS CLOSED and an unknown key is refused WITH the list. A setting that silently does
 nothing is worse than an error, and an agent with no vocabulary invents one.
 
-THE THREE DOORS (`app/main.py`). This module is pure; every one of its functions is reached through
+THE DOORS (`app/main.py`). This module is pure; every one of its functions is reached through
 exactly one route, and for one release NONE of the writers had one — the read door shipped alone,
 so identity could only ever answer DEFAULTS and everybody who had turned their minutes off, or who
 lives outside UTC, silently reverted on upgrade. That is the failure this file was written to end,
 caused by the file being wired up halfway.
 
   * ``GET  /internal/users/{id}/settings`` → `read_person_facts` — what flows reads before it mails
-    somebody or states a time. The five PERSON facts; `bot_name` is not among them.
+    somebody or states a time. The PERSON facts; `bot_name` is not among them.
   * ``PUT  /internal/users/{id}/settings`` → `apply` — the write half, partial and validated
     all-or-nothing. Body: any subset of ``timezone``, ``mail_minutes``, ``mail_join``,
-    ``mail_rsvp``, ``mail_prep``. `bot_name` is REFUSED there (422): it is a fact about the bot,
+    ``mail_rsvp``, ``mail_prep``, ``presence``. `bot_name` is REFUSED there (422): it is a fact about the bot,
     meetings owns it, and it already has a door.
+  * ``GET  /internal/presence?ids=1,2`` → `presence_choice` — agent-api's batch read of the
+    `presence` choice for the members of one desktop; ``null`` is "never chosen".
   * ``POST /admin/users/{id}/settings/import`` → `plan_import` — the operator-driven one-shot
     migration. Body is the old ``.settings.json`` object verbatim, `bot_name` included; this is the
     one path that carries that key, into the bot's own store, and only when that store is empty.
@@ -52,7 +54,16 @@ VOCAB: Dict[str, Tuple[Any, str, str]] = {
                      "replying yes in the calendar when Vexa is invited to a meeting"),
     "mail_prep":    (True, "on/off",
                      "the day-before prepare email for upcoming meetings"),
+    # Whether colleagues see a coarse "active now / today" dot for them. Changed by the person
+    # with their own credential only (`person_doors`), never by a worker acting for them.
+    "presence":     (True, "on/off",
+                     "whether colleagues see that they were active (now / today, never a time) in "
+                     "a chat or workspace they share"),
 }
+
+#: Settings only the person changes, with their own credential — a worker acting for them, even
+#: with the person in the loop, may read them and may not change them.
+PERSON_ONLY = frozenset({"presence"})
 
 #: The bot default. `coerce` knows it so the IMPORT door can carry it out of the old file; the
 #: person-settings write door refuses it (see the module docstring). Stored in the ONE place
@@ -76,8 +87,17 @@ class Refused(ValueError):
         self.detail = detail
 
 
+def presence_choice(data: dict | None) -> "bool | None":
+    """The person's own presence choice, or ``None`` when they never made one. The ONE place
+    "never chosen" is told from "chose to be seen": agent-api needs it once, to carry an opt-out
+    recorded before this setting existed over without overriding a later choice."""
+    raw = (data or {}).get(DATA_KEY)
+    value = raw.get("presence") if isinstance(raw, dict) else None
+    return value if isinstance(value, bool) else None
+
+
 def read_person_facts(data: dict | None) -> dict:
-    """The five PERSON facts, and only those — what flows reads over the internal edge.
+    """The PERSON facts, and only those — what flows reads over the internal edge.
 
     `bot_name` is excluded deliberately: it is a fact about the bot, meetings resolves it on the
     spawn path, and serving it here would invite exactly the second reader this move removed."""

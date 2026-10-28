@@ -16,10 +16,13 @@ echo "  Vexa Lite (v0.12) — starting container"
 echo "=============================================="
 
 # ─── Redis (internal by default; an external REDIS_URL is honored) ────────────────────────────────
+# The internal valkey's default user requires a password, minted per boot unless given. The services
+# connect with it; a bot or worker never does — each connects as a Redis user of its own.
+export REDIS_PASSWORD="${REDIS_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
 if [ -z "${REDIS_URL:-}" ]; then
     export REDIS_HOST="${REDIS_HOST:-localhost}"
     export REDIS_PORT="${REDIS_PORT:-6379}"
-    export REDIS_URL="redis://${REDIS_HOST}:${REDIS_PORT}/0"
+    export REDIS_URL="redis://:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}/0"
 fi
 
 # ─── Database — DB_* only. Each service builds its own async URL (postgresql+asyncpg://) from these
@@ -30,11 +33,60 @@ export DB_HOST="${DB_HOST:-localhost}"
 export DB_PORT="${DB_PORT:-5432}"
 export DB_NAME="${DB_NAME:-vexa}"
 export DB_USER="${DB_USER:-postgres}"
-export DB_PASSWORD="${DB_PASSWORD:-postgres}"
+# The database password has no default: the old one, `postgres`, is published in this repository.
+# `make -C deploy/lite up` mints one into the repo-root .env and sets it on its postgres sidecar; with
+# your own database, pass that database's password. Refused like compose's postgres refuses it.
+case "${DB_PASSWORD:-}" in
+    ""|postgres|password|vexa-internal-secret|lite-internal-secret|changeme|change-me|CHANGE-ME|default|secret)
+        echo "ERROR: DB_PASSWORD is unset or a value published in the Vexa repository - refusing to start." >&2
+        echo "  make -C deploy/lite up mints one; with your own database, pass -e DB_PASSWORD=<its password>." >&2
+        exit 1;;
+esac
+export DB_PASSWORD="${DB_PASSWORD}"
 
 # ─── Defaults for every var supervisord interpolates (empty is fine; must be SET) ─────────────────
 export LOG_LEVEL="${LOG_LEVEL:-info}"
 export DISPLAY="${DISPLAY:-:99}"
+# Unproven features (agent-api, mcp and meeting-api read it; the list is
+# core/agent/control_plane/features.py). Empty = the release default, every one off; `all` switches
+# every one on (a dev box), a comma list just those. Pass it with `docker run -e VEXA_FEATURES=all …`.
+export VEXA_FEATURES="${VEXA_FEATURES:-}"
+# Which MCP tools a caller is shown and may call (vexa_mcp/visibility.py). Empty = every tool.
+export VEXA_MCP_TOOLS_ALLOW="${VEXA_MCP_TOOLS_ALLOW:-}"
+export VEXA_MCP_TOOLS_DENY="${VEXA_MCP_TOOLS_DENY:-}"
+export VEXA_MCP_TOOLS_COHORT="${VEXA_MCP_TOOLS_COHORT:-}"
+# The kill switch for model calls (agent-api, control_plane/llm_budget.py): 1 refuses every turn.
+export VEXA_LLM_KILL_SWITCH="${VEXA_LLM_KILL_SWITCH:-}"
+# Who may sign in to the terminal besides existing users and admins — exact addresses and @domain
+# entries, comma-separated (admin-api reads it; see deploy/compose/.env.example). Empty = nobody new
+# once an admin exists. Pass it with `docker run -e VEXA_SIGNIN_ALLOW=@example.com …`.
+export VEXA_SIGNIN_ALLOW="${VEXA_SIGNIN_ALLOW:-}"
+# The administrators, comma-separated full addresses (admin-api reads it; the terminal only asks).
+# Naming them closes the admin claim — set it whenever the terminal is reachable from outside.
+export VEXA_ADMIN_EMAILS="${VEXA_ADMIN_EMAILS:-}"
+# The ADMIN ACCOUNT — one fresh address, the only account that writes the company layer `_global`
+# (and that has nothing else). Empty = nobody writes `_global`. `docker run -e VEXA_ADMIN_ACCOUNT=…`.
+export VEXA_ADMIN_ACCOUNT="${VEXA_ADMIN_ACCOUNT:-}"
+# The mail relay the terminal sends the emailed sign-in link through — the deployment's
+# VEXA_MAIL_SMTP_* family (see deploy/compose/.env.example). Empty host: no link is delivered.
+export VEXA_MAIL_SMTP_HOST="${VEXA_MAIL_SMTP_HOST:-}"
+export VEXA_MAIL_SMTP_PORT="${VEXA_MAIL_SMTP_PORT:-}"
+export VEXA_MAIL_SMTP_FROM="${VEXA_MAIL_SMTP_FROM:-}"
+export VEXA_MAIL_SMTP_USER="${VEXA_MAIL_SMTP_USER:-}"
+export VEXA_MAIL_SMTP_PASSWORD="${VEXA_MAIL_SMTP_PASSWORD:-}"
+export VEXA_MAIL_SMTP_SECURE="${VEXA_MAIL_SMTP_SECURE:-}"
+export VEXA_MAIL_SMTP_TLS_INSECURE="${VEXA_MAIL_SMTP_TLS_INSECURE:-}"
+# Proxies whose X-Forwarded-For names the client for the terminal's sign-in rate limit (addresses or
+# CIDR ranges). Only these and loopback are believed: a reverse proxy in front of this container must
+# be named (it reaches the terminal from the Docker network's gateway), or every client shares one limit.
+export TERMINAL_TRUSTED_PROXIES="${TERMINAL_TRUSTED_PROXIES:-}"
+# A chat turn continues past its tool-call budget into a fresh window, at most this many times
+# (agent-api validates both and stamps them into every worker; see deploy/compose/.env.example).
+export VEXA_AGENT_AUTO_CONTINUE_CHAT="${VEXA_AGENT_AUTO_CONTINUE_CHAT:-1}"
+export VEXA_AGENT_MAX_CHAT_CONTINUATIONS="${VEXA_AGENT_MAX_CHAT_CONTINUATIONS:-4}"
+# A room's turn runs as its workspace's own principal (D2), asked of admin-api on localhost; false
+# runs it as the owner's account, narrowed by its ceiling and the shared-route table.
+export VEXA_ROOM_WS_PRINCIPAL="${VEXA_ROOM_WS_PRINCIPAL:-true}"
 # The admin tier, on the same terms as the internal tier below and for a LARGER blast radius:
 # this token mints an API key for ANY user and HS256-signs every per-spawn MeetingToken. It
 # defaulted to the published literal `changeme`, so every lite stack nobody configured shared one
@@ -43,6 +95,14 @@ export DISPLAY="${DISPLAY:-:99}"
 # it from this same environment. Set ADMIN_API_TOKEN (or ADMIN_TOKEN) explicitly when something
 # outside the container has to present it.
 export ADMIN_API_TOKEN="${ADMIN_API_TOKEN:-${ADMIN_TOKEN:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}}"
+# A given key that this repository ever published is refused here, as admin-api, meeting-api and
+# flows refuse it at boot (fact admin-token-placeholders); `make up` replaces one in .env.
+case "$ADMIN_API_TOKEN" in
+    vexa-internal-secret|lite-internal-secret|changeme|change-me|CHANGE-ME|default|secret|dev-admin-token|CHANGE_ME|ci-admin-token|gate-admin-token|test-admin-token|test-admin-token-t3|vexa-admin-token|vexa-admin-token-2024|token|strong-random-token|your-secret|your-secret-token|your-secret-admin-token|your-secure-admin-token|your-admin-token|your-admin-api-token|your_admin_api_token|your_admin_api_key|your_admin_api_key_here|YOUR_ADMIN_KEY|YOUR_ADMIN_API_KEY|YOUR_ADMIN_TOKEN_FROM_DOTENV|admin-secret|admin-key|test-admin-key)
+        echo "ERROR: ADMIN_API_TOKEN / ADMIN_TOKEN is a value published in the Vexa repository - refusing to start." >&2
+        echo "  make -C deploy/lite up mints one into .env; by hand: openssl rand -hex 32." >&2
+        exit 1;;
+esac
 # The internal tier. lite is ONE container, so every service that shares this secret shares this
 # process's environment — which means the fallback can be MINTED per boot instead of shipped as
 # a literal. `lite-internal-secret` was published in this repository and was the exact value
@@ -50,7 +110,25 @@ export ADMIN_API_TOKEN="${ADMIN_API_TOKEN:-${ADMIN_TOKEN:-$(python3 -c "import s
 # internal tier (F95). A random per-boot value keeps the one-command quickstart working and is
 # nobody's to guess; set INTERNAL_API_SECRET explicitly when something outside talks in.
 export INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
+# The runtime caller credential: the runtime refuses every workload/schedule call without it. It is
+# NOT exported — every supervisord program inherits supervisord's environment — but rendered into the
+# environment= of the runtime, agent-api and meeting-api only (bin/render-supervisord, below). Minted
+# per boot like the internal tier; pass RUNTIME_API_TOKEN to fix it.
+runtime_api_token="${RUNTIME_API_TOKEN:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
+unset RUNTIME_API_TOKEN
+# The worker toolbelt: agent-api signs each worker's delegation token, admin-api verifies it.
+export VEXA_MCP_DELEGATION_SECRET="${VEXA_MCP_DELEGATION_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
+# The model proxy's sealing key (H5/W1): agent-api seals each turn's model route with it before the
+# route rests in Redis, and the model proxy opens it. Minted per boot like the two above; a restart
+# ends every worker, and with them every route sealed under the old key.
+export VEXA_MODEL_PROXY_SECRET="${VEXA_MODEL_PROXY_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
+# The terminal's second secret for minting the signed-in browser's SESSION credential at admin-api
+# (D13, POST /internal/sessions). Minted per boot like the two above; sessions end with the boot's key.
+export VEXA_TERMINAL_SESSION_SECRET="${VEXA_TERMINAL_SESSION_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
 export DEFAULT_BOT_NAME="${DEFAULT_BOT_NAME:-Vexa}"
+# The deployment's default transcription language (empty = none): a code, and/or a comma list.
+export DEFAULT_TRANSCRIPTION_LANGUAGE="${DEFAULT_TRANSCRIPTION_LANGUAGE:-}"
+export DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES="${DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES:-}"
 
 # Optional Google Meet speaker-stream tuning. Empty values preserve bot defaults; the runtime
 # profile forwards configured values to every spawned bot process.
@@ -60,6 +138,11 @@ export BOT_SPEAKER_SUBMIT_INTERVAL_SEC="${BOT_SPEAKER_SUBMIT_INTERVAL_SEC:-}"
 export BOT_SPEAKER_CONFIRM_THRESHOLD="${BOT_SPEAKER_CONFIRM_THRESHOLD:-}"
 export BOT_SPEAKER_MAX_BUFFER_SEC="${BOT_SPEAKER_MAX_BUFFER_SEC:-}"
 export BOT_SPEAKER_IDLE_TIMEOUT_SEC="${BOT_SPEAKER_IDLE_TIMEOUT_SEC:-}"
+export BOT_SPEAKER_MIN_FINAL_AUDIO_SEC="${BOT_SPEAKER_MIN_FINAL_AUDIO_SEC:-}"
+export BOT_STT_TIMEOUT_SEC="${BOT_STT_TIMEOUT_SEC:-}"
+export BOT_TRANSCRIPTION_LATENCY="${BOT_TRANSCRIPTION_LATENCY:-}"
+export BOT_STT_CONFIDENCE_FILTER="${BOT_STT_CONFIDENCE_FILTER:-}"
+export BOT_TRANSCRIPT_RECONFIRM_SEC="${BOT_TRANSCRIPT_RECONFIRM_SEC:-}"
 
 export TRANSCRIPTION_SERVICE_URL="${TRANSCRIPTION_SERVICE_URL:-}"
 export TRANSCRIPTION_SERVICE_TOKEN="${TRANSCRIPTION_SERVICE_TOKEN:-}"
@@ -75,11 +158,28 @@ export VEXA_SYSTEM_WEBHOOK_SECRET="${VEXA_SYSTEM_WEBHOOK_SECRET:-}"
 export VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP="${VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP:-false}"
 export VEXA_SYSTEM_WEBHOOK_TIMEOUT_S="${VEXA_SYSTEM_WEBHOOK_TIMEOUT_S:-10}"
 
+# A company IdP the bot-account sign-in browser may also reach (comma-separated exact hosts; no wildcards).
+export VEXA_BOT_SIGNIN_EXTRA_HOSTS="${VEXA_BOT_SIGNIN_EXTRA_HOSTS:-}"
+
 export MINIO_ENDPOINT="${MINIO_ENDPOINT:-}"
 export MINIO_ACCESS_KEY="${MINIO_ACCESS_KEY:-}"
 export MINIO_SECRET_KEY="${MINIO_SECRET_KEY:-}"
 export MINIO_BUCKET="${MINIO_BUCKET:-vexa}"
 export MINIO_SECURE="${MINIO_SECURE:-false}"
+# With object storage configured, its credentials must be real: the pair Lite and compose used to
+# default to is published in this repository. `make -C deploy/lite up` mints a pair into .env and
+# starts its storage sidecar with it; with your own S3, pass that store's keys.
+if [ -n "$MINIO_ENDPOINT" ]; then
+    for storage_key in "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"; do
+        case "$storage_key" in
+            ""|vexa-access-key|vexa-secret-key|minioadmin|changeme|change-me|CHANGE-ME|default|secret|password)
+                echo "ERROR: MINIO_ACCESS_KEY / MINIO_SECRET_KEY are unset or a value published in the Vexa repository - refusing to start." >&2
+                echo "  make -C deploy/lite up mints a pair; with your own S3, pass -e MINIO_ACCESS_KEY=… -e MINIO_SECRET_KEY=…" >&2
+                exit 1;;
+        esac
+    done
+fi
+unset storage_key
 
 # Gateway edge guard (fastapi-guard): ON by default with generous limits (owner ruling).
 # Opt out with -e GUARD_ENABLED=false on the container. Other GUARD_* tuning keys
@@ -94,16 +194,25 @@ export BOT_COMMAND="${BOT_COMMAND:-/usr/local/bin/vexa-bot-launch}"
 export AGENT_WORKER_COMMAND="${AGENT_WORKER_COMMAND:-/usr/local/bin/vexa-agent-worker}"
 
 # Agent control plane + worker (BYO inference; credentials brokered by the runtime).
-export VEXA_AGENT_DEFAULT_SUBJECT="${VEXA_AGENT_DEFAULT_SUBJECT:-u_live}"
-export VEXA_DISPATCH_SIGNING_KEY="${VEXA_DISPATCH_SIGNING_KEY:-dev-dispatch-signing-key}"
+# (VEXA_DISPATCH_SIGNING_KEY is set below, once the state directory is known.)
 export VEXA_BOT_API_KEY="${VEXA_BOT_API_KEY:-}"
 export VEXA_AGENT_MODEL="${VEXA_AGENT_MODEL:-}"
-export VEXA_MEETING_MODEL="${VEXA_MEETING_MODEL:-}"
+# The model catalog (ADR-0043): the models people pick per chat, one JSON object on one line of .env,
+# exactly as in compose. agent-api inherits it from supervisord and refuses a bad one at boot. A
+# provider's secret_ref (env:VEXA_MODEL_SECRET_<NAME>) names a variable set in .env too, which agent-api inherits the same
+# way; the runtime starts from a cleared environment, so no worker or bot sees either.
+export VEXA_MODEL_CATALOG="${VEXA_MODEL_CATALOG:-}"
 # HOST_CLAUDE_CREDENTIALS (config.v1 `model_inference`): path of a claude credentials JSON as seen
-# INSIDE this lite container (mount it in, e.g. -v ~/.claude/.credentials.json:/claude-creds.json:ro
-# and set HOST_CLAUDE_CREDENTIALS=/claude-creds.json). Lite's runtime uses the process backend, so
-# the worker reads the file directly; the runtime's config.v1 file probe
-# verifies it on /health.
+# INSIDE this lite container. Mount only that FILE, into the root-only /var/lib/vexa/host-claude —
+# `make up` does
+#   -v ~/.claude/.credentials.json:/var/lib/vexa/host-claude/.credentials.json:ro
+#   -e HOST_CLAUDE_CREDENTIALS=/var/lib/vexa/host-claude/.credentials.json
+# — never the whole ~/.claude, which holds the operator's own transcripts and history. The runtime
+# copies the file into each worker's private HOME for the claude CLI to read (a consumer subscription
+# is never moved into the model proxy); its config.v1 file probe verifies it on /health. The API keys
+# below reach no worker (H5/W1): agent-api seals them into the turn's route for the model proxy.
+# A single-file bind pins the inode it was created with, and the CLI refreshes a token by rename(2)-ing
+# a new file over it: after the host CLI refreshes, re-create the container (`make up`).
 # Alternative: leave empty and set ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN instead.
 export HOST_CLAUDE_CREDENTIALS="${HOST_CLAUDE_CREDENTIALS:-}"
 export CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
@@ -118,16 +227,77 @@ export ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}"
 # Dashboard + terminal (both Next.js UIs)
 export VEXA_PUBLIC_API_URL="${VEXA_PUBLIC_API_URL:-http://localhost:8056}"
 export VEXA_API_KEY="${VEXA_API_KEY:-}"
+# Sign-in: off by default, a visitor with no session signs in. With no mail and no OAuth configured,
+# the first-run door is a one-time link the container prints at start (provision-key.sh), and
+# `docker exec <container> vexa-signin-link` prints a fresh one.
+# ZERO-LOGIN (-e VEXA_TERMINAL_ZERO_LOGIN=true, an explicit opt-in for a box only you can reach): the
+# terminal answers a visitor with no session as the self-host key, so http://localhost:3001 opens
+# signed in, and anyone who can reach port 3001 is that person. A banner says so at every start.
+export VEXA_TERMINAL_ZERO_LOGIN="${VEXA_TERMINAL_ZERO_LOGIN:-false}"
 export TERMINAL_PUBLIC_URL="${TERMINAL_PUBLIC_URL:-http://localhost:3001}"
-export NEXTAUTH_SECRET="${NEXTAUTH_SECRET:-vexa-lite-nextauth-secret}"
-export JWT_SECRET="${JWT_SECRET:-vexa-lite-jwt-secret}"
+# The Meeting Canvas origin: the terminal also listens on 3002 for the canvas frame alone. Publish that
+# port and name its address (-p 3002:3002 -e TERMINAL_CANVAS_ORIGIN=http://localhost:3002) and a canvas
+# view runs on an origin of its own. Empty = the frame shares the terminal's origin, as before, and
+# the terminal warns at start.
+export TERMINAL_CANVAS_ORIGIN="${TERMINAL_CANVAS_ORIGIN:-}"
+# The terminal's signing secret — it signs sign-in cookies and (through a derived key) every emailed
+# sign-in link, so it has NO published default, and the terminal refuses to start on one shorter
+# than 32 bytes or published in this repository. Unset, it is minted on first boot and kept in
+# $VEXA_LITE_STATE_DIR (default /var/lib/vexa/state), so a restart of this container keeps sessions
+# and links valid. Mount a volume there, or pass NEXTAUTH_SECRET (`openssl rand -hex 32`), to keep it
+# across re-creating the container.
+lite_state_dir="${VEXA_LITE_STATE_DIR:-/var/lib/vexa/state}"
+export VEXA_LITE_STATE_DIR="$lite_state_dir"
+# gateway-identity.v1 — the gateway signs the identity it resolved with an Ed25519 PRIVATE key;
+# agent-api and meeting-api verify with the PUBLIC key and cannot sign. The pair is generated on the
+# first boot into $VEXA_LITE_STATE_DIR/identity (0700, the private key 0600) and reused on every
+# later one, so a restart keeps it; mount a volume there to keep it across re-creating the
+# container. supervisord names the signing key to [program:gateway] alone and the public key to
+# agent-api and meeting-api. Every Lite program is a root process in one container, so the file
+# mode, not a mount, is what keeps the agent workers (non-root) away from it. Delete
+# identity/signing-key.pem and restart to rotate. Prints which file it wrote, never a key.
+mkdir -p -m 0700 "$lite_state_dir/identity"
+/opt/venvs/gateway/bin/python /app/gateway/src/gateway/identity_token.py keygen \
+    "$lite_state_dir/identity/signing-key.pem" "$lite_state_dir/identity/public-key.pem"
+export NEXTAUTH_SECRET="${NEXTAUTH_SECRET:-$(/usr/local/bin/persisted-secret "$lite_state_dir/nextauth-secret")}"
+# The key agent-api signs each dispatch's identity token with. Its old default was published in this
+# repository and agent-api refuses to boot on it. Unset, it is minted on the first boot and kept in
+# $VEXA_LITE_STATE_DIR like the terminal's secret. A .env seeded from an older compose .env may still
+# carry the published value; that one is set aside for the kept key, with a warning.
+if [ "${VEXA_DISPATCH_SIGNING_KEY:-}" = "dev-dispatch-signing-key" ]; then
+    echo "WARNING: VEXA_DISPATCH_SIGNING_KEY holds the value published in the Vexa repository; using the key kept in $lite_state_dir instead." >&2
+    unset VEXA_DISPATCH_SIGNING_KEY
+fi
+export VEXA_DISPATCH_SIGNING_KEY="${VEXA_DISPATCH_SIGNING_KEY:-$(/usr/local/bin/persisted-secret "$lite_state_dir/dispatch-signing-key")}"
+# Read by no Lite program; minted per boot like the internal tier so no published value is exported.
+export JWT_SECRET="${JWT_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
 
-# Workspace store for the agent (shared dir; the worker runs in-process, no volume bind).
+# The mounted model credential's directory is root's alone (the runtime copies the file into each
+# worker's HOME; no child reads it here).
+mkdir -p /var/lib/vexa/host-claude && chmod 0700 /var/lib/vexa/host-claude 2>/dev/null || true
+
+# Root's runtime directory (the rendered supervisor config, Valkey's config, the self-host keys), its
+# mode set at every start, before anything writes into it: a restarted container keeps the directory
+# and whatever mode it had. Nothing but root reads it, and every file already in it is root's alone.
+mkdir -p /run/vexa && chown root:root /run/vexa && chmod 0700 /run/vexa
+chmod -R go-rwx /run/vexa/*  2>/dev/null || true
+
+# No shared X display: each meeting bot starts its own (bin/vexa-bot-launch), as its own uid, with a
+# cookie only it holds. Their sockets go in /tmp/.X11-unix, which must be root's and sticky so no bot
+# can remove or replace another's; it is made afresh at every start, with any lock or socket a
+# previous run left.
+rm -rf /tmp/.X11-unix /tmp/.X*-lock
+mkdir -m 1777 /tmp/.X11-unix
+
+# Workspace store for the agent (shared dir; the worker runs in-process, no volume bind). Writable by
+# root alone: every agent worker runs as its subject's own uid, and the runtime hands each subject its
+# own 0700 tree under it. The Valkey data directory holds every stream of every tenant: root's only.
 mkdir -p /workspaces /var/lib/redis /var/run/redis
-chmod 777 /workspaces 2>/dev/null || true
+{ chown root:root /workspaces /var/lib/redis && chmod 0755 /workspaces && chmod 0700 /var/lib/redis; } \
+    || echo "WARNING: could not make /workspaces and /var/lib/redis root's own; the runtime refuses agent dispatches into a store root does not own." >&2
 
 echo "Configuration:"
-echo "  - Redis URL:        ${REDIS_URL}"
+echo "  - Redis URL:        $(printf '%s' "$REDIS_URL" | sed -E 's#//[^@/]*@#//***@#')"
 echo "  - Database:         postgresql+asyncpg://${DB_USER}:***@${DB_HOST}:${DB_PORT}/${DB_NAME}"
 echo "  - Transcription:    ${TRANSCRIPTION_SERVICE_URL:-NOT SET (bots capture, no transcript)}"
 echo "  - Object storage:   ${MINIO_ENDPOINT:-NOT SET (recordings disabled)}"
@@ -148,11 +318,64 @@ if [ -n "$DB_HOST" ]; then
     echo ""
 fi
 
+# ─── The session store (ADR-0048): its own database role and its own bucket ─────────────────────
+# agent-api never holds the database admin credential or the storage root pair. Here, with both,
+# the store's role is made (grants on agent_session* only) and, on the bundled storage, its bucket
+# and a key scoped to it. Its secrets are minted once into $VEXA_LITE_STATE_DIR (or pass them). A
+# step that fails leaves the store off — chats keep the workspace layout — and never stops Lite.
+# With no object storage (MINIO_ENDPOINT unset) the store is off: transcripts go to S3 only.
+export VEXA_SESSIONS_DB_USER="${VEXA_SESSIONS_DB_USER:-vexa_agent_sessions}"
+export VEXA_SESSIONS_S3_BUCKET="${VEXA_SESSIONS_S3_BUCKET:-vexa-sessions}"
+export VEXA_SESSIONS_S3_ENDPOINT="${VEXA_SESSIONS_S3_ENDPOINT:-$MINIO_ENDPOINT}"
+sessions_operator_key=false
+if [ -n "${VEXA_SESSIONS_S3_ACCESS_KEY:-}" ]; then sessions_operator_key=true; fi
+if [ -z "${VEXA_SESSIONS_DB_PASSWORD:-}" ]; then
+    VEXA_SESSIONS_DB_PASSWORD="$(/usr/local/bin/persisted-secret "$lite_state_dir/sessions-db-password")"
+fi
+export VEXA_SESSIONS_DB_PASSWORD="$VEXA_SESSIONS_DB_PASSWORD"
+if [ -n "$VEXA_SESSIONS_S3_ENDPOINT" ]; then
+    export VEXA_SESSIONS_S3_ACCESS_KEY="${VEXA_SESSIONS_S3_ACCESS_KEY:-vexa-sessions-$(/usr/local/bin/persisted-secret "$lite_state_dir/sessions-s3-access" | cut -c1-24)}"
+    export VEXA_SESSIONS_S3_SECRET_KEY="${VEXA_SESSIONS_S3_SECRET_KEY:-$(/usr/local/bin/persisted-secret "$lite_state_dir/sessions-s3-secret")}"
+    case "$VEXA_SESSIONS_S3_ENDPOINT" in http://*|https://*) storage_url="$VEXA_SESSIONS_S3_ENDPOINT";;
+        *) if [ "$MINIO_SECURE" = "true" ]; then storage_url="https://$VEXA_SESSIONS_S3_ENDPOINT"; else storage_url="http://$VEXA_SESSIONS_S3_ENDPOINT"; fi;; esac
+    VEXA_SESSIONS_S3_OPERATOR_KEY="$sessions_operator_key" STORAGE_ENDPOINT="$storage_url" /opt/venvs/meeting/bin/python /app/storage-tools/storage_init.py --sessions-only \
+        || { echo "WARNING: the session store's bucket and key are not ready; chats keep the workspace layout." >&2
+             VEXA_SESSIONS_S3_ACCESS_KEY=""; VEXA_SESSIONS_S3_SECRET_KEY=""; }
+    unset storage_url
+else
+    export VEXA_SESSIONS_S3_ACCESS_KEY=""
+    export VEXA_SESSIONS_S3_SECRET_KEY=""
+fi
+if [ -n "$DB_HOST" ]; then
+    PYTHONPATH=/app/agent /opt/venvs/agent/bin/python -m control_plane.session_schema init \
+        || { echo "WARNING: the session store's database role is not ready; chats keep the workspace layout." >&2
+             VEXA_SESSIONS_DB_PASSWORD=""; }
+fi
+unset sessions_operator_key
+
 # Background: once admin-api is up, mint a self-host API key and hand it to the UIs (zero-login).
 # No-op if VEXA_API_KEY was supplied. Only meaningful for the supervisord CMD (the real bring-up).
 case "$*" in
     *supervisord*) /usr/local/bin/provision-key.sh & ;;
 esac
+
+# The supervisor config supervisord runs: the shipped template with the runtime caller credential in
+# place, root-only. Refuses (and the container stops) on a credential that is short or not URL-safe.
+case "$*" in
+    *supervisord*)
+        printf '%s' "$runtime_api_token" \
+            | python3 /usr/local/bin/render-supervisord /etc/supervisor/conf.d/vexa.conf /run/vexa/supervisord.conf \
+            || exit 1 ;;
+esac
+unset runtime_api_token
+# Zero-login with a terminal that listens beyond loopback: a banner on stderr (the container log) that
+# says who can then act as the instance's user and how to close it. Never stops the container.
+case "$*" in
+    *supervisord*) python3 /usr/local/bin/zero-login-warning /run/vexa/supervisord.conf ;;
+esac
+# Valkey's password reaches it in a root-only config file, never on its command line: every process
+# in the container can read any process's command line.
+( umask 077; printf 'requirepass "%s"\n' "$(printf '%s' "$REDIS_PASSWORD" | sed 's/[\\"]/\\&/g')" > /run/vexa/valkey.conf )
 
 echo "Starting services via supervisord..."
 exec "$@"

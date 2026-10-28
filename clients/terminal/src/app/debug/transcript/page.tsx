@@ -6,6 +6,7 @@
  *  so we can see, for any live meeting, whether segments are arriving and re-rendering in real time —
  *  independent of everything downstream.  Open /debug/transcript?id=<native_meeting_id>. */
 import { useEffect, useRef, useState } from "react";
+import "../debug.css";
 import { useLiveMeetings } from "../../../surfaces/liveMeetings";
 import { useMeetingLive } from "../../../surfaces/meetingLive";
 
@@ -78,7 +79,7 @@ export default function TranscriptDebug() {
 
   const mono: React.CSSProperties = { fontFamily: "monospace", fontSize: 12 };
   if (!mounted) {
-    return <div style={{ padding: 20, ...mono, color: "var(--t3)", background: "var(--bg)", minHeight: "100vh" }} suppressHydrationWarning>loading probe…</div>;
+    return <div className="vx-debug-loading" suppressHydrationWarning>loading probe…</div>;
   }
   return (
     <div style={{ padding: 20, color: "var(--t1)", background: "var(--bg)", minHeight: "100vh", ...mono }}>
@@ -94,8 +95,6 @@ export default function TranscriptDebug() {
         <span>last event</span><span>{ageLabel(live.lastEventAt)}</span>
         <span>last transcript</span><span>{ageLabel(live.lastTranscriptAt)}</span>
         <span>segments</span><span>{live.transcript.length}</span>
-        <span>processed notes</span><span>{live.notes.length}</span>
-        <span>cards</span><span>{live.cards.length}</span>
         <span>issues</span><span style={{ color: live.issues.length ? "var(--danger)" : "var(--t3)" }}>{live.issues.length}</span>
         <span>react renders</span><span>{renders.current}</span>
         <span>last seg change @</span><span>{lastChangeAt.current == null ? "never" : `${lastChangeAt.current}ms`}</span>
@@ -138,7 +137,6 @@ export default function TranscriptDebug() {
           </div>
         ))}
       </div>
-      {live.note && <div style={{ marginTop: 14, color: "var(--warn)" }}>note: {live.note}</div>}
     </div>
   );
 }

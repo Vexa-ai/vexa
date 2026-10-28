@@ -1,0 +1,1 @@
+{"source": {"kind": "meeting", "id": "42"}, "segment_id": "seg-17", "scores": {"addressed_to_vexa": 0.02, "decision": 0.81, "action_item": 0.12}, "words": [], "model": "typesafe/jev-1.13", "brief_version": 0, "at": 1760544000.5}

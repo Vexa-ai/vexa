@@ -17,6 +17,7 @@ import {
   type TeamsCsrcVirtualFrame,
 } from './teams-csrc-channelizer.js';
 import type { TransportEvent } from './turn-source.js';
+import type { MissingRange } from './chunked-transcriber.js';
 import { TrackNamer } from './track-namer.js';
 
 export interface TeamsCsrcTranscriptSegment {
@@ -65,6 +66,14 @@ export interface TeamsCsrcGmeetPipelineOptions {
   persistTimeoutMs?: number;
   /** GMeet-compatible window tuning. Defaults are identical to Google Meet. */
   buffer?: GmeetCompatibleBufferConfig;
+  /** A failed STT request is kept and sent again after this delay, doubling up to sttRetryMaxMs, for
+   *  as long as the lane runs — captured audio is never given up to a transient outage.
+   *  Defaults 5000 / 60000. */
+  sttRetryBaseMs?: number;
+  sttRetryMaxMs?: number;
+  /** After dispose begins, failed requests are retried back to back until this deadline (ms); then
+   *  the window is given up and the loss is reported through onError. Default 120000. */
+  finalPassMs?: number;
 }
 
 export interface TeamsCsrcGmeetPipelineHealth extends TeamsCsrcChannelizerHealth {
@@ -168,6 +177,8 @@ export class TeamsCsrcGmeetPipeline {
   private readonly latestRoutedSpan = new Map<number, TeamsRoutedSpan>();
   private readonly contests = new Map<string, TeamsWordContest>();
   private turnCount = 0;
+  /** Windows given up after the final-pass deadline — recorded, never silent. */
+  private readonly missing: MissingRange[] = [];
   private rejectedOwnership = 0;
   private timeoutPromotions = 0;
 
@@ -221,13 +232,22 @@ export class TeamsCsrcGmeetPipeline {
         try {
           const csrc = this.sourceToCsrc.get(sourceKey);
           if (csrc === undefined) throw new Error(`unknown CSRC source ${sourceKey}`);
-          const result = await this.options.transcribe(audio, prompt, {
-            csrc,
-            sourceKey,
-            forced: trigger === 'forced',
-            trigger,
-            bufferTrigger,
-          });
+          const context = { csrc, sourceKey, forced: trigger === 'forced', trigger, bufferTrigger } as const;
+          // Keep the window through an STT outage: retry with backoff while the lane runs, and back to
+          // back during the final pass, which is bounded by finalPassMs.
+          let result!: TranscriptionResult;
+          for (let attempt = 1; ; attempt++) {
+            try { result = await this.options.transcribe(audio, prompt, context); break; }
+            catch (error) {
+              const pastDeadline = this.disposingAt !== undefined
+                && Date.now() - this.disposingAt > (this.options.finalPassMs ?? 120_000);
+              if (pastDeadline) throw error;
+              this.options.onError?.(error);
+              const base = this.options.sttRetryBaseMs ?? 5000, max = this.options.sttRetryMaxMs ?? 60_000;
+              const delay = this.disposingAt !== undefined ? Math.min(base, 200) : Math.min(max, base * 2 ** (attempt - 1));
+              await new Promise((r) => setTimeout(r, delay));
+            }
+          }
           this.contestSubmissions.push({
             sourceKey,
             segments: result.segments ?? [],
@@ -246,6 +266,17 @@ export class TeamsCsrcGmeetPipeline {
           this.refreshContestsForSource(sourceKey);
         } catch (error) {
           this.options.onError?.(error);
+          // The window is given up (past the final-pass deadline): record WHAT was lost, by capture
+          // time, so the meeting carries a gap instead of a silent hole.
+          const endMs = this.sourceLastAudioMs.get(sourceKey) ?? Date.now();
+          const startMs = endMs - (audio.length / 16_000) * 1000;
+          const f = error as { kind?: string; status?: number } | undefined;
+          if (endMs > startMs) {
+            this.missing.push({
+              speakerName: `CSRC ${this.sourceToCsrc.get(sourceKey) ?? sourceKey}`, startMs, endMs,
+              reason: `stt refused the window past the final-pass deadline (${f?.kind ?? 'error'}${f?.status ? ` HTTP ${f.status}` : ''})`,
+            });
+          }
           this.manager.handleTranscriptionResult(sourceKey, '');
         }
       })();
@@ -368,7 +399,16 @@ export class TeamsCsrcGmeetPipeline {
     await this.settleAll();
   }
 
+  /** Set when dispose begins: failed requests retry back to back until the final-pass deadline. */
+  private disposingAt: number | undefined;
+
+  /** Every window this lane gave up on, by capture time (epoch ms). */
+  missingRanges(): MissingRange[] {
+    return this.missing.map((r) => ({ ...r }));
+  }
+
   async dispose(): Promise<void> {
+    this.disposingAt = Date.now();
     await this.flush();
     this.trackNamer.finish();
     this.manager.removeAll();

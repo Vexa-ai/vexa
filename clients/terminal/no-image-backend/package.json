@@ -1,0 +1,12 @@
+{
+  "name": "@vexa/no-image-backend",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "Stands in for `sharp` in the terminal's npm tree (package.json overrides), so `npm ci` installs no libvips (LGPL, FINOS Category X). next loads sharp only for the image optimizer, which next.config.ts turns off; any call throws a typed ImageBackendAbsent. src/index.cjs is byte-identical to core/meetings/modules/no-image-backend (the parity fact no-image-backend-terminal).",
+  "type": "commonjs",
+  "main": "src/index.cjs",
+  "exports": {
+    ".": "./src/index.cjs"
+  }
+}

@@ -55,7 +55,7 @@ this via `useLiveMeetingsConnection()` gating the meeting-header `BotControls`).
 `core/gateway/services/gateway/src/gateway/app.py`:
 
 - `@app.websocket("/ws")` → `run_multiplex(ws, authorizer, redis)` — `app.py:293-295`.
-- **Connect auth is shallow today**: it only checks an `x-api-key` (or `?api_key=`)
+- **Connect auth is shallow today**: it only checks an `x-api-key` (or the `vexa.key.<key>` subprotocol)
   is *present*; missing → `error:missing_api_key` + close `4401` — `app.py:315-322`.
   It does **NOT** resolve the key to a `user_id` at connect.
 - The real `user_id` is resolved **per-subscribe**, inside the `authorize_subscribe`
@@ -271,7 +271,7 @@ gateway.
 
 `liveMeetings.ts` keeps `GET /api/meetings` as the **initial snapshot** (one fetch on
 mount / reconnect — `poll()` once), but **drops `setInterval(poll, 4000)`**
-(`liveMeetings.ts:83`). A new WS client opens `/ws?api_key=…`, receives `meeting.status`
+(`liveMeetings.ts:83`). A new WS client opens `/ws` (key in `X-API-Key` or the subprotocol list), receives `meeting.status`
 frames, and patches the in-memory `meetings[]` by `native`/`meeting_id`, then
 `subs.forEach(f => f())` (the existing `useSyncExternalStore` notify — `liveMeetings.ts:73`).
 Status→bucket mapping extends `LIVE_STATUSES` and adds `idle`/`scheduled` buckets for the

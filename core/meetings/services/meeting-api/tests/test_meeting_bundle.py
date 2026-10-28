@@ -1,0 +1,489 @@
+"""Meeting export/import between two separate deployments (meeting-bundle.v1), driven through the
+SHIPPED unified app (`meeting_api.app.create_app`) twice: two isolated stores, two object stores,
+two different deployment secrets. Offline — no docker, no postgres.
+
+Round trip and cross-deployment:
+  * export from A, import into B, export again from B: the transcript part and every media part are
+    byte-identical (same SHA-256), and the metadata survives;
+  * B's meeting has B's fresh id and B's importer as owner; A's ids are provenance only;
+  * an exported file carries nothing deployment-bound (no user ids, secrets, share lists, storage
+    paths, emails, workspace ids).
+
+Deny:
+  * a stranger cannot export (404, like a missing meeting), a share recipient or workspace member
+    cannot either (403 — they see a projected meeting, not the whole one), nor can anyone export a
+    meeting that is still live (409);
+  * an import grants nothing to anyone but the importer;
+  * every malicious golden is refused over HTTP with its code and writes nothing;
+  * a re-import is refused as a duplicate (409), and a dry run writes nothing.
+"""
+from __future__ import annotations
+
+import io
+import json
+import zipfile
+from hashlib import sha256
+from types import SimpleNamespace
+
+import pytest
+from fastapi.testclient import TestClient
+
+import bundle_goldens as G
+from meeting_api.app import create_app
+from meeting_api.bundle import deployment_id
+from meeting_api.collector.fakes import InMemoryTranscriptStore
+from meeting_api.recordings.fakes import InMemoryRecordingRepo, InMemoryStorage
+
+OWNER, VIEWER, MEMBER, STRANGER = 11, 12, 13, 14
+IMPORTER, OTHER = 77, 78
+SECRET_A, SECRET_B = "deployment-a-secret", "deployment-b-secret"
+WAV = G.WAV_AUDIO + b"\x01\x02" * 50
+
+
+def _deployment(secret):
+    store, repo, storage = InMemoryTranscriptStore(), InMemoryRecordingRepo(), InMemoryStorage()
+    app = create_app(transcript_store=store, recording_repo=repo, storage=storage, token_secret=secret)
+    return SimpleNamespace(client=TestClient(app), store=store, repo=repo, storage=storage)
+
+
+def _h(uid, workspaces=None):
+    h = {"x-user-id": str(uid)}
+    if workspaces:
+        h["x-user-workspaces"] = workspaces
+    return h
+
+
+@pytest.fixture
+def a():
+    """Deployment A with one finished meeting that carries every kind of thing an export must NOT
+    take: a share list, share grants, a webhook secret, a workspace bind, attendee emails, and a
+    recording whose object key names the owner."""
+    d = _deployment(SECRET_A)
+    mid = d.store.seed_meeting(
+        user_id=OWNER, platform="google_meet", native_meeting_id="abc-defg-hij", status="completed",
+        start_time="2026-10-01T09:00:00Z", end_time="2026-10-01T09:30:00Z",
+        data={
+            "title": "Quarterly planning",
+            "metadata": {"ticket": "OPS-7", "summary": "plan agreed"},
+            "transcript_viewers": [VIEWER],
+            "workspace_id": "ws-team",
+            "share_grants": [{"secret_hash": "deadbeef" * 8, "mode": "open"}],
+            "webhook_secret": "whsec_do_not_export",
+            "webhook_url": "http://internal-hooks.svc.cluster.local/x",
+            "attendees": [{"email": "ada@example.test", "name": "Ada"}, {"email": "bob@example.test"}],
+        },
+        segments=[
+            {"segment_id": "s1", "start": 0.0, "end": 3.0, "speaker": "Ada", "text": "Let us plan.", "language": "en"},
+            {"segment_id": "s2", "start": 3.0, "end": 7.5, "speaker": "Grace", "text": "Agreed.\x1b[31m", "language": "en"},
+        ],
+    )
+    key = f"recordings/{OWNER}/555000111222/sess-1/audio/master.wav"
+    d.repo.seed(meeting_id=mid, user_id=OWNER, session_uid="sess-1", status="completed")
+    d.repo._meetings[mid]["recordings"] = [{
+        "id": 555000111222, "meeting_id": mid, "user_id": OWNER, "session_uid": "sess-1", "source": "bot",
+        "status": "completed", "created_at": "2026-10-01T09:30:00Z",
+        "media_files": [{"id": 1, "type": "audio", "format": "wav", "storage_path": key,
+                         "duration_seconds": 450.0, "chunk_count": 0, "is_final": True}],
+    }]
+    d.storage.blobs[key] = WAV
+    d.mid = mid
+    return d
+
+
+@pytest.fixture
+def b():
+    return _deployment(SECRET_B)
+
+
+def _export(d, mid, uid=OWNER, **params):
+    return d.client.get(f"/meetings/{mid}/export", params=params, headers=_h(uid))
+
+
+def _import(d, data, uid=IMPORTER, dry_run=False):
+    return d.client.post("/meetings/import", params={"dry_run": "true"} if dry_run else None,
+                         content=data, headers={**_h(uid), "content-type": "application/zip"})
+
+
+def _parts(archive: bytes) -> dict:
+    with zipfile.ZipFile(io.BytesIO(archive)) as zf:
+        return {n: zf.read(n) for n in zf.namelist()}
+
+
+# ── round trip across two deployments ───────────────────────────────────────────────────────────
+def test_round_trip_into_a_separate_deployment_keeps_transcript_metadata_and_media(a, b):
+    exported = _export(a, a.mid)
+    assert exported.status_code == 200, exported.text
+    assert exported.headers["content-type"] == "application/zip"
+    assert exported.headers["content-disposition"] == 'attachment; filename="quarterly-planning.meeting-bundle.zip"'
+    src = _parts(exported.content)
+
+    imported = _import(b, exported.content)
+    assert imported.status_code == 201, imported.text
+    new_id = imported.json()["meeting_id"]
+
+    again = _export(b, new_id, uid=IMPORTER)
+    assert again.status_code == 200, again.text
+    dst = _parts(again.content)
+    # The transcript and the media are the SAME bytes after a trip through a second deployment.
+    assert sha256(dst["transcript.json"]).hexdigest() == sha256(src["transcript.json"]).hexdigest()
+    assert dst["media/recording-1-audio.wav"] == src["media/recording-1-audio.wav"] == WAV
+    src_meeting, dst_meeting = json.loads(src["meeting.json"]), json.loads(dst["meeting.json"])
+    for k in ("platform", "native_meeting_id", "title", "start_time", "end_time", "participants", "media"):
+        assert dst_meeting[k] == src_meeting[k], k
+    meta = json.loads(dst["annotations.json"])["metadata"]
+    assert meta["ticket"] == "OPS-7" and meta["summary"] == "plan agreed"
+
+    doc = b.client.get(f"/transcripts/by-id/{new_id}", headers=_h(IMPORTER)).json()
+    assert doc["status"] == "completed"
+    assert [(s["speaker"], s["text"]) for s in doc["segments"]] == [("Ada", "Let us plan."), ("Grace", "Agreed.[31m")]
+
+
+def test_cross_deployment_ids_are_fresh_and_the_source_is_provenance_only(a, b):
+    archive = _export(a, a.mid).content
+    manifest = json.loads(_parts(archive)["manifest.json"])
+    assert manifest["source"] == {"deployment_id": deployment_id(SECRET_A), "meeting_id": a.mid}
+    assert deployment_id(SECRET_A) != deployment_id(SECRET_B)
+
+    body = _import(b, archive).json()
+    row = b.client.get(f"/meetings/{body['meeting_id']}", headers=_h(IMPORTER)).json()
+    assert row["user_id"] == IMPORTER and row["shared"] is False
+    prov = row["data"]["metadata"]["imported_from"]
+    assert prov["source_deployment_id"] == deployment_id(SECRET_A)
+    assert prov["source_meeting_id"] == a.mid
+    assert prov["bundle_id"] == manifest["bundle_id"]
+    assert row["data"]["transcript_import"]["source"] == "bundle"
+    # A recording landed under the importer's own key space, never the source's path.
+    recs = b.repo._meetings[body["meeting_id"]]["recordings"]
+    assert recs and all(mf["storage_path"].startswith(f"recordings/{IMPORTER}/")
+                        for r in recs for mf in r["media_files"])
+
+
+def test_an_exported_bundle_carries_nothing_deployment_bound(a):
+    archive = _export(a, a.mid).content
+    text = b"\n".join(v for k, v in _parts(archive).items() if k.endswith(".json")).decode()
+    for leak in ("whsec_do_not_export", "deadbeef", "internal-hooks", "transcript_viewers",
+                 "share_grants", "webhook", "@example.test",
+                 "recordings/", "sess-1", "user_id", str(OWNER) + ","):
+        assert leak not in text, leak
+    # The workspace is named once, as provenance in meeting.context (format 1.1), and nowhere else.
+    parts = _parts(archive)
+    meeting = json.loads(parts["meeting.json"])
+    assert meeting["context"]["workspace_id"] == "ws-team"
+    others = b"\n".join(v for k, v in parts.items() if k.endswith(".json") and k != "meeting.json")
+    assert b"ws-team" not in others
+
+
+def test_transcript_only_bundle_imports_without_media(a, b):
+    archive = _export(a, a.mid, media="false").content
+    assert not any(n.startswith("media/") for n in _parts(archive))
+    r = _import(b, archive)
+    assert r.status_code == 201, r.text
+    assert r.json()["media"] == []
+    golden = (G.GOLDEN / "bundles" / "transcript-only.zip").read_bytes()
+    assert _import(b, golden).status_code == 201
+
+
+def test_the_golden_with_audio_bundle_plays_back_byte_identical(b):
+    r = _import(b, (G.GOLDEN / "bundles" / "with-audio.zip").read_bytes())
+    assert r.status_code == 201, r.text
+    mid = r.json()["meeting_id"]
+    rec = b.repo._meetings[mid]["recordings"][0]
+    mf = rec["media_files"][0]
+    b.repo._meetings[mid]["user_id"] = IMPORTER  # the fake repo learns ownership from the row in prod
+    raw = b.client.get(f"/recordings/{rec['id']}/media/{mf['id']}/raw", headers=_h(IMPORTER))
+    assert raw.status_code == 200, raw.text
+    assert raw.content == G.WEBM_AUDIO
+
+
+# ── export deny ─────────────────────────────────────────────────────────────────────────────────
+def test_a_stranger_cannot_export_and_cannot_tell_the_meeting_exists(a):
+    r = _export(a, a.mid, uid=STRANGER)
+    assert r.status_code == 404
+    assert _export(a, 999999, uid=STRANGER).status_code == 404
+
+
+def test_a_share_recipient_cannot_export(a):
+    assert a.client.get(f"/transcripts/by-id/{a.mid}", headers=_h(VIEWER)).status_code == 200
+    r = _export(a, a.mid, uid=VIEWER)
+    assert r.status_code == 403
+    assert "owner" in r.json()["detail"]
+
+
+def test_a_workspace_member_cannot_export(a):
+    r = a.client.get(f"/meetings/{a.mid}/export", headers=_h(MEMBER, "ws-team"))
+    assert r.status_code == 403
+
+
+def test_a_live_meeting_is_not_exported(a):
+    a.store._meetings[a.mid]["status"] = "active"
+    r = _export(a, a.mid)
+    assert r.status_code == 409
+
+
+# ── import deny ─────────────────────────────────────────────────────────────────────────────────
+def test_an_import_grants_access_to_nobody_but_the_importer(a, b):
+    new_id = _import(b, _export(a, a.mid).content).json()["meeting_id"]
+    row = b.store._meetings[new_id]
+    assert row["user_id"] == IMPORTER
+    for key in ("transcript_viewers", "share_grants", "workspace_id", "webhook_secret", "webhook_url"):
+        assert key not in row["data"], key
+    assert b.client.get(f"/meetings/{new_id}", headers=_h(OTHER)).status_code == 404
+    assert b.client.get(f"/transcripts/by-id/{new_id}", headers=_h(OTHER)).status_code == 404
+    assert _export(b, new_id, uid=OTHER).status_code == 404
+    # The source's share recipient and its workspace mean nothing on the importing deployment.
+    assert b.client.get(f"/transcripts/by-id/{new_id}", headers=_h(VIEWER, "ws-team")).status_code == 404
+
+
+def test_a_reimport_is_refused_as_a_duplicate_and_a_dry_run_says_so(a, b):
+    archive = _export(a, a.mid).content
+    first = _import(b, archive).json()["meeting_id"]
+    preview = _import(b, archive, dry_run=True)
+    assert preview.status_code == 200 and preview.json()["duplicate_of"] == first
+    again = _import(b, archive)
+    assert again.status_code == 409
+    assert again.json()["detail"]["code"] == "duplicate_import"
+    assert str(first) in again.json()["detail"]["detail"]
+    owned = [m for m in b.store._meetings.values() if m["user_id"] == IMPORTER]
+    assert len(owned) == 1
+    # A different person importing the same file is a different import.
+    assert _import(b, archive, uid=OTHER).status_code == 201
+
+
+def test_a_dry_run_previews_and_writes_nothing(a, b):
+    r = _import(b, _export(a, a.mid).content, dry_run=True)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["dry_run"] is True and body["duplicate_of"] is None
+    assert body["meeting"]["title"] == "Quarterly planning"
+    assert body["segments"] == 2 and body["speakers"] == ["Ada", "Grace"]
+    assert body["media"][0]["type"] == "audio" and body["media"][0]["bytes"] == len(WAV)
+    assert b.store._meetings == {} and b.storage.blobs == {}
+
+
+@pytest.mark.parametrize("name", sorted(G.REFUSED))
+def test_every_malicious_golden_is_refused_over_http_and_writes_nothing(b, name):
+    code = G.REFUSED[name][0]
+    r = _import(b, (G.GOLDEN / "refused" / f"{name}.zip").read_bytes())
+    assert r.status_code == {"too_large": 413}.get(code, 422), r.text
+    assert r.json()["detail"]["code"] == code
+    assert b.store._meetings == {} and b.storage.blobs == {}
+
+
+def test_an_oversize_upload_is_refused_before_it_is_read(b, monkeypatch):
+    from meeting_api.bundle import router
+
+    monkeypatch.setattr(router, "MAX_BUNDLE_BYTES", 1024)
+    r = _import(b, b"\x00" * 4096)
+    assert r.status_code == 413
+    assert r.json()["detail"]["code"] == "too_large"
+
+
+def test_a_failed_import_leaves_nothing_behind(a, b, monkeypatch):
+    archive = _export(a, a.mid).content
+
+    async def broken_annotate(*args, **kwargs):
+        return {"error": "metadata_too_large", "detail": "metadata too large"}
+
+    monkeypatch.setattr(b.store, "annotate_meeting", broken_annotate)
+    r = _import(b, archive)
+    assert r.status_code == 422
+    assert b.store._meetings == {}
+    assert b.storage.blobs == {}
+
+
+def test_imported_text_is_stripped_of_control_characters_and_kept_as_text(b):
+    r = _import(b, (G.GOLDEN / "bundles" / "transcript-only.zip").read_bytes())
+    doc = b.client.get(f"/transcripts/by-id/{r.json()['meeting_id']}", headers=_h(IMPORTER)).json()
+    # Markup in a transcript is words someone said: stored and served as literal text.
+    assert doc["segments"][2]["text"] == "Then the migration plan <b>draft</b>."
+
+
+def test_the_two_routes_are_sealed_in_the_meetings_manifest():
+    from meeting_api import route_scopes
+
+    table = route_scopes.ROUTE_SCOPES
+    assert table[("GET", "/meetings/{meeting_id}/export")] == frozenset({"tx"})
+    assert table[("POST", "/meetings/import")] == frozenset({"tx"})
+
+
+# ── notes and the agent domain's parts ──────────────────────────────────────────────────────────
+def test_free_text_notes_round_trip(a, b):
+    a.store._meetings[a.mid]["data"]["notes"] = "Follow up with Grace on the numbers."
+    archive = _export(a, a.mid).content
+    assert json.loads(_parts(archive)["annotations.json"])["notes"] == "Follow up with Grace on the numbers."
+    preview = _import(b, archive, dry_run=True).json()
+    assert preview["annotations"]["notes"] is True
+    new_id = _import(b, archive).json()["meeting_id"]
+    assert b.store._meetings[new_id]["data"]["notes"] == "Follow up with Grace on the numbers."
+    back = _parts(_export(b, new_id, uid=IMPORTER).content)
+    assert json.loads(back["annotations.json"])["notes"] == "Follow up with Grace on the numbers."
+
+
+def test_an_export_places_the_workspace_and_notes_page_it_is_handed(a, b):
+    parts = (G.GOLDEN / "parts" / "workspace-and-notes.zip").read_bytes()
+    r = a.client.post(f"/meetings/{a.mid}/export", content=parts,
+                      headers={**_h(OWNER), "content-type": "application/zip"})
+    assert r.status_code == 200, r.text
+    inside = _parts(r.content)
+    assert inside["notes.md"] == G.NOTES_PAGE
+    assert inside["workspace/notes/agenda.md"] == dict(G.WORKSPACE)["workspace/notes/agenda.md"]
+    manifest = json.loads(inside["manifest.json"])
+    roles = {f["path"]: f["role"] for f in manifest["files"]}
+    assert roles["notes.md"] == "notes" and roles["workspace/notes/agenda.md"] == "workspace"
+    # On import, meeting-api lands the meeting and names what the agent domain restores.
+    preview = _import(b, r.content, dry_run=True).json()
+    assert preview["handoff"] == {"workspace_files": 2, "notes_page": True}
+
+
+def test_an_export_with_parts_is_still_owner_only(a):
+    parts = (G.GOLDEN / "parts" / "workspace-and-notes.zip").read_bytes()
+    for uid, status in ((STRANGER, 404), (VIEWER, 403)):
+        r = a.client.post(f"/meetings/{a.mid}/export", content=parts, headers=_h(uid))
+        assert r.status_code == status
+
+
+@pytest.mark.parametrize("name", sorted(G.REFUSED_PARTS))
+def test_a_malicious_parts_archive_is_refused(a, name):
+    r = a.client.post(f"/meetings/{a.mid}/export",
+                      content=(G.GOLDEN / "parts" / f"{name}.zip").read_bytes(), headers=_h(OWNER))
+    assert r.status_code == 422
+    assert r.json()["detail"]["code"] == G.REFUSED_PARTS[name][0]
+
+
+# ── format 1.1: the bundle says what the meeting was, and carries no token ─────────────────────────
+# A real export (2026-10-14) had a null duration and no link, calendar event, workspace, language or
+# bot timeline — and a live workspace invite link in a page.
+
+def test_the_bundle_carries_the_meetings_context(a):
+    row = a.store._meetings[a.mid] if hasattr(a.store, "_meetings") else None
+    data = (row or {}).get("data") if isinstance(row, dict) else None
+    if isinstance(data, dict):
+        data.update({
+            "constructed_meeting_url": "https://meet.google.com/abc-defg-hij?authuser=1&pwd=SECRET",
+            "calendar_uid": "evt-123@google.com",
+            "transcription_language": {"language": None, "allowed_languages": ["ru", "en"], "source": "history"},
+            "completion_reason": "left_alone",
+            "status_transition": [
+                {"from": "requested", "to": "joining", "timestamp": "2026-10-01T08:59:30Z"},
+                {"from": "joining", "to": "active", "timestamp": "2026-10-01T09:00:00Z"},
+                {"from": "active", "to": "stopping", "timestamp": "2026-10-01T09:30:00Z"},
+                {"from": "stopping", "to": "completed", "timestamp": "2026-10-01T09:30:05Z"},
+            ],
+        })
+    meeting = json.loads(_parts(_export(a, a.mid).content)["meeting.json"])
+    ctx = meeting["context"]
+    assert ctx["duration_seconds"] == 1800.0
+    assert meeting["media"][0]["duration_seconds"] == 450.0
+    assert ctx["workspace_id"] == "ws-team"
+    if isinstance(data, dict):
+        assert ctx["meeting_url"] == "https://meet.google.com/abc-defg-hij"
+        assert ctx["calendar_event_id"] == "evt-123@google.com"
+        assert ctx["language"] == {"language": None, "allowed_languages": ["ru", "en"], "source": "history"}
+        assert ctx["bot"]["joined_at"] == "2026-10-01T08:59:30Z"
+        assert ctx["bot"]["admitted_at"] == "2026-10-01T09:00:00Z"
+        assert ctx["bot"]["left_at"] == "2026-10-01T09:30:00Z"
+        assert ctx["bot"]["exit_reason"] == "left_alone"
+    assert "SECRET" not in json.dumps(meeting)
+
+
+def test_no_invite_or_join_token_leaves_in_a_bundle():
+    from meeting_api.bundle.codec import read_bundle, redact_tokens, write_bundle
+    page = (b"# Project\n\nJoin: https://app.example.test/join?i=LIVEINVITETOKEN123\n"
+            b"Call: https://zoom.us/j/123?pwd=ZOOMPASS&uname=a\n")
+    archive = write_bundle(
+        meeting=G.meeting([]), transcript={"segments": G.SEGMENTS},
+        annotations={"metadata": {"link": "https://x.test/join?i=ANNOTTOKEN"}, "notes": None}, media=[],
+        bundle_id=G.BUNDLE_ID, exported_at=G.EXPORTED_AT, deployment_id="0" * 32, source_meeting_id=1,
+        workspace=[("workspace/kg/entities/project/p.md", page)], notes_page=page)
+    raw = b"".join(_parts(archive).values())
+    for token in (b"LIVEINVITETOKEN123", b"ZOOMPASS", b"ANNOTTOKEN"):
+        assert token not in raw
+    assert b"join?i=[removed]" in raw and b"uname=a" in raw
+    assert read_bundle(archive).manifest["format_version"] == "1.1"
+    assert redact_tokens("see ?page=2") == "see ?page=2"
+
+
+# ── bounded intake: spooled, streamed, and admitted a few at a time ──────────────────────────────
+def _bundle_with_media(size: int) -> bytes:
+    from meeting_api.bundle import MediaBlob, write_bundle
+
+    media = [MediaBlob(path="media/recording-1-audio.wav", type="audio", format="wav",
+                       duration_seconds=1.0, data=G.WAV_AUDIO + b"\x00" * (size - len(G.WAV_AUDIO)))]
+    with zipfile.ZipFile(io.BytesIO((G.GOLDEN / "bundles" / "transcript-only.zip").read_bytes())) as zf:
+        meeting = json.loads(zf.read("meeting.json"))
+        transcript = json.loads(zf.read("transcript.json"))
+    meeting["media"] = [{"path": media[0].path, "type": "audio", "format": "wav", "duration_seconds": 1.0}]
+    return write_bundle(meeting=meeting, transcript=transcript, annotations={"metadata": {}, "notes": None},
+                        media=media, bundle_id="00000000-0000-4000-8000-0000000000aa",
+                        exported_at="2026-10-01T10:00:00Z", deployment_id="d" * 32, source_meeting_id=1)
+
+
+def test_reading_a_spooled_bundle_holds_neither_the_upload_nor_its_media(tmp_path):
+    """The archive is read from a file and each recording is hash-checked as a stream: reading a
+    bundle with 24 MiB of media peaks far below the media's size. The media loads on demand."""
+    import tracemalloc
+
+    from meeting_api.bundle import read_bundle
+
+    path = tmp_path / "big.zip"
+    path.write_bytes(_bundle_with_media(24 * 1024 * 1024))
+    with path.open("rb") as fh:
+        tracemalloc.start()
+        try:
+            parsed = read_bundle(fh)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert peak < 8 * 1024 * 1024, f"reading the bundle peaked at {peak} bytes"
+        (blob,) = parsed.media
+        assert blob.data is None and blob.length == 24 * 1024 * 1024
+        assert blob.load()[:4] == b"RIFF"
+
+
+def test_a_large_import_lands_its_media_through_the_spool(b):
+    archive = _bundle_with_media(3 * 1024 * 1024)
+    r = _import(b, archive)
+    assert r.status_code == 201, r.text
+    assert [len(v) for v in b.storage.blobs.values()] == [3 * 1024 * 1024]
+    assert r.json()["media"][0]["bytes"] == 3 * 1024 * 1024
+
+
+def test_an_upload_past_the_cap_is_cut_off_even_when_its_length_is_not_declared():
+    import asyncio
+
+    from meeting_api.bundle.codec import BundleRefused, spool
+
+    async def body():
+        for _ in range(8):
+            yield b"\x00" * 1024
+
+    with pytest.raises(BundleRefused) as e:
+        asyncio.run(spool(body(), 4096))
+    assert e.value.code == "too_large"
+
+
+def test_intake_slots_admit_a_bounded_number_and_refuse_the_next_as_busy():
+    from meeting_api.bundle.codec import BundleRefused, IntakeSlots
+
+    slots = IntakeSlots(2)
+    with slots, slots:
+        with pytest.raises(BundleRefused) as e:
+            with slots:
+                pass
+        assert e.value.code == "busy"
+    with slots:  # released: admitted again
+        pass
+
+
+def test_an_import_past_the_concurrency_limit_is_429_busy_and_writes_nothing(monkeypatch):
+    from meeting_api.bundle import codec
+
+    monkeypatch.setattr(codec, "MAX_CONCURRENT_INTAKES", 0)  # every slot already taken
+    d = _deployment(SECRET_B)
+    for route in ("/meetings/import", "/meetings/1/export"):
+        r = d.client.post(route, content=(G.GOLDEN / "bundles" / "transcript-only.zip").read_bytes(),
+                          headers={**_h(IMPORTER), "content-type": "application/zip"})
+        assert r.status_code == 429, r.text
+        assert r.json()["detail"]["code"] == "busy"
+        assert r.headers.get("retry-after") == "30"
+    assert d.store._meetings == {} and d.storage.blobs == {}

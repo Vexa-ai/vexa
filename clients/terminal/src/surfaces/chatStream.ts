@@ -11,55 +11,343 @@
  *
  *  Extracted from Chat.send so the robustness logic is unit-testable against a faked fetch/SSE. */
 
+import type { ChatIntent } from "./chatIntent";
+import { noteAuthFailure, isAuthStatus } from "@/platform/session";
+import { SESSION_ENDED_HEADLINE } from "../data/apiClient";
+import { faultLine, isTransientFault, readFault, type Fault } from "./faults";
+import { DEFAULT_TRANSIENT_BUDGET_MS, retryAfterMs, transientWait } from "./transientRetry";
+import { isScopeTool, notifyScope } from "./scopeEvents";
+
 /** A parsed SSE event off the chat stream. `type` is the discriminator; other fields are per-type. */
 export type ChatStreamEvent = {
   type: string;
+  /** the worker's id for the turn this event belongs to (`t0`, `t1`, …) — absent on frames the
+   *  server composes itself. What lets one view carry two turns without merging them (`onTurn`). */
+  turn_id?: string;
   text?: string;
   tool?: string;
   sha?: string;
   ok?: boolean;
   reply?: string;
+  /** `done` events only — WHAT THE TURN GAVE UP (F89): its tool-call or wall-clock budget ran out,
+   *  or its context was trimmed to fit. Absent on a turn that finished under its own budgets. */
+  reason?: string;
   message?: string;
+  /** `error` events only — the upstream HTTP status the proxy folded into the stream. /api/chat
+   *  answers 200 with an `error` event even when the gateway refused with a 401, so this field is
+   *  the ONLY place the auth status survives into the client. */
+  status?: number;
+  /** `artifact` events only — a file a tool WROTE, and whether it should come to the front.
+   *  `workspace` is "" when the write landed on the caller's own desk: the server's record resolves
+   *  that, and the stream deliberately does not guess, so an empty string means "no slug" rather
+   *  than "unknown". */
+  workspace?: string;
+  path?: string;
+  focus?: boolean;
+  /** `artifact` events only — KEEP this page in the chat's strip, as a pinned entry, exactly as a
+   *  scaffold-declared pinned tab does. Orthogonal to `focus`: pinning is about what stays,
+   *  focusing is about what is in front, and a turn may ask for either, both, or neither. */
+  pin?: boolean;
+  /** `focus` events only (Vexa-ai/vexa#1603) — the workspace a `workspace_new` just made, and its
+   *  human name when the create knew one. Never a path: this event names a place, not a page. */
+  name?: string;
+  /** `propose-target` events only (UI decision 6b) — where the chat writes now, and why the agent
+   *  asks to move it. `workspace` / `name` (above) are the proposed workspace. */
+  current?: string;
+  current_name?: string;
+  /** `terms` events only (PRD decision 35) — the meeting ROW the chips belong to, the cursor the
+   *  next Highlight should send back, and the published terms themselves. */
+  meeting?: string;
+  cursor?: string;
+  terms?: unknown[];
+  /** `sources` event: the turn's citations as `{ title, url, date?, snippet? }` (additive). */
+  items?: unknown[];
+  /** `call` events only — a successful `call_person` (call-person-autojoin): the room of two
+   *  (`chat` — not `session`, which names a job's conversation), the call's LiveKit `room`, the other
+   *  person's display name (`with`), and whether the call was already live. Ids and a name; never a
+   *  subject id or a token. */
+  chat?: string;
+  room?: string;
+  with?: string;
+  already_live?: boolean;
+  // A BACKGROUND JOB (Vexa-ai/vexa#1584). `job_id` is on every event a job produced, and on the
+  // `job-started` the spawning turn emits; `kind`/`target`/`line` are the job's own three facts.
+  //
+  // `target` is shared with the `open` event below, where it is the TOKEN the agent named
+  // (`meeting:transcript`, `meeting:note`, a path). Carried for the record only: an `open` also
+  // carries `workspace`/`path`, already resolved by the tool, and those are the two fields the
+  // panel reads. The client never re-derives what the server has answered.
+  job_id?: string;
+  kind?: string;
+  target?: string;
+  line?: string;
+  /** WHICH CONVERSATION THE JOB BELONGS TO (Vexa-ai/vexa#1613). Stamped by the worker on every job
+   *  event. A connection reading a chat it does not name renders none of it — see `ownsJob`. */
+  session?: string;
+  /** `job-progress` only — the window that just ended and the job's running step count. */
+  window?: number;
+  calls?: number;
+  /** `job-queued` only (Vexa-ai/vexa#1610) — how many acts are in front of this one on its page. */
+  ahead?: number;
+  /** HOW MANY STEPS THE TURN TOOK, from the server (Vexa-ai/vexa#1622) — on `done` (the harness's
+   *  own count, whole turn) and on `turn-complete` (the worker's). Until this existed the only step
+   *  count anywhere was one each browser derived by counting the `tool-call` events it happened to
+   *  see, which is short by however much of the turn it missed. `budget` is the ceiling that count
+   *  was measured against. */
+  steps?: number;
+  budget?: number;
+  /** `tool-call` / `tool-result` — the id pairing a result with its call, and the result itself
+   *  (`summary` is short; `result` is the full body when the harness sends it). */
+  callId?: string;
+  summary?: string;
+  result?: unknown;
+  /** `done` only — how many older messages the turn compacted to fit the model's context. */
+  compacted?: number;
+  /** `done` only, and only when the turn STOPPED at a budget (Vexa-ai/vexa#1622) — the act the
+   *  bubble offers, and the words it puts back on the same target. */
+  act?: { label?: string; instruction?: string };
+  /** `error` and failed `done` events — WHO failed and HOW (P18): the runtime that would not start
+   *  the agent, the model provider that refused the turn. Read through `faults.readFault`; a server
+   *  one release behind sends none and the event renders as it always did. */
+  fault?: unknown;
+  /** `error` only — the upstream's `Retry-After`, in seconds, passed on by /api/chat */
+  retry_after?: number;
 };
+
+/** IS THIS JOB THIS CHAT'S? (Vexa-ai/vexa#1613.)
+ *
+ *  The founder opened a NEW EMPTY CHAT and its first content was two lines from another chat's
+ *  jobs — *"some leak to empty chat"*. The server half of that is fixed where it was caused (the
+ *  jobs register is shared by every chat a person has, and a booting worker was reporting other
+ *  conversations' LIVE jobs as its own restart casualties). This is the other half, and it is the
+ *  one that makes the promise unconditional: a job event names its session, and a connection
+ *  belonging to a different one drops it whole.
+ *
+ *  It fails OPEN on an unstamped event, deliberately: a deployment one release behind stamps
+ *  nothing, and refusing every job line there would replace a rare wrong line with a permanent
+ *  missing one. The stamp is what removes the doubt, not the client's suspicion. */
+/** A proposal to move a chat's writes (UI decision 6b): the agent's ask, the person's choice. */
+export type TargetProposal = { workspace: string; name: string; current: string; currentName: string; reason: string };
+
+/** A call `call_person` started, as the `call` event names it. */
+export type PlacedCall = { session: string; room: string; with: string; alreadyLive: boolean };
+
+const CALL_ID = /^[A-Za-z0-9_-]{1,80}$/;
+/** The `call` event's fields, shape-checked, or null. The server checks them too; a client that
+ *  opens a room named by a stream event checks again rather than trusting the wire. */
+export function placedCall(ev: { chat?: unknown; room?: unknown; with?: unknown; already_live?: unknown }): PlacedCall | null {
+  const session = typeof ev.chat === "string" ? ev.chat : "";
+  const room = typeof ev.room === "string" ? ev.room : "";
+  if (!CALL_ID.test(session) || !CALL_ID.test(room)) return null;
+  return { session, room, with: typeof ev.with === "string" ? ev.with.slice(0, 200) : "", alreadyLive: ev.already_live === true };
+}
+
+/** HOW LONG A MESSAGE THIS TAB SUBMITTED STILL VOUCHES FOR A TURN it did not dispatch itself (a
+ *  mid-turn submission answered on an attached view, or on the dispatching view's second turn). */
+export const OWN_SUBMIT_WINDOW_MS = 10 * 60_000;
+
+/** IS A CALL IN THIS TURN THIS VIEWER'S OWN (call-person-autojoin)? Only the person whose message
+ *  made the agent place the call joins it — never another reader of a shared chat, and never a view
+ *  replaying history. A view that dispatched the message owns its first turn; any other turn this
+ *  view renders (an attach after a reload or from another tab, a second turn that may be someone
+ *  else's) is owned only when this tab itself submitted to the chat within `OWN_SUBMIT_WINDOW_MS`.
+ *  The shell then re-reads the call and joins only when its owner is the viewer, so a wrong "yes"
+ *  here still cannot put anyone in someone else's call. */
+export function callFromThisView(o: { dispatchedTurn: boolean; lastLocalSubmitMs: number; now: number }): boolean {
+  if (o.dispatchedTurn) return true;
+  return o.lastLocalSubmitMs > 0 && o.now - o.lastLocalSubmitMs >= 0 && o.now - o.lastLocalSubmitMs <= OWN_SUBMIT_WINDOW_MS;
+}
+
+export function ownsJob(ev: { session?: string }, session: string | undefined): boolean {
+  const owner = (ev.session ?? "").trim();
+  return !owner || !session || owner === session;
+}
+
+/** HOW ONE INTERIM TEXT JOINS THE LAST (F40, founder ruling 2026-09-02).
+ *
+ *  `message-delta` carries two different things depending on how the worker's model backend is
+ *  running: with partial streaming it is a TOKEN, and without it, a whole assistant text block.
+ *  Plain concatenation is right for the first and wrong for the second, and the founder read the
+ *  result on screen: `"created here.I'll set up a shared workspace…"` — two separate narrations run
+ *  together into a sentence that reads as one and parses as neither.
+ *
+ *  The boundary that is actually observable from the stream is a TOOL CALL: an assistant message
+ *  ends when the model reaches for a tool, and text arriving after the tool result is a NEW message.
+ *  So `afterTool` is armed by a tool-call and spent by the next delta. Tokens inside one block never
+ *  have a tool call between them, so nothing is ever broken mid-sentence.
+ *
+ *  Paragraphs rather than folding the narration under the step line: those interim texts ARE the
+ *  agent saying what it is about to do, and a person watching a turn in flight is reading exactly
+ *  them. Collapsing them by default would hide the only running commentary there is — to fix a
+ *  problem that is a missing blank line.
+ *
+ *  Pure, and exported, because the rule is one line of string handling that is impossible to see
+ *  wrong by reading it and trivial to see wrong in a test. */
+export function joinInterim(prev: string, next: string, afterTool: boolean): string {
+  if (!afterTool || !prev.trim() || prev.endsWith("\n")) return prev + next;
+  return prev + "\n\n" + next;
+}
 
 /** The live phase of a turn, surfaced so the pane is VERBOSE about what's happening instead of going
  *  silently stale: `connecting` (cold-starting the worker, no output yet) · `working` (output seen, but
  *  quiet right now — the agent is thinking / a tool is running) · `reconnecting` (the stream dropped, we
  *  are resuming from the cursor) · `stalled` (the stream is open but sending nothing — we're forcing a
  *  reconnect). `null` clears the indicator (real output is flowing or the turn ended). */
-export type ChatPhase = "connecting" | "working" | "reconnecting" | "stalled";
+export type ChatPhase = "connecting" | "working" | "reconnecting" | "stalled" | "queued";
+
+/** How a tool call ended when it did not simply work (agent-api `llm/tool_events.result_outcome`). */
+export type ToolOutcome = "held" | "refused" | "failed";
+/** A write the privacy hold kept: the confirmation code and what the approval card shows. */
+export type HeldWrite = { code: string; workspace?: string; workspace_name?: string; path?: string; readers?: string[]; sources?: string[] };
 
 export type ChatStreamCallbacks = {
   /** an agent message-delta with non-empty text (the first one clears the "starting" placeholder) */
   onDelta: (text: string) => void;
   /** a tool-call step to show as an operation */
-  onTool: (tool: string) => void;
+  onTool: (tool: string, args?: Record<string, unknown>, callId?: string) => void;
+  /** a tool's result, paired with the tool-call that asked for it by `callId`. `result` is the
+   *  event's full `result` body when the harness sends one, else its short `summary`. `outcome`
+   *  is how the call ended when it did not simply work (`held` by the privacy hold, `refused`,
+   *  `failed`); a held write carries the approval card's fields as `held` (held-label-rooms-1018). */
+  onToolResult?: (tool: string, r: { ok: boolean; result: unknown; callId?: string; outcome?: ToolOutcome; held?: HeldWrite }) => void;
+  /** FILES THE TURN WROTE ITSELF THAT THE PRIVACY HOLD KEPT BACK at its commit (`write-withheld`):
+   *  the tool call said ok, the commit did not land them. */
+  onWithheld?: (w: { workspace: string; paths: string[]; code?: string; readers: string[]; sources: string[] }) => void;
   /** the turn committed to the workspace (terminal) */
-  onCommit: (sha: string | undefined) => void;
+  onCommit: (sha: string | undefined, workspace?: string) => void;
   /** the turn was rejected by workspace.v1 governance (terminal) */
   onRejected: () => void;
   /** a done event with ok=false — model inference failed (terminal, surfaced) */
   onModelFailure: (reply: string | undefined) => void;
+  /** THE TURN GAVE SOMETHING UP (F89): `done.reason` — it hit its tool-call or wall-clock budget,
+   *  or answered from a context it had trimmed. The harness emitted `turn-truncated` /
+   *  `context-trimmed` for this and NOTHING consumed them, so a half-finished turn was rendered as
+   *  a finished one. `partial` is whatever reply the turn did produce; it is still worth showing.
+   *  Optional so existing callers/tests need not implement it — when it is absent an `ok=false`
+   *  done still falls through to `onModelFailure`.
+   *
+   *  `stop` (Vexa-ai/vexa#1622) carries what the harness knows and prose cannot: the step count,
+   *  the budget it ran into, and the CONTINUE ACT — so the bubble can offer one press instead of
+   *  leaving the person to re-type the instruction, which is what the founder did three times in
+   *  one conversation before this shipped. Optional field on an optional callback: a deployment one
+   *  release behind sends no `act` and the reason line renders alone, exactly as it did. */
+  onTruncated?: (reason: string, partial: string | undefined,
+                 stop?: { steps?: number; budget?: number;
+                          act?: { label: string; instruction: string } }) => void;
+  /** THE SERVER'S STEP COUNT for this turn (Vexa-ai/vexa#1622) — off `done` or `turn-complete`,
+   *  whichever arrives. Optional so existing callers/tests need not implement it. */
+  onSteps?: (steps: number) => void;
+  /** THE TURN COMPACTED OLDER HISTORY to fit the model's context (`done.compacted`, a count) — a
+   *  muted note in the activity line, never the reply or the stop line. Optional. */
+  onCompacted?: (count: number) => void;
   /** a hard upstream error the proxy folded into the stream (terminal, surfaced) */
   onError: (message: string) => void;
+  /** A TYPED FAULT ENDED THE TURN (P18) — an `error` event or a failed `done` that names the
+   *  dependency that failed (`source`), how (`kind`), a safe detail and a remedy. It REPLACES
+   *  `onError`/`onModelFailure` for that event, so the chat never prints "Internal Server Error" or
+   *  "Model inference failed" over a failure it can name. `reply` is the turn's own text, if any.
+   *  Optional: without it a fault falls through to the old callbacks unchanged. */
+  onFault?: (fault: Fault, reply?: string) => void;
   /** we are (re)connecting and no output has shown yet — show/keep a "starting agent…" affordance */
   onStarting: () => void;
+  /** THE WORKER HAS TAKEN A TURN — its liveness ack (Vexa-ai/vexa#1610 reads it for a second
+   *  reason: a turn being taken is exactly the moment something LEAVES the session's inbox, so this
+   *  is when the queued rows are worth re-reading). Optional; existing callers need not implement it. */
+  onAccepted?: () => void;
+  /** A MESSAGE TO THE PEOPLE IN A SHARED CHAT, not to the agent (`session-note`): it was posted to
+   *  the chat's lines and no turn runs. Optional. */
+  onNote?: (note: { seq?: number; author?: string; text?: string }) => void;
+  /** WHICH TURN THE NEXT EVENTS BELONG TO (the founder, 2026-10-10: *"sometimes chat does not answer
+   *  if asked while it's not yet answered"*). One view can carry more than one turn: the worker
+   *  finishes a turn's write-back AFTER its `done`, on a thread, and takes the next message — one
+   *  the person submitted while this view was open — in the meantime, so that turn streams on this
+   *  same connection before the first one's `turn-complete`. Called whenever the routing changes:
+   *  `isNew` is a turn this view saw begin after its first; the caller returns `true` to give it its
+   *  own agent bubble (it is the person's next answer) or `false` when another view of this chat
+   *  already owns it, in which case this view skips every event of that turn. `isNew: false` names
+   *  a turn already routed here, to switch back to it (the first turn's trailing steps).
+   *  Optional: a caller with no `onTurn` is never handed a second turn's events. */
+  onTurn?: (turnId: string, isNew: boolean) => boolean;
   /** the live phase changed (or a heartbeat fired while quiet) — drive a verbose status line. `null`
    *  clears it. Optional so existing callers/tests need not implement it. */
-  onStatus?: (phase: ChatPhase | null) => void;
+  onStatus?: (phase: ChatPhase | null, label?: string) => void;
   /** a chunk was consumed — a hook for autoscroll */
   onProgress?: () => void;
+  /** A FILE THE TURN JUST WROTE (F41). Emitted after the matching `tool-result` and only on
+   *  success — a failed write says nothing. Optional so existing callers/tests need not implement
+   *  it. */
+  onArtifact?: (a: { workspace: string; path: string; focus: boolean; pin: boolean }) => void;
+  /** SOMEBODY ASKED TO SEE THIS (Vexa-ai/vexa#1586) — a successful `open_page`. Different from
+   *  `onArtifact` in the one way that matters: an artifact is the turn saying "I wrote this" and
+   *  must not interrupt a reader who has opened something else, while this IS what the reader
+   *  asked for, so it always comes to the front. There is no `focus` flag for the same reason. */
+  onOpen?: (o: { workspace: string; path: string; target: string }) => void;
+  /** A WORKSPACE THE TURN CREATED (Vexa-ai/vexa#1603) — it is part of this chat from now on.
+   *  Forwarded, never stored, exactly like `onArtifact`: the focus set belongs to the CHAT RECORD
+   *  and this reader owns no state. Optional so existing callers/tests need not implement it. */
+  onFocusWorkspace?: (f: { workspace: string; name: string }) => void;
+  /** THE AGENT STARTED A CALL FOR THIS PERSON — a successful `call_person` ("Call tester-b").
+   *  meeting-api ends a call nobody joins within 30 s, so the caller's own view opens the room and
+   *  joins. Forwarded, never acted on here: the caller (chat.tsx) decides whether this view is the
+   *  one that placed the call, and the shell re-reads the call before joining. Optional. */
+  onCall?: (c: PlacedCall) => void;
+  /** THE AGENT ASKS TO MOVE THIS CHAT'S WRITES (UI decision 6b) — `propose_write_target`. Rendered
+   *  inline with Switch / Keep; nothing moves until the person clicks. */
+  onProposeTarget?: (p: TargetProposal) => void;
+  /** TERMS THE TURN PUBLISHED for a meeting's transcript (decision 35.2). Forwarded, never stored:
+   *  the chips belong to the CHAT RECORD and this reader owns no state, exactly as with
+   *  `onArtifact`. Optional so existing callers/tests need not implement it. */
+  onTerms?: (t: { meeting: string; cursor: string; terms: unknown[] }) => void;
+  /** The turn's SOURCES as data (terminal design guidelines §4.17): `{ title, url, date?, snippet? }`
+   *  items the chat renders as a citation list. Additive — a server that never sends the event
+   *  leaves the fallback (a "Sources" Markdown list lifted out of the prose) in charge. */
+  onSources?: (items: unknown[]) => void;
+  /** THIS TURN HANDED ITS WORK TO A BACKGROUND JOB and is already over (Vexa-ai/vexa#1584) — the
+   *  chat is free NOW, not when this connection closes. Everything carrying this job id from here
+   *  on belongs to the job, not to the turn, so none of it touches the turn's own steps. */
+  onJobStarted?: (j: { jobId: string; kind: string; target: string; line: string }) => void;
+  /** THE ACT IS QUEUED BEHIND ANOTHER ON THE SAME PAGE (Vexa-ai/vexa#1610). It used to be REFUSED
+   *  here — the founder read *"There is already something running on … — I'll finish that one
+   *  first"* twice, with his instruction lines gone — and it now waits its turn instead, carrying
+   *  the id it will run under. For this connection it is a job from this moment: the turn that asked
+   *  is over (so the composer is free), and the view stays open until it has started, run and
+   *  landed. */
+  onJobQueued?: (j: { jobId: string; kind: string; target: string; line: string; ahead: number }) => void;
+  /** one tool call the JOB made — the job's own step count, kept apart from the turn's */
+  onJobStep?: (jobId: string, tool: string) => void;
+  /** THE JOB IS STILL GOING, in a fresh window (Vexa-ai/vexa#1613). A long act reaches its
+   *  per-window tool-call budget, checkpoints — its pages are already committed — and carries on.
+   *  The row says so rather than going quiet: a job that looks stopped and is not is the same lie
+   *  as a spinner that outlives its turn. */
+  onJobProgress?: (jobId: string, line: string) => void;
+  /** the job landed, or died. `line` is the one sentence it posts into the chat — never silence. */
+  onJobEnd?: (j: { jobId: string; ok: boolean; line: string }) => void;
 };
 
 export type ChatStreamRequest = {
   /** the built prompt for this turn */
   prompt: string;
+  /** ADR-0048 — the people this message @-mentions, by the account id the picker carried. */
+  mentions?: string[];
+  /** the message is for the agent, as if it opened with @vexa (the first message of a chat that
+   *  just became shared, typed where the agent answered everything) */
+  to_agent?: boolean;
   /** the chat session/thread id (the warm unit keys on subject+session) */
   session: string;
   /** the active center-tab grounding (legacy mirror), or undefined */
   active: unknown;
   /** the terminal-state context bundle {tz, surface, focus, include}, or undefined */
   context?: unknown;
+  /** THE SCAFFOLD this turn opened from (PRD §5.5), on the FIRST turn only.
+   *
+   *  One record, two renderers: the panel rendered its tabs from this id and dispatch reads its
+   *  mounts and opening from the same one. Absent on every later turn — the session carries the
+   *  thread from then on, and re-sending it would invite the server to re-apply an arrival that
+   *  already happened. */
+  scaffold_id?: string;
+  /** PRD decision 32 — what a button pressed on a page asks for. Typed, never prose: the server
+   *  half turns it into the matching preset. Omitted when absent, like `scaffold_id`. */
+  intent?: ChatIntent;
 };
 
 /** One nonce per user turn, constant across that turn's reconnect attempts. It lets agent-api tell a
@@ -90,6 +378,16 @@ export type ChatStreamOptions = {
   /** injected for tests so a fake clock/no real wait is possible */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** WATCH, DON'T SEND (Vexa-ai/vexa#1610). The cursor to attach from — the last event this chat
+   *  saw on its own output Stream, or the tail the pending route reported on a cold load. It seeds
+   *  `Last-Event-ID` on the FIRST attempt, and agent-api never dispatches a turn on a request that
+   *  carries one: the submission is already on the server's inbox, so re-sending it is the one thing
+   *  that must not happen. Exact by construction — the next events after that cursor ARE the queued
+   *  turn's, so nothing replays and nothing is missed. */
+  attachFrom?: string;
+  /** HOW LONG A TRANSIENT FAULT IS RETRIED before the person is told (`transientRetry.ts`) —
+   *  the sum of the waits, not wall time, so a test with a fake clock gives up exactly as a browser does. */
+  transientBudgetMs?: number;
 };
 
 export type ChatStreamResult = {
@@ -99,12 +397,48 @@ export type ChatStreamResult = {
   terminal: boolean;
   /** aborted by the caller (stop button / unmount) */
   aborted: boolean;
+  /** WHERE THIS CHAT HAS READ TO on its output Stream (Vexa-ai/vexa#1610) — the last SSE `id:`. The
+   *  next thing the person submitted starts after exactly this point, so it is what the follow-on
+   *  attach resumes from: no gap, and no replay of the turn that just finished. */
+  cursor: string | null;
 };
 
 const DEFAULT_HARD_TIMEOUT_MS = 90000;   // >> a normal cold start
 const DEFAULT_RECONNECT_BACKOFF_MS = 800;
 const DEFAULT_HEARTBEAT_MS = 3500;       // "still working…" cadence during a quiet read
 const DEFAULT_IDLE_RECONNECT_MS = 18000; // an OPEN-but-silent stream this long ⇒ stalled → reconnect
+
+/* A MOMENT'S UNAVAILABILITY IS RETRIED, NOT SHOWN (the founder, 2026-10-13: he re-sent one message
+ *  three times past the gateway's one-second auth 503 and its red box). A fault `isTransientFault`
+ *  names, arriving BEFORE anything of the turn has (no event id, no output), is retried for the same
+ *  message: 1 s, 2 s, 4 s, 8 s, 8 s — never sooner than the server's Retry-After — for at most ~30 s
+ *  of waiting, and only then reported, once.
+ *
+ *  WHY A RETRY CANNOT RUN THE TURN TWICE. Every attempt carries the same `turn_id`. The gateway's auth
+ *  503 and an edge 429/5xx answer before anything is forwarded; agent-api answers a refusal it typed
+ *  (a runtime that would not spawn, a warm delivery that failed) after withdrawing the turn's inbox
+ *  entry, and a request whose turn it already started is recognised by that id and re-attached to it
+ *  rather than dispatched (`routers/chats.py`, `_chat_turn_head`). A fault that arrives AFTER the turn
+ *  began is never retried here — the turn may have run, and its own events say what happened. The schedule is
+ *  `transientRetry.ts`, shared with a message submitted while a turn runs (`inbox.submitToInbox`). */
+
+/** The fault an untyped edge answer stands for — a 429 or a bare 502/503/504 that never reached
+ *  agent-api. In the contract's words: the gateway could not be got through (`gateway · unreachable`). */
+const edgeFault = (status: number): Fault => ({ source: "gateway", kind: "unreachable", status,
+  detail: status === 429 ? "the Vexa gateway asked the terminal to slow down" : "the Vexa gateway did not answer" });
+
+
+/** The typed fault a non-ok JSON answer carries (`{detail, fault}`), or null. Never throws: a body
+ *  that is not JSON, or a test double with no body at all, is simply no fault. */
+async function bodyFault(r: Response): Promise<Fault | null> {
+  try {
+    if (typeof r.json !== "function") return null;
+    const body = (await r.json()) as { fault?: unknown } | null;
+    return readFault(body?.fault);
+  } catch {
+    return null;
+  }
+}
 
 /** Split accumulated SSE text into complete lines, returning [lines, remainder]. */
 function takeLines(buf: string): [string[], string] {
@@ -118,6 +452,46 @@ function takeLines(buf: string): [string[], string] {
  * aborts, or the hard timeout elapses with no output. Throws only on a fetch/reader error that is NOT an
  * abort (the caller maps that to a visible message).
  */
+/** What a signal turn answers when it has nothing to say (friction 6; `core/agent/shared/marks.py`
+ *  QUIET_REPLY). The server's history already drops it; this keeps the LIVE stream from painting it. */
+export const QUIET_REPLY = "[vexa-quiet]";
+
+/** One turn's delta filter: a reply that is (or opens with) `QUIET_REPLY` shows nothing at all, and
+ *  the marker is stripped from any other reply. A tail that could still become the marker is held
+ *  until the next delta decides it; `flush` hands back whatever was held when the turn ends. */
+export function quietDeltas(): { push: (text: string) => string; flush: () => string } {
+  const marker = QUIET_REPLY.toLowerCase();
+  let held = "";
+  let decided = false;
+  let muted = false;
+  const strip = (s: string) => s.replace(/\[vexa-quiet\]/gi, "");
+  return {
+    push(text: string): string {
+      if (muted) return "";
+      let s = held + text;
+      held = "";
+      if (!decided) {
+        const lead = s.trimStart().toLowerCase();
+        if (!lead || (lead.length < marker.length && marker.startsWith(lead))) { held = s; return ""; }
+        if (lead.startsWith(marker)) { muted = true; return ""; }
+        decided = true;
+      }
+      s = strip(s);
+      const low = s.toLowerCase();
+      for (let k = Math.min(marker.length - 1, s.length); k > 0; k--) {
+        if (marker.startsWith(low.slice(s.length - k))) { held = s.slice(s.length - k); s = s.slice(0, s.length - k); break; }
+      }
+      return s;
+    },
+    flush(): string {
+      if (muted) return "";
+      const out = held;
+      held = "";
+      return out;
+    },
+  };
+}
+
 export async function streamChatTurn(
   req: ChatStreamRequest,
   cb: ChatStreamCallbacks,
@@ -130,13 +504,76 @@ export async function streamChatTurn(
   const backoffMs = opts.reconnectBackoffMs ?? DEFAULT_RECONNECT_BACKOFF_MS;
   const heartbeatMs = opts.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
   const idleReconnectMs = opts.idleReconnectMs ?? DEFAULT_IDLE_RECONNECT_MS;
+  const transientBudgetMs = opts.transientBudgetMs ?? DEFAULT_TRANSIENT_BUDGET_MS;
   const signal = opts.signal;
+  /** the transient fault the last attempt ended on, waiting for the outer loop to retry or report it */
+  let transient: { fault: Fault; waitMs: number } | null = null;
+  /** nothing of the turn has arrived yet — the only moment a fault is safe to retry */
+  const beforeTurn = () => !sawVisibleOutput && lastEventId === (opts.attachFrom ?? null);
 
   let sawVisibleOutput = false;
   let terminal = false;
-  let lastEventId: string | null = null;
+  const quiet = quietDeltas();
+  const flushQuiet = () => { const t = quiet.flush(); if (t) cb.onDelta(t); };
+  /** THE MESSAGE IS QUEUED behind this chat's own running turn (the meeting recap, a routine): the
+   *  server's sentence, held until the turn is accepted — the server runs it next, so the client
+   *  never retries (live app.dev 2026-10-15: three 409s while the recap ran). */
+  let queuedLabel: string | null = null;
+  const toolByCall = new Map<string, string>();
+  let lastEventId: string | null = opts.attachFrom ?? null;
   const turnId = mintTurnId();
   const startedAt = now();
+  // THE JOBS THIS CONNECTION STARTED (Vexa-ai/vexa#1584). A SET, not one id: a marked act spawns
+  // exactly one, but a turn may call `spawn_job` twice, and a second job nobody was watching would
+  // land its page with no line saying where it came from. It changes three things, and only for the
+  // connection that owns them: `turn-complete` no longer ends the turn while one is open (the job
+  // outlives its turn — `RedisStreamReader` makes the same exception with the same two lines), the
+  // hard cap does not apply (a job is allowed to take minutes; that is the point), and every event
+  // carrying a job id this connection did not start is skipped, because another turn's connection
+  // reads the same Stream and must never fold a foreign job's steps into its own.
+  const myJobs = new Set<string>();
+  let turnDone = false;
+  // THE TURNS THIS VIEW CARRIES (see `onTurn`). `ownTurns` is every turn routed to a bubble here,
+  // `openTurns` the ones whose `turn-complete` has not arrived, `routed` the one events go to now.
+  //
+  // The FIRST turn this view meets is its own, whatever the event — a fresh send's begins with its
+  // `turn-accepted`, an attach was opened to watch a turn already under way. A LATER turn is
+  // adopted only on its own `turn-accepted` (seen beginning here, so it is the next thing this chat
+  // asked) and only if `onTurn` says this view is the one to render it; anything else carrying a
+  // turn id this view does not render is skipped.
+  const ownTurns = new Set<string>();
+  const openTurns = new Set<string>();
+  const skippedTurns = new Set<string>();
+  let routed = "";
+  /** Is this event's turn one this view renders? Routes it, and adopts a newly begun turn. */
+  const routeTurn = (ev: ChatStreamEvent): boolean => {
+    const tid = typeof ev.turn_id === "string" ? ev.turn_id : "";
+    if (!tid) return true;                       // composed by the server, or an older worker: as before
+    if (skippedTurns.has(tid)) return false;
+    if (!ownTurns.has(tid)) {
+      const first = ownTurns.size === 0;
+      if (!first && ev.type !== "turn-accepted") return false;
+      if (!first) {
+        const mine = cb.onTurn ? cb.onTurn(tid, true) : false;
+        if (!mine) { skippedTurns.add(tid); return false; }
+      } else {
+        cb.onTurn?.(tid, false);
+      }
+      ownTurns.add(tid);
+      if (ev.type === "turn-accepted") openTurns.add(tid);
+      routed = tid;
+      return true;
+    }
+    if (tid !== routed) { routed = tid; cb.onTurn?.(tid, false); }
+    return true;
+  };
+  /** A turn's end is the VIEW's end only when no other turn routed here is still running. */
+  const endsView = (ev: ChatStreamEvent): boolean => {
+    const tid = typeof ev.turn_id === "string" ? ev.turn_id : "";
+    if (!tid) return true;
+    for (const t of openTurns) if (t !== tid) return false;
+    return true;
+  };
 
   cb.onStarting();
   cb.onStatus?.("connecting");
@@ -153,7 +590,9 @@ export async function streamChatTurn(
     let to: ReturnType<typeof setTimeout> | undefined;
     try {
       const guard = new Promise<"stalled">((resolve) => {
-        hb = setInterval(() => cb.onStatus?.(sawVisibleOutput ? "working" : "connecting"), heartbeatMs);
+        hb = setInterval(() => (queuedLabel
+          ? cb.onStatus?.("queued", queuedLabel)
+          : cb.onStatus?.(sawVisibleOutput ? "working" : "connecting")), heartbeatMs);
         to = setTimeout(() => resolve("stalled"), idleReconnectMs);
       });
       return await Promise.race([reader.read(), guard]);
@@ -163,15 +602,26 @@ export async function streamChatTurn(
     }
   };
 
-  const drainOnce = async (): Promise<"closed" | "terminal"> => {
+  const drainOnce = async (): Promise<"closed" | "terminal" | "transient"> => {
     // On a RECONNECT, Last-Event-ID makes agent-api re-attach to the SAME warm unit and resume from the
-    // cursor — NO second turn is dispatched. The first attempt sends no cursor (fresh dispatch).
+    // cursor — NO second turn is dispatched. The first attempt sends no cursor (fresh dispatch)…
+    // …UNLESS THIS IS AN ATTACH (Vexa-ai/vexa#1610), where the whole point is that no turn is
+    // dispatched: the submission is already on the server's inbox and this call is here to WATCH it
+    // run. `opts.attachFrom` seeds the cursor, so the very first request carries the header and the
+    // server takes its resume branch.
     let r: Response;
     try {
       r = await fetchImpl("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(lastEventId ? { "Last-Event-ID": lastEventId } : {}) },
-        body: JSON.stringify({ prompt: req.prompt, session: req.session, active: req.active, context: req.context, turn_id: turnId }),
+        // `scaffold_id` is OMITTED when absent rather than sent as null: agent-api's ChatBody is
+        // `extra="forbid"`-adjacent about shapes, and an explicit null is a different statement
+        // from "this turn did not come from an arrival".
+        body: JSON.stringify({ prompt: req.prompt, session: req.session, active: req.active, context: req.context, turn_id: turnId,
+          ...(req.scaffold_id ? { scaffold_id: req.scaffold_id } : {}),
+          ...(req.intent ? { intent: req.intent } : {}),
+          ...(req.mentions && req.mentions.length ? { mentions: req.mentions } : {}),
+          ...(req.to_agent ? { to_agent: true } : {}) }),
         signal,
       });
     } catch (e) {
@@ -179,9 +629,35 @@ export async function streamChatTurn(
       return "closed";                  // the POST itself failed (a network blip) → resume from the cursor
     }
     if (!r.ok) {
+      const waitMs = retryAfterMs(typeof r.headers?.get === "function" ? r.headers.get("retry-after") : null);
+      // A 5xx THAT NAMES ITS FAULT is not transient by guessing — the server said what failed, and
+      // retrying for the whole hard cap would only hide that sentence behind a spinner (P18). When
+      // what it names IS transient, and the turn has not begun, it is retried for a bounded while.
+      const typed = r.status >= 500 && cb.onFault ? await bodyFault(r) : null;
+      if (typed && isTransientFault(typed) && beforeTurn()) {
+        transient = { fault: typed, waitMs };
+        return "transient";
+      }
+      // An edge 429 or a bare 502/503/504 — nothing typed, so nothing got as far as agent-api.
+      if (!typed && beforeTurn() && (r.status === 429 || r.status === 502 || r.status === 503 || r.status === 504)) {
+        transient = { fault: edgeFault(r.status), waitMs };
+        return "transient";
+      }
+      if (typed) {
+        terminal = true;
+        cb.onFault?.(typed);
+        return "terminal";
+      }
       // 4xx is a real client/terminal error — surface it, don't retry for the whole hard cap. A 5xx
       // (transient gateway/upstream) is resumable → reconnect from the cursor.
-      if (r.status < 500) { terminal = true; cb.onError(`Chat request failed (${r.status})`); return "terminal"; }
+      if (r.status < 500) {
+        terminal = true;
+        // An auth-shaped refusal is the SESSION, not this turn: tell the watcher and say so plainly
+        // instead of leaving a status code in the transcript.
+        noteAuthFailure(r.status, "/api/chat");
+        cb.onError(isAuthStatus(r.status) ? SESSION_ENDED_HEADLINE : `Chat request failed (${r.status})`);
+        return "terminal";
+      }
       return "closed";
     }
     const reader = r.body?.getReader();
@@ -217,39 +693,266 @@ export async function streamChatTurn(
         if (!line.startsWith("data: ")) continue;
         let ev: ChatStreamEvent;
         try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+        // ── the job lane, ahead of the turn's switch ──────────────────────────────────────────
+        // A job's events never reach the turn's handlers. They would otherwise land on an agent
+        // bubble the person finished reading a minute ago: its step count would climb by itself and
+        // its `commit` would end this read while the job was still writing.
+        const jid = typeof ev.job_id === "string" ? ev.job_id : "";
+        if (ev.type === "job-started") {
+          // …AND ONLY A JOB THIS CHAT OWNS IS EVER ADOPTED (Vexa-ai/vexa#1613). Adoption is the
+          // one decision that matters: every later event is gated on `myJobs`, so a job never
+          // taken here can never render, step a row, or post a line in this conversation.
+          //
+          // A job ALREADY in the set was QUEUED here a moment ago (Vexa-ai/vexa#1610) and is now
+          // starting: it was adopted then, by the same rule, so the callback fires again and the
+          // row it owns learns it is running rather than a second row appearing beside it.
+          // Idempotent on both sides — `startJob` ignores an id it already has, and `promoteJob`
+          // only clears the queued flag.
+          if (jid && (myJobs.has(jid) || ownsJob(ev, req.session))) {
+            myJobs.add(jid);
+            sawVisibleOutput = true;
+            cb.onJobStarted?.({ jobId: jid, kind: ev.kind ?? "", target: ev.target ?? "", line: ev.line ?? "" });
+          }
+          continue;
+        }
+        // QUEUED, NOT REFUSED. The act is this connection's from here: it owns the row and holds its
+        // view open, exactly as it does for one that started immediately — the whole point being
+        // that the person still gets the start, the steps and the landing line.
+        //
+        // `job-collapsed` deliberately has NO branch: nothing new is running, so nothing new is
+        // watched, and the line saying where the press went already arrives as this turn's own
+        // `message-delta` (the worker composes it once, in `run_message`).
+        if (ev.type === "job-queued") {
+          // …ADOPTED BY THE SAME RULE AS `job-started` (Vexa-ai/vexa#1613): a queued act is a job
+          // this connection is going to render, so a job belonging to another chat must not be
+          // taken here either.
+          if (jid && !myJobs.has(jid) && ownsJob(ev, req.session)) {
+            myJobs.add(jid);
+            sawVisibleOutput = true;
+            cb.onJobQueued?.({ jobId: jid, kind: ev.kind ?? "", target: ev.target ?? "",
+                               line: ev.line ?? "", ahead: typeof ev.ahead === "number" ? ev.ahead : 1 });
+          }
+          continue;
+        }
+        if (jid) {
+          if (!myJobs.has(jid)) continue;           // somebody else's job on the shared Stream
+          if (ev.type === "job-done" || ev.type === "job-failed") {
+            myJobs.delete(jid);
+            if (turnDone && myJobs.size === 0) terminal = true;
+            cb.onJobEnd?.({ jobId: jid, ok: ev.type === "job-done", line: ev.line ?? "" });
+          } else if (ev.type === "tool-call") {
+            cb.onJobStep?.(jid, ev.tool ?? "tool");
+          } else if (ev.type === "job-progress") {
+            cb.onJobProgress?.(jid, ev.line ?? "");
+          } else if (ev.type === "commit") {
+            // The one event the job shares with a turn verbatim: the panel re-reads the open
+            // document on a commit, which is what makes the page the job wrote appear by itself.
+            cb.onCommit(ev.sha, typeof ev.workspace === "string" ? ev.workspace : undefined);
+          } else if (ev.type === "artifact" && ev.path) {
+            cb.onArtifact?.({ workspace: ev.workspace ?? "", path: ev.path, focus: ev.focus === true, pin: ev.pin === true });
+          } else if (ev.type === "open" && ev.path) {
+            // A job may open a page too — it is the same ask, made by the same person, and the
+            // only thing the job lane changes about it is that this connection has to recognise
+            // the job as its own before it acts on it.
+            cb.onOpen?.({ workspace: ev.workspace ?? "", path: ev.path, target: ev.target ?? "" });
+          } else if (ev.type === "focus" && ev.workspace) {
+            // …and a job may make a workspace: Create runs as one. The chat it was asked in is
+            // still the chat that made the place.
+            cb.onFocusWorkspace?.({ workspace: ev.workspace, name: ev.name ?? "" });
+          }
+          continue;
+        }
+        if (!routeTurn(ev)) continue;
         switch (ev.type) {
           // The worker's liveness ack — emitted the moment a turn is picked up (warm or cold), long
           // before the first model token. Flips the heartbeat "Starting agent" → "Working"
           // honestly: the agent IS working, it just hasn't produced output yet.
+          case "session-note":
+            sawVisibleOutput = true;
+            cb.onNote?.(ev as { seq?: number; author?: string; text?: string });
+            break;
+          case "queued":
+            queuedLabel = typeof ev.message === "string" && ev.message ? ev.message : "Your message runs next.";
+            cb.onStatus?.("queued", queuedLabel);
+            break;
           case "turn-accepted":
+            queuedLabel = null;
             sawVisibleOutput = true;
             cb.onStatus?.("working");
+            cb.onAccepted?.();
             break;
           case "message-delta":
-            if (ev.text) { sawVisibleOutput = true; cb.onDelta(ev.text); }
+            if (ev.text) { sawVisibleOutput = true; const shown = quiet.push(ev.text); if (shown) cb.onDelta(shown); }
             break;
           case "tool-call":
-            sawVisibleOutput = true; cb.onTool(ev.tool ?? "tool");
+            if (ev.callId && ev.tool) toolByCall.set(ev.callId, ev.tool);
+            sawVisibleOutput = true; cb.onTool(ev.tool ?? "tool", (ev as { args?: Record<string, unknown> }).args, ev.callId);
+            break;
+          case "tool-result": {
+            const tool = ev.callId ? toolByCall.get(ev.callId) : undefined;
+            if (tool) {
+              const raw = ev as { outcome?: unknown; held?: unknown };
+              const outcome = raw.outcome === "held" || raw.outcome === "refused" || raw.outcome === "failed" ? raw.outcome : undefined;
+              const held = raw.held && typeof raw.held === "object" && typeof (raw.held as HeldWrite).code === "string" ? raw.held as HeldWrite : undefined;
+              cb.onToolResult?.(tool, { ok: ev.ok !== false, result: ev.result ?? ev.summary, callId: ev.callId,
+                                        ...(outcome ? { outcome } : {}), ...(held ? { held } : {}) });
+            }
+            // THE HEADER'S SCOPE LINE follows the agent (Vexa-ai/vexa#1783): a state, target or
+            // defaults verb that answered changes what the line says — it re-reads the server.
+            if (tool && ev.ok !== false && isScopeTool(tool)) notifyScope();
+            break;
+          }
+          // A SUCCESSFUL WRITE TO A MOUNTED WORKSPACE (F41). The founder created a shared workspace,
+          // the agent wrote its README, and the right panel stayed on `_global/README.md` — the one
+          // document the turn had just made was the one thing not on screen. The event is
+          // advisory-only here: this reader forwards it and the shell decides, because the tab set
+          // belongs to the CHAT RECORD (decision 18) and this file owns no state at all.
+          // A FILE WRITE THE PRIVACY HOLD KEPT BACK at the turn's commit (D6). Its tool call said ok;
+          // without this the step under the answer still read "Wrote" (held-label-rooms-1018).
+          case "write-withheld": {
+            const w = ev as { workspace?: unknown; paths?: unknown; code?: unknown; readers?: unknown; sources?: unknown };
+            const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : []);
+            cb.onWithheld?.({ workspace: String(w.workspace ?? ""), paths: list(w.paths),
+                              ...(typeof w.code === "string" && w.code ? { code: w.code } : {}),
+                              readers: list(w.readers), sources: list(w.sources) });
+            break;
+          }
+          case "artifact":
+            if (ev.path) cb.onArtifact?.({ workspace: ev.workspace ?? "", path: ev.path, focus: ev.focus === true, pin: ev.pin === true });
+            break;
+          // SOMEBODY ASKED TO SEE SOMETHING (Vexa-ai/vexa#1586). The founder typed "open meeting
+          // transcript"; the agent read the transcript and described it, because describing was
+          // the only move it had. `open_page` is the move, and this is the half that honours it.
+          //
+          // Emitted only on a tool that ANSWERED yes — "no transcript for this meeting" comes back
+          // to the model as a refusal and paints nothing here, so a turn can never say it opened
+          // something the panel did not show. Forwarded like every other panel event: this reader
+          // owns no state and the shell decides, because the strip belongs to the chat record.
+          case "open":
+            if (ev.path) cb.onOpen?.({ workspace: ev.workspace ?? "", path: ev.path, target: ev.target ?? "" });
+            break;
+          // A WORKSPACE THE TURN MADE (Vexa-ai/vexa#1603). Emitted by the harness off a successful
+          // `workspace_new` and nothing else, so a chat can never take the focus of a workspace it
+          // merely read. Forwarded like every other surface event: the focus set is the chat
+          // record's and this reader owns none of it.
+          case "focus":
+            if (ev.workspace) cb.onFocusWorkspace?.({ workspace: ev.workspace, name: ev.name ?? "" });
+            notifyScope();
+            break;
+          // A CALL THE AGENT STARTED FOR THIS PERSON (call-person-autojoin). Emitted by the harness
+          // off a successful `call_person` and nothing else; forwarded like every panel event.
+          case "call": {
+            const placed = placedCall(ev);
+            if (placed) cb.onCall?.(placed);
+            break;
+          }
+          // THE AGENT ASKS, THE PERSON DECIDES (UI decision 6b). Nothing moves here.
+          case "propose-target":
+            if (ev.workspace) cb.onProposeTarget?.({
+              workspace: ev.workspace, name: ev.name ?? ev.workspace, current: ev.current ?? "",
+              currentName: ev.current_name ?? "", reason: ev.reason ?? "" });
+            break;
+          // THE TRANSCRIPT'S CHIPS (decision 35). Emitted by the harness off a successful
+          // `transcript_terms` PUBLISH — the agent's second call, the one carrying `keep`. A bare
+          // look-up emits nothing, so a turn that read the room without choosing anything paints
+          // nothing on the person's screen.
+          //
+          // NOT counted as visible output: a Highlight turn is machinery and produces no prose, and
+          // treating this as "the agent said something" would keep the "starting agent…" affordance
+          // honest for the wrong turn.
+          case "terms":
+            if (ev.meeting && Array.isArray(ev.terms) && ev.terms.length) {
+              cb.onTerms?.({ meeting: ev.meeting, cursor: ev.cursor ?? "", terms: ev.terms });
+            }
+            break;
+          case "sources":
+            if (Array.isArray(ev.items)) cb.onSources?.(ev.items);
             break;
           case "commit":
-            terminal = true; cb.onCommit(ev.sha);
+            if (endsView(ev)) terminal = true;
+            cb.onCommit(ev.sha, typeof ev.workspace === "string" ? ev.workspace : undefined);
             break;
           case "rejected":
-            terminal = true; cb.onRejected();
+            if (endsView(ev)) terminal = true;
+            cb.onRejected();
             break;
           case "turn-complete":
-            terminal = true;
+            flushQuiet();
+            // …unless this turn spawned a job. The turn IS over — that is why the job exists — but
+            // the connection is now the job's, and calling it finished here would give up on
+            // everything it has left to say. `RedisStreamReader` makes the same exception, in the
+            // same two lines, on the server side.
+            turnDone = true;
+            if (typeof ev.steps === "number") cb.onSteps?.(ev.steps);
+            // A `turn-complete` naming no turn (server-composed, or an older worker) ends them all.
+            if (typeof ev.turn_id === "string" && ev.turn_id) openTurns.delete(ev.turn_id);
+            else openTurns.clear();
+            if (myJobs.size === 0 && openTurns.size === 0) terminal = true;
             break;
-          case "done":
-            terminal = true;
-            if (ev.ok === false) { sawVisibleOutput = true; cb.onModelFailure(ev.reply); }
+          case "done": {
+            flushQuiet();
+            if (endsView(ev)) terminal = true;
+            if (typeof ev.compacted === "number" && ev.compacted > 0) cb.onCompacted?.(ev.compacted);
+            // A FAILED TURN THAT NAMES ITS FAULT (P18) — the provider's 402, its refused key. It
+            // is rendered as what it is, not as "Model inference failed: <the provider's JSON>".
+            const doneFault = ev.ok === false && cb.onFault ? readFault(ev.fault) : null;
+            if (doneFault) {
+              if (typeof ev.steps === "number") cb.onSteps?.(ev.steps);
+              sawVisibleOutput = true;
+              cb.onFault?.(doneFault, ev.reply);
+              break;
+            }
+            // `reason` distinguishes "the model failed" from "the turn stopped early" (F89). They
+            // read identically in the old shape — both arrive as ok=false — and telling a person
+            // "Model inference failed" when the model worked and the BUDGET ran out sends them
+            // looking at the wrong thing.
+            const reason = typeof ev.reason === "string" ? ev.reason : "";
+            // THE SERVER'S OWN COUNT, on every done (Vexa-ai/vexa#1622) — including the ones that
+            // finished, because a step count that only appears when something went wrong is a
+            // count nobody can compare against.
+            if (typeof ev.steps === "number") cb.onSteps?.(ev.steps);
+            if (reason && cb.onTruncated) {
+              sawVisibleOutput = true;
+              // The act is passed on ONLY when it is whole. A half-record — a label with no
+              // instruction — would draw a button that posts nothing, which is worse than the
+              // silent stop it replaces.
+              const act = ev.act && ev.act.label && ev.act.instruction
+                ? { label: ev.act.label, instruction: ev.act.instruction } : undefined;
+              cb.onTruncated(reason, ev.reply, { steps: ev.steps, budget: ev.budget, act });
+            } else if (ev.ok === false) { sawVisibleOutput = true; cb.onModelFailure(ev.reply); }
             break;
+          }
           // A hard upstream error the proxy folded into the stream: the turn genuinely failed — surface
           // it (do NOT treat as a cold-start close to resume).
+          //
+          // ⚠ /api/chat answers 200 and folds the gateway's refusal into THIS event, so a revoked
+          // session arrives here — carrying `status: 401` and, as `message`, the gateway's raw JSON
+          // body. That body is payload-shaped, so the presenter could not read it as prose and the
+          // turn died under "Something went wrong — details are in the browser console." That was
+          // the founder's whole symptom. An auth status is now read off the event, reported to the
+          // session watcher, and rendered as the session sentence.
           case "error":
-          case "stream-error":
-            terminal = true; sawVisibleOutput = true; cb.onError(ev.message || "Chat request failed.");
+          case "stream-error": {
+            // A MOMENT'S UNAVAILABILITY before the turn began (the gateway's auth 503, folded into
+            // this event by /api/chat) is retried, not shown — see `transientRetry.ts` and the note above `edgeFault`.
+            const early = cb.onFault && beforeTurn() ? readFault(ev.fault) : null;
+            const busy = !early && cb.onFault && beforeTurn() && ev.status === 429 ? edgeFault(429) : null;
+            if ((early && isTransientFault(early)) || busy) {
+              transient = { fault: (busy ?? early) as Fault, waitMs: retryAfterMs(ev.retry_after) };
+              try { await reader.cancel("transient"); } catch { /* ignore */ }
+              return "transient";
+            }
+            terminal = true;
+            sawVisibleOutput = true;
+            const authFailed = typeof ev.status === "number" && isAuthStatus(ev.status);
+            // WHO FAILED, when the server could say (P18): the runtime that would not start the
+            // agent, the proxy that got no answer. Never a bare "Internal Server Error".
+            const errFault = !authFailed && cb.onFault ? readFault(ev.fault) : null;
+            if (errFault) { cb.onFault?.(errFault); break; }
+            if (authFailed) noteAuthFailure(ev.status as number, "/api/chat");
+            cb.onError(authFailed ? SESSION_ENDED_HEADLINE : (ev.message || "Chat request failed."));
             break;
+          }
           default:
             break;
         }
@@ -258,15 +961,37 @@ export async function streamChatTurn(
     }
   };
 
+  let transientAttempt = 0;
+  let transientSpentMs = 0;
   while (!signal.aborted) {
     const outcome = await drainOnce();
+    if (outcome === "transient" && transient) {
+      const { fault, waitMs } = transient;
+      transient = null;
+      const wait = transientWait(transientAttempt, waitMs);
+      if (transientSpentMs + wait > transientBudgetMs) {
+        // Out of patience: ONE report, as the fault it was — the renderer says it calmly.
+        terminal = true;
+        sawVisibleOutput = true;
+        if (cb.onFault) cb.onFault(fault); else cb.onError(faultLine(fault));
+        break;
+      }
+      transientSpentMs += wait;
+      transientAttempt += 1;
+      cb.onStatus?.("connecting");   // the turn is still on its way — it never looks failed meanwhile
+      await sleep(wait);
+      continue;
+    }
     if (outcome === "terminal" || terminal) break;
-    if (now() - startedAt > hardTimeoutMs) break;
+    // The hard cap answers "did the worker ever come back". A job is ALLOWED to take minutes — that
+    // is what it is for — so while one is running the cap is not the question and giving up on it
+    // would abandon work that is still happening.
+    if (myJobs.size === 0 && now() - startedAt > hardTimeoutMs) break;
     cb.onStarting();  // still waiting on the worker — keep the pane honest between attempts
     cb.onStatus?.("reconnecting");
     await sleep(backoffMs);
   }
 
   cb.onStatus?.(null);  // turn ended (or gave up) — drop the live indicator
-  return { sawVisibleOutput, terminal, aborted: signal.aborted };
+  return { sawVisibleOutput, terminal, aborted: signal.aborted, cursor: lastEventId };
 }

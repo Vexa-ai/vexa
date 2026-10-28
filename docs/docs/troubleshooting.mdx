@@ -26,6 +26,14 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
   it. Admit it like any guest. A run that ended in the lobby says so:
   [`awaiting_admission_timeout` or `awaiting_admission_rejected`](/troubleshooting/completion-reasons),
   and `automatic_leave.max_wait_for_admission` sets how long it waits.
+- **Teams bot never asks to join (`teams_prejoin_blocked`)** — Teams refuses a guest name that
+  contains anything other than letters, numbers, spaces and `- ' . _ @`, such as parentheses or a
+  colon. Teams then keeps **Join now** disabled, so no host sees a request to admit the bot. The run
+  ends `join_failure`, and its reason text (`data.reason`) starts with `teams_prejoin_blocked`, quotes
+  the rule Teams showed and lists the characters it refused. Rename the bot: see
+  [Bot participant name](/configuration#bot-participant-name). How the check works:
+  [A name Teams refuses](/troubleshooting/completion-reasons#a-name-teams-refuses-teams_prejoin_blocked). Older bots reported this case as
+  waiting in the lobby until `max_wait_for_admission` ran out.
 - **Concurrency cap** — a user can run at most `max_concurrent_bots` bots at once (set when the user was
   created). Stop an existing bot or raise the cap.
 
@@ -38,8 +46,17 @@ Applies only to deployments with `BOT_AUTHENTICATED=true` (see
   `BOT_S3_ENDPOINT`, bad scoped credentials, or the `aws` CLI missing from a custom image). The bot
   log names the step and endpoint; the meeting fails rather than joining signed-out. Fix the config
   and respawn.
-- **503 on `POST /bots`** — `BOT_AUTHENTICATED` is set but `BOT_USERDATA_S3_PATH` /
-  `BOT_S3_ENDPOINT` / `BOT_S3_BUCKET` are incomplete. The error names what is missing.
+- **meeting-api refuses to boot (or 503 on `POST /bots`)** — `BOT_AUTHENTICATED` is set but
+  `BOT_USERDATA_S3_PATH` / `BOT_S3_ENDPOINT` / `BOT_S3_BUCKET` are incomplete, or half of `BOT_S3_*`
+  equals the storage's root pair or `S3_*`. The error names what is missing or which variables match.
+- **`make login` refuses before opening the browser** — set `LOGIN_S3_ACCESS_KEY` /
+  `LOGIN_S3_SECRET_KEY` to a pair that can write the userdata prefix (on Compose, `.env`'s
+  `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`); the bots' `BOT_S3_*` pair is read-only.
+- **`session write-back failed` in the bot log** — `meeting-api` refused or could not store the
+  rotated session: 403 when the bot is no longer the live authenticated bot (a later spawn
+  superseded it, or its meeting ended more than ten minutes earlier), 422 when the profile held a
+  file outside the session profile, 502 when meeting-api's own S3 credentials cannot write
+  `BOT_S3_BUCKET`. The stored session stays at the last good write.
 - **409 "authenticated session in use"** — one stored session runs one bot at a time; the message
   names the meeting holding it. Wait for it to finish, stop it, or provision another identity.
 - **The session decayed (signed-out on join)** — re-provision with `make login`; the next spawn
@@ -136,6 +153,87 @@ The bot is capturing audio, but transcription isn't configured — or the bot wa
 - A stale bot key shows up as `native_resolve:{ok:false,kind:"unauthorized"}` on
   `GET /api/meeting/relay-health` rather than as silent dead air.
 
+## Transcript covers only part of the meeting
+
+The bot was in the meeting and some lines arrived, but long stretches of speech are missing. The
+usual cause is a slow transcription backend: a remote STT can take 15–30 s to answer a few seconds
+of audio.
+
+- Read the bot's `[COVERAGE]` line (written every minute and when the bot leaves):
+  `captured=…s submitted=…s transcribed=…s (…% of captured) no_speech=…s short=…s dropped=…s`.
+  `transcribed` close to `captured` means nothing was lost. `no_speech` is silence or audio the STT
+  returned nothing for. `short` is whole turns under a second that were not sent (see
+  `BOT_SPEAKER_MIN_FINAL_AUDIO_SEC`). Any `dropped` seconds also appear as an `[AUDIO-DROPPED]` line
+  naming the reason.
+- `[TranscriptionClient] timeout (attempt n/4)` lines mean requests are outliving
+  `BOT_STT_TIMEOUT_SEC` (default 90 s). Raise it, or move to a faster backend. Requests that answer
+  within it are waited for, however long they take.
+- Repeated `[SpeakerStreams] [FILTERED] Hallucination … "Thank you."` lines on short windows are the
+  STT answering near-silence. They are filtered out and are not missing speech.
+- `[TranscriptionClient] [STT-OVERLOAD]` and `[SttGate] [BREAKER-OPEN]` lines mean the transcription
+  service answered 429, 503 or a 5xx relaying a rate limit. The bot pauses all its requests and sends
+  them again in order when the service answers; nothing is lost unless a speaker's held audio passes
+  300 s, which logs `[AUDIO-DROPPED]` with the missing time range.
+
+### How it works
+
+Each speaker channel turn has its own audio buffer in the bot (`SpeakerStreamManager`, the Google
+Meet and Zoom lane). The buffer is the only owner of that audio until it has been transcribed. One
+request per buffer is in flight at a time. While it is in flight, new audio keeps accumulating in
+the buffer and rides the next request, so a slow STT makes windows longer instead of losing audio.
+
+- **Turn close.** The buffer's last transcript is published only if it covers the buffered audio
+  (within 0.5 s). Otherwise the whole window is sent as a final request. If a request is still in
+  flight, the final request goes out when that one answers. The closed turn is freed only after its
+  final answer arrives, capped at 10 minutes.
+- **Input gap.** When frames resume after more than 2 s, the buffered stretch is detached under its
+  own request route, which may already be in flight. It finishes its final request, and its answer
+  cannot land on the new stretch. Up to 4 detached stretches per speaker can be finishing at once.
+  After that the live window is extended instead.
+- **Hard cap.** At `BOT_SPEAKER_MAX_BUFFER_SEC` (30 s) with no covering transcript, the window up to
+  its quietest recent frame is sent as a final request, and the rest stays buffered.
+- **Bound.** Audio held behind a request that never answers is capped at 300 s per speaker. Past the
+  cap, new frames are dropped and counted.
+- **Overload.** All of a bot's STT requests pass one gate: at most 8 in flight, released in arrival
+  order. An overload answer (429, 503, or a 5xx whose body relays a rate limit or saturation) pauses
+  every request of that bot for the service's `Retry-After` (at most 120 s), or else a jittered
+  backoff from 2 s up to 30 s. After 3 overload answers in a row one probe goes out, and the rest
+  follow when it succeeds. While the gate holds requests the lane sends no window a second time and
+  no pipelined draft, and a request's stall clock starts when the hold ends. A slow (not overloaded)
+  request gets at most one duplicate beside it. Audio dropped past the 300 s bound is recorded as a
+  missing range (speaker, start, end, reason) and logged with its ISO times.
+- **Retries.** A timed-out or failed request is retried with the same window (up to 4 attempts).
+  The caller receives one answer, so the same audio is never transcribed twice. If the final window
+  still fails, its seconds are counted as dropped.
+
+Configuration: `BOT_STT_TIMEOUT_SEC`, `BOT_SPEAKER_MIN_FINAL_AUDIO_SEC` and the other
+`BOT_SPEAKER_*` keys ([Configuration](/configuration#transcription-stt)). The runtime forwards them
+to every spawned bot.
+
+### Why it complies
+
+- **P18, fail loud and attributed.** Every second of captured audio ends in exactly one counted
+  outcome, and a loss is an `error`-level `[AUDIO-DROPPED]` line with its seconds and reason. STT
+  faults still reach the host through `onError` as typed `TranscriptionError`s. Gate: the
+  `@vexa/gmeet-pipeline` test suite (`slow-stt`, `fault-surfacing`, `count-channelswitch`), which
+  runs in `gate:node`.
+- **Back-pressure, not retry storms.** The STT's overload answer is honoured once per bot, not per
+  request, and a held request is not counted as stalled. Tests: `@vexa/transcribe-whisper`
+  `overload.test.ts` (Retry-After, backoff, breaker, bound in flight) and `@vexa/gmeet-pipeline`
+  `stt-overload.test.ts` ("no window is sent again while the client is backing off", "requests in
+  flight never exceed the gate's bound", "a hung request gets one duplicate beside it, not a chain of
+  them", "the loss line names the missing time range"). Ungated beyond the package suites: reviewed.
+- **P7, configuration by environment.** The new keys are declared in the runtime's `config.v1`
+  contract and forwarded the same way as the existing `BOT_SPEAKER_*` keys. A timeout under 20 s is
+  refused with a warning, and the default stays in force. Gates: `gate:config-contract` and the bot
+  `config` test.
+- **Data ownership.** Audio never leaves the bot except in the STT request it was already sent in.
+  Nothing new is stored or transmitted. The coverage line carries durations only, never text or
+  audio.
+- **Security model.** Unchanged. A customer-owned STT endpoint still goes through the outbound URL
+  guard on every request, retries included (`url-guard` tests). The bot's STT token is read from
+  the invocation and is never logged.
+
 ## What terminal errors look like — and where the technical details live
 
 Terminal error surfaces speak user vocabulary ("Couldn't reach the Vexa server — check that the
@@ -173,10 +271,65 @@ retry budget on the first emit (≤ ~15s) already rides out brief transient prog
 | `401 Invalid API key` | unknown or revoked key | mint a fresh one ([Authentication](/authentication)) |
 | `403 Insufficient scope for this endpoint` | key lacks the route's scope | mint with the right `scopes=` |
 | `403 Invalid or missing admin token.` on `/admin/*` | missing or wrong `ADMIN_TOKEN` | use the `X-Admin-API-Key` matching your `ADMIN_TOKEN` |
+| `503 Authentication temporarily unavailable, retry` | the gateway could not get an answer from admin-api about the key; the key was **not** rejected | retry after the `Retry-After` seconds; if it persists, check admin-api ([below](#503-authentication-temporarily-unavailable)) |
 
 **Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
 account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
 required. Self-hosted: `make all` prints a key when the stack comes up.
+
+### 503 Authentication temporarily unavailable
+
+The gateway checks every API key with admin-api before forwarding the request. A `503` with
+`Authentication temporarily unavailable, retry` (and `Retry-After: 1`) means no verdict was reached on
+the key: admin-api did not answer, answered with a server error, or answered something that is not a
+verdict. The key is not invalid; send the request again. On the live WebSocket the same case sends
+an `auth_unavailable` error frame and closes with code `4503`, not `4401`.
+
+A short admin-api restart does not produce it: when the gateway cannot connect to admin-api at all,
+it tries again after 0.5 s and then 1.5 s before answering `503`. If you see it repeatedly, admin-api
+is down or overloaded: check that its container or pod is running and ready, and look for
+`auth_infra_unavailable` lines in the gateway log, which carry the reason.
+
+#### How it works
+
+1. For each credential, the gateway's admin-api adapter (`AdminApiAuthorizer.resolve`,
+   `core/gateway/services/gateway/src/gateway/adapters.py`) POSTs it to admin-api `/internal/validate`
+   with a 5-second budget per attempt.
+2. A `200` with a readable body admits the key. A `4xx` means the key is invalid, and the gateway
+   answers `401`.
+3. A hop that could not connect (`ConnectError`, `ConnectTimeout`) never reached admin-api, so it is
+   sent again: at most three attempts, after waits of 0.5 s and 1.5 s
+   (`VALIDATE_CONNECT_RETRY_BACKOFF`). A refused connection costs about 2 s in all; a connect that
+   times out can use its 5-second budget on each attempt.
+4. Every other failure is answered at once, without a retry: a read timeout (admin-api has the
+   request and is slow), a pool timeout (this gateway's own connection pool is full), a `5xx`, a
+   redirect, or an unreadable `200`. These, and the last failed connect, answer `503`.
+
+The waits are fixed in code; there is nothing to configure. admin-api remains the only service that
+decides whether a key is valid; the gateway only asks.
+
+#### Why it complies
+
+| Rule | How | Gate |
+|---|---|---|
+| P18 fail loud | No verdict is a `503` with `Retry-After`, never a `401` that blames the key, and it is logged as `auth_infra_unavailable` with the reason. | `gate:python` (`core/gateway/services/gateway/tests/test_adapters_resolve.py`) |
+| P20 authorize every access | The gateway stays fail-closed: no path admits a key without a `200` from `/internal/validate`. A retry repeats only a request admin-api never received, so no verdict is asked for twice. | `gate:python` (tests below) |
+| P5 adapt at the boundary | The retry lives in the gateway's admin-api adapter; nothing else in the gateway changed. | ungated: reviewed |
+
+**Security.** The retry adds no way in: each attempt carries the same key and headers to the same
+admin-api address, and only an answer from admin-api can admit a key. A slow admin-api gets no
+extra load, because a request it already received is never repeated. Tests, in
+`core/gateway/services/gateway/tests/test_adapters_resolve.py`:
+
+| Protection | Tests |
+|---|---|
+| No verdict is never an admission or a `401` | `test_resolve_transport_failure_raises_unavailable`, `test_resolve_server_error_raises_unavailable`, `test_resolve_redirect_is_no_verdict_unavailable`, `test_resolve_unparseable_200_body_raises_unavailable` |
+| Only a `4xx` from admin-api rejects a key | `test_resolve_client_error_is_invalid_key_none` |
+| Only a hop that never connected is retried, and only twice | `test_a_connect_failure_that_recovers_resolves_the_key`, `test_a_persistent_connect_failure_still_answers_unavailable`, `test_a_hop_that_reached_admin_api_or_hit_this_edges_pool_is_not_retried` |
+
+The gateway's own notes are in its
+[README](https://github.com/Vexa-ai/vexa/blob/main/core/gateway/services/gateway/README.md); the
+identity check itself is described in [Identity & trust](/architecture/identity-and-trust#admission-at-identity).
 
 ## Agent chat says no model credentials are configured
 
@@ -185,7 +338,7 @@ agent cannot run…"* — and no turn runs. This is the credential preflight: th
 model credential and your user has no custom endpoint, so a worker could only fail. Fix either side:
 
 - **Deployment-wide** — set ONE of `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`,
-  `ANTHROPIC_AUTH_TOKEN`, `VEXA_LLM_API_KEY` or `HOST_CLAUDE_CREDENTIALS` in `deploy/compose/.env`,
+  `ANTHROPIC_AUTH_TOKEN` or `HOST_CLAUDE_CREDENTIALS` in `deploy/compose/.env`,
   then `make all` (the frame names exactly the keys it found unset).
 - **Per-user** — add a custom endpoint under **Settings → Models** in the Terminal (a `custom`
   config needs its `base_url`; the API key is optional for keyless local gateways).
@@ -196,12 +349,32 @@ dispatch went stale — on macOS typically the Keychain-exported `HOST_CLAUDE_CR
 (install the [sync daemon](/configuration#claude-subscription-credentials-host_claude_credentials));
 otherwise refresh/rotate the key. The raw provider text rides in the frame's `detail` field.
 
+## Agent chat says the model provider is out of credits
+
+When the model provider refuses a turn for lack of credit, the chat ends the turn with one block:
+
+- the headline `Model provider · out of credits (402)` (the status is the one the provider sent;
+  some providers report an empty balance as `400` or `429`, and their wording still marks it out
+  of credits);
+- the provider's own explanation, on one line, with anything key-shaped redacted;
+- a remedy line: `Add credits at <provider>, or choose another model under Settings → Models.`
+
+When the provider says the balance covers a smaller answer ("can only afford", "fewer
+max_tokens"), the remedy also names the output cap: lower `VEXA_AGENT_MAX_OUTPUT_TOKENS` (see
+[Configuration](/configuration)). The provider's raw `API Error` text does not appear as the agent's
+reply, and no second "Model inference failed" line follows.
+
+Links in the provider's message, such as its key-management page, are for the operator. They are
+left out of the chat and written to the agent worker's log on the `model provider fault:` line,
+with the provider, kind, status and model.
+
 ## Containers don't spawn (self-host)
 
 The [runtime](/core/runtime) spawns bot and agent containers via the Docker socket.
 
-- The runtime needs access to the host Docker socket and the right group — set `DOCKER_GID` to the host's
-  docker group id.
+- The runtime runs as uid 10001 and reaches the host Docker socket through the socket's group,
+  `DOCKER_GID`. `mint-dev-env.sh` sets it on Linux; check it equals `stat -c %g /var/run/docker.sock`.
+  A `permission denied` on the socket in the runtime's log means the group is wrong.
 - The meeting bot (`BROWSER_IMAGE`) is **built from source** (`make bot`) and the runtime spawns it
   **without pulling** — it must exist locally first. Confirm it's there (`docker image inspect "$BROWSER_IMAGE"`);
   the published `vexaai/vexa-bot:dev` is the old 0.10 line and is incompatible. `AGENT_IMAGE` is built by

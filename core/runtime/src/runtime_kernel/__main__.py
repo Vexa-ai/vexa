@@ -92,7 +92,7 @@ def _start_ticker(scheduler) -> None:
     threading.Thread(target=_loop, name="scheduler-tick", daemon=True).start()
 
 
-def _build_backend():
+def _build_backend(network_envs: tuple[str, ...] = ()):
     """Select the spawn backend from ``RUNTIME_BACKEND`` (default ``docker``). compose/desktop run
     ``docker`` (host socket API); a k8s deployment runs ``k8s`` (spawns Pods via kubectl under the
     runtime's ServiceAccount/RBAC — see deploy/helm runtime RBAC). ``process`` is the no-container
@@ -109,7 +109,7 @@ def _build_backend():
         return ProcessBackend()
     from .docker_backend import DockerBackend
 
-    return DockerBackend()
+    return DockerBackend(network_envs=network_envs)
 
 
 def _kernel_grace_sec() -> float:
@@ -130,18 +130,26 @@ def build_production_app():
     """Wire the runtime API with the env-selected spawn backend + the env-driven profile registry,
     plus the durable cron scheduler (REDIS_URL) with a background tick loop."""
     from .api import create_app
+    from .caller_auth import load_caller_token
     from .config_preflight import preflight
     from .kernel import Runtime
-    from .profiles import apply_command_overrides, default_registry, worker_image_for
+    from .profiles import apply_command_overrides, default_registry, network_envs, worker_image_for
+    from .workload_env import StoreConfig
 
-    # config.v1 boot preflight (ADR-0026): validate the declaration against the env — the runtime has
-    # no required-explicit keys today, so this logs the capability tri-states (scheduler · bot_spawn ·
-    # agent_spawn · model_inference, incl. the credentials-file probe that catches a SET
+    # config.v1 boot preflight (ADR-0026): RUNTIME_API_TOKEN is required-explicit and must not hold a
+    # published placeholder, so a runtime nobody gave a caller credential refuses to boot instead of
+    # serving its workload API open. The run also logs the capability tri-states (scheduler ·
+    # bot_spawn · agent_spawn · model_inference, incl. the credentials-file probe that catches a SET
     # HOST_CLAUDE_CREDENTIALS whose host file is absent) so a deploy's config completeness is visible
     # in the boot log and on /health BEFORE any workload runs. Capabilities never block boot.
     preflight()
+    caller_token = load_caller_token()
+    # The workspace store as this runtime serves it — from its own env, never from a spec.
+    workspace_store = StoreConfig.from_env()
 
-    backend = _build_backend()
+    # The networks the profiles' workloads join scope docker discovery; they are profile data and do
+    # not depend on the images resolved below.
+    backend = _build_backend(network_envs(default_registry()))
     # The agent worker is its OWN image (core/agent/worker/Dockerfile — claude-code + node + the
     # `worker` package), NOT a rename of the agent-api image. With the Docker backend we ensure that
     # image is present up front — pulling it when absent, since the socket create API never
@@ -165,7 +173,8 @@ def build_production_app():
     # apply_command_overrides is a no-op unless BOT_COMMAND / AGENT_WORKER_COMMAND are set (the
     # process-backend / `lite` case) — docker/k8s keep the image entrypoints unchanged.
     profiles = apply_command_overrides(default_registry())
-    runtime = Runtime(backend=backend, profiles=profiles, grace_sec=_kernel_grace_sec())
+    runtime = Runtime(backend=backend, profiles=profiles, grace_sec=_kernel_grace_sec(),
+                      workspace_store=workspace_store)
     # Re-adopt the workloads this runtime spawned that are STILL on the substrate (containers/pods
     # survive a runtime recreate untouched): without this, the fresh in-memory registry 404s over a
     # live bot, and the control plane misreads that 404 as "bot gone" — the orphaned-live-bot
@@ -179,7 +188,7 @@ def build_production_app():
             )
     except Exception as e:  # noqa: BLE001 — adoption is a boot aid; it must never block the boot
         logger.warning("workload re-adoption failed: %s", e)
-    return create_app(runtime, scheduler=scheduler)
+    return create_app(runtime, scheduler=scheduler, caller_token=caller_token)
 
 
 def main() -> None:

@@ -58,6 +58,11 @@ INCLUDE=(
   architecture.seal.json
   contracts.seal.json
   license-exceptions.json
+  # licence + CVE gate data the gates and .github/workflows read (gate:licenses, gate:image-licenses,
+  # cve-scanning.yml); without them those checks fail or go green-on-empty in the published repo
+  python-licenses.json
+  image-licenses.json
+  osv-scanner.toml
 )
 
 RSYNC_EXCLUDES=(--exclude '.git' --exclude 'node_modules' --exclude '.turbo'

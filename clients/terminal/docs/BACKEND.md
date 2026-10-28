@@ -45,7 +45,7 @@ Legend — **Have/0.12**: production in 0.12. **Port**: exists on `ei-workspace`
 
 ## Self-host · air-gap · BYO-inference — the specifics
 
-The enterprise (DTCC/MS/Citi) promise is "everything in your infrastructure, no egress, your inference." Status:
+The regulated-enterprise promise is "everything in your infrastructure, no egress, your inference." Status:
 
 - ✅ **Stack is self-hostable** — the whole control plane runs from `deploy/compose` (Postgres, Redis, versitygw storage, no required SaaS). Air-gappable today for the meeting/recording half.
 - ✅ **BYO transcription** — `TRANSCRIPTION_SERVICE_URL`/`_TOKEN` already point at your STT (self-hosted Whisper, in-VPC Azure, etc.).

@@ -1,0 +1,7 @@
+{
+  "action": "list",
+  "owners": [
+    "user:42",
+    "company"
+  ]
+}

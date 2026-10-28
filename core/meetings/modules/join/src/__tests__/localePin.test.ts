@@ -1,7 +1,8 @@
-// #856 — the browser UI locale is a PINNED input, not an uncontrolled one.
+// #856 — the browser UI locale is PINNED to English, not an uncontrolled input.
 // Pure unit checks, no browser: the launch flags carry --lang / --accept-lang for
-// the resolved BOT_UI_LOCALE knob, and the constructed Meet URL carries ?hl=.
-import { getJoinBrowserArgs, getLocaleBrowserArgs, resolveBotUiLocale } from "../browser-args";
+// en-US, and the constructed Meet URL carries ?hl=.
+import { getJoinBrowserArgs, getLocaleBrowserArgs } from "../browser-args";
+import { PINNED_UI_LOCALE } from "../shared/ui-locale";
 import { withPinnedMeetLocale } from "../googlemeet/join";
 
 let passed = 0, failed = 0;
@@ -10,26 +11,16 @@ function assert(cond: boolean, msg: string): void {
   else { failed++; console.log(`  \x1b[31mFAIL\x1b[0m  ${msg}`); }
 }
 
-console.log("\n=== 1. Default pin: en-US ===");
+console.log("\n=== 1. The pin: en-US ===");
 {
-  delete process.env.BOT_UI_LOCALE;
-  assert(resolveBotUiLocale() === "en-US", "resolveBotUiLocale() defaults to en-US when the knob is unset");
+  assert(PINNED_UI_LOCALE === "en-US", "the pinned UI locale is en-US");
   const args = getJoinBrowserArgs();
-  assert(args.includes("--lang=en-US"), "getJoinBrowserArgs() carries --lang=en-US by default");
-  assert(args.includes("--accept-lang=en-US,en"), "getJoinBrowserArgs() carries --accept-lang=en-US,en by default");
+  assert(args.includes("--lang=en-US"), "getJoinBrowserArgs() carries --lang=en-US");
+  assert(args.includes("--accept-lang=en-US,en"), "getJoinBrowserArgs() carries --accept-lang=en-US,en");
+  assert(getLocaleBrowserArgs().length === 2, "exactly the two locale flags, no other language source");
 }
 
-console.log("\n=== 2. Negative control: the knob really drives it (A2) ===");
-{
-  process.env.BOT_UI_LOCALE = "hu-HU";
-  assert(resolveBotUiLocale() === "hu-HU", "BOT_UI_LOCALE=hu-HU is honoured");
-  const args = getLocaleBrowserArgs();
-  assert(args.includes("--lang=hu-HU"), "--lang follows the knob (hu-HU) — the pin is not a no-op");
-  assert(args.includes("--accept-lang=hu-HU,hu"), "--accept-lang follows the knob (hu-HU,hu)");
-  delete process.env.BOT_UI_LOCALE;
-}
-
-console.log("\n=== 3. ?hl= on the constructed Meet URL (BOT_AUTHENTICATED lever) ===");
+console.log("\n=== 2. ?hl= on the constructed Meet URL (BOT_AUTHENTICATED lever) ===");
 {
   const url = withPinnedMeetLocale("https://meet.google.com/abc-defg-hij", "en-US");
   assert(/[?&]hl=en(&|$)/.test(url), `?hl=en appended (bare language subtag): ${url}`);

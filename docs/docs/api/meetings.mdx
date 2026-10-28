@@ -34,8 +34,24 @@ Pass one of these as `platform`:
 | Zoom | `zoom` |
 | Microsoft Teams | `teams` |
 | Jitsi Meet | `jitsi` * |
+| Voice note (no meeting) | `voice_note` |
+| Call in Minutes (a LiveKit room on this deployment) | `vexa_call` |
 
 The bot joins like any participant — no plugins, no host configuration.
+
+A **`voice_note`** joins nothing: `POST /bots {"platform": "voice_note"}` (no `meeting_url`,
+`passcode` or `teams_base_host`; `native_meeting_id` is minted as `vn-…` when omitted; optional
+`speaker_name`) makes the meeting and its bot, and the audio is then streamed over
+`WS /voice-notes/{native_meeting_id}/stream`. Everything else — status, transcript, stop, delete —
+is a meeting's. See [Voice notes](/minutes/voice-notes#how-it-works) for the socket protocol.
+
+A **`vexa_call`** is a room meeting-api creates on the deployment's LiveKit server:
+`POST /bots {"platform": "vexa_call", "session_id": "s-…"}`. Send no `meeting_url`, `passcode`,
+`teams_base_host` or `native_meeting_id`: the room name (`call-…`) is minted and becomes the
+`native_meeting_id`. `session_id` (optional) names the chat the call belongs to. `transcribe`
+(optional boolean, default `true`) may be `false` only when the deployment sets
+`CALL_TRANSCRIPTION_SWITCHABLE=true`; otherwise `false` answers `422`. A deployment without a LiveKit
+server answers `503` with `{"error": "calls_not_deployed"}`. See [Calls](/minutes/calls#how-it-works).
 
 \* **Jitsi is join + capture offline-proven; live validation is pending.** Meet, Zoom and Teams are
 production. On Jitsi the bot joins and records audio, but transcripts are not yet proven live —
@@ -43,9 +59,11 @@ production. On Jitsi the bot joins and records audio, but transcripts are not ye
 docker-jitsi-meet where the speaker binder matched **0 of 122** frames and the meeting completed
 with 0 transcript segments. Track [#570](https://github.com/Vexa-ai/vexa/issues/570).
 
-For `teams`, a meeting is addressed either by its **numeric meeting ID** (10–15 digits, the one
-Teams prints beside a passcode) or by the **thread id** from a `…/l/meetup-join/19:meeting_…@thread.v2`
-link. With the numeric ID, send the passcode as `passcode` — the bot joins at
+For `teams`, a meeting is addressed either by its **numeric meeting ID** (10–17 digits, the one
+Teams prints beside a passcode) or by its full `…/l/meetup-join/19:meeting_…@thread.v2/0?context=…`
+link as `meeting_url`. A thread id sent as `native_meeting_id` without that link is refused with
+`422`: the link's `context` names the organizer's tenant, and without it Teams sends the bot to a
+sign-in page. With the numeric ID, send the passcode as `passcode` — the bot joins at
 `…/meet/<id>?p=<passcode>`, and the passcode is kept off the stored `constructed_meeting_url` and
 out of the logs. Add `teams_base_host` for a non-default cloud (`teams.live.com` for personal
 meetings, `gov.teams.microsoft.us` / `dod.teams.microsoft.us` for GCC-High and DoD); hosts outside
@@ -62,9 +80,26 @@ name on meet.jit.si (`MyRoom`), and `room@host` on any other deployment
 (`MyRoom@video.example.org`) — so same-named rooms on different deployments never collide.
 A password-protected room is joined by passing the optional `passcode` field. To make
 **calendar sync** recognize a self-hosted deployment's links, list its hostnames in the
-`VEXA_JITSI_HOSTS` env (comma-separated). On Jitsi the transcript also carries the meeting's **chat**: each chat
-message arrives as a segment with `source: "chat"` (the sender is the `speaker`), and speaker
-names come from the conference's own dominant-speaker signal.
+`VEXA_JITSI_HOSTS` env (comma-separated). On Jitsi speaker names come from the conference's own
+dominant-speaker signal.
+
+A `meeting_url` must be an `https://` link on its platform's hosts: Google Meet on
+`meet.google.com`; Teams on `teams.microsoft.com`, `teams.live.com`, `teams.microsoft.us` or
+`teams.cloud.microsoft`; Zoom on `zoom.us` (vanity `<org>.zoom.us` included), `zoom.com` or
+`zoomgov.com`, or an organisation's own Zoom front door when the link has Zoom's join shape; Jitsi
+on any deployment. Every address the host resolves to must be public, so a link that points at, or
+resolves to, a loopback, private, CGNAT, link-local or cloud-metadata address is refused with a
+`422` naming the host. A host the API cannot resolve is passed to the bot, whose browser resolves it and holds it to the same rule. A Jitsi server inside your own network joins once the operator lists it in
+`VEXA_MEETING_HOST_ALLOW` ([Configuration](/configuration)). The bot's browser holds every
+navigation and redirect to the same rule; a refusal there fails the join with a reason starting
+`meeting_host_refused`.
+
+On **Google Meet** and **Jitsi** the transcript also carries the meeting's **chat**: each chat
+message from another participant arrives as a segment with `source: "chat"` (the sender is the
+`speaker`). Read it alone with `GET /bots/{platform}/{native_meeting_id}/chat`, follow it live as
+`chat_message` frames on `/ws`, and post into it with `POST /bots/{platform}/{native_meeting_id}/chat`
+(the native-id support table below has each answer). On Meet the bot opens the
+chat panel itself and reads only lines sent after it joined.
 
 ## Meeting statuses
 
@@ -88,7 +123,7 @@ just a title, and the link can be attached later.
 <ParamField body="title" type="string">What the meeting is about — shown in the Meetings list.</ParamField>
 <ParamField body="scheduled_at" type="string">ISO-8601 start time. Present → status `scheduled` (and [auto-join](#auto-join) arms); absent → `idle`.</ParamField>
 <ParamField body="meeting_url" type="string">A Meet/Zoom/Teams link — parsed server-side into `platform` + `native_meeting_id`. Unrecognized links are rejected with `422`.</ParamField>
-<ParamField body="workspace_id" type="string">Bind the meeting to a shared workspace — its members then see the meeting, its live feed, and the transcript.</ParamField>
+<ParamField body="workspace_id" type="string">Bind the meeting to a shared workspace — its members then see the meeting, its live feed, and the transcript. You must be a member (`403` otherwise). `personal` keeps the meeting yours alone. Omitted, a bot an agent worker sends belongs to the shared workspace its chat is working in, when you are a member of it; any other caller's meeting stays private.</ParamField>
 <ParamField body="auto_join" type="boolean">Send the bot automatically at start time. Default `true`.</ParamField>
 
 ```bash POST /meetings
@@ -124,15 +159,23 @@ curl -X DELETE "$API_BASE/meetings/12345" -H "X-API-Key: $API_KEY"
   notes/shares, recording objects from primary object storage, and recording metadata. The terminal
   meeting row remains as lifecycle evidence, but transcript reads return `404`.
 
-Both answer an owner-indistinguishable `404` for an unknown or unowned record. An in-flight meeting
-(`requested` through `stopping`) answers `409`; use `DELETE /bots/{platform}/{native_meeting_id}` to
-stop a bot, then delete artifacts after the meeting becomes terminal.
+Both answer an owner-indistinguishable `404` for an unknown or unowned record.
+
+**Deleting a meeting whose bot is still running or finishing** answers `409` by default, as 0.12 did.
+With `VEXA_MEETING_DELETE_LIVE=stop` on meeting-api it answers `202` with
+`{"status":"deletion_scheduled","id":…}`. The request is recorded on the meeting, the bot is asked to
+leave (the same stop as `DELETE /bots/{platform}/{native_meeting_id}`), and the transcript and
+recordings are deleted when the meeting's lifecycle ends. A meeting that ends without a bot callback
+(for example, one ended by a sweep) keeps the request; deleting it again then deletes at once,
+because it is terminal.
 
 The same edit/delete is also reachable **by native key** — `PATCH`/`DELETE
 /meetings/{platform}/{native_meeting_id}` — which resolves `(platform, native_meeting_id)` to your
-newest owned row and applies the same rules (`404` unknown/unowned, `409` while in flight). Use it
-when you address meetings by their join-link identity rather than the record id; `DELETE` answers
-`200` on this path (the by-record-id `DELETE` answers `204`).
+newest owned row and applies the same rules (`404` unknown/unowned; `PATCH` answers `409` while in
+flight, `DELETE` answers `409`, or under `stop` `202` with `deletion_scheduled`, plus `platform` and
+`native_meeting_id`).
+Use it when you address meetings by their join-link identity rather than the record id; a finished
+`DELETE` answers `200` on this path (the by-record-id `DELETE` answers `204`).
 
 <Warning>
 Deletion confirms erasure from the live Postgres/Redis state and configured primary object storage.
@@ -174,6 +217,43 @@ curl -X POST "$API_BASE/meetings/google_meet/abc-defg-hij/workspace" \
 Returns `200` with `{"workspace_id": "ws-acme"}`. `422` when `workspace_id` is missing or empty;
 `404` for a record you don't own. `POST /meetings` accepts the same binding at creation time.
 
+Binding takes **edit access** to the workspace (role contributor or owner): it publishes the meeting to
+every member. A caller who can only view the workspace, or is not a member, gets `403` — on this route,
+on `POST /meetings` and `PATCH /meetings/{id}` with a `workspace_id`, and on `POST /bots` with one.
+Unbinding (`workspace_id: null`) is always allowed on your own meeting.
+
+### Share a meeting
+
+A meeting is shared with a **share grant**: a capability the owner mints and a signed-in person
+redeems. Redeeming adds them to the meeting's readers. A reader gets the meeting in `GET /meetings`
+(with `shared: true`), its detail, its transcript (`GET /transcripts/by-id/{id}`), its live feed (the
+terminal's stream and `/ws`), and its recording only when the owner allows it. The owner manages
+grants and readers with the routes below. All of them take the meeting's row id and need the `tx` scope.
+A meeting that isn't yours returns `404`, exactly like one that doesn't exist.
+
+| Route | What it does |
+|---|---|
+| `POST /meetings/{meeting_id}/share` | Mint a grant. Body: `{mode, allowed_emails?, expires_in_sec?, notify?}`. Each `allowed_emails` entry must be exactly one address (`422` otherwise). With `notify: true` — only for a `restricted` grant with exactly one address, at most 30 per owner per hour (`429` past that, before anything is minted) — that address is emailed its own link by the deployment's mail service, minted at send time; the answer carries `notified: {address: true\|false}`, whether that email was handed over. No token leaves meeting-api in the email fact. `mode` is `restricted` (only the listed verified addresses can redeem it) or `open` (any signed-in person can). The TTL is clamped to 60 s–30 days. Returns `{id, token, mode, expires_at}`, and the `token` appears **only in this response**. |
+| `POST /transcripts/share/accept` | Redeem a token as the signed-in caller: `{token}` → `{meeting_id, ok}`. `403 not_allowed` for an address not on a restricted grant, `403 revoked` / `403 expired` for a withdrawn or lapsed grant, `404` for an unknown token. |
+| `GET /meetings/{meeting_id}/access` | Who can read the meeting: `{people:[{user_id, email, role:"viewer", grant_id, since}], invites:[{id, ids, emails, expires_at}], links:[{id, joined, expires_at}], workspace_id, recording}`. One invite row per pending address; `ids` lists every live grant behind it (withdraw them all to withdraw the invite). Carries no tokens or hashes. |
+| `PATCH /meetings/{meeting_id}/access` | `{recording: true\|false}`: whether readers may play and download the recording. The default is `false`. Returns the access view. |
+| `DELETE /meetings/{meeting_id}/share/{grant_id}` | Revoke a grant (a pending invite or a link). Anyone who joined through it loses access immediately, unless another live grant they redeemed still admits them; turning off an OPEN link also removes readers with no record of how they joined. Returns the access view; `404` for an unknown grant. |
+| `DELETE /meetings/{meeting_id}/viewers/{viewer_id}` | Remove a reader. REST reads return `404` at once; an open live stream ends within about 17 seconds on the terminal stream (`access-revoked`) and about 15 on `/ws` (`subscription_revoked`, matched by the meeting row being streamed). A grant minted before the removal no longer admits them. A new invite does. |
+
+```bash Invite one person, then remove them
+curl -X POST "$API_BASE/meetings/42/share" -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"mode":"restricted","allowed_emails":["ana@example.com"],"expires_in_sec":2592000}'
+curl "$API_BASE/meetings/42/access" -H "X-API-Key: $API_KEY"
+curl -X DELETE "$API_BASE/meetings/42/viewers/1187" -H "X-API-Key: $API_KEY"
+```
+
+Recording reads (`GET /recordings/{id}`, `…/master`, `…/media/{media_file_id}/raw`) serve a reader the
+recordings of a meeting shared with them only while that meeting's `recording` setting is `true`, and
+until then the reader's meeting and transcript responses carry no recording metadata either.
+`GET /recordings` stays a list of your own recordings unless you pass `meeting_id`.
+Deleting a recording stays owner-only. The terminal flow is described in
+[Share a meeting](/how-to/share-a-meeting).
+
 ## api.v1 native-id support (per route)
 
 `api.v1` is sealed as a **file hash** (`contracts.seal.json`), which pins the schema document, not
@@ -187,8 +267,9 @@ native_meeting_id)` keying a 0.10 client uses is served by the 0.12 core:
 | `GET /bots/status` | **Yes** — body carries both `running_bots` (0.10) and `running`/`count` (0.12). |
 | `POST /transcripts/{platform}/{native_meeting_id}/share` | **Aliased** to the moved `POST /meetings/{platform}/{native_meeting_id}/share` mint. The response is the capability-token share (`{id, token, mode, expires_at}`), not the 0.10 public-URL `TranscriptShareResponse` — the public-URL-share backend is not in the 0.12 core. |
 | `GET /recordings/{recording_id}/media/{media_file_id}/download` | **Aliased** to the `.../raw` master byte stream (Range-capable). |
-| `GET /bots/{platform}/{native_meeting_id}/chat` | **Restored, empty** — the owner boundary is real; the message list is always empty (0.12 does not persist in-meeting chat server-side; chat flows live over the WS `va:…:chat` channel). |
-| `POST /bots/{platform}/{native_meeting_id}/chat` | **Not implemented** — no bot-command (send) backend in the 0.12 core. |
+| `GET /bots/{platform}/{native_meeting_id}/chat` | **Yes** — the chat the bot captured in your newest owned meeting on that link, oldest first, as `{messages: [{sender, text, timestamp, is_from_bot}]}` (`timestamp` in epoch milliseconds). It is the transcript's `source: "chat"` segments, so it holds only what the platform's chat reader captured (Google Meet and Jitsi). `is_from_bot` is always `false`; the bot's own lines are not captured. Each new line also arrives live over `/ws` as `{"type": "chat_message", "meeting": {id, native_id, platform}, sender, text, timestamp, is_from_bot}`. |
+| `POST /bots/{platform}/{native_meeting_id}/chat` | **Yes, on Google Meet and Jitsi** — body `{"text": "…"}`, at most 2000 characters; only the meeting's owner can send. Hands the line to your bot in that meeting and answers `200 {"status": "queued", "request_id", "meeting_id", "native_meeting_id"}`: the bot received it. Whether the line then showed in the meeting's chat is read with `request_id` from the route below. `404` with no live meeting, `409` before the bot is admitted or when no bot is listening, `429` past 10 messages in 10 seconds to one meeting (whoever sends them; the `Retry-After` header says when to retry, and nothing was sent), `422` for empty or too-long `text`, an unknown platform, or a platform whose bot cannot send chat (Zoom, Teams), `503` when the command bus is down (nothing was sent, retry). |
+| `GET /bots/{platform}/{native_meeting_id}/chat/{request_id}` | **Yes** — whether one line sent with the route above posted: `{"request_id", "status", "reason"?, "meeting_id", "native_meeting_id"}`. `status` is `queued` until the bot reports, then `posted` once the line shows in the meeting's chat, or `failed` with `reason` (`no_composer`: no chat box; `not_landed`: sent but never appeared; `no_chat_api` or `page_error`: the page could not send; `unsupported_platform`; `empty_text`; `unknown`). A line still `queued` 60 seconds after it was sent reads `unconfirmed`: the bot's answer is not coming (a bot older than this release never answers). Only the sender can read it, for one hour; any other id, or this one under another meeting, is `404`. |
 | `POST /meetings/{meeting_id}/transcribe` | **Not implemented** — no on-demand re-transcribe backend in the 0.12 core. |
 
 <Note>
@@ -242,17 +323,35 @@ request/response schemas, compatibility endpoints, error statuses, and metadata 
 
 ## Send a bot to a meeting
 
-<ParamField body="platform" type="string" required>`google_meet` · `zoom` · `teams`</ParamField>
-<ParamField body="native_meeting_id" type="string" required>The meeting id from the join URL (e.g. `abc-defg-hij`).</ParamField>
-<ParamField body="bot_name" type="string">Display name the bot uses in the call. Defaults to `Vexa`.</ParamField>
-<ParamField body="language" type="string">ISO code (e.g. `en`). **Omitted** = auto mode: each STT
-window's language is detected independently and stamped on its segments' `language` field. **Set** =
-forced mode: every STT call is pinned to this code and every segment carries it. Granularity is the
-transcription window (a few seconds of one speaker's audio), not word-level; in auto mode a
-low-confidence detection on the Zoom/Teams (mixed-audio) lane discards the window rather than
-guessing. Undetermined windows yield `language: null`. (0.10's `allowed_languages` is not part of
-the 0.12 API.)</ParamField>
+<ParamField body="platform" type="string" required>`google_meet` · `zoom` · `teams` · `jitsi` · `voice_note` · `vexa_call` (see [Platforms](#platforms)).</ParamField>
+<ParamField body="native_meeting_id" type="string">The meeting id from the join URL (e.g. `abc-defg-hij`). Required for `google_meet` and `teams` unless `meeting_url` is sent. Optional for `voice_note`: omitted, a `vn-…` id is minted and returned. Refused with `422` for `vexa_call`, whose id is always minted.</ParamField>
+<ParamField body="meeting_url" type="string">The full join link. Required for `zoom` and `jitsi`. Refused with `422` for `voice_note` and `vexa_call`.</ParamField>
+<ParamField body="bot_name" type="string">Display name the bot uses in the call, at most 100 characters (longer is a `422`). Defaults to `Vexa`.</ParamField>
+<ParamField body="language" type="string">Language code (e.g. `de`). **Set** = every STT call is pinned
+to this code and every segment carries it. `"auto"` = each window's language is detected independently,
+overriding the person's and the deployment's default. **Omitted** = the person's default (Settings), then
+the deployment's, then auto. With `allowed_languages`, it must be one of them and is the fallback.
+Granularity is the transcription window (a few seconds of one speaker's audio), not word-level; in auto
+mode a low-confidence detection on the mixed-audio lane discards the window rather than guessing.
+Undetermined windows yield `language: null`. See [Transcription language](/how-to/transcription-language).</ParamField>
+<ParamField body="allowed_languages" type="string[]">Codes detection is restricted to (e.g. `["de","en"]`,
+at most 16): a window detected outside the list is transcribed again in `language`, or in the first
+entry. The meeting stores the setting it runs with as `data.transcription_language`
+(`{language, allowed_languages, source}`). A refused value is `422`.</ParamField>
 <ParamField body="task" type="string">`transcribe` (default) or `translate`.</ParamField>
+
+The codes `language` and `allowed_languages` can take for your bots, and the deployment default, come
+from the deployment:
+
+```bash Transcription languages — GET /transcription/languages
+curl -H "X-API-Key: $API_KEY" "$API_BASE/transcription/languages"
+```
+
+`200` with `{languages: [{code, name}], default: {language, allowed_languages}, model, source}`.
+`languages` is the list for the transcription model your bots use; `source` is `provider` (the backend
+reported its model), `configured` (the configured model id) or `assumed` (no model known: every accepted
+code). Scope `bot` or `tx`. Details:
+[Transcription language](/how-to/transcription-language#which-languages-you-can-choose).
 <ParamField body="transcribe_enabled" type="boolean">Whether this spawn should request transcription. **Resolution:** an explicit value wins; else the deployment env `TRANSCRIBE_ENABLED`; else `true`. Non-boolean values (other than the common string forms `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`) are refused with `422` (`transcribe_enabled must be a boolean`). When the resolved value is `true` and no STT backend is configured, `POST /bots` answers **503** with a detail naming the unset keys, e.g. `no transcription backend configured — set it in Settings or environment variables TRANSCRIPTION_SERVICE_URL + TRANSCRIPTION_SERVICE_TOKEN`. "Settings" there means [`PUT /user/transcription`](/api/settings#transcription-backend). Set `false` for **capture-only** (bot may still join; no STT client is constructed).</ParamField>
 <ParamField body="recording_enabled" type="boolean">Whether this spawn should persist an **audio** recording (see [Recordings](/how-to/recordings) — there is no video recording path). Same resolution pattern as `transcribe_enabled` against env `RECORDING_ENABLED` (default `true` at the env resolver; the service default when callers omit it follows the request/env chain). Capture-only (`transcribe_enabled=false`) is **not** the same as recorded — recording is gated separately.</ParamField>
 
@@ -342,17 +441,26 @@ Both forms return the meeting record alongside its `segments` — `id`, `platfor
 
 ## Manage the bot
 
-```bash Update config — PUT /bots/{platform}/{native_meeting_id}/config
+```bash Change the language — PUT /bots/{platform}/{native_meeting_id}/config
 curl -X PUT "$API_BASE/bots/google_meet/abc-defg-hij/config" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d '{"language":"es","task":"translate"}'
+  -d '{"language":"de"}'
 ```
+
+The body (`language`, `allowed_languages`) replaces the running setting: an omitted field is cleared, so
+both `null` is auto. `202` with `{meeting_id, platform, native_meeting_id, transcription_language}` once
+the bot received it; `409` when the bot is not listening yet (nothing changed); `403` unless you own the
+meeting or are an owner or contributor of its workspace. Details:
+[Transcription language](/how-to/transcription-language#change-it-during-the-meeting).
 
 ```bash Stop / leave — DELETE /bots/{platform}/{native_meeting_id}
 curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij" -H "X-API-Key: $API_KEY"
 ```
 
 Stop answers `200` with `{"status":"stopping","meeting_id":…,"also_stopped":[],"cancelled":[]}`.
+The answer comes as soon as the stop is recorded and the leave command is published. Tearing down a
+bot that is still starting happens after the answer, so a slow teardown never turns a working stop
+into a timeout.
 
 ```bash Running bots — GET /bots/status
 curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
@@ -365,9 +473,8 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
 ```
 
 <Note>
-**Config** (`PUT …/config`, change language/task mid-call) and **speak** (`POST …/speak`, TTS into the
-call) ride the live bot-control plane and are not yet wired in the v0.12 open-core stack — they currently
-return `404`. Send-a-bot, stop, **running bots** (`GET /bots/status`), list, and transcripts are live.
+**Speak** (`POST …/speak`, TTS into the call) rides the live bot-control plane and is not yet wired in
+the open-core stack — it returns `404`. Everything else above is live.
 </Note>
 
 ```bash List meetings — GET /meetings
@@ -409,6 +516,36 @@ Times are seconds from session start; `absolute_start_time` / `absolute_end_time
 The same segments arrive **live** (`completed: false`, a pending draft) and then **confirmed**
 (`completed: true`) — the gateway forwards the confirmed-plus-pending bundle to subscribers as the meeting
 runs.
+
+## Export and import a meeting
+
+A meeting moves between deployments as one file, a [`meeting-bundle.v1`](/how-to/move-a-meeting) zip.
+Both routes need the `tx` scope.
+
+```bash Export (owner only) — GET /meetings/{meeting_id}/export[?media=false]
+curl -OJ -H "X-API-Key: $API_KEY" "$API_BASE/meetings/42/export"
+```
+
+`200` with `application/zip` and `Content-Disposition: attachment`. `404` when the caller cannot see
+the meeting, `403` when they see it through a share or a workspace but do not own it, `409` while a
+bot is in it, `502` when a recording cannot be read (the export is refused, never produced without it).
+`media=false` leaves recordings out. `POST` the same path with a parts archive as the body (the
+meeting's workspace and page, from `GET /agent/meeting/bundle-parts?meeting_id=`) to have them placed
+in the bundle; after an import, `POST /agent/meeting/bundle-restore?meeting_id=<new id>` with the same
+file restores them.
+
+```bash Import — POST /meetings/import[?dry_run=true]
+curl -H "X-API-Key: $API_KEY" -H "Content-Type: application/zip" \
+  --data-binary @meeting.meeting-bundle.zip "$API_BASE/meetings/import?dry_run=true"
+```
+
+With `dry_run=true`: `200` and a preview (meeting, segment count, speakers, media, `skipped`,
+`duplicate_of`); nothing is written. Without it: `201` and the new `meeting_id`, owned by the caller
+only. A refusal is `{"detail": {"code", "detail"}}` — `409 duplicate_import`, `413 too_large`, or
+`422` with one of the codes in the [refusal table](/how-to/move-a-meeting#what-you-see-when-it-is-refused).
+
+In the Terminal the same import runs when a person drops the bundle file into any chat; see
+[Move a meeting between deployments](/how-to/move-a-meeting#import).
 
 ## Meeting participants
 
@@ -487,7 +624,39 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/recordings/42/master?type=audio"
 The master metadata returns a `raw_url` pointing at the byte stream
 `GET /recordings/{recording_id}/media/{media_file_id}/raw`, which the player loads. The `/raw` endpoint
 honours a `Range` header and returns `206 Partial Content` with `Content-Range` and `Accept-Ranges` —
-these are preserved **through the gateway**, not only on a direct hit, so browser playback and seeking work.
+these are preserved **through the gateway**, not only on a direct hit, so browser playback and seeking work. Add
+`download=1` for `Content-Disposition: attachment` (same ownership check; the filename carries the
+real container's extension).
+
+## How it works
+
+1. **Gateway.** Your request reaches the gateway with `X-API-Key`. The gateway checks the key with
+   admin-api and fails closed: `401` for a missing, unknown, revoked or expired key, `403` when the
+   key lacks the route's scope. Each route's scopes come from `core/meetings/routes.v1.json`.
+2. **Signed identity.** The gateway forwards the request to meeting-api with the caller's identity,
+   signed with the gateway's Ed25519 key (`gateway-identity.v1`). meeting-api checks the signature
+   with the public key and refuses an unsigned or forged identity. It also checks the route's scopes
+   against the same manifest.
+3. **meeting-api.** It answers from Postgres (meetings, transcripts) and from object storage
+   (recordings). `POST /bots` asks the [runtime](/core/runtime) to start the bot.
+4. **Ownership.** A meeting, transcript or recording you do not own answers `404`, the same as one that
+   does not exist.
+
+## Why it complies
+
+- **P4 sealed contracts.** `api.v1`, `routes.v1` and `gateway-identity.v1` are sealed; `gate:schema`
+  and `gate:contract-version` enforce it.
+- **P8 the shipped API matches its contract.** `gate:contract-conformance` checks meeting-api's routes
+  against `api.v1` in both directions.
+- **P6 one front door.** `gate:domain-doors` fails when a client or the gateway reaches the meetings
+  domain other than through a route declared in `routes.v1.json`.
+- **P20 authorize every access.** Deny tests under `gate:python`, in
+  `core/meetings/services/meeting-api/tests/`: `test_identity_guard.py`
+  (`test_an_unsigned_identity_is_refused`, `test_a_forged_signature_is_refused`),
+  `test_route_scopes.py` (`test_a_key_without_the_route_s_scope_is_refused`), `test_collector_api.py`
+  (`test_get_transcript_other_user_is_404`), `test_completed_artifact_deletion.py`
+  (`test_non_owner_gets_indistinguishable_404_and_cannot_delete_any_artifact`). `gate:access` proves
+  the default-deny rule itself.
 
 ---
 

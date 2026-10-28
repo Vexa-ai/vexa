@@ -1,0 +1,68 @@
+{
+  "contract": "routes.v1",
+  "domain": "agent",
+  "owner": "core/agent",
+  "edge": "gateway",
+  "presence_env": "AGENT_API_URL",
+  "forward": {
+    "edge_prefix": "/agent/",
+    "upstream_prefix": "/api/"
+  },
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/agent/chat",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "stream": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/claims",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true
+    },
+    {
+      "method": "POST",
+      "path": "/agent/friction",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "delegation": true
+    },
+    {
+      "method": "GET",
+      "path": "/agent/chats/{chat_id}",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/agent/{path:path}",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    }
+  ],
+  "verbs": [
+    {
+      "method": "DELETE",
+      "path": "/agent/workspace/{slug}",
+      "person": true
+    },
+    {
+      "method": "GET",
+      "path": "/agent/connections/status",
+      "person": false
+    }
+  ]
+}

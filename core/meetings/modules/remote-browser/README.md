@@ -15,8 +15,19 @@ Two flows:
 2. `launchPersistentBrowser({ dataDir })` + `validateLoggedIn()` — restore + confirm.
 
 Backends: S3 (`syncBrowserData{To,From}S3` — production, shells the `aws` CLI) or local
-(`saveSessionLocal` / `loadSessionLocal`). Only the **auth-essential** subset of a Chromium profile is
-persisted (~200 KB), not the full profile.
+(`saveSessionLocal` / `loadSessionLocal`). Only the **session profile** — the auth-essential subset of a
+Chromium profile (~200 KB), defined by the sealed
+[`session-profile.v1`](../../contracts/session-profile.v1) contract and exported as `SESSION_PROFILE` —
+is ever moved: restore lists the stored prefix and downloads only profile paths (an extension, cache or
+any other key stored there is never fetched), and uploads and local copies take regular files only
+(never a symlink). The package reads the profile from
+[`src/session-profile.v1.schema.json`](src/session-profile.v1.schema.json), a verbatim copy of the
+contract's schema that `gate:fact-parity` holds to it. A bot restores with the deployment's
+**read-only** userdata key and never writes the store: its write-back is the body `readSessionProfile`
+builds (the contract's `WritebackBody`), sent to meeting-api at the URL its invocation names, and
+meeting-api accepts only `SESSION_PROFILE` paths, reading the same contract file. The operator's
+`make login` uploads with a separate key pair that can write (`LOGIN_S3_ACCESS_KEY` /
+`LOGIN_S3_SECRET_KEY`).
 
 > Launch flags are deliberately restrained: NO `--disable-web-security` / `--ignore-certificate-errors`
 > (Google's bot layer flags those → "You can't join this video call"), AutomationControlled disabled,
@@ -26,9 +37,10 @@ persisted (~200 KB), not the full profile.
 ## Surface
 `provisionLogin` · `launchPersistentBrowser` · `validateLoggedIn` · `getAuthenticatedBrowserArgs` ·
 `getBrowserSessionArgs` · `CDP_DEBUG_ARGS` · session store (`syncBrowserDataFromS3`/`…ToS3`,
-`saveSessionLocal`/`loadSessionLocal`, `cleanStaleLocks`, `ensureBrowserDataDir`, `BROWSER_DATA_DIR`) ·
+`saveSessionLocal`/`loadSessionLocal`, `SESSION_PROFILE`, `isSessionProfilePath`,
+`collectSessionProfile`, `readSessionProfile`, `cleanStaleLocks`, `ensureBrowserDataDir`, `BROWSER_DATA_DIR`) ·
 `AUTH_LOGIN_URLS` · `AUTH_COOKIES` (+ types `AuthPlatform`, `LoginStatus`, `S3Config`,
-`LaunchPersistentOptions`, `ProvisionLoginOptions`). Front door: [`src/index.ts`](src/index.ts).
+`LaunchPersistentOptions`, `ProvisionLoginOptions`, `SessionProfileSpec`, `ProfileFile`). Front door: [`src/index.ts`](src/index.ts).
 
 ## Verify
 `pnpm --filter @vexa/remote-browser run build` — `tsc` clean (self-contained CommonJS `tsconfig`:
@@ -37,5 +49,9 @@ extensionless relative imports + value-imports of `./types`, so it does NOT exte
 (`pnpm --filter @vexa/remote-browser test`) pins the two contract-level invariants in isolation (no real
 browser, no network): the launch-flag safety set, and the `validateLoggedIn` AND-matrix (loggedIn IFF
 not bounced to a sign-in URL AND a known auth cookie is present) driven through a stub Playwright `Page`.
+[`src/session-store.test.ts`](src/session-store.test.ts) drives the real restore/upload against a fake
+`aws` on `PATH`: a stored key outside the profile is never downloaded, an upload names only regular
+profile files, a failed restore is a typed `session-restore` error. It also answers every path vector
+of the contract (`golden/PathVectors.*.json`, which meeting-api's matcher is tested against too).
 The real login / persistence / restore paths need an **integration env** (a headed Chromium + VNC, and
 S3 creds for the S3 backend). Covered by `gate:node`, `gate:isolation`, `gate:exports`, `gate:readme`.

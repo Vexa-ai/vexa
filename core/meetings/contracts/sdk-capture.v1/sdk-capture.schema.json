@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/sdk-capture.v1",
+  "$defs": {
+    "Command": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "kind": {
+              "const": "capture-start"
+            },
+            "mode": {
+              "enum": [
+                "mixed",
+                "per-participant"
+              ]
+            }
+          },
+          "required": [
+            "version",
+            "kind",
+            "mode"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "kind": {
+              "const": "capture-stop"
+            }
+          },
+          "required": [
+            "version",
+            "kind"
+          ]
+        }
+      ]
+    },
+    "Event": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "kind": {
+              "const": "audio"
+            },
+            "mode": {
+              "enum": [
+                "mixed",
+                "per-participant"
+              ]
+            },
+            "pcm": {
+              "type": "string",
+              "maxLength": 262144,
+              "pattern": "^[A-Za-z0-9+/]*={0,2}$"
+            },
+            "sampleRate": {
+              "enum": [
+                32000,
+                48000
+              ]
+            },
+            "channels": {
+              "const": 1
+            },
+            "ts": {
+              "type": "number"
+            },
+            "userId": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "speakerName": {
+              "type": "string"
+            },
+            "isSelf": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "version",
+            "kind",
+            "mode",
+            "pcm",
+            "sampleRate",
+            "channels",
+            "ts",
+            "userId"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "kind": {
+              "const": "capture-state"
+            },
+            "state": {
+              "enum": [
+                "permission_pending",
+                "subscribed",
+                "stopped"
+              ]
+            }
+          },
+          "required": [
+            "version",
+            "kind",
+            "state"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "kind": {
+              "const": "capture-failure"
+            },
+            "code": {
+              "enum": [
+                "capture_start_failed",
+                "capture_stop_failed",
+                "permission_timeout",
+                "backpressure",
+                "runtime_closed",
+                "invalid_capture_frame"
+              ]
+            }
+          },
+          "required": [
+            "version",
+            "kind",
+            "code"
+          ]
+        }
+      ]
+    }
+  }
+}

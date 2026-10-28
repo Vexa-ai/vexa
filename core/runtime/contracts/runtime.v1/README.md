@@ -2,9 +2,58 @@
 
 The published contract between the **control plane** (meeting-api, agent-api) and the **kernel**
 (`runtime`). The control plane asks the kernel to run a *workload*; the kernel runs it on Docker / K8s /
-a child process and reports its lifecycle. **Mechanism, not policy (P11):** the kernel knows a `profile`
-(an opaque name), `env`, and resources — it does *not* know what a "meeting-bot"
-or "agent" *is*. Those are profiles (config), not kernel code.
+a child process and reports its lifecycle. **Mechanism, not policy (P11):** the caller names a
+`profile`, `env` and resources. The deployment's profile registry, not the spec, maps a profile to an
+image or command and to the profile data every backend applies the same way: the workload's labels,
+the network it joins, the runtime settings forwarded into it, and whether the runtime's credential
+files are mounted. Nothing in a caller's spec can choose them.
+
+## Transport and authentication
+HTTP. **Every route except `GET /health` requires the caller credential**:
+`Authorization: Bearer <RUNTIME_API_TOKEN>` (`$defs/CallerCredential`). The runtime, agent-api and
+meeting-api hold the same value; no workload receives it. A missing or wrong credential is a **401**
+with `WWW-Authenticate: Bearer`. The runtime will not boot without a token, with one shorter than 32
+bytes, or with a placeholder published in this repository.
+
+**The callback is signed.** Every `RuntimeEvent` the runtime POSTs to a `callbackUrl` carries
+`X-Runtime-Signature: t=<unix seconds>,v2=<hex>` (`$defs/CallbackSignature`): HMAC-SHA256, keyed with
+HMAC-SHA256(`RUNTIME_API_TOKEN`, `"vexa-runtime-callback.v2"`), over the signing time, a newline, the
+URL the callback is delivered to, a newline, and the event as canonical JSON (keys sorted, no
+whitespace, UTF-8). The runtime signs at every delivery attempt, so a retry carries a fresh time. The
+token itself never travels to a callback URL. meeting-api, which holds the token, refuses with 401
+and moves no meeting a `/runtime/callback` that is unsigned or forged, signed for another URL,
+timestamped more than 300 seconds from its clock, or a replay of one it already accepted. This
+replaces the `v1=` form (event only): a runtime from before v0.13.2 is refused, as the co-release
+already requires.
+
+**A caller of a runtime from before this requirement.** agent-api and meeting-api send the bearer
+from the release that introduced it (v0.13.2). Upgrade the runtime together with both callers; a
+caller that sends no bearer gets 401 on every workload and schedule call.
+
+## The spec's `env` — what a caller may not set
+Keys starting `RUNTIME_K8S_` or `VEXA_WORKSPACE_MOUNT_` (`$defs/RuntimeOwnedEnvPrefix`) belong to the
+runtime and are **dropped** from a spec, silently: Pod scheduling and Secret mounts, and the
+workspace store's backing, are the runtime's own configuration. When a spec declares a mount set
+(`VEXA_MOUNTS` or `VEXA_WORKSPACE_PATH`), the runtime injects `VEXA_WORKSPACE_MOUNT_TARGET` (and
+`VEXA_WORKSPACE_MOUNT_SOURCE`, when it has one) itself. A mount set it will not serve is **refused
+with 400** before any container, Pod or process exists:
+
+- `VEXA_MOUNTS` that is not a JSON array of objects, each with a `path`;
+- a mount `path` not strictly under the workspace store, or `VEXA_WORKSPACE_PATH` outside it;
+- a mount whose `source` is not one the runtime was configured to serve (the `_global` tier's path).
+
+## Errors
+Every non-2xx answer is `{ "detail": … }` (`$defs/Error`):
+
+| Status | When |
+|---|---|
+| 400 | unknown profile · a refused mount set (above) · a schedule job without `request.url` or without `execute_at`/`cron` |
+| 401 | the caller credential is missing or wrong |
+| 404 | unknown workload or job |
+| 422 | the body does not parse as the route's shape |
+| 429 | the owner's workload quota is full |
+| 502 | the backend could not start the workload; its status is already `stopped` / `start_failed` |
+| 503 | the scheduler is not wired (`/schedule` routes) |
 
 ## The seam — bot and agent are the same thing to the kernel
 The meeting **bot** (meetings domain) and the **agent** (agent domain) are *both workloads*, created
@@ -55,11 +104,11 @@ running → stopped directly when the workload exits on its own (reason=complete
 
 ## Shapes
 Defined in [`runtime.schema.json`](runtime.schema.json) (`$defs`): **WorkloadSpec** (create input),
-**WorkloadStatus** (the kernel's view), **RuntimeEvent** (the callback), plus the `RuntimeState` and
-`StopReason` enums. Conforming examples live in [`golden/`](golden/) and are validated by
+**WorkloadStatus** (the kernel's view), **RuntimeEvent** (the callback), **Error**, plus the
+`RuntimeState`, `StopReason`, `CallerCredential`, `CallbackSignature` and `RuntimeOwnedEnvPrefix`
+definitions and the `SignedEventVector` shape. Conforming examples live in [`golden/`](golden/) and are validated by
 [`validate.mjs`](validate.mjs) (run by `gate:schema`).
 
 ## Status
-**`lane:contract` — under review.** This is the first published contract; the shape is up for your
-reaction before the remaining seams (`transcript`, `lifecycle`, `acts`, `invocation`, `workspace`) are
-drafted. Not committed until reviewed (the human gate).
+**Sealed** in `contracts.seal.json` (gate:contract-version). An additive change re-seals with
+`pnpm seal:contracts` in a `lane:contract` PR; a breaking one is `runtime.v2`.

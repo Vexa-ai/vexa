@@ -121,6 +121,14 @@ class StepCtx:
     emit: Any = None                      # (event_type, source_id, refs) -> int reactions created
     flow: Any = None                      # the governing Flow (params via ctx.flow.param(key))
     checkpoint: Any = _no_checkpoint      # renew the lease + persist scratch, MID-step
+    #: THE DECLARED DOMAINS THAT ARE NOT DEPLOYED, for a step whose declaration said `degrade`
+    #: (F-D20). Empty for every other step and for every caller that constructs a `StepCtx` by
+    #: hand — which is every unit test in the suite — so a body that never asks is unchanged.
+    #:
+    #: Only a step that declared `absent={"<domain>": "degrade"}` is ever entered with this
+    #: non-empty: `abort` ends the reaction and `skip` never runs the body, so a body reading
+    #: this is reading a case its own declaration asked for.
+    absent: frozenset = field(default_factory=frozenset)
 
     @property
     def reaction_id(self) -> str:

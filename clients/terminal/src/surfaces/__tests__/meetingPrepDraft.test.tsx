@@ -18,7 +18,7 @@ vi.mock("../plannedApi", () => ({
   updatePlannedMeeting: vi.fn(async () => ({})),
   deletePlannedMeeting: vi.fn(async () => {}),
 }));
-vi.mock("../workspaceApi", () => ({
+vi.mock("../../data/workspaceApi", () => ({
   createSharedWorkspace: vi.fn(), listSharedMemberships: vi.fn(async () => []),
   listWorkspaceTree: vi.fn(async () => []), mintInvite: vi.fn(), readWorkspaceFile: vi.fn(async () => null),
 }));

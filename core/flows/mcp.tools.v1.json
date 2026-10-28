@@ -6,6 +6,7 @@
   "base_url_env": "FLOWS_API_URL",
   "served_at": "/.well-known/mcp-tools.json",
   "depends_on": ["identity"],
+  "admin_auth": { "header": "X-Flows-Operator-Key", "key_env": "VEXA_FLOWS_API_KEY" },
   "tools": [
     {
       "name": "flows_list",
@@ -54,7 +55,7 @@
       "requires": ["identity", "flows"],
       "route": { "method": "POST", "path": "/friction" },
       "arguments": ["session", "what_i_tried", "what_happened", "severity", "meeting_id", "tool", "deployment", "worker_image", "kind"],
-      "note": "PRD 40.9 open-decision 8 — friction is not a domain and this is its whole product surface: what did not work, dumped where the dev agent can read it and fix behaviour from it. Requires no agent domain: this is flows-api's own route, so it works in the no-agents profile too. NOTHING ON THIS ROUTE IS REQUIRED and no value a caller sends or omits produces a 400 (F-D27, prod 2026-09-04 11:0xZ: the route answered 400 \"session is required\" and threw away the report describing that refusal). `session` (the chat/meeting session this happened in) is what ties a report back to the conversation that produced it, so the tool description tells the agent to include it whenever it has one — but a report without one is filed, stored, and read back as \"no session\", because a missing join key is our gap and an absent session is signal too. Same for `what_i_tried`/`what_happened`. The only refusal left is authentication (401): a report attributed to nobody is a different object, not a poorer one. THE SINK TAKES ANY REPORT AS SENT (founder ruling 2026-09-04: \"we want to catch all signal … rich data, does not have to be too structured\"): `kind` and `severity` are FREE TEXT, stored verbatim, and any argument this route does not name is kept with the report under `extra` rather than dropped. The eight kinds are SUGGESTIONS, carried as `examples` plus one worked example each in the argument descriptions the MCP tool schema is derived from — never as an `enum`, because the MCP SDK validates a call against the tool schema and an enum there refuses the report instead of forwarding it. Never a 400 on a word; F-D26 lost twelve prod reports in twenty minutes to exactly that. TRANSPORT: the route now takes the whole report as a JSON BODY, which is where a person's own words about a failure belong — a query string is copied into every proxy and ingress access log in front of the service. The nine argument names above are UNCHANGED and still accepted as query parameters for one release (deprecated, warned once per process), because that is what this manifest's consumers already send; the body wins when a field arrives twice."
+      "note": "PRD 40.9 open-decision 8 — friction is not a domain and this is its whole product surface: what did not work, dumped where the dev agent can read it and fix behaviour from it. Requires no agent domain: this is flows-api's own route, so it works in the no-agents profile too. NOTHING ON THIS ROUTE IS REQUIRED and no value a caller sends or omits produces a 400 (F-D27, prod 2026-09-04 11:0xZ: the route answered 400 \"session is required\" and threw away the report describing that refusal). `session` (the chat/meeting session this happened in) is what ties a report back to the conversation that produced it, so the tool description tells the agent to include it whenever it has one — but a report without one is filed, stored, and read back as \"no session\", because a missing join key is our gap and an absent session is signal too. Same for `what_i_tried`/`what_happened`. The only refusal left is authentication (401): a report attributed to nobody is a different object, not a poorer one. THE SINK TAKES ANY REPORT AS SENT (founder ruling 2026-09-04: \"we want to catch all signal … rich data, does not have to be too structured\"): `kind` and `severity` are FREE TEXT, stored verbatim, and any argument this route does not name is kept with the report under `extra` rather than dropped. The eight kinds are SUGGESTIONS, carried as `examples` plus one worked example each in the argument descriptions the MCP tool schema is derived from — never as an `enum`, because the MCP SDK validates a call against the tool schema and an enum there refuses the report instead of forwarding it. Never a 400 on a word; F-D26 lost twelve prod reports in twenty minutes to exactly that. TRANSPORT: the route now takes the whole report as a JSON BODY, which is where a person's own words about a failure belong — a query string is copied into every proxy and ingress access log in front of the service. The nine argument names above are UNCHANGED and still accepted as query parameters for one release (deprecated, warned once per process), because that is what this manifest's consumers already send; the body wins when a field arrives twice. DEDUP: a report with the same subject, `tool` and normalised reason (the refusal reason token when `what_happened` carries one, else the text with ids, digits, hex, timestamps and quoted handles removed) inside the same UTC hour is not admitted again — it bumps `occurrences`/`last_seen` on the first report and answers `{recorded: false, duplicate_of, occurrences, instruction}`, telling the reporter not to file it again this run. The first report answers exactly as before."
     },
     {
       "name": "friction_so_far",
@@ -63,12 +64,208 @@
       "requires": ["identity", "flows"],
       "route": { "method": "GET", "path": "/friction" },
       "arguments": ["since", "limit"],
-      "note": "Your own filed reports, newest first — the subject is taken from your credential, same as reactions_list. The whole-instance dump and the fix verb stay operator-side (the rig's friction_dump/friction_fixed) for now."
+      "note": "Your own filed reports, newest first — the subject is taken from your credential, same as reactions_list. Each report carries `occurrences` (how many identical reports inside its UTC hour were folded into it; 1 when filed once) and `last_seen`. The whole-instance dump and the fix verb stay operator-side (the rig's friction_dump/friction_fixed) for now."
+    },
+    {
+      "name": "friction_list",
+      "identity": "operator",
+      "auth": "admin",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/friction/all" },
+      "arguments": ["since", "kind", "person", "status", "limit"],
+      "note": "The whole friction sink — every person's reports, newest first, with every free-text field scrubbed of credential-shaped text. `auth: admin` because `GET /friction/all` is gated by flows-api's own operator key, and the MCP edge spends that key for the deployment's admin account only (identity.v1 `admin_account`), never for an everyday account, the instance admin's included; everybody else reads their own reports with friction_so_far. Filters: since (epoch or ISO-8601), kind (case-insensitive), person (uid or address), status (open | fixed)."
+    },
+    {
+      "name": "mail_settings",
+      "identity": "operator",
+      "auth": "admin",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/mail/settings" },
+      "note": "What this deployment's mail does right now: the inbound allow-list and where it comes from, whether invitations are acted on, which mail kinds are on (`kinds`, the mail.<kind> switches), which mail templates are overridden in _global/mail, and which flows react to inbound mail. A read. Its answers are changed by the admin account editing _global/POLICIES.md and _global/mail/<name>.md (workspace_write, agent domain); credentials are reported as configured or not, never as values. Same admin gate as flows_submit."
+    },
+    {
+      "name": "mail_templates_list",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/mail/kinds" },
+      "note": "Every kind of mail this deployment can send (sign-in link, workspace/chat/meeting share invites, call invite, bot scheduled/joined/failed, prepare, minutes, attendee report, recording, daily/weekly report, notification digest, replies): whether it is on, off or admins-only, its template's current version and whether that version was test-sent, the variables a template may use, and what sends it today. The deployment's admin account only (Company mode). The design loop is mail_template_edit → mail_preview → mail_test_send → mail_kind_set."
+    },
+    {
+      "name": "mail_template_edit",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "PUT", "path": "/mail/templates/{kind}" },
+      "arguments": ["content"],
+      "note": "Rewrite the wording of one mail kind: `content` is the whole template — first line `subject: …`, then `---`, then the body. Use {{variables}} from mail_templates_list; never write a URL (Vexa appends the one link). Writes _global/mail/<template>.md as the admin account; the edit is a new template version, so test-send it again before it can be switched on. Admin account only."
+    },
+    {
+      "name": "mail_preview",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/mail/preview/{kind}" },
+      "arguments": ["sample", "draft"],
+      "note": "Render one mail kind exactly as it would be sent — subject and body — with the kind's sample values, overridden by `sample` (a dict of variables). `draft` renders unsaved template text instead of the live one. Sends nothing. Admin account only."
+    },
+    {
+      "name": "mail_test_send",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/mail/test-send/{kind}" },
+      "arguments": ["sample"],
+      "note": "Send the current template of one mail kind, with sample values, to YOUR OWN address — it can go nowhere else. Records that version as test-sent, which is what lets mail_kind_set switch the kind on. Works while the kind is still off. Admin account only."
+    },
+    {
+      "name": "mail_kind_set",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "PUT", "path": "/mail/kinds/{kind}" },
+      "arguments": ["state"],
+      "note": "Switch one mail kind `on`, `off`, or `admins` (only the admin account and instance admins receive it), written as `mail.<kind>` in _global/POLICIES.md. Refused for on/admins until the kind's CURRENT template version has been test-sent (mail_test_send), and refused for switching the sign-in link off. Admin account only."
+    },
+    {
+      "name": "mail_address",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/mail/address" },
+      "note": "The address to invite Vexa at: add it as a guest to a calendar event with a meeting link and the bot joins at the start. Every person may read it."
+    },
+    {
+      "name": "flows_submit",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/flows" },
+      "arguments": ["name", "trigger", "on_event", "steps", "params", "activate", "scope"],
+      "note": "Author a new version of a flow (ADR-0046). `auth: subject` — the caller's own credential travels and decides the scope: a person writes their own flow (`user:<uid>`), which only reacts to events about them and may name only the steps the deployment allows people (`agent_run` by default); the deployment's admin account's own credential, or the operator key, writes `scope: instance`. A routine is a flow with `trigger: {kind: schedule, cron}` and the `agent_run` step; `params.thread` names the chat it was created in (the turn states the id), and every run continues that chat — without it the routine gets a chat of its own. ONE TIME, NOT A CRON: `trigger: {kind: at, at: \"2027-03-01T13:13:00+01:00\"}` fires once and retires itself. A routine runs with nobody in the loop, so whatever needs the person is refused to it unless they GRANT it now, by name, in `params.grants` (`bot.request` send a bot · `bot.stop` stop it · `flow.retire_self` retire itself; capped by _global/POLICIES.md) — tell the person the answer's `may` sentence in your confirmation. A bot at a time needs no agent at all: `steps: [\"request_meeting_bot\"]`, `params: {meeting_url, grants: [\"bot.request\"], thread}`. A run whose acts are refused ends `failed` and says so in its chat. A worker with nobody in the loop is refused."
+    },
+    {
+      "name": "flow_lifecycle",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/flows/{name}/{version}/{action}" },
+      "note": "`action` is activate | retire | pause | resume | revoke_grants (withdraw what the routine may do on its own) on one version of one of YOUR flows, addressed by `name` + `version` — the path parameters are arguments without being declared, same shape as reaction_signal. The caller's own credential decides whose flow it may touch (ADR-0046): a person steers their own, the instance's needs the admin account or the operator key. A worker with nobody in the loop is refused — except a routine its person granted `flow.retire_self`, which may retire or pause itself and nothing else.",
+      "arguments": ["scope"]
+    },
+    {
+      "name": "routine_claim",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/flows/{name}/claim" },
+      "arguments": ["thread"],
+      "note": "Move one of YOUR routines (a scheduled flow) into a chat — usually this one (`thread`: the id your turn states). ONE operation: the running version keeps its schedule and version; only the chat it runs in changes, earlier runs stay where they were, and the chat is marked as the routine's at once. Never re-submit a routine to move it. The answer is read back after the change — active version, chat, next run (UTC): state only those facts, nothing you have not checked. A worker with nobody in the loop is refused."
+    },
+    {
+      "name": "routine_add_trigger",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/routines/triggers" },
+      "arguments": ["thread", "name", "trigger", "instruction"],
+      "note": "Give a chat one more timer: a routine it owns, `trigger: {kind: schedule, cron}` (UTC). A chat can own several routines — a standing concern such as production monitoring wakes on each, with the chat's history as memory. On a wake where nothing changed, answer in one line starting `Checked —` and nothing else. An event is not a routine (refused `routine_needs_schedule`). The answer is read back after the change; state only those facts."
+    },
+    {
+      "name": "concern_stage",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/concerns/stage" },
+      "arguments": ["thread", "stage", "note"],
+      "note": "Move a concern chat (this one: `thread` is the id your turn states) along its lifecycle — opened → active → waiting (the next move is somebody else's) → resolved (its exit condition is met: the recap was sent, the incident cleared, or the person closed it) → archived. The chat shows the stage and the home counts what waits. An EVENT AGENT is a flow on an event (not a routine): `flows_submit` with `trigger: {kind: event, event}`, `steps: [\"agent_run\"]` and `params.thread: \"per:<ref>\"` opens one concern chat per value of that ref (e.g. `per:meeting_id` — one follow-up chat per meeting) and routes a repeat into the same chat."
+    },
+    {
+      "name": "event_agents_pause",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/event-agents/pause" },
+      "arguments": ["everyone"],
+      "note": "Kill switch: pause every running event agent of the person (the instance administrator: `everyone=true`, all people's). Routines are untouched; each can be resumed with flow_lifecycle."
+    },
+    {
+      "name": "chat_subscribe",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/sinks" },
+      "arguments": ["thread", "name", "event", "filter", "wake", "instruction"],
+      "note": "Make a chat (this one: `thread` is the id your turn states) a SINK for an event stream: each matching event (`filter`: {ref: text}) lands as one compact card, with no agent run. `wake` decides when the chat's agent acts: never (a pure log), per_event, batch:<minutes>, match:<text>. State only what the answer says."
+    },
+    {
+      "name": "sensor_list",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/sensors" },
+      "arguments": ["scope"],
+      "note": "Your sensors (ADR-0050): each one's kind, filter, status (draft · active · degraded · stopped), whether its current version passed a test, its last events and next check — and the kinds a sensor can be made of. A sensor turns changes in the world (your calendar) into events with no model call and never acts."
+    },
+    {
+      "name": "sensor_create",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/sensors" },
+      "arguments": ["name", "kind", "filter", "connection_id", "interval_s", "scope"],
+      "note": "Design a sensor as a DRAFT from the person's words: `kind` (`calendar`), `filter` over each event, e.g. \"payload.video_url exists and payload.self_response != 'declined'\" (paths, ==, !=, in [..], exists, contains, and/or/not). Next: sensor_test, show the person what it would emit and drop, then sensor_action enable, then sensor_connect. A calendar sensor reads only under the person's grant: when sensor_test answers that it may not read the calendar, ask the person, call calendar_sensor_grant, then test again."
+    },
+    {
+      "name": "sensor_test",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/sensors/{name}/test" },
+      "arguments": ["scope"],
+      "note": "Dry-run a sensor over the person's recent real data with NO side effects: the events it WOULD emit, and what it dropped with the reason. A passing test is required to enable this version. Show both lists to the person in a few lines."
+    },
+    {
+      "name": "sensor_action",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/sensors/{name}/{action}" },
+      "arguments": ["filter", "connection_id", "interval_s", "scope"],
+      "note": "`action`: enable (only a version that passed sensor_test) · pause · update (new filter / connection_id / interval_s → a new version, back to draft until tested again) · delete."
+    },
+    {
+      "name": "sensor_connect",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/sensors/{name}/connect" },
+      "arguments": ["thread", "wake", "instruction", "scope"],
+      "note": "Connect a sensor's events to a chat (this one: `thread` is the id your turn states): each event lands as a card and the chat's agent wakes as `wake` says (per_event · batch:<minutes> · match:<text> · never) with `instruction`. For \"a bot 1 min before each meeting\" with no model call per meeting, prefer flows_submit with trigger {kind: relative, event: calendar.event.*, filter, at: \"payload.start - 60s\", key: \"payload.event_id\"} and steps [request_meeting_bot] with params {meeting_url: \"{{payload.video_url}}\", grants: [\"bot.request\"]}."
+    },
+    {
+      "name": "chat_unsubscribe",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "POST", "path": "/sinks/{name}/unsubscribe" },
+      "note": "Stop a chat's subscription by its name; the cards already posted stay."
+    },
+    {
+      "name": "flow_runs",
+      "identity": "user",
+      "auth": "subject",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/flows/runs" },
+      "arguments": ["subject", "limit"],
+      "note": "The runs of your own flows — a routine's fires and an event flow of yours — newest first, each with the receipts its steps left (ADR-0046 decision 10). Never anybody else's; the subject is taken from your credential."
     }
   ],
   "publishes_events": [
-    { "event": "invite.received", "status": "published today", "triggers": "invite_intake v3" },
-    { "event": "friction.reported", "status": "published today", "triggers": "friction_log v1 — `flows_defs/production.py` registers it on this event, and without a matching flow `admit()` would create nothing and the report would not be readable back (`flows/admission.py`; `tests/test_friction.py::test_friction_reported_has_a_registered_flow_in_every_profile`). This line used to deny that any flow reacted to the event, which was the manifest asserting the exact failure the flow exists to prevent. Registered in every profile: friction must work with no agent domain deployed (PRD 40.9 open-decision 8)." }
+    { "event": "invite.received", "status": "published today", "triggers": "invite_intake v4, and arms or moves invite_join's keyed schedule (ADR-0050)" },
+    { "event": "invite.cancelled", "status": "published today", "triggers": "cancels invite_join's keyed schedule for the meeting (ADR-0050)" },
+    { "event": "friction.reported", "status": "published today", "triggers": "friction_log v1 — `flows_defs/production.py` registers it on this event, and without a matching flow `admit()` would create nothing and the report would not be readable back (`flows/admission.py`; `tests/test_friction.py::test_friction_reported_has_a_registered_flow_in_every_profile`). This line used to deny that any flow reacted to the event, which was the manifest asserting the exact failure the flow exists to prevent. Registered in every profile: friction must work with no agent domain deployed (PRD 40.9 open-decision 8)." },
+    { "event": "friction.fixed", "status": "published today", "triggers": "friction_fix v1 — recorded as a fact on the timeline only, same as friction_log; #1510's C3 close-out half of the same sink" }
   ],
   "handed_off_events": [
     { "event": "meeting.started", "event_v2_owner": "meetings", "note": "F168/F181: meeting-api now publishes this too (config.v1 publish-edge, meeting_api/events.py), and the carrier census records meetings as owner. invite_intake v3's own emit_started keeps running unchanged — same source_event_id scheme (live-<meeting_id>), so admission dedups the two producers into one reaction (flows/admission.py) rather than firing live_meeting twice. Retiring emit_started is a follow-up, not part of this change." },

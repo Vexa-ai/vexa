@@ -1,0 +1,565 @@
+"""multiplex.py — the ``/ws`` control loop and its redis fan-in.
+
+Carved verbatim from ``services/api-gateway/main.py`` ``websocket_multiplex`` and moved out of
+``app.py`` unchanged: it shares nothing with the REST proxy but the ``Authorizer`` port and the
+delegation rule (a worker's delegation token opens no socket). ``create_app`` mounts it at ``/ws``;
+the conformance ws-harness drives it directly through the package front door
+(``gateway.run_multiplex``).
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+from typing import Dict, List, Set, Tuple
+
+from fastapi import WebSocket, WebSocketDisconnect
+
+from .changed import QUERY_KEY_REFUSAL, SCOPE_HOW, refusal
+from .delegation import is_delegated
+from .obs import log_event, set_user_id
+from .ws_auth import accept, ws_credential
+from .ports import Authorizer, AuthUnavailable, RedisBus
+
+
+#: THE SOCKET IS HELD TO THE REST ROUTES' SCOPES, read from the same rows (the assembled routes.v1
+#: table), so a key reaches nothing here it could not reach over REST. A meeting subscription fans in
+#: the live transcript (`tc:meeting:{id}:mutable`), so it takes the transcript read's scopes; the
+#: socket itself carries meeting-status frames, so opening it takes the scopes of a route that
+#: answers meeting status (`GET /meetings` or `GET /bots/status`).
+TRANSCRIPT_ROUTE = ("GET", "/transcripts/{platform}/{native_meeting_id}")
+STATUS_ROUTES = (("GET", "/meetings"), ("GET", "/bots/status"))
+
+
+#: How often an open socket re-authorizes what it already streams (see `_reauthorize`). A reader the
+#: owner removed stops receiving that meeting within about this long.
+WS_REAUTH_INTERVAL_SEC = 15.0
+#: Consecutive failed authorize hops after which per-meeting subscriptions are dropped (fail closed).
+WS_REAUTH_MAX_FAILURES = 2
+
+#: TRANSCRIPT SIGNALS (ADR transcript signals): the signals service is the one writer of the redis
+#: STREAM ``sig:meeting:{row}`` — one entry per scored segment, ``{segment_id, scores, words, model,
+#: brief_version, at}``. A subscription asks for it by name (``streams: ["signals"]``); a subscribe that
+#: names no streams gets the 0.12 channels and nothing new. It is granted by the SAME authorize hop as
+#: the transcript and read for the ROW that hop answered, so whoever may read a meeting's transcript
+#: may read its signals, and nobody else.
+STREAM_NAMES = ("transcript", "signals")
+#: What a subscribe without ``streams`` gets: the 0.12 channels (transcript, status, chat).
+DEFAULT_STREAMS = ("transcript",)
+#: How many annotations a new subscription is sent first (the newest), then it follows live.
+SIGNALS_BACKLOG = 500
+#: How long one blocking read of the signals stream waits before it looks again (ms).
+SIGNALS_BLOCK_MS = 5000
+
+def _num(value, cast=float):
+    try:
+        return cast(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _scores(value) -> dict:
+    """``{label: 0..1}`` — anything that is not a name and a number is dropped."""
+    if not isinstance(value, dict):
+        return {}
+    out = {}
+    for k, v in value.items():
+        n = _num(v)
+        if isinstance(k, str) and k and n is not None:
+            out[k[:64]] = max(0.0, min(1.0, n))
+    return out
+
+
+def signal_annotation(entry_id: str, fields: dict) -> "dict | None":
+    """One stream entry → the annotation the frame carries, or None when it is not one.
+
+    The carrier holds the annotation either as one JSON ``payload`` (the transcript stream's shape)
+    or as flat fields whose ``scores`` / ``words`` are JSON strings; both read the same. An entry
+    without a segment id annotates nothing and is skipped, so one bad write never stops the stream."""
+    raw = dict(fields or {})
+    for name in ("payload", "data"):
+        if isinstance(raw.get(name), str):
+            try:
+                body = json.loads(raw[name])
+            except (TypeError, ValueError):
+                return None
+            raw = body if isinstance(body, dict) else {}
+            break
+    for name in ("scores", "words"):
+        if isinstance(raw.get(name), str):
+            try:
+                raw[name] = json.loads(raw[name])
+            except (TypeError, ValueError):
+                raw[name] = {}
+    segment = raw.get("segment_id")
+    if not isinstance(segment, (str, int)) or str(segment).strip() == "":
+        return None
+    out = {"id": str(entry_id), "segment_id": str(segment), "scores": _scores(raw.get("scores")),
+           "words": _scores(raw.get("words"))}
+    if isinstance(raw.get("model"), str):
+        out["model"] = raw["model"][:128]
+    version = _num(raw.get("brief_version"), int)
+    if version is not None:
+        out["brief_version"] = version
+    at = _num(raw.get("at"))
+    if at is not None:
+        out["at"] = at
+    return out
+
+
+def _assembled_scopes() -> dict:
+    """The full-profile route table (`gateway.app.ROUTE_SCOPES`) — for a caller that names none."""
+    from .app import ROUTE_SCOPES
+    return ROUTE_SCOPES
+
+
+async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, *,
+                        route_scopes: "dict | None" = None) -> None:
+    """The ``/ws`` control loop + fan-in, carved verbatim from main.websocket_multiplex.
+
+    PUBLIC (P2 follow-up): the conformance ws-harness drives this directly to exercise the SHIPPED
+    multiplex against its fakes — exposed on the front door (``gateway.run_multiplex``) so the
+    harness no longer reaches for a private (the P1-flagged smell).
+
+    guard (PRE-accept, opt-in) → accept → authenticate (missing key → error + close 4401) →
+      loop over client frames:
+      subscribe   → authorize, register a redis fan-in per meeting, ack ``subscribed``;
+      unsubscribe → cancel the fan-in task(s), ack ``unsubscribed`` (stops forwarding);
+      ping        → ``pong``;
+      otherwise   → an ``error`` frame (invalid_json / unknown_action / invalid_*_payload).
+    Each subscription fans in ``tc:meeting:{id}:mutable`` / ``bm:meeting:{id}:status`` /
+    ``va:meeting:{id}:chat`` and forwards every raw payload to the socket (main.py:2204); one that
+    names ``streams: ["signals"]`` also (or only) follows ``sig:meeting:{id}`` as ``meeting.signals``.
+    """
+    # --- optional WS guard hook (GUARD_WS_ENABLED, default false) ---
+    # HTTP SecurityMiddleware does not intercept /ws (Starlette middleware is HTTP-only).
+    # When the toggle is on, resolve the client IP via the same trusted-proxies XFF logic
+    # as guard's HTTP path and deny over-limit/banned IPs at connect. Opt-in: the default
+    # (false) leaves the WS path unchanged so the conformance harness observes zero change.
+    #
+    # PRE-ACCEPT: the full guard check (whitelist/blacklist/ban/rate-limit) runs BEFORE
+    # ``ws.accept()`` so a banned IP never gets a WebSocket upgrade. On denial, close with
+    # 4401 BEFORE accept — Starlette forwards the pre-accept ``websocket.close`` unchanged
+    # (its state machine accepts ``websocket.close`` while CONNECTING); uvicorn (0.51 here)
+    # turns that into an HTTP 403 to the upgrade request (no upgrade, no frames). A data
+    # frame (send_text) cannot be sent before accept, so the rejection is the close alone —
+    # the client sees the 403, not an ip_blocked JSON frame.
+    from .ratelimit import env_truthy
+
+    if env_truthy(os.getenv("GUARD_WS_ENABLED")):
+        from .edge_guard import ws_guard_check
+
+        if not ws_guard_check(ws):
+            await ws.close(code=4401)  # pre-accept reject → HTTP 403 to the upgrade
+            return
+
+    credential = ws_credential(ws)
+    await accept(ws, credential.subprotocol)
+
+    if credential.source == "query":
+        log_event("ws_query_key_refused", audience="system", level="warning", span="ws",
+                  fields={"path": "/ws"})
+        try:
+            await ws.send_text(json.dumps(QUERY_KEY_REFUSAL))
+        finally:
+            await ws.close(code=4401)  # Unauthorized: the URL carries no credential
+        return
+
+    api_key = credential.key
+    if not api_key:
+        try:
+            await ws.send_text(json.dumps({"type": "error", "error": "missing_api_key"}))
+        finally:
+            await ws.close(code=4401)  # Unauthorized
+        return
+
+    # Connect-time identity resolve (Track G — meeting-status-ws §C.2). Today connect only checked
+    # the key was PRESENT and resolved user_id per-subscribe; now we resolve the key to a user up
+    # front (the SAME resolver /auth/me + the proxy use — ports.py resolve / app.py:96-99,119-125)
+    # so we can auto-subscribe the socket to its USER-SCOPED channel. Fail-closed like the proxy:
+    # a present-but-invalid key → invalid_api_key + close 4401, not a silently half-open socket.
+    try:
+        user_data = await authorizer.resolve(api_key)
+    except AuthUnavailable as e:
+        # #495: resolve() now RAISES when the validation hop is unreachable/faulted. On the REST
+        # surface that becomes a 503; on this already-accepted socket the truthful equivalent is a
+        # typed error frame + a distinct retryable close code (4503 ≈ HTTP 503), NOT 4401 (which
+        # asserts the key is bad) and NOT an uncaught raise (which drops the socket 1006/1011 with
+        # no signal). A valid key must not be told it is invalid because our auth path is down.
+        log_event("auth_infra_unavailable", audience="system", level="error", span="ws",
+                  fields={"reason": type(e).__name__, "detail": str(e)})
+        try:
+            await ws.send_text(json.dumps({"type": "error", "error": "auth_unavailable"}))
+        finally:
+            await ws.close(code=4503)  # retry later — auth infrastructure unavailable
+        return
+    # A worker's delegation token is an MCP credential (`delegation.py`): it opens no
+    # socket here, so it is answered exactly like a key this edge does not accept.
+    if not user_data or is_delegated(api_key, user_data):
+        try:
+            await ws.send_text(json.dumps({"type": "error", "error": "invalid_api_key"}))
+        finally:
+            await ws.close(code=4401)  # Unauthorized
+        return
+    user_id = user_data["user_id"]
+    set_user_id(user_id)
+
+    # A KEY WITHOUT THE SCOPE IS REFUSED HERE AS OVER REST (`_authorize`): a key that can read no
+    # meeting status opens no socket, and one that cannot read transcripts subscribes to none.
+    table = route_scopes if route_scopes is not None else _assembled_scopes()
+    held = {str(s) for s in (user_data.get("scopes") or [])}
+    status_scopes = frozenset().union(*(table.get(r, frozenset()) for r in STATUS_ROUTES))
+    transcript_scopes = frozenset(table.get(TRANSCRIPT_ROUTE, frozenset()))
+    if not held & status_scopes:
+        log_event("request_denied_scope", audience="user", level="warning", span="ws",
+                  user_id=user_id, fields={"path": "/ws", "required": sorted(status_scopes)})
+        try:
+            await ws.send_text(json.dumps({**refusal("insufficient_scope", SCOPE_HOW),
+                                           "details": "this key reads no meeting status"}))
+        finally:
+            await ws.close(code=4403)  # Forbidden
+        return
+
+    sub_tasks: Dict[Tuple, asyncio.Task] = {}
+    subscribed_meetings: Set[Tuple] = set()
+    # The meeting ROW each subscription streams. A native id is not an identity — a recurring code
+    # names many rows, across tenants too — so the live re-authorization compares the row it is
+    # streaming, never the (platform, native) pair the client typed.
+    streamed_row: Dict[Tuple, str] = {}
+
+    async def fan_in(channels: List[str]):
+        pubsub = redis.pubsub()
+        await pubsub.subscribe(*channels)
+        try:
+            async for message in pubsub.listen():
+                if message.get("type") != "message":
+                    continue
+                data = message.get("data")
+                try:
+                    await ws.send_text(data)  # forward the raw redis payload (main.py:2204)
+                except Exception:
+                    break
+        finally:
+            try:
+                await pubsub.unsubscribe(*channels)
+                await pubsub.close()
+            except Exception:
+                pass
+
+    # The signals stream each subscription reads, beside its pub/sub fan-in (same key).
+    sig_tasks: Dict[Tuple, asyncio.Task] = {}
+
+    async def signals_in(row: str, platform: str, native_id: str):
+        """Follow ``sig:meeting:{row}`` — the newest SIGNALS_BACKLOG entries first, then live — and
+        send each batch as one ``meeting.signals`` frame. ``row`` is the row the authorize hop
+        granted; nothing the client typed names the stream."""
+        key = f"sig:meeting:{row}"
+        meeting = {"id": str(row), "platform": platform, "native_id": native_id}
+
+        async def send(entries) -> bool:
+            batch = [a for a in (signal_annotation(i, f) for i, f in entries) if a]
+            if not batch:
+                return True
+            try:
+                await ws.send_text(json.dumps({"type": "meeting.signals", "meeting": meeting, "annotations": batch}))
+                return True
+            except Exception:
+                return False
+
+        last = "0-0"
+        try:
+            backlog = list(reversed(await redis.xrevrange(key, count=SIGNALS_BACKLOG) or []))
+            if backlog:
+                last = backlog[-1][0]
+                if not await send(backlog):
+                    return
+            while True:
+                resp = await redis.xread({key: last}, count=200, block=SIGNALS_BLOCK_MS)
+                for _stream, entries in resp or []:
+                    if entries:
+                        last = entries[-1][0]
+                        if not await send(entries):
+                            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — the transcript and the socket stay up without signals
+            log_event("ws_signals_read_failed", audience="system", level="warning", span="ws",
+                      user_id=user_id, fields={"detail": str(e)})
+
+    async def subscribe_meeting(platform: str, native_id: str, user_id, meeting_id, streams=DEFAULT_STREAMS):
+        key = (platform, native_id, user_id)
+        subscribed_meetings.add(key)
+        streamed_row[key] = str(meeting_id)
+        if "transcript" in streams and key not in sub_tasks:
+            channels = [
+                f"tc:meeting:{meeting_id}:mutable",
+                f"bm:meeting:{meeting_id}:status",
+                f"va:meeting:{meeting_id}:chat",
+            ]
+            sub_tasks[key] = asyncio.create_task(fan_in(channels))
+        if "signals" in streams and key not in sig_tasks:
+            if callable(getattr(redis, "xread", None)) and callable(getattr(redis, "xrevrange", None)):
+                sig_tasks[key] = asyncio.create_task(signals_in(str(meeting_id), platform, native_id))
+
+    async def unsubscribe_meeting(platform: str, native_id: str, user_id):
+        key = (platform, native_id, user_id)
+        for tasks in (sub_tasks, sig_tasks):
+            task = tasks.pop(key, None)
+            if task:
+                task.cancel()
+        subscribed_meetings.discard(key)
+        streamed_row.pop(key, None)
+
+    # Auto-subscribe the authed socket to its USER scope (Track G — meeting-status-ws §C.2). The
+    # user-scoped redis channel `u:{user_id}:meetings` carries every meeting.status frame for this
+    # user (the publisher mirrors each bm:meeting:{id}:status onto it — §C.3). No client `subscribe`
+    # frame is needed: the identity is resolved at connect. This reuses the SAME verbatim `fan_in`
+    # path as the per-meeting channels — the gateway is a thin raw forwarder for the user channel
+    # exactly as it is for tc:/bm:/va:. Per-meeting subscriptions below are unchanged.
+    #
+    # AND to every workspace this identity is a member of — `w:{workspace_id}:meetings`, carrying the
+    # status frames of meetings BOUND to that workspace. A bot requested inside a workspace makes the
+    # workspace's meeting, so its transitions belong to every member's list, not only the requester's.
+    # The membership list comes from the SAME connect-time identity resolve as `user_id` above
+    # (`user_data["workspaces"]`, which identity builds from `users.data.memberships[]`), so a client
+    # cannot name a workspace it does not belong to — it sends no subscribe frame at all. Membership
+    # is therefore evaluated per CONNECTION: a member added mid-session picks the channel up on their
+    # next connect, which is the same freshness the rest of this socket's identity already has.
+    user_channel = f"u:{user_id}:meetings"
+    # AND the person's own notifications (#1783): `u:{user_id}:notifications` carries what happened
+    # to them — added to a chat, mentioned, invited, a call started — published by agent-api, the one
+    # writer, and the `rail` frames that make a shared chat appear without a reload. One channel per
+    # identity, resolved at connect like the meetings channel, so a socket hears only its own person;
+    # every tab they have open holds its own socket, so every tab hears it at once.
+    notify_channel = f"u:{user_id}:notifications"
+
+    def member_channels_of(data: dict) -> List[str]:
+        return [f"w:{str(w).strip()}:meetings" for w in (data.get("workspaces") or []) if str(w).strip()]
+
+    member_channels = member_channels_of(user_data)
+    user_sub_task = asyncio.create_task(fan_in([user_channel, notify_channel, *member_channels]))
+
+    # LIVE RE-AUTHORIZATION. Authorization used to happen once, at subscribe; a reader the owner
+    # removed mid-meeting kept the transcript flowing until they disconnected. Every
+    # WS_REAUTH_INTERVAL_SEC this re-asks the SAME authorizer hop the subscribe used (meeting-api's
+    # one access union) for everything this socket streams, and stops whatever no longer passes —
+    # with a `subscription_revoked` frame, never silently. The identity is re-resolved on the same
+    # tick so a workspace membership that ended stops that workspace's status channel too.
+    state = {"member_channels": member_channels, "user_sub_task": user_sub_task, "failures": 0}
+
+    async def _reauthorize_once() -> bool:
+        """One re-authorization pass. False when the socket was closed (the key is gone)."""
+        try:
+            fresh = await authorizer.resolve(api_key)
+        except AuthUnavailable:
+            fresh = user_data  # cannot tell right now; the subscription check below still runs
+        if not fresh or is_delegated(api_key, fresh):
+            try:
+                await ws.send_text(json.dumps({"type": "error", "error": "invalid_api_key"}))
+            finally:
+                await ws.close(code=4401)
+            return False
+        channels = member_channels_of(fresh)
+        if channels != state["member_channels"]:
+            state["user_sub_task"].cancel()
+            state["member_channels"] = channels
+            state["user_sub_task"] = asyncio.create_task(fan_in([user_channel, notify_channel, *channels]))
+        keys = list(subscribed_meetings)
+        if not keys:
+            return True
+        refs = [{"platform": k[0], "native_meeting_id": k[1]} for k in keys]
+        try:
+            result = await authorizer.authorize_subscribe(api_key, refs)
+            errors = [str(e) for e in (result.get("errors") or [])]
+            hop_failed = any(e.startswith(("authorization_call_failed", "authorization_service_error",
+                                           "authorization_unavailable")) for e in errors)
+        except Exception:  # noqa: BLE001 — a failed hop is a failed hop, not a crash
+            result, hop_failed = {}, True
+        if hop_failed:
+            state["failures"] += 1
+            log_event("ws_reauthorize_failed", audience="system", level="warning", span="ws",
+                      user_id=user_id, fields={"failures": state["failures"]})
+            if state["failures"] < WS_REAUTH_MAX_FAILURES:
+                return True
+            for k in keys:
+                await unsubscribe_meeting(*k)
+            await ws.send_text(json.dumps({
+                "type": "error", "error": "authorization_call_failed",
+                "details": "access to the subscribed meetings could not be re-confirmed; subscribe again"}))
+            state["failures"] = 0
+            return True
+        state["failures"] = 0
+        # BY ROW, not by pair: a reader removed from one meeting may still reach ANOTHER row with the
+        # same native id (a recurring code, their own bot in the same call), and the authorizer then
+        # answers with that row. The stream they hold is the removed one, so it must stop.
+        still = {str(a.get("meeting_id")) for a in (result.get("authorized") or [])
+                 if a.get("meeting_id") is not None}
+        for k in keys:
+            if streamed_row.get(k) in still:
+                continue
+            await unsubscribe_meeting(*k)
+            log_event("ws_subscription_revoked", audience="user", span="ws", user_id=user_id,
+                      fields={"platform": k[0], "native_id": k[1]})
+            await ws.send_text(json.dumps({"type": "error", "error": "subscription_revoked",
+                                           "details": {"platform": k[0], "native_id": k[1]}}))
+        return True
+
+    async def _reauthorize_loop():
+        try:
+            while True:
+                await asyncio.sleep(WS_REAUTH_INTERVAL_SEC)
+                if not await _reauthorize_once():
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — surfaced, then the socket is closed rather than left unchecked
+            log_event("ws_reauthorize_crashed", audience="system", level="error", span="ws",
+                      user_id=user_id, fields={"detail": str(e)})
+            try:
+                await ws.close(code=1011)
+            except Exception:
+                pass
+
+    reauth_task = asyncio.create_task(_reauthorize_loop())
+
+    try:
+        while True:
+            try:
+                raw = await ws.receive_text()
+            except WebSocketDisconnect:
+                break
+
+            try:
+                msg = json.loads(raw)
+            except Exception:
+                await ws.send_text(json.dumps({"type": "error", "error": "invalid_json"}))
+                continue
+            # Syntactically-valid but NON-OBJECT JSON ([1,2,3], 42, "x", null): guard before `.get()`,
+            # else AttributeError escapes run_multiplex and KILLS the socket — a trivial public-edge DoS.
+            if not isinstance(msg, dict):
+                await ws.send_text(json.dumps({"type": "error", "error": "invalid_json"}))
+                continue
+
+            action = msg.get("action")
+            if action == "subscribe":
+                meetings = msg.get("meetings", None)
+                if not isinstance(meetings, list):
+                    await ws.send_text(json.dumps({
+                        "type": "error", "error": "invalid_subscribe_payload",
+                        "details": "'meetings' must be a non-empty list"}))
+                    continue
+                if len(meetings) == 0:
+                    await ws.send_text(json.dumps({
+                        "type": "error", "error": "invalid_subscribe_payload",
+                        "details": "'meetings' list cannot be empty"}))
+                    continue
+                payload_meetings = []
+                for m in meetings:
+                    if isinstance(m, dict):
+                        plat = str(m.get("platform", "")).strip()
+                        nid = str(m.get("native_id", "")).strip()
+                        if plat and nid:
+                            payload_meetings.append({"platform": plat, "native_meeting_id": nid})
+                if not payload_meetings:
+                    await ws.send_text(json.dumps({
+                        "type": "error", "error": "invalid_subscribe_payload",
+                        "details": "no valid meeting objects"}))
+                    continue
+                # WHICH STREAMS (additive): absent → the 0.12 channels; otherwise a non-empty list of
+                # known names. Signals are only ever read for a row the hop below grants.
+                streams = msg.get("streams", None)
+                if streams is None:
+                    streams = list(DEFAULT_STREAMS)
+                elif (not isinstance(streams, list) or not streams
+                      or any(s not in STREAM_NAMES for s in streams)):
+                    await ws.send_text(json.dumps({
+                        "type": "error", "error": "invalid_subscribe_payload",
+                        "details": f"'streams' must be a non-empty list of {list(STREAM_NAMES)}"}))
+                    continue
+                if not held & transcript_scopes:
+                    log_event("request_denied_scope", audience="user", level="warning", span="ws",
+                              user_id=user_id,
+                              fields={"path": "/ws subscribe", "required": sorted(transcript_scopes)})
+                    await ws.send_text(json.dumps({
+                        **refusal("insufficient_scope", SCOPE_HOW),
+                        "details": "subscribing streams a meeting's transcript; this key may not "
+                                   "read transcripts"}))
+                    continue
+
+                # The downstream authorize hop must never crash the socket: a RAISE → authorization_call_failed
+                # frame + continue; a non-200 (errors carried, nothing authorized) → authorization_service_error
+                # frame, NOT a misleading empty `subscribed` ack that hides the auth backend being down.
+                try:
+                    result = await authorizer.authorize_subscribe(api_key, payload_meetings)
+                except Exception as e:  # noqa: BLE001 — surface as a protocol error, keep the socket alive
+                    await ws.send_text(json.dumps({
+                        "type": "error", "error": "authorization_call_failed", "details": str(e)}))
+                    continue
+                authorized = result.get("authorized") or []
+                auth_errors = result.get("errors") or []
+                if not authorized and auth_errors:
+                    first = str(auth_errors[0])
+                    code = ("authorization_call_failed"
+                            if first.startswith("authorization_call_failed")
+                            else "authorization_service_error")
+                    await ws.send_text(json.dumps({"type": "error", "error": code, "details": first}))
+                    continue
+                subscribed: List[Dict[str, str]] = []
+                for item in authorized:
+                    plat = item.get("platform"); nid = item.get("native_id")
+                    user_id = item.get("user_id"); meeting_id = item.get("meeting_id")
+                    if plat and nid and user_id and meeting_id:
+                        await subscribe_meeting(plat, nid, user_id, meeting_id, tuple(streams))
+                        subscribed.append({"platform": plat, "native_id": nid})
+                await ws.send_text(json.dumps({"type": "subscribed", "meetings": subscribed}))
+
+            elif action == "unsubscribe":
+                meetings = msg.get("meetings", None)
+                if not isinstance(meetings, list):
+                    await ws.send_text(json.dumps({
+                        "type": "error", "error": "invalid_unsubscribe_payload",
+                        "details": "'meetings' must be a list"}))
+                    continue
+                unsubscribed: List[Dict[str, str]] = []
+                errors: List[str] = []
+                for idx, m in enumerate(meetings):
+                    if not isinstance(m, dict):
+                        errors.append(f"meetings[{idx}] must be an object")
+                        continue
+                    plat = str(m.get("platform", "")).strip()
+                    nid = str(m.get("native_id", "")).strip()
+                    if not plat or not nid:
+                        errors.append(f"meetings[{idx}] missing 'platform' or 'native_id'")
+                        continue
+                    matching_key = None
+                    for key in subscribed_meetings:
+                        if key[0] == plat and key[1] == nid:
+                            matching_key = key
+                            break
+                    if matching_key:
+                        await unsubscribe_meeting(plat, nid, matching_key[2])
+                        unsubscribed.append({"platform": plat, "native_id": nid})
+                    else:
+                        errors.append(f"meetings[{idx}] not currently subscribed")
+                if errors and not unsubscribed:
+                    await ws.send_text(json.dumps({
+                        "type": "error", "error": "invalid_unsubscribe_payload", "details": errors}))
+                    continue
+                await ws.send_text(json.dumps({"type": "unsubscribed", "meetings": unsubscribed}))
+
+            elif action == "ping":
+                await ws.send_text(json.dumps({"type": "pong"}))
+            else:
+                await ws.send_text(json.dumps({"type": "error", "error": "unknown_action"}))
+    except WebSocketDisconnect:
+        pass
+    finally:
+        reauth_task.cancel()
+        state["user_sub_task"].cancel()  # Track G — tear down the user-scope fan-in on disconnect.
+        for task in [*sub_tasks.values(), *sig_tasks.values()]:
+            task.cancel()
+
+
+# Backward-compatible private alias (kept so any existing internal reference still resolves; the
+# public name ``run_multiplex`` is the front door the conformance harness now imports).
+_run_multiplex = run_multiplex

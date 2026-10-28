@@ -17,7 +17,7 @@ parent keeps the ORM classes only as a legacy READ fallback guarded by
 `to_regclass('public.recordings') IS NOT NULL`, so omitting the tables is safe.
 """
 from sqlalchemy import (
-    Column, String, Text, Integer, DateTime, Float,
+    Column, String, Text, Integer, BigInteger, DateTime, Float, Boolean,
     ForeignKey, Index, UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB, ARRAY
@@ -31,6 +31,58 @@ Base = declarative_base()
 # --------------------------------------------------------------------------- #
 # identity tables (parent: libs/admin-models/admin_models/models.py)
 # --------------------------------------------------------------------------- #
+#: The org every install has (MIGRATION-0008). One org per install for now: every existing and new
+#: account belongs to it, and its policy source is the install's `_global`.
+DEFAULT_ORG_ID = "default"
+#: An individual account's org of one is ``p-<user id>`` (kind ``personal``).
+PERSONAL_ORG_PREFIX = "p-"
+
+
+class Org(Base):
+    """The org as a first-class object (MIGRATION-0008, architecture decision A1).
+
+    Identity is its one writer. One row per install for now (`DEFAULT_ORG_ID`, created by the
+    convergence); the columns are what later per-org policy, CRM and billing hang on, so a second org
+    is a data change rather than a refactor:
+
+    - ``policy_source`` names the policy tier agent-api resolves for this org: ``_global`` (the
+      install's company layer) for the default org; later ``_orgs/<id>``.
+    - ``crm_org_id`` ties the org to its CRM organisation (crm-api's ``CRM_ORG_ID``, its ``org_id``
+      key). NULL means "not bound yet"; the convergence stamps it from ``CRM_ORG_ID`` when admin-api
+      is given it.
+    - ``billing_account`` is where the org's billing account will hang. A field only: nothing reads
+      it yet."""
+    __tablename__ = "orgs"
+
+    id = Column(String(64), primary_key=True)
+    name = Column(String(200), nullable=False)
+    policy_source = Column(String(255), nullable=False, server_default=text("'_global'"),
+                           default="_global")
+    #: ``org`` (a company) or ``personal`` (an individual account's org of one, ``p-<user id>``: the
+    #: boundary of their personal CRM). Every org a migration creates is ``org``.
+    kind = Column(String(16), nullable=False, server_default=text("'org'"), default="org")
+    crm_org_id = Column(String(255), nullable=True)
+    billing_account = Column(String(255), nullable=True)
+    data = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=lambda: {})
+    created_at = Column(DateTime, server_default=func.now(), default=func.now())
+
+
+class OrgMember(Base):
+    """An EXPLICIT membership of an account in an org, with its role (MIGRATION-0008).
+
+    An account's home org is ``users.org_id``, and it is a member there without a row here: the
+    role is then derived (``admin`` for the instance admin, else ``member``; `app/orgs.py`). So the
+    migration writes no row per user. A row here is a role override in the home org, or (later) a
+    membership in a second org."""
+    __tablename__ = "org_members"
+
+    org_id = Column(String(64), ForeignKey("orgs.id", ondelete="CASCADE"), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True,
+                     index=True)
+    role = Column(String(32), nullable=False, server_default=text("'member'"), default="member")
+    created_at = Column(DateTime, server_default=func.now(), default=func.now())
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -42,6 +94,12 @@ class User(Base):
     max_concurrent_bots = Column(Integer, nullable=False, server_default="3", default=3)
     # webhook_url / webhook_secret / webhook_events live here (surfaced by /internal/validate)
     data = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=lambda: {})
+    # MIGRATION-0008 — the account's home org. A constant server default, so on Postgres >= 11 the
+    # additive ADD COLUMN is a catalog change (no table rewrite, no per-row UPDATE): every existing
+    # row reads the default org. Deliberately no FK and no index yet: both would scan or lock
+    # `users` in-band; they are out-of-band steps for when a second org exists (the MIGRATION doc).
+    org_id = Column(String(64), nullable=False, server_default=text("'default'"),
+                    default=DEFAULT_ORG_ID)
 
     api_tokens = relationship("APIToken", back_populates="user")
 
@@ -65,7 +123,102 @@ class User(Base):
         # UNIQUE upgrade is an operator step AFTER reconciling the duplicates — the SQL to find
         # them, and the CONCURRENTLY build, are in schema/MIGRATION-0007-users-email-lower.md.
         Index("ix_users_email_lower", text("lower(email)")),
+        # The public profile's opaque handle (app/public_profile.py): directory reads and crm-api's live
+        # reads find a profile by it. NON-UNIQUE: a handle is random (16+ bytes), and a unique build
+        # that ever met a collision would fail the boot (`_sync_indexes`, #1186). Being non-unique, it
+        # is built CONCURRENTLY after the convergence commits, never under its lock on `users`.
+        Index("ix_users_public_profile_handle", text("((data -> 'public_profile') ->> 'handle')")),
     )
+
+
+class Principal(Base):
+    """WHO A TOKEN ACTS AS when it is not a person (MIGRATION-0009, PRD 0.13.4 D2).
+
+    A room's turn runs as its WORKSPACE, not as any member: a numeric principal of kind
+    ``workspace``, so every consumer that coerces a subject to ``int`` keeps working while nothing
+    of any person is reachable through it. The principal's id IS a ``users.id`` — a dedicated account
+    row (email ``ws-<id>@principal.invalid``, ``data.principal_kind = "workspace"``, no API key, no
+    sign-in, no bots) — so foreign keys and meters that key on an account need no second id space.
+
+    - ``kind``: ``person`` (an account acting as itself; implicit, no row is written for one) or
+      ``workspace``.
+    - ``workspace_id``: the workspace a ``workspace`` principal is the agent of; unique among them.
+    - ``bills_to``: the account its spend debits (the workspace owner's pool). identity answers it
+      beside the principal; it never widens what the principal reaches.
+    - ``status``: ``active`` or ``disabled``. identity refuses a disabled principal's tokens.
+
+    There is no persons table: the human is the CRM person record (crm-api, ADR-0047 d3)."""
+    __tablename__ = "principals"
+
+    id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    kind = Column(String(16), nullable=False, server_default=text("'workspace'"), default="workspace")
+    workspace_id = Column(String(255), nullable=True)
+    bills_to = Column(Integer, ForeignKey("users.id", ondelete="RESTRICT"), nullable=True)
+    status = Column(String(16), nullable=False, server_default=text("'active'"), default="active")
+    created_at = Column(DateTime, server_default=func.now(), default=func.now())
+
+    __table_args__ = (
+        Index("ux_principals_workspace", "workspace_id", unique=True),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# the workspace registry (MIGRATION-0009, PRD 0.13.4 D5): membership leaves git
+# --------------------------------------------------------------------------- #
+class Workspace(Base):
+    """A workspace as a governed object: who owns it, whether it is open, what it is connected to.
+
+    Identity (admin-api) is the ONE writer; agent-api reaches it over the internal tier
+    (``app/workspace_registry.py``). Git keeps a workspace's content only. ``id`` is the key every
+    membership and invite names (``workspace:<id>``) — today agent-api's workspace slug, which is
+    also stored in ``slug``. ``connections`` is the list of open workspaces this one's room agent reads
+    (``[{"workspace", "added_by", "added"}]``), kept on the row rather than in a fifth table."""
+    __tablename__ = "workspaces"
+
+    id = Column(String(128), primary_key=True)
+    slug = Column(String(128), nullable=False, unique=True)
+    org_id = Column(String(64), nullable=False, server_default=text("'default'"), default=DEFAULT_ORG_ID)
+    owner = Column(String(128), nullable=True)
+    visibility = Column(String(16), nullable=False, server_default=text("'closed'"), default="closed")
+    kind = Column(String(16), nullable=False, server_default=text("'normal'"), default="normal")
+    connections = Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=lambda: [])
+    archived_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, server_default=func.now(), default=func.now())
+
+
+class Membership(Base):
+    """A principal's role on a resource: ``workspace:<id>``, or ``room:<id>`` for a CLOSED room (an
+    open room's membership is derived from its workspace's). ``principal_id`` is an account id (the
+    person is their CRM record; there is no persons table) or, later, a ``ws:<id>`` principal.
+    ``data`` holds the roster's display extras (``email``, ``discoverable``)."""
+    __tablename__ = "memberships"
+
+    principal_id = Column(String(128), primary_key=True)
+    resource = Column(String(160), primary_key=True, index=True)
+    role = Column(String(16), nullable=False)
+    added_by = Column(String(128), nullable=True)
+    added_at = Column(String(40), nullable=True)
+    position = Column(Integer, nullable=False, server_default="0", default=0)
+    data = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=lambda: {})
+
+
+class Invite(Base):
+    """An invite to a resource: only the sha256 of its token is kept. ``role`` never outranks
+    ``created_by``'s role (checked by the minting service, and again at redeem)."""
+    __tablename__ = "invites"
+
+    id = Column(String(32), primary_key=True)
+    resource = Column(String(160), nullable=False, index=True)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    role = Column(String(16), nullable=False)
+    mode = Column(String(16), nullable=False, server_default=text("'open'"), default="open")
+    max_uses = Column(Integer, nullable=False, server_default="1", default=1)
+    uses = Column(Integer, nullable=False, server_default="0", default=0)
+    expires_at = Column(BigInteger, nullable=False)     # epoch seconds: past 2038, so 64-bit
+    created_by = Column(String(128), nullable=True)
+    created_at = Column(String(40), nullable=True)
+    revoked = Column(Boolean, nullable=False, server_default=text("false"), default=False)
+    data = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=lambda: {})
 
 
 class PlatformSetting(Base):
@@ -80,6 +233,27 @@ class PlatformSetting(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
+class PersonPhoto(Base):
+    """A person's photo, one row per source (Vexa-ai/vexa#1783, UI 15g): ``upload`` (the person's
+    own), ``provider`` (their sign-in provider's picture) or ``gravatar``. The first present in that
+    order is shown (`app/person_photos.py`). Identity is the one writer. The BYTES are not here: they
+    live in the install's object store under ``person-photos/<user id>/`` (`app/photo_storage.py`),
+    re-encoded so no metadata survives; the row keeps the key, the SHA-256 and the type. A
+    ``gravatar`` row with no key is a remembered miss. Kept out of ``users.data`` and out of the
+    database's bytes on purpose: every token check reads this database."""
+    __tablename__ = "person_photos"
+
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    source = Column(String(16), primary_key=True)
+    object_key = Column(String(255), nullable=False, server_default="")
+    content_type = Column(String(32), nullable=False, server_default="")
+    sha256 = Column(String(64), nullable=False, server_default="")
+    origin = Column(String(64), nullable=False, server_default="")
+    provider = Column(String(16), nullable=False, server_default="")
+    checked_at = Column(Float, nullable=False, server_default="0")
+    updated_at = Column(Float, nullable=False, server_default="0")
+
+
 class APIToken(Base):
     __tablename__ = "api_tokens"
 
@@ -91,6 +265,9 @@ class APIToken(Base):
     created_at = Column(DateTime, server_default=func.now())
     last_used_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
+    # MIGRATION-0010 (D13): the credential class. `key` — every API key, self-serve or admin-minted;
+    # `session` — the terminal's signed-in browser, minted only by `POST /internal/sessions`.
+    kind = Column(String(16), nullable=False, server_default=text("'key'"))
 
     user = relationship("User", back_populates="api_tokens")
 
@@ -125,8 +302,8 @@ class Meeting(Base):
         # three access branches, one scan path each — owner top-N, transcript-share containment,
         # workspace top-N. The whole-column GIN above cannot serve a containment probe on the
         # `transcript_viewers` key alone.
-        # ⚠ PROD ROLLOUT: build CONCURRENTLY out-of-band before deploying (vexa-platform O-book
-        # O4); _sync_indexes' in-band CREATE INDEX locks `meetings` under live traffic.
+        # A missing one is built CONCURRENTLY after the convergence commits (`_sync_indexes`), so
+        # it never locks `meetings` under live traffic.
         Index("ix_meeting_user_created_at", "user_id", "created_at"),
         Index("ix_meeting_transcript_viewers_gin",
               text("(data -> 'transcript_viewers') jsonb_path_ops"), postgresql_using="gin"),
@@ -182,6 +359,10 @@ class Transcription(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     session_uid = Column(String, nullable=True, index=True)
     segment_id = Column(String, nullable=True)
+    # transcript.v1 `Source` — how the row was attributed; `chat` marks an in-meeting chat line
+    # (speaker = sender), which GET /bots/{platform}/{native}/chat reads back. NULL on speech rows
+    # from producers that never stamped one.
+    source = Column(String(32), nullable=True)
 
     meeting = relationship("Meeting", back_populates="transcriptions")
 

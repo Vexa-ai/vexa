@@ -82,3 +82,9 @@ podDisruptionBudgets:
     enabled: false
   agentApi:
     enabled: false
+
+# Staging calls model providers, STT and webhook targets it has not listed: keep the open
+# control-plane egress here (requirements row N3).
+networkPolicy:
+  controlPlane:
+    anyAddress: true

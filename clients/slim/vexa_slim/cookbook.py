@@ -61,25 +61,24 @@ async def _provision_token(admin_api: str, admin_token: str, email: str) -> str:
 
 async def agent_on_meeting(slim: Slim, native: str, *, meet_url: "str | None" = None,
                            platform: str = "google_meet") -> dict:
-    """Put an agent on a meeting: optionally send a bot (so a transcript flows), then start the copilot
-    processor. Returns the start result — the listening agent is now live."""
-    if meet_url:
-        await slim.meetings.send_bot(native, url=meet_url, platform=platform)
-    return await slim.agent.start_processing(native, platform=platform)
+    """Put a BOT on a meeting so a transcript flows. Returns the send result.
+
+    It used to do a second thing — start the copilot processor, so the transcript became notes and
+    cards. PRD decision 34 removed that producer; putting an AGENT on a meeting is now a `chat`
+    turn carrying an `active` meeting reference."""
+    if not meet_url:
+        return {"sent": False, "reason": "no meeting url — the bot is only sent when one is given"}
+    return await slim.meetings.send_bot(native, url=meet_url, platform=platform)
 
 
 async def listen_to_meeting(slim: Slim, native: str, *, seconds: float = 30.0,
                             meet_url: "str | None" = None, platform: str = "google_meet") -> Harvest:
     """The happy path as one call — returns the same `Harvest` whether the meeting is live or finished.
 
-    SOURCE-AGNOSTIC by design: the agent emits ONE envelope (notes/cards), carried live on redis and
-    persisted (same shape) to a durable file when finished — so a finished meeting folds to the SAME
-    `Harvest` a live one does. This verb folds the live redis stream (the finished-file fold is a
-    lower-level mechanism, not a cookbook verb)."""
+    The feed carries the meeting's TRANSCRIPT and nothing else (PRD decision 34 removed the
+    notes/cards producer that used to share it)."""
     await agent_on_meeting(slim, native, meet_url=meet_url, platform=platform)
-    out = await harvest(slim, native, seconds=seconds)   # live branch: fold the redis stream
-    await slim.agent.stop_processing(native, platform=platform)
-    return out
+    return await harvest(slim, native, seconds=seconds)
 
 
 async def meeting_doc(slim: Slim, native: str) -> "str | None":
@@ -145,29 +144,28 @@ async def mount_workspace(slim: Slim, *, repo: "str | None" = None, ref: "str | 
     return await slim.agent.swap_workspace()
 
 
-# ── cadence & automate (the proactive engine — a routine compiles to a durable schedule.v1 cron job) ──
+# ── cadence & automate (a routine is the person's own flow: a schedule + one agent turn, ADR-0046) ──
 # The cadence backbone behind every proactive behavior (morning digest, post-meeting follow-up, …).
 async def schedule_routine(slim: Slim, name: str, *, cron: str, prompt: str,
                            run_now: bool = False) -> dict:
     """JTBD: "do this on a schedule without me asking."
 
-    Author a durable routine — the control plane compiles `(name, cron, prompt)` into a schedule.v1 cron
-    job whose due-run POSTs a dispatch back to the agent (the runtime owns the durable cron, so it survives
-    restarts). `run_now=True` fires one immediate run so the author sees a result without waiting for cron.
-    Returns `{routine, job_id, ran_now}`."""
+    Author a routine — the person's own flow with a schedule trigger and the `agent_run` step, fired by
+    flows into the routine's own chat. Goes through the deprecated `/api/routines` adapter (removed in
+    0.14.0; flows' own API is the successor). `run_now` has no effect: the routine runs at its first slot.
+    Returns `{routine, job_id: None, ran_now: False, flow}`."""
     return await slim.agent.create_routine(name, cron=cron, prompt=prompt, run_now=run_now)
 
 
 async def list_routines(slim: Slim) -> list:
     """JTBD: "show me what my agent does automatically."
 
-    The user's routines as cards (file + compiled-job state)."""
+    The user's routines as cards, read off their schedule flows."""
     return await slim.agent.list_routines()
 
 
 async def set_routine_enabled(slim: Slim, name: str, enabled: bool) -> dict:
     """JTBD: "pause/resume an automation."
 
-    Flip a routine on/off by name; the control plane updates the routine and reconciles its cron job
-    (disabling cancels the job but keeps the routine for later re-enable)."""
+    Pause or resume a routine by name (its flow is paused or resumed; nothing is deleted)."""
     return await slim.agent.set_routine_enabled(name, enabled=enabled)

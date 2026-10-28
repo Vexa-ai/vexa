@@ -4,7 +4,7 @@ Two constitutions govern everything here — read them on the docs site or in th
 
 - **[Architecture](https://docs.vexa.ai/governance/architecture)** — the P-book
   ([`docs/docs/governance/architecture.mdx`](docs/docs/governance/architecture.mdx)): what the
-  software must be (P1–P23, enforced by the CI gate suite). Your change must fit these.
+  software must be (P1–P24, enforced by the CI gate suite). Your change must fit these.
 - **[Delivery](https://docs.vexa.ai/governance/delivery)** — the D-book
   ([`docs/docs/governance/delivery.mdx`](docs/docs/governance/delivery.mdx)): how change ships —
   the whole loop (roadmap · PREPARE · TAKE · validation · merge bar · ship bar) in one file.

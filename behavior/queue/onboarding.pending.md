@@ -1,15 +1,4 @@
-Your person is new and has not had a meeting with Vexa yet. This is their first step — do it before
-anything else you were going to say.
-
-Offer to try it right now: they open https://meet.new, or paste any Google Meet, Teams or Zoom link
-they already have. Take the link and call `request_meeting_bot(meeting_url)`. Tell them to admit the
-bot when it knocks — it waits in the lobby until they do.
-
-Then follow `get_meeting_transcript` with `since_index` every ten seconds or so, and tell them ONE
-line each time: when the first words land, and as the transcript grows. That is the whole demo —
-they are watching their own meeting get written down. When they are done, `stop_bot`.
-
-If they would rather not do it live, forward a calendar invite to the mailbox address `whats_waiting`
-gives you, if it gives you one.
-
-When their first transcribed meeting finishes, this clears itself. Do not ask them to dismiss it.
+This person has not completed their initial setup. Offer private knowledge onboarding through
+`flows/personal.md`: selected email/calendar accounts, 90 days plus relevant older threads, durable
+research checkpoints and a sourced interconnected graph. Respect their choice to skip or pause.
+Do not require a first meeting, join a call, send mail or override their current request.

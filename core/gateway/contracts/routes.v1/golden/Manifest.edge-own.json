@@ -1,0 +1,20 @@
+{
+  "contract": "routes.v1",
+  "domain": "gateway",
+  "owner": "core/gateway/services/gateway",
+  "edge": "gateway",
+  "note": "the edge's own identity-only routes: unscoped by declaration",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/auth/me",
+      "scopes": [],
+      "mcp_reentry": true
+    },
+    {
+      "method": "GET",
+      "path": "/health",
+      "scopes": []
+    }
+  ]
+}

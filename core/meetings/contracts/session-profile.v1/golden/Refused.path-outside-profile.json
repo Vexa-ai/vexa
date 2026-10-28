@@ -1,0 +1,15 @@
+{
+  "why": "one file outside the profile refuses the whole body, the valid files with it",
+  "body": {
+    "files": [
+      {
+        "path": "Default/Cookies",
+        "data": "cm90YXRlZC1jb29raWUtZGI="
+      },
+      {
+        "path": "Default/Extensions/abc/1.0/manifest.json",
+        "data": "cGxhbnRlZA=="
+      }
+    ]
+  }
+}

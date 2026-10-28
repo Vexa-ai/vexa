@@ -1,2 +1,11 @@
 # Keep gate:readme docs out of the template renderer.
 templates/README.md
+
+# The adoption panel's SOURCES, not its artifacts. `.Files.Get` reads dashboards/
+# adoption-panel.json and dashboards/datasource-template.yaml; the SQL these are generated
+# from, the generator, and the docs are for the repository, not for a packaged chart — and
+# gate:readme's per-directory README must stay out of the template renderer, exactly as
+# templates/README.md above does.
+dashboards/sql/
+dashboards/gen_dashboard.py
+dashboards/README.md

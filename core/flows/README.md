@@ -46,14 +46,15 @@ Two ceilings bound what the inbox can cost even when every sender is legitimate:
 `VEXA_FLOWS_MAIL_RATE_WINDOW_S`, counted on ADMITTED turns in `mail_turn` — so a flood of
 strangers cannot exhaust the budget of the people who are allowed to use this.
 
-An inbound body that IS allowed through is quote-stripped and length-capped at
-`VEXA_FLOWS_MAIL_BODY_MAX` (default 4000) before it travels as `mail.reply`'s `text` ref —
-`mailbox.strip_quotes`, quotes off first so a reply does not spend its budget on text we sent
-ourselves, and an explicit elision marker naming the control when it cuts. The text itself is
-never altered otherwise. The *framing* half — the fenced, untrusted-labelled block with the
-machinery note after it — belongs to the flow that puts the text in front of an agent
-(`email_chat`, in `flows_defs/production_agent.py`), so a deployment that carries no agent domain
-applies the cap and never builds a prompt at all.
+An inbound body that IS allowed through never reaches a prompt raw: it arrives quoted, fenced,
+length-capped (`VEXA_FLOWS_MAIL_BODY_MAX`) and labelled untrusted, with the machinery note AFTER
+the block. The frame is the control; the text itself is never altered.
+
+A `mail.reply` reaction holds `mailbox.REPLY_FIELDS` and nothing else (`mailbox.reply_refs`, used by
+the poller and the `mailbox` sensor kind): the sender's own words with the quoted thread dropped,
+capped at `VEXA_FLOWS_MAIL_BODY_MAX` characters (ceiling `BODY_CEILING`, 16000) and 32 KiB stored,
+plus the sender, one-line subject and Message-ID. No attachment and no HTML alternative is read as
+the body. The stored refs are at most `REPLY_REFS_MAX_BYTES` (36 KiB).
 
 ## What is waiting is flows
 
@@ -71,17 +72,13 @@ domain has neither the events nor the reactions — there is no desk there to ha
 
 `desk_setup` and `desk_claim` react to `desk.unscaffolded` and `claim.proposed`, which flows
 CONSUMES and does not publish — they are the agent domain's to publish, and they are deliberately
-absent from this domain's `publishes_events` for that reason. The producer is agent-api: the first
-on the call that CREATED a desk carrying no `.scaffolded`, the second at `POST /api/claims`, a
-claim-aware route that owns the claim book and publishes one event per claim it actually added,
-which is why that route exists at all. **Neither route, nor the publish-edge declaration that
-carries them, is in this cut of the repository** — the agent-api control plane that serves them is
-not here — so both entries in `contracts/flows.v1/carriers.json` are marked
-`"published_by": "private"`, and `tests/test_carrier_census.py` checks that the mark is honest:
-a carrier claiming it must have no declaration in this tree, so the flag comes off by force the
-moment a producer lands here. The two consumer flows are likewise in the optional
-`flows_defs/production_agent.py`. Both halves absent together is the deployment that carries no
-agent domain, and not a gap in the queue.
+absent from this domain's `publishes_events` for that reason. Both have a producer now: agent-api
+publishes the first at `control_plane/routers/workspaces.py` `ws_init`, on the call that CREATED a
+desk carrying no `.scaffolded`, and the second at `POST /api/claims` — a claim-aware route that
+owns the claim book and publishes one event per claim it actually added, which is why that route
+exists at all. The edge is declared in agent-api's `config.v1.json` as two `publish-edge` keys
+(`VEXA_FLOWS_API_URL`, `VEXA_FLOWS_API_KEY`). Unset, the facts are dropped and the two flows never
+fire — which is the deployment that carries no agent domain, and not a gap in the queue.
 
 **The words are not in the code.** Every sentence a person hears is a file in `behavior/queue/`,
 resolved private-mount-first and read hot, and a pending reaction behavior says nothing about is
@@ -111,6 +108,17 @@ once per process; a caller sending both is answered on the new one.
 
 An unreachable identity answers **503**, never 401: not being able to ask who somebody is has not
 established that their credential is bad.
+
+**A worker acting for a person** (an agent worker's delegation token, `vxd_…`) resolves to that
+person, carrying the dispatch's `delegation` (`regime`, `workspaces`, `target`). Flows declares to
+identity that it reads one (`X-Vexa-Internal-Accepts-Delegation: 1`, identity.v1); identity answers
+a worker's token to no caller that does not. A worker whose regime is not `human` has nobody in the
+loop: `DELEGATED_REACH` in `flows_api.py` is the one table of what it may still do — read the
+person's own rows and file friction — and it is refused every other route (today `POST
+/reactions/{id}/{verb}`) with **403** and the same `human_session_required` body agent-api and
+meeting-api answer with — including `remedy: ask_in_chat` and the `tell_your_person` sentence the
+agent relays to the person (gateway-identity.v1 `REFUSAL`; fact `flows-person-refusal`). A route
+missing from the table is refused to it.
 
 ## Meetings is optional, and so is the agent domain
 
@@ -151,43 +159,11 @@ Every environment key this brick reads is declared once in `src/flows_config.py`
 and nothing declared that nothing reads. `core/flows` is not yet one of the five `config.v1`
 adopted services (seam backlog B7/B9); this table is what makes that adoption a transcription.
 
-## Carrying flows this repo does not publish
+## Nudges are flows (PRD 0.13.4 S6, D15)
 
-A deployment with flows of its own — a private onboarding ladder, a billing gate, anything — plugs
-into the same engine and the same queue through three seams. Nothing about them is a fork of this
-tree, and none of them lets a pack edit what is already here.
-
-**1 · Flow versions as data.** `POST /flows` writes a `flow_version` row and the worker hot-loads it
-within one refresh (`Registry.refresh_from_db`). Steps are referenced by NAME against the image's
-reviewed vocabulary, and an unknown name is refused — the API never accepts code. So a flow that is
-a re-ordering of steps that already exist needs nothing below.
-
-**2 · Steps of its own — `VEXA_FLOWS_DEFS_EXTRA`.** Comma-separated importable module names, each
-exposing `build(reg, db)`, called last by `flows_defs.production.build` — after every flow in this
-repo, so a pack composes on top and supersedes nothing. This is the seam that seam 1 deliberately
-does not provide: the vocabulary stays closed to the API and open to the operator, the same split
-`VEXA_BEHAVIOR_DIR` already draws for prose.
-
-```python
-# acme_pack.py, on the deployment's own PYTHONPATH
-from flows import Done, EventType
-
-def build(reg, db):
-    @reg.step
-    def acme_step(ctx):
-        return Done({"ok": True})
-    reg.flow(name="acme", version=1, on=EventType("acme.happened"),
-             steps=[reg.steps["acme_step"]])
-```
-
-A module named here and not importable is a **refusal to boot**, not a fallback: a deployment that
-declares a pack and starts without it reacts to none of that pack's events, silently, for as long
-as nobody looks.
-
-**3 · Its own words — `VEXA_BEHAVIOR_DIR`.** `flows_queue` reads `$VEXA_BEHAVIOR_DIR/queue/<flow>.
-<type>.md` before the showcase baked into the image, so a pack ships the sentences for its own flows
-in that tree. A flow with no file is **counted and not spoken** — the copy is also the filter.
-
-**Event types need no declaration.** There is no carrier allow-list on the intake: `POST /events`
-refuses a type only when no flow reacts to it, and answers with the list that would have worked.
-Register a flow on `acme.happened` and that type is admissible the same tick.
+`src/flows_delivery/` is the one delivery gate: a card or room item waiting on a person is armed in
+`delivery` at its `next_check_at` (pack `flows_defs.nudges`), and the worker pass (`VEXA_FLOWS_NUDGES=1`)
+walks it in-app → one email after the person's idle window → the digest, stopping the moment crm says
+it was seen or acted on. Every delivery outside the Inbox is one `delivery_send` row — the attention
+budget's unit (D32), reserved before the send so a crash never sends twice. Bodies are fixed templates
+(title, who, one "Open to decide" link); content keys are refused. Full page: `docs/docs/minutes/nudges.mdx`.

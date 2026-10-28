@@ -1,0 +1,1 @@
+{"source": {"kind": "meeting", "id": "42"}, "meeting_row": "42", "buffer": [{"segment_id": "seg-16", "speaker": "A", "text": "Let us move the cutover to Monday.", "start": 61.2, "scores": {"addressed_to_vexa": 0.01, "decision": 0.93, "action_item": 0.2}}], "score": 1.14, "reason": "threshold", "brief_version": 0}

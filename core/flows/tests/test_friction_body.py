@@ -32,8 +32,8 @@ import pytest
 from sqlite_double import SqliteDB
 
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key-friction-body",
-        "INTERNAL_API_SECRET": "test-internal-secret",
-        "VEXA_FLOWS_DB_URL": "postgresql+psycopg://friction-body:unreachable@127.0.0.1:1/flows"}
+        "VEXA_FLOWS_SERVICE_KEY": "test-flows-service-key-not-a-placeholder",
+        "VEXA_FLOWS_DB_URL": "postgresql+pg8000://friction-body:unreachable@127.0.0.1:1/flows"}
 
 
 @pytest.fixture(scope="module")
@@ -139,23 +139,38 @@ def test_the_query_spelling_still_works_for_one_release(api):
     assert refs["session"] == "s-q"
 
 
+def _prose(out: str) -> str:
+    """Stdout minus the logevent.v1 lines every request now emits (one JSON object per line, with a
+    `trace_id`): what these tests read is the human-facing deprecation notice, not the trace."""
+    import json as _j
+    kept = []
+    for line in out.splitlines(keepends=True):
+        try:
+            if "trace_id" in _j.loads(line):
+                continue
+        except ValueError:
+            pass
+        kept.append(line)
+    return "".join(kept)
+
+
 def test_the_query_spelling_says_once_that_it_is_deprecated(api, capsys):
     """Once per process, like the `X-Flows-Admin-Key` deprecation and for the same reason: printed
     per request it is a flood on the hot path that nobody reads."""
     flows_api, client = api
     flows_api._FRICTION_QUERY_SAID.clear()
     client.post("/friction", headers=_headers(flows_api), params={"what_happened": "b"})
-    said = capsys.readouterr().out
+    said = _prose(capsys.readouterr().out)
     assert "DEPRECATED" in said and "JSON body" in said
     client.post("/friction", headers=_headers(flows_api), params={"what_happened": "c"})
-    assert capsys.readouterr().out == "", "once per process, not once per request"
+    assert _prose(capsys.readouterr().out) == "", "once per process, not once per request"
 
 
 def test_a_body_report_says_nothing_about_deprecation(api, capsys):
     flows_api, client = api
     flows_api._FRICTION_QUERY_SAID.clear()
     client.post("/friction", headers=_headers(flows_api), json={"what_happened": "b"})
-    assert capsys.readouterr().out == ""
+    assert _prose(capsys.readouterr().out) == ""
 
 
 def test_the_body_wins_when_a_field_arrives_twice(api):

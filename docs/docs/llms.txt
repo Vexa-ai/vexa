@@ -76,16 +76,19 @@ most coding agents).
 - [Webhooks](https://docs.vexa.ai/webhooks.md): signed delivery, event selection, delivery history
 - [Agent API](https://docs.vexa.ai/api/agent.md): dispatch units, chat turns, routines, workspace — **not served on the hosted service or on Kubernetes**
 - [Errors](https://docs.vexa.ai/api/errors.md): status codes and shapes across both APIs
-- [Deployment](https://docs.vexa.ai/deployment.md): compose · [Vexa Lite](https://docs.vexa.ai/deployment-lite.md) · [Kubernetes](https://docs.vexa.ai/deployment-kubernetes.md)
+- [Deployment](https://docs.vexa.ai/deployment.md): compose · [Vexa Lite](https://docs.vexa.ai/deployment-lite.md) · [Kubernetes](https://docs.vexa.ai/deployment-kubernetes.md) ([agent tools on Kubernetes](https://docs.vexa.ai/deployment-helm-agent-tools.md))
 - [Configuration](https://docs.vexa.ai/configuration.md): every env var and capability
 - [Upgrade from MinIO](https://docs.vexa.ai/upgrade-from-minio.md): move recordings from an older Lite or Compose install into the versitygw storage, verified by SHA-256
+- [Upgrading from 0.12 to 0.13](https://docs.vexa.ai/upgrade-from-0-12.md): the required changes, symptoms and rollback for a 0.12.x install moving to 0.13.3 on Compose, Lite or Helm
+- [Image names from v0.13.3](https://docs.vexa.ai/upgrade-image-names.md): the service images are vexaai/vexa-<service> from v0.13.3; what to change on upgrade and in a registry mirror
+- [What changed in 0.13.4: auth](https://docs.vexa.ai/changes-0-13-4-auth.md): one way to send a websocket key (header or subprotocol, never the URL), no compatibility switches, and the refusal an old-style call gets
 - [Troubleshooting](https://docs.vexa.ai/troubleshooting.md)
 
 ## Governance (the law)
 
 - [How Vexa governs itself](https://docs.vexa.ai/governance/index.md): the full map — two constitutions, protocols, surfaces, actors
 - [Delivery](https://docs.vexa.ai/governance/delivery.md): the D-book + the whole loop (roadmap · PREPARE · TAKE · validation · merge bar · ship bar · enforcement map)
-- [Architecture](https://docs.vexa.ai/governance/architecture.md): the P-book (P1–P23) + [compliance](https://docs.vexa.ai/governance/arch-compliance.md)
+- [Architecture](https://docs.vexa.ai/governance/architecture.md): the P-book (P1–P24) + [compliance](https://docs.vexa.ai/governance/arch-compliance.md)
 - [Roadmap status](https://docs.vexa.ai/roadmap/status.md): honest capability truth tables · [approach](https://docs.vexa.ai/roadmap/approach.md) · [stages](https://docs.vexa.ai/roadmap/stages.md)
 
 ## Optional

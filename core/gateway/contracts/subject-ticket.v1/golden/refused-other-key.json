@@ -1,0 +1,7 @@
+{
+  "what": "the meetings vector's claims signed by another key (RFC 8032 TEST 2)",
+  "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n-----END PUBLIC KEY-----\n",
+  "now": 1767225600,
+  "token": "st1.eyJjbHMiOlsiY2hhdC5hdXRvbm9tb3VzIiwiZGVzay53cml0ZSIsInJvb20uYmlsbHNfdG8iLCJ0cmFuc2NyaXB0LnJlYWQiXSwiZXZ0IjoibWVldGluZy5jb21wbGV0ZWQ6Nzc4MSIsImV4cCI6MTc2NzQ4NDgwMCwiaWF0IjoxNzY3MjI1NjAwLCJpc3MiOiJtZWV0aW5ncyIsImp0aSI6IjBmMWUyZDNjNGI1YTY5Nzg4Nzk2YTViNCIsImtpbmQiOiJldmVudCIsIm1pZCI6Ijc3ODEiLCJuYXRpdmUiOiJnb29nbGVfbWVldC9hYmMtZGVmZy1oaWoiLCJzdWIiOiI0MiIsInYiOiJzdWJqZWN0LXRpY2tldC52MSJ9.yIEU48X5a90sU0jJAakbW3bNEs5hfBh002-0niK5_PTPiUscNofZASEAldm3AbjyMlojLF-MWvg5sRwQL689Dg",
+  "reason": "bad_signature"
+}

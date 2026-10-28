@@ -3,7 +3,7 @@
   "domain": "identity",
   "owner": "core/identity",
   "edge": "gateway",
-  "note": "The person's own account surface: calendar connections, webhook config, model and transcription preferences.",
+  "note": "The person's own account surface: calendar connections, webhook config, model and transcription preferences, the person's own settings and workspace regime, and their own photo.",
   "presence_env": "ADMIN_API_URL",
   "routes": [
     {
@@ -11,42 +11,48 @@
       "path": "/user/calendar",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "PUT",
       "path": "/user/calendar",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
       "path": "/user/calendars",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/user/calendars",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "DELETE",
       "path": "/user/calendars/{calendar_id}",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "PATCH",
       "path": "/user/calendars/{calendar_id}",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -54,7 +60,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "PUT",
@@ -62,7 +69,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -70,7 +78,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "PUT",
@@ -78,7 +87,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -86,7 +96,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "PUT",
@@ -94,7 +105,156 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/user/settings",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "PUT",
+      "path": "/user/settings",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/user/workspace-regime",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "PUT",
+      "path": "/user/workspace-regime",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/user/photo",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "PUT",
+      "path": "/user/photo",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "DELETE",
+      "path": "/user/photo",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/user/notifications",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "PUT",
+      "path": "/user/notifications",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/user/profile",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "PUT",
+      "path": "/user/profile",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/user/profile/withdraw",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/user/company-verification",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/user/company-verification/check",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/user/directory/profiles",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/user/directory/profiles/{handle}",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
     }
   ]
 }

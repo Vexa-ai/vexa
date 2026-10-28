@@ -1,0 +1,12 @@
+[
+  {
+    "bundle": "parts-foreign-entry.zip",
+    "code": "manifest_mismatch",
+    "why": "a parts archive carrying something other than workspace/ and notes.md"
+  },
+  {
+    "bundle": "parts-zip-slip.zip",
+    "code": "unsafe_path",
+    "why": "a workspace entry that climbs out with '..'"
+  }
+]

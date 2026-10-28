@@ -1,0 +1,49 @@
+{
+  "presence_visibility": "workspace_members",
+  "workspaces": [
+    {
+      "slug": "personal", "id": "7", "name": "Personal", "kind": "private", "access": "owner", "write": true,
+      "members": [{"subject": "7", "name": "Jane Smith", "initials": "JS", "role": "owner", "presence": null}],
+      "last_activity": {"line": "Jane Smith changed Pricing notes", "at": 1760000000},
+      "last_call": null,
+      "live_call": {"meeting": "131", "platform": "google_meet", "line": "Call with Valeriia", "since": 1760004200}
+    },
+    {
+      "slug": "client-x-4f2a91", "id": "client-x-4f2a91", "name": "Client X", "kind": "shared",
+      "access": "contributor", "write": true,
+      "members": [
+        {"subject": "9", "name": "Valeriia K", "initials": "VK", "role": "owner", "presence": "now"},
+        {"subject": "7", "name": "Jane Smith", "initials": "JS", "role": "contributor", "presence": null},
+        {"subject": "12", "name": "Sam Lee", "initials": "SL", "role": "reader", "presence": "today"}
+      ],
+      "last_activity": {"line": "Valeriia K changed 3 pages", "at": 1760003600},
+      "last_call": {"meeting": "123", "platform": "zoom", "line": "Weekly sync · Oct 14", "at": 1760001000},
+      "live_call": {"session": "pchat-mfz2k1", "meeting": "130", "platform": "vexa_call", "line": "Pricing review", "people": 2, "since": 1760004000}
+    },
+    {
+      "slug": "partner-docs-0a1b2c", "id": "partner-docs-0a1b2c", "name": "Partner docs", "kind": "shared",
+      "access": "reader", "write": false, "members": [],
+      "last_activity": null, "last_call": null, "live_call": null
+    },
+    {
+      "slug": "_global", "id": "_global", "name": "Company", "kind": "company", "access": "reader", "write": false,
+      "members": [], "last_activity": {"line": "Policies changed", "at": 1759900000}, "last_call": null, "live_call": null
+    }
+  ],
+  "hidden_workspaces": 2,
+  "agents": [
+    {
+      "ref": "agent:flow:morning-brief", "id": "flow:morning-brief", "name": "Morning brief",
+      "what": "Brief me on today's meetings every morning", "status": "idle",
+      "last": "Ran", "last_at": 1760000400, "next": "daily at 07:00 UTC", "next_at": 1760072400,
+      "where": "Client X", "thread": "pchat-mb1", "missing": false
+    },
+    {"ref": "agent:flow:retired-one", "missing": true}
+  ],
+  "files": [
+    {
+      "ref": "file:7/notes/pricing.md", "slug": "7", "path": "notes/pricing.md", "title": "Pricing notes",
+      "where": "Personal", "changed": "Jane Smith changed it", "changed_at": 1760000000, "missing": false
+    }
+  ]
+}

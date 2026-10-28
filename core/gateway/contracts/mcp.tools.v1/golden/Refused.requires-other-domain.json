@@ -1,0 +1,28 @@
+{
+  "why": "a tool that needs another domain is a composition, and a composition has an owner (composes: true)",
+  "manifest": {
+    "contract": "mcp.tools.v1",
+    "domain": "agent",
+    "source": "oss",
+    "depends_on": [
+      "identity"
+    ],
+    "base_url_env": "AGENT_API_URL",
+    "tools": [
+      {
+        "name": "t",
+        "identity": "user",
+        "auth": "subject",
+        "requires": [
+          "identity",
+          "agent",
+          "meetings"
+        ],
+        "route": {
+          "method": "GET",
+          "path": "/api/t"
+        }
+      }
+    ]
+  }
+}

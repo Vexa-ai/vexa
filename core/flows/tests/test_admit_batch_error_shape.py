@@ -32,8 +32,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from fastapi.testclient import TestClient  # noqa: E402
 
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key",
-        "INTERNAL_API_SECRET": "test-internal-secret",
-        "VEXA_FLOWS_DB_URL": "postgresql+psycopg://admit-batch:unreachable@127.0.0.1:1/flows"}
+        "VEXA_FLOWS_SERVICE_KEY": "test-flows-service-key-not-a-placeholder",
+        "VEXA_FLOWS_DB_URL": "postgresql+pg8000://admit-batch:unreachable@127.0.0.1:1/flows"}
 _saved = {k: os.environ.get(k) for k in _ENV}
 os.environ.update(_ENV)
 try:

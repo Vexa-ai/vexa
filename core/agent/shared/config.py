@@ -6,14 +6,25 @@ never land in a log line, a repr, or a golden. The control plane reads these onc
 """
 from __future__ import annotations
 
-from pydantic import Field, SecretStr
+from typing import Optional
+
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from shared import git_provider
+
+#: What a delegation token outlives the chat worker's warm window by, when its lifetime is not
+#: configured: one whole turn, the openai-agent harness's own per-turn ceiling
+#: (VEXA_AGENT_MAX_TURN_SEC, 900 s), so a unit that runs one turn and idles out never outlives it.
+DELEGATION_TTL_MARGIN_SEC = 900
 
 
 class Settings(BaseSettings):
     """The agent-api boot config. Every field arrives by ``VEXA_*`` env (12-factor)."""
 
-    model_config = SettingsConfigDict(env_prefix="VEXA_", extra="ignore")
+    # ``populate_by_name`` so a field carrying an explicit ``validation_alias`` (below) is still
+    # constructible by its FIELD name — every test builds Settings that way.
+    model_config = SettingsConfigDict(env_prefix="VEXA_", extra="ignore", populate_by_name=True)
 
     # ── Where this service lives ─────────────────────────────────────────────
     agent_api_port: int = Field(default=8100, ge=1, le=65535)
@@ -23,6 +34,13 @@ class Settings(BaseSettings):
     # The agent worker is spawned via runtime.v1 under this opaque profile (P11); routine jobs are
     # registered on the same runtime's schedule.v1 surface.
     runtime_api_url: str = "http://runtime-api:8090"
+    # The runtime caller credential, presented as a bearer on every runtime.v1 / schedule.v1 call.
+    # ONE NAME across the runtime, agent-api and meeting-api (the compose/helm secret key), hence the
+    # explicit alias past the VEXA_ prefix. Required at boot (config.v1 required-explicit).
+    runtime_api_token: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("RUNTIME_API_TOKEN"),
+    )
     agent_profile: str = "agent"
     # How the runtime's scheduler reaches THIS service's /invocations sink when a routine fires.
     agent_api_self_url: str = "http://agent-api:8100"
@@ -34,21 +52,30 @@ class Settings(BaseSettings):
     workspace_ref: str = "main"
     # The workspace store (object bucket) the Runtime syncs granted workspaces down from / rw back to.
     workspace_store_url: str = "s3://vexa-workspaces"
-    # The Runtime binds THIS (a host path or a docker named volume) at `workspaces_dir` in the worker —
-    # the dev backing for the Workspace store (prod = a bucket-materialized path). The worker works in
-    # the subject's subdir of it.
-    workspace_mount_source: str = "agent-workspaces"
+    # What BACKS the store (a host path, a named volume, a PVC) is the runtime's own configuration
+    # (its VEXA_WORKSPACE_MOUNT_SOURCE / _TARGET): it drops those keys from any spec, so this service
+    # neither reads nor stamps them. The runtime's mount target must equal `workspaces_dir` below.
 
     # ── identity seam — the subject is the authenticated user (P20) ──────────
-    # agent-api is fronted by the gateway, which resolves the api-key → user_id and injects X-User-Id.
-    # The subject (workspace/quota/chat partition) is derived SERVER-SIDE from that header, never from the
-    # client body. ``agent_default_subject`` is the single-user fallback for a direct/self-host deploy with
-    # no gateway in front: empty (default) = FAIL-CLOSED (401 when X-User-Id is absent). Compose sets it to
-    # keep the shared-user dev stack working until the terminal routes through the gateway (Stage 4).
-    agent_default_subject: str = ""
+    # agent-api is fronted by the gateway, which resolves the bearer → user and forwards X-User-Id
+    # together with X-Vexa-Identity, an Ed25519 signature over the same identity with a short expiry
+    # (gateway-identity.v1). ``gateway_identity_public_key_file`` names the gateway's PUBLIC key: with it
+    # set, agent-api refuses any x-user-* header that is neither signed nor carried by the internal
+    # tier, and a request that names nobody is a 401 — there is no fallback subject. agent-api can
+    # verify that signature and cannot make one. The production boot requires it.
+    gateway_identity_public_key_file: str = ""
 
     # ── Stream primitive — the per-dispatch redis Streams (unit:<id>:out / :in) ─
     redis_url: str = "redis://redis:6379/0"
+    # What a WORKER connects to Redis as (control_plane.workload_redis). `per-workload` (the default):
+    # a Redis user of its own unit's four keys (input, output, read cursor, delegation token) and nothing else. `shared`: the service connection
+    # above — only for a Redis that cannot define users, and only where every person on the instance
+    # trusts every other. One name across agent-api and meeting-api, hence the alias.
+    redis_workload_acl: str = Field(
+        default="per-workload",
+        validation_alias=AliasChoices("REDIS_WORKLOAD_ACL"),
+        pattern="^(per-workload|shared)$",
+    )
 
     # ── MVP0 chat runner — claude turn over a per-subject local git workspace ─
     # The chat unit's per-person workspace dirs live here; seeded from the template (CLAUDE.md +
@@ -57,35 +84,47 @@ class Settings(BaseSettings):
     # Registry of workspace templates (workspace-seeds/<name>/); `default_template` selects one.
     # `seeding.resolve_seed_dir` is the selection seam (honors the VEXA_WORKSPACE_SEED_DIR override).
     workspace_seeds_dir: str = "/app/workspace-seeds"
-    default_template: str = "default"  # light ready-to-go scaffold (README = onboarding-dashboard); override with VEXA_DEFAULT_TEMPLATE=finos for the FINOS KG seed
+    # The template new workspaces are seeded from. Stamped into every worker (dispatch.build_unit_env)
+    # so the worker's skills and any workspace it seeds come from the same template.
+    default_template: str = "default"
     # ── three-tier mount stack (AMENDMENT 4) — the GLOBAL SYSTEM tier (_global) ──
     # The platform-owned, READ-ONLY _global workspace mounted into EVERY worker (behaviour/skills/tools).
-    # A host path / repo dir; empty = no _global mount (the stack degrades to _system + the active set).
+    # A host path / repo dir, or EMPTY = the in-store `<workspaces_dir>/_global`, created empty at boot
+    # (founder ruling 2026-10-08: `_global` may be empty). A configured path that is invalid fails closed.
     # A live MOUNT (updating this ONE repo propagates to all agents next turn), not a copy-once seed.
     global_system_workspace_path: str = ""
     # Pin the _global mount to a ref (branch/tag/sha) for safe rollout; empty = mount HEAD (main).
     global_system_workspace_ref: str = ""
+    # (VEXA_GLOBAL_ADMIN_SUBJECTS is RETIRED — 2026-10-11. Who writes `_global` is identity's answer:
+    # the deployment's admin account, admin-api `VEXA_ADMIN_ACCOUNT`; see global_layer.is_admin_account.)
+    # The ONE model this product runs (PRD decision 34): the agent harness's. The fields that used
+    # to sit beside it — `meeting_model`, `llm_provider`, `llm_model`, `meeting_idle_timeout_sec`,
+    # `post_meeting_dev_email` — all configured the in-product inference pipeline, which is gone.
     agent_model: str = ""
-    meeting_model: str = ""
-    # ── llm module dials (provider-agnostic; see core/agent/llm/README.md) ────
-    # Non-secret operator config forwarded into workers by dispatch. The SECRETS
-    # (VEXA_LLM_API_KEY / VEXA_LLM_BASE_URL) deliberately have no Settings field — they travel by
-    # runtime credential brokering (docker_backend), same as ANTHROPIC_*.
-    llm_provider: str = ""      # CompletionPort adapter key (openai-compat | anthropic); empty = default
-    llm_model: str = ""         # deployment-default model (free string)
     model_allowlist: str = ""   # optional comma-separated gate on workspace-pinned models
-    meeting_idle_timeout_sec: int = Field(default=4 * 60 * 60, ge=60)
+    # The operator's model catalog (VEXA_MODEL_CATALOG, models.v1 Catalog JSON): the providers and
+    # models people may pick per chat. Empty = no catalog. Parsed and refused whole at boot by
+    # control_plane.model_providers; credentials in it are secret_ref references, never values.
+    model_catalog: str = ""
     # How long a CHAT worker serves its unit:<id>:in topic after the last turn before exiting
     # (TTL-on-idle). A live worker takes the thread's next message WARM (no container/CLI cold
     # start) — the window is the warm-hit budget; an idle worker costs only its parked memory.
     chat_idle_timeout_sec: int = Field(default=900, ge=30)
+    # The openai-agent harness's CHAT turns continue past the per-window tool-call budget into a
+    # fresh window (v0.13.2: research in an ordinary chat is not cut off at 40 calls), at most
+    # `agent_max_chat_continuations` times — the bound that keeps one chat from running without end
+    # (the whole-turn clock, VEXA_AGENT_MAX_TURN_SEC, still applies). Both are stamped into every
+    # worker (dispatch.build_unit_env), so the deployment's value is the one a turn runs on. The
+    # defaults are the harness's own (llm/openai_agent.py); a test holds them equal.
+    agent_auto_continue_chat: bool = True
+    agent_max_chat_continuations: int = Field(default=4, ge=0, le=50)
 
     # ── MVP3 toolbelt — tool.v1 descriptors + MCP launch specs (the generic tool mechanism) ──
     # A unit's unit.v1.tools names resolve against this dir into --allowedTools + an .mcp.json.
     tools_seed_dir: str = "/app/tools-seed"
 
-    # Workspace-authored routines are reconciled from /workspaces/*/routines/*.md onto the durable
-    # runtime scheduler. Set to 0 to disable the background reconciler.
+    # How often the one-time move of old routines into flows retries until it completes (ADR-0046);
+    # it then stops for good. 0 runs one pass at startup and no retries.
     routine_reconcile_interval_sec: int = Field(default=60, ge=0)
 
     # ── membership index seam (Lane M) — users.data.memberships[] lives in Postgres, reachable ONLY
@@ -101,14 +140,128 @@ class Settings(BaseSettings):
     meeting_api_url: str = "http://meeting-api:8080"
     # The X-Internal-Secret the admin-api's internal tier checks (same value the gateway uses). SecretStr.
 
+    # ── the scaffold seam (PRD 5.5) — where a person ARRIVES ────────────────
+    # The terminal a scaffold link points at. ONE deployment fact, ONE variable, and deliberately
+    # the SAME name flows already reads (`VEXA_UI_URL`, flows_steps/common.py): a link that names a
+    # host the person cannot reach is worse than no link, and two spellings of the host is how that
+    # happens. Empty means `POST /internal/scaffolds` refuses to mint rather than returning a url
+    # with no origin - the mint is what a step checks before it sends, so it fails LOUDLY here.
+    ui_url: str = ""
+
+    # ── vexa-control MCP seam — the authenticated toolbelt a chat worker gets ─
+    # The MCP endpoint a spawned worker connects to, carrying a short-lived delegation token minted
+    # per dispatch (see shared.delegation). Empty ⇒ no MCP is attached (the pre-delegation behaviour).
+    mcp_url: str = ""
+    # How long that delegation token lives. The token is REVOKED when its unit ends
+    # (control_plane.delegation_revocation); this is the bound for when that never happens. Unset ⇒
+    # the chat worker's warm window plus one whole turn (`delegation_ttl_sec`), which covers a unit
+    # that runs one turn and idles out. A unit that stays warm longer is handed a new token before
+    # this one expires (control_plane.delegation_refresh), which its worker picks up before each turn.
+    mcp_delegation_ttl_sec: Optional[int] = Field(default=None, ge=60)
+    # D2 (0.13.4): a room's turn runs as the workspace's own numeric principal (identity's
+    # `principals`; token `principal_kind=workspace`, `on_behalf_of=speaker`; identity answers the
+    # owner as `bills_to`) instead of as the workspace owner's account. Needs `admin_api_url`: with no
+    # identity to answer the id, a room's turn gets no toolbelt (fail closed). Off: a room token is
+    # the owner's, narrowed by its ceiling, `shared` and D3.
+    room_ws_principal: bool = True
+
     # ── secrets (never logged, committed, or in goldens) — P14 / P15 ─────────
     # Brokered, scoped identity the worker presents (ADR-0003): a port, not a raw key here.
     agent_identity_token: SecretStr = SecretStr("")
     # The shared key the Identity service signs per-dispatch tokens with (dev tier); every boundary
     # verifies with the same key. k8s replaces this with SPIRE-issued SVIDs behind the same interface.
-    dispatch_signing_key: SecretStr = SecretStr("dev-dispatch-signing-key")
-    # Internal-tier shared secret for the admin-api membership-index edge (Lane M).
-    internal_api_secret: SecretStr = SecretStr("")
+    # No default: the old one was published in this repository, so a token signed with it proved
+    # nothing. The boot preflight refuses an unset or published value (config.v1 forbidden_values).
+    dispatch_signing_key: SecretStr = SecretStr("")
+    # THE internal-tier shared secret. agent-api both PRESENTS it (Lane M: the admin-api
+    # membership-index edge) and BELIEVES it — ``_internal_caller`` compares this value, and gate 0
+    # of the meeting room is by that code's own statement the trust boundary on who is in the room.
+    #
+    # ONE NAME, and the alias says which. The secret had three spellings across the estate
+    # (``INTERNAL_API_SECRET`` in compose/helm and in admin-api/gateway/meeting-api,
+    # ``VEXA_INTERNAL_API_SECRET`` here and in the terminal, ``VEXA_INTERNAL_SECRET`` in flows), and
+    # that drift is precisely what let the published placeholder ``vexa-internal-secret`` sit on one
+    # refusal list and not the others (F95). The canonical name is the compose/helm secret KEY —
+    # ``INTERNAL_API_SECRET`` — and it wins; the prefixed spelling is read only when the canonical
+    # one is absent, and ``_build_production_app`` logs a deprecation warning when it is.
+    internal_api_secret: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("INTERNAL_API_SECRET", "VEXA_INTERNAL_API_SECRET"),
+    )
+    # admin-api's ADMIN token (``X-Admin-API-Key`` / its ``ADMIN_API_TOKEN``). Needed ONLY to resolve
+    # a meeting participant's ADDRESS to a subject for the post-meeting room, because the one route
+    # that answers that question — ``GET /admin/users/email/{email}`` — sits behind the admin token
+    # and NOT behind the internal-secret tier agent-api already holds.
+    #
+    # This is a BIG credential for a small question: the same token can create users, patch users and
+    # read the whole directory. It is therefore EMPTY BY DEFAULT and the feature degrades to an empty
+    # room without it (never to a guess). The narrow fix is an internal-tier
+    # ``GET /internal/users/by-email/{email}`` on admin-api returning only ``{id}``, at which point
+    # this field can be deleted — see ``control_plane.meeting_room`` and the room resolver in
+    # ``control_plane.api``. Until that route exists, an operator who wants the room opts in here.
+    admin_api_token: SecretStr = SecretStr("")
+    # The symmetric key agent-api signs the worker's MCP DELEGATION token with, and the Vexa control
+    # MCP verifies with (shared.delegation). Empty ⇒ the feature is OFF and no worker is given an MCP
+    # credential at all: a delegation token signed with a zero-length key would verify for anyone who
+    # guessed the format, so "unset" must mean ABSENT, never "signed with nothing".
+    mcp_delegation_secret: SecretStr = SecretStr("")
+    # ── the model proxy (H5/W1) — no worker holds a model-provider key ────────────────────────
+    # Where workers reach the model proxy (`control_plane.model_proxy`): a worker's harness sends its
+    # model requests there with a per-turn token, and the proxy forwards them with the route's real
+    # credential. Empty ⇒ no worker is given a model credential at all, and every turn fails at its
+    # first model call (fail closed: the key is never handed to the worker instead).
+    model_proxy_url: str = ""
+    # The key agent-api seals each model route with before it rests in Redis, and the proxy opens it
+    # with. Same value on agent-api and the proxy; generated at install on every deploy surface.
+    model_proxy_secret: SecretStr = SecretStr("")
+    # The git providers this deployment reaches (shared.git_provider): a JSON list of
+    # {name, kind: github|gitlab, baseUrl, caBundle?|caFile?, label?, apiUrl?} — or the earlier
+    # comma list ``gitlab.example.com=gitlab,git.example.org=basic:svc``. GitHub is always present.
+    # Parsed here so a typo fails the boot (P18) rather than every clone.
+    git_providers: str = ""
+
+    @field_validator("git_providers")
+    @classmethod
+    def _git_providers_parse(cls, value: str) -> str:
+        git_provider.parse_registry(value)      # raises ValueError naming the bad entry
+        return value
+
+    # ── the session store (ADR-0048) — conversations stored apart from workspaces ─────────────
+    # The database holding session metadata, participants and transcript heads: `postgresql://…`
+    # (pg8000) or `sqlite:///path`. Empty ⇒ the store is OFF and chats keep the workspace layout.
+    sessions_db_url: SecretStr = SecretStr("")
+    # …or, the usual way, the instance's Postgres host, port and database, logged into as the session
+    # store's OWN role (VEXA_SESSIONS_DB_USER / _PASSWORD) — never the instance's admin user. The
+    # migrations path creates that role with grants on the agent_session* tables only
+    # (control_plane/session_schema.py). DB_HOST and the role's password set ⇒ the store is ON.
+    db_host: str = Field(default="", validation_alias=AliasChoices("DB_HOST"))
+    db_port: int = Field(default=5432, validation_alias=AliasChoices("DB_PORT"))
+    db_name: str = Field(default="vexa", validation_alias=AliasChoices("DB_NAME"))
+    sessions_db_user: str = "vexa_agent_sessions"
+    sessions_db_password: SecretStr = SecretStr("")
+    # Where transcript versions go: the install's S3 (path-style, boto3; ADR-0038) — required once the
+    # database is set; there is no directory fallback. An endpoint without a scheme (`storage:9000`,
+    # MinIO-style) takes http, or https with VEXA_SESSIONS_S3_SECURE=true.
+    sessions_s3_endpoint: str = ""
+    sessions_s3_secure: bool = False
+    sessions_s3_bucket: str = "vexa-sessions"
+    sessions_s3_region: str = "us-east-1"
+    sessions_s3_access_key: SecretStr = SecretStr("")
+    sessions_s3_secret_key: SecretStr = SecretStr("")
+
+    # ── calls (ADR-0048 decision 6) — the deployment's LiveKit server ──────────────────────────
+    # The same four names meeting-api reads. Empty LIVEKIT_URL ⇒ this deployment has no calls, and
+    # every /api/sessions/{s}/call route answers 503. agent-api mints participants' room tokens (the
+    # session is its own) and reads a room's metadata to confirm who started it.
+    livekit_url: str = Field(default="", validation_alias=AliasChoices("LIVEKIT_URL"))
+    livekit_internal_url: str = Field(default="", validation_alias=AliasChoices("LIVEKIT_INTERNAL_URL"))
+    livekit_api_key: str = Field(default="", validation_alias=AliasChoices("LIVEKIT_API_KEY"))
+    livekit_api_secret: SecretStr = Field(default=SecretStr(""), validation_alias=AliasChoices("LIVEKIT_API_SECRET"))
+
+    def delegation_ttl_sec(self) -> int:
+        """The lifetime of a minted delegation token: ``mcp_delegation_ttl_sec`` when configured,
+        else the chat warm window plus one turn (``DELEGATION_TTL_MARGIN_SEC``)."""
+        return int(self.mcp_delegation_ttl_sec or self.chat_idle_timeout_sec + DELEGATION_TTL_MARGIN_SEC)
 
     def is_secret_present(self) -> bool:
         """True when a scoped identity token has been provided (without revealing it)."""

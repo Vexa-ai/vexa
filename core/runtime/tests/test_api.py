@@ -10,6 +10,8 @@ from referencing import Registry, Resource
 from runtime_kernel import Runtime
 from runtime_kernel.api import create_app
 
+from _caller import TOKEN, caller_client
+
 SCHEMA = json.loads(
     (Path(__file__).resolve().parents[1] / "contracts" / "runtime.v1" / "runtime.schema.json").read_text()
 )
@@ -24,8 +26,8 @@ def _conforms(obj: dict, shape: str) -> None:
 
 def test_lifecycle_over_http_conforms():
     events = []
-    app = create_app(Runtime(profiles={"test": ["sleep", "30"]}, grace_sec=3.0), deliver=events.append)
-    client = TestClient(app)
+    app = create_app(Runtime(profiles={"test": ["sleep", "30"]}, grace_sec=3.0), deliver=events.append, caller_token=TOKEN)
+    client = caller_client(app)
 
     r = client.post("/workloads", json={"workloadId": "w1", "profile": "test", "env": {}})
     assert r.status_code == 201
@@ -48,7 +50,7 @@ def test_lifecycle_over_http_conforms():
 
 
 def test_unknown_profile_is_400_and_unknown_workload_404():
-    client = TestClient(create_app(Runtime(profiles={})))
+    client = caller_client(create_app(Runtime(profiles={}), caller_token=TOKEN))
     assert client.post("/workloads", json={"workloadId": "x", "profile": "nope", "env": {}}).status_code == 400
     assert client.get("/workloads/missing").status_code == 404
 
@@ -57,8 +59,8 @@ def test_double_create_over_http_touches_not_respawns():
     """runtime.v1 idempotent create (ADR 0027): a second POST /workloads for a running workloadId
     returns its live status — no second spawn, no duplicate lifecycle events."""
     events = []
-    app = create_app(Runtime(profiles={"test": ["sleep", "30"]}, grace_sec=3.0), deliver=events.append)
-    client = TestClient(app)
+    app = create_app(Runtime(profiles={"test": ["sleep", "30"]}, grace_sec=3.0), deliver=events.append, caller_token=TOKEN)
+    client = caller_client(app)
     try:
         first = client.post("/workloads", json={"workloadId": "w1", "profile": "test", "env": {}})
         assert first.status_code == 201 and first.json()["state"] == "running"

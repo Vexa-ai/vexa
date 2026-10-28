@@ -1,0 +1,7 @@
+# Native SDK capture
+
+One concern: native audio → the existing CaptureV1Sink contract. Separate from the Zoom web capture implementation. Inject the shared runtime capture port; this module neither joins nor destroys meetings. Default is per-participant audio with SDK user ID/name, mapped to stable local channels. Mixed mode emits channel 999. Never feed both representations into one pipeline. Signed 16-bit 32/48 kHz mono PCM passes through a per-channel anti-aliasing decimator to 16 kHz Float32. Native callback time crosses IPC without restamping; contiguous samples use a sample clock, and silence gaps are preserved. Self audio is excluded when identified. No fabricated names.
+
+The bot-owned native audio composition feeds these frames to the existing Google Meet channel pipeline, with SDK participant keys and no browser glow attribution. Each participant is transcribed independently through the injected Whisper client. The mixed pipeline can consume mixed frames but requires SDK active-speaker hints for names (not wired here). Browser DOM/WebRTC capture is not reused. Recording, STT and storage are host concerns.
+
+start waits for SDK recording permission/subscription; receiving_audio requires a real frame. Missing/stalled audio and native faults are observable. stop unsubscribes capture and finalizes its sink without leaving the meeting. Tests exercise conversion, anti-aliasing, interleaving and teardown.

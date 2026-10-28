@@ -1,0 +1,1 @@
+{"source": {"kind": "chat", "id": "pchat-abc"}, "session": "pchat-abc", "buffer": [{"segment_id": "m-17", "speaker": "Ana", "text": "@vexa can you check the rollout plan?", "start": 1760000000.0, "scores": {"addressed_to_vexa": 1.0}}], "score": 1.0, "reason": "addressed", "brief_version": 2}

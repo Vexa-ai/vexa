@@ -1,0 +1,39 @@
+{
+  "what": "The table every meeting-URL redactor is held to: the TypeScript one in @vexa/join (src/shared/url-redaction.ts) and the Python one vendored into meeting-api, agent and flows (meeting_url_redaction.py). Each suite reads its own byte-identical copy (gate:fact-parity, fact meeting-url-redaction-vectors).",
+  "redact_url": [
+    {"why": "Zoom passcode", "in": "https://us05web.zoom.us/j/81234567890?pwd=TESTPASSCODE.1", "out": "https://us05web.zoom.us/j/81234567890?pwd=***"},
+    {"why": "Zoom passcode, long spelling, on a hosted front door", "in": "https://zoom-lfx.platform.linuxfoundation.org/meeting/91234567890?password=TEST-PASSWORD-0000-0000", "out": "https://zoom-lfx.platform.linuxfoundation.org/meeting/91234567890?password=***"},
+    {"why": "Zoom host token and registration token", "in": "https://zoom.us/s/81234567890?zak=TEST.ZAK.TOKEN&tk=TEST-REG-TOKEN-1", "out": "https://zoom.us/s/81234567890?zak=***&tk=***"},
+    {"why": "Zoom web client keeps the meeting id in the path", "in": "https://app.zoom.us/wc/81234567890/join?pwd=TESTPASSCODE&wpk=wcpk123", "out": "https://app.zoom.us/wc/81234567890/join?pwd=***&wpk=wcpk123"},
+    {"why": "Teams short link passcode", "in": "https://teams.microsoft.com/meet/3741234567890?p=TESTTEAMSPASSCODE", "out": "https://teams.microsoft.com/meet/3741234567890?p=***"},
+    {"why": "Teams deep link: the thread id is the path, context carries directory ids and no secret", "in": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_ABC%40thread.v2/0?context=%7b%22Tid%22%3a%22t%22%7d", "out": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_ABC%40thread.v2/0?context=%7b%22Tid%22%3a%22t%22%7d"},
+    {"why": "Jitsi JWT in the query, display name in the fragment", "in": "https://meet.example.org/Room1?jwt=TEST.JWT.TOKEN#config.prejoinPageEnabled=false&userInfo.displayName=%22Vexa%22", "out": "https://meet.example.org/Room1?jwt=***#config.prejoinPageEnabled=false&userInfo.displayName=%22Vexa%22"},
+    {"why": "any key, token or secret parameter, case-insensitive", "in": "https://host.example/x?API_KEY=TESTAPIKEY&access_token=TESTACCESSTOKEN&clientSecret=TESTCLIENTSECRET&Passcode=TESTPASSCODE&keep=1", "out": "https://host.example/x?API_KEY=***&access_token=***&clientSecret=***&Passcode=***&keep=1"},
+    {"why": "credentials wearing the URL", "in": "https://testuser:TESTPASSWORD@meet.example.org/Room1", "out": "https://***@meet.example.org/Room1"},
+    {"why": "Google Meet carries no secret and is left alone", "in": "https://meet.google.com/abc-defg-hij?authuser=0&hl=en", "out": "https://meet.google.com/abc-defg-hij?authuser=0&hl=en"},
+    {"why": "an empty value has nothing to hide", "in": "https://zoom.us/j/81234567890?pwd=", "out": "https://zoom.us/j/81234567890?pwd="},
+    {"why": "a parameter with no equals sign stays", "in": "https://zoom.us/j/81234567890?pwd&x=1", "out": "https://zoom.us/j/81234567890?pwd&x=1"},
+    {"why": "no query, nothing to do", "in": "https://zoom.us/j/81234567890", "out": "https://zoom.us/j/81234567890"},
+    {"why": "an HTML-escaped ampersand (a calendar description) still separates parameters", "in": "https://zoom.us/j/81234567890?pwd=a&amp;tk=b", "out": "https://zoom.us/j/81234567890?pwd=***&amp;tk=***"},
+    {"why": "redaction is idempotent", "in": "https://zoom.us/j/81234567890?pwd=***", "out": "https://zoom.us/j/81234567890?pwd=***"}
+  ],
+  "redact_urls_in": [
+    {"why": "a Playwright navigation error quotes the URL", "in": "page.goto: Timeout 60000ms exceeded.\nCall log:\n  - navigating to \"https://app.zoom.us/wc/81234567890/join?pwd=TESTPASSCODE\", waiting until \"domcontentloaded\"", "out": "page.goto: Timeout 60000ms exceeded.\nCall log:\n  - navigating to \"https://app.zoom.us/wc/81234567890/join?pwd=***\", waiting until \"domcontentloaded\""},
+    {"why": "trailing sentence punctuation survives", "in": "Sent the bot to https://teams.microsoft.com/meet/374?p=TESTTEAMSPASSCODE. Admit it.", "out": "Sent the bot to https://teams.microsoft.com/meet/374?p=***. Admit it."},
+    {"why": "a parenthesised URL keeps its closing parenthesis", "in": "joining (https://zoom.us/j/812?pwd=x) now", "out": "joining (https://zoom.us/j/812?pwd=***) now"},
+    {"why": "several URLs in one line", "in": "from https://zoom.us/j/1?pwd=a to https://zoom.us/j/2?zak=b", "out": "from https://zoom.us/j/1?pwd=*** to https://zoom.us/j/2?zak=***"},
+    {"why": "text with no URL is unchanged", "in": "Host did not start the meeting", "out": "Host did not start the meeting"}
+  ],
+  "strip_host_tokens": [
+    {"why": "the Zoom host token is removed, the attendee passcode stays", "in": "https://zoom.us/j/81234567890?pwd=TESTPASSCODE.1&zak=TEST.ZAK.TOKEN", "out": "https://zoom.us/j/81234567890?pwd=TESTPASSCODE.1"},
+    {"why": "a start URL with only the host token loses its query", "in": "https://zoom.us/s/81234567890?zak=TEST.ZAK.TOKEN", "out": "https://zoom.us/s/81234567890"},
+    {"why": "case-insensitive, first position", "in": "https://zoom.us/j/81234567890?ZAK=t&pwd=TESTPASSCODE", "out": "https://zoom.us/j/81234567890?pwd=TESTPASSCODE"},
+    {"why": "in the fragment too", "in": "https://zoom.us/j/81234567890#zak=t&x=1", "out": "https://zoom.us/j/81234567890#x=1"},
+    {"why": "behind an HTML-escaped ampersand", "in": "https://zoom.us/j/81234567890?pwd=TESTPASSCODE&amp;zak=t", "out": "https://zoom.us/j/81234567890?pwd=TESTPASSCODE"},
+    {"why": "nothing to strip", "in": "https://zoom.us/j/81234567890?pwd=TESTPASSCODE", "out": "https://zoom.us/j/81234567890?pwd=TESTPASSCODE"}
+  ],
+  "strip_host_tokens_in": [
+    {"why": "an ICS description with a start link", "in": "Join: https://zoom.us/j/81234567890?pwd=TESTPASSCODE&zak=TEST.ZAK.TOKEN\nHost: https://zoom.us/s/81234567890?zak=TEST.ZAK.TOKEN.", "out": "Join: https://zoom.us/j/81234567890?pwd=TESTPASSCODE\nHost: https://zoom.us/s/81234567890."},
+    {"why": "an error string that quoted the link", "in": "failed to join 'https://zoom.us/j/81234567890?zak=t': host absent", "out": "failed to join 'https://zoom.us/j/81234567890': host absent"}
+  ]
+}

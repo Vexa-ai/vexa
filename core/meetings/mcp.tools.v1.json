@@ -1,0 +1,57 @@
+{
+  "contract": "mcp.tools.v1",
+  "domain": "meetings",
+  "source": "oss",
+  "owner": "core/meetings",
+  "base_url_env": "MEETING_API_URL",
+  "served_at": "/.well-known/mcp-tools.json",
+  "depends_on": [
+    "identity"
+  ],
+  "forward": {
+    "edge_prefix": "/",
+    "upstream_prefix": "/"
+  },
+  "note": "The meetings tools whose MCP surface is exactly one meeting-api route: each is called back through the gateway, which fronts every meetings route at the same path (core/meetings/routes.v1.json, mcp_reentry), carrying the identity it signed. The other eighteen meetings tools are still the MCP edge's own (core/meetings/services/mcp/src/vexa_mcp/app.py), because each does work a forward cannot: parse_meeting_link and report_issue are edge logic; request_meeting_bot parses the link and answers a repeat request with the existing meeting; update_bot_config, stop_bot, get_meeting_chat, speak_in_meeting and get_meeting_participants default the platform, refuse an unknown one and take the deprecated meeting_platform/meeting_id aliases; list_meetings, get_meeting_transcript, search_transcripts, annotate_meeting and list_recordings validate a filter, page with since_index, trim an echo or rename meeting_db_id to the REST meeting_id; get_meeting and delete_meeting address the row as meeting_db_id while the REST route names it meeting_id (a retired name on any tool input), and delete_meeting and speak_in_meeting hold the asked_by_a_human gate. The three bot-account tools (ADR-0049) are the edge's too: browser_session_open adds the ui_action a client opens the live sign-in view from, bot_account_verify takes the account id in a validated body and names it in the path, and bot_accounts_list (a plain GET /bot-accounts) stays beside them. meeting-api's require_person still refuses a delete from a worker whose person is not present.",
+  "tools": [
+    {
+      "name": "get_bot_status",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "meetings"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/bots/status"
+      }
+    },
+    {
+      "name": "get_recording",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "meetings"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/recordings/{recording_id}"
+      }
+    },
+    {
+      "name": "record_voice_note",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "meetings"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/voice-notes/recorder"
+      }
+    }
+  ]
+}

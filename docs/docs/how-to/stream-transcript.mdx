@@ -8,13 +8,21 @@ The gateway exposes a multiplexed WebSocket at **`/ws`** that fans transcripts o
 
 ## Connect and authenticate
 
-Connect to `/ws` on the gateway and authenticate with your API key — as a header, or as an `api_key`
-query parameter when the client can't set headers:
+Connect to `/ws` on the gateway and authenticate with your API key — as a header, or, when the
+client can't set headers (a browser), in the WebSocket subprotocol list:
 
 ```
 ws://localhost:18056/ws          # header:  X-API-Key: <API_KEY>
-ws://localhost:18056/ws?api_key=<API_KEY>
 ```
+
+```js
+// browser: the key travels in Sec-WebSocket-Protocol, never in the URL
+const ws = new WebSocket("ws://localhost:18056/ws", ["vexa.v1", `vexa.key.${API_KEY}`]);
+```
+
+A key in the URL (`?api_key=<API_KEY>`) is refused: the socket gets an `api_key_query_removed` error
+frame, with what to do instead, and closes with **4401**. See
+[What changed in 0.13.4: auth](/changes-0-13-4-auth).
 
 A missing key gets a `missing_api_key` error frame; an invalid key is rejected with close code **4401**.
 

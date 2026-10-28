@@ -1,0 +1,8 @@
+{
+  "platform": "jitsi",
+  "meetingUrl": "https://jitsi.corp.example/VexaStandup",
+  "botName": "Vexa",
+  "nativeMeetingId": "VexaStandup@jitsi.corp.example",
+  "redisUrl": "redis://redis:6379",
+  "meetingHostAllow": ["jitsi.corp.example", "10.20.0.0/16"]
+}

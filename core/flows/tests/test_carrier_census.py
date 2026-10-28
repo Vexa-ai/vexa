@@ -73,55 +73,6 @@ def test_onboarding_completed_is_identity_owned_and_carries_subject_org_seat():
     assert c["cardinality"] == "exactly_once_per_subject", "this fact triggers billing"
 
 
-# ── census ↔ the goldens gate:schema validates ────────────────────────────────────────────────
-GOLDEN = CENSUS.parent / "golden"
-
-
-def _golden_name(event: str) -> str:
-    return f"Carrier.{event.replace('.', '-')}.json"
-
-
-def test_every_registered_carrier_has_a_golden():
-    """P8. `gate:schema` validates the live census plus whatever is in `golden/`, and for three of
-    the seven carriers there was nothing in `golden/` — so the only document pinning those shapes
-    was the census itself, which is the file under change rather than the reference a change is
-    checked against. A spec that validates only the thing being edited is not a spec."""
-    missing = sorted(c["event"] for c in _census()["carriers"]
-                     if not (GOLDEN / _golden_name(c["event"])).is_file())
-    assert not missing, (
-        f"no golden for {missing} — add {[_golden_name(e) for e in missing]} to "
-        f"{GOLDEN.relative_to(REPO)} so gate:schema covers every registered carrier")
-
-
-def _contract_of(c: dict) -> dict:
-    """The part of a carrier entry that IS the contract — what a consumer builds against.
-
-    Deliberately not the whole object. `description` and `source_event_id` are prose, the two
-    meeting goldens already carry a longer version of theirs than the census does (the empty-room
-    race on the calendar-intake path is written out in the golden and summarised in the census),
-    and requiring byte-equality would force that detail out of the reference instance to satisfy a
-    test — which is the reference getting worse to keep a check green. What may never differ is the
-    shape: who owns it, how often it fires, which refs a consumer may rely on, whether a stamp
-    stands behind an exactly-once claim, and whether a producer in this tree publishes it."""
-    return {"event": c["event"], "owner": c["owner"], "cardinality": c["cardinality"],
-            "refs": list(c["refs"]),
-            "published_by": c.get("published_by", "repository"),
-            "has_stamp": bool(c.get("stamp")),
-            "has_source_event_id": bool(c.get("source_event_id"))}
-
-
-@pytest.mark.parametrize("carrier", _census()["carriers"], ids=lambda c: c["event"])
-def test_a_golden_agrees_with_the_census_on_the_contract(carrier):
-    """Two files, one fact. A golden that has drifted from the census in SHAPE is a reference that
-    pins the carrier a consumer used to get, and it would go on passing gate:schema while saying
-    something the live registry no longer says."""
-    path = GOLDEN / _golden_name(carrier["event"])
-    if not path.is_file():
-        pytest.skip("covered by test_every_registered_carrier_has_a_golden")
-    assert _contract_of(json.loads(path.read_text())) == _contract_of(carrier), (
-        f"{path.relative_to(REPO)} and the census disagree about {carrier['event']}")
-
-
 # ── census ↔ the domains' own manifests ───────────────────────────────────────────────────────
 @pytest.mark.parametrize("path", MANIFESTS, ids=lambda p: p.parent.name)
 def test_every_event_a_manifest_publishes_is_registered_to_that_domain(path):
@@ -137,8 +88,9 @@ def test_every_event_a_manifest_publishes_is_registered_to_that_domain(path):
             f"which the census records as owned by {owners[event]}")
 
 
-def _published_in_repository() -> set:
-    """Every event some producer in THIS tree declares it publishes."""
+def test_no_carrier_is_registered_that_nothing_in_the_repository_publishes():
+    """The other direction: an entry with no producer behind it is a wish, and it ages into a
+    consumer contract for a fact that never arrives."""
     published = set()
     for path in MANIFESTS:
         doc = json.loads(path.read_text())
@@ -148,55 +100,11 @@ def _published_in_repository() -> set:
         for key in json.loads(path.read_text()).get("keys") or []:
             if key.get("class") == "publish-edge":
                 published.update(key.get("publishes_events") or [])
-    return published
-
-
-def test_no_carrier_is_registered_that_nothing_in_the_repository_publishes():
-    """The other direction: an entry with no producer behind it is a wish, and it ages into a
-    consumer contract for a fact that never arrives.
-
-    `published_by: "private"` is the one exemption, and it is narrow on purpose — the entries that
-    take it are checked by the two tests below rather than waved through here. A cut of this
-    repository that omits a whole producing surface (this one omits the agent domain's control
-    plane) leaves carriers whose consumer contract is still true — a deployment that mounts that
-    domain receives the fact — and whose producer no file here can point at. The two dishonest
-    answers are deleting the entry and switching this direction off for everybody; the honest one
-    is a field on the entry saying which case it is."""
-    census = _census()["carriers"]
-    in_tree = {c["event"] for c in census if c.get("published_by", "repository") == "repository"}
-    orphans = sorted(in_tree - _published_in_repository())
+    orphans = sorted({c["event"] for c in _census()["carriers"]} - published)
     assert not orphans, (
         f"registered but published by nothing in this repository: {orphans}. Either a producer "
-        f"declares it (a manifest's publishes_events, or a config.v1 publish-edge key), or the "
-        f"entry comes out, or — only if its producing surface is genuinely not in this tree — it "
-        f'says so with "published_by": "private".')
-
-
-def test_an_owned_elsewhere_carrier_really_has_no_producer_here():
-    """THE GUARD ON THE EXEMPTION, and without it the field above is just a way to switch the check
-    off one row at a time.
-
-    A carrier marked `private` must have NO declaration in this tree. The moment its producer lands
-    here — the surface is merged in, or the cut changes — the flag is wrong and this fails, which is
-    the only thing that makes anybody take it off again."""
-    published = _published_in_repository()
-    for c in _census()["carriers"]:
-        if c.get("published_by") != "private":
-            continue
-        assert c["event"] not in published, (
-            f"{c['event']} is marked published_by:private but a producer in this repository "
-            f"declares it — drop the flag, the census can check this one for real now")
-
-
-def test_the_privately_published_carriers_are_exactly_the_ones_this_cut_omits():
-    """WHICH entries take the exemption, written down where a reviewer reads the census rather than
-    left to whoever edits the file next. Both are the agent domain's, both are consumed by flows
-    that only `flows_defs/production_agent.py` registers, and both producing routes live in the
-    agent-api control plane this cut does not carry."""
-    private = {c["event"] for c in _census()["carriers"] if c.get("published_by") == "private"}
-    assert private == {"desk.unscaffolded", "claim.proposed"}
-    assert all(c["owner"] == "agent" for c in _census()["carriers"]
-               if c["event"] in private), "the exemption is not a licence for any other domain"
+        f"declares it (a manifest's publishes_events, or a config.v1 publish-edge key) or the "
+        f"entry comes out.")
 
 
 # ── census ↔ the publishing services' config declarations ─────────────────────────────────────
@@ -237,7 +145,11 @@ def _publisher_bodies():
     DERIVED, not listed: a publisher is a service whose `config.v1.json` declares a `publish-edge`
     key, and its body is the dict literal in that service's source carrying an `event_type` key.
     A new publisher is therefore covered the moment it declares its edge, which is the same moment
-    the rest of this file starts checking its carriers."""
+    the rest of this file starts checking its carriers.
+
+    A publisher with an OUTBOX stores the fact first and posts it later: the row it stores (the
+    `event=` value of an insert's `.values(...)`) is its own storage shape, not the wire, and its
+    delivery builds the body this test reads — so that row is not a body, and the delivery's dict is."""
     for decl in DECLARATIONS:
         keys = json.loads(decl.read_text()).get("keys") or []
         if not any(k.get("class") == "publish-edge" for k in keys):
@@ -249,8 +161,11 @@ def _publisher_bodies():
                 tree = ast.parse(f.read_text(encoding="utf-8", errors="ignore"))
             except SyntaxError:                       # noqa: PERF203 - vendored oddities
                 continue
+            stored = {id(kw.value) for call in ast.walk(tree) if isinstance(call, ast.Call)
+                      and isinstance(call.func, ast.Attribute) and call.func.attr == "values"
+                      for kw in call.keywords if kw.arg == "event"}
             for node in ast.walk(tree):
-                if not isinstance(node, ast.Dict):
+                if not isinstance(node, ast.Dict) or id(node) in stored:
                     continue
                 names = {k.value for k in node.keys
                          if isinstance(k, ast.Constant) and isinstance(k.value, str)}

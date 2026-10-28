@@ -33,7 +33,7 @@ from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
 from meeting_api.collector.fakes import InMemoryTranscriptStore
 from meeting_api.collector.ingest import consume_segments, ingest
 
-SECRET = "test-admin-token"
+SECRET = "admin-key-for-tests-0123456789abcdef"  # not a published value: the boot refuses those
 USER = 7
 LIFECYCLE_ENDPOINT = "/bots/internal/callback/lifecycle"
 
@@ -108,10 +108,10 @@ class SlowRepo(InMemoryMeetingRepo):
 
 
 class CreateSessionFailsRepo(InMemoryMeetingRepo):
-    """The runtime spawn SUCCEEDS but the post-spawn DB write (create_session) FAILS — the partial
-    spawn that can orphan a running workload with no session row to resolve its uploads."""
+    """The runtime spawn SUCCEEDS but the post-spawn DB write (set_bot_container) FAILS — the partial
+    spawn that can orphan a running workload."""
 
-    async def create_session(self, *, meeting_id, session_uid):
+    async def set_bot_container(self, *, meeting_id, bot_container_id):
         raise RuntimeError("DB write failed after the workload was spawned")
 
 
@@ -128,7 +128,7 @@ def test_lifecycle_publish_failure_is_surfaced_but_not_fatal():
     repo = InMemoryMeetingRepo()
     runtime = FakeRuntimeClient()
     bad_redis = ExplodingRedis()
-    app = create_app(meeting_repo=repo, runtime=runtime, command_publisher=bad_redis, redis=bad_redis)
+    app = create_app(open_callbacks=True, meeting_repo=repo, runtime=runtime, command_publisher=bad_redis, redis=bad_redis)
     client = TestClient(app)
 
     # Spawn so the session_uid → meeting mapping exists (the callback persists by session_uid).
@@ -194,12 +194,15 @@ def test_ingest_should_swallow_publish_failure_and_return_count():
     assert n == 1
 
 
-def test_consume_segments_acks_batch_despite_publish_failure():
+def test_consume_segments_acks_batch_despite_publish_failure(monkeypatch):
     """FIXED (ROB4): with the publish fault-isolated inside ingest, a :mutable publish failure no longer
     aborts consume_segments — the segment is persisted AND the batch is ACKED (not left pending for an
     endless redelivery). The blip is logged-not-fatal, matching the lifecycle path."""
     import fakeredis.aioredis as fakeaio
     from meeting_api.collector.fakes import FakeRedisBus
+    from _segment_auth import SECRET, signed_xadd
+
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)   # the collector admits only session-signed entries
 
     async def _run():
         client = fakeaio.FakeRedis(decode_responses=True)
@@ -211,7 +214,7 @@ def test_consume_segments_acks_batch_despite_publish_failure():
 
         bus.publish = boom  # type: ignore[assignment]
         store = InMemoryTranscriptStore()
-        await bus.xadd("transcription_segments", {
+        await signed_xadd(bus, {
             "type": "transcript", "meeting_id": 1,
             "segments": [{"segment_id": "s1", "start": 0.0, "end": 1.0, "text": "hi", "completed": True}],
         })
@@ -737,8 +740,7 @@ def test_partial_spawn_does_not_orphan_workload():
     """FIXED (ROB3): a post-spawn DB write failure no longer orphans the running workload. The runtime
     spawn (create_workload) succeeds, then create_session raises; service.py now wraps steps 6+7, tears
     the just-created workload DOWN (runtime.delete_workload) and re-raises as SpawnFailed. So the route
-    maps it to 502 and the kernel is left with NO orphaned bot (which would otherwise keep running with
-    no session row to resolve its uploads)."""
+    maps it to 502 and the kernel is left with NO orphaned bot."""
 
     async def _run():
         repo = CreateSessionFailsRepo()
@@ -748,13 +750,46 @@ def test_partial_spawn_does_not_orphan_workload():
                               native_meeting_id="partial", max_concurrent=None,
                               redis_url="r", token_secret=SECRET)
         # The workload WAS created (the runtime call came before the failing DB write), but it must have
-        # been TORN DOWN — no orphan left running. And no session row should survive.
-        return len(runtime.specs), len(runtime.deleted), len(repo.sessions)
+        # been TORN DOWN — no orphan left running.
+        return len(runtime.specs), len(runtime.deleted)
 
-    spawned, torn_down, n_sessions = asyncio.run(_run())
+    spawned, torn_down = asyncio.run(_run())
     assert spawned == 1, "the runtime workload was provisioned before the DB write failed"
     assert torn_down == 1, "the orphaned workload must be torn down (runtime.delete_workload) on a post-spawn DB failure"
-    assert n_sessions == 0, "no dangling MeetingSession row should survive the failed spawn"
+
+
+def test_session_row_exists_before_the_runtime_call():
+    """27 Oct, meeting 241: the create timed out after the kernel had started the bot, and the session
+    row, written only after the call returned, never was. It is now committed first."""
+
+    class Runtime(FakeRuntimeClient):
+        async def create_workload(self, spec):
+            self.sessions_at_create = len(repo.sessions)
+            return await super().create_workload(spec)
+
+    repo, runtime = InMemoryMeetingRepo(), Runtime()
+    asyncio.run(request_bot(repo, runtime, user_id=USER, platform="google_meet", native_meeting_id="order",
+                            max_concurrent=None, redis_url="r", token_secret=SECRET))
+    assert runtime.sessions_at_create == 1
+
+
+def test_create_timeout_keeps_the_meeting_for_the_bot():
+    """A create that does not answer is not a refusal: the row stays `requested` with its session and
+    the workload id, so a bot the kernel starts late reports in and a stop can reach it."""
+
+    class Runtime(FakeRuntimeClient):
+        async def create_workload(self, spec):
+            self.specs.append(spec)
+            raise TimeoutError("runtime did not answer")
+
+    repo, runtime = InMemoryMeetingRepo(), Runtime()
+    resp = asyncio.run(request_bot(repo, runtime, user_id=USER, platform="google_meet", native_meeting_id="slow",
+                                   max_concurrent=None, redis_url="r", token_secret=SECRET))
+    row = repo._meetings[resp["id"]]
+    assert row["status"] == "requested"
+    assert row["bot_container_id"] == runtime.specs[0]["workloadId"]
+    assert [s["meeting_id"] for s in repo.sessions] == [resp["id"]]
+    assert runtime.deleted == []
 
 
 def test_partial_spawn_tears_down_the_exact_workload():
@@ -851,6 +886,9 @@ def test_startup_requires_admin_token(monkeypatch):
     import meeting_api.__main__ as entry
 
     monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", "/run/vexa-identity/public/key.pem")
+    monkeypatch.setenv("RUNTIME_API_TOKEN", "runtime-caller-token-for-tests-0123456789abcdef")
+    monkeypatch.setenv("DB_PASSWORD", "db-password-for-tests-0123456789abcdef")
     with pytest.raises(RuntimeError) as ei:
         entry._require_config()
     msg = str(ei.value)
@@ -868,7 +906,7 @@ def test_mint_meeting_token_surfaces_clear_config_error(monkeypatch):
 
     monkeypatch.delenv("ADMIN_TOKEN", raising=False)
     with pytest.raises(ValueError) as ei:
-        mint_meeting_token(1, USER, "google_meet", "x")
+        mint_meeting_token(1, USER, "google_meet", "x", session_uid="conn-1")
     assert "ADMIN_TOKEN" in str(ei.value)
 
 
@@ -912,3 +950,27 @@ def test_spawn_reconciles_a_stop_that_raced_the_boot():
                     json={"platform": "google_meet", "native_meeting_id": "raced-spawn"})
     assert r.status_code == 201, r.text
     assert runtime.deleted, "spawn must tear down the workload when a stop raced its boot (no orphan)"
+
+
+async def test_the_runtime_client_presents_the_caller_credential(monkeypatch):
+    """Every runtime.v1 call meeting-api makes carries the runtime caller credential; the runtime
+    answers 401 to anything else, so a missing credential is refused when the client is built."""
+    import httpx
+    import pytest
+
+    from meeting_api.bot_spawn.adapters import HttpRuntimeClient, runtime_caller_headers
+
+    monkeypatch.delenv("RUNTIME_API_TOKEN", raising=False)
+    with pytest.raises(RuntimeError):
+        runtime_caller_headers()
+    monkeypatch.setenv("RUNTIME_API_TOKEN", "runtime-caller-token-for-tests-0123456789abcdef")
+    seen = []
+
+    def handler(request):
+        seen.append(request.headers.get("authorization"))
+        return httpx.Response(201, json={"workloadId": "mtg-1-abc", "state": "starting"})
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler), headers=runtime_caller_headers())
+    await HttpRuntimeClient(http, "http://runtime:8090").create_workload(
+        {"workloadId": "mtg-1-abc", "profile": "meeting-bot", "env": {}})
+    assert seen == ["Bearer runtime-caller-token-for-tests-0123456789abcdef"]

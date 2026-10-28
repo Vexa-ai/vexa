@@ -30,3 +30,13 @@ to be paid down in the dashboard phase — not silently.**
   `gate:licenses` over its tree, add the README surface (P12), and wire it to the real meeting-api +
   gateway. Closing this ADR is that phase's definition of done.
 - Until then, treat `clients/dashboard` as an opaque vendored artifact: changes inside it are not gate-checked.
+
+## Amendment · 2026-10-09 · the dashboard now lives at `services/dashboard/`
+
+`clients/dashboard/` no longer exists. The hosted dashboard came back from `main` (#1791) as
+`services/dashboard/`, the source as it runs at dashboard.vexa.ai, and it is **to be retired**
+(`services/dashboard/RETIRING.md`) rather than de-vendored. Read `clients/dashboard` above as
+`services/dashboard`. The carve-out is unchanged in kind and narrowed in place: the `.gateignore` sits
+inside `services/dashboard/`, so only that tree leaves the per-dir gates, and the rest of `services/` is
+gated. It is outside `pnpm-workspace.yaml` (no glob matches it), so `gate:licenses` does not see its
+dependency tree, and nothing in the product builds or references it. Retiring it closes this ADR.

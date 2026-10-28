@@ -9,6 +9,8 @@ Drives the SHIPPED parse_ics/sync_user over the in-memory collector store, OFFLI
 """
 from __future__ import annotations
 
+import pytest
+
 from datetime import datetime, timedelta, timezone
 
 from meeting_api.calendar_sync import aggregate_stamps, parse_ics, sync_user
@@ -440,10 +442,10 @@ async def test_sync_vanished_linkless_uid_retires_row():
 # ---- attendees + series workspace inheritance (prep-v3 slices a+b) -------------------
 
 def _attendee_lines() -> str:
-    return ("ATTENDEE;CN=Marvin Hanke;PARTSTAT=ACCEPTED:mailto:marvin.hanke@oenb.at\r\n"
-            "ATTENDEE;CN=Roland Ramp:mailto:Roland.Ramp@oenb.at\r\n"
-            "ATTENDEE;CUTYPE=ROOM;CN=Vienna 4F:mailto:room4f@oenb.at\r\n"
-            "ATTENDEE:mailto:marvin.hanke@oenb.at\r\n")
+    return ("ATTENDEE;CN=Robin Vale;PARTSTAT=ACCEPTED:mailto:robin.vale@example.com\r\n"
+            "ATTENDEE;CN=Sasha Iyer:mailto:Sasha.Iyer@example.com\r\n"
+            "ATTENDEE;CUTYPE=ROOM;CN=Room 4F:mailto:room4f@example.com\r\n"
+            "ATTENDEE:mailto:robin.vale@example.com\r\n")
 
 
 def _event_with_attendees(uid="uid-1", **kw) -> str:
@@ -455,8 +457,8 @@ def test_parse_extracts_attendees_filtering_rooms_and_dupes():
     parsed = parse_ics(_ics(_event_with_attendees()), now=NOW)
     (ev,) = parsed["events"]
     assert ev["attendees"] == [
-        {"email": "marvin.hanke@oenb.at", "name": "Marvin Hanke", "partstat": "accepted"},
-        {"email": "roland.ramp@oenb.at", "name": "Roland Ramp"},
+        {"email": "robin.vale@example.com", "name": "Robin Vale", "partstat": "accepted"},
+        {"email": "sasha.iyer@example.com", "name": "Sasha Iyer"},
     ]
 
 
@@ -470,15 +472,15 @@ async def test_sync_stores_attendees_on_create_and_follows_feed_changes():
     await sync_user(store, USER, parse_ics(_ics(_event_with_attendees()), now=NOW))
     (row,) = await store.list_meetings(USER)
     assert [a["email"] for a in row["data"]["attendees"]] == [
-        "marvin.hanke@oenb.at", "roland.ramp@oenb.at"]
+        "robin.vale@example.com", "sasha.iyer@example.com"]
     # feed drops one attendee → the row follows (invite lists change up to the call)
     result = await sync_user(store, USER, parse_ics(_ics(
         _event(uid="uid-1").replace(
             "END:VEVENT",
-            "ATTENDEE;CN=Marvin Hanke:mailto:marvin.hanke@oenb.at\r\nEND:VEVENT")), now=NOW))
+            "ATTENDEE;CN=Robin Vale:mailto:robin.vale@example.com\r\nEND:VEVENT")), now=NOW))
     assert result["counts"]["updated"] == 1
     (row,) = await store.list_meetings(USER)
-    assert [a["email"] for a in row["data"]["attendees"]] == ["marvin.hanke@oenb.at"]
+    assert [a["email"] for a in row["data"]["attendees"]] == ["robin.vale@example.com"]
 
 
 async def test_sync_stores_and_updates_complete_event_metadata_per_calendar_source():
@@ -509,13 +511,61 @@ async def test_sync_new_occurrence_inherits_series_workspace():
     store.seed_meeting(
         user_id=USER, platform="google_meet", native_meeting_id="abc-defg-hij",
         status="completed", start_time="2026-07-01T15:00:00Z",
-        data={"calendar_uid": "uid-1", "workspace_id": "oenb-1424e3"},
+        data={"calendar_uid": "uid-1", "workspace_id": "acme-1424e3"},
     )
-    result = await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW))
+    result = await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW),
+                             writable_workspaces={"acme-1424e3"})
     assert result["counts"]["created"] == 1
     new = next(r for r in await store.list_meetings(USER) if r["status"] in ("idle", "scheduled"))
-    assert new["data"]["workspace_id"] == "oenb-1424e3"
+    assert new["data"]["workspace_id"] == "acme-1424e3"
     assert new["data"]["workspace_source"] == "series"
+
+
+@pytest.mark.parametrize("writable", [set(), {"another-room"}, None],
+                         ids=["demoted-to-viewer", "removed", "identity-did-not-answer"])
+async def test_a_new_occurrence_does_not_inherit_a_workspace_its_owner_can_no_longer_write(writable):
+    """R1801-3: binding takes edit access on every path, the calendar series included. An owner who
+    bound last week's occurrence and has since been demoted or removed gets this week's created
+    PRIVATE — and so does one whose rights could not be read right now."""
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="abc-defg-hij",
+        status="completed", start_time="2026-07-01T15:00:00Z",
+        data={"calendar_uid": "uid-1", "workspace_id": "acme-1424e3"},
+    )
+    await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW), writable_workspaces=writable)
+    new = next(r for r in await store.list_meetings(USER) if r["status"] in ("idle", "scheduled"))
+    assert "workspace_id" not in new["data"]
+
+
+async def test_the_sweep_reads_the_owners_current_rights_and_passes_them_on():
+    from meeting_api.calendar_sync.runner import run_user_sync
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="abc-defg-hij",
+        status="completed", start_time="2026-07-01T15:00:00Z",
+        data={"calendar_uid": "uid-1", "workspace_id": "acme-1424e3"},
+    )
+    asked = []
+
+    async def writable_of(uid):
+        asked.append(uid)
+        return set()          # a viewer now
+
+    import meeting_api.calendar_sync.runner as runner_mod
+    async def fake_fetch(url, client=None):
+        return _ics(_event()), None
+    import meeting_api.calendar_sync as cs
+    orig = cs.fetch_ics
+    cs.fetch_ics = fake_fetch
+    try:
+        stamp = await run_user_sync(store, {"user_id": USER, "ics_url": "https://example.test/f.ics"},
+                                    now=NOW, writable_of=writable_of)
+    finally:
+        cs.fetch_ics = orig
+    assert stamp.get("last_error") is None and asked == [USER]
+    new = next(r for r in await store.list_meetings(USER) if r["status"] in ("idle", "scheduled"))
+    assert "workspace_id" not in new["data"]
 
 
 async def test_sync_inherit_respects_unbind_tombstone():
@@ -543,7 +593,8 @@ async def test_sync_inherit_newest_row_wins():
         status="completed", start_time="2026-07-01T15:00:00Z",
         data={"calendar_uid": "uid-1", "workspace_unbound": True},
     )
-    await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW))
+    # still able to write there, so it is the tombstone — not the rights check — that stops it
+    await sync_user(store, USER, parse_ics(_ics(_event()), now=NOW), writable_workspaces={"old-room"})
     new = next(r for r in await store.list_meetings(USER) if r["status"] in ("idle", "scheduled"))
     assert "workspace_id" not in new["data"]
 
@@ -554,13 +605,13 @@ async def test_unbind_writes_tombstone_and_rebind_lifts_it():
     (row,) = await store.list_meetings(USER)
     updated = await store.update_planned_meeting(USER, row["id"], {"workspace_id": None})
     assert updated["data"].get("workspace_unbound") is True
-    rebound = await store.update_planned_meeting(USER, row["id"], {"workspace_id": "oenb-1424e3"})
-    assert rebound["data"]["workspace_id"] == "oenb-1424e3"
+    rebound = await store.update_planned_meeting(USER, row["id"], {"workspace_id": "acme-1424e3"})
+    assert rebound["data"]["workspace_id"] == "acme-1424e3"
     assert rebound["data"]["workspace_source"] == "user"
     assert "workspace_unbound" not in rebound["data"]
 
 
-# ---- recurring series with RECURRENCE-ID overrides (OeNB-vanish regression) ----------
+# ---- recurring series with RECURRENCE-ID overrides (the vanishing-series regression) ----------
 
 def _override(uid: str, rec_id: str, start: str, summary="Weekly sync",
               location="https://meet.google.com/abc-defg-hij", status=None) -> str:
@@ -569,7 +620,7 @@ def _override(uid: str, rec_id: str, start: str, summary="Weekly sync",
 
 
 def test_parse_series_survives_past_overrides_walking_before_master():
-    """The live OeNB bug: past RECURRENCE-ID instances precede the RRULE master in the feed —
+    """The live vanishing-series bug: past RECURRENCE-ID instances precede the RRULE master in the feed —
     first-component-wins consumed the UID on a dead override and dropped the whole series."""
     parsed = parse_ics(_ics(
         _override("uid-1", "20260622T150000Z", "20260622T150000Z"),   # past instance, walks FIRST
@@ -806,7 +857,7 @@ async def test_failed_auto_join_does_not_restorm_through_a_recreated_row():
     # 5. one retry once the backoff expires (still inside the 600s grace)
     counters = await _sweep(repo, runtime, START + timedelta(seconds=301))
     assert counters == {"due": 1, "spawned": 1, "already": 0, "errors": 0,
-                        "skipped_uncapped": 0, "skipped_live": 0, "stopped": 0}
+                        "skipped_uncapped": 0, "skipped_live": 0, "stopped": 0, "blocked": 0}
     assert len(runtime.specs) == 2
 
 

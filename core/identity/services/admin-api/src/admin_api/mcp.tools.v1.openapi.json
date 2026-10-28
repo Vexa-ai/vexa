@@ -1,0 +1,92 @@
+{
+  "components": {
+    "schemas": {
+      "UserSettingChange": {
+        "additionalProperties": false,
+        "description": "One of the person's settings, changed \u2014 the body behind `settings_set`.",
+        "properties": {
+          "setting": {
+            "description": "The setting: timezone, mail_minutes, mail_join, mail_rsvp, mail_prep or presence.",
+            "title": "Setting",
+            "type": "string"
+          },
+          "value": {
+            "description": "Its new value \u2014 an IANA zone for timezone; on/off for the rest.",
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "setting",
+          "value"
+        ],
+        "title": "UserSettingChange",
+        "type": "object"
+      },
+      "WorkspaceRegimeChange": {
+        "additionalProperties": false,
+        "description": "Where the person's own workspace lives \u2014 the body behind `workspace_regime_set`.",
+        "properties": {
+          "local_path": {
+            "default": "",
+            "description": "For `local`: the ABSOLUTE directory on their machine.",
+            "title": "Local Path",
+            "type": "string"
+          },
+          "mode": {
+            "description": "`local` (a directory on their machine) or `cloud` (server-side).",
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "WorkspaceRegimeChange",
+        "type": "object"
+      }
+    }
+  },
+  "paths": {
+    "/user/settings": {
+      "get": {
+        "description": "How Vexa behaves for THIS person \u2014 every setting, and what each one means. Per-person,\neffective from the next meeting; changing one never touches anyone else.",
+        "summary": "Get User Settings"
+      },
+      "put": {
+        "description": "CHANGE ONE of this person's settings when they ask for something that is one. Set it\nrather than explaining it cannot be done, and never edit a flow to achieve it. on/off\nsettings accept on/off, true/false, yes/no. An unknown setting is refused WITH the list.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserSettingChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "summary": "Set User Setting"
+      }
+    },
+    "/user/workspace-regime": {
+      "get": {
+        "description": "Where this person's OWN workspace lives: `cloud` (server-side, the default) or `local` (a\ndirectory on their machine their agent manages with its native file tools).",
+        "summary": "Get User Workspace Regime"
+      },
+      "put": {
+        "description": "MOVE this person's own workspace: `local` with an ABSOLUTE `local_path` on their machine,\nor back to `cloud`. Group workspaces, company claims and flow outputs stay server-side in\neither mode.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceRegimeChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "summary": "Set User Workspace Regime"
+      }
+    }
+  }
+}

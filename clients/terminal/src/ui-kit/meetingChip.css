@@ -1,0 +1,11 @@
+/* MeetingChip (ui-kit/MeetingChip.tsx): a meeting named in a reply or a page. The meeting colour is
+ * the entity palette's (`ENTITY_CHIP.meeting` in docRefs.tsx); hover fills it with the meeting tint. */
+.vx-meeting-chip {
+  display: inline-flex; align-items: center; gap: 5px; vertical-align: baseline;
+  border-radius: var(--radius-full); padding: 0.5px 9px 0.5px 7px; font-size: 0.92em;
+  font-weight: var(--weight-medium); white-space: nowrap; line-height: 1.45;
+  background: var(--panel2); border: 1px solid var(--line); color: var(--violet); cursor: pointer;
+}
+.vx-meeting-chip:hover:not([data-pending]) { background: var(--violetbg); border-color: var(--violet); }
+.vx-meeting-chip[data-pending] { color: var(--t3); cursor: auto; }
+.vx-meeting-chip-day { color: var(--t3); font-weight: var(--weight-regular); }

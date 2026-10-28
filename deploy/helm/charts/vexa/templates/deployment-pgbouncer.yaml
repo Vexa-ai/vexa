@@ -31,10 +31,12 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: pgbouncer
     spec:
+      enableServiceLinks: false
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- include "vexa.seccompPodSecurityContext" . | nindent 6 }}
       containers:
         - name: pgbouncer
           image: "{{ .Values.pgbouncer.image }}"

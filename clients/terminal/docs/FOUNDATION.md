@@ -74,6 +74,8 @@ under `schedule.v1` — croniter, retry/backoff, idempotency). Four trigger sour
 | `event` | a Redis stream `evt:*` (email/calendar/task event-sources publish) | a poll loop (mirror `bridge.run_once`) → Invocation |
 | `transcription` | `tc:meeting:{id}:mutable` (live) + `transcript.v1 session_end` (completed) | today's `bridge.py` folds in unchanged; live path subscribes the mutable stream |
 
+> **Superseded (ADR-0046, 2026-10-13):** a routine is now the person's own flow (a schedule trigger and the `agent_run` step), fired by flows into the routine's own chat; agent-api compiles nothing to `schedule.v1`. The text below is the original design.
+
 A routine is literally a `schedule.v1` cron job whose body is a `unit.v1` Invocation. `routine.v1` is a
 higher-level authoring entity that *compiles down* to that.
 

@@ -157,6 +157,14 @@ const CASES: Case[] = [
                detail: 'control_plane_unreachable: control plane unreachable at boot (meeting_api_callback, redis); refused to join' },
     expect: 'navigation_failure',
   },
+  // — the page was not in English: every reading on it is untrusted —
+  {
+    name: 'a lobby "rejection" on a non-English page → ui_locale_mismatch, not the host',
+    outcome: 'error',
+    signals: { reachedLobby: true, timeInLobbyMs: 4_000, lobbyBudgetMs: BUDGET_MS,
+               detail: "ui_locale_mismatch: the google_meet page rendered in 'de' (via html-lang), not the pinned en-US, so the join layer could not read the lobby or a rejection; its reading was: Bot admission was rejected by meeting admin" },
+    expect: 'ui_locale_mismatch',
+  },
   // — honest ignorance —
   {
     name: 'a lobby timeout verdict with no measurements at all is still an awaiting_admission_timeout',
@@ -187,6 +195,7 @@ const ATTRIBUTION: Array<[JoinFailureReason, JoinFailureAttribution]> = [
   ['auth_session_missing', 'system_fault'],
   ['never_reached_lobby', 'system_fault'],
   ['navigation_failure', 'system_fault'],
+  ['ui_locale_mismatch', 'system_fault'],
   ['stopped_while_joining', 'user_action'],
   ['unknown', 'unknown'],
 ];
@@ -214,6 +223,22 @@ check(
 check(
   'a plain lobby expiry stays with the host (no override without evidence)',
   attributeJoinFailure('awaiting_admission_timeout', 'host did not admit within the waiting-room timeout') === 'host_action',
+);
+check(
+  'Meet ending an unanswered knock ("No one responded") stays with the host, not our selectors',
+  attributeJoinFailure('awaiting_admission_timeout', 'Google Meet ended the join request, nobody admitted the bot: Meet showed "No one responded to your request to join the call"') === 'host_action'
+    && attributeJoinFailure('awaiting_admission_timeout', 'Google Meet ended the join request, nobody admitted the bot: redirected off Google Meet to workspace.google.com') === 'host_action',
+);
+check(
+  'Meet ending the knock at ~10 min against a 15 min budget is a timeout, not a rejection',
+  classifyJoinFailure('timeout', {
+    reachedLobby: true, timeInLobbyMs: 602_000, lobbyBudgetMs: 900_000,
+    detail: 'Google Meet ended the join request, nobody admitted the bot: Meet showed "No one responded to your request to join the call"',
+  }) === 'awaiting_admission_timeout',
+);
+check(
+  'control: the same early exit WITHOUT that evidence still reads as the platform refusing (#1058)',
+  classifyJoinFailure('timeout', { reachedLobby: true, timeInLobbyMs: 602_000, lobbyBudgetMs: 900_000 }) === 'awaiting_admission_rejected',
 );
 check(
   'the override is scoped: the same admission-flow words do not move a REJECTION',

@@ -1,0 +1,27 @@
+{
+  "secret": "delegation.v1-published-test-vector-key",
+  "now": 1767225600,
+  "subject": "42",
+  "regime": "human",
+  "workspaces": "*",
+  "ttl_sec": 3600,
+  "jti": "vec-unit-0001",
+  "unit": "agent-42-chat-main",
+  "header": {
+    "alg": "HS256",
+    "typ": "vxdlg"
+  },
+  "claims": {
+    "aud": "vexa-mcp",
+    "exp": 1767229200,
+    "iat": 1767225600,
+    "jti": "vec-unit-0001",
+    "scope": {
+      "regime": "human",
+      "workspaces": "*"
+    },
+    "sub": "42",
+    "unit": "agent-42-chat-main"
+  },
+  "token": "vxd_eyJhbGciOiJIUzI1NiIsInR5cCI6InZ4ZGxnIn0.eyJhdWQiOiJ2ZXhhLW1jcCIsImV4cCI6MTc2NzIyOTIwMCwiaWF0IjoxNzY3MjI1NjAwLCJqdGkiOiJ2ZWMtdW5pdC0wMDAxIiwic2NvcGUiOnsicmVnaW1lIjoiaHVtYW4iLCJ3b3Jrc3BhY2VzIjoiKiJ9LCJzdWIiOiI0MiIsInVuaXQiOiJhZ2VudC00Mi1jaGF0LW1haW4ifQ.ce5_R_SnOZCLo80HdAO-_L-gDyug1uDoPnfZtCIOym8"
+}

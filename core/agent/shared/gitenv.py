@@ -1,25 +1,28 @@
-"""gitenv.py — the scrubbed environment every git subprocess in this package must run with.
+"""gitenv.py — environment pieces for git: the repo-discovery scrub and transport pinning.
 
-Git HOOKS export ``GIT_DIR`` (and sometimes ``GIT_WORK_TREE`` / ``GIT_INDEX_FILE``) into the hook
-process. Any descendant git subprocess that inherits those stops discovering its repo from ``cwd``
-and operates on the EXPORTED repo instead — with ``GIT_DIR`` set and no work tree given, git treats
-the subprocess's cwd as that repo's WORK TREE. That is exactly how the pre-push gate run once
-destroyed a branch: ``.githooks/pre-push`` → ``pnpm gates`` → pytest, and every test's
-``git add -A && git commit`` in a tmp workspace rewrote the branch being pushed (~180 junk commits
-deleting the tree).
+Git itself is never started from here: every git subprocess in this domain goes through
+``shared.gitexec.run_git`` (``tests/test_git_single_path.py`` enforces it), which applies the
+discovery scrub below and much more. What remains here is what other code needs on its own:
 
-The rule this module enforces: a workspace git op must NEVER trust inherited repo-discovery vars —
-pass ``env=scrubbed_git_env(...)`` to every ``subprocess`` git invocation. Identity/config
-injection (``GIT_AUTHOR_*`` / ``GIT_COMMITTER_*`` / ``GIT_CONFIG_*``) is deliberately left alone:
-callers and tests set those on purpose, and they cannot re-point the repo.
+* ``GIT_REPO_DISCOVERY_VARS`` / ``scrubbed_git_env`` — git HOOKS export ``GIT_DIR`` (and sometimes
+  ``GIT_WORK_TREE`` / ``GIT_INDEX_FILE``) into the hook process, and any descendant git that
+  inherits them operates on the EXPORTED repo with its own cwd as the work tree. That is how the
+  pre-push gate run once destroyed a branch: ``.githooks/pre-push`` → ``pnpm gates`` → pytest, and
+  a test's ``git add -A && git commit`` in a tmp workspace rewrote the branch being pushed (~180
+  junk commits deleting the tree). The test session scrubs these at import (``tests/conftest.py``).
+* ``git_transport`` — what a NETWORK op runs with: the transports it may use, derived from the URL
+  it was given (``transport_env``, below), and the connection pinned to the remote's checked
+  addresses (``shared.git_egress``). Every network call site uses it; ``transport_env`` /
+  ``pinned_git_env`` are its unpinned halves.
 
-(``llm/ports.py`` keeps a small module-local twin of this scrub — the llm module imports nothing
-from product code so it stays liftable, the same stance as its local ``_git``.)
+(``llm/ports.py`` keeps a small module-local twin of the discovery scrub for the harness CLIs it
+launches — the llm module imports nothing from product code so it stays liftable.)
 """
 from __future__ import annotations
 
 import os
 import re
+from typing import NamedTuple
 
 # Every env var that redirects git's repo/worktree/index/object discovery away from cwd.
 GIT_REPO_DISCOVERY_VARS = (
@@ -85,6 +88,62 @@ def git_transports_for(url: str | None) -> tuple[str, ...]:
     if _SCP_LIKE.match(v):
         return REMOTE_TRANSPORTS            # ``git@host:owner/repo`` → ssh
     return (*REMOTE_TRANSPORTS, "file")     # a scheme-less LOCAL path (an opted-in local repo root)
+
+
+def transport_env(url: str | None) -> dict[str, str]:
+    """The one variable a NETWORK git op adds to :func:`shared.gitexec.run_git`'s environment:
+    ``GIT_ALLOW_PROTOCOL`` pinned to what ``url`` legitimately needs. ``run_git`` opens no transport
+    by default (``protocol.allow=never``), so an op that omits this cannot reach any remote."""
+    env = {"GIT_ALLOW_PROTOCOL": ":".join(git_transports_for(url))}
+    # A provider the operator configured with a private CA: git trusts exactly that CA for this one
+    # operation, whose URL is on that provider (``shared.git_provider``). Any other URL keeps the
+    # system trust.
+    ca = _provider_ca(url)
+    if ca:
+        env["GIT_SSL_CAINFO"] = ca
+    return env
+
+
+class GitTransport(NamedTuple):
+    """What ONE network git op adds to :func:`shared.gitexec.run_git`: ``config`` goes before the
+    subcommand (``run_git(cwd, *t.config, "fetch", …)``) and ``env`` into its environment."""
+    env: dict
+    config: tuple
+
+
+def git_transport(url: str | None, *, ssh_command: str | None = None) -> GitTransport:
+    """The transport for a NETWORK git op against ``url``: :func:`transport_env`, plus the remote's
+    host checked and the connection PINNED to the checked addresses (``shared.git_egress``).
+
+    Raises ``shared.git_egress.GitEgressRefused`` — before any git process exists — when the host
+    leads inside the deployment, is not resolvable now, or the operator's allow-list is malformed.
+    ``ssh_command`` is the ``GIT_SSH_COMMAND`` the op would otherwise run (a deploy key's); the
+    pinned command extends it, so the caller passes it here instead of beside the result."""
+    from shared import git_egress    # lazily: git_egress → git_provider → (this module, lazily)
+
+    env = transport_env(url)
+    config: tuple = ()
+    remote = git_egress.remote_of(url)
+    if remote is not None:
+        ips = git_egress.checked_addresses(remote.host, at_connect=True)
+        if ips:
+            if remote.scheme == "ssh":
+                env["GIT_SSH_COMMAND"] = git_egress.pin_ssh_command(remote, ips, ssh_command)
+            else:
+                config = git_egress.pin_config(remote, ips)
+    if ssh_command and "GIT_SSH_COMMAND" not in env:
+        env["GIT_SSH_COMMAND"] = ssh_command
+    return GitTransport(env, config)
+
+
+def _provider_ca(url: str | None) -> str | None:
+    if not url or not url.strip().lower().startswith("https://"):
+        return None
+    from shared import git_provider   # lazily: gitenv is imported by modules git_provider never needs
+    try:
+        return git_provider.ca_file_for(url)
+    except ValueError:
+        return None
 
 
 def pinned_git_env(url: str | None, **overrides: str) -> dict[str, str]:

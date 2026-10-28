@@ -1,0 +1,190 @@
+---
+title: "Use a self-hosted GitLab"
+description: "Let workspaces clone from, push to and publish on your own GitLab — nested groups, your own CA — with each person's token kept in the credential broker."
+---
+
+Workspaces sync with git repositories. GitHub is always available. An operator can add a
+**self-hosted GitLab** (or a GitHub Enterprise Server) as a **git provider**; people then connect it
+with their own token, attach repositories from it, and publish new workspaces into its groups —
+nested groups included — from the chat or from the publish form.
+
+## What you can do
+
+### Add your GitLab (operator)
+
+In your Helm values:
+
+```yaml
+agentApi:
+  gitProviders:
+    - name: corp                          # how people and the agent pick it
+      kind: gitlab                        # gitlab, or github for GitHub Enterprise Server
+      baseUrl: https://git.example.com    # https only; a port or a relative URL root is fine
+      label: Company GitLab               # optional: the name people see
+      caBundle: |                         # optional: the private CA your GitLab's certificate is issued by
+        -----BEGIN CERTIFICATE-----
+        …
+        -----END CERTIFICATE-----
+```
+
+`helm upgrade` with the new values. agent-api checks the list at start-up and refuses to start, naming
+the entry, when one is malformed (not `https`, unknown `kind`, two providers on one address, a `caBundle`
+that is not a PEM certificate). Instead of `caBundle` you can mount the CA yourself and give its
+absolute path as `caFile`. Docker Compose reads the same list as JSON in `VEXA_GIT_PROVIDERS`.
+
+Nothing secret goes into these values: the list names hosts, never tokens.
+
+### Connect it (each person)
+
+Open **Connections → Git**. Each configured provider is listed with its address. Paste a GitLab token
+into its field and save. The token is kept in the credential broker and is only ever sent to that
+GitLab.
+
+| Token | Scopes | Role in the group |
+|---|---|---|
+| Personal, project or group access token | `api` (create projects, check the token) and `write_repository` (push) | **Developer** or above in the group you publish into; **Maintainer** when the group restricts project creation to maintainers |
+
+A token for clone-only use needs `read_repository`. A project or group access token works for that one
+project or group only, which is the narrowest choice when a workspace syncs with one existing repository.
+
+### Publish a workspace into a nested group
+
+From the chat: *"publish this workspace to Company GitLab in it/ai/vexa as notes"*. The agent lists the
+providers (`git_providers`), confirms the provider, group and name with you, and calls
+`workspace_publish`. It creates the private project `it/ai/vexa/notes`, pushes the full history, and
+answers with the project's link.
+
+From the workspace's **Repository** section: **Publish to …**, pick the provider, type the group path
+(`it/ai/vexa`) and the name, and publish. Your saved token is used; a token typed in the form is used
+for that one call and never stored.
+
+### Attach, push and pull
+
+Paste the repository's address, nested as deep as GitLab allows
+(`https://git.example.com/it/ai/vexa/notes.git` or `git@git.example.com:it/ai/vexa/notes.git`).
+Push and pull use the workspace's deploy key or your saved token for the provider the address is on.
+**Add it on Company GitLab →** opens the project's deploy-key settings.
+
+## Limits and errors
+
+| You see | Meaning | Do this |
+|---|---|---|
+| *Company GitLab rejected the token (HTTP 401)* (`token_rejected`) | The token is wrong, expired or revoked | Save a new token in Connections → Git |
+| *Company GitLab rejected the token (HTTP 403)* | The token lacks the `api` scope, or you cannot create projects in that group | Add the scope, or ask for Developer/Maintainer in the group |
+| *group 'it/ai/x' was not found, or the token cannot see it* | No such group, or not visible to the token | Check the path; GitLab paths are case-sensitive |
+| *a repository named 'notes' already exists in group …* | The name is taken there | Pick another name, or publish to it with its address as `remote_url` |
+| *Vexa can create a repository on this deployment's git providers: …* | The provider named is not configured, or cannot create | Use a listed provider |
+| *Company GitLab unreachable: … certificate verify failed* | The GitLab's certificate is from a CA agent-api does not trust | Set `caBundle` (or `caFile`) for that provider |
+| *answered with a redirect* | `baseUrl` is not the GitLab's canonical address (http→https, a different host name) | Set `baseUrl` to the address GitLab redirects to |
+
+Paths can be up to 22 segments deep (a group, 20 subgroups and the project). GitHub providers stay
+`owner/repo`. A host that is not configured still works for clone and push with a token typed for that
+call, but nothing can be created there and no saved token is sent to it.
+
+## How it works
+
+### Flow
+
+1. **Configuration.** agent-api reads `VEXA_GIT_PROVIDERS` (Helm `agentApi.gitProviders`) once at
+   start-up into a registry of providers. GitHub (`github`, `https://github.com`) is always in it, so a
+   deployment that configures nothing behaves exactly as before.
+2. **One port, two adapters.** Every question agent-api asks a git host goes through one
+   `GitProvider` (`core/agent/shared/git_provider.py`): which repository path a URL names, its web
+   link and deploy-key page, how a token is presented to git (GitLab: `oauth2:<token>`), how a
+   repository is created under an owner or group, and whether a token is accepted. The GitHub adapter
+   (`git_provider_github.py`) and the GitLab adapter (`git_provider_gitlab.py`) answer; nothing else
+   in agent-api or the terminal names GitHub's host, and a static test holds that.
+3. **Publish.** `workspace_publish` / `POST /api/workspace/publish` resolves the provider by **name**
+   before any credential is read, reads the person's saved token for that provider from the credential
+   broker, and asks the adapter to create the project: for GitLab,
+   `GET /api/v4/namespaces/<group path>` then `POST /api/v4/projects` with the token in the
+   `PRIVATE-TOKEN` header. The push goes over a dedicated remote with the token on the URL for the
+   push only, then the remote is reset to the token-free address.
+4. **Private CA.** API calls trust exactly the provider's CA. git, for an operation whose URL is on
+   that provider, gets `GIT_SSL_CAINFO` pointing at the same CA; any other URL keeps the system trust.
+
+### Who writes what
+
+| Data | Writer | Store |
+|---|---|---|
+| The provider list | the operator | Helm values → `VEXA_GIT_PROVIDERS` on agent-api |
+| A person's token for a provider | the person, in Connections → Git | the credential broker, `git/pat/<person>` (GitHub) or `git/pat/<person>/<provider>` |
+| The repository | the provider (GitLab) | GitLab |
+| The workspace's remote | agent-api | the workspace's `.git/config`, token-free |
+
+### Routes
+
+| Route | Tool | Does |
+|---|---|---|
+| `GET /api/workspace/git-providers` | `git_providers` | the providers, each with whether the person saved a token (masked) |
+| `GET`/`POST /api/workspace/git-token` (`provider`) | — (terminal only) | read the masked state / save or clear a token for one provider |
+| `POST /api/workspace/publish` (`provider`, `org`) | `workspace_publish` | create on the provider, in the group, and push |
+| `POST /api/workspace/push`, `/pull`, `/status` | `workspace_push`, `workspace_pull`, `workspace_status` | sync with the saved token of the provider the remote is on |
+
+### Configuration
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `agentApi.gitProviders` / `VEXA_GIT_PROVIDERS` | empty (GitHub only) | the list above; the earlier comma form `<host>=gitlab` is still read |
+| `agentApi.gitAllowedInternalHosts` / `VEXA_GIT_ALLOWED_INTERNAL_HOSTS` | empty | internal git hosts (exact names) and networks (CIDR) a repository URL may point at without being a configured provider, such as a read-only mirror. A repository host that resolves to a private address is refused unless it is listed here or is a provider above. |
+
+## Why it complies
+
+### Architecture
+
+- **One writer per surface.** The operator writes the provider list; the person writes their token;
+  agent-api writes the workspace's remote. No component writes another's.
+- **The broker is the only credential store.** Saved tokens live in the credential broker under the
+  `git` role, one name per person and provider; agent-api keeps no copy and reads a token for one
+  operation only. The broker serves a `pat/<person>/…` name only to that signed person.
+- **One port.** Host-specific behaviour lives in two adapters behind `GitProvider`;
+  `test_no_git_host_is_hard_coded_outside_its_adapter` fails the build when `github.com` appears
+  anywhere else in agent-api or the terminal.
+
+### Security
+
+- **Egress only to configured hosts.** A request picks a provider by name; an API call goes only to
+  that provider's configured address (or GitHub's API for the built-in provider), never to a host a
+  request names. Redirects are refused, so a token in a header is never handed on.
+- **A saved token reaches only its own provider**: an `https` URL on that provider's host, port and base
+  path. `http://`, another host, or a URL that already carries a user gets no saved token
+  (`test_a_saved_token_reaches_only_its_own_provider`).
+- **No token in any answer or log.** Errors are token-redacted (every spelling: the token, its password
+  half, its URL form); a rejected token is the typed refusal `token_rejected`, naming the provider.
+- **TLS is checked**, against the provider's own CA when one is configured; tokens are never sent over
+  plain `http`.
+- **Proof against a real GitLab** (`core/agent/tests/test_git_provider_gitlab_live.py`, run against a
+  GitLab CE with a private CA and the nested group `it/ai/vexa`): connect, publish into the nested group,
+  push, pull back, the web link, a bad token's typed refusal, and that the host is refused without its CA.
+
+### Principles and the gate behind each
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| **P2** couple only through contracts | the publish and provider routes are declared in `routes.v1.json` and `mcp.tools.v1.json`; the broker is reached only through its routes | `gate:isolation`, `gate:domain-doors` |
+| **P4** published schema at a boundary | the two new tools (`git_providers`, `workspace_publish`) and their routes are declared in agent-api's manifests, which follow the sealed `routes.v1` and `mcp.tools.v1` schemas | `gate:contract-version`; `core/gateway/services/gateway/tests/test_route_manifests.py` |
+| **P5** adapt at the boundary | GitHub and GitLab vocabulary (owner or group path, `PRIVATE-TOKEN`, `oauth2:`) lives only in the two adapters | ungated: reviewed; `test_no_git_host_is_hard_coded_outside_its_adapter` checks the host name |
+| **P14** config by env, validated | `VEXA_GIT_PROVIDERS` is parsed at boot; a malformed entry stops agent-api | `gate:config-contract`; `test_a_malformed_provider_list_stops_the_boot` |
+| **P15** secrets brokered | a saved token lives only in the credential broker, one name per person and provider | ungated: reviewed; `test_the_broker_accepts_a_per_provider_name_only_for_its_owner` |
+| **P16** defer the implementation, not the seam | one `GitProvider` port; a new host kind is a new adapter | ungated: reviewed |
+| **P18** fail loud | a provider failure is a typed fault (`token_rejected`, `repo_exists`, `namespace_not_found`, `unreachable`, `redirect`, `unsupported`) naming the provider | ungated: reviewed; `test_a_rejected_token_is_a_typed_fault_naming_the_provider_never_the_token` |
+| **P20** default-deny | an unconfigured provider is refused before any credential is read; a saved token is served only to its owner | ungated: reviewed; the deny tests below |
+| **P23** one writer per carrier | operator → provider list; person → token; agent-api → the workspace remote | `gate:dataflow` |
+
+**Deny tests.**
+
+| Test | Proves |
+|---|---|
+| `core/agent/tests/test_git_provider_port.py` · `test_a_saved_token_reaches_only_its_own_provider` | a saved token goes only to an `https` URL on its own provider |
+| `core/agent/tests/test_git_provider_port.py` · `test_the_broker_accepts_a_per_provider_name_only_for_its_owner` | nobody else's token name is served |
+| `core/agent/tests/test_git_provider_port.py` · `test_publish_refuses_an_unknown_provider_before_touching_anything` | an unconfigured provider gets no request and no token |
+| `core/agent/tests/test_git_provider_port.py` · `test_a_private_ca_reaches_git_only_for_its_provider` | a private CA is trusted only for its own provider |
+| `core/agent/tests/test_git_gitlab_remotes.py` · `test_gitlab_create_does_not_follow_a_redirect` | a token in a header is never handed on |
+| `core/agent/tests/test_git_provider_gitlab_live.py` · `test_without_the_private_ca_the_host_is_not_trusted`, `test_a_bad_token_is_a_typed_refusal_naming_the_provider` | the same, against a real GitLab |
+
+## Related
+
+- [Workspaces](/minutes/workspaces)
+- [Connections](/connections)
+- [Configuration](/configuration)
+- [Kubernetes deployment](/deployment-kubernetes)

@@ -1,0 +1,14 @@
+{
+  "why": "a forward prefix is absolute and ends at a segment, or it rewrites paths nobody declared",
+  "manifest": {
+    "contract": "routes.v1",
+    "domain": "agent",
+    "owner": "core/agent",
+    "edge": "gateway",
+    "forward": {
+      "edge_prefix": "/agent",
+      "upstream_prefix": "/api/"
+    },
+    "routes": []
+  }
+}

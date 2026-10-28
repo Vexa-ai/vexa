@@ -18,24 +18,30 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: terminal
       annotations:
-        {{- toYaml .Values.global.podAnnotations | nindent 8 }}
+        checksum/secrets: {{ include "vexa.checksum" (list . .Values.secrets) }}
+        {{- with .Values.global.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
-      securityContext:
-        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      enableServiceLinks: false
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with include "vexa.extraCA.initContainer" . }}
+      initContainers:{{ . | trim | nindent 8 }}
+      {{- end }}
       containers:
         - name: terminal
-          securityContext:
-            {{- toYaml .Values.global.securityContext | nindent 12 }}
-          image: "{{ .Values.terminal.image.repository }}:{{ .Values.global.imageTag | default .Values.terminal.image.tag }}"
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
+          image: "{{ .Values.terminal.image.repository }}:{{ .Values.global.imageTag | default .Values.terminal.image.tag | default (include "vexa.releaseTag" .) }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http
               containerPort: 3000
           env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
             - name: NODE_ENV
               value: "production"
             - name: PORT
@@ -79,6 +85,26 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
+            # Mints the signed-in browser's SESSION credential (D13). Optional: without it sign-in
+            # falls back to an ordinary key and session-only decisions are refused.
+            - name: VEXA_TERMINAL_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_TERMINAL_SESSION_SECRET
+                  optional: true
+            # Whose X-Forwarded-For names the client (the sign-in link's per-client limit). Only these
+            # peers and loopback are believed; see values.yaml terminal.trustedProxies.
+            - name: TERMINAL_TRUSTED_PROXIES
+              value: {{ .Values.terminal.trustedProxies | default (ternary "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fc00::/7" "" (eq .Values.terminal.service.type "ClusterIP")) | quote }}
+            # The admin account's address (adminApi.adminAccount, as admin-api reads it): the Company
+            # profile switch opens it for an instance administrator (ADR-0049). Empty = no switch.
+            - name: VEXA_ADMIN_ACCOUNT
+              value: {{ .Values.adminApi.adminAccount | default "" | quote }}
+            # The LiveKit address a browser joins (the value agent-api hands it, when livekit.enabled): the
+            # pages' Content-Security-Policy admits connections to it.
+            - name: LIVEKIT_URL
+              value: {{ ternary .Values.livekit.url "" .Values.livekit.enabled | quote }}
             {{- if .Values.terminal.publicUrl }}
             # External origin (set when ingress/LB fronts the terminal) — cookie security + OAuth callbacks.
             - name: NEXTAUTH_URL
@@ -86,9 +112,111 @@ spec:
             - name: TERMINAL_URL
               value: {{ .Values.terminal.publicUrl | quote }}
             {{- end }}
+            {{- with .Values.terminal.canvasHost }}
+            {{- if not $.Values.terminal.publicUrl }}
+            {{- fail "terminal.canvasHost needs terminal.publicUrl: the canvas origin lets only the terminal's public origin frame it" }}
+            {{- end }}
+            {{- if not (regexMatch "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?$" .) }}
+            {{- fail "terminal.canvasHost must be a host name (and optional port), e.g. canvas.vexa.example" }}
+            {{- end }}
+            # THE MEETING CANVAS ORIGIN (docs: Meeting Canvas isolation): the canvas frame is served from
+            # this host — the same pods, routed by Host — so a canvas view runs on an origin of its own.
+            - name: TERMINAL_CANVAS_ORIGIN
+              value: {{ printf "%s://%s" (urlParse $.Values.terminal.publicUrl).scheme . | quote }}
+            {{- end }}
+            {{- if include "vexa.credentialBrokerEnabled" . }}
+            # Connections panel (credential-broker.v1): the terminal's server routes sign as the
+            # `human` role for the signed-in person. Browser POSTs must come from the public origin.
+            - name: VEXA_CONNECTIONS_BROKER_URL
+              value: {{ include "vexa.credentialBrokerUrl" . | quote }}
+            - name: VEXA_CONNECTIONS_HUMAN_KEY_FILE
+              value: /run/vexa-connections/human/key
+            - name: VEXA_CONNECTIONS_PUBLIC_ORIGIN
+              value: {{ .Values.terminal.publicUrl | default "" | trimSuffix "/" | quote }}
+            {{- end }}
+            # The sign-in link's mail relay — the deployment's VEXA_MAIL_SMTP_* family
+            # (clients/terminal/config.v1.json). The password comes from the chart's Secret.
+            - name: VEXA_MAIL_SMTP_HOST
+              value: {{ .Values.terminal.mail.smtpHost | default "" | toString | quote }}
+            - name: VEXA_MAIL_SMTP_PORT
+              value: {{ .Values.terminal.mail.smtpPort | default "" | toString | quote }}
+            - name: VEXA_MAIL_SMTP_FROM
+              value: {{ .Values.terminal.mail.from | default "" | quote }}
+            - name: VEXA_MAIL_SMTP_USER
+              value: {{ .Values.terminal.mail.user | default "" | quote }}
+            - name: VEXA_MAIL_SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_MAIL_SMTP_PASSWORD
+                  optional: true
+            - name: VEXA_MAIL_SMTP_SECURE
+              value: {{ .Values.terminal.mail.secure | default "" | toString | quote }}
+            - name: VEXA_MAIL_SMTP_TLS_INSECURE
+              value: {{ .Values.terminal.mail.tlsInsecure | default "" | toString | quote }}
+            {{- with .Values.terminal.oidc }}
+            {{- if .issuer }}
+            {{- if not .existingSecret }}
+            {{- fail "terminal.oidc.issuer is set: terminal.oidc.existingSecret must name the Secret holding the client secret" }}
+            {{- end }}
+            {{- if not .clientId }}
+            {{- fail "terminal.oidc.issuer is set: terminal.oidc.clientId is required" }}
+            {{- end }}
+            {{- if and .caBundle.configMap .caBundle.secret }}
+            {{- fail "terminal.oidc.caBundle: name a configMap or a secret, not both" }}
+            {{- end }}
+            # Generic OIDC sign-in (ADFS, Keycloak) — clients/terminal/config.v1.json, VEXA_OIDC_*.
+            # Redirect URI to register at the provider: <publicUrl>/api/auth/callback/oidc.
+            - name: VEXA_OIDC_ISSUER
+              value: {{ .issuer | quote }}
+            - name: VEXA_OIDC_CLIENT_ID
+              value: {{ .clientId | quote }}
+            - name: VEXA_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .existingSecret | quote }}
+                  key: {{ .existingSecretKey | default "client-secret" | quote }}
+            - name: VEXA_OIDC_SCOPES
+              value: {{ .scopes | default "" | quote }}
+            - name: VEXA_OIDC_RESOURCE
+              value: {{ .resource | default "" | quote }}
+            - name: VEXA_OIDC_DISPLAY_NAME
+              value: {{ .displayName | default "" | quote }}
+            - name: VEXA_OIDC_EMAIL_CLAIM
+              value: {{ .emailClaim | default "" | quote }}
+            - name: VEXA_OIDC_NAME_CLAIM
+              value: {{ .nameClaim | default "" | quote }}
+            - name: VEXA_OIDC_REQUIRE_EMAIL_VERIFIED
+              value: {{ if kindIs "bool" .requireEmailVerified }}{{ ternary "1" "0" .requireEmailVerified | quote }}{{ else if kindIs "invalid" .requireEmailVerified }}""{{ else }}{{ toString .requireEmailVerified | quote }}{{ end }}
+            {{- if or .caBundle.configMap .caBundle.secret }}
+            - name: VEXA_OIDC_CA_FILE
+              value: /etc/vexa-oidc/ca/ca.pem
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.terminal.signinMethods }}
+            # Which sign-in doors are offered (google, microsoft, oidc, email); the rest are not registered.
+            - name: VEXA_SIGNIN_METHODS
+              value: {{ .Values.terminal.signinMethods | quote }}
+            {{- end }}
             {{- with .Values.terminal.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- $oidcCa := and .Values.terminal.oidc.issuer (or .Values.terminal.oidc.caBundle.configMap .Values.terminal.oidc.caBundle.secret) }}
+          {{- if or (include "vexa.credentialBrokerEnabled" .) $oidcCa (include "vexa.extraCA.enabled" .) }}
+          volumeMounts:
+            {{- with include "vexa.extraCA.mounts" . }}{{ . | trim | nindent 12 }}{{ end }}
+            {{- if include "vexa.credentialBrokerEnabled" . }}
+            - name: connections-keys
+              mountPath: /run/vexa-connections
+              readOnly: true
+            {{- end }}
+            {{- if $oidcCa }}
+            - name: oidc-ca
+              mountPath: /etc/vexa-oidc/ca
+              readOnly: true
+            {{- end }}
+          {{- end }}
           startupProbe:
             httpGet:
               path: /
@@ -112,6 +240,36 @@ spec:
             timeoutSeconds: 5
           resources:
             {{- toYaml .Values.terminal.resources | nindent 12 }}
+      {{- $oidcCa := and .Values.terminal.oidc.issuer (or .Values.terminal.oidc.caBundle.configMap .Values.terminal.oidc.caBundle.secret) }}
+      {{- if or (include "vexa.credentialBrokerEnabled" .) $oidcCa (include "vexa.extraCA.enabled" .) }}
+      volumes:
+        {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{ end }}
+        {{- if include "vexa.credentialBrokerEnabled" . }}
+        # The human role key only.
+        - name: connections-keys
+          secret:
+            secretName: {{ include "vexa.credentialBrokerKeys" . }}
+            defaultMode: 0444
+            items:
+              - { key: human.key, path: human/key }
+        {{- end }}
+        {{- if $oidcCa }}
+        # The OIDC provider's CA chain (an internal PKI), added to the public roots for OIDC requests.
+        {{- with .Values.terminal.oidc.caBundle }}
+        - name: oidc-ca
+          {{- if .configMap }}
+          configMap:
+            name: {{ .configMap | quote }}
+          {{- else }}
+          secret:
+            secretName: {{ .secret | quote }}
+          {{- end }}
+            defaultMode: 0444
+            items:
+              - { key: {{ .key | default "ca.crt" | quote }}, path: ca.pem }
+        {{- end }}
+        {{- end }}
+      {{- end }}
       {{- with .Values.global.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

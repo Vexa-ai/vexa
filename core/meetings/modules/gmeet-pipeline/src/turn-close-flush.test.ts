@@ -102,7 +102,10 @@ const ZOOM = { callbackStampedFrames: true } as const;
   h.mgr.removeAll();
 }
 
-// ── D: feeders that do not opt in keep today's flush ──────────────────────────────────────────
+// ── D: Google Meet (no flag) gets the same guarantee — a slow STT leaves seconds after the last answer ──
+// With STT taking 5–30 s, a Meet turn keeps receiving audio long after the request whose text is
+// `lastTranscript`. Publishing that text at the close dropped all of it; the close now submits the
+// whole window when the transcript misses more than half a second of buffered audio.
 {
   const h = harness(); const SID = 'ch-6:1';
   h.mgr.addSpeaker(SID, 'Speaker');
@@ -111,8 +114,23 @@ const ZOOM = { callbackStampedFrames: true } as const;
   h.mgr.handleTranscriptionResult(SID, 'early words', 2.0, one('early words', 2.0), 'en');
   h.feed(SID, 4);
   await h.mgr.flushSpeaker(SID, true);
-  ok(h.requests.length === 1 && h.confirmed()[0] === 'early words',
-    'without the flag the close emits the last transcript as before (unchanged default path)');
+  ok(h.requests.length === 2 && h.requests[1] === 12,
+    `without the flag a stale transcript no longer closes the turn: the 12-frame window is the final request (requests: ${JSON.stringify(h.requests)})`);
+  h.mgr.handleTranscriptionResult(SID, 'early words and later words', 3.0, one('early words and later words', 3.0), 'en');
+  ok(h.confirmed().length === 1 && h.confirmed()[0] === 'early words and later words', 'the final window is the text the turn keeps');
+  h.mgr.removeAll();
+}
+
+// ── E: without the flag, a transcript within half a second of the buffer end still closes at once ──
+{
+  const h = harness(); const SID = 'ch-6:2';
+  h.mgr.addSpeaker(SID, 'Speaker');
+  h.feed(SID, 8);
+  await h.submit(SID);
+  h.mgr.handleTranscriptionResult(SID, 'nearly all', 2.0, one('nearly all', 2.0), 'en');
+  h.feed(SID, 1);                                             // 0.26 s after the answer
+  await h.mgr.flushSpeaker(SID, true);
+  ok(h.requests.length === 1 && h.confirmed()[0] === 'nearly all', 'a covering transcript (within 0.5 s) closes without another request');
   h.mgr.removeAll();
 }
 

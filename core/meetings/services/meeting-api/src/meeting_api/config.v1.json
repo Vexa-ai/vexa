@@ -6,7 +6,7 @@
    "key": "ADMIN_TOKEN",
    "class": "required-explicit",
    "secret": true,
-   "description": "HS256-signs the per-spawn MeetingToken AND verifies the recordings upload — the same admin secret admin-api holds (ADMIN_API_TOKEN); unset, every POST /bots would 500, so the boot refuses instead (A4). A PUBLISHED PLACEHOLDER is refused on the same terms as INTERNAL_API_SECRET: the literal is in this repository, so anyone can forge a MeetingToken and upload a recording against any meeting (A19).",
+   "description": "the admin secret admin-api holds (ADMIN_API_TOKEN). meeting-api never signs with it directly: the MeetingToken key is derived from it as HMAC-SHA256(ADMIN_TOKEN, \"vexa/meeting-token/v1\") (meeting_token.signing_key), which HS256-signs the per-spawn MeetingToken AND verifies the lifecycle callback, the recordings upload and the transcript stream entries; unset, every POST /bots would 500, so the boot refuses instead (A4). A PUBLISHED PLACEHOLDER is refused on the same terms as INTERNAL_API_SECRET: the literal is in this repository, so anyone can forge a MeetingToken and upload a recording against any meeting (A19). The list is the internal-secret placeholders plus every default and example this repository has shipped for the admin key on any surface (compose, Helm, Lite, CI, docs); it is held equal to admin-api's ADMIN_API_TOKEN by fact admin-token-placeholders.",
    "forbidden_values": [
      "vexa-internal-secret",
      "lite-internal-secret",
@@ -14,8 +14,53 @@
      "change-me",
      "CHANGE-ME",
      "default",
-     "secret"
+     "secret",
+     "dev-admin-token",
+     "CHANGE_ME",
+     "ci-admin-token",
+     "gate-admin-token",
+     "test-admin-token",
+     "test-admin-token-t3",
+     "vexa-admin-token",
+     "vexa-admin-token-2024",
+     "token",
+     "strong-random-token",
+     "your-secret",
+     "your-secret-token",
+     "your-secret-admin-token",
+     "your-secure-admin-token",
+     "your-admin-token",
+     "your-admin-api-token",
+     "your_admin_api_token",
+     "your_admin_api_key",
+     "your_admin_api_key_here",
+     "YOUR_ADMIN_KEY",
+     "YOUR_ADMIN_API_KEY",
+     "YOUR_ADMIN_TOKEN_FROM_DOTENV",
+     "admin-secret",
+     "admin-key",
+     "test-admin-key"
    ]
+  },
+  {
+   "key": "RUNTIME_API_TOKEN",
+   "class": "required-explicit",
+   "secret": true,
+   "description": "the runtime caller credential meeting-api presents (`Authorization: Bearer`) on every runtime.v1 call — bot spawns, liveness probes, teardown. The runtime refuses any other caller; the same value is set on the runtime and on agent-api, and never placed in a bot invocation. Unset, the boot refuses: every POST /bots would be refused by the runtime",
+   "forbidden_values": [
+    "vexa-internal-secret",
+    "lite-internal-secret",
+    "changeme",
+    "change-me",
+    "CHANGE-ME",
+    "default",
+    "secret"
+   ]
+  },
+  {
+   "key": "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE",
+   "class": "required-explicit",
+   "description": "gateway-identity.v1 verification key: a file holding the gateway's Ed25519 PUBLIC key (SubjectPublicKeyInfo PEM). meeting-api rebuilds every x-user-* header (owner, bot limit, workspace memberships, webhook) from a verified signature and refuses (401) one that is neither signed nor carried by the internal tier. It verifies and cannot sign; a private key in this file refuses the boot, as does a missing file or any other key type. Generated at install with the gateway's signing key: compose's identity-keys one-shot, the Helm identity-keys ConfigMap, the Lite entrypoint"
   },
   {
    "key": "DB_HOST",
@@ -43,17 +88,27 @@
   },
   {
    "key": "DB_PASSWORD",
-   "class": "defaulted",
-   "default": "postgres",
+   "class": "required-explicit",
    "secret": true,
-   "description": "PostgreSQL password (dev default; change for any non-local deploy)"
+   "description": "PostgreSQL password. No default: unset, the boot refuses. `postgres`, the value every unconfigured stack once shared, and the other values published in this repository are refused the same way, as compose's postgres service refuses them",
+   "forbidden_values": [
+    "postgres",
+    "password",
+    "vexa-internal-secret",
+    "lite-internal-secret",
+    "changeme",
+    "change-me",
+    "CHANGE-ME",
+    "default",
+    "secret"
+   ]
   },
   {
    "key": "DATABASE_URL",
    "class": "defaulted",
    "default": "(derived from DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD as postgresql+asyncpg://)",
    "secret": true,
-   "description": "explicit async SQLAlchemy URL override; when unset the URL is built from the DB_* parts (lite deliberately sets only DB_* so the asyncpg driver is chosen)",
+   "description": "explicit async SQLAlchemy URL override; when unset the URL is built from the DB_* parts (lite deliberately sets only DB_* so the asyncpg driver is chosen). DB_PASSWORD is required at boot either way",
    "targets": []
   },
   {
@@ -74,7 +129,22 @@
    "key": "REDIS_URL",
    "class": "defaulted",
    "default": "redis://redis:6379/0",
+   "secret": true,
    "description": "the transcription_segments stream + bm:meeting:{id}:status pub/sub + bot-command channel backing"
+  },
+  {
+   "key": "BOT_REDIS_RESTORE_INTERVAL_S",
+   "class": "defaulted",
+   "default": "1",
+   "description": "how often (s) meeting-api checks whether Redis is a new process (one INFO) and, when it is, defines again every bot Redis user — Redis keeps none across a restart, so a live bot's credential would otherwise stay refused until its meeting ended",
+   "targets": []
+  },
+  {
+   "key": "REDIS_WORKLOAD_ACL",
+   "class": "defaulted",
+   "default": "per-workload",
+   "description": "what a spawned meeting bot connects to Redis as. `per-workload`: a Redis user of its own — append to transcription_segments, its own meeting's live-update and command channels — defined at spawn and removed when it ends; the service connection never reaches it. `shared`: the service connection, for a Redis that cannot define users (some managed services); every meeting bot can then read and write every other's keys, so it is safe only where every person on the instance trusts every other. The service's own Redis user needs ACL SETUSER/DELUSER for `per-workload`.",
+   "targets": []
   },
   {
    "key": "RUNTIME_API_URL",
@@ -94,9 +164,9 @@
   {
    "key": "INTERNAL_API_SECRET",
    "class": "defaulted",
-   "default": "(unset — the internal lifecycle-callback header is then not attached)",
+   "default": "(unset — no internal-tier caller is admitted, and none may name a person)",
    "secret": true,
-   "description": "shared secret for internal service-to-service calls (x-internal-secret on the self-driven lifecycle callback). Unset is a documented degrade; a PUBLISHED PLACEHOLDER is not — it is the whole internal tier handed to anyone who read the repository (F95), so the boot refuses it.",
+   "description": "shared secret for internal service-to-service calls: meeting-api presents it on admin-api's internal routes and admits it (from trusted services, never from a bot — a bot holds only its session's MeetingToken) on the bot lifecycle callback and the recording upload, and it is the internal tier gateway-identity.v1 believes an unsigned X-User-Id from (agent-api acting for a person). Unset is a documented degrade; a PUBLISHED PLACEHOLDER is not — it is the whole internal tier handed to anyone who read the repository (F95), so the boot refuses it.",
    "forbidden_values": [
      "vexa-internal-secret",
      "lite-internal-secret",
@@ -112,6 +182,18 @@
    "class": "defaulted",
    "default": "(unset — request_bot falls back to VexaBot-{random})",
    "description": "server-side bot participant name used by POST /bots when bot_name is omitted"
+  },
+  {
+   "key": "DEFAULT_TRANSCRIPTION_LANGUAGE",
+   "class": "defaulted",
+   "default": "(unset — no deployment default; a person's default or auto-detection applies)",
+   "description": "the deployment's default transcription language (transcription-language.v1 DeploymentDefault): one code such as `de`. With DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES set it must be one of that list, and is the language a window detected outside the list falls back to. Applies to every spawn whose request and person set no language. A value the contract refuses stops the boot"
+  },
+  {
+   "key": "DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES",
+   "class": "defaulted",
+   "default": "(unset — detection is not restricted)",
+   "description": "the deployment's default list of languages detection is restricted to (transcription-language.v1 DeploymentDefault), comma-separated with no spaces, e.g. `de,en`. A value the contract refuses stops the boot"
   },
   {
    "key": "TRANSCRIPTION_SERVICE_URL",
@@ -187,7 +269,7 @@
    "key": "BOT_S3_ENDPOINT",
    "class": "defaulted",
    "default": "(unset — required when BOT_AUTHENTICATED=true)",
-   "description": "userdata store endpoint, as reachable FROM the bot containers (e.g. http://minio:9000)",
+   "description": "userdata store endpoint, reachable from the bot containers (each restores its session from it) and from meeting-api (which writes an authenticated bot's session back to it), e.g. http://minio:9000",
    "targets": [
     "compose",
     "helm"
@@ -208,7 +290,7 @@
    "class": "defaulted",
    "default": "(unset)",
    "secret": true,
-   "description": "SCOPED userdata-store access key — never the deployment's admin S3 credentials; rides the invocation env into the bot container, so its blast radius must be the userdata prefix only",
+   "description": "READ-ONLY userdata-store access key (Get + List on the userdata prefix): it rides the invocation env into the bot container, and the bot only restores with it. Never a storage root key: meeting-api refuses an authenticated spawn, and the session write-back, when this pair shares a half with a storage root pair (S3_* / MINIO_*)",
    "targets": [
     "compose",
     "helm"
@@ -219,7 +301,7 @@
    "class": "defaulted",
    "default": "(unset)",
    "secret": true,
-   "description": "scoped userdata-store secret key (see BOT_S3_ACCESS_KEY)",
+   "description": "read-only userdata-store secret key (see BOT_S3_ACCESS_KEY)",
    "targets": [
     "compose",
     "helm"
@@ -235,7 +317,7 @@
    "key": "MINIO_ACCESS_KEY",
    "class": "capability",
    "capability": "object_storage",
-   "description": "object-store access key (recordings upload/finalize)"
+   "description": "object-store access key: recordings upload/finalize, and the authenticated bot's session write-back to the userdata store"
   },
   {
    "key": "MINIO_SECRET_KEY",
@@ -269,7 +351,7 @@
    "key": "S3_ACCESS_KEY",
    "class": "defaulted",
    "default": "(unset — falls back to MINIO_ACCESS_KEY)",
-   "description": "explicit S3 access-key override; helm reads it from the storage.s3.existingSecret Secret",
+   "description": "explicit S3 access-key override, for recordings and the authenticated bot's session write-back; helm reads it from the storage.s3.existingSecret Secret",
    "targets": [
     "helm"
    ]
@@ -315,6 +397,130 @@
    "default": "18000",
    "description": "MeetingToken lifetime — must outlive the bot's max active time (default 4h) or transcription dies mid-meeting",
    "targets": []
+  },
+  {
+   "key": "VOICE_NOTE_MAX_DURATION_SEC",
+   "class": "defaulted",
+   "default": "1800",
+   "description": "the longest voice note, in seconds of audio: the voice-note socket accepts no audio past it and ends the note (close 4413), and the bot ends a note still running a minute later",
+   "targets": ["compose", "helm"]
+  },
+  {
+   "key": "VOICE_NOTE_IDLE_TIMEOUT_SEC",
+   "class": "defaulted",
+   "default": "120",
+   "description": "how long a voice note's bot waits with neither audio nor Stop before it ends the note (left_alone): the browser went away",
+   "targets": ["compose", "helm"]
+  },
+  {
+   "key": "LIVEKIT_URL",
+   "class": "capability",
+   "capability": "calls",
+   "targets": [
+    "compose",
+    "helm"
+   ],
+   "description": "the LiveKit server's public address (wss://\u2026) a browser joins a call at; also where meeting-api and the listener reach it unless LIVEKIT_INTERNAL_URL is set"
+  },
+  {
+   "key": "LIVEKIT_API_KEY",
+   "class": "capability",
+   "capability": "calls",
+   "targets": [
+    "compose",
+    "helm"
+   ],
+   "description": "the LiveKit API key that signs room tokens (the server's `keys:` entry)"
+  },
+  {
+   "key": "LIVEKIT_API_SECRET",
+   "class": "capability",
+   "capability": "calls",
+   "secret": true,
+   "targets": [
+    "compose",
+    "helm"
+   ],
+   "forbidden_values": [
+    "vexa-internal-secret",
+    "lite-internal-secret",
+    "changeme",
+    "change-me",
+    "CHANGE-ME",
+    "default",
+    "secret"
+   ],
+   "description": "SECRET \u2014 the LiveKit API secret paired with LIVEKIT_API_KEY, at least 32 characters; signs every room token"
+  },
+  {
+   "key": "LIVEKIT_INTERNAL_URL",
+   "class": "defaulted",
+   "default": "",
+   "targets": [
+    "compose",
+    "helm"
+   ],
+   "description": "the LiveKit server inside the deployment (ws://livekit:7880): where meeting-api calls the room service and the listener joins; empty \u21d2 LIVEKIT_URL"
+  },
+  {
+   "key": "CALL_MAX_DURATION_SEC",
+   "class": "defaulted",
+   "default": "14400",
+   "targets": [
+    "compose",
+    "helm"
+   ],
+   "description": "the longest call, in seconds; the listener ends a call still running at it"
+  },
+  {
+   "key": "CALL_EMPTY_GRACE_SEC",
+   "class": "defaulted",
+   "default": "30",
+   "targets": [
+    "compose",
+    "helm"
+   ],
+   "description": "how long an emptied call room is given for someone to come back before the call ends"
+  },
+  {
+   "key": "CALL_FIRST_JOIN_TIMEOUT_SEC",
+   "class": "defaulted",
+   "default": "30",
+   "targets": [
+    "compose",
+    "helm"
+   ],
+   "description": "how long a new call waits for its first participant before it ends"
+  },
+  {
+   "key": "CALL_MAX_PARTICIPANTS",
+   "class": "defaulted",
+   "default": "50",
+   "targets": [
+    "compose",
+    "helm"
+   ],
+   "description": "the most people one call room admits"
+  },
+  {
+   "key": "CALL_TRANSCRIPTION_SWITCHABLE",
+   "class": "defaulted",
+   "default": "false",
+   "targets": [
+    "compose",
+    "helm"
+   ],
+   "description": "whether the person starting a call may turn its transcription off (POST /bots `transcribe: false`); off \u21d2 every call is transcribed and says so"
+  },
+  {
+   "key": "CALL_TRANSCRIBE_SHARED_SCREEN",
+   "class": "defaulted",
+   "default": "true",
+   "targets": [
+    "compose",
+    "helm"
+   ],
+   "description": "whether the sound of a screen a call participant shares (a tab or video with audio) is transcribed too, as its own speaker \"<name> (shared screen)\" (invocation.v1 `call.screenShareAudio`; the room notice says so); off \u21d2 the listener never reads that track"
   },
   {
    "key": "SEGMENT_CONSUMER_INTERVAL",
@@ -377,6 +583,20 @@
    "class": "defaulted",
    "default": "5",
    "description": "sweep interval (s) of the webhook retry-queue drain loop",
+   "targets": []
+  },
+  {
+   "key": "VEXA_MEETING_DELETE_LIVE",
+   "class": "defaulted",
+   "default": "refuse",
+   "description": "what DELETE /meetings/... does while the meeting's bot is still in it or finishing. refuse (default) = the 0.12 contract: 409, nothing stopped or scheduled. stop = ask the bot to leave, answer 202 deletion_scheduled, and delete the transcript and recordings when the lifecycle is terminal.",
+   "targets": []
+  },
+  {
+   "key": "VEXA_LANGUAGE_HISTORY_TIER",
+   "class": "defaulted",
+   "default": "off",
+   "description": "on = a person who set no transcription language gets the languages of their recent meetings (two or more above the share threshold) as a restricted setting, ranked above the deployment default. off (default) = the 0.12 behaviour: the deployment default, then auto-detection.",
    "targets": []
   },
   {
@@ -581,6 +801,27 @@
    "targets": []
   },
   {
+   "key": "VEXA_CALENDAR_FEED_ALLOW",
+   "class": "defaulted",
+   "default": "(empty — no internal feed is reachable)",
+   "targets": ["compose", "helm"],
+   "description": "operator allowance for calendar feeds served inside a private network: exact host names and IP networks (CIDR), comma- or space-separated (cal.corp.example, 10.20.0.0/16). The ICS fetch's pinned transport admits an address inside a listed network, or any non-reserved address a listed name resolves to; everything else stays refused by the outbound URL guard (deploy/contracts/outbound-url.v1). Loopback, link-local/cloud metadata, unspecified, multicast and reserved addresses are never admitted, and an entry overlapping them, a wildcard, a URL or a malformed name refuses the boot. Calendar feeds only: customer webhooks never read it. admin-api reads the same key when a feed is saved."
+  },
+  {
+   "key": "VEXA_MEETING_HOST_ALLOW",
+   "class": "defaulted",
+   "default": "(empty — every meeting host must resolve to a public address)",
+   "targets": ["compose", "helm"],
+   "description": "operator allowance for meeting servers inside a private network (an on-prem Jitsi, a Zoom front door on the corporate network): exact host names and IP networks (CIDR), comma- or space-separated (jitsi.corp.example, 10.20.0.0/16). A bot's meeting_url must be on its platform's hosts (Meet, Teams, Zoom) or, for Jitsi and Zoom front doors, on a host of the organisation's choosing, and every address the host resolves to must be public; a listed name or network is admitted when it resolves privately, and a listed name is accepted as a Jitsi or Zoom host. The bot receives the entries (invocation.v1 meetingHostAllow) and holds every navigation and redirect of its browser to the same rule. Loopback, link-local/cloud metadata, unspecified, multicast and reserved addresses are never admitted, and an entry overlapping them, a wildcard, a URL or a malformed name refuses the boot."
+  },
+  {
+   "key": "VEXA_AUTO_JOIN_BLOCK",
+   "class": "defaulted",
+   "default": "(empty — no deployment-wide block)",
+   "targets": ["compose", "helm"],
+   "description": "the deployment's auto-join block list: domains (matching themselves and subdomains) and exact email addresses, comma- or space-separated. The auto-join sweep never spawns a bot for a planned meeting whose organiser, an invitee or the meeting link's host matches; it stamps the reason on the row (data.auto_join_error). Each owner's own list (auto_join_block, PUT /user/calendar, delivered on bot-context) applies on top. A malformed entry refuses the boot. Manual POST /bots is not affected."
+  },
+  {
    "key": "PIPELINE_TICK_STALE_S",
    "class": "defaulted",
    "default": "120",
@@ -658,22 +899,44 @@
    "targets": []
   },
   {
+   "key": "VEXA_CAPTURE_SIGNAL_DEFAULT",
+   "class": "defaulted",
+   "default": "true (the Helm chart sets false)",
+   "targets": ["helm"],
+   "description": "whether a bot tapes its raw captured signal (audio, captions, speaker events) to the bucket under signal/ when identity gives no answer for its owner (unreachable, or an admin-api that predates the field). admin-api reads the same key as its last tier (user > platform setting > this), so a reachable identity already carries it. Unset or empty = true, the compose and Lite behaviour; the Helm chart sets it from diagnostics.captureSignal, default false. Anything but a recognized boolean (true/1/yes/on, false/0/no/off) refuses the boot: whether meetings are taped is a data-protection decision a typo must not make."
+  },
+  {
    "key": "VEXA_FLOWS_API_URL",
    "class": "publish-edge",
-   "publishes_events": ["meeting.started", "meeting.completed"],
-   "description": "flows' intake, told when a bot this service dispatched goes active and when it completes (F168/F181 — an ad hoc bot started via the MCP request_meeting_bot never reached flows before this; only invite_intake's own emit_started/emit_completed, calendar-only, ever did). MEETING-API TELLS FLOWS; IT DOES NOT ASK IT — best-effort, bounded at 2s, swallowed (events.py), so a deployment with no flows domain runs meetings exactly as one with a flows domain does, and so does one where flows is down. Unset is a profile, not a degraded state. Spelled VEXA_FLOWS_API_URL to match agent-api's control_plane/config.v1.json (identity's admin-api spells the bare key FLOWS_API_URL for the same edge — the two publishers that already exist do not agree with each other; not fixed here).",
-   "targets": ["compose"]
+   "publishes_events": ["meeting.started", "meeting.completed", "meeting.shared"],
+   "description": "flows' intake, told when a bot this service dispatched goes active and when it completes, and when a meeting's owner invites an address by email from the Share dialog (meeting.shared, which flows mails) (F168/F181 — an ad hoc bot started via the MCP request_meeting_bot never reached flows before this; only invite_intake's own emit_started/emit_completed, calendar-only, ever did). MEETING-API TELLS FLOWS; IT DOES NOT ASK IT — best-effort, bounded at 2s, swallowed (events.py), so a deployment with no flows domain runs meetings exactly as one with a flows domain does, and so does one where flows is down. Unset is a profile, not a degraded state. Spelled VEXA_FLOWS_API_URL to match agent-api's control_plane/config.v1.json (identity's admin-api spells the bare key FLOWS_API_URL for the same edge — the two publishers that already exist do not agree with each other; not fixed here).",
+   "targets": ["compose", "helm"]
   },
   {
    "key": "VEXA_FLOWS_API_KEY",
    "class": "publish-edge",
-   "publishes_events": ["meeting.started", "meeting.completed"],
+   "publishes_events": ["meeting.started", "meeting.completed", "meeting.shared"],
    "secret": true,
    "description": "operator key for the same edge, sent as X-Flows-Operator-Key (flows' POST /events is authenticated). Declared as part of the edge rather than beside it, on the same terms as identity's admin-api and agent-api's control_plane declare theirs: unset alongside an unset URL is the no-flows profile; unset with a URL set is a deployment whose facts are being refused.",
-   "targets": ["compose"]
-  }
+   "targets": ["compose", "helm"]
+  },
+  {"key": "VEXA_SUBJECT_TICKET_KEY_FILE", "class": "capability", "capability": "subject_tickets", "targets": ["compose", "helm"], "description": "subject-ticket.v1: a file holding meeting-api's OWN Ed25519 PRIVATE key (PKCS#8 PEM), issuer `meetings`. meeting.started / meeting.completed / meeting.shared carry a ticket signed with it (refs._tickets) naming the meeting's owner and the meeting, which the flows calls those facts cause present to the gateway's service door; the door verifies under the public half (`meetings.pem` in its VEXA_SUBJECT_TICKET_KEYS_DIR) and holds nothing that signs. No other service mounts this file. Unset or unreadable, facts still reach flows without a ticket (one warning) and the door refuses the person-bound calls they would have opened (403 subject_ticket_required). Generated at install: compose's subject-ticket-keys one-shot, the Helm subject-ticket-meetings-key Secret"},
+  {"key": "VEXA_BOT_ACCOUNTS_BROKER_URL", "class": "capability", "capability": "bot_accounts", "targets": ["compose", "helm"], "description": "the credential broker's base URL (credential-broker.v1, role `bots`): where meeting-api keeps bot accounts — saved signed-in browser profiles a meeting bot joins as (ADR-0049). Set together with VEXA_BOT_ACCOUNTS_KEY_FILE; either unset, every bot-account route answers 409 \"bot accounts are not configured on this deployment\" and POST /bots spawns guest bots as before"},
+  {"key": "VEXA_BOT_ACCOUNTS_KEY_FILE", "class": "capability", "capability": "bot_accounts", "secret": true, "targets": ["compose", "helm"], "description": "path of the broker's `bots` role key (at least 32 bytes; the connections-keys `bots` key, mounted read-only). meeting-api signs every bot-account request with it (X-Vexa-Assertion). A file that is unreadable, too short or one of the contract's published fixture keys refuses the boot"},
+  {"key": "VEXA_COMPANY_BOT_USE", "class": "defaulted", "default": "admins", "description": "who may send a meeting bot as a COMPANY bot account: `all`, `admins` (the instance admins and the admin account) or `none`; an unknown value reads as `admins`. The company's statement of this rule is `_global/POLICIES.md` `company_bot_use`; this env carries it to meeting-api until meeting-api reads policies. Creating and deleting company accounts is the admin account's alone, whatever this says", "targets": []},
+  {"key": "VEXA_BOT_ACCOUNTS_SESSION_TIMEOUT_S", "class": "defaulted", "default": "900", "description": "how long a browser session (the sign-in workload a person signs a bot account in through) stays open before the reaper closes it and stops its workload", "targets": []},
+  {"key": "VEXA_BOT_SIGNIN_EXTRA_HOSTS", "class": "defaulted", "default": "", "targets": ["compose", "helm", "lite"], "description": "hosts the bot-account sign-in browser may navigate to beside the platform's own sign-in hosts: a company identity provider the platform hands the sign-in to (a bank's ADFS for its Teams account). Comma-separated exact host names, https only; empty (default) = the platform's hosts only. An entry that is a wildcard (*.example.com), an IP literal, a single label, localhost or a metadata name refuses the boot; a host that resolves to an internal address (or not at all) is left out of the session and logged browser_session_extra_host_refused"},
+  {"key": "VEXA_BOT_ACCOUNTS_CHECK_TIMEOUT_S", "class": "defaulted", "default": "180", "description": "how long a bot-account verify check may run before the reaper closes it and stops its workload", "targets": []},
+  {"key": "VEXA_BOT_ACCOUNTS_WORKLOAD_HOST", "class": "defaulted", "default": "vexa-{workload_id}", "description": "how a browser-session workload is named on the bots network, as a template over {workload_id}: the runtime's container (docker backend, prefix `vexa-`) or Pod name. meeting-api relays the live view to http://<host>:6080 and ws://<host>:6080/websockify", "targets": []},
+  {"key": "BOT_ACCOUNTS_REAPER_INTERVAL_S", "class": "defaulted", "default": "30", "description": "how often (s) meeting-api closes expired browser sessions and verify checks and stops their workloads; runs only when the bot-account store is configured", "targets": []},
+  {"key": "VEXA_FEATURES", "class": "defaulted", "default": "(empty — the release default: every switchable feature off)", "description": "the install's switched-on features (core/agent/control_plane/features.py rules): empty = the release default, every unproven feature off; `all` = every one on (a dev stack); a comma list switches on just those; `all,-name` takes one back. meeting-api answers `browser_bots`: off, every public /bot-accounts… route refuses 403 `feature_disabled` (bot_accounts/feature.py); /internal/… is untouched", "targets": ["compose", "helm", "lite"]}
  ],
  "capabilities": {
+  "calls": {
+   "description": "Vexa calls (#1783): a session can start a call on this deployment's self-hosted LiveKit server, and meeting-api creates its room and spawns its listener",
+   "mode": "all",
+   "when_unconfigured": "POST /bots {\"platform\": \"vexa_call\"} answers 503 calls_not_deployed; every other platform is unaffected"
+  },
   "stt": {
    "description": "spawned bots can transcribe (the STT service bot_spawn threads into the invocation.v1 payload)",
    "mode": "all",
@@ -705,6 +968,16 @@
    "description": "recordings persist to the object store (chunk upload + finalize → meeting.data JSONB)",
    "mode": "all",
    "when_unconfigured": "recording upload/finalize fails at request time with a storage auth error; transcripts are unaffected"
+  },
+  "subject_tickets": {
+   "description": "meeting-api signs who its meeting facts are about (subject-ticket.v1, issuer `meetings`), so the flows calls those facts cause pass the gateway's service door for that person and that meeting only",
+   "mode": "all",
+   "when_unconfigured": "meeting facts reach flows without a ticket, and the door refuses the person-bound calls post-meeting processing makes (transcript reads and shares, the autonomous turn, desk writes, the room payer) with 403 subject_ticket_required; everything else is unchanged"
+  },
+  "bot_accounts": {
+   "description": "people sign meeting bots into their own accounts through a live browser session, and bots join meetings as those saved accounts (ADR-0049)",
+   "mode": "all",
+   "when_unconfigured": "every bot-account route answers 409 \"bot accounts are not configured on this deployment\"; POST /bots spawns guest bots (or the deployment-wide BOT_AUTHENTICATED session) exactly as before"
   }
  }
 }

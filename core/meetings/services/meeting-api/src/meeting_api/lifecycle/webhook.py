@@ -127,7 +127,7 @@ def _minimal_meeting_projection(change: StatusChange) -> Dict[str, Any]:
         "failure_stage": (
             rec.failure_stage.value if rec.failure_stage is not None else None
         ),
-        "data": rec.data,
+        "data": {k: v for k, v in rec.data.items() if k != "transcript_gaps"},
     }
 
 

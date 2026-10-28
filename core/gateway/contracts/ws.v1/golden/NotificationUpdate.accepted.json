@@ -1,0 +1,1 @@
+{"type": "notification.update", "notification": {"id": "n-1123456789abcdef", "kind": "workspace_invited", "actor": {"id": "u_alice", "name": "Alice"}, "object": {"kind": "workspace", "id": "acme", "name": "Acme"}, "text": "Alice invited you to the workspace “Acme”", "created": 1760360000.0, "read": true, "actions": ["open"], "state": "accepted"}, "unread": 0}

@@ -26,7 +26,7 @@ from __future__ import annotations
 import os
 import re
 import uuid
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from ..config_preflight import CONFIG_FAULT_KINDS, cached_probe_verdict
@@ -37,11 +37,13 @@ from ..service_authority import (
     ServiceAuthorityRequest,
     ServiceAuthorityUnavailable,
 )
-from .env_flags import env_flag
+from .auth_session import auth_session_config
 from .invocation import build_invocation, build_workload_spec, mint_meeting_token
+from .meeting_host import TEAMS_HOST_SUFFIXES, allowance_entries, check_meeting_url_async
+from . import transcription_language as tlang
+from .workload_redis import voice_note_stream
 from .ports import (
     AuthSessionBusy,
-    AuthSessionNotConfigured,
     DuplicateMeeting,
     MaxBotsExceeded,
     MeetingRepo,
@@ -60,6 +62,7 @@ __all__ = [
     "construct_meeting_url",
     "apply_join_passcode",
     "resolve_teams_base_host",
+    "teams_id_needs_meeting_url",
     "DuplicateMeeting",
     "MeetingStopped",
     "LOBBY_BUDGET_MS",
@@ -126,18 +129,38 @@ _URL_TEMPLATES = {
 #   * THREAD id — ``19:meeting_…@thread.v2``, the id inside a classic ``/l/meetup-join/`` deep
 #     link. It joins at ``/l/meetup-join/<thread>`` and carries no separate passcode: the deep
 #     link's own query string is the credential, so a caller holding this id holds the whole URL.
-#   * SHORT id — the 10–15 digit meeting id Teams prints next to "Meeting ID / Passcode" and
+#   * SHORT id — the 10–16 digit meeting id Teams prints next to "Meeting ID / Passcode" and
 #     hands out as ``…/meet/<id>?p=<passcode>``. It joins at ``/meet/<id>``, and the passcode is
 #     a SEPARATE value by construction — this is the ONLY shape for which a bare id plus its own
 #     ``passcode`` field is a complete address.
 #
 # Only the SHORT shape is matched: it is the one that needs a different path from the one every
-# Teams id used to get, and its 10–15 digit range mirrors the SSOT parsers that produce these ids
+# Teams id used to get, and its 10–17 digit range mirrors the SSOT parsers that produce these ids
 # (``collector.meeting_link``, the MCP ``link_parser``). Everything else — thread ids included —
 # stays on ``/l/meetup-join/``. Interpolating a SHORT id into that path builds
 # ``/l/meetup-join/397421056486982``: the wrong path for that id, and with nowhere for the
-# passcode to go (#892).
-_TEAMS_SHORT_ID = re.compile(r"^\d{10,15}$")
+# passcode to go (#892). Teams answers that path with its sign-in page, never a pre-join: on prod,
+# 7 days to 28 Oct 2026, 21 of 21 bare 16/17-digit ids built onto it ended `teams_auth_redirect`,
+# while 17-digit ids handed out as ``/meet/<id>`` joined. Hence 17, not 16.
+_TEAMS_SHORT_ID = re.compile(r"^\d{10,17}$")
+
+# A THREAD id is not a whole address on its own. Teams' deep link is
+# ``/l/meetup-join/<thread>/0?context={"Tid":…,"Oid":…}``: the ``context`` names the organizer's
+# tenant, and without it Teams cannot place an anonymous guest, so it sends the browser to the
+# Microsoft sign-in page and no host is ever asked to admit the bot. On prod, 7 days to 28 Oct
+# 2026, 9 of 9 bare thread ids ended ``teams_auth_redirect``; the same shape with its ``context``
+# never did. Reproduced on our own Graph-created meeting the same day (bare → sign-in page, with
+# context → pre-join). A bare thread id cannot be joined, so the door refuses it.
+_TEAMS_THREAD_ID = re.compile(r"^19:[^@\s]+@thread\.[a-z0-9]+$", re.IGNORECASE)
+
+
+def teams_id_needs_meeting_url(native_meeting_id: str) -> bool:
+    """True when a Teams id cannot be joined without the caller's full meeting link.
+
+    That is a THREAD id (see ``_TEAMS_THREAD_ID``): the tenant that makes it joinable lives in the
+    link's ``context``, which the id does not carry and nothing here can reconstruct.
+    """
+    return bool(_TEAMS_THREAD_ID.match(native_meeting_id or ""))
 
 #: Teams web-client host SUFFIXES a constructed URL may be built on — the same set the join
 #: layer recognizes as "this page IS Teams" (``join/src/msteams/auth-redirect.ts``
@@ -149,12 +172,7 @@ _TEAMS_SHORT_ID = re.compile(r"^\d{10,15}$")
 #: ALLOWLIST, not a passthrough. An arbitrary host here is the same SSRF surface
 #: ``_validate_meeting_url`` guards on the URL path, and it would also aim an anonymous join at a
 #: look-alike page. ``teams.microsoft.com`` is the default when the caller names nothing.
-_TEAMS_HOST_SUFFIXES = (
-    "teams.microsoft.com",
-    "teams.live.com",
-    "teams.microsoft.us",
-    "teams.cloud.microsoft",
-)
+_TEAMS_HOST_SUFFIXES = TEAMS_HOST_SUFFIXES
 _TEAMS_DEFAULT_HOST = "teams.microsoft.com"
 
 
@@ -177,7 +195,7 @@ def _teams_url(native_meeting_id: str, teams_base_host: Optional[str]) -> str:
 
     An id matching neither shape keeps the classic ``/l/meetup-join/`` path: that is what every
     such id resolved to before this rule existed, and shape does not predict joinability here
-    (a bare-numeric id outside the 10–15 range has transcribed real meetings), so an unrecognized
+    (a bare-numeric id outside the 10–16 range has transcribed real meetings), so an unrecognized
     id is left on its established path rather than rerouted on a guess.
     """
     host = resolve_teams_base_host(teams_base_host) or _TEAMS_DEFAULT_HOST
@@ -224,15 +242,22 @@ def _transcription_from_context(ctx: dict) -> dict:
 
 
 def _capture_signal_from_context(ctx: dict) -> bool:
-    """Whether this spawn tapes its raw captured-signal stream — DEFAULT ON.
+    """Whether this spawn tapes its raw captured-signal stream.
 
-    admin-api resolves user > platform_settings > default-on and ALWAYS states the key, so anything
-    other than an explicit ``False`` here means we could not read a decision: unreachable identity,
-    an older admin-api that predates the field, or an unset ADMIN_API_URL. All of those default ON,
-    because prod meetings are the fixture source and a transient identity blip must not silently
-    turn collection off fleet-wide. The kill switch is an explicit ``false``, nothing else.
+    admin-api resolves user > platform_settings > the deployment default and ALWAYS states the key
+    as a real boolean, so that answer is final. Anything else means we could not read a decision:
+    unreachable identity, an older admin-api that predates the field, or an unset ADMIN_API_URL.
+    Those fall to the DEPLOYMENT's default (``VEXA_CAPTURE_SIGNAL_DEFAULT``): ON where it is unset,
+    as on compose and Lite, because there prod meetings are the fixture source and an identity blip
+    must not silently turn collection off; OFF where the operator set it so, as the Helm chart does,
+    because there a blip must not silently turn it ON. A string is not an answer (contract drift).
     """
-    return ctx.get("capture_signal") is not False
+    from .env_flags import capture_signal_default
+
+    answer = ctx.get("capture_signal")
+    if isinstance(answer, bool):
+        return answer
+    return capture_signal_default()
 
 
 def _bot_name_from_context(ctx: dict) -> Optional[str]:
@@ -402,6 +427,17 @@ async def _terminalize_as_stopped(
                   span="bots.create", meeting_id=str(meeting_id), fields={"error": str(e)})
 
 
+VOICE_NOTE_PLATFORM = "voice_note"
+CALL_PLATFORM = "vexa_call"
+
+
+def _voice_note_limits() -> tuple[int, int]:
+    """(cap, idle timeout) in seconds — read lazily: the voice_notes module imports this package."""
+    from ..voice_notes import idle_timeout_sec, max_duration_sec
+
+    return max_duration_sec(), idle_timeout_sec()
+
+
 async def request_bot(
     repo: MeetingRepo,
     runtime: RuntimeClient,
@@ -415,6 +451,7 @@ async def request_bot(
     meeting_url: Optional[str] = None,
     teams_base_host: Optional[str] = None,
     language: Optional[str] = None,
+    allowed_languages: Optional[list] = None,
     task: Optional[str] = None,
     transcription_tier: str = "realtime",
     recording_enabled: bool = False,
@@ -424,13 +461,53 @@ async def request_bot(
     max_concurrent: Optional[int] = None,
     redis_url: Optional[str] = None,
     meeting_api_url: Optional[str] = None,
-    internal_secret: Optional[str] = None,
     token_secret: Optional[str] = None,
+    # Defines the bot's own Redis user and returns the URL it connects with (bot_spawn.
+    # workload_redis). None hands the bot ``redis_url`` (the in-process harness, and a deployment's
+    # explicit REDIS_WORKLOAD_ACL=shared).
+    redis_grant: "Optional[Callable[[str, int], Awaitable[str]]]" = None,
     # Per-user webhook config (the gateway forwards it from identity's /internal/validate). Persisted
     # into meeting.data so the lifecycle callback delivers status_change events with no users-table read.
     webhook_url: Optional[str] = None,
     webhook_secret: Optional[str] = None,
     webhook_events: Optional[dict] = None,
+    # THE MEETING'S WORKSPACE, decided at spawn. A bot requested from inside a workspace makes the
+    # WORKSPACE's meeting, not the requester's private one: `data.workspace_id` is the single fact
+    # every member-facing surface reads (`list_meetings`' third access branch, `GET /meetings/{id}`,
+    # the live SSE, the status fan-out, the write-up's recipients). Before this, an ad-hoc spawn had
+    # no way to say which workspace it belonged to — `POST /bots` took no such field and nothing
+    # called `POST /meetings/{platform}/{native}/workspace` — so every ad-hoc meeting was owner-only
+    # by construction and a member "could not see the call" in their own terminal.
+    #
+    # Written on the FRESH-INSERT path only. `continue_meeting` reopens a row that already carries
+    # whatever bind it was created with, and re-binding it here would let a later spawn move
+    # somebody else's meeting between workspaces on a path that never asked about membership.
+    workspace_id: Optional[str] = None,
+    # Fresh-meeting stream hygiene: purge tc:meeting:{new_row_id} on a FRESH insert so a new meeting
+    # never inherits a prior generation's transcript (a reused row id after a DB reset would otherwise
+    # carry a stale session_end → "Meeting ended" before the first word). Injected (redis-backed in
+    # prod, None in tests/offline). NOT called on continue_meeting — that reuse KEEPS the stream.
+    transcript_stream_purge: "Optional[Callable[[int], Awaitable[None]]]" = None,
+    # A voice note (#1783): the name its words are attributed to. Read only when the platform is
+    # voice_note.
+    speaker_name: Optional[str] = None,
+    # A call (#1783): the listener's invocation.v1 `call` block and the meeting's `data.call`,
+    # prepared by the calls module (the room already exists). Read only when the platform is
+    # vexa_call.
+    call_invocation: Optional[dict] = None,
+    call_data: Optional[dict] = None,
+    # THE BOT ACCOUNT this bot joins as (bot_accounts, ADR-0049): the account the router resolved
+    # for this person and platform, or None for today's bot (a guest, or the deployment-wide
+    # BOT_AUTHENTICATED session). With one, the bot is authenticated, restores the account's profile
+    # from meeting-api (sessionRestoreUrl) instead of the userdata store, writes it back to the
+    # account, and is serialized per account (`auth_userdata_path` = "bot-account:<id>").
+    bot_account: Optional[dict] = None,
+    # A ROOM'S BOT (D2): ``{"principal", "principal_workspace"}`` when a room's turn — a workspace
+    # principal — asked for it. The row is keyed to the account that pays (``user_id``), and this
+    # records that it is the room's: ``data.room_principal`` (collector.share_access.ROOM_PRINCIPAL),
+    # so no personal credential of the payer's is its owner. A continued meeting is reopened only
+    # when it is the same principal's (or, with none, nobody's room meeting).
+    room_principal: Optional[dict] = None,
 ) -> dict:
     """Run the spawn flow and return a MeetingResponse-shaped dict.
 
@@ -444,10 +521,32 @@ async def request_bot(
     means no cap was provided, so no pre-check.
     """
     authority = authority or AllowAllServiceAuthority()
-    # 1. URL.
-    constructed_url = meeting_url or construct_meeting_url(
+    # 0. The meeting tier of the transcription language (transcription-language.v1), checked before
+    #    anything else: a refused value raises ``LanguageRefused`` (the router's 422) with no lookup,
+    #    row or workload behind it.
+    meeting_language = tlang.spawn_tier(language, allowed_languages)
+    # A voice note has no meeting to join and no page to record from: no URL, no recording, no
+    # lobby. Its audio arrives over the voice-note socket instead (voice_notes).
+    is_voice_note = platform == VOICE_NOTE_PLATFORM
+    # A call has no page either: its audio is the LiveKit room's tracks (calls).
+    is_call = platform == CALL_PLATFORM
+    no_page = is_voice_note or is_call
+    if is_call:
+        recording_enabled = False
+        if call_invocation is None or call_data is None:
+            raise ValueError("a vexa_call is spawned with its prepared call block")
+    if is_voice_note:
+        recording_enabled = False
+        voice_note_cap, voice_note_idle = _voice_note_limits()
+    # 1. URL. A caller-supplied URL is held to the meeting host rule here, on every spawn path
+    #    (POST /bots and the calendar auto-join), before any DB write: its host belongs to the
+    #    platform and resolves to a public or operator-listed address (meeting_host). A refusal is
+    #    MeetingHostRefused (POST /bots → 422). A constructed URL is built on a fixed platform host.
+    if meeting_url and not no_page:
+        await check_meeting_url_async(platform, meeting_url)
+    constructed_url = None if no_page else (meeting_url or construct_meeting_url(
         platform, native_meeting_id, teams_base_host=teams_base_host
-    )
+    ))
     # The address the BOT gets, which is not the address we STORE: the passcode rides on the join
     # URL (Teams' own `?p=`) and stays off `data.constructed_meeting_url`, which every
     # MeetingResponse reads back. Both derive from the same constructed URL, so they address the
@@ -478,6 +577,29 @@ async def request_bot(
     # without identity being consulted about it at all — the answer could not change anything.
     if not bot_name:
         bot_name = _bot_name_from_context(bot_context)
+    # THE LANGUAGE THE BOT TRANSCRIBES IN — fourth reader of the same hop. Whole-setting precedence:
+    # this request, then this person's default, then the deployment's, then auto. Every spawn path
+    # reaches here (POST /bots from the API, the terminal, the MCP and an invite-by-email flow; the
+    # calendar sweep calls this function directly), so none of them carries its own copy of the rule.
+    try:
+        user_language = tlang.user_tier(bot_context)
+    except tlang.LanguageRefused as e:
+        user_language = None
+        log_event("bot_spawn_user_language_unreadable", audience="system", level="warning",
+                  span="bots.create", user_id=user_id, fields={"reason": str(e)})
+    history_language = None
+    if meeting_language is None and user_language is None and tlang.history_tier_enabled():
+        # THE PERSON'S OWN HISTORY (VEXA_LANGUAGE_HISTORY_TIER=on), when they set nothing: the languages their recent meetings were
+        # spoken in. Best effort — a history that cannot be read leaves the tiers below.
+        recent = getattr(repo, "recent_transcript_languages", None)
+        if recent is not None:
+            try:
+                history_language = tlang.history_tier(await recent(user_id))
+            except Exception as e:  # noqa: BLE001
+                log_event("bot_spawn_language_history_unreadable", audience="system", level="warning",
+                          span="bots.create", user_id=user_id, fields={"reason": type(e).__name__})
+    transcription_language = tlang.resolve(meeting_language, user_language, tlang.deployment_tier(),
+                                           history_language)
     transcription_provider: Optional[str] = "none" if not transcribe_enabled else None
     if configured.get("url"):
         transcription_service_url = configured["url"]
@@ -531,26 +653,27 @@ async def request_bot(
     #     gated loud BEFORE any DB write (the TranscriptionNotConfigured precedent) — a half-
     #     configured knob must never spawn a bot that silently joins anonymous. Env vocabulary
     #     matches the provisioning CLI: BOT_USERDATA_S3_PATH + BOT_S3_{ENDPOINT,BUCKET,ACCESS_KEY,
-    #     SECRET_KEY} (scoped userdata credentials — never the deployment's admin S3 creds; they
-    #     ride the invocation env into the bot container, so their blast radius must stay the
-    #     userdata prefix).
-    authenticated = env_flag("BOT_AUTHENTICATED", False)
-    auth_userdata_path: Optional[str] = None
+    #     SECRET_KEY} (the bots' READ-ONLY userdata pair — it rides the invocation env into the bot
+    #     container, so it may read the session and nothing else; a bot's write-back goes through
+    #     meeting-api's session_profile route). auth_session_config also refuses a pair that reuses
+    #     either half of a storage root pair (MINIO_* / S3_*), before any row or bot exists.
+    # A bot account replaces the deployment's session for THIS spawn: the deployment knob is not
+    # consulted (its store is not where this bot's profile lives). A spawn with no page (a voice
+    # note, a call) signs nothing in either way.
+    bot_account_id: Optional[str] = None if no_page else ((bot_account or {}).get("id") or None)
+    auth_cfg = None if (no_page or bot_account_id is not None) else auth_session_config()
+    authenticated = auth_cfg is not None or bot_account_id is not None
+    auth_userdata_path: Optional[str] = (
+        f"bot-account:{bot_account_id}" if bot_account_id else (auth_cfg.userdata_path if auth_cfg else None)
+    )
     auth_s3: dict[str, Optional[str]] = {}
-    if authenticated:
-        auth_userdata_path = os.getenv("BOT_USERDATA_S3_PATH") or None
+    if auth_cfg is not None:
         auth_s3 = {
-            "s3_endpoint": os.getenv("BOT_S3_ENDPOINT") or None,
-            "s3_bucket": os.getenv("BOT_S3_BUCKET") or None,
-            "s3_access_key": os.getenv("BOT_S3_ACCESS_KEY") or None,
-            "s3_secret_key": os.getenv("BOT_S3_SECRET_KEY") or None,
+            "s3_endpoint": auth_cfg.s3_endpoint,
+            "s3_bucket": auth_cfg.s3_bucket,
+            "s3_access_key": auth_cfg.s3_access_key,
+            "s3_secret_key": auth_cfg.s3_secret_key,
         }
-        if not (auth_userdata_path and auth_s3["s3_endpoint"] and auth_s3["s3_bucket"]):
-            raise AuthSessionNotConfigured(
-                "BOT_AUTHENTICATED is set but the userdata store is incomplete — set "
-                "BOT_USERDATA_S3_PATH + BOT_S3_ENDPOINT + BOT_S3_BUCKET (and scoped "
-                "BOT_S3_ACCESS_KEY/BOT_S3_SECRET_KEY); provision the session with `make login`"
-            )
 
     # 2c. continue_meeting (P3c): reuse a TERMINAL prior meeting row if asked. The reused row keeps
     #     its id (so its transcripts/recordings survive); a fresh session is appended below. This read
@@ -560,6 +683,9 @@ async def request_bot(
     if continue_meeting:
         latest = await repo.find_latest(user_id, platform, native_meeting_id)
         latest_data = (latest or {}).get("data") or {}
+        if ((latest_data.get("room_principal") or {}).get("principal")
+                != (room_principal or {}).get("principal")):
+            latest, latest_data = None, {}          # a room's row is not the payer's, nor theirs the room's
         deletion = latest_data.get("artifact_deletion") or {}
         recording_delete = any(
             r.get("deletion_pending") for r in (latest_data.get("recordings") or [])
@@ -676,27 +802,53 @@ async def request_bot(
                     fields={"active": active, "cap": max_concurrent},
                 )
                 raise MaxBotsExceeded(user_id, max_concurrent)
-        row = await repo.reopen_meeting(
-            meeting_id=reused_row["id"],
-            data_patch={
-                "transcribe_enabled": transcribe_enabled,
-                "recording_enabled": recording_enabled,
-                "transcription_provider": transcription_provider,
-                "service_authority": authority_record,
-            },
-        )
+        reopen_patch: dict[str, Any] = {
+            "transcription_language": transcription_language,
+            "transcribe_enabled": transcribe_enabled,
+            "recording_enabled": recording_enabled,
+            "transcription_provider": transcription_provider,
+            "service_authority": authority_record,
+        }
+        # A continued run in authenticated mode is an authenticated run: it carries the identity key
+        # the per-identity serialization and the session write-back both match on.
+        if authenticated and auth_userdata_path:
+            reopen_patch["auth_userdata_path"] = auth_userdata_path
+        elif str((reused_row.get("data") or {}).get("auth_userdata_path") or "").startswith("bot-account:"):
+            # A guest run on a row a bot account last used must not keep holding that account.
+            reopen_patch["auth_userdata_path"] = None
+        # The account this run joins as; None clears a prior run's, so a continued guest run is not
+        # mistaken for an account's bot by the restore, the write-back or the signed-out hook.
+        reopen_patch["bot_account_id"] = bot_account_id
+        row = await repo.reopen_meeting(meeting_id=reused_row["id"], data_patch=reopen_patch)
     else:
         meeting_data: dict[str, Any] = {}
         if constructed_url:
             meeting_data["constructed_meeting_url"] = constructed_url
         meeting_data["transcribe_enabled"] = transcribe_enabled
         meeting_data["recording_enabled"] = recording_enabled
+        # The setting the bot runs with, and which tier chose it. meeting-api is its one writer:
+        # here, and on every accepted live change (lifecycle/reconfigure_router.py).
+        meeting_data["transcription_language"] = transcription_language
+        if is_call:
+            meeting_data["call"] = dict(call_data)
+        if is_voice_note:
+            meeting_data["voice_note"] = {"max_duration_sec": voice_note_cap}
         if transcription_provider is not None:
             meeting_data["transcription_provider"] = transcription_provider
         meeting_data["service_authority"] = authority_record
+        # The workspace bind (see the parameter's note). Same key, same shape and same readers as the
+        # one `bind_workspace` writes after the fact — this only writes it EARLY, so the meeting is
+        # the workspace's from its first row rather than from whenever someone remembered to bind it.
+        if workspace_id:
+            meeting_data["workspace_id"] = workspace_id
+        if room_principal:
+            meeting_data["room_principal"] = {k: str(room_principal.get(k) or "")
+                                              for k in ("principal", "principal_workspace")}
         # The serialization key for authenticated spawns — find_active_by_userdata matches on it.
         if authenticated and auth_userdata_path:
             meeting_data["auth_userdata_path"] = auth_userdata_path
+        if bot_account_id:
+            meeting_data["bot_account_id"] = bot_account_id
         # Per-user webhook config carried on the meeting (delivered by the lifecycle callback).
         # Stripped from any outbound meeting projection (webhooks.delivery._INTERNAL_DATA_KEYS). At
         # the API response edge the treatment splits (collector.projection): `webhook_secret` is
@@ -726,12 +878,41 @@ async def request_bot(
             raise
     meeting_id = row["id"]
 
+    # 3b. Fresh-meeting stream hygiene (see the param doc): a brand-new row must start on an EMPTY
+    # transcript stream. Row ids are monotonic, so tc:meeting:{id} normally doesn't exist yet — but if
+    # the DB id sequence is ever reset/restored without flushing redis, a NEW meeting can be minted on a
+    # row id whose OLD stream still holds a prior generation's session_end, and the terminal shows
+    # "Meeting ended" before the first word. Purge on the FRESH insert only (reused_row is None);
+    # continue_meeting KEEPS the reused row's stream for continuity. Best-effort — a purge failure must
+    # never block the spawn (the collector is the stream's writer and appends after this).
+    if reused_row is None and transcript_stream_purge is not None:
+        try:
+            await transcript_stream_purge(meeting_id)
+        except Exception as _e:  # noqa: BLE001 — best-effort; never fail the spawn on a purge error
+            log_event(
+                "bot_spawn_stream_purge_failed", audience="system", level="warning",
+                span="bots.create", user_id=user_id,
+                fields={"meeting_id": meeting_id, "error": str(_e)},
+            )
+
     # 4. MeetingToken + invocation. connection_id IS the session_uid (parent's connectionId).
     redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
     meeting_api_url = meeting_api_url or os.getenv("MEETING_API_URL", "http://meeting-api:8080")
-    internal_secret = internal_secret if internal_secret is not None else os.getenv(
-        "INTERNAL_API_SECRET"
-    )
+    if redis_grant is not None:
+        # The bot connects to Redis as this session's own user — never with the service connection.
+        # A user that cannot be defined fails the spawn (the fallback would be the service credential).
+        try:
+            redis_url = await redis_grant(connection_id, meeting_id)
+        except Exception as e:  # noqa: BLE001
+            reason = "the bot's Redis credential could not be issued"
+            try:
+                await repo.fail_meeting(meeting_id=meeting_id, reason=reason, failure_stage="requested")
+            except Exception:  # noqa: BLE001 — failing the row is best-effort; never mask the cause
+                pass
+            log_event("bot_spawn_failed", audience="system", level="error", span="bots.create",
+                      user_id=user_id, meeting_id=str(meeting_id),
+                      fields={"reason": reason, "error": type(e).__name__})
+            raise SpawnFailed(reason) from e
     # STT creds were resolved and gated at step 1b (before the meeting-row write); the resolved
     # transcription_service_url/token/model flow into the invocation below. Without either the bot
     # joins + captures but cannot transcribe — None-safe: omitted from the invocation when unset
@@ -739,8 +920,11 @@ async def request_bot(
     # Token must outlive the bot's max active time (default 4h, see bot deriveMaxActiveMs) or
     # transcription dies mid-meeting when the JWT expires. Default 5h; override per deployment.
     token_ttl_seconds = int(os.getenv("MEETING_TOKEN_TTL_SECONDS") or 18000)
+    # The bot's ONLY credential: its lifecycle callbacks and uploads present this token, bound to
+    # this session (connection_id). No service-tier secret is ever placed in an invocation.
     token = mint_meeting_token(
-        meeting_id, user_id, platform, native_meeting_id, secret=token_secret, ttl_seconds=token_ttl_seconds
+        meeting_id, user_id, platform, native_meeting_id, secret=token_secret,
+        ttl_seconds=token_ttl_seconds, session_uid=connection_id,
     )
     invocation = build_invocation(
         meeting_id=meeting_id,
@@ -751,16 +935,18 @@ async def request_bot(
         token=token,
         native_meeting_id=native_meeting_id,
         connection_id=connection_id,
-        language=language,
+        language=transcription_language["language"],
+        allowed_languages=transcription_language["allowed_languages"],
         task=task,
         transcription_tier=transcription_tier,
         redis_url=redis_url,
         meeting_api_callback_url=f"{meeting_api_url}/bots/internal/callback/lifecycle",
-        internal_secret=internal_secret,
         transcribe_enabled=transcribe_enabled,
         transcription_service_url=transcription_service_url,
         transcription_service_token=transcription_service_token,
         transcription_model=transcription_model,
+        transcription_service_owner=("customer" if configured.get("url") and configured.get("provider") == "customer"
+                                     else None),
         recording_enabled=recording_enabled,
         capture_modes=(["audio", "video"] if recording_enabled else None),
         # O-TEL-1: the tape is INDEPENDENT of recording_enabled — a meeting the user never asked to
@@ -768,15 +954,34 @@ async def request_bot(
         capture_signal_enabled=capture_signal_enabled,
         recording_upload_url=f"{meeting_api_url}/internal/recordings/upload",
         authenticated=True if authenticated else None,
-        userdata_s3_path=auth_userdata_path,
+        # A bot account's profile is not in the userdata store: no S3 path or key rides its invocation.
+        userdata_s3_path=auth_userdata_path if bot_account_id is None else None,
         s3_endpoint=auth_s3.get("s3_endpoint"),
         s3_bucket=auth_s3.get("s3_bucket"),
         s3_access_key=auth_s3.get("s3_access_key"),
         s3_secret_key=auth_s3.get("s3_secret_key"),
+        # session-profile.v1's write-back route on this meeting-api, for this session only. Sent only
+        # in authenticated mode: an older bot refuses the field, and an anonymous bot has no session.
+        session_writeback_url=(f"{meeting_api_url}/internal/browser-session/{connection_id}"
+                               if authenticated else None),
+        voice_note=({
+            "audioStream": voice_note_stream(meeting_id),
+            "maxDurationSec": voice_note_cap,
+            "idleTimeoutSec": voice_note_idle,
+            **({"speakerName": speaker_name} if speaker_name else {}),
+        } if is_voice_note else None),
+        call=call_invocation if is_call else None,
+        # session-profile.v1's restore route: where a bot-account bot reads its profile before launch.
+        session_restore_url=(f"{meeting_api_url}/internal/browser-session/{connection_id}"
+                             if bot_account_id else None),
+        # The operator's VEXA_MEETING_HOST_ALLOW entries: the internal meeting hosts the bot's
+        # navigation guard may also reach. Sent only when the operator listed some (an older bot
+        # refuses the field), and never for a bot with no page.
+        meeting_host_allow=(allowance_entries() or None) if not no_page else None,
         # Explicit caller windows win; otherwise omit everyoneLeftTimeout so the bot's
         # silence-window module default applies (the lobby window stays forgiving for
         # human-in-the-loop dashboard joins).
-        automatic_leave=automatic_leave or {"waitingRoomTimeout": lobby_budget_ms()},
+        automatic_leave=None if no_page else (automatic_leave or {"waitingRoomTimeout": lobby_budget_ms()}),
     )
 
     # 4b. THE SPAWN FENCE (F2, stage rev 193 row 26313). Re-read this row's user-stop flag from the
@@ -792,7 +997,14 @@ async def request_bot(
                   fields={"phase": "before_workload_create"})
         raise MeetingStopped(_stopped_spawn_detail(meeting_id))
 
-    # 5. Spawn over runtime.v1.
+    # 5. Commit the MeetingSession (connectionId == session_uid) BEFORE the workload exists: the bot's
+    #    callbacks and uploads resolve their meeting by it, so it must not depend on the runtime call
+    #    returning (27 Oct, meeting 241: the create timed out after the kernel had started the bot, the
+    #    row was never written, the meeting sat `requested` and its recordings 404'd). For a continued
+    #    meeting this APPENDS a session to the reused row — N sessions per meeting (P3c).
+    await repo.create_session(meeting_id=meeting_id, session_uid=connection_id)
+
+    # 6. Spawn over runtime.v1.
     spec = build_workload_spec(
         workload_id=f"mtg-{meeting_id}-{connection_id[:8]}",
         invocation=invocation,
@@ -817,8 +1029,7 @@ async def request_bot(
         # No workload came up. Mark the just-inserted meeting row `failed` with the reason so no
         # `requested` row lingers for the 5-minute reaper to flip reason-less (#718): the failure and
         # its cause are on the row NOW, and POST /bots answers 502 with the same reason. The row is
-        # failed BY ID — the MeetingSession is not created until after a successful spawn, so the
-        # session-keyed update_meeting_status cannot reach it yet.
+        # failed BY ID.
         reason = str(e) or "bot workload failed to start"
         try:
             await repo.fail_meeting(meeting_id=meeting_id, reason=reason, failure_stage="requested")
@@ -834,17 +1045,23 @@ async def request_bot(
             fields={"reason": reason},
         )
         raise
+    except Exception as e:  # noqa: BLE001 — no answer (timeout, dropped connection) is not a refusal
+        # The kernel may still start the workload after we gave up, so keep the row and its session and
+        # record the workload id the spec named: a bot that comes up reports in and a stop can reach it.
+        # One that never does is terminalized by the runtime callback / stale sweeps.
+        log_event(
+            "bot_spawn_outcome_unknown", audience="system", level="warning",
+            span="bots.create", user_id=user_id, meeting_id=str(meeting_id),
+            fields={"workload_id": spec["workloadId"], "error": repr(e)},
+        )
+        result = {}
 
     workload_id = result.get("workloadId") or result.get("name") or spec["workloadId"]
 
-    # 6+7. Eager-create the MeetingSession (connectionId == session_uid) + write the kernel workload id
-    #      back as bot_container_id. The workload is ALREADY running, so a failure here would orphan it
-    #      (a live bot with no session row to resolve its uploads, the meeting stuck `requested`) —
-    #      ROB3. Wrap both DB writes: on failure, tear the just-created workload DOWN (best-effort) and
-    #      re-raise as SpawnFailed so the route maps it to 502 and no half-spawned state is left behind.
+    # 7. Write the kernel workload id back as bot_container_id. The workload is ALREADY running, so a
+    #    failure here would orphan it — ROB3: tear the just-created workload DOWN (best-effort) and
+    #    re-raise as SpawnFailed so the route maps it to 502 and no half-spawned state is left behind.
     try:
-        # For a continued meeting this APPENDS a session to the reused row — N sessions per meeting (P3c).
-        await repo.create_session(meeting_id=meeting_id, session_uid=connection_id)
         row = await repo.set_bot_container(meeting_id=meeting_id, bot_container_id=workload_id)
     except Exception as e:  # noqa: BLE001 — any post-spawn DB failure must trigger compensation
         try:

@@ -5,6 +5,10 @@ metadata:
   name: {{ include "vexa.componentName" (list . "gateway") }}
   labels:
     {{- include "vexa.labels" . | nindent 4 }}
+  {{- with .Values.gateway.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   replicas: {{ .Values.gateway.replicaCount }}
   {{- include "vexa.deploymentStrategy" . | nindent 2 }}
@@ -18,24 +22,37 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: gateway
       annotations:
-        {{- toYaml .Values.global.podAnnotations | nindent 8 }}
+        checksum/secrets: {{ include "vexa.checksum" (list . .Values.secrets) }}
+        {{- if .Values.flows.enabled }}
+        checksum/subject-tickets: {{ include "vexa.checksum" (list . .Values.subjectTickets) }}
+        {{- end }}
+        {{- with .Values.global.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
-      securityContext:
-        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      enableServiceLinks: false
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with include "vexa.extraCA.initContainer" . }}
+      initContainers:{{ . | trim | nindent 8 }}
+      {{- end }}
       containers:
         - name: gateway
-          securityContext:
-            {{- toYaml .Values.global.securityContext | nindent 12 }}
-          image: "{{ .Values.gateway.image.repository }}:{{ .Values.global.imageTag | default .Values.gateway.image.tag }}"
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
+          image: "{{ .Values.gateway.image.repository }}:{{ .Values.global.imageTag | default .Values.gateway.image.tag | default (include "vexa.releaseTag" .) }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http
               containerPort: 8000
+            {{- if .Values.flows.enabled }}
+            - name: door
+              containerPort: 8002
+            {{- end }}
           env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
             - name: ADMIN_API_URL
               value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
             - name: MEETING_API_URL
@@ -54,6 +71,16 @@ spec:
             - name: AGENT_API_URL
               value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
             {{- end }}
+            {{- if .Values.crm.enabled }}
+            # The optional CRM (ADR-0047): the record page's verbs fronted under /crm/*.
+            - name: CRM_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "crm-api") }}:8300"
+            {{- end }}
+            # Who the agent tier is enabled for (empty = everyone a key scope admits). agent-api
+            # reads the same value.
+            - name: VEXA_AGENT_ALLOW
+              value: {{ .Values.gateway.agentAllow | default "" | quote }}
+            {{- include "vexa.redisPasswordEnv" . | nindent 12 }}
             - name: REDIS_URL
               value: {{ include "vexa.redisUrl" . | quote }}
             - name: INTERNAL_API_SECRET
@@ -61,6 +88,33 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
+            {{- if .Values.flows.enabled }}
+            # THE SERVICE DOOR (gateway/service_door.py) on 8002, behind its own ClusterIP Service
+            # (gateway-door) and never the public one: the flows tier's one way into the other
+            # domains (a fixed allow-list), and the internal tier's way into flows-api (/to-flows/*),
+            # so flows holds no INTERNAL_API_SECRET and never receives it.
+            - name: VEXA_FLOWS_SERVICE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_FLOWS_SERVICE_KEY
+            - name: FLOWS_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "flows-api") }}:18200"
+            # subject-ticket.v1: the ticket producers' PUBLIC keys, `<issuer>.pem` (the
+            # subject-ticket-verify-keys ConfigMap, mounted below). The door forwards a call that
+            # acts for a person only with a ticket one of them verifies. Public halves only.
+            - name: VEXA_SUBJECT_TICKET_KEYS_DIR
+              value: /run/vexa-subject-ticket-verify
+            {{- end }}
+            # gateway-identity.v1: the Ed25519 PRIVATE key that signs the identity the edge resolved
+            # onto every forward. The gateway is the only workload that mounts it.
+            - name: VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE
+              value: /run/vexa-identity/signing/key.pem
+            {{- if .Values.mcp.enabled }}
+            # The ONE MCP server (ADR-0037): /mcp is relayed to the assembled MCP service.
+            - name: MCP_URL
+              value: "http://{{ include "vexa.componentName" (list . "mcp") }}:{{ .Values.mcp.service.port }}"
+            {{- end }}
             - name: LOG_LEVEL
               value: {{ .Values.gateway.logLevel | default "info" | quote }}
             # fastapi-guard edge layer (edge_guard.py): per-IP throttle + auto-ban at the edge.
@@ -117,8 +171,34 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 20
             timeoutSeconds: 5
+          volumeMounts:
+            {{- with include "vexa.extraCA.mounts" . }}{{ . | trim | nindent 12 }}{{ end }}
+            - name: identity-signing-key
+              mountPath: /run/vexa-identity/signing
+              readOnly: true
+            {{- if .Values.flows.enabled }}
+            - name: subject-ticket-verify-keys
+              mountPath: /run/vexa-subject-ticket-verify
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.gateway.resources | nindent 12 }}
+      volumes:
+        {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{ end }}
+        # gateway-identity.v1: the signing key, here and in no other workload.
+        - name: identity-signing-key
+          secret:
+            secretName: {{ .Values.identity.existingSecret | default (include "vexa.componentName" (list . "identity-signing-key")) }}
+            defaultMode: 0440
+            items:
+              - { key: signing-key.pem, path: key.pem }
+        {{- if .Values.flows.enabled }}
+        # subject-ticket.v1: the producers' public keys (subject-ticket-keys.yaml), never a private one.
+        - name: subject-ticket-verify-keys
+          configMap:
+            name: {{ include "vexa.componentName" (list . "subject-ticket-verify-keys") }}
+            defaultMode: 0444
+        {{- end }}
       {{- with .Values.global.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

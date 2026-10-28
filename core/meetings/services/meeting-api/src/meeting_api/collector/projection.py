@@ -109,6 +109,21 @@ OWNER_ONLY_KEYS = frozenset({
     # The reader roster — every user id that can read this meeting. A share recipient enumerating it
     # learns who ELSE the owner shared with, which is other people's material, not theirs.
     "transcript_viewers",
+    # The same roster with each reader's email, and the people the owner removed
+    # (`share_access`). The owner manages these through `GET /meetings/{id}/access`.
+    "share_viewers",
+    "share_removed",
+})
+
+# ── Response-edge omissions · OPT-IN: stored, shipped only to a reader that asks ─────────────────
+# Facts the record keeps that no 0.12 response carried. Dropped from EVERY ``data`` projection for
+# every viewer, so an existing client sees byte-identical responses; a reader that wants one asks
+# for it by name on a route that serves it (``GET /transcripts/…?include_gaps=true`` → top-level
+# ``gaps``). Not a disclosure tier — a size/compatibility one.
+OPT_IN_KEYS = frozenset({
+    # Captured audio the bot never transcribed (prod-cutover R4): the lifecycle receiver persists the
+    # bot's report here; the transcript routes render it on request (``collector.gaps``).
+    "transcript_gaps",
 })
 
 # What a NON-OWNER's response drops explicitly: both tiers. Kept as one name because that is the
@@ -259,10 +274,29 @@ def project_response_data(
     """
     omit = omitted_keys(viewer_is_owner=viewer_is_owner)
     projected = project_calendar_sources(data)
-    return {
+    out = {
         k: v for k, v in projected.items()
-        if k not in omit and not is_sensitive_key(k)
+        if k not in omit and k not in OPT_IN_KEYS and not is_sensitive_key(k)
     }
+    if "recordings" in out and not visible_recordings(data, viewer_is_owner=viewer_is_owner):
+        out.pop("recordings")
+    return out
+
+
+def visible_recordings(data: Optional[Dict[str, Any]], *, viewer_is_owner: bool) -> list:
+    """The recordings this viewer may see listed — ids, media files, durations, storage keys.
+
+    The OWNER always. Anybody else (a transcript-share reader, a member of the bound workspace)
+    only when the owner allowed people they share with the recording (``share_settings``): the
+    bytes are gated on the same switch in ``recordings/shared_access``, and metadata about a
+    recording you may not play is not yours to read either (R1801-10)."""
+    from .share_access import recording_shared
+
+    if not isinstance(data, dict):
+        return []
+    if viewer_is_owner or recording_shared(data):
+        return list(data.get("recordings") or [])
+    return []
 
 
 def project_list_data(
@@ -288,7 +322,7 @@ def project_list_data(
     sources = project_calendar_sources(data).get("calendar_sources")
     projected = {k: v for k, v in data.items()
                  if k not in LIST_OMIT_KEYS and k != "calendar_sources"
-                 and k not in omit and not is_sensitive_key(k)}
+                 and k not in omit and k not in OPT_IN_KEYS and not is_sensitive_key(k)}
     if isinstance(sources, list):
         projected["calendar_sources"] = sources
     return projected

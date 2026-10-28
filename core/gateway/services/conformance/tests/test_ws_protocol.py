@@ -193,7 +193,7 @@ async def test_invalid_subscribe_payload_yields_error_with_details():
 
 
 async def test_missing_api_key_yields_error_and_closes():
-    """AUTH-NEGATIVE: no x-api-key (header or ?api_key=) → missing_api_key Error frame +
+    """AUTH-NEGATIVE: no key (header or vexa.key.<key> subprotocol) → missing_api_key Error frame +
     close 4401. Mirrors main.websocket_multiplex:2171-2176."""
     ws = FakeWebSocket(inbound=[], api_key=None)
     h = WSMultiplexHarness(ws, FakeRedis(), FakeAuthorizer(AUTH_MAP))

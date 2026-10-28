@@ -30,7 +30,7 @@ DECLARATION = SRC / "flows_config.py"
 KEY = re.compile(r"\bVEXA_[A-Z0-9_]*[A-Z0-9]\b")
 # An env name read through a MODULE CONSTANT is invisible to a literal scan, and R-A11 found two of
 # exactly those in the agent tier — "read through a variable so no literal scanner can see them".
-# `common.py` has the pattern here too since F95 (`INTERNAL_SECRET_ENV = "INTERNAL_API_SECRET"`), so
+# `common.py` has the pattern here too (`SERVICE_KEY_ENV = "VEXA_FLOWS_SERVICE_KEY"`), so
 # the scan reads the convention rather than pretending the keys are not there.
 ENV_CONST = re.compile(r"^[A-Z][A-Z0-9_]*_ENV(?:_DEPRECATED)?\s*=\s*(.+)$", re.M)
 NAME_IN = re.compile(r"[\"\']([A-Z][A-Z0-9_]{3,})[\"\']")
@@ -57,9 +57,16 @@ def _read_keys() -> dict:
 def test_the_scan_sees_a_name_held_in_a_constant_not_only_a_literal():
     """The guard on the guard: if this stops working, the reverse assertions above go quiet
     instead of going red, which is the failure mode the whole file exists to prevent."""
+    found: dict = {}
+    text = 'SOME_ENV = "NOT_A_VEXA_NAME"\nos.environ.get(SOME_ENV)\n'
+    for rhs in ENV_CONST.findall(text):
+        for name in NAME_IN.findall(rhs):
+            found[name] = True
+    assert "NOT_A_VEXA_NAME" in found, "an env name read through a *_ENV constant went unseen"
+    assert not KEY.findall(text), "the literal scan alone must not see it — that is the point"
     read = _read_keys()
-    assert "INTERNAL_API_SECRET" in read, "an env name read through a *_ENV constant went unseen"
-    assert "flows_steps/common.py" in read["INTERNAL_API_SECRET"]
+    assert "VEXA_FLOWS_SERVICE_KEY" in read
+    assert "flows_steps/common.py" in read["VEXA_FLOWS_SERVICE_KEY"]
 
 
 def test_every_key_the_code_reads_is_declared():
@@ -107,16 +114,15 @@ def test_the_declared_default_is_what_an_unset_key_returns(monkeypatch):
 
 def test_the_two_keys_that_open_the_machine_are_required_explicit():
     """A weak default makes an unconfigured deployment look configured (R-B11, and R-A20 one lane
-    over). These two are the ones that mint accounts, tokens and flows."""
-    for name in ("VEXA_FLOWS_ADMIN_KEY", "VEXA_FLOWS_API_KEY", "INTERNAL_API_SECRET"):
+    over). These two are the ones that open flows and its way into the other domains."""
+    for name in ("VEXA_FLOWS_SERVICE_KEY", "VEXA_FLOWS_API_KEY"):
         assert cfg.DECLARED[name][0] == "required-explicit", name
-    # The two deprecated spellings of the internal secret (F95) are capability-classed on purpose:
-    # a deployment that sets NEITHER them nor the canonical name is refused by the canonical key's
-    # own required-explicit row, and a deployment that sets one of them is warned and honoured for
-    # one release. Declaring them makes their removal a deletion here rather than an archaeology.
-    for legacy in ("VEXA_INTERNAL_SECRET", "VEXA_INTERNAL_API_SECRET"):
-        assert cfg.DECLARED[legacy][0] == "capability", legacy
-        assert "DEPRECATED" in cfg.DECLARED[legacy][2]
+        assert name in cfg.SECRETS, name
+    # Flows holds no internal-tier secret and no admin key, under any spelling.
+    for gone in ("INTERNAL_API_SECRET", "VEXA_INTERNAL_SECRET", "VEXA_INTERNAL_API_SECRET",
+                 "VEXA_FLOWS_ADMIN_KEY", "VEXA_FLOWS_USER_KEY_TTL_S"):
+        assert gone not in cfg.DECLARED, gone
+        assert gone not in cfg.SECRETS, gone
 
 
 def test_the_mail_policy_keys_are_declared_together():
@@ -133,9 +139,11 @@ def test_the_mail_capability_names_its_keys_in_one_place():
     lookup into somebody's private credential store. Grouping the four machine-readably is what
     makes a half-configured mailbox visible as one thing rather than four rows apart."""
     assert set(cfg.MAIL_KEYS) <= set(cfg.DECLARED)
-    emailx = (SRC / "flows_steps" / "emailx.py").read_text()
+    readers = ((SRC / "flows_steps" / "emailx.py").read_text()
+               + (SRC / "flows_steps" / "mail_transport.py").read_text()
+               + (SRC / "flows_steps" / "mail_secret.py").read_text())
     for key in cfg.MAIL_KEYS:
-        assert key in emailx, f"{key} is grouped under the mail capability but nothing reads it"
+        assert key in readers, f"{key} is grouped under the mail capability but nothing reads it"
 
 
 def test_every_secret_is_a_declared_key_and_the_password_is_one():

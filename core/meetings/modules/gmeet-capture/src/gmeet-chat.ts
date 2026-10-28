@@ -1,0 +1,591 @@
+/**
+ * Google Meet chat reader + sender — SHARED browser module, mirror of
+ * jitsi-chat.ts / teams-chat.ts. Emits each new chat message from another
+ * participant as { sender, text }, and writes into the meeting chat.
+ *
+ * Pure DOM — Meet exposes no in-page chat API, and its chat panel must be OPEN
+ * for messages to be in the DOM. The reader therefore opens the panel itself
+ * (openGmeetChatPanel) on start and re-checks on every poll, because Meet
+ * closes it on some layout changes.
+ *
+ * LANGUAGE-INDEPENDENT. Meet localises every label to the viewer's UI language.
+ * The bot's browser is pinned to English, but a signed-in account's own language
+ * can still win, so no lookup depends on an English string. Each lookup walks
+ * layers in this order, and getState() / the send log say which hit:
+ *   1. stable attributes — `data-message-id`, `jsname`, `data-panel-id`, `aria-live`;
+ *   2. structure — the composer is the text field of the panel that holds the
+ *      message list; the send button is the button of the composer's own row;
+ *   3. icon ligatures — Meet's material-icon buttons carry the icon NAME as text
+ *      (`chat`, `send`), the same in every UI language;
+ *   4. a multilingual label set (en, nl, de, fr, es, ru, pt, it) — last, for a
+ *      build that drops the hooks above.
+ *
+ * Identity: every message element carries Meet's stable `data-message-id`; that
+ * id is the dedup key, with sender+text as the fallback for an element without
+ * one. A run of messages from one person shares a single sender header, so the
+ * sender is read from the nearest enclosing group.
+ *
+ * A composer is a field a person could type into: shown (no `hidden` / `aria-hidden` / `inert`
+ * ancestor, not `display:none` / `visibility:hidden`, and laid out with a box when the page has
+ * layout) and never part of reCAPTCHA — Meet's in-call page carries reCAPTCHA's hidden
+ * `g-recaptcha-response` textarea, which is the page's only text field while the chat panel is
+ * closed. "The page's only text field" is a composer layer only while the chat toggle says the panel
+ * is open.
+ *
+ * A send counts only when it LANDS: the sent line shows in Meet's message list within a bounded
+ * wait. Every send path returns a GmeetChatSendResult — `{ ok: true }` once the line is on screen,
+ * else `{ ok: false, reason }`.
+ *
+ * The bot's OWN messages are never emitted: every text a send path writes is held
+ * in a short recent-sent set (rememberGmeetChatSent). Meet renders the local
+ * participant's lines with no sender header, sometimes more than once; every
+ * unlabelled render of a just-sent text is the bot's own (claimSent). A message under
+ * the bot's display name or Meet's localised "You" label is skipped too — so an
+ * embedder that auto-replies to chat cannot converse with itself.
+ */
+
+export interface GmeetChatMessage { sender: string; text: string }
+
+export interface GmeetChatOptions {
+  log?: (m: string) => void;
+  onMessage: (msg: GmeetChatMessage) => void;
+  /** The bot's display name — a message under it is the bot's own, like "You". */
+  selfName?: string;
+  /** Poll interval (ms) for the panel re-check + rescan. Default 2000. */
+  pollMs?: number;
+  /** Minimum gap (ms) between attempts to re-open a closed panel. Default 10000. */
+  reopenMs?: number;
+}
+
+export interface GmeetChat {
+  destroy(): void;
+  getState(): {
+    matchedContainer: string | null;
+    matchedComposer: string | null;
+    panelOpen: boolean;
+    primed: boolean;
+    seen: number;
+    recent: GmeetChatMessage[];
+    candidates: Array<{ sel: string; count: number }>;
+  };
+}
+
+/** A lookup's result: the element and the layer that found it. */
+export interface GmeetChatHit { el: HTMLElement; via: string }
+
+/** Why a send did not land in the meeting chat. */
+export type GmeetChatSendFailure =
+  | 'empty_text'      // nothing to send
+  | 'no_composer'     // no visible chat composer, even after opening the panel
+  | 'not_landed';     // written and sent, but the line never showed in the message list
+
+/** The outcome of a send: ok only once the line is in Meet's message list. */
+export type GmeetChatSendResult =
+  | { ok: true; composer: string; send: string }
+  | { ok: false; reason: GmeetChatSendFailure; composer: string | null; send: string | null };
+
+// ── Layer 1: stable attributes (plain CSS, language-free) ──
+/** The chat side-panel toggle: Meet keys each side-panel button by `data-panel-id`; chat is 2. */
+export const gmeetChatToggleSelectors: string[] = [
+  'button[data-panel-id="2"]',
+  '[role="button"][data-panel-id="2"]',
+];
+export const gmeetChatContainerSelectors: string[] = [
+  '[jsname="xySENc"]',
+  '[role="list"][aria-live="polite"]',
+];
+export const gmeetChatMessageSelectors: string[] = [
+  '[data-message-id]',
+  '[jsname="dTKtvb"]',
+];
+export const gmeetChatSenderSelectors: string[] = [
+  '[data-sender-name]',
+  '.poVWob',
+  '.YTbUzc',
+  '[class*="sender"]',
+];
+export const gmeetChatTextSelectors: string[] = [
+  '[jsname="dTKtvb"]',
+  '[data-message-text]',
+];
+/** Fields that can be the composer — chosen by structure (which panel holds them), never by label. */
+export const gmeetChatComposerFieldSelectors: string[] = [
+  'textarea',
+  '[contenteditable="true"][role="textbox"]',
+  '[contenteditable="true"]',
+];
+
+// ── Layer 3: icon ligatures (the icon's NAME, identical in every UI language) ──
+export const gmeetChatToggleIcons: string[] = ['chat', 'chat_bubble', 'chat_bubble_outline', 'forum'];
+export const gmeetChatSendIcons: string[] = ['send'];
+
+// ── Layer 4: multilingual labels (en, nl, de, fr, es, ru, pt, it), case-folded substrings ──
+/** Words in the chat toggle's label ("Chat with everyone"). Only matched on a toggle button. */
+export const gmeetChatToggleLabels: string[] = [
+  'chat',                  // en Chat with everyone · nl Chatten met iedereen · de Mit allen chatten · es Chatear · it Chatta
+  'discuter',              // fr Discuter avec tous les participants
+  'чат',                   // ru Чат со всеми
+  'conversa',              // pt Conversar com todos
+];
+/** Words in the send button's / composer's label ("Send a message"). */
+export const gmeetChatSendLabels: string[] = [
+  'send',                                  // en Send a message
+  'verzend', 'versturen', 'verstuur', 'stuur', // nl Bericht verzenden / Een bericht sturen
+  'senden', 'nachricht',                   // de Nachricht senden
+  'envoyer',                               // fr Envoyer un message
+  'enviar',                                // es / pt
+  'отправ', 'сообщени',                    // ru Отправить сообщение
+  'invia',                                 // it Invia un messaggio
+];
+/** How Meet may label the local participant's own messages, per UI language (whole label). The
+ *  recent-sent set and the bot's display name catch the bot's lines when this list misses. */
+export const gmeetChatSelfLabels: string[] = [
+  'you',                   // en
+  'jij', 'u',              // nl
+  'sie', 'du', 'ich',      // de (Meet's German UI addresses the viewer as "Sie")
+  'vous', 'moi',           // fr
+  'tú', 'tu', 'yo',        // es / it
+  'вы', 'я',               // ru
+  'você', 'eu',            // pt
+  'io',                    // it
+];
+
+/** How long a sent text stays claimable as the bot's own echo (ms). */
+const RECENT_SENT_TTL_MS = 120_000;
+
+// Texts this page just sent → when, and whether the reader has already seen it rendered as the
+// bot's own (unlabelled) line. Shared by every send path and every reader in the page.
+const recentSent = new Map<string, { at: number; ownRendered: boolean }>();
+const normalize = (t: string): string => t.replace(/\s+/g, ' ').trim();
+const fold = (t: string): string => normalize(t).toLowerCase();
+
+/** Record `text` as the bot's own line so the reader skips its echo. Every send path calls it. */
+export function rememberGmeetChatSent(text: string): void {
+  const now = Date.now();
+  for (const [t, e] of recentSent) if (now - e.at > RECENT_SENT_TTL_MS) recentSent.delete(t);
+  recentSent.set(normalize(text), { at: now, ownRendered: false });
+}
+
+/** True when a rendered line reading `text` is the bot's own just-sent one.
+ *  • `unlabelled` — Meet renders the local participant's lines with no sender header, and may render
+ *    one line more than once (a pending node, then the confirmed one under a new id): every such
+ *    render within the TTL is the bot's, and the entry stays.
+ *  • labelled — a line under some sender label claims the entry once (it is consumed), unless the bot's
+ *    line was already seen unlabelled: then a labelled line with the same words is a person's. */
+function claimSent(text: string, unlabelled: boolean): boolean {
+  const key = normalize(text);
+  const e = recentSent.get(key);
+  if (!e) return false;
+  if (Date.now() - e.at > RECENT_SENT_TTL_MS) { recentSent.delete(key); return false; }
+  if (unlabelled) { e.ownRendered = true; return true; }
+  if (e.ownRendered) return false;
+  recentSent.delete(key);
+  return true;
+}
+
+const firstMatch = (root: ParentNode, selectors: string[]): Element | null => {
+  for (const s of selectors) {
+    const el = root.querySelector(s);
+    if (el) return el;
+  }
+  return null;
+};
+
+/** An element's accessible label (aria-label, else Meet's tooltip attribute), case-folded. */
+const labelOf = (el: Element): string =>
+  fold(el.getAttribute('aria-label') || el.getAttribute('data-tooltip') || el.getAttribute('title') || '');
+
+/** The material-icon ligature a button renders (`<i …>send</i>`), case-folded — or ''. */
+export function iconOf(el: Element): string {
+  for (const i of Array.from(el.querySelectorAll('i'))) {
+    const t = fold(i.textContent || '');
+    if (t && /^[a-z_]+$/.test(t)) return t;
+  }
+  return '';
+}
+
+const hasWord = (label: string, words: string[]): boolean => !!label && words.some((w) => label.includes(w));
+
+const isDisabled = (el: Element): boolean =>
+  el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true';
+
+/** True for reCAPTCHA's own elements (`g-recaptcha-response`, `.g-recaptcha`, `grecaptcha-*`) and
+ *  anything inside them. */
+export function isRecaptcha(el: Element): boolean {
+  for (let cur: Element | null = el; cur; cur = cur.parentElement) {
+    const id = `${cur.getAttribute('id') || ''} ${cur.getAttribute('name') || ''} ${cur.getAttribute('class') || ''}`;
+    if (/recaptcha/i.test(id)) return true;
+  }
+  return false;
+}
+
+/** Whether the page has layout (a real browser does; a DOM without a renderer reports no boxes). */
+const hasLayout = (): boolean => {
+  const root = document.documentElement as Element | undefined;
+  return typeof root?.getClientRects === 'function' && root.getClientRects().length > 0;
+};
+
+/** True when a person could see `el`: no `hidden` / `aria-hidden="true"` / `inert` on it or an
+ *  ancestor, no `display:none` / `visibility:hidden` on the way up, and — where the page has
+ *  layout — a box of non-zero size. */
+export function isShown(el: Element): boolean {
+  const style = typeof getComputedStyle === 'function' ? getComputedStyle : null;
+  for (let cur: Element | null = el; cur; cur = cur.parentElement) {
+    if (cur.hasAttribute('hidden') || cur.hasAttribute('inert') || cur.getAttribute('aria-hidden') === 'true') return false;
+    if (style) {
+      const cs = style(cur);
+      if (cs.display === 'none' || (cur === el && (cs.visibility === 'hidden' || cs.visibility === 'collapse'))) return false;
+    }
+  }
+  if (hasLayout()) {
+    const r = el.getBoundingClientRect();
+    if (!el.getClientRects().length || r.width <= 0 || r.height <= 0) return false;
+  }
+  return true;
+}
+
+/** The message list: a stable container selector, else the live region / list holding a message. */
+export function findGmeetChatContainer(): { el: Element; via: string } | null {
+  for (const sel of gmeetChatContainerSelectors) {
+    const el = Array.from(document.querySelectorAll(sel)).find(isShown);
+    if (el) return { el, via: sel };
+  }
+  const msg = Array.from(document.querySelectorAll(gmeetChatMessageSelectors.join(','))).find(isShown);
+  for (let cur = msg?.parentElement ?? null, i = 0; cur && i < 8; cur = cur.parentElement, i++) {
+    if (cur.hasAttribute('aria-live') || cur.getAttribute('role') === 'list') return { el: cur, via: 'structure:live-region-of-message' };
+  }
+  return null;
+}
+
+/** Fields a person could type a chat line into, inside `root`: in selector order, de-duplicated,
+ *  enabled, shown, and never reCAPTCHA's. */
+const fieldsIn = (root: ParentNode): Element[] => {
+  const out: Element[] = [];
+  for (const sel of gmeetChatComposerFieldSelectors) {
+    for (const el of Array.from(root.querySelectorAll(sel))) {
+      if (!out.includes(el) && !isDisabled(el) && !isRecaptcha(el) && isShown(el)) out.push(el);
+    }
+  }
+  return out;
+};
+
+/** The chat toggle's own word on the panel: 'open' / 'closed' from its `aria-pressed`, or null
+ *  when there is no toggle or it does not say. */
+export function gmeetChatPanelState(): 'open' | 'closed' | null {
+  const pressed = findGmeetChatToggle()?.el.getAttribute('aria-pressed');
+  return pressed === 'true' ? 'open' : pressed === 'false' ? 'closed' : null;
+}
+
+/** The chat composer, by structure: the text field of the panel that holds the message list; else,
+ *  while the chat toggle says the panel is open, the page's only text field; else a field whose label
+ *  is a "send a message" label in a supported language. Only fields a person could type into count
+ *  (fieldsIn) — never a hidden one, never reCAPTCHA's. */
+export function findGmeetChatComposer(): GmeetChatHit | null {
+  const list = findGmeetChatContainer()?.el ?? null;
+  for (let cur = list?.parentElement ?? null, i = 0; cur && i < 8; cur = cur.parentElement, i++) {
+    const f = fieldsIn(cur).filter((el) => !(list!.contains?.(el)));
+    if (f.length) return { el: f[0] as HTMLElement, via: 'structure:panel-of-message-list' };
+  }
+  const all = fieldsIn(document);
+  if (all.length === 1 && gmeetChatPanelState() === 'open') return { el: all[0] as HTMLElement, via: 'structure:only-text-field' };
+  const labelled = all.find((el) => hasWord(labelOf(el), gmeetChatSendLabels));
+  if (labelled) return { el: labelled as HTMLElement, via: 'label:multilingual' };
+  return null;
+}
+
+/** The send button of `composer`'s own row: climb from the composer to the nearest ancestor that
+ *  holds a button; of that row's buttons take the `send` icon, else a multilingual send label, else
+ *  the row's only button. Searching outward from the composer keeps toolbar controls (e.g. the
+ *  reactions button) out of reach; a row of several unidentifiable buttons yields null (Enter). */
+export function findGmeetChatSendButton(composer: Element): GmeetChatHit | null {
+  for (let cur: Element | null = composer.parentElement, i = 0; cur && i < 5; cur = cur.parentElement, i++) {
+    const buttons = Array.from(cur.querySelectorAll('button, [role="button"]'));
+    if (!buttons.length) continue;
+    const byIcon = buttons.find((b) => gmeetChatSendIcons.includes(iconOf(b)));
+    if (byIcon) return { el: byIcon as HTMLElement, via: 'icon:send' };
+    const byLabel = buttons.find((b) => hasWord(labelOf(b), gmeetChatSendLabels));
+    if (byLabel) return { el: byLabel as HTMLElement, via: 'label:multilingual' };
+    if (buttons.length === 1) return { el: buttons[0] as HTMLElement, via: 'structure:only-button-of-row' };
+    return null;
+  }
+  return null;
+}
+
+/** The chat panel toggle: `data-panel-id`, else a button showing a chat icon, else a toggle button
+ *  whose label carries a chat word in a supported language. */
+export function findGmeetChatToggle(): GmeetChatHit | null {
+  const byAttr = firstMatch(document, gmeetChatToggleSelectors);
+  if (byAttr) return { el: byAttr as HTMLElement, via: 'attr:data-panel-id' };
+  const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
+  const byIcon = buttons.find((b) => gmeetChatToggleIcons.includes(iconOf(b)));
+  if (byIcon) return { el: byIcon as HTMLElement, via: 'icon:chat' };
+  const byLabel = buttons.find((b) => b.hasAttribute('aria-pressed') && hasWord(labelOf(b), gmeetChatToggleLabels));
+  if (byLabel) return { el: byLabel as HTMLElement, via: 'label:multilingual' };
+  return null;
+}
+
+/** Open the chat panel when it is closed. Returns true when the panel is open or a toggle was
+ *  clicked; false when no visible composer and no toggle is in the DOM. */
+export function openGmeetChatPanel(): boolean {
+  if (findGmeetChatComposer()) return true;
+  const toggle = findGmeetChatToggle();
+  if (!toggle) return false;
+  // A pressed toggle means the panel is already open (and still mounting) — clicking would close it.
+  if (toggle.el.getAttribute('aria-pressed') === 'true') return true;
+  toggle.el.click();
+  return true;
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Open the panel if needed and wait (up to `waitMs`) for the composer. */
+async function awaitComposer(waitMs: number): Promise<GmeetChatHit | null> {
+  let composer = findGmeetChatComposer();
+  if (!composer && openGmeetChatPanel()) {
+    const deadline = Date.now() + waitMs;
+    while (!composer && Date.now() < deadline) {
+      await sleep(100);
+      composer = findGmeetChatComposer();
+    }
+  }
+  return composer;
+}
+
+/** The texts of the lines in Meet's message list (the matched list, else the whole page). */
+function chatLines(): string[] {
+  const root: ParentNode = findGmeetChatContainer()?.el ?? document;
+  const out: string[] = [];
+  for (const sel of gmeetChatMessageSelectors) {
+    const nodes = Array.from(root.querySelectorAll(sel));
+    if (!nodes.length) continue;
+    for (const node of nodes) {
+      const textEl = node.matches?.(gmeetChatTextSelectors.join(',')) ? node : firstMatch(node, gmeetChatTextSelectors);
+      out.push(normalize((textEl ?? node).textContent || ''));
+    }
+    return out;
+  }
+  return out;
+}
+
+/** How many lines in the message list read exactly `text` now — the baseline a landing check
+ *  compares against, so a repeat of an earlier line is told apart from it. */
+export function countGmeetChatLines(text: string): number {
+  const want = normalize(text);
+  return chatLines().filter((t) => t === want).length;
+}
+
+/** Wait (up to `waitMs`) for one more line reading `text` than `before`. True once it shows. */
+export async function awaitGmeetChatLanded(text: string, before: number, waitMs = 8000): Promise<boolean> {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    if (countGmeetChatLines(text) > before) return true;
+    if (Date.now() >= deadline) return false;
+    await sleep(Math.min(150, Math.max(1, deadline - Date.now())));
+  }
+}
+
+/** Attributes the bot's trusted-input path addresses the composer and the send button by. */
+export const GMEET_CHAT_COMPOSER_MARK = 'data-vexa-chat-composer';
+export const GMEET_CHAT_SEND_MARK = 'data-vexa-chat-send';
+
+/** Prepare a TRUSTED send driven from outside the page (Playwright fill + click / Enter): open the
+ *  panel, find the composer and its send button, mark them with GMEET_CHAT_COMPOSER_MARK /
+ *  GMEET_CHAT_SEND_MARK, and record `text` as the bot's own line. Returns the layer that found
+ *  each (null when absent) and `before` — the count of list lines already reading `text`, which
+ *  the caller hands to awaitGmeetChatLanded once it has sent. */
+export async function prepareGmeetChatSend(
+  text: string,
+  opts: { log?: (m: string) => void; waitMs?: number } = {},
+): Promise<{ composer: string | null; send: string | null; before: number }> {
+  const log = opts.log || (() => {});
+  for (const m of Array.from(document.querySelectorAll(`[${GMEET_CHAT_COMPOSER_MARK}], [${GMEET_CHAT_SEND_MARK}]`))) {
+    m.removeAttribute?.(GMEET_CHAT_COMPOSER_MARK);
+    m.removeAttribute?.(GMEET_CHAT_SEND_MARK);
+  }
+  const composer = await awaitComposer(opts.waitMs ?? 3000);
+  if (!composer) { log('chat send: no visible chat composer (panel would not open)'); return { composer: null, send: null, before: 0 }; }
+  composer.el.setAttribute(GMEET_CHAT_COMPOSER_MARK, '1');
+  const send = findGmeetChatSendButton(composer.el);
+  if (send) send.el.setAttribute(GMEET_CHAT_SEND_MARK, '1');
+  rememberGmeetChatSent(text);
+  const before = countGmeetChatLines(text);
+  log(`chat send: composer via ${composer.via}, send button via ${send?.via ?? 'none (Enter)'}`);
+  return { composer: composer.via, send: send?.via ?? null, before };
+}
+
+/** Write `text` into the meeting chat from INSIDE the page: open the panel if needed, fill the
+ *  composer, click its send button, else press Enter — then wait (up to `landWaitMs`) for the line to
+ *  show in the message list. ok only once it does. */
+export async function sendGmeetChatMessage(
+  text: string,
+  opts: { log?: (m: string) => void; waitMs?: number; landWaitMs?: number } = {},
+): Promise<GmeetChatSendResult> {
+  const log = opts.log || (() => {});
+  if (!normalize(text)) return { ok: false, reason: 'empty_text', composer: null, send: null };
+  const found = await awaitComposer(opts.waitMs ?? 3000);
+  if (!found) {
+    log('chat send: no visible chat composer (panel would not open)');
+    return { ok: false, reason: 'no_composer', composer: null, send: null };
+  }
+  const composer = found.el;
+  const before = countGmeetChatLines(text);
+
+  composer.focus?.();
+  if (composer.getAttribute('contenteditable') === 'true') {
+    composer.textContent = text;
+  } else {
+    // Meet's input is framework-controlled: set through the NATIVE value setter so the
+    // framework's tracker sees a change, then announce it with an input event.
+    const Ta = typeof HTMLTextAreaElement !== 'undefined' ? HTMLTextAreaElement : null;
+    const setter = Ta ? Object.getOwnPropertyDescriptor(Ta.prototype, 'value')?.set : undefined;
+    if (setter && Ta && composer instanceof Ta) setter.call(composer, text);
+    else (composer as HTMLTextAreaElement).value = text;
+  }
+  composer.dispatchEvent(new Event('input', { bubbles: true }));
+  rememberGmeetChatSent(text);
+
+  const send = findGmeetChatSendButton(composer);
+  let how: string;
+  if (send && !isDisabled(send.el)) {
+    send.el.click();
+    how = `send:${send.via}`;
+  } else {
+    const init = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+    const enter = typeof KeyboardEvent === 'function'
+      ? new KeyboardEvent('keydown', init)
+      : Object.assign(new Event('keydown', init), { key: 'Enter', code: 'Enter', keyCode: 13 });
+    composer.dispatchEvent(enter);
+    how = 'enter';
+  }
+  const landed = await awaitGmeetChatLanded(text, before, opts.landWaitMs);
+  log(`chat send: composer via ${found.via}, ${how}, ${landed ? 'landed in the message list' : 'NOT in the message list'} (${text.slice(0, 60)})`);
+  return landed
+    ? { ok: true, composer: found.via, send: how }
+    : { ok: false, reason: 'not_landed', composer: found.via, send: how };
+}
+
+export function createGmeetChat(opts: GmeetChatOptions): GmeetChat {
+  const log = opts.log || (() => {});
+  const selfName = fold(opts.selfName || '');
+  const reopenMs = opts.reopenMs ?? 10_000;
+  const seenKeys = new Set<string>();
+  const recent: GmeetChatMessage[] = [];
+  let matchedContainer: string | null = null;
+  let matchedComposer: string | null = null;
+  let container: Element | null = null;
+  let panelOpen = false;
+  let primed = false;
+  let lastOpenAttempt = -Infinity;
+
+  const textOf = (el: Element | null): string => normalize(el?.textContent || '');
+
+  // The sender header is shared by a run of messages: climb from the message to the
+  // nearest ancestor that names a sender (its own attribute, or a header inside it).
+  const senderOf = (node: Element): string => {
+    let cur: Element | null = node;
+    for (let i = 0; i < 5 && cur; i++, cur = cur.parentElement) {
+      const attr = normalize(cur.getAttribute('data-sender-name') || '');
+      if (attr) return attr;
+      if (cur === node) continue;   // a header lives beside the message, never inside it
+      const t = textOf(firstMatch(cur, gmeetChatSenderSelectors));
+      if (t) return t;
+    }
+    return '';
+  };
+
+  const keyOf = (node: Element, sender: string, text: string): string => {
+    const id = node.getAttribute('data-message-id');
+    return id ? `id:${id}` : `txt:${sender}\u0000${text}`;
+  };
+
+  const extract = (node: Element): { msg: GmeetChatMessage; key: string; unlabelled: boolean } | null => {
+    const textEl = node.matches?.(gmeetChatTextSelectors.join(',')) ? node : firstMatch(node, gmeetChatTextSelectors);
+    const text = textOf(textEl ?? node);
+    if (!text) return null;   // not rendered yet — left unseen so a later scan reads it
+    const named = senderOf(node);
+    const sender = named || 'Unknown';
+    return { msg: { sender, text }, key: keyOf(node, sender, text), unlabelled: !named };
+  };
+
+  const isOwn = (msg: GmeetChatMessage): boolean => {
+    const s = fold(msg.sender);
+    return gmeetChatSelfLabels.includes(s) || (!!selfName && s === selfName);
+  };
+
+  const messageNodes = (root: ParentNode): Element[] => {
+    for (const sel of gmeetChatMessageSelectors) {
+      const nodes = Array.from(root.querySelectorAll(sel));
+      if (nodes.length) return nodes;
+    }
+    return [];
+  };
+
+  const scan = () => {
+    const root: ParentNode = container ?? document;
+    for (const node of messageNodes(root)) {
+      const got = extract(node);
+      if (!got || seenKeys.has(got.key)) continue;
+      seenKeys.add(got.key);
+      // What is on screen when the panel first opens predates the reader — recorded, not emitted.
+      if (!primed) continue;
+      const justSent = claimSent(got.msg.text, got.unlabelled);
+      if (isOwn(got.msg) || justSent) {
+        if (justSent) log(`chat: own line skipped (${got.unlabelled ? 'unlabelled' : `under "${got.msg.sender}"`})`);
+        continue;
+      }
+      recent.push(got.msg);
+      if (recent.length > 30) recent.shift();
+      log(`chat ${got.msg.sender}: ${got.msg.text.slice(0, 60)}`);
+      try { opts.onMessage(got.msg); } catch { /* never break capture */ }
+    }
+  };
+
+  const observer = new MutationObserver(() => { if (primed) scan(); });
+
+  const tick = () => {
+    const found = findGmeetChatContainer();
+    const composer = findGmeetChatComposer();
+    matchedComposer = composer?.via ?? null;
+    // The toggle's own aria-pressed is the authority when it says; otherwise a visible list,
+    // composer or message means the panel is open.
+    const toggleSays = gmeetChatPanelState();
+    panelOpen = toggleSays === 'open'
+      || (toggleSays === null && !!(found || composer || messageNodes(document).some(isShown)));
+    if (!panelOpen) {
+      const now = Date.now();
+      if (now - lastOpenAttempt >= reopenMs) {
+        lastOpenAttempt = now;
+        const toggle = findGmeetChatToggle();
+        if (openGmeetChatPanel()) log(`chat panel closed — opened it (toggle via ${toggle?.via ?? 'none'})`);
+      }
+      return;
+    }
+    if (found && found.el !== container) {
+      container = found.el;
+      matchedContainer = found.via;
+      observer.disconnect();
+      observer.observe(container, { childList: true, subtree: true, characterData: true });
+      log(`chat container matched: ${matchedContainer}`);
+    }
+    scan();
+    if (!primed) { primed = true; log(`chat primed (${seenKeys.size} message(s) already on screen; composer via ${matchedComposer ?? 'none'})`); }
+  };
+
+  tick();
+  const poll = setInterval(tick, opts.pollMs ?? 2000);
+
+  return {
+    destroy() { clearInterval(poll); observer.disconnect(); },
+    getState() {
+      return {
+        matchedContainer,
+        matchedComposer,
+        panelOpen,
+        primed,
+        seen: seenKeys.size,
+        recent: recent.slice(-10),
+        candidates: gmeetChatContainerSelectors.map((sel) => ({ sel, count: document.querySelectorAll(sel).length })),
+      };
+    },
+  };
+}
