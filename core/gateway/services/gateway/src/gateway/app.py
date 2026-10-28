@@ -291,6 +291,23 @@ def _is_authority_header(name: str) -> bool:
     return name in _AUTHORITY_HEADER_EXACT or name.startswith(_AUTHORITY_HEADER_PREFIXES)
 
 
+# ── the caller's credential stays at this edge ───────────────────────────────────────────────────
+# The client's API key (``x-api-key``, or the bearer in ``authorization``) is resolved HERE, and what
+# travels on is the identity it resolved to (gateway-identity.v1). The services behind this edge that
+# verify that identity — meeting-api, agent-api, the credential broker — never see the key.
+#: The carriers of the client's own credential, removed from every forward.
+CREDENTIAL_HEADERS = frozenset({"x-api-key", "authorization"})
+#: The domains whose service is still handed the caller's key, as ``x-api-key``, and why:
+#:   * ``mcp``      — the MCP acts AS the caller: its tools call back into this edge (and into crm
+#:                    and flows directly) with the caller's own credential, which is what this edge
+#:                    and those services authenticate.
+#:   * ``identity`` — admin-api authenticates the key itself on ``/user/*`` (it issued it); it holds
+#:                    no verifier for the signed identity.
+#:   * ``crm``      — crm resolves the key itself through ``/internal/validate``; it holds no
+#:                    verifier for the signed identity, and the MCP calls it directly with the key.
+CREDENTIAL_CARRIED_TO = frozenset({"mcp", "identity", "crm"})
+
+
 def _insufficient_scope_response() -> Response:
     return Response(
         content=json.dumps({"detail": "Insufficient scope for this endpoint"}),
@@ -612,9 +629,10 @@ def create_app(
         excluded = {"host", "content-length", "transfer-encoding"}
         headers = {k.lower(): v for k, v in request.headers.items() if k.lower() not in excluded}
         for h in list(headers):
-            if _is_authority_header(h):
+            if _is_authority_header(h) or h in CREDENTIAL_HEADERS:
                 headers.pop(h, None)
-        headers["x-api-key"] = client_key
+        if _assembly.owner_of.get(_route_key(request)) in CREDENTIAL_CARRIED_TO:
+            headers["x-api-key"] = client_key
         # THE RESOLVED IDENTITY, RE-STAMPED (gateway-identity.v1). Every value comes from /internal/validate,
         # never from the client: the user id; the verified email agent-api's membership redeem checks
         # for RESTRICTED invites (Lane M); the scopes and the bot limit `POST /bots` enforces; the

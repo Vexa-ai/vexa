@@ -507,10 +507,13 @@ def test_the_spawn_stores_the_secret_even_though_it_does_not_return_it(monkeypat
     meeting_id = _spawn(client).json()["id"]
 
     stored = repo._meetings[meeting_id]["data"]
-    assert stored["webhook_secret"] == SECRET, "the spawn must still persist the signing secret"
+    from meeting_api import at_rest
+    assert stored["webhook_secret"] != SECRET, "the row holds the secret sealed (MIGRATION-0015)"
+    assert at_rest.unseal(stored["webhook_secret"], at_rest.WEBHOOK_SECRET_PURPOSE) == SECRET, \
+        "the spawn must still persist the signing secret"
     assert stored["webhook_url"] == HOOK
 
     body, ts = b'{"event_type":"meeting.completed"}', "1750000000"
-    headers = {"X-Webhook-Signature": sign_payload(body, stored["webhook_secret"], ts),
+    headers = {"X-Webhook-Signature": sign_payload(body, at_rest.unseal(stored["webhook_secret"], at_rest.WEBHOOK_SECRET_PURPOSE), ts),
                "X-Webhook-Timestamp": ts}
     assert verify_signature(body, headers, SECRET), "delivery must still sign with the row's secret"

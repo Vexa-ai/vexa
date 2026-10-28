@@ -12,6 +12,11 @@ from typing import Optional, Set
 TOKEN_PREFIX = "vxa"
 TOKEN_PATTERN = re.compile(r"^vxa_([a-z]+)_(.+)$")
 
+#: `browser` grants nothing: no gateway route declares it (`core/gateway/services/gateway/tests/
+#: test_scope_matrix.py::test_browser_only_key_reaches_no_route_at_all`), and "is this a person at a
+#: keyboard" is the credential class (`session`), never a scope. It stays valid so the keys and
+#: sessions that carry it keep validating and the sign-in clients that still send it are not refused.
+#: Nothing new should ask for it; the terminal's key form leaves it unticked.
 VALID_SCOPES: Set[str] = {"bot", "tx", "browser"}
 
 

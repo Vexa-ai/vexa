@@ -44,7 +44,9 @@ def test_request_bot_stores_webhook_in_meeting_data():
     ))
     m = asyncio.run(repo.find_active(1, "google_meet", "m1"))
     assert m["data"]["webhook_url"] == "https://hook.example/x"
-    assert m["data"]["webhook_secret"] == "s3cr3t"
+    from meeting_api import at_rest
+    assert m["data"]["webhook_secret"] != "s3cr3t"                       # sealed at rest (MIGRATION-0015)
+    assert at_rest.unseal(m["data"]["webhook_secret"], at_rest.WEBHOOK_SECRET_PURPOSE) == "s3cr3t"
     assert m["data"]["webhook_events"] == {"meeting.status_change": True}
 
 

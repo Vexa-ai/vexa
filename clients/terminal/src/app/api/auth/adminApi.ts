@@ -76,12 +76,6 @@ export function listTestUsers(): Promise<AdminResult<AdminUser[]>> {
   return adminRequest<AdminUser[]>(`/admin/users/test-users`, { method: "GET" });
 }
 
-export function createUserToken(userId: string | number): Promise<AdminResult<{ token: string }>> {
-  return adminRequest<{ token: string }>(
-    `/admin/users/${encodeURIComponent(String(userId))}/tokens?scopes=bot,tx,browser`,
-    { method: "POST" },
-  );
-}
 
 // ── verified identity — admin-api's internal oracle (`POST /internal/validate`, the same
 //    X-Internal-Secret edge the gateway uses). The `vexa-token` auth cookie is the ONLY input; the
@@ -95,6 +89,27 @@ export type ValidatedUser =
        *  null when an older admin-api does not say. */
       credentialClass?: "session" | "key" | "delegation" | null }
   | { ok: false; status: number; error: string };
+
+/** Sign-out ends the credential the cookie carried (admin-api `POST /internal/sessions/end`): the
+ *  holder presents it and identity deletes it if it is a session or a system key. Best-effort — the
+ *  cookie is cleared either way, and an unended credential still expires with it. */
+export async function endSignInCredential(token: string): Promise<boolean> {
+  const url = (process.env.VEXA_ADMIN_API_URL || "").replace(/\/$/, "");
+  const secret = process.env.VEXA_INTERNAL_API_SECRET || "";
+  if (!url || !secret || !token) return false;
+  try {
+    const res = await fetch(`${url}/internal/sessions/end`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Internal-Secret": secret },
+      body: JSON.stringify({ token }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(5000),
+    });
+    return res.status === 204;
+  } catch {
+    return false;
+  }
+}
 
 export async function validateAuthToken(token: string): Promise<ValidatedUser> {
   const url = (process.env.VEXA_ADMIN_API_URL || "").replace(/\/$/, "");
@@ -541,13 +556,17 @@ export function listUserTokens(userId: string | number): Promise<AdminResult<Adm
   );
 }
 
+/** Mint a key for a person. `credentialClass: "system"` marks a credential this server mints for
+ *  itself (never listed to the person, always ending, deleted once it has); the default is the
+ *  person's own key. */
 export function mintUserToken(
   userId: string | number,
-  opts: { scopes: string[]; name?: string; expiresIn?: number },
+  opts: { scopes: string[]; name?: string; expiresIn?: number; credentialClass?: "key" | "system" },
 ): Promise<AdminResult<AdminMintedToken>> {
   const q = new URLSearchParams({ scopes: opts.scopes.join(",") });
   if (opts.name) q.set("name", opts.name);
   if (opts.expiresIn && opts.expiresIn > 0) q.set("expires_in", String(opts.expiresIn));
+  if (opts.credentialClass) q.set("credential_class", opts.credentialClass);
   return adminRequest<AdminMintedToken>(
     `/admin/users/${encodeURIComponent(String(userId))}/tokens?${q.toString()}`,
     { method: "POST" },
@@ -618,7 +637,10 @@ export async function mintLoginToken(userId: string | number): Promise<AdminResu
   }
   console.warn(`[terminal-auth] session credential unavailable (${session.error || session.status}); `
     + "signing in with an ordinary key — decisions that need a session will be refused");
-  const minted = await mintUserToken(userId, { scopes: ["bot", "tx", "browser"], name: TERMINAL_LOGIN_TOKEN_NAME, expiresIn: LOGIN_LIFETIME_SECONDS });
+  const minted = await mintUserToken(userId, {
+    scopes: ["bot", "tx", "browser"], name: TERMINAL_LOGIN_TOKEN_NAME, expiresIn: LOGIN_LIFETIME_SECONDS,
+    credentialClass: "system",
+  });
   if (!minted.ok || !minted.data?.token) {
     return { ok: false, status: minted.status || 500, error: minted.error || "Failed to mint API token" };
   }

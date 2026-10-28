@@ -201,7 +201,7 @@ def test_identity_headers_injected_and_spoof_stripped():
     fwd = downstream.last["headers"]
     assert fwd["x-user-id"] == "7", "must reflect the resolved user, not the spoofed header"
     assert fwd["x-user-scopes"] == "bot,tx,browser"
-    assert fwd["x-api-key"] == VALID_KEY
+    assert "x-api-key" not in fwd, "the key stays at the edge; meeting-api reads the signed identity"
 
 
 def test_internal_tier_header_is_stripped_from_a_public_request():

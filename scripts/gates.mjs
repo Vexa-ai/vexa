@@ -20,6 +20,7 @@ import { execSync, execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { checkDomainDoors, ALLOW_PATH as DOORS_ALLOW } from "./check-domain-doors.mjs";
 import { checkParity, MANIFEST_PATH as PARITY_MANIFEST } from "./check-parity.mjs";
+import { checkSecretLogs } from "./check-secret-logs.mjs";
 import { checkVendorPayload, NATIVE_DIR } from "./check-vendor-payload.mjs";
 import { checkHostDemands, LEDGER_PATH as HOST_DEMANDS_LEDGER, TABLE_DOC as HOST_DEMANDS_TABLE } from "./check-host-demands.mjs";
 import { checkPythonLicenses, INDEX_FILE as PY_LICENSE_INDEX } from "./check-python-licenses.mjs";
@@ -1897,7 +1898,7 @@ function gateBankProfile() {
   console.log("  ✓ gate:bank-profile — bank profile green: install, posture, sign-in, workspace, chat and meeting on both database paths");
   return true;
 }
-const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, "docs-links": gateDocsLinks, dataflow: gateDataflow, calm: gateCalm, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "bank-profile": gateBankProfile, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance, "domain-doors": gateDomainDoors, "fact-parity": gateFactParity, "vendor-payload": gateVendorPayload, "host-demands": gateHostDemands, "ui-design": gateUiDesign };
+const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, "docs-links": gateDocsLinks, dataflow: gateDataflow, calm: gateCalm, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "bank-profile": gateBankProfile, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance, "domain-doors": gateDomainDoors, "fact-parity": gateFactParity, "secret-logs": gateSecretLogs, "vendor-payload": gateVendorPayload, "host-demands": gateHostDemands, "ui-design": gateUiDesign };
 // gate:docs-links — every docs page compiles and every internal link resolves. `mint broken-links`
 // EXITS 0 when it cannot parse a page ("Unable to parse <page> - … Expected a closing tag for <ext>")
 // and then checks nothing, so its exit code alone proved nothing: a page with a bare `<placeholder>`
@@ -1929,6 +1930,14 @@ function gateDocsLinks() {
 // decision, so the gate records both answers, names the decision, and refuses to let either side
 // move silently). The gate does not pick winners: a gate that guesses a product decision makes the
 // wrong answer permanent and calls it enforcement.
+// gate:secret-logs — no log line carries any part of a credential (#1868; scripts/check-secret-logs.mjs).
+function gateSecretLogs() {
+  const hits = checkSecretLogs(ROOT);
+  if (hits.length) return fail(["secret-logs — a log call carries a credential's value or a slice of it — interpolated, passed as an argument, concatenated, or read from a header (log its presence or length):", ...hits]);
+  console.log("  ✓ gate:secret-logs — no log call carries a key, token, secret or password");
+  return true;
+}
+
 function gateFactParity() {
   let res;
   try { res = checkParity(ROOT); }

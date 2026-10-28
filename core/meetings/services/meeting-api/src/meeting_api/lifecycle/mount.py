@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Optional
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from .. import at_rest
 from .. import events as _flows_events
 from .. import meeting_token
 from .machine import LifecycleSink
@@ -541,13 +542,23 @@ def mount_lifecycle(
         if webhook_sink is not None and isinstance(meeting_row, dict):
             data = meeting_row.get("data") if isinstance(meeting_row.get("data"), dict) else {}
             url = data.get("webhook_url")
+            try:
+                secret = at_rest.unseal(data.get("webhook_secret"), at_rest.WEBHOOK_SECRET_PURPOSE)
+            except at_rest.SealedSecretUnreadable as e:
+                # The meeting's stored secret does not open under this key (a missing or replaced
+                # key file). Never deliver unsigned: no delivery, an error the operator sees.
+                log_event("webhook_delivery", audience="system", level="error",
+                          span="lifecycle.callback", meeting_id=meeting_row.get("id"),
+                          fields={"outcome": "failed", "error": "webhook_secret_unreadable",
+                                  "reason": str(e), "target_host": _webhook_target_host(url)})
+                url = None
             if url:
                 for env in (envelope, typed_envelope):
                     if env is None:
                         continue
                     try:
                         result = await webhook_sink.deliver(
-                            url, env, data.get("webhook_secret"),
+                            url, env, secret,
                             events_config=data.get("webhook_events"),
                             label=f"meeting:{meeting_row.get('id')}",
                         )

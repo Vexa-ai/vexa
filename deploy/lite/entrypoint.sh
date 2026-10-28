@@ -269,6 +269,16 @@ if [ "${VEXA_DISPATCH_SIGNING_KEY:-}" = "dev-dispatch-signing-key" ]; then
     unset VEXA_DISPATCH_SIGNING_KEY
 fi
 export VEXA_DISPATCH_SIGNING_KEY="${VEXA_DISPATCH_SIGNING_KEY:-$(/usr/local/bin/persisted-secret "$lite_state_dir/dispatch-signing-key")}"
+# MIGRATION-0015: the at-rest sealing key admin-api and meeting-api seal per-user webhook signing
+# secrets with (AES-256-GCM; a file of 64 hex characters, apart from the database). Unset, it is
+# minted on the first boot into $VEXA_LITE_STATE_DIR/at-rest/key (0600 in a 0700 directory) and kept;
+# the value is never printed. Keep that directory as long as the database: a new key leaves every
+# sealed webhook secret unreadable. With an external database (DB_HOST) mount a volume at
+# $VEXA_LITE_STATE_DIR, or pass VEXA_AT_REST_KEY_FILE naming a key file you mount.
+if [ -z "${VEXA_AT_REST_KEY_FILE:-}" ]; then
+    /usr/local/bin/persisted-secret "$lite_state_dir/at-rest/key" >/dev/null
+    export VEXA_AT_REST_KEY_FILE="$lite_state_dir/at-rest/key"
+fi
 # Read by no Lite program; minted per boot like the internal tier so no published value is exported.
 export JWT_SECRET="${JWT_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
 

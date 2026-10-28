@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 
 from fastapi.testclient import TestClient
 
+from admin_api.key_store import stored_fields
 from admin_api.app import validate as validate_mod
 from admin_api.app.db import get_db
 from admin_api.app.main import create_app
@@ -84,7 +85,7 @@ def _client(monkeypatch, session):
 
 def _pair(last_used=None):
     user = User(id=42, email="ada@example.com", max_concurrent_bots=2, data={})
-    tok = APIToken(id=7, token=KEY, user_id=42, scopes=["bot"], last_used_at=last_used)
+    tok = APIToken(id=7, **stored_fields(KEY), user_id=42, scopes=["bot"], last_used_at=last_used)
     return tok, user
 
 

@@ -262,11 +262,22 @@ export async function createUser(data: {
   });
 }
 
+/** How long the sign-in key lives: the 30 days of the cookie that carries it. */
+const LOGIN_KEY_SECONDS = 60 * 60 * 24 * 30;
+
 /**
- * Create API token for user
+ * Mint the key a sign-in's cookie carries. It is a SYSTEM credential (admin-api MIGRATION-0014):
+ * never listed among the person's keys, ending with its cookie, deleted once it has. Every sign-in
+ * mints one; none outlives the cookie that holds it.
  */
 export async function createUserToken(userId: string): Promise<ApiResult<{ token: string }>> {
-  return adminRequest<{ token: string }>(`/admin/users/${userId}/tokens?scopes=bot,tx,browser`, {
+  const q = new URLSearchParams({
+    scopes: "bot,tx,browser",
+    name: "dashboard-login",
+    expires_in: String(LOGIN_KEY_SECONDS),
+    credential_class: "system",
+  });
+  return adminRequest<{ token: string }>(`/admin/users/${encodeURIComponent(userId)}/tokens?${q.toString()}`, {
     method: "POST",
   });
 }

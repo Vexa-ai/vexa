@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 
 from admin_api.app import db as app_db
 from admin_api.app.main import create_app
+from admin_api.key_store import hash_token
 from admin_api.schema.models import Base
 from admin_api.schema.sync import ensure_schema_sync
 from conftest import requires_docker
@@ -73,7 +74,8 @@ def test_an_empty_scope_key_has_no_access_before_and_after_a_convergence(client)
     assert _access(client, "vxa_empty_k") == (403, ["legacy"])
     _reconverge(client)                                   # every admin-api boot runs this
     assert _access(client, "vxa_empty_k") == (403, ["legacy"])
-    assert _sql(client, "SELECT scopes FROM api_tokens WHERE token = 'vxa_empty_k'") == [([],)]
+    assert _sql(client, "SELECT scopes FROM api_tokens WHERE token_hash = :h",
+                h=hash_token("vxa_empty_k")) == [([],)]
 
 
 def test_a_null_scope_row_cannot_exist(client):

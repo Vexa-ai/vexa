@@ -67,6 +67,60 @@ the architecture rules this service meets and the deny tests that prove each pro
 [`docs/docs/connections.mdx`](../../../../docs/docs/connections.mdx) under "How it works" and
 "Why it complies".
 
+## Storage and backup
+
+Both SQLite files (`metadata.sqlite`, and with the local backend `secrets.sqlite`) run in WAL mode
+with a 10-second busy timeout (`sqlite_db.py`). WAL is set when the schema opens and is stored in the
+file, so a state volume an older broker wrote in rollback-journal mode converts in place on the first
+boot. Every write to the secret store folds and truncates the log, so a destroyed version leaves no
+copy in it.
+
+`python -m credential_broker.backup` (`backup.py`) snapshots the state into a separate volume on a
+schedule: compose's `credential-broker-backup` service and the chart's `state-backup` container,
+both on by default (every 6 h, newest 28 kept). It copies the two databases with SQLite's online
+backup API from a read-only connection, checks each copy (`integrity_check`), switches it to a
+single-file journal and renames the finished `snapshot-<UTC time>/` into place. It opens nothing
+else in the state volume and mounts no key: a snapshot is ciphertext, unreadable without the store
+key the operator keeps elsewhere. `state-hmac.key` is not copied; it protects consents in flight
+only, and the broker generates a new one when it is missing.
+
+### Backup and restore
+
+Restore a snapshot with the broker stopped and the **same store key** it was written under.
+
+Compose (project `vexa`; volume names are `<project>_connections-state` and `<project>_connections-backup`):
+
+```bash
+docker compose stop credential-broker credential-broker-backup
+docker run --rm -v vexa_connections-backup:/backup alpine ls /backup          # pick a snapshot
+SNAP=snapshot-20261023T060000Z
+docker run --rm -v vexa_connections-state:/state -v vexa_connections-backup:/backup:ro alpine sh -c "
+  rm -f /state/metadata.sqlite* /state/secrets.sqlite* &&
+  cp /backup/$SNAP/*.sqlite /state/ && chown 10001:10001 /state/*.sqlite && chmod 600 /state/*.sqlite"
+docker compose up -d credential-broker credential-broker-backup
+docker compose ps credential-broker      # healthy once /ready answers 200
+```
+
+Helm (release `vexa`, namespace `vexa`):
+
+```bash
+kubectl -n vexa scale deploy/vexa-vexa-credential-broker --replicas=0
+kubectl -n vexa run broker-restore --rm -it --restart=Never --image=alpine --overrides='{"spec":{
+  "securityContext":{"runAsUser":10001,"runAsGroup":10001,"fsGroup":10001},
+  "volumes":[{"name":"state","persistentVolumeClaim":{"claimName":"vexa-vexa-credential-broker-state"}},
+             {"name":"backup","persistentVolumeClaim":{"claimName":"vexa-vexa-credential-broker-backup"}}],
+  "containers":[{"name":"r","image":"alpine","stdin":true,"tty":true,"command":["sh"],
+    "volumeMounts":[{"name":"state","mountPath":"/state"},{"name":"backup","mountPath":"/backup"}]}]}}'
+# inside: ls /backup; rm -f /state/metadata.sqlite* /state/secrets.sqlite*;
+#         cp /backup/<snapshot>/*.sqlite /state/ && chmod 600 /state/*.sqlite; exit
+kubectl -n vexa scale deploy/vexa-vexa-credential-broker --replicas=1
+```
+
+Remove the `-wal` and `-shm` files with the databases (`*.sqlite*`): a log left beside a restored
+file belongs to the database it replaced. A wrong store key shows on `/ready` as 503 and in the log
+as a `store` fault of kind `integrity`. Consents in flight at snapshot time start again; connections
+made after it are reconnected.
+
 ## Contracts
 
 **Owns:** [`core/agent/contracts/credential-broker.v1`](../../contracts/credential-broker.v1) — the
@@ -104,6 +158,8 @@ key refused, and store faults as 503.
 - ✅ delivered — retention: a write keeps the current version and the one before it; delete destroys
   every stored version of a connection's credential and OAuth application, disconnect destroys the
   credential (the application stays, for reconnecting). Backups the deployment took keep what they hold.
+- ✅ delivered — WAL mode with a busy timeout on both databases; scheduled snapshots of the state
+  into a separate volume (compose and helm, on by default), no key in them
 - ✅ delivered — each connection record is sealed to its owner inside the encrypted value, and every
   read checks it; the agent role serves a worker only with a person in the loop (listing excepted)
 - ⬜ planned — provider-side revocation on disconnect

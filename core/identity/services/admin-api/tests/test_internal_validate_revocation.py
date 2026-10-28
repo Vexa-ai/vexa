@@ -17,9 +17,12 @@ import json
 import time
 
 import pytest
+
+from conftest import HashedTokens
 from fastapi.testclient import TestClient
 
 from admin_api import delegation
+from admin_api.key_store import stored_fields
 from admin_api.app import delegation_revocation
 from admin_api.app import validate as validate_mod
 from admin_api.app.db import get_db
@@ -47,7 +50,7 @@ class _Session:
     """One API key and its account; a user by id for a delegation's subject."""
 
     def __init__(self, tokens, users):
-        self._tokens, self._users = tokens, users
+        self._tokens, self._users = HashedTokens(tokens), users
 
     async def execute(self, stmt):
         params = list(stmt.compile().params.values())
@@ -68,7 +71,7 @@ def client(monkeypatch):
     monkeypatch.setenv("DEV_MODE", "false")
     monkeypatch.delenv("VEXA_ADMIN_EMAILS", raising=False)
     user = User(id=42, email="ada@example.com", max_concurrent_bots=2, data={})
-    tok = APIToken(token=KEY, user_id=42, scopes=["bot"], expires_at=None)
+    tok = APIToken(**stored_fields(KEY), user_id=42, scopes=["bot"], expires_at=None)
     app = create_app()
 
     async def _db():

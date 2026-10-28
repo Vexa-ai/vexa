@@ -25,6 +25,7 @@ import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
 import { authSecretStartupError } from "./src/app/api/auth/authSecret.mjs";
 import { signinConfigStartupError, signinSchemeStartupWarning } from "./src/app/api/auth/oidcConfig.mjs";
+import { sessionSecretStartupError } from "./src/app/api/sessionSecret.mjs";
 import { stampClientAddress, trustedProxies } from "./src/app/api/auth/clientAddress.mjs";
 import { isImageOptimizerPath, refuseImageOptimizer } from "./src/app/api/imageOptimizer.mjs";
 import { applyFallbackPolicy } from "./src/app/api/responsePolicy.mjs";
@@ -55,6 +56,13 @@ if (signinError) {
 }
 const schemeWarning = signinSchemeStartupWarning(process.env);
 if (schemeWarning) console.warn(schemeWarning);
+
+// The session secret, in production: without it no sign-in ends in a session (sessionSecret.mjs).
+const sessionSecretError = sessionSecretStartupError(process.env);
+if (sessionSecretError) {
+  console.error(`[terminal] refusing to start: ${sessionSecretError}`);
+  process.exit(1);
+}
 
 // The Meeting Canvas origin (src/app/canvasOrigin.mjs): a value that cannot be served, or one with no
 // terminal origin to let frame it, is refused by name; unset, the canvas shares this origin, and the

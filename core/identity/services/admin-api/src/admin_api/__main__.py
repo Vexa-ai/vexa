@@ -126,6 +126,13 @@ def build_production_app():
         feed_allowance()
     except ValueError as e:
         raise ConfigError(f"admin-api refuses to boot: {e}") from None
+    # Webhook signing secrets are stored sealed (at_rest.py, MIGRATION-0015): without a usable key
+    # nothing could be written or read, so the service does not start.
+    from . import at_rest
+    try:
+        at_rest.load_key()
+    except at_rest.AtRestKeyUnavailable as e:
+        raise ConfigError(f"admin-api refuses to boot: {e}") from None
     if open_to_everyone():
         logger.warning("VEXA_SIGNIN_ALLOW contains '*': ANY email address may sign in to this "
                        "instance and get an account. Meant for dev/demo stacks only.")

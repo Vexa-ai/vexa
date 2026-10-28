@@ -220,12 +220,31 @@ secures HTTPS connections). State and plan:
 |---|---|---|---|
 | **Workspace buckets** | Your whole workspace — notes, meeting docs, chat transcripts — a git folder in object storage (minio/S3) | bind-mounted local dirs (M1); contract reserves an `encryption` field on `workspace.v1` | **Per-workspace envelope encryption** (the KMS data-key pattern): a data key per workspace, wrapped by a master key the identity layer brokers; decrypted **only inside the sandboxed container**; keys stay in-VPC for air-gap |
 | **Transcripts** | The durable source of truth: the meetings **Postgres** `transcriptions` table (what `GET /transcripts` reads). The redis `transcription_segments` / `tc:…:mutable` stream is the live carrier; the workspace Markdown is a derived copy | persisted in Postgres; carried in redis; derived copy in the workspace bucket | Encrypt at rest in the **meetings database** (the SSOT); protect the redis carrier (auth/TLS, restricted ACLs); the workspace copy is covered by bucket encryption above |
-| **User API tokens** | The keys in `api_tokens.token` that unlock an account | stored and matched as **cleartext** | Store only a **hash** and verify by hashing the presented key — the same practice as passwords (argon2 / bcrypt) — or encrypt at rest, so a database leak yields no usable keys |
+| **User API keys** | The keys that unlock an account (`api_tokens`) | stored as the key's **SHA-256** (`token_hash`) and matched by hashing the presented key; the value is shown once, at creation, and a list shows only `vxa_bot_…AbCd` (`token_hint`). A database leak yields no usable key | done (MIGRATION-0013); every existing key was hashed in place and keeps working |
 
 These are tracked in the [roadmap status](/roadmap/status); workspace/bucket encryption is already part of
 the `workspace.v1` contract shape in [Stage 0](/roadmap/stages).
 
 ---
+
+## API keys: who sees which
+
+Every credential in `api_tokens` has a class (`kind`):
+
+| Class | What it is | In the person's key list | Ends |
+|---|---|---|---|
+| `key` | A key the person made: on their key page, with the connect button (`mcp-connect`), or one an operator made for them | yes | when its creator chose |
+| `session` | The terminal's signed-in browser | no | 30 days |
+| `system` | A credential Vexa mints for itself, such as the key a sign-in cookie carries | no | always, at most 30 days |
+
+`GET /admin/users/{id}/tokens` lists `key` rows only (`?include_hidden=true` is the operator's full
+view). Expired `session` and `system` rows are deleted on every mint and every admin-api boot.
+A service mints a system key with `credential_class=system`; a key named `terminal-login`,
+`webapp-login` or `dashboard-login` is always one. (admin-api MIGRATION-0014.)
+
+Scopes on a key: `bot` (bots) and `tx` (meetings and transcripts). `browser` is still accepted so keys
+that carry it keep working, but no route requires it, so it grants nothing; whether someone is at a
+keyboard is the `session` class, never a scope. The terminal's key form leaves it unticked.
 
 ## How it works
 

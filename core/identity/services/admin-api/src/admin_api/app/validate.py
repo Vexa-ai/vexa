@@ -37,6 +37,8 @@ from sqlalchemy.future import select
 
 from .. import delegation as delegation_mod
 from .. import obs
+from .. import at_rest
+from ..key_store import hash_in_place, token_matches
 from ..schema.models import APIToken, User
 from . import delegation_revocation as revocation
 from . import admin_account
@@ -163,12 +165,7 @@ def identity_of(user: User, *, scopes: List[str], is_admin: bool) -> Dict[str, A
         "admin_account": is_account,
         "email_verified": public_profile.email_is_verified(data_blob, str(user.email or "")),
     }
-    if data_blob.get("webhook_url"):
-        resp["webhook_url"] = data_blob["webhook_url"]
-        if data_blob.get("webhook_secret"):
-            resp["webhook_secret"] = data_blob["webhook_secret"]
-        if data_blob.get("webhook_events"):
-            resp["webhook_events"] = data_blob["webhook_events"]
+    resp.update(webhook_config(data_blob, user_id=user.id))
     memberships = data_blob.get("memberships")
     if isinstance(memberships, list):
         resp["workspaces"] = [str(m["workspace_id"]) for m in memberships
@@ -365,6 +362,25 @@ async def _stamp_last_used(db, api_token) -> None:
                       fields={"reason": type(e).__name__})
 
 
+def webhook_config(data: dict, *, user_id) -> dict:
+    """The person's webhook as identity hands it on: url, secret (unsealed), events. A secret that
+    is stored sealed and does not open leaves the whole webhook out, so no delivery goes unsigned;
+    it is logged as an error for the operator (the key file is wrong or missing)."""
+    if not data.get("webhook_url"):
+        return {}
+    try:
+        secret = at_rest.unseal(data.get("webhook_secret"), at_rest.WEBHOOK_SECRET_PURPOSE)
+    except at_rest.SealedSecretUnreadable as e:
+        obs.log_event("webhook_secret_unreadable", audience="system", level="error",
+                      fields={"user_id": user_id, "reason": str(e)})
+        return {}
+    out = {"webhook_url": data["webhook_url"]}
+    if secret:
+        out["webhook_secret"] = secret
+    if data.get("webhook_events"):
+        out["webhook_events"] = data["webhook_events"]
+    return out
+
 router = APIRouter()
 
 
@@ -387,11 +403,15 @@ async def validate_token(payload: ValidateRequest, request: Request,
 
     row = (await db.execute(
         select(APIToken, User).join(User, APIToken.user_id == User.id)
-        .where(APIToken.token == token)
+        .where(token_matches(APIToken, token))
     )).first()
     if not row:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=INVALID_TOKEN)
     api_token, user = row
+    if api_token.audience is not None:
+        # A transit key opens only its target, which asks identity itself (ADR-0051): it reaches
+        # no gateway route.
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=INVALID_TOKEN)
     # A WORKSPACE PRINCIPAL's account (D2) is never a key holder: nothing mints one, and a row that
     # somehow carries one is refused rather than answered as a person.
     from . import principals as principals_mod  # noqa: PLC0415
@@ -401,6 +421,7 @@ async def validate_token(payload: ValidateRequest, request: Request,
     if api_token.expires_at is not None and api_token.expires_at < datetime.utcnow():
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Token expired")
 
+    await hash_in_place(db, api_token, token)
     await _stamp_last_used(db, api_token)
 
     scopes = list(api_token.scopes) if api_token.scopes else ["legacy"]

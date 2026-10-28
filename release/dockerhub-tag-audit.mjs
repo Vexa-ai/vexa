@@ -61,7 +61,7 @@ export async function auditCandidateTags({
   if (typeof accessToken !== "string" || accessToken.length === 0) {
     throw new Error("Docker Hub authentication returned no access_token");
   }
-  console.log(`::add-mask::${accessToken}`);
+  console.log(`::add-mask::${accessToken}`);  // secret-log-ok: ::add-mask:: registers it to be hidden from the CI log
 
   const previousTag = previousAttemptTag(targetTag);
   const rows = [];

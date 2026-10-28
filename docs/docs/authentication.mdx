@@ -63,7 +63,9 @@ curl -X POST "$ADMIN/admin/users/1/tokens" \
 # query form still works: ?scopes=bot,tx or ?scope=bot
 ```
 
-The returned `token` is your `X-API-Key`. **It is shown once** — store it.
+The returned `token` is your `X-API-Key`. **It is shown once**: Vexa stores only its SHA-256 and a
+hint (`vxa_bot_…AbCd`), so it can never be shown again. Store it. If you lose it, mint a new key and
+delete the old one.
 
 ## Scopes
 
@@ -75,7 +77,7 @@ is refused with `422` — never silently dropped.
 |---|---|
 | `bot` | bot lifecycle — `POST`/`GET`/`DELETE /bots`, `/bots/status`, bot config — and the calendar connections (`/user/calendar`, `/user/calendars/*`), because an auto-join feed spawns bots |
 | `tx` | the transcript and meeting-record plane — `/meetings*`, `/transcripts/*` |
-| `browser` | browser-tool capabilities. **Reaches no API route today** — a browser-only key can call [`/auth/me`](/api/settings#identity) and nothing else |
+| `browser` | **grants nothing.** No route requires it; a browser-only key can call [`/auth/me`](/api/settings#identity) and nothing else. It stays valid so keys that carry it keep working; whether someone is at a keyboard is the `session` class, never a scope |
 
 `/recordings*`, `/user/webhook*`, `/user/models`, `/user/transcription`, `/agent/*` and `/mcp` accept
 either `bot` or `tx`. Most keys want both: `{"scopes":["bot","tx"]}`. The three `/user/*` routes in
@@ -98,24 +100,36 @@ curl -X DELETE "$ADMIN/admin/tokens/7" -H "X-Admin-API-Key: $ADMIN_TOKEN"   # �
 
 Set an expiry at mint time with `expires_in=<seconds>`; expired keys are rejected automatically.
 
-### Login-minted tokens (`terminal-login`)
+### Which keys are listed
 
-When a user signs in through the terminal (OAuth or email login), the terminal mints an API token
-named **`terminal-login`** to populate the auth cookie. These are **bounded per user**: after each
-sign-in the terminal keeps only the newest `VEXA_TERMINAL_LOGIN_TOKEN_CAP` (default `3`) and revokes
-the older ones. So when you audit a user's tokens —
+`GET /admin/users/{id}/tokens` lists the keys a person made: on their key page, with the connect
+button (`mcp-connect`), or that an operator minted for them. Each shows its name, scopes, hint,
+dates and, for a transit key, its target. Credentials Vexa mints for itself are not listed:
 
-```bash
-curl "$ADMIN/admin/users/1/tokens" -H "X-Admin-API-Key: $ADMIN_TOKEN"
-```
+- `session`: the terminal's signed-in browser;
+- `system`: the key a sign-in cookie carries (`terminal-login`, `webapp-login`, `dashboard-login`
+  are always system keys) and any key a service mints with `credential_class=system`.
 
-— the `terminal-login`-named entries are login sessions (capped, not unbounded), while any
-differently-named entries are self-serve keys the user minted and are never pruned by login.
+These always end within 30 days, and once expired they are deleted, on the next mint for that
+person and on every admin-api boot. Signing out of the terminal ends its session at once. An
+operator sees everything with `?include_hidden=true`.
+
+### Transit keys
+
+A transit key opens one registered service, not the API. It names that service and the actions it
+allows there (`vxt_transcription_…` opens the hosted transcription API for `audio.transcribe`), and
+the service asks identity whether a key opens it. A transit key reaches no gateway route.
+
+- An operator registers a service with `PUT /admin/transit-targets/{name}` (its actions) and issues
+  its credential with `POST /admin/transit-targets/{name}/secret`. The credential is answered once.
+- `POST /admin/users/{id}/transit-keys` with `{"audience": "transcription"}` mints one for a person.
+  It is listed with their other keys and revoked the same way.
+- Keys from before transit keys existed (`vxa_tx_…`) keep opening the transcription API.
 
 ## Who may sign in to the terminal
 
 The terminal's sign-in doors — the emailed link, Google, Microsoft and your own OIDC provider — each end by creating an
-account and minting a `terminal-login` key for it, so they are gated on **who** the address is, not
+account and minting its sign-in session, so they are gated on **who** the address is, not
 only on proof that the person holds it. A sign-in is admitted only for:
 
 - an **existing user** of this instance (upgrading locks nobody out),
@@ -206,9 +220,11 @@ warning at boot whenever sign-in is open.
 5. **Account and binding.** `findOrCreateUserToken` asks admission again, finds or creates the user
    (`POST /admin/users`) and, for OAuth, binds the provider subject
    (`PUT /internal/users/{id}/provider-subject`).
-6. **Session.** The terminal mints a `terminal-login` key (`POST /admin/users/{id}/tokens`), keeps
-   the newest `VEXA_TERMINAL_LOGIN_TOKEN_CAP`, and sets the httpOnly `vexa-token` and
-   `vexa-user-info` cookies.
+6. **Session.** The terminal mints a 30-day `session` credential (`POST /internal/sessions`, behind
+   the internal secret and `VEXA_TERMINAL_SESSION_SECRET`, which every install generates and without
+   which admin-api and the terminal refuse to start), and sets the httpOnly `vexa-token` and
+   `vexa-user-info` cookies. Logout ends that credential (`POST /internal/sessions/end`) and clears
+   the cookies.
 
 **Who writes what.** admin-api is the only writer of users, tokens, the `signin` setting, the claim
 record, the redeemed-link records and the provider bindings (`users.data.provider_subjects`). The

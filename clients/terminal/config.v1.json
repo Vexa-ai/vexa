@@ -227,10 +227,9 @@
     },
     {
       "key": "VEXA_TERMINAL_SESSION_SECRET",
-      "class": "defaulted",
-      "default": "(unset — sign-in mints an ordinary login key, and every decision that needs a session is refused)",
+      "class": "required-explicit",
       "secret": true,
-      "description": "The terminal's own second secret for admin-api's POST /internal/sessions (src/app/api/auth/adminApi.ts mintSessionToken, PRD 0.13.4 D13): with it, sign-in mints the SESSION credential (credential_class=session) a policy change or a routine's activation requires; a self-serve key with the browser scope is not one. The same value admin-api holds. Set here, every sign-in ends with a session (an admin-api that cannot mint one fails the sign-in), and a browser still holding a pre-session login key is asked to sign in again (no key is traded up to a session). Unset here, sign-in falls back to the old bot,tx,browser key with a warning.",
+      "description": "The terminal's own second secret for admin-api's POST /internal/sessions (src/app/api/auth/adminApi.ts mintSessionToken, PRD 0.13.4 D13): with it, sign-in mints the SESSION credential (credential_class=session) a policy change or a routine's activation requires; a self-serve key with the browser scope is not one. The same value admin-api holds. Set here, every sign-in ends with a session (an admin-api that cannot mint one fails the sign-in), and a browser still holding a pre-session login key is asked to sign in again (no key is traded up to a session). In production (NODE_ENV=production) the terminal refuses to start without a usable one — unset, shorter than 32 bytes or a published value (server.mjs, src/app/api/sessionSecret.mjs); every surface generates it at install (compose mint-dev-env.sh, the chart's Secret, Lite's entrypoint). Only `next dev` keeps the fallback: unset there, sign-in uses the old bot,tx,browser key with a warning.",
       "targets": ["compose", "helm", "lite"]
     },
     {

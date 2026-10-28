@@ -8,6 +8,8 @@ mint door never produces a session. No database: a fake session that knows users
 from datetime import datetime, timedelta
 
 import pytest
+
+from conftest import HashedTokens
 from fastapi.testclient import TestClient
 
 from admin_api import delegation
@@ -37,7 +39,7 @@ class _Result:
 class _Session:
     def __init__(self, users):
         self.users = users
-        self.tokens: dict[str, APIToken] = {}
+        self.tokens: dict[str, APIToken] = HashedTokens()
         self.added: list = []
 
     async def get(self, model, ident):
@@ -56,7 +58,7 @@ class _Session:
         self.added.append(obj)
         if isinstance(obj, APIToken):
             obj.id = len(self.added)
-            self.tokens[obj.token] = obj
+            self.tokens[obj.token_hash] = obj
 
     async def commit(self):
         pass
@@ -189,7 +191,7 @@ def test_the_admin_mint_door_only_ever_makes_a_key(world, query, body):
     assert r.status_code == 201, r.text
     row = session.tokens[r.json()["token"]]
     assert row.kind == "key"
-    assert _validate(client, row.token).json()["credential_class"] == "key"
+    assert _validate(client, r.json()["token"]).json()["credential_class"] == "key"
 
 
 def test_a_body_kind_on_the_admin_door_is_refused(world):
@@ -267,7 +269,7 @@ def test_a_legacy_login_key_is_never_traded_for_a_session(world, created_at):
     old = _seed(session, "vxa_bot_legacy-login-key", created_at=created_at)
     r = _upgrade(client, old.token)
     assert r.status_code in (404, 405), r.text
-    assert list(session.tokens) == [old.token] and old.kind == "key"
+    assert len(session.tokens) == 1 and session.tokens[old.token] is old and old.kind == "key"
     assert not any(isinstance(o, APIToken) and o.kind == "session" for o in session.added)
 
 

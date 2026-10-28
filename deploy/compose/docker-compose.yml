@@ -343,6 +343,35 @@ services:
     network_mode: none
     restart: "no"
 
+  # ─── MIGRATION-0015: the at-rest sealing key ──────────────────────────────────────────────────
+  # One-shot: generates the AES-256-GCM key (64 hex characters) admin-api and meeting-api seal
+  # per-user webhook signing secrets with (users.data, meetings.data), into its own volume, the first
+  # time the stack starts — and never again: an existing key is left alone, because a new one would
+  # leave every sealed secret unreadable. A file apart from the database: never in it, never in a
+  # database backup. Only admin-api and meeting-api mount it (both run as uid 10001).
+  at-rest-key:
+    build:
+      context: ../../core/identity/services/admin-api
+      dockerfile: Dockerfile
+    image: vexaai/vexa-admin-api:${IMAGE_TAG:-dev}
+    user: "0:0"
+    command:
+      - python
+      - -c
+      - |
+        import os, pathlib, secrets
+        key = pathlib.Path("/keys/at-rest/key")
+        if not key.exists():
+            tmp = key.with_suffix(".tmp")
+            tmp.write_text(secrets.token_hex(32) + "\n")
+            tmp.replace(key)
+        os.chown(key, 10001, 10001)
+        key.chmod(0o400)
+    volumes:
+      - at-rest-key:/keys/at-rest
+    network_mode: none
+    restart: "no"
+
   # ─── Core services ────────────────────────────────────────────────────────────────────────────
   admin-api:
     build:
@@ -364,8 +393,10 @@ services:
       - ADMIN_API_TOKEN=${ADMIN_TOKEN:-}
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       # The terminal's own second secret for POST /internal/sessions (D13): only it may mint the
-      # `session` credential. Unset = no sessions; the terminal signs in with an ordinary key.
+      # `session` credential. mint-dev-env.sh generates it; unset, admin-api refuses to boot.
       - VEXA_TERMINAL_SESSION_SECRET=${VEXA_TERMINAL_SESSION_SECRET:-}
+      # MIGRATION-0015: the at-rest sealing key (the `at-rest-key` one-shot), the same file meeting-api reads.
+      - VEXA_AT_REST_KEY_FILE=/run/vexa-at-rest/key
       # Unproven features (VEXA_FEATURES): identity answers `public_profiles` (by name only; `all` does not).
       - VEXA_FEATURES=${VEXA_FEATURES:-}
       # identity resolves a worker's delegation token (vxd_) in /internal/validate, so the gateway and
@@ -424,6 +455,8 @@ services:
       - VEXA_OIDC_ISSUER=${VEXA_OIDC_ISSUER:-}
       - VEXA_OIDC_CLIENT_ID=${VEXA_OIDC_CLIENT_ID:-}
       - VEXA_OIDC_CA_FILE=${VEXA_OIDC_CA_FILE:-}
+    volumes:
+      - at-rest-key:/run/vexa-at-rest:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/health').status==200 else 1)"]
       interval: 10s
@@ -436,6 +469,8 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
+      at-rest-key:
+        condition: service_completed_successfully
     networks: [vexa]
     restart: unless-stopped
 
@@ -999,6 +1034,8 @@ services:
       # by `connections-keys`. Set VEXA_BOT_ACCOUNTS_BROKER_URL= (empty) to run without them.
       - VEXA_BOT_ACCOUNTS_BROKER_URL=${VEXA_BOT_ACCOUNTS_BROKER_URL-http://credential-broker:8100}
       - VEXA_BOT_ACCOUNTS_KEY_FILE=/run/vexa-connections/bots/key
+      # MIGRATION-0015: the at-rest sealing key (the `at-rest-key` one-shot), the same file admin-api reads.
+      - VEXA_AT_REST_KEY_FILE=/run/vexa-at-rest/key
       # A company IdP the bot-account sign-in browser may also reach (e.g. adfs.bank.example).
       - VEXA_BOT_SIGNIN_EXTRA_HOSTS=${VEXA_BOT_SIGNIN_EXTRA_HOSTS:-}
       # Unproven features (VEXA_FEATURES): empty = the release default, every one off; `all` on a dev stack.
@@ -1006,6 +1043,7 @@ services:
     volumes:
       - identity-public-key:/run/vexa-identity/public:ro
       - connections-bots-key:/run/vexa-connections/bots:ro
+      - at-rest-key:/run/vexa-at-rest:ro
       - subject-ticket-meetings-key:/run/vexa-subject-ticket:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').status==200 else 1)"]
@@ -1030,6 +1068,8 @@ services:
       connections-keys:
         condition: service_completed_successfully
       subject-ticket-keys:
+        condition: service_completed_successfully
+      at-rest-key:
         condition: service_completed_successfully
     # `bots`: bots post their lifecycle callbacks and uploads here. `connections`: the credential
     # broker, which keeps bot accounts.
@@ -1878,7 +1918,7 @@ services:
       # still PRESENTED the published literal as internal-tier authority. Unset is unset (A19).
       - VEXA_INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-}
       # Mints the signed-in browser's SESSION credential (D13) at admin-api; the same value admin-api
-      # holds. Unset = sign-in falls back to an ordinary key and session-only decisions are refused.
+      # holds. mint-dev-env.sh generates it; unset, the terminal refuses to start (server.mjs).
       - VEXA_TERMINAL_SESSION_SECRET=${VEXA_TERMINAL_SESSION_SECRET:-}
       # Declared self-hosted Jitsi hostnames — served to the client link parser
       # (/api/meeting/jitsi-hosts) so pasted links on these hosts are recognized in the UI,
@@ -2090,6 +2130,35 @@ services:
     # Google and to the HTTPS services a person approved.
     networks: [connections, connections-egress]
     restart: unless-stopped
+  # The broker's state, snapshotted (credential_broker.backup): every VEXA_CONNECTIONS_BACKUP_INTERVAL_S
+  # (default 6 h) a consistent SQLite copy of metadata.sqlite and secrets.sqlite (online backup API,
+  # never a file copy of the live database) into its own volume, keeping the newest
+  # VEXA_CONNECTIONS_BACKUP_KEEP (default 28 = 7 days). ON by default: the files are ciphertext and
+  # metadata, and without a copy a damaged state volume means every person reconnects every
+  # connection. It mounts NO key — a snapshot is unreadable without connections-store-key, which you
+  # keep (and copy off-host) separately. Copy connections-backup off-host too; restore: the broker's
+  # README § Backup and restore. Off: `docker compose up -d --scale credential-broker-backup=0`.
+  credential-broker-backup:
+    # Same image as credential-broker; the build is repeated as for connections-keys.
+    build:
+      context: ../../core/agent/services/credential-broker
+      dockerfile: Dockerfile
+    image: vexaai/vexa-credential-broker:${IMAGE_TAG:-dev}
+    command: ["python", "-m", "credential_broker.backup", "--source", "/state", "--dest", "/backup",
+              "--keep", "${VEXA_CONNECTIONS_BACKUP_KEEP:-28}",
+              "--interval", "${VEXA_CONNECTIONS_BACKUP_INTERVAL_S:-21600}"]
+    volumes:
+      - connections-state:/state
+      - connections-backup:/backup
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    network_mode: none
+    depends_on:
+      credential-broker:
+        condition: service_started
+    restart: unless-stopped
   # Transcript signals (profile `signals`): a small company-chosen model listens to live meetings
   # against the listening brief the meeting's agent wrote and wakes it through the company's flow.
   # It does nothing until `_global/POLICIES.md` says `transcript_signals: on` and names a
@@ -2299,6 +2368,11 @@ volumes:
   connections-sensors-key:
   connections-signals-key:
   connections-store-key:
+  # The broker's state snapshots (credential-broker-backup). Ciphertext and metadata, no key.
+  connections-backup:
+  # MIGRATION-0015: the at-rest sealing key (admin-api and meeting-api only). Never remove it on an
+  # existing install: a new key leaves every sealed webhook secret unreadable.
+  at-rest-key:
   # gateway-identity.v1: the gateway's signing key (the gateway only) and its public half.
   identity-signing-key:
   identity-public-key:

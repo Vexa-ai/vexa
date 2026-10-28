@@ -1,13 +1,13 @@
 /** MINUTES dev seam: make sure the signed-in user HAS the meeting a door link names.
  *
  *  POST { platform, native, title? } → finds-or-creates the user's meeting row via the gateway
- *  (mints a tx-scoped token through admin-api, exactly what the mailroom does in prod). The door
+ *  (mints a 15-minute system key through admin-api, exactly what the mailroom does in prod). The door
  *  must never land on a void: whoever the invitation reached owns a view of that meeting.
  *  404 outside local-dev minutes mode, and not built at all into a production build (`route.dev.ts`,
  *  next.config.ts `pageExtensions`).
  */
 import { NextRequest, NextResponse } from "next/server";
-import { createUserToken } from "../../auth/adminApi";
+import { mintUserToken } from "../../auth/adminApi";
 import { currentUser } from "../../tokens/currentUser";
 
 const GATEWAY = process.env.VEXA_GATEWAY_PUBLIC_URL || "http://127.0.0.1:18056";
@@ -29,7 +29,9 @@ export async function POST(req: NextRequest) {
   if (!mk || !/^[a-z0-9-]+$/i.test(String(native || "")))
     return NextResponse.json({ error: "bad ref" }, { status: 400 });
 
-  const tok = await createUserToken(uid);
+  const tok = await mintUserToken(uid, {
+    scopes: ["bot", "tx"], name: "minutes-dev", expiresIn: 15 * 60, credentialClass: "system",
+  });
   if (!tok.ok) return NextResponse.json({ error: "token mint failed" }, { status: 502 });
   const key = (tok.data as { token: string }).token;
 

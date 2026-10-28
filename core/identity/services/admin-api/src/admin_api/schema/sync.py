@@ -382,6 +382,131 @@ def _bound_sign_in_credentials(conn: Connection):
                     "their cookie (created_at + 30 days)", result.rowcount)
 
 
+# MIGRATION-0013 — keys are held as their SHA-256, never as their value (`key_store.py`).
+#
+# Every row that still holds a plaintext `token` gets `token_hash` (SHA-256 of the value, hex) and
+# `token_hint` (prefix + last four), and its `token` is cleared. The key itself is unchanged: a caller
+# presents the same value, identity hashes it, and the row matches. `token` loses its NOT NULL first,
+# a catalog-only change. Idempotent: it reads only rows whose `token` is set, so a second boot finds
+# none, and a row a not-yet-upgraded writer adds in plaintext is hashed on the next one. One-way:
+# nothing can restore a value from its hash.
+def _hash_api_tokens(conn: Connection):
+    from ..key_store import hash_token, token_hint  # noqa: PLC0415 — key_store imports nothing from here
+
+    inspector = inspect(conn)
+    if "api_tokens" not in set(inspector.get_table_names()):
+        return
+    cols = {c["name"]: c for c in inspector.get_columns("api_tokens")}
+    if not {"token", "token_hash", "token_hint"} <= set(cols):
+        return
+    if conn.dialect.name == "postgresql" and not cols["token"]["nullable"]:
+        conn.execute(text('ALTER TABLE "api_tokens" ALTER COLUMN "token" DROP NOT NULL'))
+    rows = conn.execute(text("SELECT id, token FROM api_tokens WHERE token IS NOT NULL")).all()
+    if not rows:
+        return
+    conn.execute(text("UPDATE api_tokens SET token_hash = :h, token_hint = :hint, token = NULL "
+                      "WHERE id = :id"),
+                 [{"id": r[0], "h": hash_token(r[1]), "hint": token_hint(r[1])} for r in rows])
+    logger.info("schema-sync (MIGRATION-0013): %d key(s) now held as their SHA-256; plaintext cleared",
+                len(rows))
+
+
+# MIGRATION-0014 — a person sees only the keys they made; the product's own credentials end and go.
+#
+# Rows from before the `system` class are classified once more on every boot (idempotent: it reads
+# only `kind = 'key'` rows that match):
+#   * a key named for a sign-in surface (`key_store.SIGN_IN_KEY_NAMES`) AND carrying the `browser`
+#     scope every sign-in minted with is the key a cookie carried (the same guard as MIGRATION-0011);
+#   * an unnamed key with exactly the scopes flows minted (`["bot","browser","tx"]`, in that order)
+#     that lived a day or less is one flows minted for itself (15 minutes each, by default).
+# A person's own key never matches: self-serve doors refuse the sign-in names, and no self-serve
+# surface minted that unnamed, short-lived shape.
+# Each becomes `system`; one with no end gets its cookie's (`created_at` + 30 days). Then every
+# expired `session` and `system` row is deleted: nothing authenticates with it, nobody is shown it.
+# Unnamed keys with no end are NOT touched: they cannot be told apart from a key a person made, and
+# whether to retire them is the founder's call (identity PRD, "старые бессрочные ключи").
+def _classify_and_sweep_keys(conn: Connection):
+    from ..key_store import (FLOWS_MINTED_SCOPES, HIDDEN_KINDS, SIGN_IN_KEY_NAMES,  # noqa: PLC0415
+                             SYSTEM_KEY_LIFETIME_SECONDS)
+
+    if conn.dialect.name != "postgresql":
+        return
+    inspector = inspect(conn)
+    if "api_tokens" not in set(inspector.get_table_names()):
+        return
+    classified = conn.execute(text(
+        "UPDATE api_tokens SET kind = 'system', "
+        "expires_at = COALESCE(expires_at, COALESCE(created_at, now() AT TIME ZONE 'utc') "
+        "+ make_interval(secs => :life)) "
+        "WHERE kind = 'key' AND ("
+        "(lower(name) = ANY(:names) AND 'browser' = ANY(scopes)) "
+        "OR (name IS NULL AND scopes = :flows_scopes AND expires_at IS NOT NULL AND created_at IS NOT NULL "
+        "AND expires_at - created_at <= interval '1 day'))"
+    ), {"life": SYSTEM_KEY_LIFETIME_SECONDS, "names": sorted(SIGN_IN_KEY_NAMES),
+        "flows_scopes": list(FLOWS_MINTED_SCOPES)})
+    swept = conn.execute(text(
+        "DELETE FROM api_tokens WHERE kind = ANY(:kinds) AND expires_at IS NOT NULL "
+        "AND expires_at < now() AT TIME ZONE 'utc'"
+    ), {"kinds": list(HIDDEN_KINDS)})
+    if classified.rowcount or swept.rowcount:
+        logger.info("schema-sync (MIGRATION-0014): %d key(s) classified system; %d expired session/system "
+                    "credential(s) deleted", classified.rowcount, swept.rowcount)
+
+
+# MIGRATION-0015 — a webhook signing secret is stored sealed (`at_rest.py`), never as written.
+#
+# With `VEXA_AT_REST_KEY_FILE` set, every `webhook_secret` still in plaintext — on a person
+# (`users.data`) or carried on a meeting (`meetings.data`, for the post-meeting webhook) — is sealed
+# in place with AES-256-GCM. The secret itself is unchanged, so every subscriber keeps verifying
+# signatures. Idempotent: a sealed value starts `vxe1:` and is never read again. With no key, nothing
+# is touched and admin-api says so at boot.
+def _seal_webhook_secrets(conn: Connection):
+    from .. import at_rest  # noqa: PLC0415 — at_rest imports nothing from here
+
+    if conn.dialect.name != "postgresql" or not at_rest.key_configured():
+        return
+    tables = set(inspect(conn).get_table_names())
+    sealed = 0
+    for table in ("users", "meetings"):
+        if table not in tables:
+            continue
+        rows = conn.execute(text(
+            f"SELECT id, data->>'webhook_secret' FROM {table} "
+            "WHERE data ? 'webhook_secret' AND jsonb_typeof(data->'webhook_secret') = 'string' "
+            "AND data->>'webhook_secret' <> '' AND data->>'webhook_secret' NOT LIKE 'vxe1:%'"
+        )).all()
+        if not rows:
+            continue
+        conn.execute(text(
+            f"UPDATE {table} SET data = jsonb_set(data, '{{webhook_secret}}', to_jsonb(CAST(:v AS text))) "
+            "WHERE id = :id"
+        ), [{"id": r[0], "v": at_rest.seal(r[1], at_rest.WEBHOOK_SECRET_PURPOSE)} for r in rows])
+        sealed += len(rows)
+    if sealed:
+        logger.info("schema-sync (MIGRATION-0015): %d webhook secret(s) sealed at rest", sealed)
+
+
+# MIGRATION-0016 — transit keys (ADR-0051). The convergence adds `api_tokens.audience/actions` and
+# the `transit_targets` table. It registers one target, once, because keys that already exist depend
+# on it: `transcription`, with the prefixes transcription-gateway has always honoured (`tx`, `user`,
+# `admin`, and keys with no prefix), so every existing transcription key reads as a transit key on
+# it. ON CONFLICT DO NOTHING: an operator's later edit of the target is never overwritten. It has no
+# credential until the operator issues one (`POST /admin/transit-targets/transcription/secret`).
+LEGACY_TRANSCRIPTION_TARGET = {"name": "transcription", "actions": ["audio.transcribe"],
+                               "legacy_prefixes": ["tx", "user", "admin", ""],
+                               "description": "the hosted transcription API (transcription-gateway)"}
+
+
+def _register_legacy_transit_target(conn: Connection):
+    if conn.dialect.name != "postgresql" or "transit_targets" not in set(inspect(conn).get_table_names()):
+        return
+    conn.execute(text(
+        "INSERT INTO transit_targets (name, actions, legacy_prefixes, description, created_at) "
+        "VALUES (:name, :actions, :legacy_prefixes, :description, now() AT TIME ZONE 'utc') "
+        "ON CONFLICT (name) DO NOTHING"
+    ), LEGACY_TRANSCRIPTION_TARGET)
+
+
 def _sync_functions(conn: Connection):
     conn.execute(text(_MEETING_EVENT_TIME_FN))
 
@@ -416,6 +541,10 @@ def _ensure_schema_sync(conn: Connection, base, deferred: list | None = None):
     _backfill_token_scopes(conn, predate_scopes)       # MIGRATION-0004 data backfill
     _ensure_default_org(conn)                          # MIGRATION-0008 the default org row
     _bound_sign_in_credentials(conn)                   # MIGRATION-0011 sign-in credentials end
+    _hash_api_tokens(conn)                             # MIGRATION-0013 keys held as SHA-256
+    _classify_and_sweep_keys(conn)                     # MIGRATION-0014 hidden credentials end and go
+    _seal_webhook_secrets(conn)                        # MIGRATION-0015 webhook secrets sealed at rest
+    _register_legacy_transit_target(conn)              # MIGRATION-0016 existing tx keys stay valid
     _sync_indexes(conn, base, deferred)                # additive indexes (non-unique: deferred)
 
 

@@ -1321,7 +1321,9 @@ if grep -q "POSTGRES_PASSWORD: \"$good\"" <<< "$good_render"; then
 else echo "  FAIL: an explicit database.password was not rendered"; fail=1; fi
 # The rotation hook renders only on an upgrade whose live Secret holds a published value (lookup);
 # an offline render never sees one, so it renders none. Its run is proven on a live cluster.
-upgrade_render="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --is-upgrade)"
+# (an offline upgrade render cannot look up the at-rest key either, so it names one: see below)
+upgrade_render="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --is-upgrade \
+  --set atRest.existingSecret=my-at-rest)"
 if grep -qE 'name: vexa-vexa-postgres-password$' <<< "$upgrade_render"; then
   echo "  FAIL: the postgres-password hook rendered without a published live Secret"; fail=1
 else echo "  OK: no postgres-password hook without a published live Secret"; fi
@@ -1407,6 +1409,42 @@ else echo "  FAIL: flows-api ingress under the default-deny"; fail=1; fi
 broker="$(awk '/deployment-credential-broker.yaml/{f=1} f{print} f&&/^---/{exit}' <<< "$RENDER")"
 if grep -A2 'readinessProbe:' <<< "$broker" | has 'path: /ready'; then echo "  OK: the broker's readiness is /ready"
 else echo "  FAIL: the broker's readinessProbe is not /ready"; fail=1; fi
+# MIGRATION-0015: the at-rest sealing key. One generated Secret, kept across upgrades and uninstall,
+# mounted by admin-api and meeting-api (the same key) and by nothing else; atRest.existingSecret
+# replaces the generated one.
+need 1 'name: vexa-vexa-at-rest-key$' "at-rest key Secret"
+ar_holders="$(awk '/^# Source: /{src=$3} /secretName: vexa-vexa-at-rest-key$/{print src}' <<< "$RENDER" | sort -u | tr '\n' ' ')"
+ar_secret="$(awk '/Source: vexa\/templates\/secret-at-rest-key.yaml/,/^---/' <<< "$RENDER")"
+if [ "$ar_holders" = "vexa/templates/deployment-admin-api.yaml vexa/templates/deployment-meeting-api.yaml " ] \
+   && grep -q 'helm.sh/resource-policy: keep' <<< "$ar_secret" && grep -q 'at-rest.key:' <<< "$ar_secret" \
+   && [ "$(grep -c 'value: /run/vexa-at-rest/key' <<< "$RENDER")" -eq 2 ]; then
+  echo "  OK: the at-rest key is kept, and mounted by admin-api and meeting-api only"
+else echo "  FAIL: at-rest key wiring (holders: $ar_holders)"; fail=1; fi
+# An upgrade that cannot find the key must not mint a new one (every sealed secret would be lost).
+if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --is-upgrade >/dev/null 2>&1; then
+  echo "  FAIL: an upgrade with no at-rest key Secret rendered (it would generate a new key)"; fail=1
+else echo "  OK: an upgrade with no at-rest key Secret refuses to render"; fi
+if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --is-upgrade --set atRest.existingSecret=my-at-rest >/dev/null 2>&1; then
+  echo "  OK: an upgrade naming atRest.existingSecret renders"
+else echo "  FAIL: an upgrade naming atRest.existingSecret did not render"; fail=1; fi
+ARX="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set atRest.existingSecret=my-at-rest)"
+if ! grep -q 'secret-at-rest-key.yaml' <<< "$ARX" && [ "$(grep -c 'secretName: my-at-rest$' <<< "$ARX")" -eq 2 ]; then
+  echo "  OK: atRest.existingSecret replaces the generated key in both consumers"
+else echo "  FAIL: atRest.existingSecret wiring"; fail=1; fi
+# The state backup (on by default): a container beside the broker writing SQLite snapshots into its
+# OWN claim. It mounts the state and the backup claim and never the keys Secret, so no key (store.key
+# above all) reaches a snapshot. Off, nothing of it renders.
+need 1 'name: vexa-vexa-credential-broker-backup$' "broker backup PVC"
+bk="$(awk '/^        - name: state-backup$/{f=1} f&&/^          resources:/{exit} f{print}' <<< "$broker")"
+if grep -q 'credential_broker.backup' <<< "$bk" && grep -q 'mountPath: /backup' <<< "$bk" \
+   && grep -q 'mountPath: /state' <<< "$bk" && ! grep -qE 'name: keys|/run/vexa-connections|store|openbao' <<< "$bk" \
+   && grep -q 'claimName: vexa-vexa-credential-broker-backup' <<< "$broker"; then
+  echo "  OK: state-backup snapshots into its own claim and mounts no key"
+else echo "  FAIL: state-backup wiring (own claim, no key mount)"; fail=1; fi
+NOBK="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set credentialBroker.backup.enabled=false)"
+if ! grep -qE 'state-backup|credential-broker-backup|credential_broker.backup' <<< "$NOBK"; then
+  echo "  OK: backup.enabled=false renders no backup container or claim"
+else echo "  FAIL: backup.enabled=false still renders the backup"; fail=1; fi
 # Every generated secret has a way to stay put under a template-only render (GitOps): an existing
 # Secret the chart reads instead of generating.
 dbx="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set database.existingSecret=my-db)"

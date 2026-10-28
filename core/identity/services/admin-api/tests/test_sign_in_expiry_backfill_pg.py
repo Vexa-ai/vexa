@@ -3,7 +3,7 @@
 Sessions minted before sessions had a lifetime, and the `terminal-login` keys browsers were signed in
 with before sessions existed, carry `expires_at` NULL: standing credentials, though the cookie that
 carried them lived 30 days. Every admin-api boot runs the convergence, which bounds each one at
-`created_at` + 30 days (already past for an old one, so it stops validating). A self-serve key, and a
+`created_at` + 30 days (already past for an old one, which MIGRATION-0014 then deletes). A self-serve key, and a
 row that already has an end, are left exactly as they were.
 """
 from datetime import datetime, timedelta
@@ -14,6 +14,7 @@ from sqlalchemy import create_engine, text
 
 from admin_api.app import db as app_db
 from admin_api.app.main import create_app
+from admin_api.key_store import hash_token
 from admin_api.schema.models import Base
 from admin_api.schema.sync import LOGIN_LIFETIME_SECONDS, ensure_schema_sync
 from conftest import requires_docker
@@ -63,7 +64,13 @@ def _row(client, uid, token, *, kind, name, scopes, created_at, expires_at=None)
 
 
 def _expiry(client, token):
-    return _sql(client, "SELECT expires_at FROM api_tokens WHERE token = :t", t=token)[0][0]
+    return _sql(client, "SELECT expires_at FROM api_tokens WHERE token_hash = :h OR token = :t",
+                h=hash_token(token), t=token)[0][0]
+
+
+def _gone(client, token):
+    return not _sql(client, "SELECT 1 FROM api_tokens WHERE token_hash = :h OR token = :t",
+                    h=hash_token(token), t=token)
 
 
 def _validates(client, token):
@@ -90,8 +97,8 @@ def test_sign_in_credentials_with_no_end_end_with_their_cookie(client):
     _reconverge(client)                                   # every admin-api boot runs this
 
     life = timedelta(seconds=LOGIN_LIFETIME_SECONDS)
-    assert _expiry(client, "vxa_browser_old_session") == old + life
-    assert _expiry(client, "vxa_bot_old_login_key") == old + life
+    # the old ones end with their cookie, long past, so the same boot deletes them (MIGRATION-0014)
+    assert _gone(client, "vxa_browser_old_session") and _gone(client, "vxa_bot_old_login_key")
     assert _expiry(client, "vxa_browser_new_session") == recent + life
     assert _expiry(client, "vxa_bot_new_login_key") == recent + life
     # the old ones' cookies are long gone, so they no longer validate; the recent ones still do

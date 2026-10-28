@@ -11,9 +11,12 @@ from datetime import datetime, timedelta
 from typing import get_type_hints
 
 import pytest
+
+from conftest import HashedTokens
 from fastapi.testclient import TestClient
 
 from admin_api import delegation
+from admin_api.key_store import stored_fields
 from admin_api.app import validate as validate_mod
 from admin_api.app.db import get_db
 from admin_api.app.main import create_app
@@ -43,7 +46,7 @@ class _Session:
     and a user by id (for a delegation's subject)."""
 
     def __init__(self, tokens, users):
-        self._tokens, self._users = tokens, users
+        self._tokens, self._users = HashedTokens(tokens), users
         self.commits = 0
 
     async def execute(self, stmt):
@@ -64,7 +67,7 @@ def _client(monkeypatch, *, data=None, scopes=("bot",), expires_at=None):
     monkeypatch.setenv("DEV_MODE", "false")
     monkeypatch.delenv("VEXA_ADMIN_EMAILS", raising=False)
     user = User(id=42, email="ada@example.com", max_concurrent_bots=2, data=data or {})
-    tok = APIToken(token=KEY, user_id=42, scopes=list(scopes) if scopes is not None else None,
+    tok = APIToken(**stored_fields(KEY), user_id=42, scopes=list(scopes) if scopes is not None else None,
                    expires_at=expires_at)
     session = _Session({KEY: (tok, user)}, {42: user})
     app = create_app()

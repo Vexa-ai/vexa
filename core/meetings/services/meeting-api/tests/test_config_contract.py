@@ -23,6 +23,7 @@ def _admin_token(monkeypatch):
     monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", "/run/vexa-identity/public/key.pem")
     monkeypatch.setenv("RUNTIME_API_TOKEN", "runtime-caller-token-for-tests-0123456789abcdef")
     monkeypatch.setenv("DB_PASSWORD", "db-password-for-tests-0123456789abcdef")
+    monkeypatch.setenv("VEXA_AT_REST_KEY_FILE", "/run/vexa-at-rest/key")
 
 
 @pytest.fixture(autouse=True)
@@ -51,10 +52,11 @@ def test_declaration_loads_and_is_internally_consistent():
     stt_keys = {k["key"] for k in decl["keys"] if k.get("capability") == "stt"}
     assert stt_keys == {"TRANSCRIPTION_SERVICE_URL", "TRANSCRIPTION_SERVICE_TOKEN"}
     # required-explicit is exactly the A4 boot bar, gateway-identity.v1's verification key, the
-    # runtime caller credential every spawn presents, and the database password
+    # runtime caller credential every spawn presents, the database password, and the at-rest key
+    # webhook signing secrets are sealed under (MIGRATION-0015)
     required = {k["key"] for k in decl["keys"] if k["class"] == "required-explicit"}
     assert required == {"ADMIN_TOKEN", "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", "RUNTIME_API_TOKEN",
-                        "DB_PASSWORD"}
+                        "DB_PASSWORD", "VEXA_AT_REST_KEY_FILE"}
 
 
 def test_preflight_refuses_a_boot_without_a_real_database_password(monkeypatch):

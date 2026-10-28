@@ -258,7 +258,11 @@ class APIToken(Base):
     __tablename__ = "api_tokens"
 
     id = Column(Integer, primary_key=True, index=True)
-    token = Column(String(255), unique=True, index=True, nullable=False)
+    # MIGRATION-0013: a key is held as its SHA-256 (`key_store.py`). `token` is the plaintext column
+    # rows had before; the convergence hashes and clears it, so it is NULL on every converged row.
+    token = Column(String(255), unique=True, index=True, nullable=True)
+    token_hash = Column(String(64), unique=True, index=True, nullable=True)
+    token_hint = Column(String(32), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     scopes = Column(ARRAY(Text), nullable=False, server_default=text("'{}'::text[]"))
     name = Column(String(255), nullable=True)
@@ -268,8 +272,31 @@ class APIToken(Base):
     # MIGRATION-0010 (D13): the credential class. `key` — every API key, self-serve or admin-minted;
     # `session` — the terminal's signed-in browser, minted only by `POST /internal/sessions`.
     kind = Column(String(16), nullable=False, server_default=text("'key'"))
+    # MIGRATION-0016: a TRANSIT key (ADR-0051) names the one registered service it opens
+    # (`transit_targets.name`) and what it may do there. NULL on every other key. A transit key
+    # reaches no gateway route; its target asks identity (`POST /transit/validate`).
+    audience = Column(String(64), nullable=True, index=True)
+    actions = Column(ARRAY(Text), nullable=True)
 
     user = relationship("User", back_populates="api_tokens")
+
+
+class TransitTarget(Base):
+    """A service that accepts transit keys (ADR-0051, MIGRATION-0016). Registered by an operator
+    (`PUT /admin/transit-targets/{name}`), never named in code. ``secret`` is the target's own
+    credential for asking identity, sealed at rest (`at_rest.py`); it also keys the HMAC on
+    identity's answers, so the target knows an answer came from identity.
+    ``legacy_prefixes`` reads keys minted before transit keys existed as transit keys on this
+    target: a key whose ``vxa_<scope>_`` prefix names one of them (``""`` = a key with no prefix)."""
+    __tablename__ = "transit_targets"
+
+    name = Column(String(64), primary_key=True)
+    actions = Column(ARRAY(Text), nullable=False, server_default=text("'{}'::text[]"))
+    legacy_prefixes = Column(ARRAY(Text), nullable=False, server_default=text("'{}'::text[]"))
+    description = Column(Text, nullable=False, server_default="")
+    secret = Column(String(255), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    secret_rotated_at = Column(DateTime, nullable=True)
 
 
 # --------------------------------------------------------------------------- #

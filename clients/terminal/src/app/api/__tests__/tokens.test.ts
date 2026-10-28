@@ -130,6 +130,7 @@ describe("/api/tokens — self-serve, always scoped to the VALIDATED auth-cookie
     const mint = calls.find((c) => c.startsWith("POST") && c.includes("/admin/users/"));
     expect(mint).toContain("/admin/users/42/tokens");   // the token-validated user
     expect(mint).toContain("scopes=bot");
+    expect(mint).toContain("credential_class=key");   // a person's key: identity refuses a sign-in name for it
     expect(mint).toContain("name=new");
     expect(mint).toContain("expires_in=3600");
   });
@@ -138,6 +139,9 @@ describe("/api/tokens — self-serve, always scoped to the VALIDATED auth-cookie
     login();
     const calls = stubAdminApi();
     expect((await createRoute(makeReq({ scopes: ["root"] }))).status).toBe(400);
+    for (const name of ["terminal-login", "WebApp-Login", "dashboard-login"]) {
+      expect((await createRoute(makeReq({ scopes: ["bot"], name }))).status).toBe(400);   // reserved for sign-in
+    }
     expect((await createRoute(makeReq({ scopes: [] }))).status).toBe(400);
     expect(calls.some((c) => c.startsWith("POST") && c.includes("/admin/users/"))).toBe(false);
   });

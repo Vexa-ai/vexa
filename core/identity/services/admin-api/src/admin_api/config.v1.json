@@ -29,10 +29,9 @@
   },
   {
    "key": "VEXA_TERMINAL_SESSION_SECRET",
-   "class": "defaulted",
-   "default": "(unset — POST /internal/sessions answers 503 and no session credential is minted)",
+   "class": "required-explicit",
    "secret": true,
-   "description": "the terminal's own second secret for POST /internal/sessions (app/sessions.py, PRD 0.13.4 D13), the one door that mints the `session` credential class (api_tokens.kind = 'session'). Compared in constant time with the X-Terminal-Session-Secret header, beside the internal tier. INTERNAL_API_SECRET alone is shared by every service in the deployment; this one only the terminal holds, so a compromised peer cannot mint a person's session. Unset, the terminal's sign-in falls back to an ordinary key and every decision that needs a session is refused (fail closed). Set the same value on the terminal.",
+   "description": "the terminal's own second secret for POST /internal/sessions (app/sessions.py, PRD 0.13.4 D13), the one door that mints the `session` credential class (api_tokens.kind = 'session'). Compared in constant time with the X-Terminal-Session-Secret header, beside the internal tier. INTERNAL_API_SECRET alone is shared by every service in the deployment; this one only the terminal holds, so a compromised peer cannot mint a person's session. Unset or a published placeholder, admin-api refuses to boot: without it no sign-in can end in a session and every decision that needs one is refused. Every surface generates it at install (compose: mint-dev-env.sh; helm: the chart Secret; lite: entrypoint.sh). Set the same value on the terminal.",
    "forbidden_values": [
      "vexa-internal-secret",
      "lite-internal-secret",
@@ -370,6 +369,7 @@
   },
   {"key": "VEXA_FEATURES", "class": "defaulted", "default": "(empty — the release default: every switchable feature off)", "targets": ["compose", "helm", "lite"], "description": "the install's switched-on features (core/agent/control_plane/features.py rules). admin-api answers `public_profiles` only, and only when it is NAMED (`all` does not switch an explicit feature on): off, /user/profile*, /user/directory/*, /user/company-verification* and /internal/profiles/* refuse 403 `feature_disabled` (app/public_profile.py)"},
   {"key": "VEXA_DIRECTORY_READS_PER_MINUTE", "class": "defaulted", "default": "30", "targets": [], "description": "directory reads (search or one profile) one person may make a minute, per admin-api process; past it the door answers 429 (app/profile_doors.py)"},
-  {"key": "VEXA_DNS_RESOLVER", "class": "defaulted", "default": "(empty — the first nameserver in /etc/resolv.conf)", "targets": [], "description": "the DNS server the company-domain verification asks for the domain's TXT records (app/profile_doors.py)"}
+  {"key": "VEXA_DNS_RESOLVER", "class": "defaulted", "default": "(empty — the first nameserver in /etc/resolv.conf)", "targets": [], "description": "the DNS server the company-domain verification asks for the domain's TXT records (app/profile_doors.py)"},
+  {"key": "VEXA_AT_REST_KEY_FILE", "class": "required-explicit", "secret": true, "targets": ["compose", "helm", "lite"], "description": "file holding the at-rest sealing key: 64 hex characters (`openssl rand -hex 32`), mounted apart from the database, the same file in admin-api and meeting-api (at_rest.py, MIGRATION-0015). Per-user webhook signing secrets are stored AES-256-GCM sealed under it in users.data and meetings.data and in meeting-api's webhook retry queue. Never regenerate it on an existing install: values sealed under the old key can no longer be opened. Unset, or not 64 hex characters, the service refuses to boot."}
  ]
 }
