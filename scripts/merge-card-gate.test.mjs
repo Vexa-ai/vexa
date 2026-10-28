@@ -748,3 +748,151 @@ test("R2-A1, R2-A2: the comment workflow and the enforcement map say what GitHub
   const row = map.split("\n").find((l) => l.startsWith("| Merge bar — value + diff accepted"));
   assert.match(row, /commit bit/);
 });
+
+// ── RADIUS: who signs — the independent reviewer on a small radius, a maintainer on a large one ──
+
+import { REVIEWER_LOGIN, scannerVerdict, waitForScanners, radiusOf } from "./merge-card-gate.mjs";
+
+const bot = (login, body) => ({ user: { login, type: "Bot" }, body, html_url: `https://example.test/c/${login}` });
+const reviewerSays = (sha, verdict, extra = "") =>
+  bot(REVIEWER_LOGIN, [marker("architecture", sha, verdict, extra), marker("security", sha, verdict, extra), "", "Findings below."].join("\n"));
+const scan = (name, status, conclusion, started_at = "2026-10-28T10:00:00Z") => ({ name, status, conclusion, started_at });
+const GREEN = { state: "agree", why: "3 scanners green" };
+
+test("RADIUS: a reviewer pass on a small radius clears both rows, marked as the agent's", () => {
+  for (const kind of ["architecture", "security"]) {
+    const r = passRow(kind, [reviewerSays(HEAD, "pass")], { ...opts, radius: "small", scanners: GREEN });
+    assert.equal(r.ok, true, r.why);
+    assert.equal(r.state, "reviewer");
+    assert.match(r.why, /small radius/);
+  }
+  const text = renderCard({ num: 1, ok: true, valueOk: true, valueWhy: "v", diffOk: true, diffWhy: "d",
+    radius: { radius: "small", why: "CI, docs or tests only" },
+    architecture: { ok: true, state: "reviewer", why: "x" }, security: { ok: true, state: "reviewer", why: "y" } });
+  assert.match(text, /✅ agent/);
+  assert.match(text, /\| \*\*Radius\*\* \| small \|/);
+});
+
+test("RADIUS: on a large radius the reviewer's pass does not count, and the row says a maintainer must sign", () => {
+  const r = passRow("architecture", [reviewerSays(HEAD, "pass")], { ...opts, radius: "large", scanners: GREEN });
+  assert.equal(r.ok, false);
+  assert.match(r.why, /large radius — .*only a maintainer signs/);
+  // the default radius is large: a caller that forgets the radius never lets the agent sign
+  assert.equal(passRow("architecture", [reviewerSays(HEAD, "pass")], opts).ok, false);
+  // and a maintainer's pass still clears a large radius, before or after the reviewer's
+  assert.equal(passRow("architecture", [comment("maint", marker("architecture", HEAD, "pass")), reviewerSays(HEAD, "pass")], { ...opts, radius: "large" }).ok, true);
+  assert.equal(passRow("architecture", [reviewerSays(HEAD, "pass"), comment("maint", marker("architecture", HEAD, "pass"))], { ...opts, radius: "large" }).ok, true);
+});
+
+test("RADIUS: a reviewer fail blocks on any radius and routes to a maintainer; a newer maintainer pass clears it", () => {
+  for (const radius of ["small", "large"]) {
+    const r = passRow("security", [reviewerSays(HEAD, "fail", "findings=2")], { ...opts, radius, scanners: GREEN });
+    assert.equal(r.ok, false);
+    assert.equal(r.state, "fail");
+    assert.match(r.why, /routed to a maintainer/);
+    assert.match(r.why, /2 findings/);
+  }
+  // a fail after a maintainer's pass takes the pass away; the maintainer re-reads and re-signs
+  const after = [comment("maint", marker("security", HEAD, "pass")), reviewerSays(HEAD, "fail")];
+  assert.equal(passRow("security", after, { ...opts, radius: "large" }).ok, false);
+  const resigned = [...after, comment("maint", marker("security", HEAD, "pass"))];
+  assert.equal(passRow("security", resigned, { ...opts, radius: "large" }).ok, true);
+  // a later reviewer pass on the same head supersedes its own fail (small radius)
+  assert.equal(passRow("security", [reviewerSays(HEAD, "fail"), reviewerSays(HEAD, "pass")], { ...opts, radius: "small", scanners: GREEN }).ok, true);
+});
+
+test("RADIUS: a scanner red where the reviewer passed is a disagreement → maintainer; a pending scanner waits", () => {
+  const dis = passRow("security", [reviewerSays(HEAD, "pass")], { ...opts, radius: "small", scanners: { state: "disagree", why: "`analyze (python)` is red on the head" } });
+  assert.equal(dis.ok, false);
+  assert.match(dis.why, /disagreement — .*routed to a maintainer/);
+  const pend = passRow("security", [reviewerSays(HEAD, "pass")], { ...opts, radius: "small", scanners: { state: "pending", why: "`osv-scanner` has not finished on the head" } });
+  assert.equal(pend.ok, false);
+  assert.match(pend.why, /counts once every scanner agrees/);
+  // scanners never read: the pass does not count
+  assert.equal(passRow("security", [reviewerSays(HEAD, "pass")], { ...opts, radius: "small" }).ok, false);
+  // a maintainer's pass does not need the scanners (unchanged)
+  assert.equal(passRow("security", [comment("maint", marker("security", HEAD, "pass"))], { ...opts, radius: "small", scanners: { state: "disagree", why: "x" } }).ok, true);
+});
+
+test("RADIUS negative controls: only the reviewer App's own login counts — not another bot, a person, an old head, or a waiver", () => {
+  const small = { ...opts, radius: "small", scanners: GREEN };
+  // another bot posting the reviewer's markers
+  assert.equal(passRow("architecture", [bot("github-actions[bot]", marker("architecture", HEAD, "pass"))], small).ok, false);
+  // a person whose login looks like it (a User, not a Bot)
+  assert.equal(passRow("architecture", [comment(REVIEWER_LOGIN, marker("architecture", HEAD, "pass"))], small).ok, false);
+  assert.equal(passRow("architecture", [comment("vexa-reviewer", marker("architecture", HEAD, "pass"))], small).ok, false);
+  // a reviewer pass for an older head
+  assert.equal(passRow("architecture", [reviewerSays(OLD, "pass")], small).ok, false);
+  // the reviewer cannot waive, even naming a maintainer
+  const w = passRow("architecture", [reviewerSays(HEAD, "waived", "waived-by=maint")], small);
+  assert.equal(w.ok, false);
+  assert.match(w.why, /can only pass or fail/);
+  // a reviewer marker below the leading lines is not read
+  assert.equal(passRow("architecture", [bot(REVIEWER_LOGIN, `Summary\n${marker("architecture", HEAD, "pass")}`)], small).ok, false);
+});
+
+test("RADIUS: with no reviewer marker the row waits for a maintainer, and says the reviewer's pass would count", () => {
+  const r = passRow("architecture", [], { ...opts, radius: "small", scanners: GREEN });
+  assert.equal(r.ok, false);
+  assert.match(r.why, /independent reviewer's pass counts too/);
+  assert.doesNotMatch(passRow("architecture", [], opts).why, /independent reviewer/);
+});
+
+test("SCANNERS: newest run per name decides; red disagrees, unfinished is pending, skipped agrees, others ignored", () => {
+  assert.equal(scannerVerdict([]).state, "agree");
+  assert.match(scannerVerdict([]).why, /no scanner ran/);
+  assert.equal(scannerVerdict([scan("analyze (python)", "completed", "success"), scan("osv-full", "completed", "skipped"), scan("gates", "completed", "failure")]).state, "agree");
+  assert.equal(scannerVerdict([scan("analyze (python)", "completed", "failure")]).state, "disagree");
+  assert.equal(scannerVerdict([scan("GitGuardian Security Checks", "completed", "action_required")]).state, "disagree");
+  assert.equal(scannerVerdict([scan("dependency-review", "in_progress", null)]).state, "pending");
+  // a re-run that went green supersedes the old red
+  assert.equal(scannerVerdict([scan("osv-scanner", "completed", "failure", "2026-10-28T09:00:00Z"), scan("osv-scanner", "completed", "success", "2026-10-28T10:00:00Z")]).state, "agree");
+});
+
+test("SCANNERS: the wait settles on a terminal read, and a scanner that never finishes stays pending", async () => {
+  let n = 0;
+  const v = await waitForScanners(HEAD, { read: () => (n++ < 2 ? [scan("analyze (python)", "in_progress", null)] : [scan("analyze (python)", "completed", "success")]), wait: async () => {} });
+  assert.equal(v.state, "agree");
+  const stuck = await waitForScanners(HEAD, { read: () => [scan("analyze (python)", "queued", null)], wait: async () => {}, attempts: 3 });
+  assert.equal(stuck.state, "pending");
+});
+
+test("RADIUS: a file list the API cut short is large", () => {
+  assert.equal(radiusOf({ files: [{ filename: "docs/x.md" }], complete: false }).radius, "large");
+  assert.equal(radiusOf({ files: [{ filename: "docs/x.md" }], complete: true }).radius, "small");
+});
+
+// The card end to end, offline: a CI-only PR clears on the reviewer alone; a contracts PR does not;
+// a reviewer fail blocks. These are the three acceptance cases of the radius change.
+function radiusApi({ files, comments, checks = [] }) {
+  const base = fakeApi({ head: HEAD, comments });
+  return (path) => {
+    let m;
+    if ((m = path.match(/\/pulls\/\d+\/files\?per_page=100&page=(\d+)$/))) return m[1] === "1" ? files.map((filename) => ({ filename })) : [];
+    if (/\/commits\/[0-9a-f]+\/check-runs/.test(path)) return { check_runs: checks };
+    return base(path);
+  };
+}
+
+test("RADIUS end to end: CI-only PR → green on the reviewer alone", async () => {
+  const c = await gate.card(4242, { api: radiusApi({ files: [".github/workflows/terminal-layout.yml"], comments: [reviewerSays(HEAD, "pass")], checks: [scan("analyze (actions)", "completed", "success")] }), expectedHead: HEAD, readClosing: () => [] });
+  assert.equal(c.radius.radius, "small");
+  assert.equal(c.ok, true, renderCard(c));
+});
+
+test("RADIUS end to end: contracts PR → the reviewer's pass is not enough, a maintainer must sign", async () => {
+  // a contract lives under core/, a runtime prefix: value-fsm is green so only the pass rows decide
+  const checks = [scan("value-fsm", "completed", "success"), scan("analyze (python)", "completed", "success")];
+  const c = await gate.card(4242, { api: radiusApi({ files: ["core/meetings/contracts/webhook.v1/golden/Envelope.json"], comments: [reviewerSays(HEAD, "pass")], checks }), expectedHead: HEAD, readClosing: () => [] });
+  assert.equal(c.radius.radius, "large");
+  assert.equal(c.ok, false);
+  assert.match(renderCard(c), /large — contracts/);
+  const signed = await gate.card(4242, { api: radiusApi({ files: ["core/meetings/contracts/webhook.v1/golden/Envelope.json"], comments: [reviewerSays(HEAD, "pass"), passes(HEAD)], checks }), expectedHead: HEAD, readClosing: () => [] });
+  assert.equal(signed.ok, true);
+});
+
+test("RADIUS end to end: a reviewer fail blocks a small PR", async () => {
+  const c = await gate.card(4242, { api: radiusApi({ files: ["docs/x.md"], comments: [reviewerSays(HEAD, "fail", "findings=1")] }), expectedHead: HEAD, readClosing: () => [] });
+  assert.equal(c.ok, false);
+  assert.equal(c.architecture.state, "fail");
+});
