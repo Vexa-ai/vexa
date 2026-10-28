@@ -415,14 +415,19 @@ def _hash_api_tokens(conn: Connection):
 #
 # Rows from before the `system` class are classified once more on every boot (idempotent: it reads
 # only `kind = 'key'` rows that match):
-#   * a key named for a sign-in surface (`key_store.SIGN_IN_KEY_NAMES`) is the key a cookie carried;
-#   * an unnamed key that lived a day or less is one flows minted for itself (15 minutes each).
+#   * a key named for a sign-in surface (`key_store.SIGN_IN_KEY_NAMES`) AND carrying the `browser`
+#     scope every sign-in minted with is the key a cookie carried (the same guard as MIGRATION-0011);
+#   * an unnamed key with exactly the scopes flows minted (`["bot","browser","tx"]`, in that order)
+#     that lived a day or less is one flows minted for itself (15 minutes each, by default).
+# A person's own key never matches: self-serve doors refuse the sign-in names, and no self-serve
+# surface minted that unnamed, short-lived shape.
 # Each becomes `system`; one with no end gets its cookie's (`created_at` + 30 days). Then every
 # expired `session` and `system` row is deleted: nothing authenticates with it, nobody is shown it.
 # Unnamed keys with no end are NOT touched: they cannot be told apart from a key a person made, and
 # whether to retire them is the founder's call (identity PRD, "старые бессрочные ключи").
 def _classify_and_sweep_keys(conn: Connection):
-    from ..key_store import HIDDEN_KINDS, SIGN_IN_KEY_NAMES, SYSTEM_KEY_LIFETIME_SECONDS  # noqa: PLC0415
+    from ..key_store import (FLOWS_MINTED_SCOPES, HIDDEN_KINDS, SIGN_IN_KEY_NAMES,  # noqa: PLC0415
+                             SYSTEM_KEY_LIFETIME_SECONDS)
 
     if conn.dialect.name != "postgresql":
         return
@@ -433,9 +438,12 @@ def _classify_and_sweep_keys(conn: Connection):
         "UPDATE api_tokens SET kind = 'system', "
         "expires_at = COALESCE(expires_at, COALESCE(created_at, now() AT TIME ZONE 'utc') "
         "+ make_interval(secs => :life)) "
-        "WHERE kind = 'key' AND (lower(name) = ANY(:names) OR (name IS NULL AND expires_at IS NOT NULL "
-        "AND created_at IS NOT NULL AND expires_at - created_at <= interval '1 day'))"
-    ), {"life": SYSTEM_KEY_LIFETIME_SECONDS, "names": sorted(SIGN_IN_KEY_NAMES)})
+        "WHERE kind = 'key' AND ("
+        "(lower(name) = ANY(:names) AND 'browser' = ANY(scopes)) "
+        "OR (name IS NULL AND scopes = :flows_scopes AND expires_at IS NOT NULL AND created_at IS NOT NULL "
+        "AND expires_at - created_at <= interval '1 day'))"
+    ), {"life": SYSTEM_KEY_LIFETIME_SECONDS, "names": sorted(SIGN_IN_KEY_NAMES),
+        "flows_scopes": list(FLOWS_MINTED_SCOPES)})
     swept = conn.execute(text(
         "DELETE FROM api_tokens WHERE kind = ANY(:kinds) AND expires_at IS NOT NULL "
         "AND expires_at < now() AT TIME ZONE 'utc'"

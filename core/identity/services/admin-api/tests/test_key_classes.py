@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from admin_api.key_store import SYSTEM_KEY_LIFETIME_SECONDS, class_for_mint
+from admin_api.key_store import SYSTEM_KEY_LIFETIME_SECONDS, ReservedKeyName, class_for_mint
 from test_key_hashing import ADMIN, _mint, _validate, world  # noqa: F401 — the fixture is used by name
 
 
@@ -81,7 +81,17 @@ def test_a_person_key_keeps_the_lifetime_it_was_given(world):
 
 @pytest.mark.parametrize("requested,name,kind", [
     (None, None, "key"), ("key", "x", "key"), ("system", "x", "system"),
-    (None, "webapp-login", "system"), ("key", " terminal-login ", "system"), (None, "mcp-connect", "key"),
+    (None, "webapp-login", "system"), ("system", " terminal-login ", "system"), (None, "mcp-connect", "key"),
 ])
 def test_class_for_mint(requested, name, kind):
     assert class_for_mint(requested, name) == kind
+
+
+@pytest.mark.parametrize("name", ["terminal-login", " WebApp-Login ", "dashboard-login"])
+def test_a_persons_key_under_a_sign_in_name_is_refused_not_hidden(world, name):
+    client, session = world
+    with pytest.raises(ReservedKeyName):
+        class_for_mint("key", name)
+    r = _mint(client, name=name, credential_class="key")
+    assert r.status_code == 422 and "reserved" in r.text
+    assert not session.tokens

@@ -902,7 +902,10 @@ def create_app() -> FastAPI:
         now = datetime.utcnow()
         # A KEY or a SYSTEM key, never a session (D13): a session is minted only by
         # `POST /internal/sessions` (app/sessions.py). A sign-in name is always a system key.
-        kind = key_store.class_for_mint(body.credential_class or credential_class, token_name)
+        try:
+            kind = key_store.class_for_mint(body.credential_class or credential_class, token_name)
+        except key_store.ReservedKeyName as e:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
         expires_at = None
         if token_expires_in is not None and token_expires_in > 0:
             expires_at = now + timedelta(seconds=token_expires_in)

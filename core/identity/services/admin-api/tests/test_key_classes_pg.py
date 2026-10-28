@@ -87,7 +87,8 @@ def test_the_boot_hides_and_sweeps_what_the_product_minted_and_keeps_what_the_pe
     _row(c.pg_url, u, "vxa_bot_webappOldNoEnd", name="webapp-login", created_at=old)            # pre-Sep cookie key
     _row(c.pg_url, u, "vxa_bot_webappRecent", name="webapp-login", created_at=recent,
          expires_at=recent + timedelta(days=30))
-    _row(c.pg_url, u, "vxa_bot_flows15min", name=None, created_at=old, expires_at=old + timedelta(minutes=15))
+    _row(c.pg_url, u, "vxa_bot_flows15min", name=None, created_at=old, expires_at=old + timedelta(minutes=15),
+         scopes=("bot", "browser", "tx"))                                          # as flows minted it
     _row(c.pg_url, u, "vxa_bot_dashboardForever", name=None, created_at=old)                     # no end: untouched
     _row(c.pg_url, u, "vxa_bot_mcpConnect", name="mcp-connect", created_at=old)
     _row(c.pg_url, u, "vxa_bot_myExpiredKey", name="my-ci", created_at=old, expires_at=old + timedelta(days=1))
@@ -150,3 +151,21 @@ def test_sign_out_ends_a_session_and_never_a_persons_key(client):
     assert end(own).status_code == 204                   # same answer, nothing deleted
     assert _validates(c, own)
     assert end("vxa_bot_never_existed").status_code == 204
+
+
+def test_the_boot_never_reclassifies_a_persons_own_key(client):
+    """MIGRATION-0014's guards: a sign-in name counts only with the `browser` scope every sign-in
+    minted with, and an unnamed key only in the exact shape flows minted ([bot, browser, tx], a day
+    or less). A person's keys outside those shapes stay theirs, listed and working."""
+    c, u = client, client.uid
+    old = NOW - timedelta(days=80)
+    _row(c.pg_url, u, "vxa_bot_namedLikeSignInNoBrowser", name="webapp-login", created_at=old, scopes=("bot", "tx"))
+    _row(c.pg_url, u, "vxa_bot_myShortUnnamedKey", name=None, created_at=NOW - timedelta(hours=1),
+         expires_at=NOW + timedelta(hours=1), scopes=("bot", "tx"))
+    _row(c.pg_url, u, "vxa_bot_flowsShaped", name=None, created_at=old, expires_at=old + timedelta(minutes=15),
+         scopes=("bot", "browser", "tx"))
+    _converge(c.pg_url)
+    assert _kind(c.pg_url, "vxa_bot_namedLikeSignInNoBrowser") == ("key", None)
+    assert _kind(c.pg_url, "vxa_bot_myShortUnnamedKey")[0] == "key"
+    assert _kind(c.pg_url, "vxa_bot_flowsShaped") is None          # flows' leftover: classified, expired, gone
+    assert _validates(c, "vxa_bot_namedLikeSignInNoBrowser") and _validates(c, "vxa_bot_myShortUnnamedKey")

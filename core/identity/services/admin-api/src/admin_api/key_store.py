@@ -77,10 +77,28 @@ SIGN_IN_KEY_NAMES = frozenset({"terminal-login", "webapp-login", "dashboard-logi
 SYSTEM_KEY_LIFETIME_SECONDS = 60 * 60 * 24 * 30
 
 
+#: The scopes flows minted its unnamed 15-minute keys with (flows_steps/common.py `user_api_key`,
+#: before 0.13.4 removed it), in the order it sent them: MIGRATION-0014 recognises its leftovers by
+#: this exact array.
+FLOWS_MINTED_SCOPES = ("bot", "browser", "tx")
+
+
+class ReservedKeyName(ValueError):
+    """A person's key may not carry a sign-in surface's name."""
+
+
+def is_reserved_name(name: Optional[str]) -> bool:
+    return (name or "").strip().lower() in SIGN_IN_KEY_NAMES
+
+
 def class_for_mint(requested: Optional[str], name: Optional[str]) -> str:
-    """The class an admin-door mint gets: what the caller asked for, and always ``system`` for a
-    sign-in name. The admin door never mints a session."""
-    if (name or "").strip().lower() in SIGN_IN_KEY_NAMES:
+    """The class an admin-door mint gets. A sign-in name is always ``system``: a caller that names
+    no class (a sign-in surface from before the class existed) gets that, and one that asks for a
+    person's ``key`` under a sign-in name is refused (ReservedKeyName) rather than silently hidden.
+    The admin door never mints a session."""
+    if is_reserved_name(name):
+        if requested == KIND_KEY:
+            raise ReservedKeyName(f"the key name {name!r} is reserved for sign-in")
         return KIND_SYSTEM
     return KIND_SYSTEM if requested == KIND_SYSTEM else KIND_KEY
 
