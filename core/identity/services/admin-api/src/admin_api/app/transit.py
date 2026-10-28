@@ -12,8 +12,8 @@ A service that acts on a person's or customer's key (transcription-gateway today
   Keys
     POST   /admin/users/{id}/transit-keys       an operator mints one for a person
     POST   /transit/keys                        the target asks identity to mint one on itself
-    GET    /transit/keys?user_id=               the target lists a person's keys on itself (hints)
-    DELETE /transit/keys?user_id=[&key_id=]     the target revokes them
+    GET    /transit/keys?user_id=               the target lists a person's transit keys on itself
+    DELETE /transit/keys?user_id=[&key_id=]     the target revokes them (never any other key)
 
   Validation (the target)
     POST /transit/validate {token, action}      -> {answer, signature}
@@ -23,14 +23,15 @@ list with its target and actions, revoked like any other. It reaches no gateway 
 `/internal/validate` refuses it). The target authenticates with `X-Transit-Target` and
 `X-Transit-Target-Secret`; the answer is `answer` = base64url(JSON claims) and `signature` =
 hex HMAC-SHA256(target secret, "transit.v1." + answer). Claims: `aud`, `sub` (user id), `email`,
-`actions`, `key_id`, `iat`, `exp` (iat + 60 s). The target checks the signature, `aud`, `exp` and
+`actions`, `key_id`, `token_sha256` (of the key asked about), `nonce`, `iat`, `exp` (iat + 60 s). The target checks the signature, `aud`, `exp` and
 that the action it is about to perform is in `actions`.
 
 Keys minted before transit keys existed keep working under the rule their target was registered
 with: a key with no audience whose `vxa_<scope>_` prefix is one of the target's `legacy_prefixes`
 (`""` = a key with no prefix) reads as a transit key on it with all of its actions. MIGRATION-0016
 registers `transcription` with the prefixes transcription-gateway honoured (`tx`, `user`, `admin`,
-none), so every existing transcription key keeps working.
+none), so every existing transcription key keeps working. That rule only VALIDATES: a legacy key
+stays the person's (or an operator's) to list and revoke, never the target's.
 """
 from __future__ import annotations
 
@@ -47,11 +48,11 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import at_rest
-from ..key_store import KIND_KEY, stored_fields, token_matches
+from ..key_store import KIND_KEY, hash_token, stored_fields, token_matches
 from ..schema.models import APIToken, TransitTarget, User
 from ..token_scope import parse_token_scope
 from .db import get_db
@@ -78,9 +79,11 @@ def sign_answer(secret: str, claims: dict) -> dict:
     return {"answer": answer, "signature": sig}
 
 
-def verify_answer(secret: str, signed: dict, *, audience: str, action: str, now: Optional[float] = None) -> Optional[dict]:
+def verify_answer(secret: str, signed: dict, *, audience: str, action: str, now: Optional[float] = None,
+                  token: Optional[str] = None) -> Optional[dict]:
     """What a target runs on identity's answer (reference implementation; transcription-gateway
-    carries a copy). The claims when the signature, audience, expiry and action all hold."""
+    carries a copy). The claims when the signature, audience, expiry and action all hold, and, given
+    the key the target presented, when the answer is about that key."""
     answer, sig = str(signed.get("answer") or ""), str(signed.get("signature") or "")
     want = hmac.new(secret.encode(), SIGNATURE_CONTEXT + answer.encode(), hashlib.sha256).hexdigest()
     if not answer or not hmac.compare_digest(sig, want):
@@ -90,6 +93,8 @@ def verify_answer(secret: str, signed: dict, *, audience: str, action: str, now:
     except ValueError:
         return None
     if claims.get("aud") != audience or float(claims.get("exp", 0)) < (now or time.time()):
+        return None
+    if token is not None and claims.get("token_sha256") != hashlib.sha256(token.encode()).hexdigest():
         return None
     return claims if action in (claims.get("actions") or []) else None
 
@@ -189,15 +194,6 @@ def _legacy_row_matches(target: TransitTarget, token: str) -> bool:
     return (scope or "") in prefixes
 
 
-def _legacy_hint_matches(target: TransitTarget):
-    """The WHERE clause for a target's legacy keys of one person, read from their hints."""
-    clauses = []
-    for p in target.legacy_prefixes or []:
-        clauses.append(APIToken.token_hint.like(f"vxa\\_{p}\\_%", escape="\\") if p
-                       else ~APIToken.token_hint.like("vxa\\_%", escape="\\"))
-    return or_(*clauses) if clauses else None
-
-
 def build_router(verify_admin_token) -> APIRouter:
     router = APIRouter()
     admin = [Depends(verify_admin_token)]
@@ -252,11 +248,10 @@ def build_router(verify_admin_token) -> APIRouter:
         return await _mint(db, user, target, actions=body.actions, name=body.name, expires_in=body.expires_in)
 
     def _on_target(target: TransitTarget, user_id: int):
-        mine = APIToken.audience == target.name
-        legacy = _legacy_hint_matches(target)
-        if legacy is not None:
-            mine = or_(mine, APIToken.audience.is_(None) & (APIToken.kind == KIND_KEY) & legacy)
-        return (APIToken.user_id == user_id) & mine
+        """A person's transit keys ON THIS TARGET, and nothing else: a target never sees, lists or
+        revokes a person's general keys, legacy ones included (those are the person's or an
+        operator's to manage)."""
+        return (APIToken.user_id == user_id) & (APIToken.audience == target.name)
 
     @router.get("/transit/keys", include_in_schema=False)
     async def list_on_target(user_id: int = Query(..., ge=1), target: TransitTarget = Depends(authenticated_target),
@@ -288,6 +283,9 @@ def build_router(verify_admin_token) -> APIRouter:
         if row is None:
             raise refused
         tok, user = row
+        from . import principals as principals_mod  # noqa: PLC0415
+        if principals_mod.is_principal_account(user):
+            raise refused   # a workspace principal holds no key (D2), so none opens a target
         if tok.expires_at is not None and tok.expires_at < datetime.utcnow():
             raise refused
         if tok.audience is not None:
@@ -301,7 +299,6 @@ def build_router(verify_admin_token) -> APIRouter:
         if body.action not in actions:
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail=f"this key may not {body.action!r}")
         from .validate import _stamp_last_used  # noqa: PLC0415
-        await hash_in_place(db, tok, body.token)
         await _stamp_last_used(db, tok)
         secret = at_rest.unseal(target.secret, SECRET_PURPOSE)   # opened above to authenticate
         now = int(time.time())

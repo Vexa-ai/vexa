@@ -139,22 +139,37 @@ def test_a_second_registered_target_is_separate(c):
                   json={"audience": "summaries", "actions": ["audio.transcribe"]}).status_code == 422
 
 
-def test_the_target_mints_lists_and_revokes_through_identity(c):
+def test_the_target_mints_lists_and_revokes_only_its_own_transit_keys(c):
     secret = _secret(c)
     h = _target_headers("transcription", secret)
     minted = c.post("/transit/keys", headers=h, json={"user_id": c.uid, "name": "api"})
     assert minted.status_code == 201, minted.text
+    assert minted.json()["audience"] == "transcription"                 # never a general key
     listed = c.get("/transit/keys", headers=h, params={"user_id": c.uid}).json()
-    assert sorted(k["token_hint"] for k in listed) == sorted(
-        [f"vxt_transcription_…{minted.json()['token'][-4:]}", "vxa_tx_…0001", "…6789"])
-    assert all(not k["token_hint"].startswith("vxa_bot_") for k in listed)       # not the target's
+    # its own transit key only: neither the person's legacy keys nor their gateway key
+    assert [k["token_hint"] for k in listed] == [f"vxt_transcription_…{minted.json()['token'][-4:]}"]
     gone = c.delete("/transit/keys", headers=h, params={"user_id": c.uid}).json()["revoked"]
-    assert gone == len(listed)
-    assert _validate(c, "transcription", secret, LEGACY_TX).status_code == 401
+    assert gone == 1
+    # the person's legacy transcription key still opens the target, and their gateway key the gateway
+    assert _validate(c, "transcription", secret, LEGACY_TX).status_code == 200
     assert c.post("/internal/validate", json={"token": BOT_KEY},
-                  headers={"X-Internal-Secret": INTERNAL_SECRET}).status_code == 200   # the gateway key stays
+                  headers={"X-Internal-Secret": INTERNAL_SECRET}).status_code == 200
+    # nor can a key id of a general key be revoked through the target
+    general_id = [k["id"] for k in c.get(f"/admin/users/{c.uid}/tokens", headers=_admin()).json()][0]
+    assert c.delete("/transit/keys", headers=h,
+                    params={"user_id": c.uid, "key_id": general_id}).json()["revoked"] == 0
     assert c.post("/transit/keys", headers=_target_headers("transcription", "wrong"),
                   json={"user_id": c.uid}).status_code == 401
+
+
+def test_the_answer_is_bound_to_the_key_asked_about(c):
+    secret = _secret(c)
+    r = _validate(c, "transcription", secret, LEGACY_TX).json()
+    assert verify_answer(secret, r, audience="transcription", action="audio.transcribe", token=LEGACY_TX)
+    assert verify_answer(secret, r, audience="transcription", action="audio.transcribe",
+                         token="vxa_tx_another_key") is None
+    r2 = _validate(c, "transcription", secret, LEGACY_TX).json()
+    assert r2["answer"] != r["answer"]                                   # a nonce: never the same answer
 
 
 def test_an_issued_credential_retires_the_previous_one(c):
