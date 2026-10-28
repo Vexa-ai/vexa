@@ -890,7 +890,7 @@ function gateAccess() {
   for (const d of pkgs) {
     const fs = accessFiles(d);
     files += fs.length;
-    try { execSync(`uv run pytest -q ${fs.join(" ")}`, { cwd: d, stdio: "pipe" }); }
+    try { execFileSync("uv", ["run", "pytest", "-q", ...fs], { cwd: d, stdio: "pipe" }); }
     catch (e) { return fail([`access ${rel(d)}:\n${errText(e).slice(-1500)}`]); }
   }
   console.log(`  ✓ gate:access — ${files} access deny-test file(s) in ${pkgs.length} package(s) green (default-deny, P20)`);

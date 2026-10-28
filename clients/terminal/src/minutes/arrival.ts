@@ -123,7 +123,7 @@ export function useScaffoldArrival(on: {
       void (async () => {
         const got = await resolveArrival(id);
         if (!got.ok) {
-          console.error("scaffold " + id + " did not open:", got.refusal.reason, got.refusal.detail);
+          console.error("scaffold %s did not open:", id, got.refusal.reason, got.refusal.detail);
           handlers.current.onRefuse(got.refusal);
           return;
         }

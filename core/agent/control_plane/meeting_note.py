@@ -42,6 +42,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
+from control_plane.path_confine import within
 from workspaces.shared import workspace_paths as wpaths
 
 #: Where a meeting's record lives on a desk, relative to that desk's root. The directory is the
@@ -289,7 +290,10 @@ def note_places(workspaces_root, subject: str) -> list[dict]:
     report vanished from the meeting): read-only, never a home, so a report written there before is
     still shown and nothing new is written into a workspace the person took away."""
     root = Path(workspaces_root)
-    desk = root / str(subject)
+    try:
+        desk = within(root, str(subject), ValueError("invalid subject"))
+    except ValueError:
+        return []
     try:
         from control_plane.workspace_attach import active_workspaces, desk_hidden  # noqa: PLC0415
         mounts = list(active_workspaces(root, str(subject)))

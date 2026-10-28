@@ -11,3 +11,8 @@ reason = "sprintf-js 1.1.3, DoS through an unbounded precision specifier; no fix
 id = "GHSA-238p-pmpm-9mq7"
 ignoreUntil = 2026-12-31
 reason = "katex 0.16.47 (LOW): a trust bypass that needs prototype pollution to exist already. Reached through mermaid in the terminal's diagram rendering; the fix is in 0.18.2, outside mermaid 11's ^0.16 range, so it waits for mermaid."
+
+[[IgnoredVulns]]
+id = "GHSA-gcqx-w48m-w2h4"
+ignoreUntil = 2026-12-31
+reason = "deepmerge 4.3.1, prototype poisoning in mergeObject(); no fixed release exists. Reached only through puppeteer-extra-plugin-user-preferences <- puppeteer-extra-plugin-stealth in the join and remote-browser bots, which merges the stealth plugins' own fixed Chrome preferences; Vexa passes no userPrefs, so no request data reaches it."

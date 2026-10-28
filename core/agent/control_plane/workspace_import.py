@@ -17,6 +17,7 @@ from typing import Callable
 
 from fastapi import HTTPException
 
+from control_plane.path_confine import within
 from control_plane.repo_ref import normalize
 from control_plane.workspace_attach import _safe_subject_dir
 from shared import git_provider
@@ -30,7 +31,7 @@ def _now() -> str:
 
 def _store(root: str | Path, subject: str) -> Path:
     _safe_subject_dir(Path(root), subject)
-    path = Path(root) / '.imports' / subject
+    path = within(root, f'.imports/{subject}', ValueError('invalid subject'))
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     return path
 
@@ -68,7 +69,7 @@ def status(root: str | Path, subject: str, operation_id: str) -> dict:
     if not re.fullmatch(r'[a-f0-9]{32}', operation_id):
         raise HTTPException(404, 'Unknown import operation')
     store = _store(root, subject)
-    path = store / f'{operation_id}.json'
+    path = within(store, f'{operation_id}.json', HTTPException(404, 'Unknown import operation'))
     if not path.exists():
         raise HTTPException(404, 'Unknown import operation')
     result = json.loads(path.read_text())

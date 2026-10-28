@@ -1197,7 +1197,7 @@ dashboard:
 # networks that block the range. Secret: secrets.livekitApiSecret (generated when empty).
 livekit:
   enabled: false
-  image: livekit/livekit-server:v1.13.7@sha256:6fd3b7088874c4d119160dd688798dfec852bc014786d392caad15f6f63912a3
+  image: livekit/livekit-server:v1.13.11@sha256:25cd902de7cacbd5f1f779f6a6ac1eae20ba8f56b0935934ce6b0ab80d1e3d20
   # The public signalling address browsers join (wss://calls.example.com). Required when enabled.
   url: ""
   apiKey: vexa

@@ -140,10 +140,18 @@ export function isBlockedIp(addr: string | Addr): boolean {
   return (a.n >> 120n) === 0n && carried.length === 0;
 }
 
+/** `s` trimmed and without its trailing dots, by a scan: a regex here backtracks on a long run of dots. */
+function withoutTrailingDots(s: string): string {
+  const t = (s || '').trim();
+  let end = t.length;
+  while (end > 0 && t[end - 1] === '.') end--;
+  return t.slice(0, end);
+}
+
 /** True for a name that can only name this deployment: localhost (and *.localhost), a cloud
  *  metadata name, or a single label. */
 export function isBlockedHostname(hostname: string): boolean {
-  const host = (hostname || '').trim().replace(/\.+$/, '').toLowerCase();
+  const host = withoutTrailingDots(hostname).toLowerCase();
   if (!host) return true;
   if (BLOCKED_HOSTNAMES.has(host) || host.endsWith('.localhost')) return true;
   return !host.includes('.') && literalAddress(host) === null;
@@ -215,7 +223,7 @@ export function parseAllowance(entries: readonly string[] | string, what = 'allo
 
 /** Whether the allowance names `host` exactly. */
 export function allowanceAdmitsHost(allow: OperatorAllowance | null | undefined, host: string): boolean {
-  return !!allow && allow.hosts.has((host || '').trim().replace(/\.+$/, '').toLowerCase());
+  return !!allow && allow.hosts.has(withoutTrailingDots(host).toLowerCase());
 }
 
 /** May a connection to `addr` (reached through `host`, when one was named) go ahead under `allow`? */

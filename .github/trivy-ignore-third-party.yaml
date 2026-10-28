@@ -641,3 +641,153 @@ vulnerabilities:
       - "pkg:pypi/tornado@6.5.8"
     statement: "litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
     expired_at: 2026-12-31
+  - id: GHSA-6q48-6c7w-9gw2
+    purls:
+      - "pkg:pypi/certifi@2024.8.30"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-112393
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-112398
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-112403
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-112900
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-112390
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-112392
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-112397
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-112399
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-112400
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-112402
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-112404
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-112406
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-112892
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-112893
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-112894
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-112895
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-112896
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-112897
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-112902
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-96637
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-96640
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-96642
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-96644
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-96778
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-111943
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input and makes no TLS connection, so the crypto/x509 path is not reached. It clears when Docker rebuilds gosu with a newer Go (the 2026-10-26 17-alpine build still carries it), and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2026-112940
+    purls:
+      - "pkg:pypi/filelock@3.29.0"
+    statement: "litellm/litellm v1.103.9 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). filelock inside LiteLLM's own image; every release scanned on 2026-10-27 (v1.103.9, v1.104.7, v1.105.5, v1.106.4) carries it and the fix is a filelock major. v1.104 and later refuse to start without a master key, which this stateless shim deliberately does not set."
+    expired_at: 2026-12-31
+  - id: CVE-2026-116588
+    purls:
+      - "pkg:pypi/ddtrace@4.11.0"
+    statement: "litellm/litellm v1.103.9 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). ddtrace inside LiteLLM's own image is imported only when USE_DDTRACE is true, which the shim never sets; every release scanned on 2026-10-28 (v1.103.10, v1.104.8, v1.105.6, v1.106.5) carries the same ddtrace."
+    expired_at: 2026-12-31
+  - id: CVE-2026-116589
+    purls:
+      - "pkg:pypi/ddtrace@4.11.0"
+    statement: "litellm/litellm v1.103.9 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). ddtrace's IAST instrumentation inside LiteLLM's own image loads only when USE_DDTRACE is true, which the shim never sets; every release scanned on 2026-10-28 (v1.103.10, v1.104.8, v1.105.6, v1.106.5) carries the same ddtrace."
+    expired_at: 2026-12-31
+  - id: CVE-2026-114605
+    purls:
+      - "pkg:pypi/dnspython@2.8.0"
+    statement: "litellm/litellm v1.103.9 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). dnspython is required only by email_validator and psycopg inside LiteLLM's image; the shim is stateless with no database or user sign-up, and its HTTP clients resolve through the system resolver. Every release scanned on 2026-10-28 (v1.103.10, v1.104.8, v1.105.6, v1.106.5) carries it."
+    expired_at: 2026-12-31

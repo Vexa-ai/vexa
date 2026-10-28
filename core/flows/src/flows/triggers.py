@@ -63,7 +63,7 @@ def glob_matches(pattern: str, event_type: str) -> bool:
 
 # ── filters ──────────────────────────────────────────────────────────────────────────────────────
 
-_TOKEN = re.compile(r"""\s*(?:
+_TOKEN = re.compile(r"""(?:
     (?P<str>'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")
   | (?P<num>-?\d+(?:\.\d+)?)
   | (?P<op>==|!=|\(|\)|\[|\]|,)
@@ -75,8 +75,10 @@ _KEYWORDS = {"and", "or", "not", "in", "exists", "contains", "true", "false", "n
 def _tokens(text: str) -> list:
     out, i = [], 0
     text = str(text or "")
-    while i < len(text):
-        if text[i:].strip() == "":
+    while True:
+        while i < len(text) and text[i].isspace():
+            i += 1
+        if i >= len(text):
             break
         m = _TOKEN.match(text, i)
         if not m or m.end() == i:
@@ -249,7 +251,7 @@ def passes(filter_text: str, event_type: str, refs: dict) -> bool:
 
 # ── relative times ───────────────────────────────────────────────────────────────────────────────
 
-_AT = re.compile(r"^\s*(?P<path>[A-Za-z_][A-Za-z0-9_.]*)\s*(?:(?P<sign>[+-])\s*(?P<n>\d+)\s*(?P<unit>[smhd]))?\s*$")
+_AT = re.compile(r"^(?P<path>[A-Za-z_][A-Za-z0-9_.]*)(?:\s*(?P<sign>[+-])\s*(?P<n>\d+)\s*(?P<unit>[smhd]))?$")
 _UNIT = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 #: The largest offset a relative time may carry: a bot a week early is not a bot for this meeting.
 MAX_OFFSET_S = 7 * 86400
@@ -257,7 +259,7 @@ MAX_OFFSET_S = 7 * 86400
 
 def parse_at(text: str) -> tuple:
     """`payload.start - 60s` → ("payload.start", -60). Raises :class:`TriggerError`."""
-    m = _AT.match(str(text or ""))
+    m = _AT.match(str(text or "").strip())
     if not m:
         raise TriggerError("a relative time is a path plus or minus a duration, e.g. payload.start - 60s")
     off = 0
