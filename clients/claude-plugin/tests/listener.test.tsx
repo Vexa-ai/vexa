@@ -22,7 +22,7 @@ async function sendBot($: any): Promise<void> {
   await $.tool.call({ tool: 'mcp__plugin_vexa_vexa__request_meeting_bot', meeting_url: 'https://meet.google.com/abc-defg-hij' } as any)
 }
 
-function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<string, string> = {}, live?: (() => unknown[]) | 'strict', triage = 'YES check the annual plan'): Seen {
+function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<string, string> = {}, live?: (() => unknown[]) | 'strict', triage = 'DECIDED check the annual plan'): Seen {
   const seen: Seen = { args: [], tools: [], model: [], prompts: [], written: {}, annotations: [], maps: [], upserts: [], logs: [], triage: [], pages: [] }
   on('ui.log', (_: unknown, e: any) => { seen.logs.push(String(e.text ?? e)); return { value: undefined } })
   for (const k of Object.keys(meta)) delete meta[k]
@@ -76,7 +76,7 @@ function engine(on: any, segments: () => unknown[], decision = 'S', fs: Record<s
         open_questions: ['Who is Zed?'], readme: '# Acme renewal\nAnn Lee ([[Acme]]) agreed the annual plan at 38k.',
       }), usage: { inputTokens: 900, outputTokens: 300 } } }
     }
-    if (sys.includes('deserves the attention')) {
+    if (sys.includes('You sort one signal')) {
       seen.triage.push(String(e.prompt))
       return { value: { isAnswered: true, text: triage, usage: { inputTokens: 200, outputTokens: 10 } } }
     }

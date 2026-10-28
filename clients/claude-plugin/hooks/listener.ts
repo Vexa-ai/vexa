@@ -269,14 +269,30 @@ export function renderMap(title: string, d: CallMap): string {
 
 // Signal triage: a non-direct wake goes to a mid model first, which decides whether it deserves
 // the person's attention now; only a yes reaches the main chat, as one line.
-export const TRIAGE_SYSTEM = 'You decide whether a signal from a live meeting deserves the attention of the person your '
-  + 'assistant works for RIGHT NOW. You get the trigger, the recent lines and the listen rules. Reply with exactly one line: '
-  + '"YES <one short sentence saying what to look at>" or "NO". Default to NO for chatter, repetition and things that can wait '
-  + 'for the call report.'
+export const TRIAGE_SYSTEM = 'You sort one signal from a live meeting the person\'s assistant is listening to. You get the trigger, '
+  + 'the recent lines (speech-recognition output: fragments and misheard words are common) and the listen rules. Reply with '
+  + 'exactly one line that starts with one of these words:\n'
+  + 'ASKED: someone in the call speaks to the assistant (Claude, Vexa) or asks it to do something.\n'
+  + 'DECIDED: the people in the call settle something: a decision, or a commitment of who does what, an agreed price or '
+  + 'date. Said plainly, not guessed from a fragment.\n'
+  + 'NEW: a named person, company, or a concrete number (price, amount, date, count) appears that belongs on the meeting '
+  + 'page as a fact about the people in the call or their business. A product, tool or technology mentioned in passing is not NEW.\n'
+  + 'QUESTION: someone in the call asks something only the person\'s own chat can answer now (their notes, docs, data), '
+  + 'and is waiting for it.\n'
+  + 'PAGE: anything else worth a line in the meeting notes: a topic, an opinion, an idea, news, a problem described, a '
+  + 'plan being discussed.\n'
+  + 'NO: chatter, fragments, repetition, recognition errors, anything unclear.\n'
+  + 'After ASKED, DECIDED, NEW or QUESTION add one short sentence saying what to look at. When unsure between a word and '
+  + 'PAGE or NO, choose PAGE or NO.'
 
-export function parseTriage(text: string): { yes: boolean; line: string } {
-  const t = text.trim()
-  return /^yes\b/i.test(t) ? { yes: true, line: t.replace(/^yes\b[\s:,-]*/i, '').split('\n')[0]!.slice(0, 200) } : { yes: false, line: '' }
+// The triage's sort: ASKED, DECIDED, NEW and QUESTION reach the chat; PAGE goes onto the meeting page's
+// «In this call» with the next update; NO, and an answer that names none of them, is dropped.
+export type TriageKind = 'asked' | 'decided' | 'new' | 'question' | 'page' | 'no'
+export const TRIAGE_TO_CHAT: readonly TriageKind[] = ['asked', 'decided', 'new', 'question']
+export function parseTriage(text: string): { kind: TriageKind; line: string } {
+  const m = /^\s*\**\s*(ASKED|DECIDED|NEW|QUESTION|PAGE|NO)\b[\s:,.*-]*(.*)/i.exec(text)
+  if (!m) return { kind: 'no', line: '' }
+  return { kind: m[1]!.toLowerCase() as TriageKind, line: m[2]!.split('\n')[0]!.trim().slice(0, 200) }
 }
 
 // Which model each listener job uses; the person changes them from chat.

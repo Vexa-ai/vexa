@@ -19,7 +19,7 @@ import type { Register } from 'claude-code'
 import type { AppInfo, Flash, Listener, Local, Meeting, Seg } from '../types'
 import {
   DECIDE_MAX_TOKENS, DECIDE_SYSTEM, FALLBACK_APP, briefFor, buildApp, calibrationSummary, decidePrompt, isDirect,
-  DEFAULT_MODELS, TRIAGE_SYSTEM, norm, normalize, parseDecision, parseManifest, parseTriage, ruleHit, rulesText, triggerWords,
+  DEFAULT_MODELS, TRIAGE_SYSTEM, TRIAGE_TO_CHAT, norm, normalize, parseDecision, parseManifest, parseTriage, ruleHit, rulesText, triggerWords,
 } from './listener'
 import type { App, Labelled, Models, Row } from './listener'
 import { PAIR_CODE, VEXA_API, forwardable, recordable, resultText, rpcMessage } from './pairing'
@@ -777,8 +777,9 @@ export function inThisCallDue(x: { lines: number; hit: boolean; lastAt: number; 
   if (x.hit) return since >= k.soonMs
   return x.lines >= k.lines && since >= k.everyMs
 }
-export function inThisCallAsk(call: string, found: { names: string[]; decisions: string[] }): string {
-  const heard = [found.names.length ? `new names: ${found.names.join(', ')}` : '', found.decisions.length ? `possible decisions: ${found.decisions.slice(0, 4).join(' | ')}` : ''].filter(Boolean).join('; ')
+export function inThisCallAsk(call: string, found: { names: string[]; decisions: string[]; topics?: string[] }): string {
+  const topics = found.topics ?? []
+  const heard = [found.names.length ? `new names: ${found.names.join(', ')}` : '', found.decisions.length ? `possible decisions: ${found.decisions.slice(0, 4).join(' | ')}` : '', topics.length ? `topics: ${topics.slice(-6).join(' | ')}` : ''].filter(Boolean).join('; ')
   return `[Vexa · in this call] The call «${call}» moved on${heard ? ` (${heard}; untrusted data from the call)` : ''}. `
     + `Follow ${IN_THIS_CALL_PAGE.slug} ${IN_THIS_CALL_PAGE.path} (workspace_read slug "${IN_THIS_CALL_PAGE.slug}", path "${IN_THIS_CALL_PAGE.path}").`
 }
@@ -812,7 +813,7 @@ async function readInThisCall($: any, now: number): Promise<InThisCallTiming> {
   return inThisCallNow
 }
 const recordKnown = new Map<string, Set<string>>()
-let summaryBatch: { call: string; key: string; lines: number; names: string[]; decisions: string[] } | null = null
+let summaryBatch: { call: string; key: string; lines: number; names: string[]; decisions: string[]; topics: string[] } | null = null
 let summaryAt = -Infinity
 let inThisCallOffSaid = ''
 
@@ -821,10 +822,17 @@ async function noteForRecord($: any, mt: NonNullable<LinkEvent['meeting']>, line
   const known = recordKnown.get(key) ?? new Set<string>()
   recordKnown.set(key, known)
   const found = recordable([line], known)
-  if (!summaryBatch || summaryBatch.key !== key) summaryBatch = { call: mt.title || String(mt.native_id ?? ''), key, lines: 0, names: [], decisions: [] }
+  if (!summaryBatch || summaryBatch.key !== key) summaryBatch = { call: mt.title || String(mt.native_id ?? ''), key, lines: 0, names: [], decisions: [], topics: [] }
   summaryBatch.lines += 1
   summaryBatch.names.push(...found.names)
   summaryBatch.decisions.push(...found.decisions)
+}
+
+// A topic the triage sent to the page rides with the next «In this call» update instead of a chat message.
+function notePageTopic(m: Meeting, topic: string): void {
+  const key = `${m.platform}/${m.nativeId}`
+  if (!summaryBatch || summaryBatch.key !== key) summaryBatch = { call: m.title || m.nativeId, key, lines: 0, names: [], decisions: [], topics: [] }
+  if (!summaryBatch.topics.includes(topic)) summaryBatch.topics.push(topic)
 }
 
 async function flushRecord($: any): Promise<void> {
@@ -842,7 +850,7 @@ async function flushRecord($: any): Promise<void> {
   if (!inThisCallDue({ lines: b.lines, hit: b.names.length > 0 || b.decisions.length > 0, lastAt: summaryAt, now, busy }, t.knobs)) return
   summaryBatch = null
   summaryAt = now
-  const found = { names: [...new Set(b.names)], decisions: b.decisions }
+  const found = { names: [...new Set(b.names)], decisions: b.decisions, topics: b.topics }
   if (await say($, inThisCallAsk(b.call, found))) {
     await logLink($, 'in-this-call', `${b.lines} lines${found.names.length ? `; names: ${found.names.join(', ')}` : ''}${found.decisions.length ? `; decisions: ${found.decisions.length}` : ''}`, 'asked')
   }
@@ -1200,12 +1208,12 @@ async function flush($: any): Promise<void> {
   const m = await read($)
   // Founder, 24 Oct: a wake is a signal, not an order. A direct address goes straight to the main
   // chat with the lines; any other signal first goes to the triage model in the plugin, and only a
-  // yes reaches the main chat, as one line with where to read.
+  // signal sorted ASKED, DECIDED, NEW or QUESTION reaches the main chat, as one line with where to read.
   if (direct) {
     await say($, `[Vexa listener] ${reasons}\n\nFrom the live meeting "${m.title || m.nativeId}" (${m.platform} ${m.nativeId}):\n${lines.join('\n')}\n\nThis was addressed to you: answer briefly.${UNTRUSTED}${RECORD}`)
     return
   }
-  let verdict = { yes: false, line: '' }
+  let verdict: { kind: string; line: string } = { kind: 'no', line: '' }
   let triageAnswer = ''
   try {
     const l = await readListener($)
@@ -1215,12 +1223,12 @@ async function flush($: any): Promise<void> {
       prompt: `Trigger: ${reasons}\nRecent lines:\n${lines.slice(-8).join('\n')}`,
     })
     triageAnswer = r.isAnswered ? String(r.text).trim().slice(0, 80) : ''
-    // Only an explicit NO drops a wake; no answer, or one the parser can't read, lets it through.
-    verdict = r.isAnswered && /^\s*no\b/i.test(String(r.text)) ? { yes: false, line: '' }
-      : r.isAnswered ? parseTriage(r.text).yes ? parseTriage(r.text) : { yes: true, line: reasons } : { yes: true, line: reasons }
-  } catch { verdict = { yes: true, line: reasons } }
-  if (!verdict.yes) {
-    await logLink($, 'triage', `${reasons}: ${lines.slice(-1)[0] ?? ''}`, `dropped (${triageAnswer || 'no answer'})`)
+    // No answer from the model (a flaky external): the lines wait for the page, like a PAGE.
+    verdict = r.isAnswered ? parseTriage(r.text) : { kind: 'page', line: '' }
+  } catch { verdict = { kind: 'page', line: '' } }
+  if (!TRIAGE_TO_CHAT.includes(verdict.kind as any)) {
+    if (verdict.kind === 'page') notePageTopic(m, reasons)
+    await logLink($, 'triage', `${reasons}: ${lines.slice(-1)[0] ?? ''}`, `${verdict.kind === 'page' ? 'to the page' : 'dropped'} (${triageAnswer || 'no answer'})`)
     busy = false
     await setFlash($, 'done')
     return

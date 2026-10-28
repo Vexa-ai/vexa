@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { TRIAGE_TO_CHAT, parseTriage } from '../hooks/listener'
 
 import { AFTER_CALL_PAGE, afterCallAsk, inThisCallAsk, inThisCallDue, inThisCallKnobs, inThisCallTiming, bandState, fromPerson, heardLine, panelShownHere, signalIndex, pickOwner, runsListener, withChat, FOLLOW_UP_CONTEXT, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, PERSON_CONTEXT, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
 
@@ -446,4 +447,13 @@ test("a signal points at get_meeting_transcript only with the lines' own place t
   expect(signalIndex([s('a', 438), s('b')])).toBe(null)
   expect(signalIndex([s('262:440')])).toBe(null)
   expect(signalIndex([])).toBe(null)
+})
+
+test('the triage sorts a signal: asked, decided, new and question reach the chat; page and no stay out', () => {
+  expect(parseTriage('DECIDED: Renzo sends the PR by Friday.')).toEqual({ kind: 'decided', line: 'Renzo sends the PR by Friday.' })
+  expect(parseTriage('NEW Priya Shah runs platform at Acme Robotics')).toEqual({ kind: 'new', line: 'Priya Shah runs platform at Acme Robotics' })
+  expect(parseTriage('PAGE')).toEqual({ kind: 'page', line: '' })
+  expect(parseTriage('YES check it')).toEqual({ kind: 'no', line: '' })
+  expect(TRIAGE_TO_CHAT).toEqual(['asked', 'decided', 'new', 'question'])
+  expect(inThisCallAsk('x', { names: [], decisions: [], topics: ['software factory'] })).toContain('topics: software factory')
 })
