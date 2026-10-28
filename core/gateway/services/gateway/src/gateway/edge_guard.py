@@ -378,12 +378,13 @@ def build_guard_config() -> SecurityConfig:
         # requires enable_ip_banning). ONE knob governs BOTH paths: the HTTP pipeline's
         # RateLimitCheck AND the WS connect primitive (check_rate_limit_by_ip) read it,
         # which is the point of the consolidation - the hand-rolled WS auto-ban this
-        # replaces had no HTTP counterpart. Default ON to preserve the WS auto-ban the
-        # hand-rolled guard shipped with; the HTTP path newly gains the same protection
-        # (the documented expansion). Default off in guard-core itself; flip
-        # GUARD_AUTO_BAN_RATE_LIMIT=false to disable both. See audit 5.5: without this,
-        # auto_ban_threshold / auto_ban_duration were dead config on the rate-limit path.
-        enable_rate_limit_auto_ban=_env_bool("GUARD_AUTO_BAN_RATE_LIMIT", True),
+        # replaces had no HTTP counterpart. Default OFF, as in guard-core and as the old WS
+        # auto-ban was: the violation counter has no window (THRESHOLD over-limit events in a
+        # process lifetime ban an IP for DURATION), and every caller behind one IP - the
+        # terminal proxy, MCP, an ingress with GUARD_TRUSTED_PROXIES empty - shares that ban.
+        # Set GUARD_AUTO_BAN_RATE_LIMIT=true to enable both paths. See audit 5.5: without
+        # this, auto_ban_threshold / auto_ban_duration were dead config on the rate-limit path.
+        enable_rate_limit_auto_ban=_env_bool("GUARD_AUTO_BAN_RATE_LIMIT", False),
         auto_ban_threshold=_env_int(
             "GUARD_AUTO_BAN_THRESHOLD", _GUARD_AUTO_BAN_THRESHOLD_DEFAULT
         ),
@@ -406,7 +407,10 @@ def build_guard_config() -> SecurityConfig:
         # the limiter honor it, and the default (False) under fail_secure=False would skip
         # the rate limit entirely for every request until Redis is back. The pin
         # (guard-core>=4.4) is past that boundary, so the flag is load-bearing. Ban checks are unaffected:
-        # is_ip_banned already fails open (not banned) under fail_secure=False.
+        # is_ip_banned already fails open (not banned) under fail_secure=False. If Redis is down
+        # when the guard initializes (first request), guard-core logs "Redis unavailable during
+        # initialization" and never wires the ban store or limiter to Redis: that process stays
+        # per-process until it restarts, even after Redis comes back.
         redis_fail_open=True,
         lazy_init=True,
         exclude_paths=_GUARD_EXCLUDE_PATHS,

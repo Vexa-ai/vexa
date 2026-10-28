@@ -560,15 +560,16 @@ gateway:
     enableRedis: true         # reuse REDIS_URL for guard state (vexa:guard: namespace)
     rateLimitRpm: 600         # per-IP requests per minute (0 disables rate limiting)
     rateLimitWindow: 60
-    autoBanRateLimit: true  # auto-ban IPs exceeding the rate limit (rate_limit_exceeded). One knob for
-                            # both the HTTP pipeline and the WS connect primitive; off in guard-core
-                            # itself, ON here. Requires the ban store (on by default).
+    autoBanRateLimit: false # auto-ban IPs exceeding the rate limit (rate_limit_exceeded). One knob for
+                            # both the HTTP pipeline and the WS connect primitive. Off by default: enable
+                            # only when each caller has its own client IP (trustedProxies set behind an
+                            # ingress). Requires the ban store (on by default).
     autoBanThreshold: 10
     autoBanDuration: 3600
     # ipWhitelist / ipBlacklist / trustedProxies: comma-separated IPs or CIDR ranges (e.g.
     # "10.0.0.0/8,203.0.113.5"). Each entry is validated at boot (stdlib `ipaddress`) - an
     # invalid entry refuses to boot with an error naming the value and the bad entry.
-    ipWhitelist: ""           # IPs/CIDRs that bypass the guard entirely
+    ipWhitelist: ""           # allow-list: when set, every IP NOT listed is refused (403)
     ipBlacklist: ""           # IPs/CIDRs to block (403)
     trustedProxies: ""        # IPs/CIDRs whose X-Forwarded-For is trusted for client-IP resolution
     trustXForwardedProto: false
@@ -602,12 +603,13 @@ adminApi:
     enableRedis: true         # reuse REDIS_URL for guard state (vexa:guard: namespace)
     rateLimitRpm: 600         # per-IP requests per minute (0 disables rate limiting)
     rateLimitWindow: 60
-    autoBanRateLimit: true  # auto-ban IPs exceeding the rate limit (rate_limit_exceeded). One knob for
-                            # both the HTTP pipeline and the WS connect primitive; off in guard-core
-                            # itself, ON here. Requires the ban store (on by default).
+    autoBanRateLimit: false # auto-ban IPs exceeding the rate limit (rate_limit_exceeded). One knob for
+                            # both the HTTP pipeline and the WS connect primitive. Off by default: enable
+                            # only when each caller has its own client IP (trustedProxies set behind an
+                            # ingress). Requires the ban store (on by default).
     autoBanThreshold: 10
     autoBanDuration: 3600
-    ipWhitelist: ""           # comma-separated IPs that bypass the guard
+    ipWhitelist: ""           # allow-list: when set, every IP NOT listed is refused (403)
     ipBlacklist: ""           # comma-separated IPs to block (403)
     trustedProxies: ""        # comma-separated trusted proxy IPs (enables X-Forwarded-For)
     trustXForwardedProto: false
