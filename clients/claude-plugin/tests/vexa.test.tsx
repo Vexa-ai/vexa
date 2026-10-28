@@ -5,7 +5,7 @@ import { AFTER_CALL_PAGE, afterCallAsk, inThisCallAsk, inThisCallDue, inThisCall
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 
 // `refuse`: every mod call fails the way auto mode refuses one in the desktop app.
-function engine(on: any, connect: unknown | (() => unknown), calls: { tool: string; args: unknown }[] = [], opened: string[] = [], env: Record<string, string> = {}, tools = ['calendar_status', 'workspace_list', 'start_demo_meeting', 'get_meeting_transcript', 'whats_waiting'], browser = false, refuse = false) {
+function engine(on: any, connect: unknown | (() => unknown), calls: { tool: string; args: unknown }[] = [], opened: string[] = [], env: Record<string, string> = {}, tools = ['calendar_status', 'workspace_list', 'start_demo_meeting', 'get_meeting_transcript', 'whats_waiting'], browser = false, refuse = false, answer?: (e: any) => unknown) {
   on('command.register', () => ({ value: { command: 'vexa' } }))
   on('tool.register', () => ({ value: { tool: 'mcp__vexa-live__listener_configure' } }))
   on('ui.open', (_: unknown, e: any) => { opened.push(e.id); return { value: { isPlaced: true } } })
@@ -17,6 +17,8 @@ function engine(on: any, connect: unknown | (() => unknown), calls: { tool: stri
   on('mcp.call', (_: unknown, e: any) => {
     calls.push({ tool: e.tool, args: e.args })
     if (refuse) return { value: { isError: true, content: [{ type: 'text', text: 'The server-side auto mode classifier gave no verdict' }] } }
+    const own = answer?.(e)
+    if (own) return { value: own }
     if (e.tool === 'panel_link') return { value: text({ url: 'https://claude-rc-app.dev.vexa.ai/api/auth/redeem?t=SECRET&next=/panel' }) }
     if (e.tool === 'start_demo_meeting') return { value: text({ platform: 'jitsi', native_meeting_id: 'vexa-demo-1', status: 'requested' }) }
     if (e.tool === 'list_meetings') return { value: text({ meetings: [] }) }
@@ -35,16 +37,49 @@ test("finds the person's Vexa by its tools, whatever the server is called", () =
   expect(vexaServerOf([])).toBe('')
 })
 
-test('no Vexa in this session: nothing is called or drawn; /vexa says to connect it first', async ($, on) => {
+test('no Vexa in this session: nothing is called or drawn; /vexa itself starts the sign-in', async ($, on) => {
   mock.clock(on)
   const calls: { tool: string; args: unknown }[] = []
   const opened: string[] = []
+  const ran: string[][] = []
   engine(on, { isConnected: false, reason: 'failed', message: 'none' }, calls, opened, {}, [])
+  on('http.fetch', (_: unknown, e: any) => (/\/pair$/.test(e.url)
+    ? { value: { ok: true, status: 200, headers: {}, text: JSON.stringify({ code: 'abcd2345', setup_url: 'https://app/panel/setup?code=abcd2345', signin_url: 'https://app/signin?code=abcd2345' }) } }
+    : { value: { ok: false, status: 404, headers: {}, text: '' } }))
+  on('process.run', (_: unknown, e: any) => { ran.push([...e.argv]); return { value: { exitCode: 0, stdout: e.argv[0] === 'uname' ? 'Darwin\n' : '', stderr: '' } } })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   expect(calls).toEqual([])
   expect(opened).toEqual([])
   const r: any = await $.command.run({ command: 'vexa', args: '' } as any)
-  expect(r.text).toBe('Connect Vexa first: ask Claude to set up Vexa.')
+  expect(r.text).toBe('Vexa: sign in with Google in the browser window that just opened; /vexa carries on when you are in.')
+  expect(ran).toContainEqual(['open', 'https://app/signin?code=abcd2345'])
+})
+
+test('/vexa: the panel opens, the line starts with a listen key, the live call is listened to here; /vexa stop stops', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  const calls: { tool: string; args: any }[] = []
+  const spawned: any[] = []
+  engine(on, { isConnected: true, server: 'plugin:vexa:vexa' }, calls, [], { HOME: '/home/u' }, ['panel_link', 'listen_token', 'get_meeting_transcript', 'list_meetings', 'whats_waiting'], true, false, (e: any) => {
+    if (e.tool === 'listen_token') return text({ key: 'vxa_listen_K', api_url: 'https://claude-rc.dev.vexa.ai' })
+    if (e.tool === 'list_meetings') return text({ meetings: [{ id: 41, platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'active', data: { title: 'Acme pricing call' } }] })
+    return undefined
+  })
+  on('fs.write', () => ({ value: undefined }))
+  on('fs.list', () => ({ value: [] }))
+  on('process.spawn', async function* (_: unknown, e: any) { spawned.push(e); return { value: { code: 0, signal: null } } })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const r: any = await $.command.run({ command: 'vexa', args: '' } as any)
+  expect(calls.find(c => c.tool === 'panel_link')?.args.next).toMatch(/^\/panel(\/meeting\/google_meet\/abc-defg-hij)?\?surface=claude-panel/)
+  expect(spawned).toHaveLength(1)
+  expect(spawned[0].argv.slice(0, 1)).toEqual(['sh'])
+  expect(spawned[0].argv[1]).toMatch(/\/bin\/vexa-link$/)
+  expect(spawned[0].argv[2]).toBe('https://claude-rc.dev.vexa.ai')
+  expect(spawned[0].env).toEqual({ VEXA_LISTEN_KEY: 'vxa_listen_K' })
+  expect(r.text).toMatch(/^Vexa: panel open · line from Vexa started · /)
+  expect(r.text).not.toContain('vxa_listen_K')
+  const stop: any = await $.command.run({ command: 'vexa', args: 'stop' } as any)
+  expect(stop.text).toBe('Vexa: stopped listening in this chat.')
 })
 
 test("a connector's Vexa is used through Claude Code's connection, and told the plugin is here", async ($, on) => {
@@ -134,7 +169,7 @@ test('the web panel: /vexa opens a one-time sign-in link in the browser pane', a
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   expect(opened).not.toContain('vexa-home')
   await $.command.run({ command: 'vexa', args: '' } as any)
-  expect(calls.find(c => c.tool === 'panel_link')?.args).toEqual({ next: '/panel' })
+  expect(calls.find(c => c.tool === 'panel_link')?.args).toEqual({ next: '/panel?surface=claude-panel' })
   expect(opened).toEqual([])
   expect(calls.find(c => c.tool === 'preview_start')).toMatchObject({ args: { url: expect.stringContaining('/api/auth/redeem?t=SECRET') } })
   // Only the plugin's own call for the panel origin is approved; anyone else's preview_start is not ours to allow.

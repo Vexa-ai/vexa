@@ -468,7 +468,10 @@ async function pollPairing($: any): Promise<void> {
         try { await $.store.set('vexaKey', vexaKey); await $.store.set('vexaEmail', vexaEmail) } catch { /* this session only */ }
         const n = await connectProxy($).catch(() => 0)
         pairPolling = false
-        if (pairingHere) {
+        if (vexaAfterPairing) {
+          vexaAfterPairing = false
+          void runVexa($).then(t => $.ui.toast(t))
+        } else if (pairingHere) {
           void $.prompt.submit({ text: `[Vexa] Signed in as ${vexaEmail || 'your account'} — Vexa is connected in this chat (${n} tools). Continue the setup: call whats_waiting and do its next step.` })
         }
         return
@@ -1651,13 +1654,88 @@ async function bandView($: any): Promise<BandView> {
   return { kind: 'line', b, now, act }
 }
 
+// /vexa: one press, the whole start. The panel opens beside the chat, the line from Vexa starts here
+// when none runs on this machine (vexa-link, one per machine as always), and a live call is listened
+// to in this chat. `/vexa stop` stops listening here. The command does it all itself; when a step
+// cannot be done it says what is wrong and the one step that fixes it.
+// Vexa is reached with this chat's paired key, or through the connector where Claude lets the plugin
+// call it (never while vexa-link carries the line and no key is paired: the desktop app refuses that).
+function canCallVexa(): boolean {
+  return Boolean(vexaKey) || (!byScript && Boolean(server))
+}
+// Signing in is the person's step: the setup panel opens beside the chat and the sign-in page in
+// their own browser; when they are in, /vexa carries on by itself.
+let vexaAfterPairing = false
+async function vexaSignIn($: any): Promise<string> {
+  const r: any = await setup($, {})
+  if (r?.error) return `Vexa: ${r.error}`
+  vexaAfterPairing = true
+  await openInPane($, String(r.setup_url))
+  // No `uname` is Windows.
+  const os = String((await $.process.run(['uname', '-s'], { timeoutMs: 5_000 }).catch(() => ({ stdout: 'Windows' }))).stdout).trim()
+  const opener = os === 'Darwin' ? 'open' : os === 'Linux' ? 'xdg-open' : 'explorer'
+  try {
+    await $.process.run([opener, String(r.signin_url)], { timeoutMs: 10_000 })
+  } catch (err) {
+    return `Vexa: the sign-in page did not open (${message(err)}); sign in on the setup panel beside the chat, and /vexa carries on when you are in.`
+  }
+  return 'Vexa: sign in with Google in the browser window that just opened; /vexa carries on when you are in.'
+}
+export function vexaAnswer(x: { panel: boolean; line: 'running' | 'started' | 'other' | ''; call: string }): string {
+  return [
+    x.panel ? 'panel open' : 'panel not opened',
+    x.line === 'started' ? 'line from Vexa started' : x.line === 'other' ? 'line from Vexa runs in another chat' : 'line from Vexa running',
+    x.call ? `listening to «${x.call}» here` : 'no live call: this chat listens when one starts',
+  ].join(' · ')
+}
+let linkChild: any = null
+async function startLink($: any): Promise<'started' | string> {
+  let t: any
+  try { t = await call($, 'listen_token', {}) } catch (err) { return `Vexa did not give this chat a line (${message(err)})` }
+  if (!t?.key || !t?.api_url) return 'Vexa did not give this chat a line (no key in its answer)'
+  if (!localHome) localHome = String((await $.env.get('HOME')) ?? '')
+  // The line lives as long as this chat's Vexa Live: its loop is the child's life.
+  linkChild = $.process.spawn({ argv: ['sh', `${$.plugin.root}/bin/vexa-link`, String(t.api_url)], env: { VEXA_LISTEN_KEY: String(t.key) } })
+  const child = linkChild
+  void (async () => {
+    try { for await (const piece of child) await logLink($, 'link', String(piece.text).trim(), 'said') } catch (err) { await logLink($, 'link', message(err), 'failed') }
+    if (linkChild === child) linkChild = null
+  })()
+  byScript = true
+  return 'started'
+}
+async function runVexa($: any): Promise<string> {
+  await connect($)
+  if (!canCallVexa()) return vexaSignIn($)
+  const m = await read($)
+  let panel = false
+  try {
+    const r = await call($, 'panel_link', { next: withChat(`${panelPath(m)}?surface=claude-panel`, mySession) })
+    panel = Boolean(r?.url) && await openInPane($, String(r.url))
+  } catch (err) { return `Vexa: the panel did not open (${message(err)}). Sign this chat in to Vexa: /vexa signin` }
+  await syncLink($)
+  let line: 'running' | 'started' | 'other' | '' = 'running'
+  if (!linkActive) {
+    const started = await startLink($)
+    if (started !== 'started') return `Vexa: ${started}. Sign this chat in to Vexa: /vexa signin`
+    line = 'started'
+  }
+  try { await $.fs.write(`${await linkDir($)}/pinned`, mySession) } catch { /* the usual rule decides */ }
+  await markActive($)
+  await markUsed($)
+  if (line !== 'started' && !(await ownsLink($))) line = 'other'
+  const live = isLive(m) && m.nativeId ? (m.title || m.nativeId) : ''
+  if (live) await updateListener($, x => ({ ...x, isOn: true, offer: null, declined: x.declined.filter(d => d !== roomKey(m)) }))
+  return `Vexa: ${vexaAnswer({ panel, line, call: live })}`
+}
+
 export const register: Register = (on) => {
   on('session.start', async ($, e, next) => {
     try { pluginVersion = String(JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`))?.version ?? '') } catch { pluginVersion = '' }
     lastSurface = String((e as { surface?: unknown }).surface ?? '')
     try { mySession = String(await $.session.id()) } catch { mySession = '' }
     try { usedVexaHere = Boolean(mySession) && await $.fs.exists(`${await linkDir($)}/active/${mySession}`) } catch { usedVexaHere = false }
-    await $.command.register({ name: 'vexa', description: 'Open the Vexa call panel beside the chat' })
+    await $.command.register({ name: 'vexa', description: 'Vexa: open the panel, start the line, listen to the live call here', argumentHint: '[stop | signin]' })
     await $.tool.register({
       name: CONFIGURE,
       description: 'Control the Vexa meeting listener: read it, set what it listens for in the live meeting the person chose '
@@ -1728,12 +1806,11 @@ export const register: Register = (on) => {
     return r
   })
 
-  on('command.run', { command: 'vexa' }, async $ => {
-    await connect($)
-    const m = await read($)
-    if (m.connection !== 'ready') return { text: "Connect Vexa first: ask Claude to set up Vexa." }
-    if (!m.offers.webPanel) return { text: "Vexa's call panel opens beside the chat in the Claude desktop app." }
-    return { text: (await openPanel($, panelPath(m))) ? 'Vexa opened.' : "Vexa's panel didn't open." }
+  on('command.run', { command: 'vexa' }, async ($, e) => {
+    const arg = String((e as { args?: unknown }).args ?? '').trim().toLowerCase()
+    if (arg === 'stop') { await stopListening($); return { text: 'Vexa: stopped listening in this chat.' } }
+    if (arg === 'signin') return { text: await vexaSignIn($) }
+    return { text: await runVexa($) }
   })
 
   // A registered tool answers text: the engine checks a hook's result against a string.
