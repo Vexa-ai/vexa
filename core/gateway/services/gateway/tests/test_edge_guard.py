@@ -1230,6 +1230,8 @@ _SECRET_HEADERS = {
     "Cookie": "session=sekrit-header-cookie",
     "X-Internal-Secret": "sekrit-header-internal",
     "X-Vexa-Identity": "sekrit-header-identity",
+    # ws.v1: a browser sends its key as a subprotocol entry (ws_auth.KEY_SUBPROTOCOL_PREFIX)
+    "Sec-WebSocket-Protocol": "vexa.v1, vexa.key.sekrit-subprotocol-key",
 }
 _SECRET_QUERY = (
     "api_key=sekrit-query-api-key&token=sekrit-query-token&key=sekrit-query-key"

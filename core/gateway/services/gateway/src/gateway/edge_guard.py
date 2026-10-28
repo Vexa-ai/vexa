@@ -89,7 +89,10 @@ _GUARD_EXCLUDE_PATHS = [
 # set (log_scrub.CREDENTIAL_PARAMS), which adds ``key``; the headers are the two secrets the
 # gateway's own hops carry.
 _GUARD_LOG_SENSITIVE_PARAMS = frozenset(CREDENTIAL_PARAMS)
-_GUARD_LOG_SENSITIVE_HEADERS = frozenset({"x-internal-secret", "x-vexa-identity"})
+# sec-websocket-protocol: a browser's ws.v1 key rides in it as `vexa.key.<key>` (ws_auth.py).
+_GUARD_LOG_SENSITIVE_HEADERS = frozenset(
+    {"x-internal-secret", "x-vexa-identity", "sec-websocket-protocol"}
+)
 
 
 def _guard_csv(env: str) -> list[str]:
