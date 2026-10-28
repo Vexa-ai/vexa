@@ -51,3 +51,16 @@ def test_multipart_upload_is_not_capped_at_the_edge():
     r = c.post("/bots", headers={"x-api-key": VALID_KEY},
                files={"file": ("a.bin", b"x" * (MAX_BODY_BYTES + 1))})
     assert r.status_code != 413
+
+
+def test_bundle_zip_import_is_not_capped_at_the_edge():
+    c, downstream = _client()
+    r = c.post("/meetings/import", headers={"x-api-key": VALID_KEY, "content-type": "application/zip"},
+               content=b"x" * (MAX_BODY_BYTES + 1))
+    assert r.status_code != 413
+
+
+def test_oversize_body_without_content_type_is_413():
+    c, downstream = _client()
+    r = c.post("/bots", headers={"x-api-key": VALID_KEY}, content=b"x" * (MAX_BODY_BYTES + 1))
+    assert r.status_code == 413

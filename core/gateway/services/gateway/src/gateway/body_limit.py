@@ -5,16 +5,24 @@ Unbounded, a 12 MB ``POST /bots`` body was read whole, forwarded to meeting-api,
 only in the runtime (a 502 after a container was already created). The edge refuses an
 over-size body with a typed **413** before anything downstream sees it.
 
-Multipart uploads (recordings, workspace files) are exempt: they are the routes built to take
-large bodies, and their services bound them.
+The cap applies to structured bodies only: JSON, text, url-encoded forms, or a body that names no
+type. File bodies (multipart uploads, a `meeting-bundle.v1` zip on `POST /meetings/import`, audio)
+are the routes built to take large bodies, and the services behind them bound them.
 """
 
 from __future__ import annotations
 
 import json
 
-#: The largest non-multipart request body the edge accepts.
+#: The largest structured request body the edge accepts.
 MAX_BODY_BYTES = 1024 * 1024
+
+
+def _capped(content_type: bytes) -> bool:
+    """Whether a body of this Content-Type is held to MAX_BODY_BYTES (structured, not a file)."""
+    media = content_type.split(b";", 1)[0].strip().lower()
+    return (not media or media.startswith(b"text/") or media.endswith(b"json")
+            or media == b"application/x-www-form-urlencoded")
 
 
 def _too_large_body() -> bytes:
@@ -32,7 +40,7 @@ class BodyLimitMiddleware:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
         headers = {k.lower(): v for k, v in scope.get("headers") or []}
-        if headers.get(b"content-type", b"").lower().startswith(b"multipart/form-data"):
+        if not _capped(headers.get(b"content-type", b"")):
             return await self.app(scope, receive, send)
         declared = headers.get(b"content-length")
         if declared is not None:
