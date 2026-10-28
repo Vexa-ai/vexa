@@ -62,6 +62,7 @@ __all__ = [
     "construct_meeting_url",
     "apply_join_passcode",
     "resolve_teams_base_host",
+    "teams_id_needs_meeting_url",
     "DuplicateMeeting",
     "MeetingStopped",
     "LOBBY_BUDGET_MS",
@@ -134,12 +135,32 @@ _URL_TEMPLATES = {
 #     ``passcode`` field is a complete address.
 #
 # Only the SHORT shape is matched: it is the one that needs a different path from the one every
-# Teams id used to get, and its 10–16 digit range mirrors the SSOT parsers that produce these ids
+# Teams id used to get, and its 10–17 digit range mirrors the SSOT parsers that produce these ids
 # (``collector.meeting_link``, the MCP ``link_parser``). Everything else — thread ids included —
 # stays on ``/l/meetup-join/``. Interpolating a SHORT id into that path builds
 # ``/l/meetup-join/397421056486982``: the wrong path for that id, and with nowhere for the
-# passcode to go (#892).
-_TEAMS_SHORT_ID = re.compile(r"^\d{10,16}$")
+# passcode to go (#892). Teams answers that path with its sign-in page, never a pre-join: on prod,
+# 7 days to 28 Oct 2026, 21 of 21 bare 16/17-digit ids built onto it ended `teams_auth_redirect`,
+# while 17-digit ids handed out as ``/meet/<id>`` joined. Hence 17, not 16.
+_TEAMS_SHORT_ID = re.compile(r"^\d{10,17}$")
+
+# A THREAD id is not a whole address on its own. Teams' deep link is
+# ``/l/meetup-join/<thread>/0?context={"Tid":…,"Oid":…}``: the ``context`` names the organizer's
+# tenant, and without it Teams cannot place an anonymous guest, so it sends the browser to the
+# Microsoft sign-in page and no host is ever asked to admit the bot. On prod, 7 days to 28 Oct
+# 2026, 9 of 9 bare thread ids ended ``teams_auth_redirect``; the same shape with its ``context``
+# never did. Reproduced on our own Graph-created meeting the same day (bare → sign-in page, with
+# context → pre-join). A bare thread id cannot be joined, so the door refuses it.
+_TEAMS_THREAD_ID = re.compile(r"^19:[^@\s]+@thread\.[a-z0-9]+$", re.IGNORECASE)
+
+
+def teams_id_needs_meeting_url(native_meeting_id: str) -> bool:
+    """True when a Teams id cannot be joined without the caller's full meeting link.
+
+    That is a THREAD id (see ``_TEAMS_THREAD_ID``): the tenant that makes it joinable lives in the
+    link's ``context``, which the id does not carry and nothing here can reconstruct.
+    """
+    return bool(_TEAMS_THREAD_ID.match(native_meeting_id or ""))
 
 #: Teams web-client host SUFFIXES a constructed URL may be built on — the same set the join
 #: layer recognizes as "this page IS Teams" (``join/src/msteams/auth-redirect.ts``

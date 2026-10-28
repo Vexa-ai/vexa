@@ -1060,19 +1060,47 @@ def test_teams_short_id_plus_passcode_builds_the_passcode_bearing_join_url(monke
     assert inv["passcode"] == TEAMS_PASSCODE
 
 
-def test_teams_thread_id_keeps_the_meetup_join_deep_link(monkeypatch):
-    """#892 A- — the OTHER Teams id shape is untouched. A `19:…@thread.v2` id joins at
-    `/l/meetup-join/`, carries no separate passcode, and must not be rerouted by the short-id
-    rule."""
+def test_teams_bare_thread_id_is_refused_at_the_door(monkeypatch):
+    """A `19:…@thread.v2` id ALONE is not joinable: Teams needs the organizer's tenant from the
+    deep link's `context` and otherwise sends the browser to the Microsoft sign-in page (prod,
+    7 days to 28 Oct 2026: 9 of 9 bare thread ids ended `teams_auth_redirect`; reproduced on our
+    own Graph meeting). PRE-FIX this was a 201 and a bot that could only fail; now it is a 422
+    that names the fix, and nothing is spawned or written."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    runtime = FakeRuntimeClient()
+    repo = InMemoryMeetingRepo()
+    r = _client(repo, runtime).post("/bots", headers=HEADERS, json={
+        "platform": "teams", "native_meeting_id": TEAMS_THREAD_ID,
+    })
+    assert r.status_code == 422, r.text
+    assert "meeting_url" in r.json()["detail"]
+    assert runtime.specs == []
+
+
+def test_teams_thread_id_with_its_link_keeps_the_full_deep_link(monkeypatch):
+    """The same thread id WITH the caller's full link joins through that link, `context`
+    included — the one address Teams turns into a pre-join for an anonymous guest."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    runtime = FakeRuntimeClient()
+    url = (f"https://teams.microsoft.com/l/meetup-join/{TEAMS_THREAD_ID}/0"
+           "?context=%7b%22Tid%22%3a%22t%22%2c%22Oid%22%3a%22o%22%7d")
+    r = _client(InMemoryMeetingRepo(), runtime).post("/bots", headers=HEADERS, json={
+        "platform": "teams", "native_meeting_id": TEAMS_THREAD_ID, "meeting_url": url,
+    })
+    assert r.status_code == 201, r.text
+    assert "context=" in _spawned_invocation(runtime)["meetingUrl"]
+
+
+def test_teams_17_digit_short_id_joins_at_meet_not_meetup_join(monkeypatch):
+    """A 17-digit Teams meeting id is a SHORT id: prod handed such ids out as `/meet/<id>` and
+    they joined, while every bare one built onto `/l/meetup-join/` hit the sign-in page."""
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
     runtime = FakeRuntimeClient()
     r = _client(InMemoryMeetingRepo(), runtime).post("/bots", headers=HEADERS, json={
-        "platform": "teams", "native_meeting_id": TEAMS_THREAD_ID,
+        "platform": "teams", "native_meeting_id": "12345678901234567",
     })
     assert r.status_code == 201, r.text
-    assert _spawned_invocation(runtime)["meetingUrl"] == (
-        f"https://teams.microsoft.com/l/meetup-join/{TEAMS_THREAD_ID}"
-    )
+    assert _spawned_invocation(runtime)["meetingUrl"] == "https://teams.microsoft.com/meet/12345678901234567"
 
 
 def test_teams_passcode_never_reaches_meeting_readback(monkeypatch):

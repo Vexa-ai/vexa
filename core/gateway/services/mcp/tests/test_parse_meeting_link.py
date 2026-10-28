@@ -91,6 +91,16 @@ class TestTeamsEnterpriseShort:
         assert r.teams_base_host == "teams.microsoft.com"
         assert r.meeting_url is None
 
+    def test_17_digit_id_is_a_short_id(self):
+        # Prod handed out 17-digit /meet/<id> links that joined (28 Oct 2026); meeting-api builds
+        # them onto /meet/, so the parser takes the same lengths (parity `teams-meeting-id-length`).
+        r = parse("https://teams.microsoft.com/meet/12345678901234567?p=abc")
+        assert r.native_meeting_id == "12345678901234567"
+        assert r.passcode == "abc"
+
+    def test_18_digit_id_is_refused(self):
+        assert_422("https://teams.microsoft.com/meet/123456789012345678")
+
     def test_no_passcode_warns(self):
         r = parse("https://teams.microsoft.com/meet/33749853217630")
         assert r.teams_base_host == "teams.microsoft.com"

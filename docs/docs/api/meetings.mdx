@@ -59,9 +59,11 @@ production. On Jitsi the bot joins and records audio, but transcripts are not ye
 docker-jitsi-meet where the speaker binder matched **0 of 122** frames and the meeting completed
 with 0 transcript segments. Track [#570](https://github.com/Vexa-ai/vexa/issues/570).
 
-For `teams`, a meeting is addressed either by its **numeric meeting ID** (10–15 digits, the one
-Teams prints beside a passcode) or by the **thread id** from a `…/l/meetup-join/19:meeting_…@thread.v2`
-link. With the numeric ID, send the passcode as `passcode` — the bot joins at
+For `teams`, a meeting is addressed either by its **numeric meeting ID** (10–17 digits, the one
+Teams prints beside a passcode) or by its full `…/l/meetup-join/19:meeting_…@thread.v2/0?context=…`
+link as `meeting_url`. A thread id sent as `native_meeting_id` without that link is refused with
+`422`: the link's `context` names the organizer's tenant, and without it Teams sends the bot to a
+sign-in page. With the numeric ID, send the passcode as `passcode` — the bot joins at
 `…/meet/<id>?p=<passcode>`, and the passcode is kept off the stored `constructed_meeting_url` and
 out of the logs. Add `teams_base_host` for a non-default cloud (`teams.live.com` for personal
 meetings, `gov.teams.microsoft.us` / `dod.teams.microsoft.us` for GCC-High and DoD); hosts outside
