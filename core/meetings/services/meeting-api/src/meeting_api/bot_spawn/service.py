@@ -976,7 +976,14 @@ async def request_bot(
                   fields={"phase": "before_workload_create"})
         raise MeetingStopped(_stopped_spawn_detail(meeting_id))
 
-    # 5. Spawn over runtime.v1.
+    # 5. Commit the MeetingSession (connectionId == session_uid) BEFORE the workload exists: the bot's
+    #    callbacks and uploads resolve their meeting by it, so it must not depend on the runtime call
+    #    returning (27 Oct, meeting 241: the create timed out after the kernel had started the bot, the
+    #    row was never written, the meeting sat `requested` and its recordings 404'd). For a continued
+    #    meeting this APPENDS a session to the reused row — N sessions per meeting (P3c).
+    await repo.create_session(meeting_id=meeting_id, session_uid=connection_id)
+
+    # 6. Spawn over runtime.v1.
     spec = build_workload_spec(
         workload_id=f"mtg-{meeting_id}-{connection_id[:8]}",
         invocation=invocation,
@@ -1001,8 +1008,7 @@ async def request_bot(
         # No workload came up. Mark the just-inserted meeting row `failed` with the reason so no
         # `requested` row lingers for the 5-minute reaper to flip reason-less (#718): the failure and
         # its cause are on the row NOW, and POST /bots answers 502 with the same reason. The row is
-        # failed BY ID — the MeetingSession is not created until after a successful spawn, so the
-        # session-keyed update_meeting_status cannot reach it yet.
+        # failed BY ID.
         reason = str(e) or "bot workload failed to start"
         try:
             await repo.fail_meeting(meeting_id=meeting_id, reason=reason, failure_stage="requested")
@@ -1018,17 +1024,23 @@ async def request_bot(
             fields={"reason": reason},
         )
         raise
+    except Exception as e:  # noqa: BLE001 — no answer (timeout, dropped connection) is not a refusal
+        # The kernel may still start the workload after we gave up, so keep the row and its session and
+        # record the workload id the spec named: a bot that comes up reports in and a stop can reach it.
+        # One that never does is terminalized by the runtime callback / stale sweeps.
+        log_event(
+            "bot_spawn_outcome_unknown", audience="system", level="warning",
+            span="bots.create", user_id=user_id, meeting_id=str(meeting_id),
+            fields={"workload_id": spec["workloadId"], "error": repr(e)},
+        )
+        result = {}
 
     workload_id = result.get("workloadId") or result.get("name") or spec["workloadId"]
 
-    # 6+7. Eager-create the MeetingSession (connectionId == session_uid) + write the kernel workload id
-    #      back as bot_container_id. The workload is ALREADY running, so a failure here would orphan it
-    #      (a live bot with no session row to resolve its uploads, the meeting stuck `requested`) —
-    #      ROB3. Wrap both DB writes: on failure, tear the just-created workload DOWN (best-effort) and
-    #      re-raise as SpawnFailed so the route maps it to 502 and no half-spawned state is left behind.
+    # 7. Write the kernel workload id back as bot_container_id. The workload is ALREADY running, so a
+    #    failure here would orphan it — ROB3: tear the just-created workload DOWN (best-effort) and
+    #    re-raise as SpawnFailed so the route maps it to 502 and no half-spawned state is left behind.
     try:
-        # For a continued meeting this APPENDS a session to the reused row — N sessions per meeting (P3c).
-        await repo.create_session(meeting_id=meeting_id, session_uid=connection_id)
         row = await repo.set_bot_container(meeting_id=meeting_id, bot_container_id=workload_id)
     except Exception as e:  # noqa: BLE001 — any post-spawn DB failure must trigger compensation
         try:

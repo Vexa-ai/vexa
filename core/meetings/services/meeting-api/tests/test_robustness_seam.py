@@ -108,10 +108,10 @@ class SlowRepo(InMemoryMeetingRepo):
 
 
 class CreateSessionFailsRepo(InMemoryMeetingRepo):
-    """The runtime spawn SUCCEEDS but the post-spawn DB write (create_session) FAILS — the partial
-    spawn that can orphan a running workload with no session row to resolve its uploads."""
+    """The runtime spawn SUCCEEDS but the post-spawn DB write (set_bot_container) FAILS — the partial
+    spawn that can orphan a running workload."""
 
-    async def create_session(self, *, meeting_id, session_uid):
+    async def set_bot_container(self, *, meeting_id, bot_container_id):
         raise RuntimeError("DB write failed after the workload was spawned")
 
 
@@ -740,8 +740,7 @@ def test_partial_spawn_does_not_orphan_workload():
     """FIXED (ROB3): a post-spawn DB write failure no longer orphans the running workload. The runtime
     spawn (create_workload) succeeds, then create_session raises; service.py now wraps steps 6+7, tears
     the just-created workload DOWN (runtime.delete_workload) and re-raises as SpawnFailed. So the route
-    maps it to 502 and the kernel is left with NO orphaned bot (which would otherwise keep running with
-    no session row to resolve its uploads)."""
+    maps it to 502 and the kernel is left with NO orphaned bot."""
 
     async def _run():
         repo = CreateSessionFailsRepo()
@@ -751,13 +750,46 @@ def test_partial_spawn_does_not_orphan_workload():
                               native_meeting_id="partial", max_concurrent=None,
                               redis_url="r", token_secret=SECRET)
         # The workload WAS created (the runtime call came before the failing DB write), but it must have
-        # been TORN DOWN — no orphan left running. And no session row should survive.
-        return len(runtime.specs), len(runtime.deleted), len(repo.sessions)
+        # been TORN DOWN — no orphan left running.
+        return len(runtime.specs), len(runtime.deleted)
 
-    spawned, torn_down, n_sessions = asyncio.run(_run())
+    spawned, torn_down = asyncio.run(_run())
     assert spawned == 1, "the runtime workload was provisioned before the DB write failed"
     assert torn_down == 1, "the orphaned workload must be torn down (runtime.delete_workload) on a post-spawn DB failure"
-    assert n_sessions == 0, "no dangling MeetingSession row should survive the failed spawn"
+
+
+def test_session_row_exists_before_the_runtime_call():
+    """27 Oct, meeting 241: the create timed out after the kernel had started the bot, and the session
+    row, written only after the call returned, never was. It is now committed first."""
+
+    class Runtime(FakeRuntimeClient):
+        async def create_workload(self, spec):
+            self.sessions_at_create = len(repo.sessions)
+            return await super().create_workload(spec)
+
+    repo, runtime = InMemoryMeetingRepo(), Runtime()
+    asyncio.run(request_bot(repo, runtime, user_id=USER, platform="google_meet", native_meeting_id="order",
+                            max_concurrent=None, redis_url="r", token_secret=SECRET))
+    assert runtime.sessions_at_create == 1
+
+
+def test_create_timeout_keeps_the_meeting_for_the_bot():
+    """A create that does not answer is not a refusal: the row stays `requested` with its session and
+    the workload id, so a bot the kernel starts late reports in and a stop can reach it."""
+
+    class Runtime(FakeRuntimeClient):
+        async def create_workload(self, spec):
+            self.specs.append(spec)
+            raise TimeoutError("runtime did not answer")
+
+    repo, runtime = InMemoryMeetingRepo(), Runtime()
+    resp = asyncio.run(request_bot(repo, runtime, user_id=USER, platform="google_meet", native_meeting_id="slow",
+                                   max_concurrent=None, redis_url="r", token_secret=SECRET))
+    row = repo._meetings[resp["id"]]
+    assert row["status"] == "requested"
+    assert row["bot_container_id"] == runtime.specs[0]["workloadId"]
+    assert [s["meeting_id"] for s in repo.sessions] == [resp["id"]]
+    assert runtime.deleted == []
 
 
 def test_partial_spawn_tears_down_the_exact_workload():
