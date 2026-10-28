@@ -41,6 +41,8 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
+          # Full history: when the DCO App cannot read a long pull request, the gate reads its range from git.
+          fetch-depth: 0
       # The verdict is the published head-bound check run; this job itself never fails on it.
       - name: Evaluate and publish the head-bound rights check
         run: node scripts/contribution-rights-gate.mjs

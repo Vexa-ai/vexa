@@ -179,6 +179,7 @@ edges:
   meeting-api -write-> postgres
   meeting-api -write-> object-store
   meeting-api -write-> livekit  # creates a call's room with its transcription notice (Twirp room service)
+  meeting-api -read-> transcription  # asks a deployment-owned STT backend which model it serves (GET /health -> model, cached 5 min) to answer GET /transcription/languages; a customer's own endpoint is never called
   agent-api -read-> livekit  # reads a room's metadata to bind a call to its session
   bot -read-> livekit  # the call listener: joins hidden and subscribe-only, and transcribes every audio track each participant publishes, on that participant's channel
   terminal -write-> livekit  # the terminal's page in a person's browser joins a call itself, not the terminal server (signalling over WebSocket; media over the UDP range)

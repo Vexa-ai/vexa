@@ -164,6 +164,9 @@ def create_app(
     # reconfigure_router.WorkspaceRoles). None → identity's admin-api from ADMIN_API_URL /
     # INTERNAL_API_SECRET, or, without them, a reader that confirms no member's role.
     workspace_roles: Optional["object"] = None,
+    # what a transcription backend says its model is, for GET /transcription/languages
+    # (bot_spawn.language_catalog.ModelProbe). None → ask the backend's /health.
+    language_probe: Optional["object"] = None,
     # per-user webhook delivery sink (WebhookSink) — delivers meeting.status_change on each FSM advance
     webhook_sink: Optional["object"] = None,
     # operator-owned terminal callback — boot-frozen destination, never user/meeting input
@@ -399,6 +402,15 @@ def create_app(
 
     app.include_router(build_reconfigure_router(
         meeting_repo, command_publisher, workspace_roles or workspace_roles_from_env()))
+
+    # --- the languages a caller's bots can transcribe: GET /transcription/languages
+    #     (transcription-language.v1 LanguageCatalog) ---
+    #     The caller's backend is read through the same bot-context hop a spawn makes.
+    from .bot_spawn import service as _spawn_service
+    from .bot_spawn.language_catalog import HealthProbe, build_language_catalog_router
+
+    app.include_router(build_language_catalog_router(
+        lambda user_id: _spawn_service._fetch_bot_context(user_id), language_probe or HealthProbe()))
 
     # --- chat-send: POST /bots/{platform}/{native_meeting_id}/chat → acts.v1 `chat_send` on the same
     #     command bus (lifecycle/chat_router.py) ---

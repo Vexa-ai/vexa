@@ -13,6 +13,7 @@ L2: the desktop test app (real git workspaces, sqlite session store, fake flows 
 from __future__ import annotations
 
 import collections
+import time
 
 import pytest
 
@@ -125,6 +126,37 @@ def test_a_policy_write_inside_a_scope_forgets_what_it_remembered(tmp_path):
         assert m.scope_memo(("k",), lambda: seen.append(1) or "c") == "c"      # a write forgets
     assert m.scope_memo(("k",), lambda: "d") == "d"                            # no scope: no memo
     assert len(seen) == 2
+
+
+def test_workers_sharing_a_scope_compute_a_key_once(tmp_path):
+    """The desktop router's pool workers run in copies of the request's context, so they share its
+    scope. Two of them asking for one key at the same moment computed it twice (28 Oct)."""
+    import contextvars
+    import threading
+
+    entered = []
+    release = threading.Event()
+
+    def compute():
+        entered.append(1)
+        release.wait(5)
+        return "heads"
+
+    results = []
+    with m.read_scope():
+        workers = [threading.Thread(target=contextvars.copy_context().run,
+                                    args=(lambda: results.append(m.scope_memo(("person_heads", "d"), compute)),))
+                   for _ in range(2)]
+        for w in workers:
+            w.start()
+        deadline = time.monotonic() + 2
+        while len(entered) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        release.set()
+        for w in workers:
+            w.join(5)
+    assert results == ["heads", "heads"]
+    assert len(entered) == 1
 
 
 def test_chat_targets_are_read_in_one_batch():

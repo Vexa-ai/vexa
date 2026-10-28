@@ -22,6 +22,37 @@ you set both fields, `language` must be one of `allowed_languages`. A list holds
 "A few languages" is the mode for a mixed meeting: German stays German, English stays English, and a
 window detected as something else falls back to German instead of producing text in a third language.
 
+## Which languages you can choose
+
+Ask the deployment instead of keeping your own list:
+
+```bash
+curl -H "X-API-Key: $API_KEY" "$API_BASE/transcription/languages"
+```
+
+```json
+{
+  "languages": [{ "code": "en", "name": "English" }, { "code": "zh", "name": "Chinese" }, …],
+  "default": { "language": null, "allowed_languages": [] },
+  "model": "large-v3-turbo",
+  "source": "provider"
+}
+```
+
+- **`languages`** are the codes the bots you send can transcribe, with English names. Any of them is a
+  valid `language` or `allowed_languages` entry.
+- **`model`** is the transcription model the list is for, and **`source`** says how Vexa knows it:
+  `provider` (the transcription backend reported it), `configured` (the model set for your backend), or
+  `assumed` (no model is known, so the list is every code Vexa accepts).
+- **`default`** is the deployment's default setting (see below). It is only a default, so it never
+  shortens `languages`.
+
+The list follows your own transcription backend when you set one in Settings. Vexa never calls your
+own endpoint to ask; it uses the model you configured for it. The list is the model's: the
+English-only Whisper models (`*.en`, distil-whisper) list only English, `large-v3` and its turbo variant
+list 100 codes including Cantonese (`yue`), and earlier Whisper models, OpenAI's `whisper-1` among them,
+list 99. A key with scope `bot` or `tx` can read it.
+
 ## Where to set it, and which setting wins
 
 | Level | Where | Who |

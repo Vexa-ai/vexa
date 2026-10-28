@@ -408,6 +408,15 @@
     },
     {
       "method": "GET",
+      "path": "/transcription/languages",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
       "path": "/transcripts/by-id/{meeting_id}",
       "scopes": [
         "tx"

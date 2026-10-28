@@ -791,19 +791,34 @@ def read_scope():
         _SCOPE.reset(token)
 
 
+#: Hands out the per-key locks in a scope.
+_MEMO_LOCKS = threading.Lock()
+
+
 def scope_memo(key: tuple, compute):
     """``compute()`` once per read scope for ``key`` (e.g. every roster on the host, or one person's
     mount set — the key names whose); outside a scope it is simply called. A policy write inside the scope forgets every
-    memo, so a request that writes and then reads sees its own write."""
+    memo, so a request that writes and then reads sees its own write.
+
+    ONCE ACROSS THREADS: the desktop router fans a request's reads out to a pool with
+    ``contextvars.copy_context()``, so its workers share this scope's dict. Without a lock, two
+    workers asking for the same key at once both missed it and both computed (a desk's person pages
+    read twice, test_desktop_page_reads, 28 Oct). One lock per key: the second waits for the first's
+    value. A memo computed inside another memo must always nest the same way round."""
     scope = _SCOPE.get()
     if scope is None:
         return compute()
     k = ("memo", *key)
     if k in scope:
         return scope[k]
-    value = compute()
-    scope[k] = value
-    return value
+    with _MEMO_LOCKS:
+        lock = scope.setdefault(("lock", *key), threading.Lock())
+    with lock:
+        if k in scope:
+            return scope[k]
+        value = compute()
+        scope[k] = value
+        return value
 
 
 def _scope_forget() -> None:
