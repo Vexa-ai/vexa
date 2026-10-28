@@ -38,6 +38,7 @@ COPY core/meetings/services/meeting-api/src ./src
 COPY core/meetings/contracts/invocation.v1/invocation.schema.json   ./meetings/contracts/invocation.v1/invocation.schema.json
 COPY core/meetings/contracts/lifecycle.v1/lifecycle.schema.json     ./meetings/contracts/lifecycle.v1/lifecycle.schema.json
 COPY core/meetings/contracts/webhook.v1/webhook.schema.json         ./meetings/contracts/webhook.v1/webhook.schema.json
+COPY core/meetings/contracts/transcription-language.v1/catalog.json ./meetings/contracts/transcription-language.v1/catalog.json
 COPY core/runtime/contracts/runtime.v1/runtime.schema.json          ./runtime/contracts/runtime.v1/runtime.schema.json
 COPY core/runtime/contracts/schedule.v1/schedule.schema.json        ./runtime/contracts/schedule.v1/schedule.schema.json
 # The meetings domain's route manifest: route_scopes.py reads, per route, the key scopes of the

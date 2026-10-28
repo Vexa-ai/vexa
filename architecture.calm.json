@@ -3272,6 +3272,27 @@
    "description": "creates a call's room with its transcription notice (Twirp room service)"
   },
   {
+   "unique-id": "ma-stt-model",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "transcription",
+      "interface": "stt-endpoint"
+     }
+    }
+   },
+   "protocol": "HTTPS",
+   "metadata": [
+    {
+     "access": "read"
+    }
+   ],
+   "description": "asks a deployment-owned STT backend which model it serves (GET /health -> model, cached 5 min) to answer GET /transcription/languages; a customer's own endpoint is never called"
+  },
+  {
    "unique-id": "aa-livekit",
    "relationship-type": {
     "connects": {

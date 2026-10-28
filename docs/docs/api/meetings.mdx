@@ -337,6 +337,19 @@ at most 16): a window detected outside the list is transcribed again in `languag
 entry. The meeting stores the setting it runs with as `data.transcription_language`
 (`{language, allowed_languages, source}`). A refused value is `422`.</ParamField>
 <ParamField body="task" type="string">`transcribe` (default) or `translate`.</ParamField>
+
+The codes `language` and `allowed_languages` can take for your bots, and the deployment default, come
+from the deployment:
+
+```bash Transcription languages — GET /transcription/languages
+curl -H "X-API-Key: $API_KEY" "$API_BASE/transcription/languages"
+```
+
+`200` with `{languages: [{code, name}], default: {language, allowed_languages}, model, source}`.
+`languages` is the list for the transcription model your bots use; `source` is `provider` (the backend
+reported its model), `configured` (the configured model id) or `assumed` (no model known: every accepted
+code). Scope `bot` or `tx`. Details:
+[Transcription language](/how-to/transcription-language#which-languages-you-can-choose).
 <ParamField body="transcribe_enabled" type="boolean">Whether this spawn should request transcription. **Resolution:** an explicit value wins; else the deployment env `TRANSCRIBE_ENABLED`; else `true`. Non-boolean values (other than the common string forms `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`) are refused with `422` (`transcribe_enabled must be a boolean`). When the resolved value is `true` and no STT backend is configured, `POST /bots` answers **503** with a detail naming the unset keys, e.g. `no transcription backend configured — set it in Settings or environment variables TRANSCRIPTION_SERVICE_URL + TRANSCRIPTION_SERVICE_TOKEN`. "Settings" there means [`PUT /user/transcription`](/api/settings#transcription-backend). Set `false` for **capture-only** (bot may still join; no STT client is constructed).</ParamField>
 <ParamField body="recording_enabled" type="boolean">Whether this spawn should persist an **audio** recording (see [Recordings](/how-to/recordings) — there is no video recording path). Same resolution pattern as `transcribe_enabled` against env `RECORDING_ENABLED` (default `true` at the env resolver; the service default when callers omit it follows the request/env chain). Capture-only (`transcribe_enabled=false`) is **not** the same as recorded — recording is gated separately.</ParamField>
 

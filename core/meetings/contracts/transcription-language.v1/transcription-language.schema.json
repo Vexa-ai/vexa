@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vexa.ai/schemas/transcription-language.v1",
   "title": "transcription-language.v1",
-  "description": "The language a meeting bot transcribes in: the setting itself, where each tier of it is written (a meeting's spawn request and live change, a person's default, the deployment's default), and the setting a meeting is running with. One rule beyond the shapes, enforced by validate.mjs and by every runtime that reads these shapes: when both `language` and a non-empty `allowed_languages` are set, `language` is one of the list.",
+  "description": "The language a meeting bot transcribes in: the setting itself, where each tier of it is written (a meeting's spawn request and live change, a person's default, the deployment's default), and the setting a meeting is running with, and the languages a caller's bots can transcribe (`LanguageCatalog`, from `catalog.json`). One rule beyond the shapes, enforced by validate.mjs and by every runtime that reads these shapes: when both `language` and a non-empty `allowed_languages` are set, `language` is one of the list.",
   "$defs": {
     "LanguageCode": {
       "description": "A Whisper language code: two or three lower-case letters (`de`, `en`, `yue`).",
@@ -93,6 +93,44 @@
         "DEFAULT_TRANSCRIPTION_LANGUAGE": { "type": "string", "pattern": "^([a-z]{2,3})?$" },
         "DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES": { "type": "string", "pattern": "^([a-z]{2,3}(,[a-z]{2,3}){0,15})?$" }
       }
+    },
+    "CatalogLanguage": {
+      "description": "One language the caller's transcription model can transcribe: its code (the value `language` and `allowed_languages` take) and its English name, both from `catalog.json`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "name"],
+      "properties": {
+        "code": { "$ref": "#/$defs/LanguageCode" },
+        "name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "CatalogSource": {
+      "description": "How the list was chosen. provider: the transcription backend named its model (`GET {url}/health` → `model`) and `catalog.json` lists that model. configured: the model id configured for the caller's backend (Settings, else `TRANSCRIPTION_MODEL`) is listed there. assumed: no model is known, or the known one is not listed, so the list is every code the language fields accept.",
+      "enum": ["provider", "configured", "assumed"]
+    },
+    "LanguageCatalog": {
+      "description": "The answer to `GET /transcription/languages`: the languages a bot this caller sends can transcribe, and the deployment's default setting (`DeploymentDefault` as a setting; auto when unset). The default is the lowest tier, not a limit: a meeting, a person's default and their history all override it, with any code in `languages`. Beyond the shape, enforced by validate.mjs and by meeting-api's tests: `languages` is exactly the `catalog.json` list for `model` (every code, in catalog order, under its catalog name) — the full list when `source` is assumed — and `model` is set unless `source` is assumed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["languages", "default", "model", "source"],
+      "properties": {
+        "languages": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/CatalogLanguage" } },
+        "default": { "$ref": "#/$defs/LanguageSetting" },
+        "model": { "type": ["string", "null"], "description": "The model id the list was chosen for, as the backend or the configuration names it; null when none is known." },
+        "source": { "$ref": "#/$defs/CatalogSource" }
+      }
+    },
+    "ModelLookup": {
+      "description": "A golden-only shape pinning how `catalog.json` reads one model id: how many codes it lists (null: the id is not listed), and codes the list must and must not hold.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "count"],
+      "properties": {
+        "model": { "type": "string", "minLength": 1 },
+        "count": { "type": ["integer", "null"], "minimum": 1 },
+        "has": { "type": "array", "items": { "$ref": "#/$defs/LanguageCode" } },
+        "lacks": { "type": "array", "items": { "$ref": "#/$defs/LanguageCode" } }
+      }
     }
   },
   "x-routes": [
@@ -116,6 +154,12 @@
       "request": "UserPreferenceUpdate",
       "response": "UserPreference",
       "auth": "the caller's own account (identity admin-api). Refusals: 422 a body this contract refuses"
+    },
+    {
+      "method": "GET",
+      "path": "/transcription/languages",
+      "response": "LanguageCatalog",
+      "auth": "the caller's key (scope `bot` or `tx`). The list is for the backend this caller's bots transcribe with: their Settings backend, else the deployment's. Only a backend the deployment owns is asked for its model; a customer's own endpoint is never called from here, and its configured model id decides. The backend's answer is cached for 5 minutes; an unreachable backend, or one that names no model, falls to the next source. No refusals beyond the edge's (401, 403)"
     }
   ]
 }
