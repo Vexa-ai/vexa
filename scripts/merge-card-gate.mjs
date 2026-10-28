@@ -9,6 +9,12 @@
 //     terminal verdict (success/failure) rather than reading an in-flight run as failure (#655). A
 //     value-fsm that never settles within the wait budget stays not-mergeable — a label can never
 //     waive value-fsm; success must be positively observed.
+//     A RELEASE VERSION BUMP needs no label: when every changed file is one `release/version.mjs
+//     set` writes, the old and new versions are releases in ascending SemVer order, and replaying
+//     `set <new>` on the merge base reproduces every one of those files at the head byte for byte,
+//     the diff is the version strings and nothing else, so there is no value to sign. The row says
+//     so. value-fsm still applies (package.json is a runtime file), and any other PR, including a
+//     bump with one more line in it, needs the label exactly as before.
 //   • DIFF accepted   — the code was reviewed. Either the PR author is a MAINTAINER (holds the
 //     commit bit — a maintainer reviewing their own work is allowed; the mandatory-review rule is
 //     the quality gate for CONTRIBUTOR PRs), OR a GitHub review APPROVAL from a NON-AUTHOR whose
@@ -77,6 +83,7 @@
 
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { VERSION_FILES, applyVersion, compareVersions, readVersion } from "../release/version.mjs";
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const IS_MAIN = import.meta.url === pathToFileURL(process.argv[1] || "").href;
@@ -105,16 +112,61 @@ function prNumbers() {
   return [...new Set([...ref.matchAll(/pr-(\d+)-/g)].map((m) => +m[1]))];
 }
 
-function touchesRuntime(num, api = ghj) {
+function changedFiles(num, api = ghj) {
+  const all = [];
   for (let page = 1; page <= 10; page++) {
     const files = api(`repos/${REPO}/pulls/${num}/files?per_page=100&page=${page}`);
-    for (const f of files) {
-      const p = f.filename;
-      if (RUNTIME_FILES.includes(p) || RUNTIME_PREFIXES.some((pre) => p.startsWith(pre))) return true;
-    }
+    all.push(...files);
     if (files.length < 100) break;
   }
-  return false;
+  return all;
+}
+
+const isRuntime = (p) => RUNTIME_FILES.includes(p) || RUNTIME_PREFIXES.some((pre) => p.startsWith(pre));
+
+// ── RELEASE VERSION BUMP (the value row without a label) ────────────────────────────────────────
+
+// Is this PR a release version bump and nothing else? Pure over the PR's changed files (the
+// `pulls/:n/files` shape) and the texts of every VERSION_FILES path at the merge base and at the
+// head ({ path: text }, a missing file absent). Returns { ok: true, from, to } or { ok: false, why }.
+export function versionBump(changed, base, head) {
+  if (!changed?.length) return { ok: false, why: "no changed files" };
+  for (const f of changed) {
+    if (!VERSION_FILES.includes(f.filename)) return { ok: false, why: `${f.filename} is not a file release/version.mjs writes` };
+    if (f.status !== "modified") return { ok: false, why: `${f.filename} is ${f.status}, not modified` };
+  }
+  for (const f of VERSION_FILES)
+    if (typeof base[f] !== "string" || typeof head[f] !== "string") return { ok: false, why: `${f} could not be read at the merge base and the head` };
+  const from = readVersion(base["package.json"]), to = readVersion(head["package.json"]);
+  let order;
+  try { order = compareVersions(to, from); } catch (e) { return { ok: false, why: e.message }; }
+  if (order <= 0) return { ok: false, why: `${from} → ${to} is not an upgrade` };
+  let replay;
+  try { replay = applyVersion(base, to); } catch (e) { return { ok: false, why: e.message }; }
+  for (const f of VERSION_FILES)
+    if (replay[f] !== head[f]) return { ok: false, why: `${f} differs from what \`release/version.mjs set ${to}\` writes` };
+  return { ok: true, from, to };
+}
+
+// One file's text at a commit, through the contents API; undefined when the API gives no text.
+function fileAt(path, ref, api = ghj) {
+  const r = api(`repos/${REPO}/contents/${path}?ref=${ref}`);
+  if (r?.encoding !== "base64" || typeof r.content !== "string") return undefined;
+  return Buffer.from(r.content, "base64").toString("utf8");
+}
+
+// The PR as a version bump, read from the API: the merge base (what the PR's diff is against) and
+// every VERSION_FILES text there and at the head. Any read that fails makes it not a bump.
+function readVersionBump(pr, changed, api = ghj) {
+  if (!changed.every((f) => VERSION_FILES.includes(f.filename))) return versionBump(changed, {}, {});
+  try {
+    const mergeBase = api(`repos/${REPO}/compare/${pr.base.sha}...${pr.head.sha}`).merge_base_commit?.sha;
+    if (!mergeBase) return { ok: false, why: "merge base not found" };
+    const at = (ref) => Object.fromEntries(VERSION_FILES.map((f) => [f, fileAt(f, ref, api)]));
+    return versionBump(changed, at(mergeBase), at(pr.head.sha));
+  } catch (e) {
+    return { ok: false, why: `could not read the version files: ${e.message}` };
+  }
 }
 
 // value-fsm is a live sibling check: `labeled` (which triggers merge-card) also re-triggers
@@ -433,20 +485,28 @@ export async function card(num, { api = ghj, expectedHead = "", readClosing = re
     return { num, ok: false, moved: { from: expectedHead, to: live } };
   const head = live;
   const labels = (pr.labels || []).map((l) => l.name);
-  const signed = labels.includes("state: value-signed");
-  const runtime = touchesRuntime(num, api);
+  const changed = changedFiles(num, api);
+  const runtime = changed.some((f) => isRuntime(f.filename));
+  // A release version bump stands in for the label (VALUE, above); read only when the label is absent.
+  const bump = labels.includes("state: value-signed") ? null : readVersionBump(pr, changed, api);
+  const signed = labels.includes("state: value-signed") || Boolean(bump?.ok);
+  const signedBy = bump?.ok ? `version-only bump ${bump.from} → ${bump.to} (release/version.mjs), no label needed` : "value-signed";
   // Only a runtime PR has a value-fsm leg, and only then do we pay the wait. A non-terminal
   // value-fsm is waited out to its real verdict rather than sampled once mid-run (the #655 race).
   const vf = runtime && head ? await waitForTerminalValueFsm(head, { read: (sha) => readValueFsmRuns(sha, api) }) : "absent";
 
   // VALUE
   let valueOk = false, valueWhy;
-  if (!signed) valueWhy = "missing `state: value-signed` (the value sign-off)";
-  else if (runtime && vf === "success") { valueOk = true; valueWhy = "value-fsm green + value-signed"; }
+  if (!signed) {
+    valueWhy = "missing `state: value-signed` (the value sign-off)";
+    // A PR that touches only version files is told why it is not a version-only bump.
+    if (changed.every((f) => VERSION_FILES.includes(f.filename))) valueWhy += ` — not a version-only bump: ${bump.why}`;
+  }
+  else if (runtime && vf === "success") { valueOk = true; valueWhy = `value-fsm green + ${signedBy}`; }
   else if (runtime && (vf === "pending" || vf === "absent"))
-    valueWhy = `value-signed but value-fsm did not reach a terminal verdict on head within the wait budget (still ${vf}) — value-fsm must be green (a label cannot waive it)`;
-  else if (runtime) valueWhy = `value-signed but value-fsm is ${vf} on head — value-fsm must be green (a label cannot waive it)`;
-  else { valueOk = true; valueWhy = "non-runtime + value-signed"; }
+    valueWhy = `${signedBy} but value-fsm did not reach a terminal verdict on head within the wait budget (still ${vf}) — value-fsm must be green (a label cannot waive it)`;
+  else if (runtime) valueWhy = `${signedBy} but value-fsm is ${vf} on head — value-fsm must be green (a label cannot waive it)`;
+  else { valueOk = true; valueWhy = `non-runtime + ${signedBy}`; }
 
   // DIFF
   const d = diffAccepted(pr, head, api);
