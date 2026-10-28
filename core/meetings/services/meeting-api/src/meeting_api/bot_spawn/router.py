@@ -53,6 +53,7 @@ from .service import (
     construct_meeting_url,
     request_bot,
     resolve_teams_base_host,
+    teams_id_needs_meeting_url,
 )
 
 #: Max length of a native meeting id, mirroring the `meetings.platform_specific_id`
@@ -507,6 +508,20 @@ def build_router(
                         "'passcode' or supply the full 'meeting_url' instead"
                     ),
                 )
+        # A Teams THREAD id without its link is an address Teams answers with a sign-in page: the
+        # tenant that makes it joinable rides in the link's `context`, not in the id
+        # (`service._TEAMS_THREAD_ID`). Accepting it was a 201 for a bot that could only end
+        # `teams_auth_redirect`; refuse it here, before any DB write, and name the fix.
+        if platform == "teams" and not meeting_url and teams_id_needs_meeting_url(native_meeting_id or ""):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "a Teams meeting-thread id ('19:…@thread.v2') cannot be joined on its own: "
+                    "Teams needs the organizer's tenant from the link's 'context' and otherwise "
+                    "sends the bot to a sign-in page — supply the full 'meeting_url' (the Join link "
+                    "as Teams gave it), or the meeting's numeric ID with its 'passcode'"
+                ),
+            )
         # Reject a platform the meeting-bot flow cannot invoke, up front (→ 422) and BEFORE any DB
         # write. Without this, a platform outside the sealed invocation.v1 enum but WITH a
         # meeting_url (api.v1 seals more platforms than invocation.v1 — `browser_session`, #816)

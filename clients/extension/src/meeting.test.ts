@@ -1,5 +1,5 @@
 /**
- * Teams meeting-id lengths — the extension recognises the same 10-16 digit short ids
+ * Teams meeting-id lengths — the extension recognises the same 10-17 digit short ids
  * meeting-api and the MCP's link parser accept (parity fact `teams-meeting-id-length`).
  * Pure: no chrome.
  * Run: npx tsx src/meeting.test.ts
@@ -14,7 +14,7 @@ const check = (name: string, cond: boolean, detail = ''): void => {
 
 const id = (n: number): string => '1234567890123456789'.slice(0, n);
 
-for (const n of [10, 15, 16]) {
+for (const n of [10, 15, 16, 17]) {
   for (const url of [
     `https://teams.microsoft.com/meet/${id(n)}?p=abc`,
     `https://teams.live.com/meet/${id(n)}`,
@@ -25,7 +25,7 @@ for (const n of [10, 15, 16]) {
       JSON.stringify(got));
   }
 }
-for (const n of [9, 17]) {
+for (const n of [9, 18]) {
   for (const url of [
     `https://teams.microsoft.com/meet/${id(n)}`,
     `https://teams.microsoft.com/v2/#/meet/${id(n)}`,

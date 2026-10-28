@@ -72,11 +72,11 @@ export function detectMeeting(url: string): MeetingRef | null {
     onHost(u.hostname, 'teams.microsoft.com') ||
     u.hostname === 'teams.cloud.microsoft'
   ) {
-    // /meet/<10-16 digits> on the path (personal + enterprise short URL) — the lengths meeting-api
+    // /meet/<10-17 digits> on the path (personal + enterprise short URL) — the lengths meeting-api
     // and the MCP's link parser accept, so a link the server takes is one this recognises…
-    let m = u.pathname.match(/^\/meet\/(\d{10,16})\/?$/);
+    let m = u.pathname.match(/^\/meet\/(\d{10,17})\/?$/);
     // …or the enterprise deep-link form /v2/?…#/meet/<id>?p=… (id in the hash).
-    if (!m && u.hash) m = u.hash.replace(/^#/, '').match(/^\/meet\/(\d{10,16})\b/);
+    if (!m && u.hash) m = u.hash.replace(/^#/, '').match(/^\/meet\/(\d{10,17})\b/);
     if (m) return { platform: 'teams', nativeMeetingId: m[1] };
     return null;
   }
