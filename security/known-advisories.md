@@ -16,6 +16,7 @@ file beside each lockfile.
 | [GHSA-hp3w-g68c-fv3c](https://osv.dev/GHSA-hp3w-g68c-fv3c) | `sprintf-js` 1.1.3 | Medium | No fixed release exists. Reached only through `roarr` ← `global-agent` ← `onnxruntime-node`, which formats its own log lines while its postinstall downloads the ONNX runtime; no request data reaches it. | 2026-12-31 |
 | [GHSA-238p-pmpm-9mq7](https://osv.dev/GHSA-238p-pmpm-9mq7) | `katex` 0.16.47 | Low | A trust bypass that needs prototype pollution to exist already. Reached through `mermaid` in the terminal's diagram rendering; the fix (0.18.2) is outside mermaid 11's `^0.16` range. | 2026-12-31 |
 | [GHSA-vfj7-8cjw-p6xm](https://osv.dev/GHSA-vfj7-8cjw-p6xm) | `braces` 3.0.3 (`services/dashboard`) | High | No fixed release exists. A dev dependency only (`eslint-config-next` → `@next/eslint-plugin-next` → `fast-glob` → `micromatch`), run at lint time over the repository's own globs; not in the dashboard image. | 2026-12-31 |
+| [GHSA-gcqx-w48m-w2h4](https://osv.dev/GHSA-gcqx-w48m-w2h4) | `deepmerge` 4.3.1 | Medium | No fixed release exists. Reached only through `puppeteer-extra-plugin-user-preferences` ← `puppeteer-extra-plugin-stealth` in the join and remote-browser bots, which merges the stealth plugins' own fixed Chrome preferences; Vexa passes no `userPrefs`, so no request data reaches it. | 2026-12-31 |
 
 ### adm-zip (the advisory the report left open)
 
