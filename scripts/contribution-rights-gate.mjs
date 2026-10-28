@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { evaluateCommits, readRange } from "./dco-range.mjs";
 
 const RIGHTS = ["independent", "corporate", "uncertain"];
 const DECISION_MARKER = "<!-- vexa-contribution-rights-decision:v1 -->";
@@ -405,22 +407,61 @@ async function publishRightsCheck(event, headSha, results, apiBase, token) {
   }, apiBase, token);
 }
 
-async function publishDcoPolicyCheck(event, apiBase, token) {
+// The DCO App reads at most 250 commits over REST; past that it reports that it could not read the list,
+// and its verdict is unknown rather than a failure. Only that one report is decided again here, by
+// dco-range's rule over git history read in this job's trusted checkout: the pull request's commits are
+// fetched as data and none of its code runs. A manual override, any other message and a real DCO
+// failure still fail. (The pull_request dco-range check is not trusted for this: that job runs the pull
+// request's own workflow file.)
+const DCO_INCOMPLETE_LIST = "The DCO check could not be evaluated because the complete pull request commit list could not be retrieved.";
+
+export function rangeVerdict(pr, headSha, cwd = process.cwd()) {
+  const git = (args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  git(["fetch", "--no-tags", "--quiet", "origin", `+refs/pull/${pr.number}/head:refs/dco-range/pr-${pr.number}`, pr.base.sha]);
+  git(["cat-file", "-e", `${headSha}^{commit}`]);
+  return evaluateCommits(readRange({ head: headSha, exclude: [pr.base.sha, "HEAD"], cwd }));
+}
+
+async function publishDcoPolicyCheck(event, apiBase, token, recheck) {
   const dco = event.check_run;
   const ordinarySuccess = dco.conclusion === "success" && dco.output?.summary?.trim() === "All commits are signed off!";
+  const pr = dco.pull_requests?.[0];
+  const incomplete = !ordinarySuccess && dco.conclusion === "failure" && pr?.number && pr?.base?.sha &&
+    (dco.output?.summary ?? "").startsWith(DCO_INCOMPLETE_LIST);
+  let range = null;
+  let readError = null;
+  if (incomplete) {
+    try {
+      range = recheck(pr, dco.head_sha);
+    } catch (error) {
+      readError = error;
+    }
+  }
+  const ok = ordinarySuccess || range?.ok === true;
+  const summary = ordinarySuccess
+    ? "The maintained DCO App verified every applicable commit."
+    : range
+      ? `The DCO App could not read past 250 commits, so its verdict is unknown. dco-range's rule over git history: ` +
+        `${range.checked} commits checked, ${range.merges} merge commits skipped, ${range.failing.length} failing.` +
+        range.failing.map((r) => `\n- \`${r.sha.slice(0, 12)}\` ${r.author.name} <${r.author.email}>: ${r.detail}`).join("")
+      : readError
+        ? `The DCO App could not read the commit list, and reading it from git failed too, so this check fails closed.\n\n${readError.message}`
+        : "Vexa does not accept manual DCO overrides or unknown success messages. The original author must complete DCO remediation and rerun the DCO check.";
   return createCheck(event, dco.head_sha, {
     name: "dco-no-override",
-    ok: ordinarySuccess,
-    title: ordinarySuccess ? "DCO completed without override" : "DCO result is not an ordinary verified success",
-    summary: ordinarySuccess
-      ? "The maintained DCO App verified every applicable commit."
-      : "Vexa does not accept manual DCO overrides or unknown success messages. The original author must complete DCO remediation and rerun the DCO check.",
+    ok,
+    title: ordinarySuccess
+      ? "DCO completed without override"
+      : ok
+        ? "DCO verified from git history (the DCO App could not read the full list)"
+        : "DCO result is not an ordinary verified success",
+    summary,
   }, apiBase, token);
 }
 
-export async function run({ event, config, token, apiBase = "https://api.github.com" }) {
+export async function run({ event, config, token, apiBase = "https://api.github.com", dcoRange = rangeVerdict }) {
   if (event.check_run?.name === "DCO" && event.check_run?.app?.slug === "dco") {
-    return publishDcoPolicyCheck(event, apiBase, token);
+    return publishDcoPolicyCheck(event, apiBase, token, dcoRange);
   }
   const pullRequests = await pullRequestsForEvent(event, apiBase, token);
   if (!pullRequests.length) return true;
