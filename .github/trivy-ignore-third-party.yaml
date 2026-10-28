@@ -776,3 +776,18 @@ vulnerabilities:
       - "pkg:pypi/filelock@3.29.0"
     statement: "litellm/litellm v1.103.9 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). filelock inside LiteLLM's own image; every release scanned on 2026-10-27 (v1.103.9, v1.104.7, v1.105.5, v1.106.4) carries it and the fix is a filelock major. v1.104 and later refuse to start without a master key, which this stateless shim deliberately does not set."
     expired_at: 2026-12-31
+  - id: CVE-2026-116588
+    purls:
+      - "pkg:pypi/ddtrace@4.11.0"
+    statement: "litellm/litellm v1.103.9 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). ddtrace inside LiteLLM's own image is imported only when USE_DDTRACE is true, which the shim never sets; every release scanned on 2026-10-28 (v1.103.10, v1.104.8, v1.105.6, v1.106.5) carries the same ddtrace."
+    expired_at: 2026-12-31
+  - id: CVE-2026-116589
+    purls:
+      - "pkg:pypi/ddtrace@4.11.0"
+    statement: "litellm/litellm v1.103.9 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). ddtrace's IAST instrumentation inside LiteLLM's own image loads only when USE_DDTRACE is true, which the shim never sets; every release scanned on 2026-10-28 (v1.103.10, v1.104.8, v1.105.6, v1.106.5) carries the same ddtrace."
+    expired_at: 2026-12-31
+  - id: CVE-2026-114605
+    purls:
+      - "pkg:pypi/dnspython@2.8.0"
+    statement: "litellm/litellm v1.103.9 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). dnspython is required only by email_validator and psycopg inside LiteLLM's image; the shim is stateless with no database or user sign-up, and its HTTP clients resolve through the system resolver. Every release scanned on 2026-10-28 (v1.103.10, v1.104.8, v1.105.6, v1.106.5) carries it."
+    expired_at: 2026-12-31
