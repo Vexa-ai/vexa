@@ -1,5 +1,6 @@
 // A transcript segment. `pending`: a draft the recognizer may still change or withdraw.
-export type Seg = { id: string; speaker: string; text: string; time: string; pending: boolean }
+// `index`: the line's place in get_meeting_transcript, when it was read from there.
+export type Seg = { id: string; speaker: string; text: string; time: string; pending: boolean; index?: number }
 
 // `connection`: where the plugin's own `vexa` server stands. `signin` is the
 // OAuth sign-in Claude Code has not done yet; `refused` carries the reason.

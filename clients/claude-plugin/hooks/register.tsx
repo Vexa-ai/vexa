@@ -353,7 +353,8 @@ async function readConfirmed($: any, since: number, status: string): Promise<str
   const segs: any[] = page.segments ?? page.transcripts ?? []
   const base = typeof page.since_index === 'number' ? page.since_index : since
   const firstPending = segs.findIndex(x => x.completed === false)
-  const fresh: Seg[] = segs.map(s => ({
+  const fresh: Seg[] = segs.map((s, i) => ({
+    index: base + i,
     id: String(s.segment_id ?? s.id ?? ''),
     speaker: String(s.speaker ?? s.speaker_name ?? '—'),
     text: String(s.text ?? '').trim(),
@@ -1106,7 +1107,9 @@ const MIN_GAP_MS = 15_000
 const WINDOW_MS = 600_000
 const MAX_PER_WINDOW = 8
 let busy = false
-let batch: { reason: string; lines: string[]; direct: boolean; index: number }[] = []
+// `index`: where the lines start in get_meeting_transcript, or null for lines from the line from Vexa,
+// whose numbering is its own.
+let batch: { reason: string; lines: string[]; direct: boolean; index: number | null }[] = []
 
 // The web and the plugin talk only through the meeting's metadata (flat keys, since
 // annotate_meeting merges key-wise): the plugin writes listener_state / listener_heard /
@@ -1190,7 +1193,7 @@ async function flush($: any): Promise<void> {
   for (const b of batch) for (const l of b.lines) { const k = norm(l); if (!seen.has(k)) { seen.add(k); lines.push(l) } }
   const reasons = [...new Set(batch.map(b => b.reason))].join('; ')
   const direct = batch.some(b => b.direct)
-  const index = Math.min(...batch.map(b => b.index))
+  const index = batch.every(b => b.index !== null) ? Math.min(...batch.map(b => b.index as number)) : null
   batch = []
   busy = true
   await setFlash($, 'sent')
@@ -1222,8 +1225,16 @@ async function flush($: any): Promise<void> {
     await setFlash($, 'done')
     return
   }
-  await say($, `[Vexa listener · signal] ${reasons}: ${verdict.line} — ${m.platform} ${m.nativeId} (get_meeting_transcript since_index=${index}). `
+  const where = index !== null ? ` (get_meeting_transcript since_index=${index})` : `:\n${lines.slice(-8).join('\n')}\n`
+  await say($, `[Vexa listener · signal] ${reasons}: ${verdict.line} — ${m.platform} ${m.nativeId}${where}. `
       + `Look only if it matters; otherwise let it pass with a single «·».${UNTRUSTED}${RECORD}`)
+}
+
+// Where a signal's lines start in get_meeting_transcript: the first fresh line's own place there, known
+// only for lines read from it.
+export function signalIndex(fresh: readonly Seg[]): number | null {
+  const known = fresh.map(s => s.index)
+  return known.every((i): i is number => typeof i === 'number') && known.length ? Math.min(...known) : null
 }
 
 // Judges the tail of the transcript, drafts included, whenever it changes. A rule trigger wakes
@@ -1285,7 +1296,7 @@ async function triage($: any): Promise<void> {
       if (!firstWake) { firstWake = true; quiet(heartbeat($, 'wake')) }
       const heard = (fresh.find(x => isDirect([`${x.speaker}: ${x.text}`])) ?? fresh[fresh.length - 1])?.text ?? ''
       await setFlash($, 'woke', heardLine(heard, triggerWords(v.reason), direct))
-      batch.push({ reason: v.reason, lines: [...context.slice(-2), ...lines], direct, index: Math.max(0, m.segments.length - fresh.length) })
+      batch.push({ reason: v.reason, lines: [...context.slice(-2), ...lines], direct, index: signalIndex(fresh) })
       await flush($)
     }
   } catch (err) {

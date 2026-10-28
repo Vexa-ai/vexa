@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { AFTER_CALL_PAGE, afterCallAsk, inThisCallAsk, inThisCallDue, inThisCallKnobs, inThisCallTiming, bandState, fromPerson, heardLine, panelShownHere, pickOwner, runsListener, withChat, FOLLOW_UP_CONTEXT, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, PERSON_CONTEXT, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
+import { AFTER_CALL_PAGE, afterCallAsk, inThisCallAsk, inThisCallDue, inThisCallKnobs, inThisCallTiming, bandState, fromPerson, heardLine, panelShownHere, signalIndex, pickOwner, runsListener, withChat, FOLLOW_UP_CONTEXT, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, PERSON_CONTEXT, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
 
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 
@@ -438,4 +438,12 @@ test('the end of a call points at the _global after-call page, never the steps',
   expect(ask).toContain(`${AFTER_CALL_PAGE.slug} ${AFTER_CALL_PAGE.path}`)
   expect(ask).toContain('ended')
   for (const step of ['entity_upsert', 'annotate_meeting', 'section_update', 'links_report', 'Action items', 'Decided']) expect(ask).not.toContain(step)
+})
+
+test("a signal points at get_meeting_transcript only with the lines' own place there", () => {
+  const s = (id: string, index?: number) => ({ id, speaker: 'A', text: 't', time: '', pending: false, ...(index === undefined ? {} : { index }) })
+  expect(signalIndex([s('a', 438), s('b', 439)])).toBe(438)
+  expect(signalIndex([s('a', 438), s('b')])).toBe(null)
+  expect(signalIndex([s('262:440')])).toBe(null)
+  expect(signalIndex([])).toBe(null)
 })
