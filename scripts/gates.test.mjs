@@ -594,6 +594,18 @@ test("gate:python shards: shard 1 reds when pytest collects a file the plan neve
   }, sneaky);
 });
 
+test("gate:python shards: a package with no test_*.py file is dealt whole, so pytest still runs it in exactly one shard", () => {
+  // tests/ holds only check_*.py: the plan sees no test file and deals the package as one unit with
+  // no file arguments; pytest (python_files override) finds check_whole.py itself. Shard 1's
+  // collection check skips a whole-dealt package, so this row is what proves the file still runs.
+  const own = (name) => PY_PYPROJECT(name).replace('testpaths = ["tests"]', 'testpaths = ["tests"]\npython_files = ["check_*.py"]');
+  withPlantedPyFiles({ [PKG_A]: ["check_whole.py"], [PKG_B]: ["test_b1.py", "test_b2.py"] }, (tree) => {
+    const outs = [1, 2, 3].map((i) => runPyShard(`${i}/3`, tree));
+    const hits = outs.filter((r) => r.out.includes(`planted ${PKG_A}/check_whole.py`)).length;
+    assert.equal(hits, 1, `a whole-dealt package ran in ${hits} shard(s), not exactly one:\n${outs.map((r) => r.out).join("\n---\n")}`);
+  }, own);
+});
+
 test("gate:python shards: a malformed PY_SHARD reds instead of running nothing", () => {
   withPlantedPyFiles({ [PKG_A]: ["test_a1.py"] }, (tree) => {
     for (const bad of ["0/2", "3/2", "two"]) {

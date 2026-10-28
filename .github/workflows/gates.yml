@@ -98,7 +98,7 @@ jobs:
   # for the whole Python population (run 40697825325), and every PR and rebase waited on it. Every
   # test file runs in exactly one shard; shard 1 also proves pytest collects no file the plan
   # missed. fail-fast off, so one red shard still lets the other seven report.
-  python:
+  python-shard:
     name: python (${{ matrix.shard }})
     runs-on: ubuntu-latest
     strategy:
@@ -119,6 +119,20 @@ jobs:
       - run: docker pull alpine
       - run: pnpm gate:python
         env: { PY_SHARD: "${{ matrix.shard }}/${{ strategy.job-total }}" }
+
+  # `python` is a required check by name on the release branch. The matrix jobs report as
+  # `python (1)`…`python (8)`, so this job keeps the `python` context alive: green only when every
+  # shard is (always(), because a skipped required check would read as satisfied).
+  python:
+    needs: [python-shard]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: All python shards green?
+        env: { R_SHARDS: "${{ needs.python-shard.result }}" }
+        run: |
+          echo "python shards: $R_SHARDS"
+          [ "$R_SHARDS" = "success" ] || { echo "::error ::a python shard failed or was cancelled"; exit 1; }
 
   node:
     runs-on: ubuntu-latest
