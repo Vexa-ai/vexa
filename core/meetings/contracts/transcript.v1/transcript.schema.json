@@ -20,7 +20,7 @@
       }
     },
     "TranscriptSegment": {
-      "description": "One speaker-attributed utterance. Times are seconds relative to session start.",
+      "description": "One speaker-attributed utterance. `start`/`end` are seconds in one of two conventions, by producer: the bot's live lanes write absolute epoch seconds (wall clock), while the transcript import route and the meeting bundle write seconds from the start of the capture. A value at or above 1000000000 is an epoch, a smaller one is an offset. Use `absolute_start_time`/`absolute_end_time` for wall-clock and cross-meeting work; the transcript read fills them from either convention when a producer left them out.",
       "type": "object",
       "additionalProperties": false,
       "required": ["segment_id", "speaker", "text", "start", "end", "completed"],
@@ -29,8 +29,8 @@
         "speaker": { "type": "string", "description": "display name (glow-bound or a provisional label)" },
         "speaker_key": { "type": "string", "description": "per-channel turn key" },
         "text": { "type": "string" },
-        "start": { "type": "number" },
-        "end": { "type": "number" },
+        "start": { "type": "number", "description": "seconds, epoch or offset from capture start by producer (see the segment description); wall-clock use goes through absolute_start_time" },
+        "end": { "type": "number", "description": "seconds, same convention as start; wall-clock use goes through absolute_end_time" },
         "language": { "type": ["string", "null"] },
         "completed": { "type": "boolean", "description": "true = confirmed, false = live draft/pending" },
         "absolute_start_time": { "type": "string", "format": "date-time" },
