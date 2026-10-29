@@ -414,11 +414,13 @@ curl -H "X-API-Key: $API_KEY" \
       "segment_id": "sess_9c2a:spk1:12400",
       "speaker": "Jane Liu",
       "text": "Let's lock the renewal pricing by July 1.",
-      "start": 12.4, "end": 15.1,
+      "start": 1781776812.4, "end": 1781776815.1,
+      "absolute_start_time": "2026-06-18T10:00:12.400Z",
+      "absolute_end_time": "2026-06-18T10:00:15.100Z",
       "language": "en",
       "completed": true,
       "confidence": 0.93,
-      "words": [{ "word": "Let's", "start": 12.4, "end": 12.6, "probability": 0.98 }]
+      "words": [{ "word": "Let's", "start": 1781776812.4, "end": 1781776812.6, "probability": 0.98 }]
     }
   ]
 }
@@ -511,7 +513,13 @@ your client must handle unattributed segments. Under heavy crosstalk roughly **4
 unnamed** ([v0.12.22 release notes](https://github.com/Vexa-ai/vexa/releases/tag/v0.12.22)).
 Speaker attribution is
 text-level (who said what), via speaker binding / clustering / captions — *not* separate audio tracks.
-Times are seconds from session start; `absolute_start_time` / `absolute_end_time` give wall-clock.
+`start` and `end` are seconds, and their reference depends on the producer. The bot's live lanes
+(Google Meet, Zoom, Teams and Jitsi) write absolute epoch seconds; a transcript added through
+`POST /meetings/{meeting_id}/transcript-import` or a [meeting bundle](/how-to/move-a-meeting) carries
+seconds from the start of the capture. A value at or above `1000000000` is an epoch, a smaller one is an
+offset. For wall-clock time, or to compare segments across meetings, read `absolute_start_time` /
+`absolute_end_time` instead: when a segment has no `absolute_start_time`, the transcript read fills
+both from either convention, so never compute `start_time + start` yourself.
 
 The same segments arrive **live** (`completed: false`, a pending draft) and then **confirmed**
 (`completed: true`) — the gateway forwards the confirmed-plus-pending bundle to subscribers as the meeting
