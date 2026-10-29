@@ -15,7 +15,7 @@ import { HumanizedInteractor, MOCAP_LIBRARY } from "./humanized";
 import { AdmissionError } from "../shared/admission";
 import { PINNED_UI_LOCALE, checkUiLocale } from "../shared/ui-locale";
 import { redactMeetingUrl, rethrowRedacted } from "../shared/url-redaction";
-import { watchGoogleJoinRefusal } from "./refusal";
+import { watchGoogleJoinRefusal, throwIfGoogleJoinRefused } from "./refusal";
 
 /** Thrown when authenticated mode detects a signed-out browser profile. Extends AdmissionError so
  *  the JoinDriver's single `instanceof` catch maps the typed `auth_session_missing` outcome to a
@@ -214,16 +214,19 @@ export async function describeSelectorMiss(
  * Wait for the FIRST of an ordered selector list to become visible
  * (locale-agnostic selectors first, English text fallbacks last). Returns the
  * matched handle and the selector that won. On total failure: screenshot + LOUD
- * throw carrying the observed locale/URL.
+ * throw carrying the observed locale/URL. `guard` runs before every poll and
+ * ends the wait by throwing (Meet refusing the join, refusal.ts).
  */
 export async function waitForAnySelector(
   page: Page,
   selectors: string[],
   timeoutMs: number,
-  label: string
+  label: string,
+  guard?: () => Promise<void>
 ): Promise<{ handle: ElementHandle<Element>; selector: string }> {
   const started = Date.now();
   do {
+    if (guard) await guard();
     const hit = await firstVisibleSelector(page, selectors);
     if (hit) {
       log(`Located ${label} via selector: ${hit.selector}`);
@@ -258,7 +261,8 @@ export async function waitForLobbyCta(
   page: Page,
   selectors: string[],
   timeoutMs: number,
-  label: string
+  label: string,
+  guard?: () => Promise<void>
 ): Promise<{ handle: ElementHandle<Element>; selector: string }> {
   const started = Date.now();
   const graceMs = Math.min(CTA_SCAN_GRACE_MS, Math.floor(timeoutMs / 3));
@@ -267,6 +271,7 @@ export async function waitForLobbyCta(
   // no text-labelled button", never "the scan never got to look".
   let lastLabels: string[] | null = null;
   do {
+    if (guard) await guard();
     const hit = await firstVisibleSelector(page, selectors);
     if (hit) {
       log(`Located ${label} via selector: ${hit.selector}`);
@@ -318,8 +323,10 @@ export async function joinGoogleMeeting(
   botName: string,
   botConfig: BotConfig
 ): Promise<void> {
-  // Before any click: Meet answers a refused knock on the network first (refusal.ts).
+  // Before navigating: Meet can refuse the join during the lobby load or on the click, and
+  // answers on the network first (refusal.ts). Every lobby wait below stops on that refusal.
   watchGoogleJoinRefusal(page);
+  const refused = (stage: string) => () => throwIfGoogleJoinRefused(page, stage);
   const navUrl = withPinnedMeetLocale(meetingUrl, PINNED_UI_LOCALE);
   await page.goto(navUrl, { waitUntil: "domcontentloaded" }).catch(rethrowRedacted);
   await page.bringToFront();
@@ -430,7 +437,8 @@ export async function joinGoogleMeeting(
       page,
       googleAuthJoinCtaSelectors,
       30000,
-      "authenticated join CTA"
+      "authenticated join CTA",
+      refused("lobby, authenticated join CTA")
     );
 
     // Signed-out guard: a guest lobby (name input rendered) means the persisted
@@ -459,7 +467,8 @@ export async function joinGoogleMeeting(
       page,
       googleNameInputSelectors,
       120000,
-      "name input"
+      "name input",
+      refused("lobby, name input")
     );
     log("Name input field found.");
 
@@ -486,7 +495,8 @@ export async function joinGoogleMeeting(
       page,
       googleJoinButtonSelectors,
       60000,
-      "join button"
+      "join button",
+      refused("lobby, join button")
     );
     await clickHandle(joinHandle!, "ask_to_join");
     log(`${botName} joined the Google Meet Meeting.`);

@@ -15,7 +15,7 @@ import {
 // teams) throws the SAME typed error the JoinDriver maps, without one platform depending on another.
 import { AdmissionError } from "../shared/admission";
 import { redactMeetingUrl } from "../shared/url-redaction";
-import { throwIfGoogleJoinRefused } from "./refusal";
+import { throwIfGoogleJoinRefused, checkForGoogleJoinRefused } from "./refusal";
 
 // A LIVE reCAPTCHA challenge is a VISIBLE, challenge-sized `iframe[src*="recaptcha"]` —
 // the "I'm not a robot" anchor or the opened bframe. Frame-URL presence is NOT a
@@ -300,13 +300,15 @@ export async function checkForGoogleAdmissionSilent(page: Page): Promise<boolean
   return await checkForGoogleAdmissionIndicators(page);
 }
 
-// Helper function to check for waiting room indicators
+// Helper function to check for waiting room indicators. Meet's refusal screen ("You can't join this
+// video call", refusal.ts) carries "Return to home screen" too, and can render between a poll's
+// refusal check and this one: a refused page is never the waiting room.
 export async function checkForWaitingRoomIndicators(page: Page): Promise<boolean> {
   for (const waitingIndicator of googleWaitingRoomIndicators) {
     try {
       const element = await page.locator(waitingIndicator).first();
       if (await element.isVisible()) {
-        return true;
+        return !(await checkForGoogleJoinRefused(page));
       }
     } catch {
       continue;

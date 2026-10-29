@@ -11,6 +11,7 @@ import {
   knockUntilGoogleAccepts, GoogleJoinRefusedError, GOOGLE_JOIN_MAX_KNOCKS, GOOGLE_JOIN_REFUSED,
 } from './refusal';
 import { AdmissionError } from '../shared/admission';
+import { waitForAnySelector, waitForLobbyCta } from './join';
 
 let passed = 0, failed = 0;
 function check(name: string, ok: boolean, detail?: string) {
@@ -75,6 +76,24 @@ const refused = () => new GoogleJoinRefusedError('CreateMeetingDevice answered H
     let knocks = 0;
     const got = await knockUntilGoogleAccepts(page, 60_000, async () => { knocks++; return true; });
     check('admitted on knock 1 → one knock', got === true && knocks === 1, `knocks=${knocks}`);
+  }
+
+  // The lobby waits stop on a refusal instead of running out their 120 s / 60 s budget (the pre-click
+  // refusal: ResolveMeetingSpace 403 while the bot still waits for the name field).
+  {
+    const blank: any = {
+      locator: () => ({ first: () => ({ isVisible: async () => false }) }),
+      waitForTimeout: async () => {},
+      screenshot: async () => {},
+    };
+    let polls = 0;
+    const guard = async () => { if (++polls >= 3) throw refused(); };
+    const t = Date.now();
+    const nameErr = await waitForAnySelector(blank, ['input[type="text"]'], 120_000, 'name input', guard).catch((e) => e);
+    check('name-input wait ends on the refusal guard, typed', nameErr instanceof GoogleJoinRefusedError && polls === 3 && Date.now() - t < 5_000, `${nameErr?.name} polls=${polls}`);
+    polls = 0;
+    const ctaErr = await waitForLobbyCta(blank, ['button:has-text("Ask to join")'], 60_000, 'join button', guard).catch((e) => e);
+    check('join-button wait ends on the refusal guard, typed', ctaErr instanceof GoogleJoinRefusedError && polls === 3, `${ctaErr?.name} polls=${polls}`);
   }
 
   console.log(`\n=== summary: ${passed} passed, ${failed} failed ===`);

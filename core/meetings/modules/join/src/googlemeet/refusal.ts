@@ -1,11 +1,15 @@
 /**
  * Google Meet refusing the knock itself — "You can't join this video call".
  *
- * Reproduced on the join harness (bbb, 29 Oct 2026) and seen in prod meeting 34824: right after the
- * bot clicks "Ask to join" / "Join now", Meet's `MeetingDeviceService/CreateMeetingDevice` call
- * answers HTTP 403. No meeting device is created, so the host never receives a request; the page
- * throws `DisconnectedError, EndCause = 72, StartupCode = 200` and shows "You can't join this video
- * call" with a "Return to home screen" button, then redirects to workspace.google.com after 60 s.
+ * Reproduced on the join harness (bbb, 29 Oct 2026), seen in prod meeting 34824 and in a self-hosted
+ * log (meeting 121, 29 Oct): Meet answers one of two calls with HTTP 403 (gRPC PERMISSION_DENIED,
+ * "The caller does not have permission"):
+ *   - `MeetingSpaceService/ResolveMeetingSpace`, ~3.5 s after the lobby loads, before any click;
+ *   - `MeetingDeviceService/CreateMeetingDevice`, right after "Ask to join" / "Join now".
+ * Either way no meeting device exists, so the host never receives a request; the page throws
+ * `DisconnectedError, EndCause = 72, StartupCode = 200` and shows "You can't join this video call"
+ * with a "Return to home screen" button, then redirects to workspace.google.com after 60 s.
+ * (ResolveMeetingSpace answering 404 is a meeting code that does not exist: not this.)
  *
  * Before this module the bot read that screen's button as the waiting room (#471), reported
  * `awaiting_admission`, and polled a page with nothing behind it for its whole lobby budget.
@@ -28,16 +32,17 @@ export const GOOGLE_JOIN_REFUSED = "google_meet_join_refused";
  *  these is reported as refused rather than knocked on until the lobby budget runs out. */
 export const GOOGLE_JOIN_MAX_KNOCKS = 3;
 
-const CREATE_MEETING_DEVICE = /MeetingDeviceService\/CreateMeetingDevice/;
+// The two calls whose 403 is Meet refusing this join. Group 1 names the call in the evidence.
+const REFUSING_RPC = /(MeetingSpaceService\/ResolveMeetingSpace|MeetingDeviceService\/CreateMeetingDevice)/;
 
-// Per page: the refused CreateMeetingDevice status of the CURRENT knock, and whether the
+// Per page: the refused call of the CURRENT knock ("<call> answered HTTP 403"), and whether the
 // response listener is already attached. WeakMap/WeakSet so nothing outlives the page.
-const refusedStatus = new WeakMap<object, number>();
+const refusedCall = new WeakMap<object, string>();
 const watched = new WeakSet<object>();
 
 /**
- * Listen for Meet refusing the knock's device creation. Idempotent per page; call it before the
- * join click. The network answer is the primary signal: it does not depend on the UI language and
+ * Listen for Meet refusing the join. Idempotent per page; call it before navigating to the meeting
+ * (ResolveMeetingSpace answers during the lobby load). The network answer is the primary signal: it does not depend on the UI language and
  * it outlives the refusal screen (which Meet replaces with a redirect after 60 s).
  */
 export function watchGoogleJoinRefusal(page: Page): void {
@@ -46,9 +51,11 @@ export function watchGoogleJoinRefusal(page: Page): void {
   watched.add(key);
   page.on("response", (response) => {
     try {
-      if (response.status() === 403 && CREATE_MEETING_DEVICE.test(response.url())) {
-        refusedStatus.set(key, 403);
-        log(`🚫 Google Meet refused the join: CreateMeetingDevice answered HTTP 403`);
+      const call = response.status() === 403 ? REFUSING_RPC.exec(response.url())?.[1] : undefined;
+      if (call) {
+        const what = `${call.split("/")[1]} answered HTTP 403`;
+        refusedCall.set(key, what);
+        log(`🚫 Google Meet refused the join: ${what}`);
       }
     } catch { /* a response we cannot read is not evidence */ }
   });
@@ -56,14 +63,14 @@ export function watchGoogleJoinRefusal(page: Page): void {
 
 /** Forget the previous knock's refusal before knocking again on the same page. */
 export function resetGoogleJoinRefusal(page: Page): void {
-  refusedStatus.delete(page as unknown as object);
+  refusedCall.delete(page as unknown as object);
 }
 
 /** What shows Meet refused this knock, or null. Either signal alone is enough. */
 export async function checkForGoogleJoinRefused(page: Page): Promise<string | null> {
   const evidence: string[] = [];
-  const status = refusedStatus.get(page as unknown as object);
-  if (status) evidence.push(`CreateMeetingDevice answered HTTP ${status}`);
+  const call = refusedCall.get(page as unknown as object);
+  if (call) evidence.push(call);
   for (const selector of googleJoinRefusedIndicators) {
     const visible = await page.locator(selector).first().isVisible().catch(() => false);
     if (visible) {
