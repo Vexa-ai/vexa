@@ -15,6 +15,7 @@ import {
 // teams) throws the SAME typed error the JoinDriver maps, without one platform depending on another.
 import { AdmissionError } from "../shared/admission";
 import { redactMeetingUrl } from "../shared/url-redaction";
+import { throwIfGoogleJoinRefused, checkForGoogleJoinRefused } from "./refusal";
 
 // A LIVE reCAPTCHA challenge is a VISIBLE, challenge-sized `iframe[src*="recaptcha"]` —
 // the "I'm not a robot" anchor or the opened bframe. Frame-URL presence is NOT a
@@ -299,13 +300,15 @@ export async function checkForGoogleAdmissionSilent(page: Page): Promise<boolean
   return await checkForGoogleAdmissionIndicators(page);
 }
 
-// Helper function to check for waiting room indicators
+// Helper function to check for waiting room indicators. Meet's refusal screen ("You can't join this
+// video call", refusal.ts) carries "Return to home screen" too, and can render between a poll's
+// refusal check and this one: a refused page is never the waiting room.
 export async function checkForWaitingRoomIndicators(page: Page): Promise<boolean> {
   for (const waitingIndicator of googleWaitingRoomIndicators) {
     try {
       const element = await page.locator(waitingIndicator).first();
       if (await element.isVisible()) {
-        return true;
+        return !(await checkForGoogleJoinRefused(page));
       }
     } catch {
       continue;
@@ -448,6 +451,10 @@ export async function waitForGoogleMeetingAdmission(
       }
     }
 
+    // Meet may refuse the knock outright ("You can't join this video call", see refusal.ts). Its
+    // screen carries "Return to home screen", a waiting indicator, so this runs before that check.
+    await throwIfGoogleJoinRefused(page, "admission start");
+
     log("Bot not yet admitted - checking for Google Meet waiting room indicators...");
     
     // Check for waiting room indicators using visibility checks
@@ -485,6 +492,7 @@ export async function waitForGoogleMeetingAdmission(
       while (Date.now() - startTime < effectiveTimeout()) {
         // Host denial can leave stale waiting-room text in the DOM. Check the
         // terminal rejection state before treating the page as still waiting.
+        await throwIfGoogleJoinRefused(page, "waiting-room polling");
         await throwIfGoogleAdmissionRejected(page, "waiting-room polling");
         await throwIfGoogleKnockExpired(page, "waiting-room polling");
 
@@ -540,7 +548,8 @@ export async function waitForGoogleMeetingAdmission(
         // reproduces a block (datacenter egress arm) before it can drive `blocked` without
         // false positives.
 
-        // Rejection check first
+        // Refusal and rejection checks first
+        await throwIfGoogleJoinRefused(page, "polling mode");
         await throwIfGoogleAdmissionRejected(page, "polling mode");
         await throwIfGoogleKnockExpired(page, "polling mode");
 
@@ -587,6 +596,7 @@ export async function waitForGoogleMeetingAdmission(
         const checkInterval = 2000;
         const startTime2 = Date.now();
         while (Date.now() - startTime2 < timeout) {
+          await throwIfGoogleJoinRefused(page, "late waiting-room polling");
           await throwIfGoogleAdmissionRejected(page, "late waiting-room polling");
           await throwIfGoogleKnockExpired(page, "late waiting-room polling");
 
@@ -613,6 +623,7 @@ export async function waitForGoogleMeetingAdmission(
 
     // Before concluding failure, check for rejection one last time
     log("No admission indicators after timeout - checking rejection one last time...");
+    await throwIfGoogleJoinRefused(page, "final check");
     await throwIfGoogleAdmissionRejected(page, "final check");
     await throwIfGoogleKnockExpired(page, "final check");
 
