@@ -15,6 +15,7 @@ import { HumanizedInteractor, MOCAP_LIBRARY } from "./humanized";
 import { AdmissionError } from "../shared/admission";
 import { PINNED_UI_LOCALE, checkUiLocale } from "../shared/ui-locale";
 import { redactMeetingUrl, rethrowRedacted } from "../shared/url-redaction";
+import { watchGoogleJoinRefusal } from "./refusal";
 
 /** Thrown when authenticated mode detects a signed-out browser profile. Extends AdmissionError so
  *  the JoinDriver's single `instanceof` catch maps the typed `auth_session_missing` outcome to a
@@ -317,6 +318,8 @@ export async function joinGoogleMeeting(
   botName: string,
   botConfig: BotConfig
 ): Promise<void> {
+  // Before any click: Meet answers a refused knock on the network first (refusal.ts).
+  watchGoogleJoinRefusal(page);
   const navUrl = withPinnedMeetLocale(meetingUrl, PINNED_UI_LOCALE);
   await page.goto(navUrl, { waitUntil: "domcontentloaded" }).catch(rethrowRedacted);
   await page.bringToFront();

@@ -237,6 +237,12 @@ def test_platform_policy_refusal_is_exogenous_not_the_hosts_doing():
     assert attribute_join_failure(
         JoinFailureReason.AWAITING_ADMISSION_REJECTED, detail="reCAPTCHA challenge presented",
     ) is JoinFailureAttribution.EXOGENOUS_PLATFORM
+    # Meet refusing the knock itself (@vexa/join GoogleJoinRefusedError, prod meeting 34824).
+    assert attribute_join_failure(
+        JoinFailureReason.AWAITING_ADMISSION_REJECTED,
+        detail="google_meet_join_refused: Google Meet refused the join on 3 of 3 knocks "
+        "(CreateMeetingDevice answered HTTP 403); the host never received a request to admit the bot",
+    ) is JoinFailureAttribution.EXOGENOUS_PLATFORM
 
 
 def test_a_broken_admission_flow_is_ours_not_the_hosts():
