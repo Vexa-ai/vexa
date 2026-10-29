@@ -53,6 +53,27 @@ EDGE_HOPS: Dict[RouteKey, RouteKey] = {
     ("GET", "/bot-accounts/sessions/{session_id}/vnc"): ("GET", "/bot-accounts/sessions/{session_id}"),
 }
 
+#: The ``/ws`` subscribe hop. Until ``removed_config.COMPAT_REMOVED_IN`` it is NOT held to the
+#: transcript read's scopes, as in 0.12.28: the gateway lets any valid key subscribe, the hop reaches
+#: this service with a key that may hold only ``bot``, and the handler's ownership check decides each
+#: meeting, row by row, exactly as for a ``tx`` key. A key without the scopes is logged
+#: ``ws_scope_not_enforced`` so its users can be found before the requirement returns.
+WS_SUBSCRIBE_HOP: RouteKey = ("POST", "/ws/authorize-subscribe")
+
+
+def _scope_not_enforced(request: HTTPConnection, required: FrozenSet[str]) -> None:
+    try:
+        from .obs import log_event
+        from .removed_config import COMPAT_REMOVED_IN, count_compat_use
+
+        log_event("ws_scope_not_enforced", audience="system", level="warning",
+                  span="ws.authorize_subscribe", user_id=request.headers.get("x-user-id"),
+                  fields={"required": sorted(required), "count": count_compat_use("ws_scope_not_enforced"),
+                          "removed_in": COMPAT_REMOVED_IN})
+    except Exception:  # noqa: BLE001 — logging never decides a request
+        pass
+
+
 #: The answer the edge gives a key without the route's scope (`gateway/app.py`), so a client reads
 #: one refusal whichever side refused it.
 INSUFFICIENT_SCOPE = "Insufficient scope for this endpoint"
@@ -130,6 +151,9 @@ def scope_gate(request: HTTPConnection) -> None:
         raise _refuse()
     held = {s.strip() for s in (request.headers.get("x-user-scopes") or "").split(",") if s.strip()}
     if not held & required:
+        if key == WS_SUBSCRIBE_HOP:
+            _scope_not_enforced(request, required)
+            return
         raise _refuse()
 
 

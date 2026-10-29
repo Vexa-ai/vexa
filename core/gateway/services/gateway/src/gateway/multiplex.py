@@ -15,18 +15,19 @@ from typing import Dict, List, Set, Tuple
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from .changed import QUERY_KEY_REFUSAL, SCOPE_HOW, refusal
+from .changed import COMPAT_REMOVED_IN, count_compat_use
 from .delegation import is_delegated
 from .obs import log_event, set_user_id
 from .ws_auth import accept, ws_credential
 from .ports import Authorizer, AuthUnavailable, RedisBus
 
 
-#: THE SOCKET IS HELD TO THE REST ROUTES' SCOPES, read from the same rows (the assembled routes.v1
-#: table), so a key reaches nothing here it could not reach over REST. A meeting subscription fans in
-#: the live transcript (`tc:meeting:{id}:mutable`), so it takes the transcript read's scopes; the
-#: socket itself carries meeting-status frames, so opening it takes the scopes of a route that
-#: answers meeting status (`GET /meetings` or `GET /bots/status`).
+#: THE REST ROUTES' SCOPES, read from the same rows (the assembled routes.v1 table). A meeting
+#: subscription fans in the live transcript (`tc:meeting:{id}:mutable`), the transcript read's data;
+#: the socket itself carries meeting-status frames, the data of `GET /meetings` / `GET /bots/status`.
+#: Until `changed.COMPAT_REMOVED_IN` the socket does not REQUIRE them, as in 0.12.28: any valid key
+#: opens it and subscribes to the meetings `POST /ws/authorize-subscribe` grants it (ownership,
+#: workspace, share). A key without them is logged `ws_scope_not_enforced`, so its users can be found.
 TRANSCRIPT_ROUTE = ("GET", "/transcripts/{platform}/{native_meeting_id}")
 STATUS_ROUTES = (("GET", "/meetings"), ("GET", "/bots/status"))
 
@@ -121,7 +122,8 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
     multiplex against its fakes — exposed on the front door (``gateway.run_multiplex``) so the
     harness no longer reaches for a private (the P1-flagged smell).
 
-    guard (PRE-accept, opt-in) → accept → authenticate (missing key → error + close 4401) →
+    guard (PRE-accept, opt-in) → accept → authenticate (missing key → error + close 4401; a key in
+      the URL is still taken, deprecated, and logged) →
       loop over client frames:
       subscribe   → authorize, register a redis fan-in per meeting, ack ``subscribed``;
       unsubscribe → cancel the fan-in task(s), ack ``unsubscribed`` (stops forwarding);
@@ -157,13 +159,11 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
     await accept(ws, credential.subprotocol)
 
     if credential.source == "query":
-        log_event("ws_query_key_refused", audience="system", level="warning", span="ws",
-                  fields={"path": "/ws"})
-        try:
-            await ws.send_text(json.dumps(QUERY_KEY_REFUSAL))
-        finally:
-            await ws.close(code=4401)  # Unauthorized: the URL carries no credential
-        return
+        # DEPRECATED, still a credential for 0.12 clients (changed.py). Never the key in the line.
+        log_event("ws_query_key_deprecated", audience="system", level="warning", span="ws",
+                  fields={"path": "/ws", "count": count_compat_use("ws_query_key_deprecated"),
+                          "removed_in": COMPAT_REMOVED_IN,
+                          "use": "x-api-key header or the vexa.key.<key> subprotocol"})
 
     api_key = credential.key
     if not api_key:
@@ -204,21 +204,21 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
     user_id = user_data["user_id"]
     set_user_id(user_id)
 
-    # A KEY WITHOUT THE SCOPE IS REFUSED HERE AS OVER REST (`_authorize`): a key that can read no
-    # meeting status opens no socket, and one that cannot read transcripts subscribes to none.
+    # A KEY WITHOUT THE REST SCOPES IS SERVED AS IN 0.12.28 (see TRANSCRIPT_ROUTE above), and named.
     table = route_scopes if route_scopes is not None else _assembled_scopes()
     held = {str(s) for s in (user_data.get("scopes") or [])}
     status_scopes = frozenset().union(*(table.get(r, frozenset()) for r in STATUS_ROUTES))
     transcript_scopes = frozenset(table.get(TRANSCRIPT_ROUTE, frozenset()))
+
+    def scope_not_enforced(on: str, required: frozenset) -> None:
+        log_event("ws_scope_not_enforced", audience="system", level="warning", span="ws",
+                  user_id=user_id,
+                  fields={"path": "/ws", "on": on, "required": sorted(required),
+                          "count": count_compat_use("ws_scope_not_enforced"),
+                          "removed_in": COMPAT_REMOVED_IN})
+
     if not held & status_scopes:
-        log_event("request_denied_scope", audience="user", level="warning", span="ws",
-                  user_id=user_id, fields={"path": "/ws", "required": sorted(status_scopes)})
-        try:
-            await ws.send_text(json.dumps({**refusal("insufficient_scope", SCOPE_HOW),
-                                           "details": "this key reads no meeting status"}))
-        finally:
-            await ws.close(code=4403)  # Forbidden
-        return
+        scope_not_enforced("connect", status_scopes)
 
     sub_tasks: Dict[Tuple, asyncio.Task] = {}
     subscribed_meetings: Set[Tuple] = set()
@@ -477,14 +477,7 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
                         "details": f"'streams' must be a non-empty list of {list(STREAM_NAMES)}"}))
                     continue
                 if not held & transcript_scopes:
-                    log_event("request_denied_scope", audience="user", level="warning", span="ws",
-                              user_id=user_id,
-                              fields={"path": "/ws subscribe", "required": sorted(transcript_scopes)})
-                    await ws.send_text(json.dumps({
-                        **refusal("insufficient_scope", SCOPE_HOW),
-                        "details": "subscribing streams a meeting's transcript; this key may not "
-                                   "read transcripts"}))
-                    continue
+                    scope_not_enforced("subscribe", transcript_scopes)
 
                 # The downstream authorize hop must never crash the socket: a RAISE → authorization_call_failed
                 # frame + continue; a non-200 (errors carried, nothing authorized) → authorization_service_error

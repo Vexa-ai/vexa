@@ -2660,6 +2660,25 @@
           "pattern": "^\\| `draft_attachments` / `draft_attachment_max_kb` \\| `[^`]+` / `([^`]+)` \\|"
         }
       ]
+    },
+    {
+      "id": "compat-removed-in",
+      "fact": "the release that removes what 0.13.4 still does for 0.12 clients: the /ws URL key, /ws subscribe without tx, a 0.12 bot's unsigned transcript entries",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/gateway/services/gateway/src/gateway/changed.py — COMPAT_REMOVED_IN",
+      "how_to_agree": "change COMPAT_REMOVED_IN in the gateway's changed.py and meeting-api's removed_config.py together, and the docs that name the release (changes-0-13-4-auth.mdx)",
+      "why": "The gateway and meeting-api are separately built images that may not import each other (P2), and each logs the release in every compat line (removed_in) and names it at boot. The /ws scope requirement must return in both at once: a gateway that subscribes a bot-only key while meeting-api refuses its authorize hop (or the reverse) gives that key no transcript and no reason.",
+      "sites": [
+        {
+          "path": "core/gateway/services/gateway/src/gateway/changed.py",
+          "pattern": "^COMPAT_REMOVED_IN = \"([^\"]+)\""
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/removed_config.py",
+          "pattern": "^COMPAT_REMOVED_IN = \"([^\"]+)\""
+        }
+      ]
     }
   ]
 }

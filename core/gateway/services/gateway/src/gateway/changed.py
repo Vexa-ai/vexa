@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Optional
+from typing import Dict, Optional
 
 #: The release whose auth change these refusals describe.
 CHANGED_IN = "0.13.4"
@@ -30,17 +30,35 @@ def refusal(error: str, do_instead: str) -> dict:
             "do_instead": do_instead, "docs": DOCS}
 
 
-#: What a key /ws refuses for its scopes needs instead.
-SCOPE_HOW = ("use a key that holds the scopes the same REST read takes (meeting status for the socket, "
-             "tx for a transcript subscription; a bot-only key streams nothing); GET /auth/me lists yours")
-
-
-#: A websocket that names its key in the URL (``?api_key=``); close 4401 follows.
+#: A websocket that names its key in the URL (``?api_key=``); close 4401 follows. The bot-account
+#: live view (``vnc_relay.py``) refuses it; ``/ws`` still takes it until COMPAT_REMOVED_IN.
 QUERY_KEY_REFUSAL = refusal("api_key_query_removed", WS_KEY_HOW)
+
+
+# -- kept for existing 0.12 clients, for one release -------------------------------------------------
+#
+# Two things /ws still does as 0.12.28 did, so a client already deployed keeps its live transcript:
+#   * a key in the URL (``?api_key=``) is a credential, logged ``ws_query_key_deprecated``;
+#   * a key without ``tx`` subscribes to the meetings it may read, logged ``ws_scope_not_enforced``.
+# Which meetings a key may read is decided as before (meeting-api ``POST /ws/authorize-subscribe``,
+# and the live re-authorization). Fixed behaviour, not a setting, and removed in this release:
+COMPAT_REMOVED_IN = "0.13.6"
+
+#: Running count of each kept behaviour's use since this process started. The gateway has no metrics
+#: backend; the count rides on every log line, so a pod's last line of an event is its total.
+COMPAT_USE: Dict[str, int] = {}
+
+
+def count_compat_use(event: str) -> int:
+    """Count one use of a kept 0.12 behaviour; returns the running total for ``event``."""
+    COMPAT_USE[event] = COMPAT_USE.get(event, 0) + 1
+    return COMPAT_USE[event]
+
 
 #: Configuration keys the gateway does not read, each with what holds now.
 REMOVED_KEYS = {
-    "VEXA_WS_SCOPE_MODE": "/ws always takes the REST routes' key scopes",
+    "VEXA_WS_SCOPE_MODE": (f"/ws serves any valid key as 0.12 did until {COMPAT_REMOVED_IN}, "
+                           "then takes the REST routes' key scopes; there is no setting"),
 }
 
 

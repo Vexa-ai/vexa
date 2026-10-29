@@ -155,17 +155,22 @@ async def test_deny_a_reader_removed_mid_meeting_stops_receiving_annotations(mon
     await _close(ws, task)
 
 
-async def test_deny_a_key_that_may_not_read_transcripts_gets_no_annotations(monkeypatch):
-    """Signals ride the transcript's scope: strict mode refuses a key without it, before the hop."""
+async def test_signals_ride_the_transcript_rule_for_a_key_without_tx(monkeypatch):
+    """Signals ride the transcript's access rule. Until COMPAT_REMOVED_IN a key without `tx` reads its
+    OWN meeting's annotations, as it reads its transcript (0.12.28); another meeting's it never gets."""
     _fast(monkeypatch)
     redis = FakeRedis()
     await _write(redis, 42)
+    await _write(redis, 43, {**ANNOTATION, "segment_id": "theirs"})
     auth = FakeAuthorizer(user={"user_id": 7, "scopes": ["bot"], "max_concurrent": 3}, valid_key=API_KEY,
                           auth_map={("google_meet", "room-1"): {"meeting_id": 42, "user_id": 7}})
-    ws, task = await _open(redis, auth, [SUB_SIGNALS])
+    other = {"action": "subscribe", "meetings": [{"platform": "google_meet", "native_id": "room-9"}],
+             "streams": ["signals"]}
+    ws, task = await _open(redis, auth, [SUB_SIGNALS, other])
     await asyncio.sleep(0.05)
-    assert any(f.get("error") == "insufficient_scope" for f in ws.sent), ws.sent
-    assert not _signals(ws)
+    assert not any(f.get("error") == "insufficient_scope" for f in ws.sent), ws.sent
+    assert [a["segment_id"] for a in _annotations(ws)] == ["s-1"]
+    assert "sig:meeting:43" not in redis.xread_keys
     await _close(ws, task)
 
 

@@ -565,9 +565,22 @@ def _attach_background_loops(
 
     async def _segment_consumer_loop() -> None:
         # Drain the transcription_segments stream → persist + publish tc:…:mutable.
+        from .collector import legacy_unsigned
+
+        # Upgrade hand-off: a 0.12 bot still in a meeting writes unsigned entries; admit them for the
+        # meetings spawned before 0.13, for a bounded window (collector/legacy_unsigned.py).
+        try:
+            await legacy_unsigned.open_from_db(session_factory)
+        except Exception:
+            log.exception("legacy segment hand-off: could not read in-flight meetings")
         tick_n = 0
         while True:
             try:
+                if tick_n % 60 == 0:
+                    try:
+                        await legacy_unsigned.refresh_from_db(session_factory)
+                    except Exception:
+                        log.exception("legacy segment hand-off: refresh failed")
                 await consume_segments(transcript_store, segment_bus)
                 # #636: every N ticks, reclaim any ORPHANED (crashed-replica) un-acked batch idle
                 # past RECLAIM_MIN_IDLE_MS and drain it through the same ingest→ack path. Bounded to

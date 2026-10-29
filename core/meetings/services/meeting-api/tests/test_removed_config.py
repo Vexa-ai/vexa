@@ -31,6 +31,12 @@ def test_each_set_key_is_named_with_the_release_and_the_page(key, value):
     assert "https://docs.vexa.ai/changes-0-13-4-auth" in line
 
 
+def test_the_kept_0_12_behaviours_name_their_removal_release():
+    assert rc.COMPAT_REMOVED_IN == "0.13.6"
+    for key in ("VEXA_WS_SCOPE_MODE", "VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S"):
+        assert f"until {rc.COMPAT_REMOVED_IN}" in rc.REMOVED_KEYS[key]
+
+
 def test_all_three_set_are_all_named():
     assert rc.warn_at_boot({k: "x" for k in KEYS}, stream=io.StringIO()) == list(KEYS)
     assert set(rc.REMOVED_KEYS) == set(KEYS)

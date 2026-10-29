@@ -1,8 +1,11 @@
-"""A `bot`-only key streams no transcript over `/ws`, end to end through the gateway and meeting-api.
+"""A `bot`-only key streams its OWN meeting over `/ws` and nobody else's, end to end through the
+gateway and meeting-api.
 
-`GET /transcripts/{platform}/{native_meeting_id}` takes `tx`; a `/ws` subscription streams the same
-transcript, so both services hold it to the same scopes. A `bot`-only key gets `insufficient_scope`
-with what to do instead; `VEXA_WS_SCOPE_MODE` is not read by either service.
+`{bot}` is the hosted webapp's key (and what many API users hold). Until COMPAT_REMOVED_IN (0.13.6)
+neither service requires `tx` for a `/ws` subscription, as in 0.12.28: the gateway subscribes any
+valid key, and meeting-api's `POST /ws/authorize-subscribe` lets it past the route-scope gate, then
+its ownership check decides each meeting exactly as for a `tx` key. Both log `ws_scope_not_enforced`.
+`VEXA_WS_SCOPE_MODE` is not read by either service.
 
 This drives the SHIPPED pieces together, offline:
   the gateway's `/ws` loop (`gateway.run_multiplex`)
@@ -65,16 +68,28 @@ def _authorizer(scopes):
     return AdminApiAuthorizer(client, "http://admin-api", "http://meeting-api", identity_key=KEY)
 
 
-async def _subscribe(scopes, meeting):
+async def _subscribe(scopes, meeting, publish_to=None):
+    """Subscribe with a key holding ``scopes``; then, when ``publish_to`` names a meeting row, publish
+    one transcript frame on its channel and wait for it to come through (or not)."""
     ws = FakeWebSocket(inbound=[
         '{"action": "subscribe", "meetings": [%s]}' % (
             '{"platform": "%s", "native_id": "%s"}' % (meeting["platform"], meeting["native_id"]))
     ], api_key=API_KEY, close_when_drained=False)
-    task = asyncio.ensure_future(run_multiplex(ws, _authorizer(scopes), FakeRedis()))
+    redis = FakeRedis()
+    task = asyncio.ensure_future(run_multiplex(ws, _authorizer(scopes), redis))
     for _ in range(200):
         await asyncio.sleep(0.01)
         if any(f.get("type") in ("subscribed", "error") for f in ws.sent):
             break
+    if publish_to is not None:
+        channel = f"tc:meeting:{publish_to}:mutable"
+        if any(f.get("type") == "subscribed" and f.get("meetings") for f in ws.sent):
+            await redis.wait_for_subscriber(channel, timeout=2)
+        await redis.publish(channel, '{"type": "transcript", "speaker": "Ann", "confirmed": [], "pending": []}')
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if any(f.get("type") == "transcript" for f in ws.sent):
+                break
     ws.disconnect()
     await asyncio.wait_for(task, timeout=5)
     return ws
@@ -85,17 +100,20 @@ def _env(monkeypatch):
     monkeypatch.setenv("INTERNAL_API_SECRET", "conformance-internal")
 
 
-@pytest.mark.parametrize("old_setting", [None, "legacy"])
-async def test_a_bot_only_key_is_refused_with_what_to_do(monkeypatch, old_setting):
+@pytest.mark.parametrize("old_setting", [None, "legacy", "strict"])
+async def test_a_bot_only_key_subscribes_to_its_own_meeting_and_receives_its_frames(monkeypatch, old_setting):
     if old_setting:
         monkeypatch.setenv("VEXA_WS_SCOPE_MODE", old_setting)
-    ws = await _subscribe(["bot"], MINE)
-    refused = [f for f in ws.sent if f.get("error") == "insufficient_scope"]
-    assert refused, ws.sent
-    assert refused[0]["changed_in"] == "0.13.4"
-    assert "tx" in refused[0]["do_instead"] and "bot-only" in refused[0]["do_instead"]
-    assert refused[0]["docs"] == "https://docs.vexa.ai/changes-0-13-4-auth"
-    assert not any(f.get("type") == "subscribed" and f.get("meetings") for f in ws.sent)
+    ws = await _subscribe(["bot"], MINE, publish_to=42)
+    assert not [f for f in ws.sent if f.get("type") == "error"], ws.sent
+    assert {"type": "subscribed", "meetings": [MINE]} in ws.sent, ws.sent
+    assert any(f.get("type") == "transcript" and f.get("speaker") == "Ann" for f in ws.sent), ws.sent
+
+
+async def test_a_bot_only_key_is_refused_a_meeting_it_does_not_own():
+    ws = await _subscribe(["bot"], THEIRS, publish_to=43)
+    assert not any(f.get("type") == "subscribed" and f.get("meetings") for f in ws.sent), ws.sent
+    assert not any(f.get("type") == "transcript" for f in ws.sent), ws.sent
 
 
 async def test_a_transcript_key_subscribes_to_its_own_meeting():

@@ -316,8 +316,8 @@ is refused.
 | `PUT /user/webhook` adds the webhook config (`webhook_url`, `webhook_secret_set`, masked `webhook_secret`, `webhook_events`) to the account record it returned in 0.12. The record's `data` never carries a stored credential. | New top-level fields | Nothing; read either. See [Webhooks](/webhooks). |
 | `/admin/users*` reads show stored credentials as `api_key_set`, `token_set` and `ics_url_set` with a masked tail. | Credential values missing | Store credentials where you write them; reads never return them. |
 | agent-api accepts a user only from the gateway's signed identity. `VEXA_AGENT_DEFAULT_SUBJECT` and `VEXA_REQUIRE_GATEWAY_IDENTITY` are gone. | `401` on direct calls to agent-api | Call it through the gateway (`/agent/*` with an API key). |
-| The live WebSocket `/ws` applies the REST key scopes on the gateway and meeting-api. On 0.12 any valid key opened the socket and subscribed to the meetings it owned, so a `bot`-only key streamed transcripts. | A key that cannot read meeting status is closed with `4403`; a key without the `tx` scope gets `insufficient_scope` on transcript subscribe | Give those callers keys with the scopes the matching REST routes need. See [Authentication → Scopes](/authentication#scopes) and [What changed in 0.13.4: auth](/changes-0-13-4-auth). |
-| `/ws` and the bot-account live view no longer take the key in the URL (`?api_key=`). | `api_key_query_removed` error frame, then close `4401` | Send the key in the `X-API-Key` header, or from a browser in the subprotocol list (`["vexa.v1", "vexa.key.<key>"]`). See [What changed in 0.13.4: auth](/changes-0-13-4-auth). |
+| Deprecated: the live WebSocket `/ws` does not require the REST key scopes. As on 0.12, any valid key opens the socket and subscribes to the meetings it may read, so a `bot`-only key streams its own transcripts. Removed in 0.13.6. | None until 0.13.6 (logged `ws_scope_not_enforced`); then a key without `tx` gets `insufficient_scope` on transcript subscribe | Give live-transcript callers keys with `tx` before 0.13.6. See [Authentication → Scopes](/authentication#scopes) and [What changed in 0.13.4: auth](/changes-0-13-4-auth). |
+| Deprecated: `/ws` still takes the key in the URL (`?api_key=`) until 0.13.6. The bot-account live view no longer does. | `/ws`: none until 0.13.6 (logged `ws_query_key_deprecated`). Live view: `api_key_query_removed` error frame, then close `4401` | Send the key in the `X-API-Key` header, or from a browser in the subprotocol list (`["vexa.v1", "vexa.key.<key>"]`). See [What changed in 0.13.4: auth](/changes-0-13-4-auth). |
 | A webhook URL, calendar feed or personal transcription endpoint that points at a private or internal address is refused when saved. | `422` | Use a public address. |
 | A webhook is delivered under the 0.13 guard, whenever its URL was saved. 0.12 also delivered to shared (100.64/10), documentation and benchmarking addresses. | Deliveries to a URL saved on 0.12 that resolves into those ranges are recorded `blocked` | Re-save the webhook with a public address. |
 | Deleting a meeting whose bot is still in it can stop the bot and delete at the end (`202 deletion_scheduled`): `VEXA_MEETING_DELETE_LIVE=stop` on meeting-api. The default, `refuse`, keeps the 0.12 answer. | Default: `409` until the meeting ends, as on 0.12 | Set `stop` to let a delete end the meeting. |
@@ -329,7 +329,9 @@ is refused.
 
 There are none. `VEXA_WS_SCOPE_MODE`, `VEXA_WEBHOOK_STORED_URL_POLICY` and
 `VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S` are not read; a service that is still given one names it at
-start (`config_key_removed`), and a Helm values file that still sets `compat.*` is refused. See
+start (`config_key_removed`), and a Helm values file that still sets `compat.*` is refused. Until
+0.13.6, `/ws` serves 0.12 clients as 0.12 did, and a 0.12 bot already in a call when meeting-api
+starts keeps storing its transcript for 4 hours; both are fixed behaviour, not settings. See
 [What changed in 0.13.4: auth](/changes-0-13-4-auth).
 
 ### Redis password and per-workload users
