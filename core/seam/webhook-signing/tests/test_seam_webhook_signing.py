@@ -138,8 +138,10 @@ def stack(pg_url):
             return await c.post(url, content=body, headers=headers)
 
     repo = InMemoryMeetingRepo()
+    runtime = FakeRuntimeClient()
     meeting_app = create_meeting_app(
-        meeting_repo=repo, runtime=FakeRuntimeClient(),
+        meeting_repo=repo, runtime=runtime,
+        token_secret="seam-meeting-token-secret",  # the production entrypoint passes ADMIN_TOKEN here
         webhook_sink=WebhookSink(transport, resolver=resolver),
     )
     meeting_url, meeting_srv = _serve(meeting_app)
@@ -158,7 +160,7 @@ def stack(pg_url):
     gateway.__enter__()  # one portal loop for the whole module: the httpx pools outlive a request
     try:
         yield {"admin": admin_url, "meeting": meeting_url, "gateway": gateway,
-               "receiver": receiver, "repo": repo}
+               "receiver": receiver, "repo": repo, "runtime": runtime}
     finally:
         gateway.__exit__(None, None, None)
         receiver.close()
@@ -172,13 +174,23 @@ def _sign(body: bytes, ts: str, secret: str) -> str:
     return "sha256=" + hmac.new(secret.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
 
 
-def _complete(meeting_url: str, session_uid: str):
+def _bot_token(runtime, session_uid: str) -> str:
+    """The MeetingToken the spawned bot carries: the lifecycle callback admits only its own session's."""
+    for spec in runtime.specs:
+        cfg = json.loads(spec["env"]["VEXA_BOT_CONFIG"])
+        if cfg.get("connectionId") == session_uid:
+            return cfg["token"]
+    raise AssertionError(f"no spawned bot for session {session_uid}")
+
+
+def _complete(meeting_url: str, session_uid: str, token: str):
     for status in ("joining", "active", "completed"):
         ev = {"connection_id": session_uid, "status": status,
               "timestamp": "2026-10-22T10:00:00.000Z"}
         if status == "completed":
             ev["completion_reason"] = "stopped"
-        r = httpx.post(f"{meeting_url}/bots/internal/callback/lifecycle", json=ev, timeout=10)
+        r = httpx.post(f"{meeting_url}/bots/internal/callback/lifecycle", json=ev,
+                       headers={"Authorization": f"Bearer {token}"}, timeout=10)
         assert r.status_code == 200, r.text
 
 
@@ -240,7 +252,8 @@ def test_user_webhook_secret_signs_meeting_completed(stack):
     kept = spawn("seam-url-only-put")
 
     for bot in (before, signed, kept):
-        _complete(stack["meeting"], _session_uid(bot))
+        uid = _session_uid(bot)
+        _complete(stack["meeting"], uid, _bot_token(stack["runtime"], uid))
 
     for native_id in ("seam-with-secret", "seam-url-only-put"):
         d = _completed_for(rx, native_id)
