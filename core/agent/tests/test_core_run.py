@@ -58,7 +58,7 @@ def test_emitted_frontmatter_conforms_to_workspace_v1(transcription_golden):
 
 def test_empty_transcript_is_noop_no_commit():
     ws = FakeWorkspace()
-    empty = {"type": "transcription", "session_uid": "s", "meeting_id": "1", "segments": []}
+    empty = {"type": "transcription", "meeting_id": "1", "segments": []}
     result = run(_request(empty), ws)
     assert result.action.kind is ActionKind.noop
     assert result.committed is False

@@ -98,7 +98,7 @@ class Deployment:
             for i, (spk, txt, s, e) in enumerate([("Ada", "Opening the call.", 0.0, 2.5),
                                                   ("Grace", "Numbers look right.", 2.5, 6.0)]):
                 db.add(Transcription(meeting_id=m.id, start_time=s, end_time=e, text=txt, speaker=spk,
-                                     language="en", session_uid="sess-pg", segment_id=f"sess-pg-{i}"))
+                                     language="en", segment_id=f"sess-pg-{i}"))
             await db.commit()
             mid = m.id
         self.storage.blobs[key] = WAV
