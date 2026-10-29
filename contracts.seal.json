@@ -34,7 +34,7 @@
   "core/meetings/contracts/sdk-join.v1": "a06b7ed198cd9046ee15862732f82baa003fb9ee1879b004f29fbf8548b33192",
   "core/meetings/contracts/service-authority.v1": "cbcb1662424e180faebc9170896cc270985d8510b50f51ae1e9b32bc2e6050e6",
   "core/meetings/contracts/session-profile.v1": "b43e8b6438e84e496f3c4c5f85651fce844598489f167668e127e77fdaa22930",
-  "core/meetings/contracts/transcript.v1": "2b2e594ec10c77a7e22eb92f35be0df6148a1ffee0e6d8713be0c5856b3dbd41",
+  "core/meetings/contracts/transcript.v1": "9c1d1e4a98f568cf100fa49d71a911f8d0791b0bc4d4ae382ec166a1d5bb59c3",
   "core/meetings/contracts/transcription-language.v1": "bd045f0335fce7edb9e993d0ab5f8d20706381d6b2372c1eb81db5f0251933c1",
   "core/meetings/contracts/webhook.v1": "7d5b9d674544cf8ce7bdeda85b5156907be7c4d3e9be359366cc2ab1665bafba",
   "core/runtime/contracts/runtime.v1": "5b1d52ea7cc663f61a802c009c36135f2dc7056bd00f62c5f566dae3ca169af1",

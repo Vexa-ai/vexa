@@ -20,7 +20,7 @@
       }
     },
     "TranscriptSegment": {
-      "description": "One speaker-attributed utterance. `start`/`end` are seconds in one of two conventions, by producer: the bot's live lanes write absolute epoch seconds (wall clock), while the transcript import route and the meeting bundle write seconds from the start of the capture. A value at or above 1000000000 is an epoch, a smaller one is an offset. Use `absolute_start_time`/`absolute_end_time` for wall-clock and cross-meeting work; the transcript read fills them from either convention when a producer left them out.",
+      "description": "One speaker-attributed utterance. `start`/`end` are seconds in one of two conventions, by producer: the bot's live lanes write absolute epoch seconds (wall clock), while the transcript import route and the meeting bundle write seconds from the start of the capture. A value at or above 1000000000 is an epoch, a smaller one is an offset. Use `absolute_start_time`/`absolute_end_time` for wall-clock and cross-meeting work; the transcript read fills both from either convention when a segment has no `absolute_start_time`.",
       "type": "object",
       "additionalProperties": false,
       "required": ["segment_id", "speaker", "text", "start", "end", "completed"],
