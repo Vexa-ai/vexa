@@ -39,8 +39,9 @@ nothing. Both are idempotent.
 ## Order
 
 Run it **after** every meeting-api replica of the release before this one is gone. The previous
-release's INSERT names `session_uid`, and fails once the column is dropped. A deployment that never
-runs the SQL is correct as well: the column is nullable, so the new INSERT leaves it `NULL`.
+release names `session_uid` in its INSERT and reads full `Transcription` rows (`select(Transcription)`),
+so both its transcript writes and its transcript reads fail once the column is dropped. A deployment
+that never runs the SQL is correct as well: the column is nullable, so the new INSERT leaves it `NULL`.
 
 ## Pre-flight (read-only)
 
