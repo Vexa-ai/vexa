@@ -117,7 +117,6 @@ def normalize_segments(raw, session_uid: str) -> "tuple[Optional[list], Optional
             return None, f"segment {i}: 'language' must be a string"
         out.append({
             "segment_id": segment_id_for(session_uid, i),
-            "session_uid": session_uid,
             "start": start,
             "end": end,
             "text": text,

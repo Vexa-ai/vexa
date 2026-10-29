@@ -110,8 +110,7 @@ def main() -> int:
         elapsed = ctx.clock_now - state.get("admitted_at", ctx.clock_now)
         if elapsed < args.transcribe_s:
             return Wait(seconds=args.transcribe_s - elapsed)
-        uid = f"witness-{state['meeting_id']}"
-        n = rs.inject_fixture_transcript(state["meeting_id"], uid)
+        n = rs.inject_fixture_transcript(state["meeting_id"])
         say(f"fixture transcript injected: {n} segments (no whisper in this stack — the one double)")
         return Done({"segments": n})
 
