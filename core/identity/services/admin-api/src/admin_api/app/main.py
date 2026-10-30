@@ -18,10 +18,11 @@ exercises:
   is refused (422) — never silently dropped (#922).
 """
 import hmac
+import json
 import os
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, Security, status
 from fastapi.security import APIKeyHeader
@@ -257,7 +258,16 @@ class CalendarPatch(BaseModel):
 # resolves FIELD-BY-FIELD user > platform; the process env stays the bottom fallback downstream
 # (dispatch/bot_spawn only override what is set here).
 MODEL_MODES = ("subscription", "custom")
-_MODELS_FIELDS = ("mode", "model", "meeting_model", "base_url", "api_key", "effort")
+# `harness_base_url`/`harness_api_key` and `headers` are the per-dialect half of a custom config
+# (Vexa-ai/vexa#1666, #1667). `mode: custom` drives TWO wire contracts — the claude-code harness
+# posts `{base}/v1/messages` with `x-api-key`, the completion adapters post `{base}/chat/completions`
+# with `Authorization: Bearer` — and one base_url + one api_key cannot serve a gateway that splits
+# them. Both harness_* fields fall back to their base_url/api_key twin downstream, so an endpoint
+# serving both dialects is configured exactly as before. `headers` carries provider-required extra
+# request headers, normalized HERE to `Name: Value` lines (the format the claude CLI's
+# ANTHROPIC_CUSTOM_HEADERS parses) so no consumer downstream re-parses what the user typed.
+_MODELS_FIELDS = ("mode", "model", "meeting_model", "base_url", "api_key", "effort",
+                  "harness_base_url", "harness_api_key", "headers")
 _TRANSCRIPTION_FIELDS = ("url", "token")
 # "setup" tracks the admin first-run wizard: per-step state ("done" / "skipped") + overall
 # completion — the terminal re-surfaces the wizard until it reads completed. Plain strings,
@@ -313,6 +323,10 @@ class ModelPrefsUpdate(BaseModel):
     base_url: Optional[str] = None
     api_key: Optional[str] = None
     effort: Optional[str] = None  # claude-code reasoning-effort pin (low|medium|high|xhigh); empty = unset
+    harness_base_url: Optional[str] = None  # the Anthropic Messages endpoint (agent chat); defaults to base_url
+    harness_api_key: Optional[str] = None   # its credential (sent as x-api-key); defaults to api_key
+    # extra request headers — `Name: Value` per line, or a JSON object (both normalize to lines)
+    headers: Optional[Union[str, Dict[str, str]]] = None
 
 
 class TranscriptionPrefsUpdate(BaseModel):
@@ -328,6 +342,67 @@ def _mask_secret(secret: Optional[str]) -> Optional[str]:
     return "********" + (secret[-4:] if len(secret) > 8 else "")
 
 
+def _normalize_headers(value: str) -> str:
+    """Extra request headers, stored in ONE form: ``Name: Value``, one per line.
+
+    That form is what the ``claude`` CLI's ``ANTHROPIC_CUSTOM_HEADERS`` parses, so the stored
+    string travels to both call shapes with nobody re-parsing it (agent-api passes it through
+    verbatim). A JSON object is accepted on the way in — that is what an API client naturally
+    sends, and what Vexa-ai/vexa#1667 proposed — and is converted here, at the edge, so the
+    conversion happens exactly once. Anything else is a 422 carrying the expected shape: a header
+    that silently does not arrive is the failure this field exists to end.
+    """
+    text = value.strip()
+    pairs: list = []
+    if text.startswith("{"):
+        try:
+            payload = json.loads(text)
+        except ValueError:
+            payload = None
+        if not isinstance(payload, dict):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="headers must be a JSON object of name → value, or "
+                                       "'Name: Value' lines")
+        pairs = [(str(k).strip(), str(v).strip()) for k, v in payload.items()]
+    else:
+        for line in text.replace("\r\n", "\n").split("\n"):
+            if not line.strip():
+                continue
+            name, sep, val = line.partition(":")
+            if not sep:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"headers line {line.strip()!r} is not 'Name: Value'")
+            pairs.append((name.strip(), val.strip()))
+    for name, val in pairs:
+        if not name or not val:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="headers entries need a non-empty name and value")
+        if any(c in name for c in " \t:") or not name.isascii():
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail=f"header name {name!r} is not a valid HTTP header name")
+        if not val.isascii() or "\n" in val:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail=f"header {name!r} has a value that is not valid ASCII")
+    return "\n".join(f"{n}: {v}" for n, v in pairs)
+
+
+def _mask_headers(value: Optional[str]) -> Optional[str]:
+    """Header NAMES in the clear, VALUES masked. A routing header is not a secret but a session or
+    entitlement header usually is — and which names are configured is the diagnostic an operator
+    actually needs back (the same reasoning as ``_mask_secret``, one level in)."""
+    if not value:
+        return None
+    out = []
+    for line in str(value).split("\n"):
+        name, sep, val = line.partition(":")
+        if not sep:
+            continue
+        val = val.strip()
+        out.append(f"{name.strip()}: ********" + (val[-4:] if len(val) > 8 else ""))
+    return "\n".join(out) or None
+
+
 def _validate_config_fields(update: dict, *, kind: str) -> dict:
     """Shared field validation for both the per-user prefs and the platform settings writers
     (one rulebook, whichever tier writes). Returns the cleaned update dict."""
@@ -335,6 +410,8 @@ def _validate_config_fields(update: dict, *, kind: str) -> dict:
 
     cleaned: dict = {}
     for field, raw in update.items():
+        if field == "headers" and isinstance(raw, dict):
+            raw = json.dumps(raw)  # the wire may send an object; storage is always the line form
         value = (raw or "").strip() if isinstance(raw, str) else raw
         if value in (None, ""):
             cleaned[field] = ""  # explicit clear
@@ -345,11 +422,13 @@ def _validate_config_fields(update: dict, *, kind: str) -> dict:
         if field == "mode" and value not in MODEL_MODES:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 detail=f"mode must be one of {sorted(MODEL_MODES)}")
-        if field in ("base_url", "url"):
+        if field in ("base_url", "url", "harness_base_url"):
             parsed = urlparse(value)
             if parsed.scheme not in ("http", "https") or not parsed.hostname:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                     detail=f"{field} must be an http(s) URL")
+        if field == "headers":
+            value = _normalize_headers(value)
         cleaned[field] = value
     return cleaned
 
@@ -850,6 +929,13 @@ def create_app() -> FastAPI:
             "effort": prefs.get("effort"),
             "api_key_set": bool(prefs.get("api_key")),
             "api_key": _mask_secret(prefs.get("api_key")),
+            # The per-dialect half (#1666/#1667). harness_api_key is a SECRET like api_key;
+            # headers echo their NAMES with the values masked.
+            "harness_base_url": prefs.get("harness_base_url"),
+            "harness_api_key_set": bool(prefs.get("harness_api_key")),
+            "harness_api_key": _mask_secret(prefs.get("harness_api_key")),
+            "headers_set": bool(prefs.get("headers")),
+            "headers": _mask_headers(prefs.get("headers")),
         }
 
     @app.put("/user/transcription")

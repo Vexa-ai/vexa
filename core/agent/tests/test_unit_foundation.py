@@ -400,6 +400,55 @@ def test_dispatcher_model_config_custom_mode_stamps_both_call_shapes():
     assert env["VEXA_AGENT_MODEL"] == "qwen3"
 
 
+def test_dispatcher_custom_mode_splits_the_two_dialect_contracts_1666():
+    """The two call shapes are two contracts. `harness_base_url`/`harness_api_key` address the
+    Messages side (what agent chat rides) independently of the OpenAI side (what meeting beats
+    ride) — the gateway in #1666 serves both dialects but wants a different credential on each,
+    and before this split one value configured both."""
+    rt = _FakeRuntime()
+    mc = _FakeModelConfig({"mode": "custom",
+                           "base_url": "https://gw.example.com/v1", "api_key": "fake-chat-key",
+                           "harness_base_url": "https://messages.example.com",
+                           "harness_api_key": "fake-harness-key"})
+    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity(), model_config=mc)
+    d.dispatch(VALID_INV)
+    _, _profile, env = rt.spawned[0]
+    assert env["ANTHROPIC_BASE_URL"] == "https://messages.example.com"
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "fake-harness-key"
+    assert env["VEXA_LLM_BASE_URL"] == "https://gw.example.com/v1"
+    assert env["VEXA_LLM_API_KEY"] == "fake-chat-key"
+
+
+def test_dispatcher_custom_mode_extra_headers_ride_both_call_shapes_1667():
+    """One header map, both consumers: the llm/ adapters read VEXA_LLM_EXTRA_HEADERS, the claude
+    CLI reads its own ANTHROPIC_CUSTOM_HEADERS. Passed through VERBATIM — admin-api normalized it
+    on write, so the two consumers cannot disagree about what the user typed."""
+    rt = _FakeRuntime()
+    mc = _FakeModelConfig({"mode": "custom", "base_url": "https://gw.example.com",
+                           "api_key": "sk-user", "headers": "x-provider-session: abc"})
+    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity(), model_config=mc)
+    d.dispatch(VALID_INV)
+    _, _profile, env = rt.spawned[0]
+    assert env["VEXA_LLM_EXTRA_HEADERS"] == "x-provider-session: abc"
+    assert env["ANTHROPIC_CUSTOM_HEADERS"] == "x-provider-session: abc"
+
+
+def test_dispatcher_custom_mode_harness_only_endpoint_is_not_inert(monkeypatch):
+    """A config naming only the Messages endpoint still configures chat (it used to be dropped
+    entirely, because inertness keyed on `base_url` alone)."""
+    for key in dispatch.MODEL_AUTH_ENV_ALLOWLIST:  # isolate from the test-runner's own env
+        monkeypatch.delenv(key, raising=False)
+    rt = _FakeRuntime()
+    mc = _FakeModelConfig({"mode": "custom", "harness_base_url": "https://messages.example.com",
+                           "harness_api_key": "fake-harness-key"})
+    d = dispatch.Dispatcher(load_settings(), rt, _FakeIdentity(), model_config=mc)
+    d.dispatch(VALID_INV)
+    _, _profile, env = rt.spawned[0]
+    assert env["ANTHROPIC_BASE_URL"] == "https://messages.example.com"
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "fake-harness-key"
+    assert "VEXA_LLM_BASE_URL" not in env  # no OpenAI endpoint was named
+
+
 def test_dispatcher_model_config_subscription_mode_keeps_deployment_credentials(monkeypatch):
     """mode:subscription (or unset) never stamps endpoint/credential env — the deployment's
     brokered credential (mounted subscription / deployment key) stays in charge."""

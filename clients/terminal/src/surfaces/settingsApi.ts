@@ -12,6 +12,15 @@ export type ModelPrefs = {
   base_url?: string | null;
   api_key_set?: boolean;
   api_key?: string | null; // masked on read (********abcd) — write-only in the clear
+  // The per-dialect half of a custom endpoint (#1666/#1667): `mode: custom` drives TWO wire
+  // contracts — the harness posts {harness_base_url}/v1/messages with x-api-key, the completion
+  // adapters post {base_url}/chat/completions with Authorization: Bearer. Each harness_* field
+  // falls back to its base_url/api_key twin, so a both-dialect gateway configures as before.
+  harness_base_url?: string | null;
+  harness_api_key_set?: boolean;
+  harness_api_key?: string | null; // masked on read, like api_key
+  headers_set?: boolean;
+  headers?: string | null; // "Name: Value" lines — names in the clear, values masked on read
 };
 
 export type TranscriptionPrefs = {

@@ -144,8 +144,13 @@ function ModelsSection() {
       { value: "subscription", label: "Claude subscription (deployment credentials)" },
       { value: "custom", label: "Custom endpoint (open-source / gateway)" },
     ] },
-    { key: "base_url", label: "Base URL", placeholder: "https://… (Anthropic/OpenAI-compatible gateway)", showIf: (v: Record<string, string>) => v.mode === "custom" },
+    { key: "base_url", label: "Base URL", placeholder: "https://…/v1 — called as {base}/chat/completions", showIf: (v: Record<string, string>) => v.mode === "custom" },
     { key: "api_key", label: "API key", placeholder: "unchanged unless typed", secret: true, showIf: (v: Record<string, string>) => v.mode === "custom" },
+    // The Messages side. Blank = same endpoint/key as above (a gateway serving both dialects);
+    // fill them in when the gateway splits the two contracts (#1666).
+    { key: "harness_base_url", label: "Agent-chat Base URL", placeholder: "defaults to Base URL — called as {base}/v1/messages", showIf: (v: Record<string, string>) => v.mode === "custom" },
+    { key: "harness_api_key", label: "Agent-chat API key", placeholder: "defaults to the API key above", secret: true, showIf: (v: Record<string, string>) => v.mode === "custom" },
+    { key: "headers", label: "Extra headers", placeholder: "Name: Value (one per line)", showIf: (v: Record<string, string>) => v.mode === "custom" },
     { key: "model", label: "Chat model", placeholder: "deployment default (e.g. sonnet)" },
     { key: "meeting_model", label: "Meeting model", placeholder: "defaults to chat model" },
     { key: "effort", label: "Reasoning effort", placeholder: "CLI default (e.g. medium)", options: [
@@ -172,8 +177,11 @@ function ModelsSection() {
       <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.5, marginBottom: 12, maxWidth: 460 }}>
         Which model the agent runs on, and which transcription service meeting bots use. Provider
         &ldquo;subscription&rdquo; rides the deployment&rsquo;s Claude credentials; &ldquo;custom&rdquo; points at your own
-        Anthropic/OpenAI-compatible endpoint (a LiteLLM/OpenRouter gateway serves open-source
-        models). Empty fields inherit the deployment defaults.
+        gateway (a LiteLLM/OpenRouter gateway serves open-source models). A custom gateway is
+        called two ways: agent chat posts <code>/v1/messages</code> with <code>x-api-key</code>,
+        meeting summaries post <code>/chat/completions</code> with a bearer token. Leave the
+        agent-chat fields blank when one endpoint and one key serve both. Empty fields inherit the
+        deployment defaults.
       </div>
       <div style={head}>Your models</div>
       <ConfigForm fields={modelFields} load={async () => asStrings(await getModelPrefs())}

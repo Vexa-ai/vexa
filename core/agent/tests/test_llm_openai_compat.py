@@ -1,6 +1,7 @@
 """L2: the openai-compat completion adapter against a fake transport — request shape (URL, auth
-header, messages), response parsing, and the error taxonomy (401→LLMAuthError, 5xx→LLMError,
-missing config→LLMConfigError). No network."""
+header, extra headers, messages), STRICT response parsing (Vexa-ai/vexa#1666: a 200 carrying the
+other dialect is a named failure, not an empty completion), no-retry-on-401, and the error
+taxonomy (401→LLMAuthError, 5xx→LLMError, missing config→LLMConfigError). No network."""
 import json
 
 import httpx
@@ -85,3 +86,73 @@ def test_missing_model_fails_loud(monkeypatch):
     with pytest.raises(LLMConfigError) as exc:
         adapter.complete("p")
     assert "VEXA_LLM_MODEL" in str(exc.value)
+
+
+# ── #1666: what the endpoint ANSWERED, not just what it returned ──────────────────────────────
+
+def test_anthropic_body_at_200_fails_by_name_not_empty_text():
+    handler = lambda request: httpx.Response(  # noqa: E731
+        200, json={"type": "message", "content": [{"type": "text", "text": "pong"}]})
+    with pytest.raises(LLMError) as exc:
+        _adapter(handler).complete("p")
+    assert "DIALECT MISMATCH" in str(exc.value) and "/chat/completions" in str(exc.value)
+
+
+def test_html_error_page_at_200_names_the_gateway():
+    handler = lambda request: httpx.Response(  # noqa: E731
+        200, text="<!DOCTYPE html><html>blocked</html>",
+        headers={"content-type": "text/html; charset=utf-8"})
+    with pytest.raises(LLMError) as exc:
+        _adapter(handler).complete("p")
+    assert "CDN or gateway" in str(exc.value)
+
+
+def test_empty_completion_is_an_error_not_a_silent_blank():
+    handler = lambda request: httpx.Response(  # noqa: E731
+        200, json={"choices": [{"message": {"content": ""}, "finish_reason": "stop"}]})
+    with pytest.raises(LLMError) as exc:
+        _adapter(handler).complete("p")
+    assert "EMPTY completion" in str(exc.value)
+
+
+# ── #1666: a rejected credential is terminal ──────────────────────────────────────────────────
+
+def test_401_is_not_retried():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(401, text="User not found.")
+
+    with pytest.raises(LLMAuthError) as exc:
+        _adapter(handler).complete("p")
+    assert len(calls) == 1
+    assert "Authorization: Bearer" in str(exc.value) and "Not retried" in str(exc.value)
+
+
+# ── #1667: a provider-required extra header ───────────────────────────────────────────────────
+
+def test_extra_headers_are_sent_and_never_override_auth():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(request.headers)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    adapter = _adapter(handler, extra_headers='{"x-provider-session": "abc", '
+                                              '"Authorization": "Bearer hijack"}')
+    assert adapter.complete("p").text == "ok"
+    assert seen["x-provider-session"] == "abc"
+    assert seen["authorization"] == "Bearer sk-test"  # config extras never replace the credential
+
+
+def test_extra_headers_from_env(monkeypatch):
+    monkeypatch.setenv("VEXA_LLM_EXTRA_HEADERS", "x-route: eu")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers.get("x-route") == "eu"
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    adapter = OpenAICompatCompletion(base_url="https://llm.example/v1", api_key="k", model="m",
+                                     transport=httpx.MockTransport(handler))
+    assert adapter.complete("p").text == "ok"

@@ -97,35 +97,144 @@ def test_subscription_credentials(creds_path: str = CREDS_PATH, *, now: Optional
                    expires_in_hours=round(left_h, 1))
 
 
+def parse_extra_headers(raw: object) -> dict:
+    """The configured extra request headers (#1667), ``Name: Value`` one per line — the format
+    admin-api normalizes to on write and the format the claude CLI's ``ANTHROPIC_CUSTOM_HEADERS``
+    parses. Local and deliberately tiny: the control-plane image does not ship ``llm/`` (D1), so
+    the probe reads the same STRING the dispatch overlay passes through rather than importing the
+    worker's parser. Unparseable lines are skipped — a bad header never breaks the test."""
+    if isinstance(raw, dict):
+        return {str(k).strip(): str(v).strip() for k, v in raw.items()
+                if str(k).strip() and str(v).strip()}
+    out: dict = {}
+    for line in str(raw or "").replace("\r\n", "\n").split("\n"):
+        name, sep, value = line.partition(":")
+        if sep and name.strip() and value.strip():
+            out[name.strip()] = value.strip()
+    return out
+
+
+# VEXA_LLM_PROVIDER → the dialect that provider's completion call speaks. None = it makes no HTTP
+# completion call (claude-cli rides the subscription CLI), so there is nothing to probe.
+_COMPLETION_DIALECT = {"openai-compat": "openai", "anthropic": "anthropic", "claude-cli": None}
+
+
+def _grade_body(dialect: str, base: str, path: str, body: str) -> Optional[str]:
+    """What is WRONG with a 2xx body, or None if it is the dialect's own success shape.
+
+    The whole point of Vexa-ai/vexa#1666: a gateway that answers HTTP 200 with the *other*
+    dialect's body (or with a CDN's HTML page) used to test GREEN here while every turn failed —
+    the probe graded the status code and never looked at what came back. It looks now."""
+    text = (body or "").strip()
+    if not text:
+        return f"HTTP 200 with an EMPTY body at {path} — a proxy or gateway is intercepting."
+    if text[:1] == "<":
+        return (f"an HTML page, not an API response, at {path} — a CDN or gateway (e.g. "
+                f"Cloudflare) in front of {base} intercepted the request.")
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        return f"a non-JSON body at {path}: {text[:160]}"
+    if not isinstance(payload, dict):
+        return f"a non-object JSON body at {path}: {text[:160]}"
+    if dialect == "anthropic":
+        if isinstance(payload.get("content"), list):
+            return None
+        if isinstance(payload.get("choices"), list):
+            return (f"an OpenAI chat.completion body at {path} — this endpoint speaks the OPENAI "
+                    f"dialect there, and the claude-code harness (which posts {path}) rejects "
+                    f"that as 'empty or malformed'.")
+    else:
+        if isinstance(payload.get("choices"), list):
+            return None
+        if isinstance(payload.get("content"), list):
+            return (f"an Anthropic Messages body at {path} — this endpoint speaks the ANTHROPIC "
+                    f"dialect there, and the completion adapters cannot read it.")
+    return f"an unrecognized 2xx body at {path}: {text[:160]}"
+
+
+def _probe_dialect(base: str, path: str, dialect: str, api_key: str, model: str,
+                   extra: dict, post: HttpPost) -> dict:
+    """One dialect, ONE request, with ONLY that dialect's auth header.
+
+    Sending ``x-api-key`` and ``Authorization: Bearer`` together (what this probe used to do) makes
+    a gateway with per-dialect auth untestable: whichever header it wants is always present, so it
+    answers 200 here and 401 in production. Each shape is now asked its own question — and a 401 is
+    TERMINAL for that shape (never retried with the other header: the credential is wrong for this
+    endpoint, and re-asking is the ~70s retry loop of #1666 in miniature)."""
+    payload = {"model": model, "max_tokens": 1,
+               "messages": [{"role": "user", "content": "ping"}]}
+    headers = dict(extra)
+    if dialect == "anthropic":
+        headers.update({"x-api-key": api_key, "anthropic-version": "2023-06-01"})
+    else:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        status, body = post(f"{base}{path}", payload, headers)
+    except Exception as exc:  # DNS, refused, TLS, timeout — the endpoint itself is the problem
+        return {"ok": False, "status": None, "detail": f"unreachable: {exc}"}
+    if status in (401, 403):
+        want = "x-api-key" if dialect == "anthropic" else "Authorization: Bearer"
+        return {"ok": False, "status": status,
+                "detail": f"HTTP {status} — the key sent as '{want}' was rejected at {path}."}
+    if status in (404, 405):
+        return {"ok": False, "status": status,
+                "detail": f"HTTP {status} — no {dialect} endpoint at {path}."}
+    if not 200 <= status < 300:
+        return {"ok": False, "status": status,
+                "detail": f"HTTP {status} at {path}: {(body or '')[:160]}"}
+    wrong = _grade_body(dialect, base, path, body)
+    if wrong:
+        return {"ok": False, "status": status, "detail": f"HTTP {status} answered {wrong}"}
+    return {"ok": True, "status": status, "detail": f"HTTP {status}, {dialect} body OK"}
+
+
 def test_custom_endpoint(base_url: str, api_key: str, model: str = "",
-                         post: HttpPost = _post) -> dict:
-    """A REAL 1-token completion against the configured endpoint. Anthropic-style first
-    (``/v1/messages``), OpenAI-compat fallback (``/v1/chat/completions``) on 404/405 — the two
-    dialects the dispatch overlay brokers (ANTHROPIC_* vs VEXA_LLM_*)."""
-    base = base_url.rstrip("/")
-    if not base:
+                         post: HttpPost = _post, *, harness_base_url: str = "",
+                         harness_api_key: str = "", headers: object = "",
+                         completion_dialect: Optional[str] = "openai") -> dict:
+    """A REAL 1-token completion against EACH call shape the dispatch overlay brokers, with that
+    shape's own endpoint, auth header and success body:
+
+    * ``{harness_base_url or base_url}/v1/messages`` + ``x-api-key`` — what agent chat rides.
+    * ``{base_url}/chat/completions`` + ``Authorization: Bearer`` — what meeting beats ride when
+      the completion provider is ``openai-compat`` (the default, and what ``mode: custom`` always
+      stamps). ``completion_dialect="anthropic"`` moves that probe to ``/v1/messages``; ``None``
+      (the ``claude-cli`` provider) drops it — those beats ride the CLI, not HTTP.
+
+    Every probed shape must pass, because every probed shape runs. The harness is reported first:
+    a deployment whose Messages side fails has no working chat, whatever the other side says."""
+    base = (base_url or "").rstrip("/")
+    h_base = (harness_base_url or "").rstrip("/") or base
+    if not (base or h_base):
         return _result(False, "Custom mode but no Base URL set.")
     model = model or "claude-haiku-4-5-20251001"
-    auth = {"x-api-key": api_key, "Authorization": f"Bearer {api_key}",
-            "anthropic-version": "2023-06-01"}
-    try:
-        status, body = post(f"{base}/v1/messages",
-                            {"model": model, "max_tokens": 1,
-                             "messages": [{"role": "user", "content": "ping"}]}, auth)
-        if status in (404, 405):  # not an anthropic dialect — try openai-compat
-            status, body = post(f"{base}/v1/chat/completions",
-                                {"model": model, "max_tokens": 1,
-                                 "messages": [{"role": "user", "content": "ping"}]}, auth)
-    except Exception as exc:  # DNS, refused, TLS, timeout — the endpoint itself is the problem
-        return _result(False, f"Endpoint unreachable: {exc}")
-    if status in (401, 403):
-        return _result(False, f"Authentication FAILED at {base} (HTTP {status}) — bad or "
-                              "expired API key.", status=status)
-    if 200 <= status < 300:
-        return _result(True, f"Live completion OK against {base} (model {model}).",
-                       status=status)
-    detail = body[:200] if body else ""
-    return _result(False, f"Endpoint answered HTTP {status}: {detail}", status=status)
+    extra = parse_extra_headers(headers)
+    harness = _probe_dialect(h_base, "/v1/messages", "anthropic",
+                             harness_api_key or api_key, model, extra, post)
+    c_path = "/v1/messages" if completion_dialect == "anthropic" else "/chat/completions"
+    c_label = ("Anthropic Messages" if completion_dialect == "anthropic"
+               else "OpenAI chat-completions")
+    # Skip the second probe when it would repeat the first (same dialect, same endpoint) or when
+    # the beats make no HTTP completion call at all.
+    same_call = completion_dialect == "anthropic" and base == h_base
+    completion = (_probe_dialect(base, c_path, completion_dialect, api_key, model, extra, post)
+                  if base and completion_dialect and not same_call else None)
+    shapes = {"harness": {"endpoint": f"{h_base}/v1/messages", **harness}}
+    if completion is not None:
+        shapes["completion"] = {"endpoint": f"{base}{c_path}", **completion}
+    extras_note = (f" Extra headers sent: {', '.join(sorted(extra))}." if extra else "")
+    if harness["ok"] and (completion is None or completion["ok"]):
+        where = "both call shapes" if completion is not None else "the agent call shape"
+        return _result(True, f"Live completion OK on {where} (model {model}).{extras_note}",
+                       status=harness.get("status"), shapes=shapes)
+    broken = []
+    if not harness["ok"]:
+        broken.append(f"agent chat (Anthropic Messages at {h_base}/v1/messages): {harness['detail']}")
+    if completion is not None and not completion["ok"]:
+        broken.append(f"meeting beats ({c_label} at {base}{c_path}): {completion['detail']}")
+    return _result(False, " · ".join(broken) + extras_note,
+                   status=harness.get("status"), shapes=shapes)
 
 
 def run_models_test(config: dict, env: Optional[dict] = None,
@@ -134,19 +243,35 @@ def run_models_test(config: dict, env: Optional[dict] = None,
     (Settings user > global config already collapsed by admin-api; env is the floor)."""
     env = env if env is not None else dict(os.environ)
     mode = (config.get("mode") or "").strip()
-    base_url = (config.get("base_url") or "").strip() or env.get("ANTHROPIC_BASE_URL", "")
+    base_url = (config.get("base_url") or "").strip() or env.get("VEXA_LLM_BASE_URL", "") \
+        or env.get("ANTHROPIC_BASE_URL", "")
     api_key = (config.get("api_key") or "").strip() or env.get("ANTHROPIC_AUTH_TOKEN", "") \
         or env.get("ANTHROPIC_API_KEY", "")
+    harness_base_url = (config.get("harness_base_url") or "").strip() \
+        or env.get("ANTHROPIC_BASE_URL", "")
+    harness_api_key = (config.get("harness_api_key") or "").strip()
+    headers = config.get("headers") or env.get("VEXA_LLM_EXTRA_HEADERS", "")
+    # WHICH dialect the beats speak is the completion provider's business, not an assumption:
+    # `mode: custom` always stamps openai-compat, but an env-configured deployment may run the
+    # `anthropic` adapter (the same Messages dialect) or `claude-cli` (no HTTP completion call at
+    # all). Probing /chat/completions regardless would fail a deployment that works.
+    provider = (config.get("provider") or env.get("VEXA_LLM_PROVIDER") or "").strip()
+    completion_dialect = _COMPLETION_DIALECT.get(provider or "openai-compat", "openai")
+    if mode == "custom":
+        completion_dialect = "openai"  # what overlay_model_config stamps for this mode
     if mode == "custom" or (not mode and base_url and api_key):
         out = test_custom_endpoint(base_url, api_key, (config.get("model") or "").strip(),
-                                   post=post)
+                                   post=post, harness_base_url=harness_base_url,
+                                   harness_api_key=harness_api_key, headers=headers,
+                                   completion_dialect=completion_dialect)
         out["mode"] = "custom"
     else:
         out = test_subscription_credentials(creds_path)
         out["mode"] = "subscription"
     # Non-secret provenance so the UI can say WHAT was tested.
-    out["config"] = {k: v for k, v in config.items() if k in ("mode", "model", "meeting_model",
-                                                              "base_url") and v}
+    out["config"] = {k: v for k, v in config.items()
+                     if k in ("mode", "model", "meeting_model", "base_url",
+                              "harness_base_url") and v}
     return out
 
 

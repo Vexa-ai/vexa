@@ -145,10 +145,26 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
     setting, resolved by admin-api) onto the dispatch env — field-by-field over the deployment
     env defaults, which stay the bottom fallback for anything unset.
 
-    ``mode: custom`` points BOTH call shapes at the supplied gateway (an Anthropic-/OpenAI-
-    compatible endpoint, e.g. LiteLLM/OpenRouter in front of an open-source model): the
-    claude-code harness via ``ANTHROPIC_BASE_URL``/``ANTHROPIC_AUTH_TOKEN`` and the completion
-    adapters via ``VEXA_LLM_PROVIDER=openai-compat`` + ``VEXA_LLM_BASE_URL``/``VEXA_LLM_API_KEY``.
+    ``mode: custom`` points the two call shapes at the supplied gateway. They are TWO DIFFERENT
+    CONTRACTS and this is the one place that fact is visible:
+
+    | call shape | env | wire |
+    |---|---|---|
+    | claude-code harness (chat, docs, routines) | ``ANTHROPIC_BASE_URL``/``ANTHROPIC_AUTH_TOKEN`` | ``POST {base}/v1/messages``, ``x-api-key`` |
+    | completion beats (meeting cards) | ``VEXA_LLM_BASE_URL``/``VEXA_LLM_API_KEY`` | ``POST {base}/chat/completions``, ``Authorization: Bearer`` |
+
+    ``base_url``/``api_key`` feed BOTH by default (unchanged behaviour — a LiteLLM/OpenRouter
+    gateway serving both dialects needs nothing more). A gateway that serves them on different
+    endpoints, or wants a different credential per dialect, sets ``harness_base_url`` /
+    ``harness_api_key`` for the Messages side; each falls back to its ``base_url``/``api_key``
+    twin. Before this split, one value configured two contracts and a single-dialect gateway
+    could not be used at all — Vexa-ai/vexa#1666.
+
+    ``headers`` (``Name: Value`` lines, normalized by admin-api) rides BOTH shapes — the adapters
+    read ``VEXA_LLM_EXTRA_HEADERS``, the CLI reads its own ``ANTHROPIC_CUSTOM_HEADERS`` — so a
+    gateway that requires a session/routing/entitlement header of its own is configurable without
+    a translating proxy in front of it (Vexa-ai/vexa#1667).
+
     ``mode: subscription`` (or unset) keeps the deployment's brokered credential — the mounted
     Claude Code subscription / deployment key — and only the model names apply.
 
@@ -180,14 +196,27 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
         return
     base_url = (config.get("base_url") or "").strip()
     api_key = (config.get("api_key") or "").strip()
-    if not base_url:
+    harness_url = (config.get("harness_base_url") or "").strip() or base_url
+    harness_key = (config.get("harness_api_key") or "").strip() or api_key
+    # Extra request headers ride BOTH call shapes. PASSTHROUGH, deliberately: admin-api normalized
+    # this to the `Name: Value` line form on write (the format the claude CLI's own
+    # ANTHROPIC_CUSTOM_HEADERS parses), so dispatch never re-parses a header string and the two
+    # consumers cannot disagree about what the user typed.
+    headers = (config.get("headers") or "").strip()
+    if headers:
+        env["VEXA_LLM_EXTRA_HEADERS"] = headers   # llm/ completion adapters
+        env["ANTHROPIC_CUSTOM_HEADERS"] = headers  # the claude CLI harness
+    if not (base_url or harness_url):
         return  # custom mode without an endpoint is inert — deployment credentials still apply
-    env["ANTHROPIC_BASE_URL"] = base_url
-    env["VEXA_LLM_PROVIDER"] = "openai-compat"
-    env["VEXA_LLM_BASE_URL"] = base_url
-    if api_key:
-        env["ANTHROPIC_AUTH_TOKEN"] = api_key
-        env["VEXA_LLM_API_KEY"] = api_key
+    if harness_url:
+        env["ANTHROPIC_BASE_URL"] = harness_url
+        if harness_key:
+            env["ANTHROPIC_AUTH_TOKEN"] = harness_key
+    if base_url:
+        env["VEXA_LLM_PROVIDER"] = "openai-compat"
+        env["VEXA_LLM_BASE_URL"] = base_url
+        if api_key:
+            env["VEXA_LLM_API_KEY"] = api_key
 
 
 def _worker_cwd(root: str, subject: str, mounts: list[dict]) -> str:
