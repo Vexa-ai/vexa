@@ -74,7 +74,8 @@ A prepared issue is a worked delivery spec — read it end to end before touchin
   pairs, negative controls, anchors) and the PR **merges — that's a promise** (D10). If your
   bundle satisfies the table and something is still wrong, that's *our* table bug, not yours.
 - **Deployments to validate · docs surface · preferred validator** — the change isn't done
-  until its docs move with it and someone is named to witness it.
+  until its docs move with it; the preferred validator is who is invited to witness it
+  (optional, credited).
 
 ## Claiming — and say hello on Discord
 
@@ -186,7 +187,8 @@ trailers (D13).
 
 The maintainer triages your PR by the
 [TAKE protocol](https://docs.vexa.ai/governance/delivery#take-protocol) — read it to know
-exactly how you'll be read. Then a **non-author validates the value**
-([the attestation shape](https://docs.vexa.ai/governance/delivery#validation)); validators are
-credited in release notes alongside you, and the reporter of the original bug is the preferred
-signer of your fix.
+exactly how you'll be read. Your PR merges on a green merge card: value-fsm green on the head,
+the diff reviewed, the passes on record. A **non-author may also validate the value live**
+([how](https://docs.vexa.ai/governance/delivery#validation)). That is optional and not awaited:
+validators are credited in release notes alongside you, and the reporter of the original bug is
+the preferred validator of your fix.

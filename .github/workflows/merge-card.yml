@@ -1,5 +1,5 @@
 # merge-card — choke point 1 of the delivery constitution, enforced. MAIN accepts a PR only when
-# every row of its card is accepted (the merge bar): value (value-fsm green + `state: value-signed`),
+# every row of its card is accepted (the merge bar): value (value-fsm green on head; non-runtime PRs: no value-fsm leg),
 # diff (the author holds the commit bit, or a fresh non-author review approval), acceptance (when
 # the PR closes an issue), and, on EVERY PR, a maintainer's architecture pass and security pass
 # recorded for the head (PR-comment markers; the format is in scripts/merge-card-gate.mjs). This is

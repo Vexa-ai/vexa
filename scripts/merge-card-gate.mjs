@@ -3,12 +3,12 @@
 // closes an issue), and the architecture and security passes:
 //
 //   • VALUE accepted  — the observation bundle is real. Runtime PRs: `value-fsm` (pr-value L3)
-//     GREEN on the head sha AND `state: value-signed` (the D9 human sign-off). Non-runtime PRs
-//     (no pr-value leg): `state: value-signed` alone. Because `labeled` also re-triggers value-fsm,
-//     its newest run on head is often still non-terminal when the card fires: the card WAITS for a
-//     terminal verdict (success/failure) rather than reading an in-flight run as failure (#655). A
-//     value-fsm that never settles within the wait budget stays not-mergeable — a label can never
-//     waive value-fsm; success must be positively observed.
+//     GREEN on the head sha — the automated value check is the whole row; no label is read (#1935).
+//     Non-runtime PRs have no value-fsm leg and pass the row. Because `labeled` also re-triggers
+//     value-fsm, its newest run on head is often still non-terminal when the card fires: the card
+//     WAITS for a terminal verdict (success/failure) rather than reading an in-flight run as failure
+//     (#655). A value-fsm that never settles within the wait budget stays not-mergeable — success
+//     must be positively observed.
 //   • DIFF accepted   — the code was reviewed. Either the PR author is a MAINTAINER (holds the
 //     commit bit — a maintainer reviewing their own work is allowed; the mandatory-review rule is
 //     the quality gate for CONTRIBUTOR PRs), OR a GitHub review APPROVAL from a NON-AUTHOR whose
@@ -150,8 +150,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // within the job budget. Removes the race entirely: a value-fsm still running when the card fires
 // is waited out to its real success/failure. If it never settles within the budget the verdict
 // stays "pending" (or "absent") and the caller red-cards it LOUDLY — a non-terminal check is never
-// silently accepted, so the invariant holds: success must be positively observed, a label cannot
-// waive it. Injected read/sleep make it unit-testable without the network or real clock.
+// silently accepted, so the invariant holds: success must be positively observed. Injected read/sleep make it unit-testable without the network or real clock.
 export async function waitForTerminalValueFsm(
   sha,
   { read = readValueFsmRuns, wait = sleep, attempts = 20, delayMs = 15000 } = {},
@@ -432,8 +431,6 @@ export async function card(num, { api = ghj, expectedHead = "", readClosing = re
   if (expectedHead && String(expectedHead).toLowerCase() !== String(live || "").toLowerCase())
     return { num, ok: false, moved: { from: expectedHead, to: live } };
   const head = live;
-  const labels = (pr.labels || []).map((l) => l.name);
-  const signed = labels.includes("state: value-signed");
   const runtime = touchesRuntime(num, api);
   // Only a runtime PR has a value-fsm leg, and only then do we pay the wait. A non-terminal
   // value-fsm is waited out to its real verdict rather than sampled once mid-run (the #655 race).
@@ -441,12 +438,11 @@ export async function card(num, { api = ghj, expectedHead = "", readClosing = re
 
   // VALUE
   let valueOk = false, valueWhy;
-  if (!signed) valueWhy = "missing `state: value-signed` (the value sign-off)";
-  else if (runtime && vf === "success") { valueOk = true; valueWhy = "value-fsm green + value-signed"; }
+  if (runtime && vf === "success") { valueOk = true; valueWhy = "value-fsm green on head"; }
   else if (runtime && (vf === "pending" || vf === "absent"))
-    valueWhy = `value-signed but value-fsm did not reach a terminal verdict on head within the wait budget (still ${vf}) — value-fsm must be green (a label cannot waive it)`;
-  else if (runtime) valueWhy = `value-signed but value-fsm is ${vf} on head — value-fsm must be green (a label cannot waive it)`;
-  else { valueOk = true; valueWhy = "non-runtime + value-signed"; }
+    valueWhy = `value-fsm did not reach a terminal verdict on head within the wait budget (still ${vf}) — value-fsm must be green`;
+  else if (runtime) valueWhy = `value-fsm is ${vf} on head — value-fsm must be green`;
+  else { valueOk = true; valueWhy = "non-runtime — no value-fsm leg"; }
 
   // DIFF
   const d = diffAccepted(pr, head, api);

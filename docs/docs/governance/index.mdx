@@ -48,8 +48,8 @@ contributor's work — a PRD whose acceptance table is a merge promise.
 | Build | contributor + agent | the checkout: issue-as-PRD, worktree, gates | AGENTS.md binding the P-book |
 | Deliver | contributor | the two-artifact PR: observation bundle + diff | D8 |
 | Take | maintainer | the PR, against the declared floor | TAKE |
-| Validate | **a non-author human** | a real meeting / deployment — multichannel, provenance-anchored | D9 / D12b |
-| Release + close back | maintainer | release notes credit author *and* signer; the reporter is invited to validate | D15 / D16 |
+| Validate (optional, credited) | **a non-author human** | a real meeting / deployment — multichannel, provenance-anchored | D9 / D12b |
+| Release + close back | maintainer | release notes credit author *and* validator; the reporter is invited to validate | D15 / D16 |
 
 ## Who enforces what
 
@@ -57,8 +57,8 @@ contributor's work — a PRD whose acceptance table is a merge promise.
   map of principle → gate is [Architecture compliance](/governance/arch-compliance), generated,
   never hand-edited.
 - **The D-book: process.** The state-label machine (exactly one `state:` per issue), acceptance
-  floors, value signing. The enforcement map — including the honestly-marked TO-BUILD rows
-  (the `value-signed` status check, the label bot) — is
+  floors, value checks. The enforcement map — including the honestly-marked TO-BUILD rows
+  (the label bot) — is
   [the enforcement map](/governance/delivery#enforcement-map).
 - **The actor contract: visibility.** No gate checks the expect→verdict loop — the human
   reading the ledger *is* the gate.

@@ -5,11 +5,9 @@
 // ACCEPTED when its value is machine-witnessed on its OWN merged head (the ladder, not a re-run):
 //
 //   • runtime PR  → `value-fsm` (the pr-value L3 leg) is GREEN on the PR's head sha
-//   • non-runtime → merged through the full `gates` suite (backend-invisible, machine-sound), or
-//                   carries `state: value-signed` (a human TAKE sign-off)
+//   • non-runtime → merged through the full `gates` suite (backend-invisible, machine-sound)
 //
-// A RED value-fsm is never rescued by a label — the label signs the rows ABOVE the automation
-// line, it does not waive the machine leg. A change we cannot positively verify fails CLOSED.
+// No label is read (#1935). A change we cannot positively verify fails CLOSED.
 //
 // Exit codes (so the published-guard can tell "unwitnessed" from "couldn't evaluate"):
 //   0 — every batch change accepted
@@ -141,8 +139,6 @@ for (const num of batch.prs) {
   let pr;
   try { pr = ghj(`repos/${REPO}/pulls/${num}`); }
   catch { rows.push({ num, verdict: "UNVERIFIABLE", why: "PR fetch failed after retries" }); couldNotEvaluate++; continue; }
-  const labels = (pr.labels || []).map((l) => l.name);
-  const signed = labels.includes("state: value-signed");
   const sha = pr.head?.sha;
   let runtime, vf;
   try { runtime = prTouchesRuntime(num); vf = sha ? valueFsmVerdict(sha) : "absent"; }
@@ -150,8 +146,7 @@ for (const num of batch.prs) {
 
   let verdict, why;
   if (vf === "success") { verdict = "ACCEPTED"; why = "value-fsm green on head"; }
-  else if (vf === "failure") { verdict = "UNACCEPTED"; why = "value-fsm RED on head — a label cannot waive it; re-run pr-value green"; }
-  else if (!runtime && signed) { verdict = "ACCEPTED"; why = "non-runtime + state: value-signed"; }
+  else if (vf === "failure") { verdict = "UNACCEPTED"; why = "value-fsm RED on head — re-run pr-value green"; }
   else if (!runtime) { verdict = "ACCEPTED"; why = "non-runtime PR; gates-green (merged)"; }
   else { verdict = "UNACCEPTED"; why = "runtime PR with no value-fsm run — re-run pr-value on head or (if non-runtime) reclassify"; }
 
