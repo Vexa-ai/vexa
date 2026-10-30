@@ -214,7 +214,7 @@ The person's default is in identity. The meeting level is on the request.
   `test_a_workspace_reader_is_refused_and_nothing_is_sent`, `test_somebody_outside_the_meeting_cannot_see_it`,
   `test_an_unconfirmable_role_is_a_503_never_a_guess`. In the terminal, a reader gets no control
   (`meetingLanguage.test.tsx`), but the server check is what enforces it.
-- **The key's scope.** The route is a `bot`-scope row in the meetings route table, checked at the gateway
+- **The key's scope.** The route is a scoped row (`bot` · `tx`) in the meetings route table, checked at the gateway
   and again by meeting-api (`route_scopes`).
 - **The person's default** is written only through the person's own key on `PUT /user/transcription`. It
   crosses to meeting-api only on the internal bot-context door, which needs the internal secret.

@@ -37,7 +37,7 @@ Roles come from admin-api `GET /internal/users/{id}/is-admin` (`ADMIN_API_URL` +
 
 ## Routes
 
-Public (gateway, scope `bot`, rows in [`core/meetings/routes.v1.json`](../../../../../routes.v1.json)):
+Public (gateway, scopes `bot` · `tx`, rows in [`core/meetings/routes.v1.json`](../../../../../routes.v1.json)):
 
 | Route | |
 |---|---|

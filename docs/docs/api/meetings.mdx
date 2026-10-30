@@ -228,7 +228,7 @@ A meeting is shared with a **share grant**: a capability the owner mints and a s
 redeems. Redeeming adds them to the meeting's readers. A reader gets the meeting in `GET /meetings`
 (with `shared: true`), its detail, its transcript (`GET /transcripts/by-id/{id}`), its live feed (the
 terminal's stream and `/ws`), and its recording only when the owner allows it. The owner manages
-grants and readers with the routes below. All of them take the meeting's row id and need the `tx` scope.
+grants and readers with the routes below. All of them take the meeting's row id and accept any API key (`bot` or `tx`).
 A meeting that isn't yours returns `404`, exactly like one that doesn't exist.
 
 | Route | What it does |
@@ -520,7 +520,7 @@ runs.
 ## Export and import a meeting
 
 A meeting moves between deployments as one file, a [`meeting-bundle.v1`](/how-to/move-a-meeting) zip.
-Both routes need the `tx` scope.
+Both routes accept any API key (`bot` or `tx`); export is the owner's only, and import writes into the key's own account.
 
 ```bash Export (owner only) — GET /meetings/{meeting_id}/export[?media=false]
 curl -OJ -H "X-API-Key: $API_KEY" "$API_BASE/meetings/42/export"

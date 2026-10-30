@@ -358,7 +358,7 @@ data or change who has access.
 - Someone who is not the owner gets the same `404` as for a meeting that does not exist, so meetings
   cannot be discovered.
 - A deleted meeting's transcript is refused, and new segments for it are refused.
-- Recording responses are `private, no-store`. A bot-only API key cannot subscribe to a transcript.
+- Recording responses are `private, no-store`. Only the owner, or a workspace member the owner shares with, can subscribe to a transcript.
 - A download is the playback read with `download=1`: the same owner check, and nothing else changes.
   Its file name is built only from server-side fields (meeting id, recording date, stored format),
   never from the request, and the browser fetches it through the session proxy with no credential in
