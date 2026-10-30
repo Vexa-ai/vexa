@@ -4,8 +4,11 @@ A stub STT server answers a chosen status. A config fault (401/403/402/404) is a
 stored prefs are unchanged; 200 stores; a refused connection saves with `probe.kind=unreachable`.
 Neither the URL nor the token appears in the 422 body or in logs. Same testcontainers-PG harness as
 test_user_webhook_response (skips without docker)."""
+import json
 import logging
+import socket
 import threading
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
@@ -15,6 +18,7 @@ from sqlalchemy import create_engine
 from admin_api.app import db as app_db
 from admin_api.app import calendars as _calendars  # noqa: F401 — binds its real ssrf import before any patch
 from admin_api.app import ssrf
+from admin_api.app import transcription_probe as probe_mod
 from admin_api.app.main import create_app
 from admin_api.schema.models import Base
 from admin_api.schema.sync import ensure_schema_sync
@@ -29,13 +33,15 @@ TOKEN = "stt-token-never-echo-5d2e"
 
 @pytest.fixture()
 def stub():
-    state = {"status": 200, "hits": 0}
+    state = {"status": 200, "hits": 0, "location": None}
 
     class H(BaseHTTPRequestHandler):
         def do_POST(self):
             self.rfile.read(int(self.headers.get("Content-Length") or 0))
             state["hits"] += 1
             self.send_response(state["status"])
+            if state["location"]:
+                self.send_header("Location", state["location"])
             self.send_header("Content-Length", "0")
             self.end_headers()
 
@@ -58,8 +64,12 @@ def client(pg_url, pg_async_url, monkeypatch):
     monkeypatch.setenv("ADMIN_API_TOKEN", ADMIN_TOKEN)
     monkeypatch.setenv("INTERNAL_API_SECRET", INTERNAL_SECRET)
     monkeypatch.setenv("DEV_MODE", "false")
-    # the stub lives on loopback; the SSRF guard has its own tests
-    monkeypatch.setattr(ssrf, "validate_url", lambda *a, **k: None)
+    # The stub lives on loopback: an operator allowance admits loopback ONLY. The guard itself stays
+    # on — any other private address is still refused (see the guard tests below).
+    loop = ssrf.parse_allowance("127.0.0.0/8")
+    real_validate = ssrf.validate_url
+    monkeypatch.setattr(ssrf, "validate_url", lambda url, *a, **k: real_validate(url, *a, **{**k, "allow": loop}))
+    monkeypatch.setattr(probe_mod, "ALLOW", loop)
     app_db.configure(pg_async_url)
     with TestClient(create_app()) as c:
         yield c
@@ -115,18 +125,65 @@ def test_a_working_endpoint_is_stored(client, stub):
     assert stub["hits"] == 1
 
 
-def test_an_unreachable_endpoint_saves_and_says_so(client, stub):
+def test_an_unreachable_endpoint_saves_and_says_so(client, caplog):
     h = _key(client, "down@vexa.ai")
-    url = stub["url"]  # port closed afterwards = refused connection
-    port = int(url.split(":")[2].split("/")[0])
-    import socket
-    s = socket.socket(); s.bind(("127.0.0.1", 0)); closed = s.getsockname()[1]; s.close()
-    r = client.put("/user/transcription", headers=h, json={"url": f"http://127.0.0.1:{closed}", "token": TOKEN})
+    s = socket.socket(); s.bind(("127.0.0.1", 0)); closed = s.getsockname()[1]; s.close()  # refused connection
+    url = f"http://127.0.0.1:{closed}"
+    with caplog.at_level(logging.DEBUG):
+        r = client.put("/user/transcription", headers=h, json={"url": url, "token": TOKEN})
     assert r.status_code == 200, r.text
     assert r.json()["probe"] == {"ok": False, "kind": "unreachable"}
-    assert str(closed) not in r.json()["probe"].__repr__()
-    assert client.get("/user/transcription", headers=h).json()["url"] == f"http://127.0.0.1:{closed}"
-    assert port != closed
+    # the refused connection's exception text names the address; it must reach neither side
+    for secret in (TOKEN, str(closed), "refused", "ConnectError"):
+        assert secret not in r.text
+        assert secret not in caplog.text
+    assert client.get("/user/transcription", headers=h).json()["url"] == url
+
+
+def test_a_name_resolving_to_a_private_address_is_refused_without_a_connection(client, monkeypatch):
+    h = _key(client, "rebind@vexa.ai")
+    monkeypatch.setattr(ssrf, "resolve_host", lambda host: ["10.1.2.3"])
+    import httpx
+    dialled = []
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", lambda self, req: dialled.append(req))
+    r = client.put("/user/transcription", headers=h, json={"url": "http://stt.public-looking.example", "token": TOKEN})
+    assert r.status_code == 422, r.text
+    assert "internal or private" in r.text and TOKEN not in r.text
+    assert dialled == []
+    assert client.get("/user/transcription", headers=h).json()["url"] is None
+
+
+def test_a_redirect_is_not_followed(client, stub):
+    h = _key(client, "redirect@vexa.ai")
+    target_hits = []
+
+    class T(BaseHTTPRequestHandler):
+        def _hit(self):
+            target_hits.append(self.command)
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        do_POST = do_GET = _hit
+
+        def log_message(self, *a):
+            pass
+
+    target = HTTPServer(("127.0.0.1", 0), T)
+    threading.Thread(target=target.serve_forever, daemon=True).start()
+    try:
+        stub["status"] = 302
+        stub["location"] = f"http://127.0.0.1:{target.server_port}/internal"
+        r = client.put("/user/transcription", headers=h, json={"url": stub["url"], "token": TOKEN})
+        assert r.status_code == 200, r.text
+        assert stub["hits"] == 1 and target_hits == []   # the Location was never dialled
+    finally:
+        target.shutdown()
+
+
+def test_the_probe_spec_is_the_one_meeting_api_declares():
+    decl = Path(__file__).resolve().parents[4] / "meetings/services/meeting-api/src/meeting_api/config.v1.json"
+    declared = json.loads(decl.read_text())["capabilities"]["stt"]["probe"]["http"]
+    assert probe_mod.STT_PROBE_SPEC == declared
 
 
 def test_clearing_the_url_does_not_probe(client, stub):

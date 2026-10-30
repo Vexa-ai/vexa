@@ -1178,16 +1178,16 @@ def create_app() -> FastAPI:
 
     @app.put("/user/transcription")
     async def set_user_transcription(update: TranscriptionPrefsUpdate,
-                                     user: User = Depends(get_current_user_for_update),
+                                     user: User = Depends(get_current_user),
                                      db: AsyncSession = Depends(get_db)):
         """Set the caller's transcription backend override. ``token`` is a SECRET — masked on read.
 
         A person's own endpoint is a destination this deployment's bots send meeting audio to, so it
         is held to the outbound URL guard: an internal or private address is refused here (422) and
         by the bot at every request. The deployment's own STT (env or platform setting) is not."""
+        from .ssrf import SSRFError, validate_url
         url = (update.url or "").strip()
         if url:
-            from .ssrf import SSRFError, validate_url
             try:
                 validate_url(url, what="url", resolve=False)
             except SSRFError as exc:
@@ -1213,7 +1213,12 @@ def create_app() -> FastAPI:
             if merged.get("url"):
                 import asyncio  # noqa: PLC0415
                 from . import transcription_probe as probe_mod  # noqa: PLC0415
-                verdict = await asyncio.to_thread(probe_mod.probe_endpoint, merged["url"], merged.get("token") or "")
+                # Probed BEFORE the row lock is taken below: a slow endpoint must not hold the
+                # user's row (and a transaction) for up to the probe timeout.
+                try:
+                    verdict = await asyncio.to_thread(probe_mod.probe_endpoint, merged["url"], merged.get("token") or "")
+                except SSRFError as exc:
+                    raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
                 if not verdict["ok"] and probe_mod.is_config_fault(verdict["kind"]):
                     logger.info("transcription endpoint rejected user=%s kind=%s status=%s",
                                 user.id, verdict["kind"], verdict.get("status"))
@@ -1222,6 +1227,7 @@ def create_app() -> FastAPI:
                         "kind": verdict["kind"], "reason": verdict["reason"]})
                 if not verdict["ok"]:
                     probe_note = {"ok": False, "kind": verdict["kind"]}
+        user = await get_current_user_for_update(user, db)
         await _put_user_prefs(fields, "transcription_prefs", user, db, language_fields=language_fields)
         view = await get_user_transcription(user)
         if probe_note:
