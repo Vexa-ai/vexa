@@ -65,6 +65,11 @@ Tracked as [#1240](https://github.com/Vexa-ai/vexa/issues/1240).
 
 **Calendar API** (`/user/calendar*`) — see [Calendar API → Error summary](/api/calendar#error-summary).
 
+**Settings API** (`/user/*`) — `PUT /user/transcription` answers `422` with
+`error: "transcription_endpoint_rejected"` (a string `detail`, a `kind` and the endpoint's `status`)
+when the endpoint failed its test before saving; nothing is saved. See
+[Settings → transcription backend](/api/settings#transcription-backend).
+
 **Agent API** (`/agent/*`) — **not served on the hosted service or on Kubernetes**; every route
 answers `502 {"detail":"upstream unreachable: ConnectError"}` there
 ([vexa-platform#324](https://github.com/Vexa-ai/vexa-platform/issues/324)). On a deployment that does

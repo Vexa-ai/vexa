@@ -8,8 +8,9 @@ import json
 import logging
 import socket
 import threading
+import time
 from pathlib import Path
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
 import pytest
 from fastapi.testclient import TestClient
@@ -33,12 +34,16 @@ TOKEN = "stt-token-never-echo-5d2e"
 
 @pytest.fixture()
 def stub():
-    state = {"status": 200, "hits": 0, "location": None}
+    # `gate`: when set to a threading.Event, the stub stalls (after counting the hit) until it is set.
+    state = {"status": 200, "hits": 0, "location": None, "gate": None, "requests": []}
 
     class H(BaseHTTPRequestHandler):
         def do_POST(self):
-            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            state["requests"].append({"path": self.path, "headers": dict(self.headers), "body": body})
             state["hits"] += 1
+            if state["gate"] is not None:
+                state["gate"].wait(timeout=30)
             self.send_response(state["status"])
             if state["location"]:
                 self.send_header("Location", state["location"])
@@ -48,7 +53,7 @@ def stub():
         def log_message(self, *a):
             pass
 
-    srv = HTTPServer(("127.0.0.1", 0), H)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     state["url"] = f"http://127.0.0.1:{srv.server_port}/secret-path-7"
     yield state
@@ -78,7 +83,7 @@ def client(pg_url, pg_async_url, monkeypatch):
 
 def _key(client, email):
     uid = client.post("/admin/users", headers=_admin(), json={"email": email}).json()["id"]
-    tok = client.post(f"/admin/users/{uid}/tokens?scopes=bot,tx", headers=_admin()).json()["token"]
+    tok = client.post(f"/admin/users/{uid}/tokens", headers=_admin()).json()["token"]  # the default key
     return {"X-API-Key": tok}
 
 
@@ -137,9 +142,11 @@ def test_an_unreachable_endpoint_saves_and_says_so(client, caplog):
         r = client.put("/user/transcription", headers=h, json={"url": url, "token": TOKEN})
     assert r.status_code == 200, r.text
     assert r.json()["probe"] == {"ok": False, "kind": "unreachable"}
-    # the refused connection's exception text names the address; it must reach neither side
-    for secret in (TOKEN, str(closed), "refused", "ConnectError"):
-        assert secret not in json.dumps(r.json()["probe"])  # the view itself echoes the saved url
+    # the refused connection's exception text names the address; it must reach neither the body nor
+    # the logs (the body's `url` is the saved url itself, so the port is checked in the logs only)
+    for secret in (TOKEN, "refused", "ConnectError", "Errno"):
+        assert secret not in r.text
+    for secret in (TOKEN, str(closed), "refused", "ConnectError", "Errno"):
         assert secret not in caplog.text
     assert client.get("/user/transcription", headers=h).json()["url"] == url
 
@@ -190,7 +197,11 @@ def test_a_redirect_is_not_followed(client, stub):
 
 def test_the_probe_spec_is_the_one_meeting_api_declares():
     decl = Path(__file__).resolve().parents[4] / "meetings/services/meeting-api/src/meeting_api/config.v1.json"
-    declared = json.loads(decl.read_text())["capabilities"]["stt"]["probe"]["http"]
+    if not decl.is_file():
+        pytest.skip(f"meeting-api's declaration is not in this checkout ({decl}); the pin needs the monorepo")
+    probe_decl = json.loads(decl.read_text())["capabilities"]["stt"]["probe"]
+    declared = probe_decl["http"]
+    assert probe_mod.PROBE_TIMEOUT_S == float(probe_decl["timeout_s"])
     # Every field the probe uses matches the declaration; the only declared fields it leaves out are
     # the env-key names (the person's URL and token are passed in, never read from env).
     assert probe_mod.STT_PROBE_SPEC == {k: declared[k] for k in probe_mod.STT_PROBE_SPEC}
@@ -204,3 +215,77 @@ def test_clearing_the_url_does_not_probe(client, stub):
     stub["status"] = 401
     assert client.put("/user/transcription", headers=h, json={"url": ""}).status_code == 200
     assert stub["hits"] == hits
+
+
+def test_a_model_validating_vendor_400_is_stored_as_ok(client, stub):
+    """A vendor that checks the model name answers the probe's model with 400: the token got in, so
+    it is not a config fault (A2) and the write saves."""
+    h = _key(client, "vendor400@vexa.ai")
+    stub["status"] = 400
+    r = client.put("/user/transcription", headers=h, json={"url": stub["url"], "token": TOKEN})
+    assert r.status_code == 200, r.text
+    assert r.json()["probe"] == {"ok": True}
+    got = client.get("/user/transcription", headers=h).json()
+    assert got["url"] == stub["url"] and got["token_set"] is True
+
+
+def test_the_probe_is_a_real_audio_transcription_request(client, stub):
+    h = _key(client, "wire@vexa.ai")
+    assert client.put("/user/transcription", headers=h,
+                      json={"url": stub["url"], "token": TOKEN}).status_code == 200
+    assert len(stub["requests"]) == 1
+    req = stub["requests"][0]
+    headers = {k.lower(): v for k, v in req["headers"].items()}
+    assert req["path"] == "/secret-path-7" + probe_mod.STT_PROBE_SPEC["path"]
+    assert headers["authorization"] == f"Bearer {TOKEN}"
+    assert headers["content-type"].startswith("multipart/form-data; boundary=")
+    body = req["body"]
+    assert b"RIFF" in body and b'filename="probe.wav"' in body
+    assert b'name="model"' in body and b"whisper-1" in body
+
+
+def test_a_language_only_update_does_not_probe(client, stub):
+    h = _key(client, "lang@vexa.ai")
+    assert client.put("/user/transcription", headers=h,
+                      json={"url": stub["url"], "token": TOKEN}).status_code == 200
+    hits = stub["hits"]
+    stub["status"] = 401  # a probe now would refuse; none is sent
+    r = client.put("/user/transcription", headers=h, json={"language": "de"})
+    assert r.status_code == 200, r.text
+    assert "probe" not in r.json()
+    assert stub["hits"] == hits
+    assert client.get("/user/transcription", headers=h).json()["url"] == stub["url"]
+
+
+def test_the_probe_does_not_hold_the_row_lock(client, stub):
+    """While the endpoint stalls, another write by the same person (it takes the row lock) finishes."""
+    h = _key(client, "lock@vexa.ai")
+    stub["gate"] = threading.Event()
+    first, second = {}, {}
+
+    def _slow_write():
+        first["r"] = client.put("/user/transcription", headers=h, json={"url": stub["url"], "token": TOKEN})
+
+    def _language_write():
+        second["r"] = client.put("/user/transcription", headers=h, json={"language": "fr"})
+
+    t1 = threading.Thread(target=_slow_write, daemon=True)
+    try:
+        t1.start()
+        for _ in range(200):  # wait until the probe has reached the stub and is stalled there
+            if stub["hits"]:
+                break
+            time.sleep(0.05)
+        assert stub["hits"] == 1
+        t2 = threading.Thread(target=_language_write, daemon=True)
+        t2.start()
+        t2.join(timeout=10)
+        assert not t2.is_alive(), "a same-user write waited on the stalled probe"
+        assert second["r"].status_code == 200, second["r"].text
+        assert "r" not in first  # the probed write is still waiting on the endpoint
+    finally:
+        stub["gate"].set()
+    t1.join(timeout=20)
+    assert first["r"].status_code == 200, first["r"].text
+    got = client.get("/user/transcription", headers=h).json()
+    assert got["url"] == stub["url"] and got["token_set"] is True
