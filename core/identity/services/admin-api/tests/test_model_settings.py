@@ -17,6 +17,7 @@ from admin_api.schema.models import Base
 from admin_api.schema.sync import ensure_schema_sync
 
 from conftest import requires_docker
+from stt_stub import stt_stub
 from test_stack_admin_api import ADMIN_TOKEN, INTERNAL_SECRET, _admin, _dispose_async_engine
 
 pytestmark = requires_docker
@@ -137,7 +138,7 @@ def test_bot_context_carries_effective_transcription(client):
     }
 
     client.put("/user/transcription", headers={"X-API-Key": tok},
-               json={"url": "https://stt-mine.example.com"})
+               json={"url": "https://stt-mine.example.com", "skip_probe": True})
     r = client.get(f"/internal/users/{uid}/bot-context", headers=_internal())
     # A customer URL never inherits the platform credential.
     assert r.json()["transcription"] == {
@@ -149,3 +150,95 @@ def test_bot_context_carries_effective_transcription(client):
     cfg = client.get("/user/transcription", headers={"X-API-Key": tok}).json()
     assert cfg["url"] == "https://stt-mine.example.com"
     assert cfg["token_set"] is False
+
+
+def test_user_transcription_probe_outcomes(client):
+    uid, tok = _user_token(client, email="probe@vexa.ai")
+    h = {"X-API-Key": tok}
+
+    def read():
+        response = client.get("/user/transcription", headers=h)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def stored():
+        return client.get(f"/admin/users/{uid}", headers=_admin()).json()["data"]
+
+    with stt_stub() as (url, requests):
+        r = client.put("/user/transcription", headers=h, json={"url": url, "token": "first-secret"})
+        assert r.status_code == 200, r.text
+        assert r.json()["probe"] == "ok"
+        cfg = read()
+        assert r.json() == {**cfg, "probe": "ok"}
+        assert cfg["url"] == url and cfg["token_set"] is True
+        assert cfg["probe_status"] == "ok"
+        assert cfg["probe_at"].endswith("Z") and len(cfg["probe_at"]) == 20
+        assert len(requests) == 1
+        prefs = stored()["transcription_prefs"]
+        assert prefs == {
+            "url": url, "token": "first-secret",
+            "transcription_probe_status": "ok", "transcription_probe_at": cfg["probe_at"],
+        }
+        r = client.get(f"/internal/users/{uid}/bot-context", headers=_internal())
+        assert r.status_code == 200, r.text
+        transcription = r.json()["transcription"]
+        assert set(transcription) <= {"url", "token", "provider"}
+        assert transcription["url"] == url and transcription["token"] == "first-secret"
+
+        # A token-only edit must probe the saved URL with the replacement credential.
+        r = client.put("/user/transcription", headers=h,
+                       json={"token": "replacement-secret", "skip_probe": False})
+        assert r.status_code == 200 and r.json()["probe"] == "ok"
+        assert len(requests) == 2
+        assert requests[-1]["headers"]["authorization"] == "Bearer replacement-secret"
+        assert read()["url"] == url
+
+    before, before_stored = read(), stored()
+    for status, verdict in ((401, "unauthorized"), (403, "unauthorized"), (404, "unreachable")):
+        with stt_stub(status=status) as (url, requests):
+            r = client.put("/user/transcription", headers=h,
+                           json={"url": url, "token": "bad-secret"})
+        assert r.status_code == 422, r.text
+        assert set(r.json()) == {"probe", "detail"}
+        assert r.json()["probe"] == verdict
+        assert isinstance(r.json()["detail"], str)
+        assert len(requests) == 1
+        assert read() == before
+        assert stored() == before_stored
+
+    with stt_stub(status=401) as (url, requests):
+        r = client.put("/user/transcription", headers=h,
+                       json={"url": url, "skip_probe": True})
+        assert r.status_code == 200 and r.json()["probe"] == "skipped"
+        cfg = read()
+        assert cfg["probe_status"] == "skipped" and cfg["probe_at"].endswith("Z")
+        assert cfg["url"] == url
+        assert "skip_probe" not in stored()["transcription_prefs"]
+
+        r = client.put("/user/transcription", headers=h, json={"url": "ftp://x"})
+        assert r.status_code == 422
+        assert r.json() == {"detail": "url must be an http(s) URL"}
+        assert read() == cfg
+
+        # Clearing the URL removes stamps even when a token remains stored.
+        r = client.put("/user/transcription", headers=h, json={"url": ""})
+        assert r.status_code == 200 and r.json()["probe"] is None
+        assert read()["probe_status"] is None and read()["probe_at"] is None
+        assert stored()["transcription_prefs"] == {"token": "replacement-secret"}
+        assert requests == []
+
+    r = client.put("/user/transcription", headers=h, json={"token": "unpaired-secret"})
+    assert r.status_code == 200 and r.json()["probe"] is None
+    assert read()["url"] is None and read()["probe_status"] is None
+    assert stored()["transcription_prefs"] == {"token": "unpaired-secret"}
+
+    # Clearing all fields drops the prefs object, including any existing stamps.
+    with stt_stub() as (url, requests):
+        r = client.put("/user/transcription", headers=h, json={"url": url})
+        assert r.status_code == 200 and r.json()["probe"] == "ok"
+        r = client.put("/user/transcription", headers=h, json={"url": "", "token": ""})
+        assert r.status_code == 200 and r.json()["probe"] is None
+        assert len(requests) == 1
+    assert "transcription_prefs" not in stored()
+    assert read() == {"url": None, "token_set": False, "token": None,
+                      "probe_status": None, "probe_at": None}

@@ -113,7 +113,34 @@ keep the main stack CPU-only.
 
 ## Preflight before a meeting
 
-Test the endpoint from the Vexa host before sending a bot:
+For an account-level override, `PUT /user/transcription` probes the resulting URL and token
+**before saving**. This also applies to token-only updates when a URL is already stored.
+
+```bash
+curl -X PUT "$API_BASE/user/transcription" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"url":"https://stt.example.com","token":"your-stt-token"}'
+```
+
+The probe POSTs to `/v1/audio/transcriptions` (without doubling an existing full path), using
+`Authorization: Bearer <token>` when a token is set. It sends the canonical one-second quiet tone
+as `probe.wav`: 16 kHz, mono, 16-bit PCM WAV, with `model=whisper-1` and `response_format=json`.
+The timeout is 10 seconds. A successful response is HTTP 2xx with a JSON object whose `text` is a
+string; an empty string is valid for this probe.
+
+Success returns `"probe":"ok"`. HTTP 401/403 produces a **422** response with top-level
+`"probe":"unauthorized"`; connection errors, timeouts, other non-2xx statuses (including 404),
+and invalid response bodies produce `"probe":"unreachable"`. The accompanying `detail` explains
+the failure without the token. A failed probe leaves the previous configuration unchanged.
+
+If you need to save an endpoint without testing it from admin-api, add `"skip_probe":true` to
+the PUT body. This saves the configuration with `"probe":"skipped"`; it does not establish that
+the endpoint works. The flag applies only to that request and is not stored. Read the last saved
+verdict and UTC timestamp through `probe_status` and `probe_at` on `GET /user/transcription`.
+Clearing the URL removes those stamps and returns `"probe":null` on the PUT.
+
+For a deployment configured through environment variables, test the endpoint from the Vexa host
+before sending a bot:
 
 ```bash
 curl -sS "$TRANSCRIPTION_SERVICE_URL/v1/audio/transcriptions" \
