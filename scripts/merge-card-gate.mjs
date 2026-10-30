@@ -47,6 +47,18 @@
 //     not count and must be re-posted. The card's own sticky comment, a bot's, never counts; it is
 //     skipped by its author, so a maintainer's verdict that mentions the card marker still counts.
 //
+//     WHO SIGNS DEPENDS ON THE RADIUS (scripts/pr-radius.mjs, from the PR's diff paths alone). On a
+//     SMALL radius (CI, docs, tests, one unit with no database, contract, protocol, billing, auth,
+//     gate or deploy path) the independent reviewer agent's marker counts too: a comment by
+//     REVIEWER_LOGIN, the GitHub App that vexa-reviewer.yml runs as, never a person's account. The
+//     reviewer reads the diff as text in a trusted job and never runs the PR's code or sees its
+//     author's session. On a LARGE radius its pass does not count: a maintainer must pass. Its
+//     `verdict=fail` always counts, on any radius, and routes the row to a maintainer, whose newer
+//     pass on the head clears it. A reviewer pass also counts only while every SCANNER on the head
+//     agrees (CodeQL, GitGuardian, dependency-review, osv, Trivy): a scanner that failed where the
+//     reviewer passed is a disagreement, and the row goes to a maintainer. The reviewer cannot waive.
+//     If the reviewer never ran, there is no marker and the row waits for a maintainer: no fallback.
+//
 //     SECURITY FINDINGS STAY PRIVATE. The marker and its comment carry only the verdict, a finding
 //     count (`findings=<n>`, optional) and the sha — never a finding, a path, a payload or an
 //     exploit. The findings themselves stay in the private channel SECURITY.md describes until
@@ -77,6 +89,7 @@
 
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { classify, pathsOfFiles } from "./pr-radius.mjs";
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const IS_MAIN = import.meta.url === pathToFileURL(process.argv[1] || "").href;
@@ -105,16 +118,25 @@ function prNumbers() {
   return [...new Set([...ref.matchAll(/pr-(\d+)-/g)].map((m) => +m[1]))];
 }
 
-function touchesRuntime(num, api = ghj) {
-  for (let page = 1; page <= 10; page++) {
+// The PR's changed files, every page the API serves (it lists at most 3,000). `complete` is false
+// when the list may be cut short: the radius is then LARGE, since an unseen path could be any kind.
+function readFiles(num, api = ghj) {
+  const out = [];
+  for (let page = 1; page <= 30; page++) {
     const files = api(`repos/${REPO}/pulls/${num}/files?per_page=100&page=${page}`);
-    for (const f of files) {
-      const p = f.filename;
-      if (RUNTIME_FILES.includes(p) || RUNTIME_PREFIXES.some((pre) => p.startsWith(pre))) return true;
-    }
-    if (files.length < 100) break;
+    out.push(...files);
+    if (files.length < 100) return { files: out, complete: true };
   }
-  return false;
+  return { files: out, complete: false };
+}
+
+const touchesRuntime = (files) =>
+  files.some((f) => RUNTIME_FILES.includes(f.filename) || RUNTIME_PREFIXES.some((pre) => f.filename.startsWith(pre)));
+
+// The PR's radius over its file list; an incomplete list is LARGE (the card refuses what it cannot see).
+export function radiusOf({ files, complete }) {
+  if (!complete) return { radius: "large", kinds: { "too many files": [] }, units: [], why: "more files than the API lists — the radius cannot be read" };
+  return classify(pathsOfFiles(files));
 }
 
 // value-fsm is a live sibling check: `labeled` (which triggers merge-card) also re-triggers
@@ -139,8 +161,53 @@ export function verdictFromRuns(runs) {
   return top.conclusion === "success" ? "success" : "failure";
 }
 
-function readValueFsmRuns(sha, api = ghj) {
-  return api(`repos/${REPO}/commits/${sha}/check-runs?per_page=100`).check_runs || [];
+function readCheckRuns(sha, api = ghj) {
+  const out = [];
+  for (let page = 1; page <= 5; page++) {
+    const runs = api(`repos/${REPO}/commits/${sha}/check-runs?per_page=100&page=${page}`).check_runs || [];
+    out.push(...runs);
+    if (runs.length < 100) break;
+  }
+  return out;
+}
+const readValueFsmRuns = readCheckRuns;
+
+// ── SCANNERS — the machine opinions a reviewer pass must agree with ─────────────────────────────
+
+// The check runs that scan the head for vulnerabilities and secrets, by name (codeql.yml,
+// cve-scanning.yml, dependency-review.yml, GitGuardian's app). Each name's newest run is its verdict.
+export const SCANNERS = [/^analyze \(/i, /^CodeQL$/, /^GitGuardian/, /^dependency-review$/, /^osv-/, /^third-party-images/, /^Trivy/i];
+const AGREES = new Set(["success", "neutral", "skipped"]);
+
+// { state: agree | disagree | pending, why }, pure over a raw check-runs array. A scanner that has
+// not finished is pending, never agreement; one that finished with anything but success, neutral or
+// skipped disagrees with a pass. No scanner run on the head at all is no disagreement, and says so.
+export function scannerVerdict(runs) {
+  const newest = new Map();
+  for (const r of runs || []) {
+    if (!SCANNERS.some((re) => re.test(r.name || ""))) continue;
+    const prev = newest.get(r.name);
+    if (!prev || new Date(r.started_at || 0) > new Date(prev.started_at || 0)) newest.set(r.name, r);
+  }
+  const all = [...newest.values()];
+  const failed = all.filter((r) => r.status === "completed" && r.conclusion != null && !AGREES.has(r.conclusion));
+  const pending = all.filter((r) => r.status !== "completed" || r.conclusion == null);
+  const names = (list) => list.map((r) => `\`${r.name}\``).join(", ");
+  if (failed.length) return { state: "disagree", why: `${names(failed)} ${failed.length === 1 ? "is" : "are"} red on the head` };
+  if (pending.length) return { state: "pending", why: `${names(pending)} ${pending.length === 1 ? "has" : "have"} not finished on the head` };
+  if (!all.length) return { state: "agree", why: "no scanner ran on this head" };
+  return { state: "agree", why: `${all.length} scanner${all.length === 1 ? "" : "s"} green` };
+}
+
+// Wait out pending scanners on `sha`, like value-fsm: a pending scanner is never read as agreement.
+export async function waitForScanners(sha, { read = readCheckRuns, wait = sleep, attempts = 20, delayMs = 15000 } = {}) {
+  let v = { state: "pending", why: "not read" };
+  for (let i = 0; i < attempts; i++) {
+    v = scannerVerdict(read(sha));
+    if (v.state !== "pending") return v;
+    if (i < attempts - 1) await wait(delayMs);
+  }
+  return v;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -279,6 +346,11 @@ const short = (sha) => String(sha || "").slice(0, 7);
 // How many pages of 100 comments the card reads, newest first.
 export const COMMENT_PAGES = 10;
 
+// The independent reviewer: the GitHub App vexa-reviewer.yml posts as. An App's `[bot]` login cannot
+// be registered by a person, so the login alone names it. It holds no write on the repo.
+export const REVIEWER_LOGIN = "vexa-reviewer[bot]";
+const isReviewer = (user) => user?.type === "Bot" && user?.login === REVIEWER_LOGIN;
+
 const MARKER = /<!--\s*vexa-pass:([a-z][a-z-]*)\s([\s\S]*?)-->/gi;
 
 function parseMarkers(text) {
@@ -330,41 +402,66 @@ function waiverLogin(fields) {
   return LOGIN.test(who) ? who : null;
 }
 
-const howToPass = (kind) =>
-  `a maintainer (write or admin on the repo) posts a PR comment whose first line is \`<!-- vexa-pass:${kind} sha=<full head sha> verdict=pass -->\``;
+const howToPass = (kind, radius = "large") =>
+  `a maintainer (write or admin on the repo) posts a PR comment whose first line is \`<!-- vexa-pass:${kind} sha=<full head sha> verdict=pass -->\`` +
+  (radius === "small" ? ` — on this small-radius PR, the independent reviewer's pass counts too (vexa-reviewer.yml posts it for every head)` : "");
 
 // One pass row, pure over the PR's issue comments (the `repos/:repo/issues/:n/comments` shape, in
 // API order = oldest first) and an injected maintainer predicate, so it has no network in its unit
-// path. `truncated` says the comments are only the newest window of a longer thread. Returns
-// { ok, state, why } where state is pass | waived | stale | invalid | missing.
-export function passRow(kind, comments, { head, isMaintainer, truncated = false }) {
+// path. `truncated` says the comments are only the newest window of a longer thread. `radius` is the
+// PR's (pr-radius.mjs); only "small" lets the reviewer's pass count, so the default keeps a
+// maintainer's. `scanners` is scannerVerdict() on the head, read when a reviewer pass would decide.
+// Returns { ok, state, why } where state is pass | reviewer | waived | fail | stale | invalid | missing.
+export function passRow(kind, comments, { head, isMaintainer, truncated = false, radius = "large", scanners = null }) {
   const headSha = String(head || "").toLowerCase();
   const seen = []; // { by, sha, verdict, fields, placed } in thread order; placed=false: a marker for the head below the leading lines
   for (const c of comments || []) {
     // The card's own sticky comment is skipped by its author, a bot (as merge-card-comment.yml
     // finds it), never by what a comment says: a maintainer's verdict that quotes the card marker
-    // still counts. No bot or app holds a pass anyway.
-    if (c?.user?.type === "Bot") continue;
+    // still counts. The one bot whose marker is read is the reviewer App (REVIEWER_LOGIN).
+    // The reviewer App is the one bot whose marker is read, and only through the radius rules below.
+    const reviewer = isReviewer(c?.user);
+    if (c?.user?.type === "Bot" && !reviewer) continue;
     const body = c?.body || "";
     const by = c?.user?.login;
     if (!by) continue;
     const placed = passMarkers(body).filter((mk) => mk.kind === kind);
+    if (reviewer) { // only its leading markers for the head; it posts nothing else that could count
+      for (const mk of placed) if (mk.sha.toLowerCase() === headSha) seen.push({ ...mk, by, placed: true, reviewer: true });
+      continue;
+    }
     for (const mk of placed) seen.push({ ...mk, by, placed: true });
     // A marker for the head only below the leading lines (none of this kind for the head leads the
     // comment) is recorded as misplaced. A comment that leads with its verdict may quote others below.
     const onHead = (list) => list.filter((mk) => mk.kind === kind && mk.sha.toLowerCase() === headSha).length;
     if (!onHead(placed) && onHead(parseMarkers(body))) seen.push({ by, sha: headSha, verdict: null, fields: {}, placed: false });
   }
-  const counted = seen.filter((s) => isMaintainer(s.by));
+  // A reviewer marker counts unless it is a pass on a large radius: there its pass is not a signature,
+  // but its fail still stops the row. Every maintainer marker counts, as before.
+  const reviewerCounts = (s) => s.verdict !== "pass" || radius === "small";
+  const counted = seen.filter((s) => (s.reviewer ? reviewerCounts(s) : isMaintainer(s.by)));
   const onHead = counted.filter((s) => s.sha.toLowerCase() === headSha);
+  const count = (s) => /^\d+$/.test(s.fields.findings || "") ? ` (${s.fields.findings} finding${s.fields.findings === "1" ? "" : "s"})` : "";
+
+  if (onHead.length && onHead[onHead.length - 1].reviewer) {
+    const s = onHead[onHead.length - 1]; // the newest verdict on head is the reviewer's
+    if (s.verdict === "fail")
+      return { ok: false, state: "fail", why: `the independent reviewer (@${s.by}) failed ${kind} on head ${short(head)}${count(s)} — routed to a maintainer: read its findings, then fix and push, or post a maintainer's pass on this head` };
+    if (s.verdict !== "pass")
+      return { ok: false, state: "invalid", why: `the independent reviewer's ${kind} marker on head ${short(head)} is \`verdict=${s.verdict}\` — the reviewer can only pass or fail; a maintainer decides` };
+    if (!scanners || scanners.state === "pending")
+      return { ok: false, state: "invalid", why: `the independent reviewer passed ${kind} on head ${short(head)}, but ${scanners ? scanners.why : "the scanners were not read"} — its pass counts once every scanner agrees` };
+    if (scanners.state === "disagree")
+      return { ok: false, state: "invalid", why: `disagreement — the independent reviewer passed ${kind} on head ${short(head)} but ${scanners.why}; routed to a maintainer: ${howToPass(kind)}` };
+    return { ok: true, state: "reviewer", why: `small radius — pass on head ${short(head)} by the independent reviewer @${s.by}${count(s)}; ${scanners.why}` };
+  }
 
   if (onHead.length) {
     const s = onHead[onHead.length - 1]; // newest maintainer verdict on head wins
     if (!s.placed) // misplaced and newest: it is no verdict, but it takes away any earlier pass
       return { ok: false, state: "invalid", why: `@${s.by}'s newest ${kind} marker for head ${short(head)} is not at the top of its comment, so it does not count — a marker must be the first line of the comment (markers may fill the first lines; nothing else may come before them)` };
-    const count = /^\d+$/.test(s.fields.findings || "") ? ` (${s.fields.findings} finding${s.fields.findings === "1" ? "" : "s"})` : "";
     if (s.verdict === "pass")
-      return { ok: true, state: "pass", why: `pass on head ${short(head)} by @${s.by}${count}` };
+      return { ok: true, state: "pass", why: `pass on head ${short(head)} by @${s.by}${count(s)}` };
     if (s.verdict === "waived") {
       const named = s.fields["waived-by"];
       if (!named)
@@ -372,26 +469,30 @@ export function passRow(kind, comments, { head, isMaintainer, truncated = false 
       const who = waiverLogin(s.fields);
       if (!who || !isMaintainer(who))
         return { ok: false, state: "invalid", why: `@${s.by}'s waiver on head ${short(head)} names \`${named}\`, which is not an account with write or admin on the repo — \`waived-by=\` must name one` };
-      return { ok: true, state: "waived", why: `waived on head ${short(head)}: waiver recorded by @${s.by}, names @${who}${count}` };
+      return { ok: true, state: "waived", why: `waived on head ${short(head)}: waiver recorded by @${s.by}, names @${who}${count(s)}` };
     }
-    return { ok: false, state: "invalid", why: `the newest ${kind} pass on head ${short(head)} (by @${s.by}) is \`verdict=${s.verdict}\`${count} — only \`verdict=pass\`, or \`verdict=waived\` with \`waived-by=\`, clears this row` };
+    return { ok: false, state: "invalid", why: `the newest ${kind} pass on head ${short(head)} (by @${s.by}) is \`verdict=${s.verdict}\`${count(s)} — only \`verdict=pass\`, or \`verdict=waived\` with \`waived-by=\`, clears this row` };
   }
 
   // Only the newest window of a long thread was read: an older pass may exist but cannot be
   // verified, so the row fails closed. A re-posted pass lands in the window.
   if (truncated)
-    return { ok: false, state: "missing", why: `comment history too long to verify — re-post the pass (no ${kind} pass for head ${short(head)} among the newest ${COMMENT_PAGES * 100} comments); ${howToPass(kind)}` };
+    return { ok: false, state: "missing", why: `comment history too long to verify — re-post the pass (no ${kind} pass for head ${short(head)} among the newest ${COMMENT_PAGES * 100} comments); ${howToPass(kind, radius)}` };
+
+  const uncounted = seen.some((s) => s.reviewer && !reviewerCounts(s));
+  if (uncounted)
+    return { ok: false, state: "missing", why: `large radius — the independent reviewer passed ${kind} on head ${short(head)}, but on a large radius only a maintainer signs: ${howToPass(kind)}` };
 
   if (counted.length) {
     const s = counted[counted.length - 1];
     if (!FULL_SHA.test(s.sha) && headSha.startsWith(s.sha.toLowerCase()))
       return { ok: false, state: "invalid", why: `@${s.by}'s ${kind} marker carries \`sha=${s.sha}\` — it must carry the full 40-character head sha (${head})` };
-    return { ok: false, state: "stale", why: `${kind} pass on record is for ${short(s.sha)}, head is ${short(head)} — re-run the ${kind} pass on the current head; ${howToPass(kind)}` };
+    return { ok: false, state: "stale", why: `${kind} pass on record is for ${short(s.sha)}, head is ${short(head)} — re-run the ${kind} pass on the current head; ${howToPass(kind, radius)}` };
   }
 
   const strangers = [...new Set(seen.filter((s) => s.placed).map((s) => "@" + s.by))];
   const ignored = strangers.length ? ` (${strangers.join(", ")} posted a marker, which does not count — no write or admin on the repo)` : "";
-  return { ok: false, state: "missing", why: `no ${kind} pass on head ${short(head)}${ignored} — ${howToPass(kind)}` };
+  return { ok: false, state: "missing", why: `no ${kind} pass on head ${short(head)}${ignored} — ${howToPass(kind, radius)}` };
 }
 
 // The PR's newest comments, oldest first, as { comments, truncated }. Reads newest first, because
@@ -434,7 +535,9 @@ export async function card(num, { api = ghj, expectedHead = "", readClosing = re
   const head = live;
   const labels = (pr.labels || []).map((l) => l.name);
   const signed = labels.includes("state: value-signed");
-  const runtime = touchesRuntime(num, api);
+  const changed = readFiles(num, api);
+  const runtime = touchesRuntime(changed.files);
+  const radius = radiusOf(changed);
   // Only a runtime PR has a value-fsm leg, and only then do we pay the wait. A non-terminal
   // value-fsm is waited out to its real verdict rather than sampled once mid-run (the #655 race).
   const vf = runtime && head ? await waitForTerminalValueFsm(head, { read: (sha) => readValueFsmRuns(sha, api) }) : "absent";
@@ -469,11 +572,16 @@ export async function card(num, { api = ghj, expectedHead = "", readClosing = re
     if (!perms.has(login)) perms.set(login, authorIsMaintainer(login, api));
     return perms.get(login);
   };
-  const architecture = passRow("architecture", comments, { head, isMaintainer, truncated });
-  const security = passRow("security", comments, { head, isMaintainer, truncated });
+  // The scanners are read, and waited out, only when a reviewer pass on a small radius would decide.
+  const reviewerPassed = radius.radius === "small" && comments.some((c) =>
+    isReviewer(c?.user) && passMarkers(c.body).some((mk) => mk.verdict === "pass" && mk.sha.toLowerCase() === String(head).toLowerCase()));
+  const scanners = reviewerPassed ? await waitForScanners(head, { read: (sha) => readCheckRuns(sha, api) }) : null;
+  const passOpts = { head, isMaintainer, truncated, radius: radius.radius, scanners };
+  const architecture = passRow("architecture", comments, passOpts);
+  const security = passRow("security", comments, passOpts);
 
   const rows = { valueOk, diffOk: d.ok, acceptance, architecture, security };
-  return { num, ok: cardOk(rows), valueOk, valueWhy, diffOk: d.ok, diffWhy, acceptance, architecture, security };
+  return { num, ok: cardOk(rows), valueOk, valueWhy, diffOk: d.ok, diffWhy, acceptance, radius, architecture, security };
 }
 
 // Render one PR's card as GitHub-flavoured markdown. The leading marker lets the sticky-comment
@@ -485,7 +593,7 @@ export function renderCard(c) {
     return `### 🃏 Merge card — #${c.num}\n\n**Not judged** — this run is for head ${short(c.moved.from)}, but the PR's head is now ${short(c.moved.to)}. The run for ${short(c.moved.to)} decides.`;
   if (c.skip) return `${CARD_MARKER}\n### 🃏 Merge card — #${c.num}\n\n_Skipped (${c.skip})._`;
   const row = (label, ok, why, mark = ok ? "✅" : "❌") => `| **${label}** | ${mark} | ${why} |`;
-  const pass = (label, r) => row(label, r.ok, r.why, r.ok && r.state === "waived" ? "✅ waived" : undefined);
+  const pass = (label, r) => row(label, r.ok, r.why, r.ok && r.state === "waived" ? "✅ waived" : r.ok && r.state === "reviewer" ? "✅ agent" : undefined);
   const verdict = c.ok
     ? `**Ready to merge** — every row above is accepted.`
     : `**Not mergeable yet** — every row above must be accepted before merge (choke point 1). Fill in what's ❌ above, then this clears automatically.`;
@@ -499,6 +607,10 @@ export function renderCard(c) {
     row("Diff", c.diffOk, c.diffWhy),
     // The row exists only when the PR carries a closing reference — `Part of #N` closes nothing.
     ...(c.acceptance ? [row("Acceptance", c.acceptance.ok, c.acceptance.why)] : []),
+    // Radius gates nothing by itself: it says who may sign the two pass rows below it.
+    ...(c.radius ? [row("Radius", true, c.radius.radius === "small"
+      ? `small — ${c.radius.why}: the independent reviewer's passes count`
+      : `large — ${c.radius.why}: a maintainer signs the passes`, c.radius.radius === "small" ? "small" : "large")] : []),
     // Every PR carries both pass rows; a card built without them renders them as missing (red),
     // never silently drops them.
     pass("Architecture", c.architecture || { ok: false, why: "architecture pass not evaluated" }),
