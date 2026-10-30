@@ -41,6 +41,7 @@ from .auth_session import auth_session_config
 from .invocation import build_invocation, build_workload_spec, mint_meeting_token
 from .meeting_host import TEAMS_HOST_SUFFIXES, allowance_entries, check_meeting_url_async
 from . import transcription_language as tlang
+from . import saved_stt_probe
 from .workload_redis import voice_note_stream
 from .ports import (
     AuthSessionBusy,
@@ -633,6 +634,8 @@ async def request_bot(
     #         client retries; a wrong URL never heals by itself. Only the latter is ours to refuse;
     #       * the ENV backend only — the verdict describes that endpoint, so a Settings-configured
     #         backend (a different endpoint) must never be blocked by the env one's health.
+    #     "No probe I/O" holds for the env backend; a SAVED endpoint is judged by its own probe in
+    #     the branch below (#1924), at most one probe per (url, token) per TTL.
     if transcribe_enabled and not configured.get("url"):
         verdict = cached_probe_verdict("stt", max_age_s=_STT_VERDICT_MAX_AGE_S)
         if verdict is not None and verdict.get("kind") in CONFIG_FAULT_KINDS:
@@ -645,6 +648,24 @@ async def request_bot(
                 f"the configured transcription backend is not working: {verdict.get('reason')} — "
                 f"fix TRANSCRIPTION_SERVICE_URL / TRANSCRIPTION_SERVICE_TOKEN; this re-tests within "
                 f"{int(_STT_VERDICT_MAX_AGE_S)}s, or call /health?force=1 to re-probe now"
+            )
+    elif transcribe_enabled and configured.get("url"):
+        # 1b-iii. A SAVED endpoint (Settings) is judged by its own probe, never the env verdict
+        #     (#1924): a rejected token used to spawn a deaf bot. Same refusal, same bounds — config
+        #     faults (and an internal address) refuse, `unreachable` never does. Kind and status
+        #     only: the URL and token never reach the detail or the log.
+        saved = await saved_stt_probe.verdict(configured["url"], configured.get("token") or "")
+        if saved.get("kind") in saved_stt_probe.FAULT_KINDS:
+            log_event(
+                "bot_spawn_saved_stt_endpoint_unhealthy", audience="user", level="warning",
+                span="bots.create", user_id=user_id,
+                fields={"kind": saved.get("kind"), "status": saved.get("status")},
+            )
+            status = f" (HTTP {saved['status']})" if saved.get("status") else ""
+            raise TranscriptionNotConfigured(
+                f"your saved transcription endpoint is not working: "
+                f"{saved_stt_probe.reason(saved.get('kind'))}{status} — fix it in Settings "
+                f"(PUT /user/transcription); this re-tests within {int(saved_stt_probe.FAULT_TTL_S)}s"
             )
 
     # 1c. Authenticated-bot mode (#724, deployment-scoped knob — Q1-A): when BOT_AUTHENTICATED is
