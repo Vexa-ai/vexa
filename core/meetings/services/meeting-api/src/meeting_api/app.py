@@ -165,7 +165,7 @@ def create_app(
     # lifecycle store
     meeting_store: Optional[MeetingStore] = None,
     token_secret: Optional[str] = None,
-    # user-stop (DELETE /bots) redis command publisher
+    # bot command-bus publisher (acts.v1 on bot_commands:meeting:{id}) — the user stop + chat send
     command_publisher: Optional["object"] = None,
     # per-user webhook delivery sink (WebhookSink) — delivers meeting.status_change on each FSM advance
     webhook_sink: Optional["object"] = None,
@@ -272,6 +272,12 @@ def create_app(
     # The stop router also gets the runtime client so a stop can directly tear down a still-booting bot's
     # workload (the leave command alone is fire-and-forget — a booting bot may never receive it → orphan).
     app.include_router(build_stop_router(meeting_repo, command_publisher, runtime))
+
+    # --- chat-send: POST /bots/{platform}/{native_meeting_id}/chat → acts.v1 `chat_send` on the same
+    # command bus the stop publishes `leave` on ---
+    from .lifecycle.chat_router import build_chat_router
+
+    app.include_router(build_chat_router(meeting_repo, command_publisher))
 
     # Resolve the shared recording storage before mounting the collector: completed-meeting erasure
     # uses this same port to delete objects before its transcript/JSONB finalization.

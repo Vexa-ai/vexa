@@ -45,6 +45,8 @@ API_V1_MEETING_SURFACE: set[tuple[str, str]] = {
     ("DELETE", "/bots/{platform}/{native_meeting_id}"),
     ("PUT", "/bots/{platform}/{native_meeting_id}/config"),
     ("POST", "/bots/{platform}/{native_meeting_id}/speak"),
+    ("GET", "/bots/{platform}/{native_meeting_id}/chat"),
+    ("POST", "/bots/{platform}/{native_meeting_id}/chat"),
     ("GET", "/transcripts/{platform}/{native_meeting_id}"),
     ("GET", "/recordings"),
     ("GET", "/recordings/{recording_id}"),

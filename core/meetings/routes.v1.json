@@ -42,6 +42,13 @@
       ]
     },
     {
+      "method": "POST",
+      "path": "/bots/{platform}/{native_meeting_id}/chat",
+      "scopes": [
+        "bot"
+      ]
+    },
+    {
       "method": "PUT",
       "path": "/bots/{platform}/{native_meeting_id}/config",
       "scopes": [
