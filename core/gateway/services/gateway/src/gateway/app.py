@@ -91,23 +91,14 @@ def _auth_unavailable_response(exc: Exception, *, span: str) -> Response:
     )
 
 # --- the scope model -------------------------------------------------------------------------
-# The three key scopes, as ``docs/docs/authentication.mdx`` defines them:
-#   bot     — "send and manage meeting bots, read their transcripts, delete meetings"
-#   tx      — "read/record plane: transcripts and meeting records; cannot delete meetings"
-#   browser — "browser-tool capabilities"
-#
-# Read as capabilities, that gives one rule per domain:
-#   BOT       anything that can make a bot EXIST, stop existing, or change how it behaves — the
-#             whole /bots surface, and the calendar connections, because auto-join turns a feed
-#             into bot spawns (the same cost vector as POST /bots, reached by another door).
-#   TX        the transcript/meeting data plane: meeting records, transcripts (reads; the default
-#             `bot` key also reads transcripts and deletes meetings, per routes.v1.json).
-#   BOT_OR_TX account-level config and reads that belong to either service domain (recordings,
-#             webhook config + delivery history, model/transcription prefs, agent, MCP). Neither
-#             scope alone is privileged over the other here; what matters is that a key with
-#             NEITHER — a browser-only key — is refused.
-#   browser   grants NO gateway route. v0.12 serves no browser-tool surface at this edge, so a
-#             browser-only key can authenticate (GET /auth/me) and do nothing else.
+# ONE KEY DOES EVERYTHING ITS OWNER MAY DO (#1922, the founder's one_key_scope ruling). Every
+# scoped row in every domain manifest declares exactly ["bot","tx"] (test_route_manifests.py guards
+# it), so `bot` and `tx` are the same capability: any key holding either one sends bots and reads,
+# streams and deletes the meetings, transcripts and recordings its user owns or sees through a
+# workspace. Ownership and workspace checks downstream are the boundary, not the scope.
+#   browser   grants NO gateway route. This edge serves no browser-tool surface, so a browser-only
+#             key can authenticate (GET /auth/me) and do nothing else — the one key the scope gate
+#             still refuses.
 # ── THE TABLE IS ASSEMBLED, NOT WRITTEN HERE (PRD decisions 40.5 + 40.7) ─────────────────────
 #
 # This used to be a 92-line literal holding all 69 rows, seven of them the agent domain's. That
@@ -292,23 +283,9 @@ def _is_authority_header(name: str) -> bool:
     return name in _AUTHORITY_HEADER_EXACT or name.startswith(_AUTHORITY_HEADER_PREFIXES)
 
 
-def scope_refusal_detail(required=None, held=()) -> str:
-    """The 403 text for a key lacking a route's scope. ``meeting_api.route_scopes`` carries a copy of
-    this formatter (pinned equal by a test); an undeclared route (``required`` None) stays generic."""
-    if not required:
-        return "Insufficient scope for this endpoint"
-    req = sorted(required)
-    return (
-        f"Insufficient scope: this endpoint requires one of [{', '.join(req)}]; "
-        f"your key has [{', '.join(sorted(held))}]. "
-        "Mint a key with the scope: POST /admin/users/{user_id}/tokens "
-        '{"scopes":[' + ",".join(f'"{x}"' for x in req) + "]}"
-    )
-
-
-def _insufficient_scope_response(required=None, held=()) -> Response:
+def _insufficient_scope_response() -> Response:
     return Response(
-        content=json.dumps({"detail": scope_refusal_detail(required, held)}),
+        content=json.dumps({"detail": "Insufficient scope for this endpoint"}),
         status_code=403,
         media_type="application/json",
     )
@@ -596,7 +573,7 @@ def create_app(
                 user_id=user_id,
                 fields={"method": method, "path": request.url.path, "required": sorted(required)},
             )
-            return None, _insufficient_scope_response(required, user_scopes)
+            return None, _insufficient_scope_response()
 
         # THE AGENT TIER, PER PERSON (`VEXA_AGENT_ALLOW`). Asked of every agent-domain row — literal,
         # streamed or catch-all, a person's key or the MCP's re-entry with a worker's token, which
@@ -1224,9 +1201,8 @@ def create_app(
         return await _forward_meeting(request)
 
     # ---- user self-serve calendar-sync config (identity owns it, same shape as /user/webhook).
-    # The ICS URL is a secret — admin-api masks it on every read-back. Scoped BOT, not BOT_OR_TX:
-    # a connection with auto_join on turns every event in the feed into a bot spawn, so managing
-    # one is bot-lifecycle power reached through a different door. ----
+    # The ICS URL is a secret — admin-api masks it on every read-back. Scoped ["bot","tx"] like every
+    # row (#1922): auto-join spawns bots, and any key that is not browser-only may send bots. ----
     # calendar-sync feedback edges live in MEETING-api (they run the sync), unlike the config
     # (identity). Registered before the config routes only for reading clarity - paths are exact.
     @app.get("/user/calendar/sync")

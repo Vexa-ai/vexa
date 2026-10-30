@@ -241,28 +241,28 @@ class _ScopedAuthorizer(FakeAuthorizer):
 
 
 @pytest.mark.parametrize("old_setting", [None, "legacy"])
-async def test_a_bot_only_key_cannot_subscribe_to_a_transcript(monkeypatch, old_setting):
-    """`GET /transcripts/{platform}/{native_meeting_id}` takes `tx`; a subscription streams the same
-    transcript, so a `bot`-only key is refused it — and nothing is asked downstream or fanned in.
-    The removed `VEXA_WS_SCOPE_MODE=legacy` changes nothing, and the refusal says what to do."""
+async def test_a_bot_only_key_subscribes_to_a_transcript(monkeypatch, old_setting):
+    """One key does everything its owner may do (#1922): the transcript row is ["bot","tx"], so the
+    default `bot`-only key subscribes to its own meeting; ownership (the subscribe hop) decides which.
+    The removed `VEXA_WS_SCOPE_MODE=legacy` changes nothing."""
     if old_setting:
         monkeypatch.setenv("VEXA_WS_SCOPE_MODE", old_setting)
-    ws = _WS(inbound=[SUBSCRIBE], api_key=API_KEY)
+    ws = _WS(inbound=[SUBSCRIBE], api_key=API_KEY, close_when_drained=False)
     redis, auth = FakeRedis(), _ScopedAuthorizer(["bot"])
-    await _run_multiplex(ws, auth, redis)
-    errs = [f for f in ws.sent if f.get("type") == "error"]
-    assert errs and errs[0]["error"] == "insufficient_scope", ws.sent
-    assert errs[0]["changed_in"] == "0.13.4" and "tx" in errs[0]["do_instead"]
-    assert errs[0]["docs"] == "https://docs.vexa.ai/changes-0-13-4-auth"
-    assert not any(f.get("type") == "subscribed" for f in ws.sent)
-    assert auth.asked == 0
-    assert ws.close_code is None                     # the socket stays open for status frames
+    task = asyncio.ensure_future(_run_multiplex(ws, auth, redis))
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert any(f.get("type") == "subscribed" and f["meetings"] for f in ws.sent), ws.sent
+    assert not any(f.get("type") == "error" for f in ws.sent), ws.sent
+    assert auth.asked == 1                           # ownership is asked downstream
+    ws.disconnect()
+    await asyncio.wait_for(task, timeout=2)
 
 
 @pytest.mark.parametrize("old_setting", [None, "legacy"])
 async def test_a_browser_only_key_opens_no_socket(monkeypatch, old_setting):
     """A key that may read no meeting status over REST (`GET /meetings` takes `tx`, `GET /bots/status`
-    takes `bot`) opens no socket: `insufficient_scope`, then close 4403, whatever the removed
+    takes `bot`) opens no socket (every row is ["bot","tx"] now): `insufficient_scope`, then close 4403, whatever the removed
     `VEXA_WS_SCOPE_MODE` says."""
     if old_setting:
         monkeypatch.setenv("VEXA_WS_SCOPE_MODE", old_setting)
@@ -271,6 +271,7 @@ async def test_a_browser_only_key_opens_no_socket(monkeypatch, old_setting):
     await _run_multiplex(ws, auth, redis)
     assert ws.sent and ws.sent[0]["error"] == "insufficient_scope"
     assert ws.sent[0]["changed_in"] == "0.13.4" and "scope" in ws.sent[0]["do_instead"]
+    assert "bot or tx" in ws.sent[0]["do_instead"]
     assert ws.sent[0]["docs"] == "https://docs.vexa.ai/changes-0-13-4-auth"
     assert ws.close_code == 4403
     assert auth.asked == 0

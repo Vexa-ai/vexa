@@ -31,8 +31,8 @@ def refusal(error: str, do_instead: str) -> dict:
 
 
 #: What a key /ws refuses for its scopes needs instead.
-SCOPE_HOW = ("use a key that holds the scopes the same REST read takes (meeting status for the socket, "
-             "tx for a transcript subscription; a bot-only key streams nothing); GET /auth/me lists yours")
+SCOPE_HOW = ("use a key that holds the bot or tx scope (every key the quickstart mints holds one); "
+             "GET /auth/me lists your key's scopes")
 
 
 #: A websocket that names its key in the URL (``?api_key=``); close 4401 follows.

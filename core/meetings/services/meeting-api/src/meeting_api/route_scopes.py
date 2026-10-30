@@ -8,8 +8,10 @@ that reached a route other than the one the edge checked is refused by the route
 
 THE TABLE IS THE MANIFEST, not a copy of it. A meeting-api route needs the union of the scopes of the
 rows that reach it: `POST /meetings/{meeting_id}/share` is reached by its own row and by the
-`/transcripts/by-id/{meeting_id}/share` alias, both `tx`. Adding a row, or moving one, changes both
-ends at once.
+`/transcripts/by-id/{meeting_id}/share` alias. Adding a row, or moving one, changes both ends at once.
+Every scoped row is ["bot","tx"] (#1922: one key does everything its owner may do), so in practice
+this gate refuses only a browser-only key; ownership and workspace checks in the routes are the
+boundary between users.
 
 WHAT IS CHECKED, AND WHAT IS NOT. Only a request carrying the gateway's signed identity
 (`x-vexa-identity`, verified by `identity_token.IdentityGuard` before any route runs). The internal
@@ -43,7 +45,8 @@ MANIFEST = Path("meetings") / "routes.v1.json"
 
 #: Calls the gateway makes ITSELF with a signed identity, which are not routes it serves, each held
 #: to the row whose data it serves: the `/ws` subscribe (`adapters.authorize_subscribe`) opens a
-#: meeting's live transcript, so it takes the transcript read's scopes — the rule the gateway's socket
+#: meeting's live transcript, so it takes the transcript read's scopes (["bot","tx"], like every row;
+#: which meetings a key may subscribe to is decided by ownership) — the rule the gateway's socket
 #: applies before it asks (`gateway/multiplex.py`).
 #: The browser session's live-view socket (keyed ``GET``, the upgrade a websocket is — see
 #: ``_matched``) is the gateway's own relay, authenticated like ``/ws`` and not a row; it serves the
@@ -53,7 +56,7 @@ EDGE_HOPS: Dict[RouteKey, RouteKey] = {
     ("GET", "/bot-accounts/sessions/{session_id}/vnc"): ("GET", "/bot-accounts/sessions/{session_id}"),
 }
 
-#: The generic answer (undeclared route) the edge gives; a declared route names its scopes (`gateway/app.py`), so a client reads
+#: The answer the edge gives a key without the route's scope (`gateway/app.py`), so a client reads
 #: one refusal whichever side refused it.
 INSUFFICIENT_SCOPE = "Insufficient scope for this endpoint"
 
@@ -113,21 +116,8 @@ def _matched(request: HTTPConnection) -> Optional[RouteKey]:
     return (method, path) if path else None
 
 
-def scope_refusal_detail(required=None, held=()) -> str:
-    """Copy of ``gateway.app.scope_refusal_detail`` (pinned equal by a test): one text whichever side refuses."""
-    if not required:
-        return INSUFFICIENT_SCOPE
-    req = sorted(required)
-    return (
-        f"Insufficient scope: this endpoint requires one of [{', '.join(req)}]; "
-        f"your key has [{', '.join(sorted(held))}]. "
-        "Mint a key with the scope: POST /admin/users/{user_id}/tokens "
-        '{"scopes":[' + ",".join(f'"{x}"' for x in req) + "]}"
-    )
-
-
-def _refuse(required=None, held=()) -> HTTPException:
-    return HTTPException(status_code=403, detail=scope_refusal_detail(required, held))
+def _refuse() -> HTTPException:
+    return HTTPException(status_code=403, detail=INSUFFICIENT_SCOPE)
 
 
 def scope_gate(request: HTTPConnection) -> None:
@@ -143,7 +133,7 @@ def scope_gate(request: HTTPConnection) -> None:
         raise _refuse()
     held = {s.strip() for s in (request.headers.get("x-user-scopes") or "").split(",") if s.strip()}
     if not held & required:
-        raise _refuse(required, held)
+        raise _refuse()
 
 
 #: The dependency `create_app` installs on the whole app.

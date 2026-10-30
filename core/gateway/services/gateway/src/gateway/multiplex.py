@@ -26,7 +26,9 @@ from .ports import Authorizer, AuthUnavailable, RedisBus
 #: table), so a key reaches nothing here it could not reach over REST. A meeting subscription fans in
 #: the live transcript (`tc:meeting:{id}:mutable`), so it takes the transcript read's scopes; the
 #: socket itself carries meeting-status frames, so opening it takes the scopes of a route that
-#: answers meeting status (`GET /meetings` or `GET /bots/status`).
+#: answers meeting status (`GET /meetings` or `GET /bots/status`). Every one of those rows is
+#: ["bot","tx"] (#1922), so any key holding bot or tx opens the socket and subscribes to the meetings
+#: its user may see — ownership decides which — and only a browser-only key is refused.
 TRANSCRIPT_ROUTE = ("GET", "/transcripts/{platform}/{native_meeting_id}")
 STATUS_ROUTES = (("GET", "/meetings"), ("GET", "/bots/status"))
 

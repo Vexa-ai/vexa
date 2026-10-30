@@ -55,8 +55,8 @@ same key, the same gateway — and you get Vexa's meeting tools and prompts with
   "https://api.cloud.vexa.ai/mcp", "--header", "Authorization: Bearer ${VEXA_API_KEY}"]}}}
 ```
 
-The key lives in `VEXA_API_KEY`. **Scopes decide which tools work**: a `bot`-only key dispatches
-bots, reads recordings and transcripts and deletes meetings, but gets `403 Insufficient scope` on meeting records (`/meetings` lists). The
+The key lives in `VEXA_API_KEY`. Any key holding `bot` or `tx` reaches every tool, limited to
+the meetings its user owns or can see; only a `browser`-only key gets `403 Insufficient scope`. The
 key's prefix is a hint, not the truth — call `GET /auth/me` for the scopes you actually hold.
 Full page: https://docs.vexa.ai/vexa-mcp
 

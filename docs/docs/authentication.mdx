@@ -73,14 +73,15 @@ is refused with `422` — never silently dropped.
 
 | Scope | Grants |
 |---|---|
-| `bot` | bot lifecycle — `POST`/`GET`/`DELETE /bots`, `/bots/status`, bot config — reading a bot's transcripts (`/transcripts/*`), deleting meetings (`DELETE /meetings*`), and the calendar connections (`/user/calendar`, `/user/calendars/*`), because an auto-join feed spawns bots |
-| `tx` | the read/record plane — `/meetings*`, `/transcripts/*`; a `tx`-only key reads but cannot delete meetings |
+| `bot` | every API route — bots, meetings, transcripts, recordings, calendar, settings, `/agent/*`, `/mcp` — limited to what the key's user owns or can see through a workspace |
+| `tx` | the same as `bot`: every route takes either one |
 | `browser` | browser-tool capabilities. **Reaches no API route today** — a browser-only key can call [`/auth/me`](/api/settings#identity) and nothing else |
 
-`/recordings*`, `/user/webhook*`, `/user/models`, `/user/transcription`, `/agent/*` and `/mcp` accept
-either `bot` or `tx`. Most keys want both: `{"scopes":["bot","tx"]}`. The three `/user/*` routes in
-that list are the [Settings API](/api/settings) — model credentials, transcription backend, and
-webhook delivery, stored per key owner.
+`bot` and `tx` are equivalent: one key sends a bot, reads and streams its transcript, and deletes
+the meetings and recordings its user owns. Ownership and workspace membership decide which records a
+key reaches, not its scope. The default mint (no scope named) gives `bot`, which is enough for
+everything. The `/user/*` routes are the [Settings API](/api/settings) — model credentials,
+transcription backend, and webhook delivery, stored per key owner.
 
 Every route requires a scope. A key that holds none of the scopes a route accepts gets `403`,
 whichever route it is.
@@ -262,6 +263,6 @@ Deny tests:
 |---|---|---|
 | `401` | `Missing API key` | no `X-API-Key` header |
 | `401` | `Invalid API key` | unknown or revoked key |
-| `403` | `Insufficient scope: this endpoint requires one of [bot, tx]; your key has [...]. Mint a key with the scope: POST /admin/users/{user_id}/tokens {"scopes":["bot","tx"]}` | key lacks the scope this route needs; the text lists the route's real scopes |
+| `403` | `Insufficient scope for this endpoint` | key lacks the scope this route needs |
 
 See the full [error reference](/api/errors).

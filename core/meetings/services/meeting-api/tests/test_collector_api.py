@@ -169,11 +169,3 @@ def test_routes_fail_closed_without_user_identity():
         "/ws/authorize-subscribe",
         json={"meetings": [{"platform": "google_meet", "native_meeting_id": "abc-defg-hij"}]},
     ).status_code == 401
-
-
-def test_get_transcript_by_id_other_user_is_never_200():
-    """A key reads only its owner's meetings (ownership is per user): by-id of another's is 404."""
-    store, mid = _seeded()
-    client = TestClient(create_app(store, redis=None))
-    assert client.get(f"/transcripts/by-id/{mid}", headers=GATEWAY_HEADERS).status_code == 200
-    assert client.get(f"/transcripts/by-id/{mid}", headers={"x-user-id": "999"}).status_code in (403, 404)

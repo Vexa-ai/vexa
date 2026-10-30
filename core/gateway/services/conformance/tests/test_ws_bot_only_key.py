@@ -1,8 +1,10 @@
-"""A `bot`-only key streams no transcript over `/ws`, end to end through the gateway and meeting-api.
+"""A `bot`-only key streams its own meeting's transcript over `/ws`, and no one else's, end to end
+through the gateway and meeting-api.
 
-`GET /transcripts/{platform}/{native_meeting_id}` takes `tx`; a `/ws` subscription streams the same
-transcript, so both services hold it to the same scopes. A `bot`-only key gets `insufficient_scope`
-with what to do instead; `VEXA_WS_SCOPE_MODE` is not read by either service.
+One key does everything its owner may do (#1922): `GET /transcripts/{platform}/{native_meeting_id}`
+takes `bot` or `tx`, and a `/ws` subscription is held to the same row, so the default `bot`-only key
+subscribes; ownership decides which meetings. A `browser`-only key gets `insufficient_scope` with
+what to do instead; `VEXA_WS_SCOPE_MODE` is not read by either service.
 
 This drives the SHIPPED pieces together, offline:
   the gateway's `/ws` loop (`gateway.run_multiplex`)
@@ -86,14 +88,25 @@ def _env(monkeypatch):
 
 
 @pytest.mark.parametrize("old_setting", [None, "legacy"])
-async def test_a_bot_only_key_is_refused_with_what_to_do(monkeypatch, old_setting):
+async def test_a_bot_only_key_streams_its_own_meeting(monkeypatch, old_setting):
     if old_setting:
         monkeypatch.setenv("VEXA_WS_SCOPE_MODE", old_setting)
     ws = await _subscribe(["bot"], MINE)
+    assert not [f for f in ws.sent if f.get("type") == "error"], ws.sent
+    assert any(f.get("type") == "subscribed" and f.get("meetings") for f in ws.sent), ws.sent
+
+
+async def test_a_bot_only_key_is_refused_a_meeting_it_may_not_read():
+    ws = await _subscribe(["bot"], THEIRS)
+    assert not any(f.get("type") == "subscribed" and f.get("meetings") for f in ws.sent), ws.sent
+
+
+async def test_a_browser_only_key_is_refused_with_what_to_do():
+    ws = await _subscribe(["browser"], MINE)
     refused = [f for f in ws.sent if f.get("error") == "insufficient_scope"]
     assert refused, ws.sent
     assert refused[0]["changed_in"] == "0.13.4"
-    assert "tx" in refused[0]["do_instead"] and "bot-only" in refused[0]["do_instead"]
+    assert "bot or tx" in refused[0]["do_instead"] and "scope" in refused[0]["do_instead"]
     assert refused[0]["docs"] == "https://docs.vexa.ai/changes-0-13-4-auth"
     assert not any(f.get("type") == "subscribed" and f.get("meetings") for f in ws.sent)
 

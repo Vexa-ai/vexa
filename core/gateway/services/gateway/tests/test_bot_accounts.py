@@ -98,9 +98,10 @@ def test_a_key_this_edge_does_not_accept_is_closed_4401():
     assert connector.calls == []
 
 
-def test_a_key_without_the_bot_scope_is_closed_4403():
+def test_a_browser_only_key_is_closed_4403():
+    """The session row is ["bot","tx"] (#1922); only a key holding neither — browser-only — is refused."""
     connector = FakeConnector()
-    client, _ = _client(connector, user={**VALID_USER, "scopes": ["tx", "browser"]})
+    client, _ = _client(connector, user={**VALID_USER, "scopes": ["browser"]})
     assert _closed_with(client, VNC, {"x-api-key": VALID_KEY}) == 4403
     assert connector.calls == []
 

@@ -321,7 +321,7 @@ def test_the_read_needs_the_bot_scope_and_refuses_a_shared_turn(redis):
 
     _seed(repo)
     rid = _send(client, headers=signed(["bot"]))["request_id"]
-    assert _status(client, rid, headers=signed(["tx"])).status_code == 403
+    assert _status(client, rid, headers=signed(["browser"])).status_code == 403
     shared = _status(client, rid, headers=signed(["bot"], regime="human", workspaces=["ws_1"],
                                                   shared=True))
     assert shared.status_code == 403, shared.text

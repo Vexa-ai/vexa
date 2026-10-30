@@ -15,8 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from meeting_api import create_app, identity_token, route_scopes
-from meeting_api.route_scopes import (
-    INSUFFICIENT_SCOPE, ROUTE_SCOPES, ScopeTableError, scope_refusal_detail, scopes_by_route)
+from meeting_api.route_scopes import INSUFFICIENT_SCOPE, ROUTE_SCOPES, ScopeTableError, scopes_by_route
 
 KEY = identity_token.generate_signing_key()
 INTERNAL = "route-scopes-internal-secret"
@@ -60,20 +59,19 @@ def _served(app) -> set:
 
 
 def _scope_refused(r) -> bool:
-    if r.status_code != 403:
-        return False
-    d = r.json().get("detail")
-    return d == INSUFFICIENT_SCOPE or (isinstance(d, str) and d.startswith("Insufficient scope: this endpoint requires one of ["))
+    return r.status_code == 403 and r.json().get("detail") == INSUFFICIENT_SCOPE
 
 
 # ── the table is the manifest ────────────────────────────────────────────────────────────────────
 
 def test_the_table_is_read_from_the_meetings_manifest():
     assert ROUTE_SCOPES == scopes_by_route(MANIFEST)
-    assert ROUTE_SCOPES[("POST", "/bots")] == {"bot"}
-    assert ROUTE_SCOPES[("GET", "/meetings")] == {"tx"}
+    # One key does everything its owner may do (#1922): every row takes bot or tx.
+    assert set(ROUTE_SCOPES.values()) == {frozenset({"bot", "tx"})}
+    assert ROUTE_SCOPES[("POST", "/bots")] == {"bot", "tx"}
+    assert ROUTE_SCOPES[("GET", "/meetings")] == {"bot", "tx"}
     # An alias row reaches the route its `upstream` names, with its own scopes.
-    assert ROUTE_SCOPES[("POST", "/meetings/{meeting_id}/share")] == {"tx"}
+    assert ROUTE_SCOPES[("POST", "/meetings/{meeting_id}/share")] == {"bot", "tx"}
     assert ROUTE_SCOPES[("GET", "/webhooks/deliveries")] == {"bot", "tx"}
     assert ("GET", "/user/webhook/deliveries") not in ROUTE_SCOPES
 
@@ -111,17 +109,17 @@ def test_a_key_without_the_route_s_scope_is_refused(client, method, template):
     assert _scope_refused(r), (method, template, r.status_code, r.text[:200])
 
 
+@pytest.mark.parametrize("scope", ["bot", "tx"])
 @pytest.mark.parametrize("method,template", _CHECKED)
-def test_a_key_with_the_route_s_scope_passes_the_check(client, method, template):
-    scope = sorted(ROUTE_SCOPES[(method, template)])[0]
+def test_a_key_with_the_route_s_scope_passes_the_check(client, method, template, scope):
     r = client.request(method, _concrete(template), headers=_signed([scope]), json={})
     assert not _scope_refused(r), (method, template, r.status_code, r.text[:200])
 
 
-def test_a_tx_key_that_reached_the_bot_spawn_route_is_refused_and_nothing_is_spawned(client):
-    """The cross-scope hop: a `tx` key whose request arrived at `POST /bots` (scope `bot`) — the
-    shape a mis-routed annotate would take — is refused before the route runs."""
-    r = client.post("/bots", headers=_signed(["tx"]),
+def test_a_browser_key_that_reached_the_bot_spawn_route_is_refused_and_nothing_is_spawned(client):
+    """A `browser`-only key (neither bot nor tx) whose request arrived at `POST /bots` is refused
+    before the route runs."""
+    r = client.post("/bots", headers=_signed(["browser"]),
                     json={"platform": "google_meet", "native_meeting_id": "abc-defg-hij"})
     assert _scope_refused(r)
     listing = client.get("/bots", headers=_signed(["bot"]))
@@ -129,9 +127,14 @@ def test_a_tx_key_that_reached_the_bot_spawn_route_is_refused_and_nothing_is_spa
     assert "abc-defg-hij" not in listing.text
 
 
-def test_a_bot_key_that_reached_a_meeting_record_route_is_refused(client):
-    assert _scope_refused(client.get("/meetings", headers=_signed(["bot"])))
-    assert _scope_refused(client.post("/meetings", headers=_signed(["bot"]), json={}))
+def test_a_browser_key_that_reached_a_meeting_record_route_is_refused(client):
+    assert _scope_refused(client.get("/meetings", headers=_signed(["browser"])))
+    assert _scope_refused(client.post("/meetings", headers=_signed(["browser"]), json={}))
+
+
+def test_a_bot_key_reaches_the_meeting_record_and_transcript_routes(client):
+    assert client.get("/meetings", headers=_signed(["bot"])).status_code == 200
+    assert not _scope_refused(client.get("/transcripts/by-id/1", headers=_signed(["bot"])))
 
 
 @pytest.mark.parametrize("method,path", [
@@ -148,7 +151,7 @@ def test_a_signed_identity_on_a_route_no_row_reaches_is_refused(client, method, 
 
 
 @pytest.mark.parametrize("old_setting", [None, "legacy"])
-@pytest.mark.parametrize("scopes", [["browser"], ["browser", "browser"]])
+@pytest.mark.parametrize("scopes", [["browser"]])
 def test_the_edge_s_subscribe_hop_refuses_a_key_that_may_not_read_transcripts(client, scopes, monkeypatch,
                                                                                old_setting):
     """`/ws` subscribing opens a meeting's live transcript: the hop takes the transcript read's
@@ -160,8 +163,9 @@ def test_the_edge_s_subscribe_hop_refuses_a_key_that_may_not_read_transcripts(cl
     assert _scope_refused(r), r.text
 
 
-def test_the_edge_s_subscribe_hop_takes_a_transcript_key(client):
-    r = client.post("/ws/authorize-subscribe", headers=_signed(["tx"]),
+@pytest.mark.parametrize("scopes", [["tx"], ["bot"], ["bot", "browser"]])
+def test_the_edge_s_subscribe_hop_takes_a_bot_or_tx_key(client, scopes):
+    r = client.post("/ws/authorize-subscribe", headers=_signed(scopes),
                     json={"meetings": [{"platform": "google_meet", "native_meeting_id": "abc-defg-hij"}]})
     assert not _scope_refused(r), r.text
 
@@ -190,38 +194,3 @@ def test_the_image_carries_the_manifest_where_this_module_reads_it():
     assert "COPY core/meetings/routes.v1.json" in dockerfile
     assert "./meetings/routes.v1.json" in dockerfile
     assert route_scopes.MANIFEST == Path("meetings") / "routes.v1.json"
-
-
-def test_the_scope_refusal_names_the_missing_scopes_and_the_mint_instruction(client):
-    r = client.get("/transcripts/by-id/1", headers=_signed(["browser"]))
-    assert r.status_code == 403
-    d = r.json()["detail"]
-    assert "requires one of [bot, tx]" in d and "your key has [browser]" in d
-    assert 'POST /admin/users/{user_id}/tokens {"scopes":["bot","tx"]}' in d
-    assert d == scope_refusal_detail({"bot", "tx"}, {"browser"})
-
-
-def test_the_text_is_identical_to_the_gateway_s():
-    gateway_src = (Path(__file__).resolve().parents[5]
-                   / "gateway/services/gateway/src/gateway")
-    import importlib.util, sys
-    sys.path.insert(0, str(gateway_src.parent))
-    try:
-        gw = importlib.import_module("gateway.app")
-    except Exception:  # gateway toolchain not importable from this package's env
-        pytest.skip("gateway package not importable here")
-    finally:
-        sys.path.remove(str(gateway_src.parent))
-    for req, held in [({"bot", "tx"}, {"browser"}), ({"bot"}, set()), (None, {"x"})]:
-        assert gw.scope_refusal_detail(req, held) == scope_refusal_detail(req, held)
-
-
-def test_a_bot_key_may_delete_a_meeting_and_a_tx_key_may_not(client):
-    for path in ("/meetings/1", "/meetings/google_meet/abc-defg-hij"):
-        assert _scope_refused(client.delete(path, headers=_signed(["tx"])))
-        assert not _scope_refused(client.delete(path, headers=_signed(["bot"])))
-
-
-def test_a_bot_key_reads_transcripts(client):
-    for path in ("/transcripts/by-id/1", "/transcripts/google_meet/abc-defg-hij"):
-        assert not _scope_refused(client.get(path, headers=_signed(["bot"])))

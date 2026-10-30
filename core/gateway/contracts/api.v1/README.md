@@ -36,7 +36,7 @@ The gateway authenticates `X-API-Key` against admin-api and **fails closed**. Th
 |---|---|---|
 | Missing `X-API-Key` header | `401` | `Missing API key` |
 | Invalid / unknown / revoked key | `401` | `Invalid API key` |
-| Valid key, scope not permitted for the route | `403` | `Insufficient scope: this endpoint requires one of [...]; your key has [...]. Mint a key ...` (undeclared route: `Insufficient scope for this endpoint`) |
+| Valid key, scope not permitted for the route | `403` | `Insufficient scope for this endpoint` |
 | Expired key | `401` | `Invalid API key` |
 | Admin route, missing/invalid `X-Admin-API-Key` | `403` | `Invalid or missing admin token.` |
 
