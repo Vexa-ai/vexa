@@ -52,7 +52,7 @@ request, your own policy, or the ordinary friction of putting a bot into someone
 | `startup_alone` | Nobody was in the meeting when the bot arrived, and nobody joined within the window. | **The meeting** | Check the bot was sent at the right time. Raise `no_one_joined_timeout` if your bots routinely arrive first. |
 | `evicted` | A host or participant removed the bot from the call. | **The meeting** | Nothing to fix on your side. A person in the call made this decision. |
 | `awaiting_admission_timeout` | The bot waited in the lobby and was never admitted before its budget ran out. | **The meeting** | Have someone admit the bot as they would any guest. Raise `max_wait_for_admission` if your hosts admit late. |
-| `awaiting_admission_rejected` | A host explicitly denied the bot admission. | **The meeting** | Nothing automatic — this was an explicit decision. Ask the host to admit it next time. |
+| `awaiting_admission_rejected` | A host explicitly denied the bot admission. On Google Meet, a reason that starts with `google_meet_join_refused` means something else: Meet refused the guest join and no host was asked. | **The meeting**; for `google_meet_join_refused`, **the platform** | Host denial: nothing automatic, since this was an explicit decision. Ask the host to admit it next time. `google_meet_join_refused`: the bot has already re-knocked up to 3 times. Send it again later. See [A join Google Meet refuses](#a-join-google-meet-refuses-google_meet_join_refused). |
 | `join_failure` | The bot never reached the call: no admission signal ever appeared, or it died before it could join. | **Vexa** | Retry. If it repeats on one platform or one link, tell us — and read the [caveat on this value](#join_failure-is-currently-two-failures-under-one-name) first. |
 | `auth_session_missing` | The run needed a signed-in browser identity and there was no usable one — a meeting restricted to authenticated accounts, or a stored session that has died. | **Vexa, or your bot identity** | A re-spawn against a dead session cannot succeed. Self-hosting: re-provision with `make login` — see [Authenticated bots](/authenticated-bots). Hosted: tell us. |
 | `validation_error` | The request that created the run was not usable — wrong `native_meeting_id`, wrong platform value, malformed parameters. | **Yours** | Fix the request. [Bot won't join the meeting](/troubleshooting#bot-wont-join-the-meeting) lists the usual causes. |
@@ -152,6 +152,26 @@ holds. Who may send a bot is unchanged and enforced upstream. Tests in `prejoin-
 "the disabled button was never clicked", "the admission wait never ran (no waiting-room verdict
 was logged)", "a valid name still joins", "a button that enables a moment late is not a refusal". Module notes:
 [`msteams/README.md`](https://github.com/Vexa-ai/vexa/blob/main/core/meetings/modules/join/src/msteams/README.md).
+
+### A join Google Meet refuses (`google_meet_join_refused`)
+
+Sometimes Google Meet refuses a guest join itself, and no host is ever asked. The bot sees one of
+these:
+
+- `ResolveMeetingSpace` or `CreateMeetingDevice` answers HTTP 403.
+- The page shows "You can't join this video call", either while the lobby loads or right after
+  **Ask to join**.
+
+Meet's refusal is intermittent: it applies to one join, and the next knock can succeed. So the bot
+knocks again by itself, up to 3 times in total and within its admission budget. If Meet refuses
+every knock, the run ends within seconds as `failed` / `awaiting_admission_rejected`. Its reason
+text (`data.reason`) starts with `google_meet_join_refused` and names the refused call or screen.
+The failure is attributed to the platform, not to the host or to Vexa.
+
+The host can't fix this, because there was nothing to admit. Send the bot again later. If one
+meeting link keeps getting refused, tell us and include the reason text. Older bots read the
+refusal screen as the waiting room and reported `awaiting_admission` until
+`max_wait_for_admission` ran out.
 
 ### `left_alone` is a silence verdict, not a headcount
 
