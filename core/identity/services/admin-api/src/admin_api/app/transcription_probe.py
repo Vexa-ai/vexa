@@ -26,6 +26,7 @@ STT_PROBE_SPEC = {
     "unauthorized_statuses": [401, 403],
     "invalid_statuses": [404], "exhausted_statuses": [402], "payload": "audio",
 }
+# Mirrors the declaration's `probe.timeout_s` (the same test pins it).
 PROBE_TIMEOUT_S = 15.0
 
 # httpx logs every request line (the person's URL) at INFO and httpcore traces at DEBUG; the URL
@@ -38,6 +39,7 @@ REASONS = {
     "exhausted": "the token is valid but the account cannot pay for transcription",
     "invalid_endpoint": "the endpoint path was not found; check the URL",
     "unreachable": "the endpoint could not be reached",
+    # `internal_address` is answered with the guard's own sentence (ssrf.SSRFError), not this table.
 }
 
 

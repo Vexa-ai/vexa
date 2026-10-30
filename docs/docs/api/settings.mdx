@@ -202,15 +202,29 @@ made only to a checked address, and redirects are not followed. The result:
 
 | Endpoint answers | Write result |
 |---|---|
-| a success, or any status not listed below | Saved, `200`. |
-| `401` / `403` | Refused, `422`, nothing saved: `{"detail": {"error": "transcription_endpoint_rejected", "kind": "unauthorized", "reason": "…"}}`. |
+| a success, or any status not listed below (a `400` from a vendor that checks the model name counts) | Saved, `200`; the response carries `"probe": {"ok": true}`. |
+| `401` / `403` | Refused, `422`, nothing saved, `kind: "unauthorized"`: the token is missing or wrong. |
 | `402` | Refused, `422`, `kind: "exhausted"`: the token is valid but the account can't pay. |
 | `404` | Refused, `422`, `kind: "invalid_endpoint"`: check the URL path. |
-| no answer (network failure, name doesn't resolve) | Saved, `200`, and the read-back carries `"probe": {"ok": false, "kind": "unreachable"}`. An outage means the endpoint is down, not set up wrong, so it doesn't block saving. |
-| (host resolves to an internal address) | Refused, `422`, before any connection is made. |
+| the host resolves to an internal address | Refused, `422`, `kind: "internal_address"`, before any connection is made. |
+| no answer (network failure, name doesn't resolve) | Saved, `200`, and the response carries `"probe": {"ok": false, "kind": "unreachable"}`. An outage means the endpoint is down, not set up wrong, so it doesn't block saving. |
 
-A refused write leaves the earlier saved value in place. The error text never repeats your URL or
-token. Clearing `url` sends no test request.
+A refusal is one body shape, `detail` a sentence and the typed fields beside it:
+
+```json
+{
+  "detail": "the endpoint rejected the token (missing or wrong)",
+  "error": "transcription_endpoint_rejected",
+  "kind": "unauthorized",
+  "status": 401
+}
+```
+
+`status` is the status the endpoint answered (`401`, `403`, `402` or `404`); it is `null` for
+`internal_address`. A refused write leaves the earlier saved value in place. The error text never
+repeats your URL or token. `probe` is on the write's response only; `GET /user/transcription` does not
+carry it. A write that changes neither `url` nor `token` (a language-only update), or clears `url`,
+sends no test request.
 
 ## Webhook configuration
 
@@ -350,7 +364,7 @@ Creating accounts and minting keys are covered in [Authentication](/authenticati
 | P4 — sealed contracts | Each route and its scopes is a row in a domain `routes.v1.json`. | `gate:schema`, `gate:contract-version`; `test_scope_matrix.py` |
 | P15 — secrets protected | No read returns a stored credential in the clear, from the user tier or the admin tier. | `test_user_webhook_response.py`: `test_a_narrow_key_reads_back_the_webhook_and_no_stored_credential`; `test_admin_user_secrets.py`: `test_no_admin_user_read_returns_a_stored_credential`; `test_model_settings.py`: `test_user_models_set_masked_readback_and_clear` |
 | Outbound URLs | An internal webhook or transcription address is refused when saved. | `test_an_internal_webhook_destination_is_refused_when_saved`, `test_an_internal_transcription_endpoint_is_refused_when_saved` |
-| Endpoint tested before saving | A personal transcription endpoint that rejects its token, can't pay, or has a wrong path is refused and nothing is saved. The test request goes through the URL guard and follows no redirects. | `test_transcription_save_probe.py`: `test_a_config_fault_is_a_typed_422_and_nothing_is_stored`, `test_a_rejected_change_leaves_the_previous_value`, `test_an_unreachable_endpoint_saves_and_says_so`, `test_a_name_resolving_to_a_private_address_is_refused_without_a_connection`, `test_a_redirect_is_not_followed`, `test_the_probe_spec_is_the_one_meeting_api_declares` |
+| Endpoint tested before saving | A personal transcription endpoint that rejects its token, can't pay, has a wrong path or resolves to an internal address is refused (`422`, string `detail`, typed `kind`) and nothing is saved; a working one saves with `probe.ok`. The test request goes through the URL guard and follows no redirects. | `test_transcription_save_probe.py`: `test_a_config_fault_is_a_typed_422_and_nothing_is_stored`, `test_a_rejected_change_leaves_the_previous_value`, `test_an_unreachable_endpoint_saves_and_says_so`, `test_a_name_resolving_to_a_private_address_is_refused_without_a_connection`, `test_a_redirect_is_not_followed`, `test_the_probe_spec_is_the_one_meeting_api_declares` |
 | P20 — authorize every access | Delivery history is scoped to its owner and never carries the URL or secret. | meeting-api `test_webhook_ledger.py`: `test_delivery_history_is_owner_scoped`, `test_ledger_sanitizes_url_and_secret_even_if_a_caller_passes_them` |
 | Own endpoint, own key | A person's `base_url` never inherits the organisation's credential. | `test_a_persons_own_endpoint_never_inherits_the_platform_credential` |
 
