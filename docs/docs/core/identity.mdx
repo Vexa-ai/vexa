@@ -100,7 +100,7 @@ security model has to cover (nothing more):
 | Group | Endpoints | Owner rule | Scope |
 |---|---|---|---|
 | **Front door** | `GET /health`, `GET /auth/me`, `WS /ws` | n/a / "who am I" / per-meeting subscribe | — |
-| **Meetings** (you must own the meeting) | `GET·POST /bots`, `…/bots/{platform}/{native}` (delete · config · speak), `GET /transcripts/{platform}/{native}`, `GET /recordings…`, `GET /meetings…` | owner = `meetings.user_id` | `bot` · `browser` · `tx` |
+| **Meetings** (you must own the meeting) | `GET·POST /bots`, `…/bots/{platform}/{native}` (delete · config · speak), `GET /transcripts/{platform}/{native}`, `GET /recordings…`, `GET /meetings…` | owner = `meetings.user_id` | `bot` · `tx`; `browser` reaches none |
 | **Your agent space** (yours by construction) | `POST /agent/chat`, `GET /agent/meeting/stream`, and `/agent/*` → `chat`, `workspace/{tree,file,init,swap,git,upload}`, `sessions`, `routines`, `models`, `meeting/{start,process,stream}` | owner = you, **by partition** (you can only name your own workspace/session) | none today |
 
 Two safety shapes result:

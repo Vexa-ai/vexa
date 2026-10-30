@@ -491,6 +491,45 @@ def test_route_scope_declarations_only_use_real_scopes():
         assert set(scopes) <= vocabulary, f"{key} declares unknown scope(s) {set(scopes) - vocabulary}"
 
 
+# --- one key does everything its owner may do (#1922) ---------------------------------------------
+# Every DELETE row in every manifest, crossed with each single scope and with no scope at all:
+# `bot` and `tx` pass the scope gate (ownership decides downstream); `browser` and none get 403.
+
+DELETE_CASES = [c for c in CASES if c[0] == "DELETE"]
+
+
+def test_the_delete_matrix_covers_every_delete_row():
+    declared = {path for (method, path) in ROUTE_SCOPES if method == "DELETE"}
+    assert declared and declared <= {template for _m, _u, template in DELETE_CASES}
+
+
+@pytest.mark.parametrize("method,url,template,scopes", [
+    pytest.param(m, u, t, s, marks=[needs_agent] if _agent_row(t) else [], id=f"{m} {u} {s}")
+    for m, u, t in DELETE_CASES
+    for s in (["bot"], ["tx"], ["browser"], [])
+])
+def test_delete_rows_take_bot_or_tx_and_refuse_browser_and_none(method, url, template, scopes):
+    r = _request(_client(scopes), method, url)
+    if set(scopes) & {"bot", "tx"}:
+        assert r.status_code != 403, f"{method} {url} with {scopes} must pass the scope gate"
+    else:
+        assert r.status_code == 403, f"{method} {url} with {scopes} → {r.status_code}, expected 403"
+
+
+def test_a_tx_only_key_sends_bots_and_deletes_meetings():
+    client = _client(["tx"])
+    assert client.post("/bots", headers=AUTH,
+                       json={"platform": "google_meet", "native_meeting_id": "abc"}).status_code == 200
+    assert client.delete("/meetings/42", headers=AUTH).status_code == 200
+    assert client.delete("/meetings/google_meet/abc", headers=AUTH).status_code == 200
+
+
+def test_a_bot_only_key_reads_transcripts_and_meetings():
+    client = _client(["bot"])
+    for url in ("/transcripts/by-id/42", "/transcripts/google_meet/abc", "/meetings"):
+        assert client.get(url, headers=AUTH).status_code == 200, url
+
+
 def test_app_is_a_fastapi_instance_after_the_build_guard():
     """Sanity: the build-time assertion runs AFTER every route is registered and returns the app."""
     assert isinstance(create_app(FakeAuthorizer(), FakeDownstream(), FakeRedis()), FastAPI)

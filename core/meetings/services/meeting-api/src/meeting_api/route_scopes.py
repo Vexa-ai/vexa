@@ -8,8 +8,10 @@ that reached a route other than the one the edge checked is refused by the route
 
 THE TABLE IS THE MANIFEST, not a copy of it. A meeting-api route needs the union of the scopes of the
 rows that reach it: `POST /meetings/{meeting_id}/share` is reached by its own row and by the
-`/transcripts/by-id/{meeting_id}/share` alias, both `tx`. Adding a row, or moving one, changes both
-ends at once.
+`/transcripts/by-id/{meeting_id}/share` alias. Adding a row, or moving one, changes both ends at once.
+Every scoped row is ["bot","tx"] (#1922: one key does everything its owner may do), so in practice
+this gate refuses only a browser-only key; ownership and workspace checks in the routes are the
+boundary between users.
 
 WHAT IS CHECKED, AND WHAT IS NOT. Only a request carrying the gateway's signed identity
 (`x-vexa-identity`, verified by `identity_token.IdentityGuard` before any route runs). The internal
@@ -42,18 +44,17 @@ RouteKey = Tuple[str, str]
 MANIFEST = Path("meetings") / "routes.v1.json"
 
 #: Calls the gateway makes ITSELF with a signed identity, which are not routes it serves, each held
-#: to the row whose data it serves.
+#: to the row whose data it serves: the `/ws` subscribe (`adapters.authorize_subscribe`) opens a
+#: meeting's live transcript, so it takes the transcript read's scopes (["bot","tx"], like every row;
+#: which meetings a key may subscribe to is decided by ownership) — the rule the gateway's socket
+#: applies before it asks (`gateway/multiplex.py`).
 #: The browser session's live-view socket (keyed ``GET``, the upgrade a websocket is — see
 #: ``_matched``) is the gateway's own relay, authenticated like ``/ws`` and not a row; it serves the
 #: session the GET row reads, so it takes that row's scopes.
 EDGE_HOPS: Dict[RouteKey, RouteKey] = {
+    ("POST", "/ws/authorize-subscribe"): ("GET", "/transcripts/{platform}/{native_meeting_id}"),
     ("GET", "/bot-accounts/sessions/{session_id}/vnc"): ("GET", "/bot-accounts/sessions/{session_id}"),
 }
-
-#: The `/ws` subscribe the gateway makes itself (`adapters.authorize_subscribe`) takes no key scope:
-#: any valid key reads the meetings it owns, and the handler's ownership, workspace and share check
-#: decides each meeting (one_key_scope, 30 Oct 2026: no bot/tx split; ownership is the boundary).
-OWNERSHIP_ONLY_HOPS: FrozenSet[RouteKey] = frozenset({("POST", "/ws/authorize-subscribe")})
 
 #: The answer the edge gives a key without the route's scope (`gateway/app.py`), so a client reads
 #: one refusal whichever side refused it.
@@ -127,8 +128,6 @@ def scope_gate(request: HTTPConnection) -> None:
     key = _matched(request)
     if key is None:
         raise _refuse()  # a matched route that cannot be read is treated as undeclared
-    if key in OWNERSHIP_ONLY_HOPS:
-        return
     required = ROUTE_SCOPES.get(EDGE_HOPS.get(key, key))
     if required is None:
         raise _refuse()

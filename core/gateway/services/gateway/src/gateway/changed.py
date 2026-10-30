@@ -30,6 +30,11 @@ def refusal(error: str, do_instead: str) -> dict:
             "do_instead": do_instead, "docs": DOCS}
 
 
+#: What a key /ws refuses for its scopes needs instead.
+SCOPE_HOW = ("use a key that holds the bot or tx scope (every key the quickstart mints holds one); "
+             "GET /auth/me lists your key's scopes")
+
+
 #: A websocket that names its key in the URL (``?api_key=``); close 4401 follows. The bot-account
 #: live view (``vnc_relay.py``) refuses it; ``/ws`` still takes it until COMPAT_REMOVED_IN.
 QUERY_KEY_REFUSAL = refusal("api_key_query_removed", WS_KEY_HOW)
@@ -55,8 +60,8 @@ def count_compat_use(event: str) -> int:
 
 #: Configuration keys the gateway does not read, each with what holds now.
 REMOVED_KEYS = {
-    "VEXA_WS_SCOPE_MODE": ("/ws takes any valid key; meeting ownership, workspace and share decide "
-                           "what it streams; there is no setting"),
+    "VEXA_WS_SCOPE_MODE": ("/ws takes any key holding bot or tx, as the REST routes do; meeting "
+                           "ownership, workspace and share decide what it streams; there is no setting"),
 }
 
 

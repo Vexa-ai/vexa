@@ -19,7 +19,7 @@ Verify: `uv run pytest tests/test_voice_note_recorder.py tests/test_regime.py`.
 
 
 `WS /voice-notes/{native_meeting_id}/stream` — reached through the gateway, which authorizes the
-upgrade against the meetings row `GET /voice-notes/{native_meeting_id}/stream` (scope `bot`) and
+upgrade against the meetings row `GET /voice-notes/{native_meeting_id}/stream` (scopes `bot` · `tx`) and
 signs the caller's identity onto the hop. A plain `GET` on the path answers 426.
 
 | Frame | Meaning |

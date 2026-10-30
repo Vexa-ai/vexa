@@ -17,7 +17,8 @@ SDKs, and any client build against.
   `{type:"error", error:"api_key_query_removed", changed_in, do_instead, docs}` and close `4401`.
   Missing key → `{type:"error", error:"missing_api_key"}` then close `4401`; a key that
   resolves to nobody → `invalid_api_key`, close `4401`; the key cannot be resolved now →
-  `auth_unavailable`, close `4503`. Any valid key opens the socket; `/ws` takes no key scope.
+  `auth_unavailable`, close `4503`. Any key holding `bot` or `tx` opens the socket; a
+  `browser`-only key gets `insufficient_scope`, close `4403`.
 - **Client → server:** `SubscribeRequest` `{action:"subscribe", meetings:[{platform, native_id}]}`
   (and `UnsubscribeRequest`). Authorization is delegated to the collector
   (`POST /ws/authorize-subscribe`): you only receive meetings your key may read (its own, a meeting

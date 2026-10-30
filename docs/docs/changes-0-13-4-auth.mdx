@@ -45,13 +45,13 @@ const ws = new WebSocket("wss://<host>/ws", ["vexa.v1", `vexa.key.${API_KEY}`]);
 
 See [Stream a transcript](/how-to/stream-transcript).
 
-## `/ws` subscribes any valid key
+## `/ws` takes the same scopes as REST
 
-Any valid key opens `/ws` and subscribes to the meetings it may read: its own, a meeting bound to a
-workspace it belongs to, or one shared with it. Which meetings those are is checked on every
-subscribe and again about every 15 seconds. `/ws` takes no key scope: a key that sends a bot also
-streams that bot's transcript, so a `bot`-only key, such as the one the hosted web app holds, streams
-its own meetings. Ownership, workspace and share checks are the boundary; no later release tightens it.
+A socket opens for any key that holds `bot` or `tx`, the same keys every REST route takes. Which
+meetings it may subscribe to is decided by ownership: the meetings the key's user owns, or can see
+through a workspace. A `browser`-only key gets `insufficient_scope`, with `changed_in`, `do_instead`
+and `docs`, and the socket is closed with `4403`. `GET /auth/me` lists the scopes your key holds. See
+[Authentication → Scopes](/authentication#scopes).
 
 ## The compatibility switches are gone
 
@@ -61,7 +61,7 @@ still sets `compat.*`.
 
 | Setting (Helm value) | What holds now |
 |---|---|
-| `VEXA_WS_SCOPE_MODE` (`compat.wsScopeMode`) | `/ws` takes any valid key; meeting ownership, workspace and share decide what it streams |
+| `VEXA_WS_SCOPE_MODE` (`compat.wsScopeMode`) | `/ws` takes any key holding `bot` or `tx`, as REST does; meeting ownership, workspace and share decide what it streams |
 | `VEXA_WEBHOOK_STORED_URL_POLICY` (`compat.webhookStoredUrlPolicy`) | every webhook delivery is held to the outbound-url.v1 guard: a URL that resolves into 100.64/10 or the documentation and benchmarking ranges is recorded `blocked`; save it again with a public address |
 | `VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S` (`compat.legacyUnsignedWindowSeconds`) | a transcript entry is stored only when it is signed; upgrade from 0.12 with no meeting in flight ([Upgrade from 0.12](/upgrade-from-0-12)) |
 

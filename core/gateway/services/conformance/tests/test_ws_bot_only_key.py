@@ -1,11 +1,11 @@
 """A `bot`-only key streams its OWN meeting over `/ws` and nobody else's, end to end through the
 gateway and meeting-api.
 
-`{bot}` is the hosted webapp's key (and what many API users hold). Any valid key reads what it owns
-(one_key_scope, 30 Oct 2026): neither service splits bot from tx for a `/ws` subscription. The
-gateway subscribes any valid key, meeting-api's `POST /ws/authorize-subscribe` takes no key scope,
-and its ownership check decides each meeting exactly as for a `tx` key. `VEXA_WS_SCOPE_MODE` is not
-read by either service.
+`{bot}` is the hosted webapp's key (and what many API users hold). One key does everything its owner
+may do (#1922, one_key_scope): `GET /transcripts/{platform}/{native_meeting_id}` takes `bot` or `tx`,
+and a `/ws` subscription is held to the same row, so the default `bot`-only key subscribes and its
+ownership check decides each meeting exactly as for a `tx` key. A `browser`-only key gets
+`insufficient_scope` with what to do instead; `VEXA_WS_SCOPE_MODE` is not read by either service.
 
 This drives the SHIPPED pieces together, offline:
   the gateway's `/ws` loop (`gateway.run_multiplex`)
@@ -114,6 +114,16 @@ async def test_a_bot_only_key_is_refused_a_meeting_it_does_not_own():
     ws = await _subscribe(["bot"], THEIRS, publish_to=43)
     assert not any(f.get("type") == "subscribed" and f.get("meetings") for f in ws.sent), ws.sent
     assert not any(f.get("type") == "transcript" for f in ws.sent), ws.sent
+
+
+async def test_a_browser_only_key_is_refused_with_what_to_do():
+    ws = await _subscribe(["browser"], MINE)
+    refused = [f for f in ws.sent if f.get("error") == "insufficient_scope"]
+    assert refused, ws.sent
+    assert refused[0]["changed_in"] == "0.13.4"
+    assert "bot or tx" in refused[0]["do_instead"] and "scope" in refused[0]["do_instead"]
+    assert refused[0]["docs"] == "https://docs.vexa.ai/changes-0-13-4-auth"
+    assert not any(f.get("type") == "subscribed" and f.get("meetings") for f in ws.sent)
 
 
 async def test_a_transcript_key_subscribes_to_its_own_meeting():

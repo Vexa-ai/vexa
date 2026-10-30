@@ -302,8 +302,8 @@ def test_the_two_routes_are_sealed_in_the_meetings_manifest():
     from meeting_api import route_scopes
 
     table = route_scopes.ROUTE_SCOPES
-    assert table[("GET", "/meetings/{meeting_id}/export")] == frozenset({"tx"})
-    assert table[("POST", "/meetings/import")] == frozenset({"tx"})
+    assert table[("GET", "/meetings/{meeting_id}/export")] == frozenset({"bot", "tx"})
+    assert table[("POST", "/meetings/import")] == frozenset({"bot", "tx"})
 
 
 # ── notes and the agent domain's parts ──────────────────────────────────────────────────────────

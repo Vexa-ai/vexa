@@ -37,7 +37,8 @@ The production edge logic, injectable. Modules:
   the boot line (`config_key_removed`) for a configuration key the gateway no longer reads, and
   `COMPAT_REMOVED_IN` (0.13.6), the release that turns off the `/ws` URL key. Each use is counted
   in-process (`count_compat_use`, the count on every log line); the gateway has no metrics backend.
-  `/ws` takes no key scope: ownership, workspace and share decide what a key streams.
+  `/ws` takes the REST rows' scopes (every row is `["bot","tx"]`, so only a browser-only key is
+  refused); ownership, workspace and share decide what a key streams.
 - **`identity_token.py`** — vendored `gateway-identity.v1`: signs the resolved identity onto every
   forward (byte-identical to the contract's canonical copy).
 - **`ratelimit.py`** / **`edge_guard.py`** — the per-user request rate limit and the opt-in

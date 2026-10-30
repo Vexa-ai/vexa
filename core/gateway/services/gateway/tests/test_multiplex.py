@@ -225,11 +225,11 @@ async def test_connect_also_fans_in_the_persons_own_notifications():
     await task
 
 
-# ── /ws takes no key scope (one_key_scope, 30 Oct 2026) ─────────────────────────────────────────
+# ── /ws takes the REST rows' scopes, all ["bot","tx"] (#1922, one_key_scope) ─────────────────────
 #
-# Any valid key opens the socket and subscribes; WHICH meetings it gets is the authorize hop's
-# answer (ownership, workspace, share), as for any key. No bot/tx split is computed, logged or
-# refused, and no later release tightens it.
+# Any key holding bot or tx opens the socket and subscribes; WHICH meetings it gets is the authorize
+# hop's answer (ownership, workspace, share), as for any key. No bot/tx split is computed or refused;
+# only a browser-only key, which holds neither, is.
 
 class _ScopedAuthorizer(FakeAuthorizer):
     """A key with the given scopes; records whether the subscribe hop was asked at all."""
@@ -256,6 +256,24 @@ def _capture(monkeypatch):
 def _not_enforced(events):
     """Any scope-split event: there must be none."""
     return [(name, kw) for name, kw in events if name in ("ws_scope_not_enforced", "request_denied_scope")]
+
+
+@pytest.mark.parametrize("old_setting", [None, "legacy"])
+async def test_a_browser_only_key_opens_no_socket(monkeypatch, old_setting):
+    """A key that may read no meeting status over REST (`GET /meetings` takes `tx`, `GET /bots/status`
+    takes `bot`) opens no socket (every row is ["bot","tx"] now): `insufficient_scope`, then close 4403, whatever the removed
+    `VEXA_WS_SCOPE_MODE` says."""
+    if old_setting:
+        monkeypatch.setenv("VEXA_WS_SCOPE_MODE", old_setting)
+    ws = _WS(inbound=[SUBSCRIBE], api_key=API_KEY)
+    redis, auth = FakeRedis(), _ScopedAuthorizer(["browser"])
+    await _run_multiplex(ws, auth, redis)
+    assert ws.sent and ws.sent[0]["error"] == "insufficient_scope"
+    assert ws.sent[0]["changed_in"] == "0.13.4" and "scope" in ws.sent[0]["do_instead"]
+    assert "bot or tx" in ws.sent[0]["do_instead"]
+    assert ws.sent[0]["docs"] == "https://docs.vexa.ai/changes-0-13-4-auth"
+    assert ws.close_code == 4403
+    assert auth.asked == 0
 
 
 async def _settle(n=20):
@@ -300,16 +318,6 @@ async def test_a_bot_only_key_gets_nothing_for_a_meeting_it_may_not_read(monkeyp
     await asyncio.wait_for(task, timeout=2)
 
 
-async def test_a_browser_only_key_opens_the_socket_and_nothing_is_logged(monkeypatch):
-    """Any valid key opens the socket; what it streams is decided by ownership, not by scope."""
-    events = _capture(monkeypatch)
-    ws = _WS(inbound=[{"action": "ping"}], api_key=API_KEY)
-    redis, auth = FakeRedis(), _ScopedAuthorizer(["browser"])
-    await _run_multiplex(ws, auth, redis)
-    assert {"type": "pong"} in ws.sent and ws.close_code is None, ws.sent
-    assert not _not_enforced(events), events
-
-
 async def test_a_transcript_key_still_subscribes_and_is_not_counted(monkeypatch):
     events = _capture(monkeypatch)
     ws = _WS(inbound=[SUBSCRIBE], api_key=API_KEY, close_when_drained=False)
@@ -335,19 +343,21 @@ async def test_a_key_in_the_url_connects_and_subscribes(monkeypatch):
     await asyncio.wait_for(task, timeout=2)
 
 
-async def test_the_socket_takes_no_scope_from_the_route_table(monkeypatch):
-    """No split at the socket: even a table in which the reads take only `tx` lets a `bot` key
-    subscribe to the meeting it owns, and nothing is logged."""
-    events = _capture(monkeypatch)
+async def test_the_socket_reads_its_scopes_from_the_route_table(monkeypatch):
+    """The socket holds no table of its own: it takes the REST rows' scopes, so a table in which the
+    transcript read took only `tx` would refuse a `bot` key's subscription (the assembled table is
+    ["bot","tx"] everywhere, #1922, so in practice only a browser-only key is refused)."""
+    _capture(monkeypatch)
     table = {("GET", "/transcripts/{platform}/{native_meeting_id}"): frozenset({"tx"}),
-             ("GET", "/meetings"): frozenset({"tx"}), ("GET", "/bots/status"): frozenset({"tx"})}
+             ("GET", "/meetings"): frozenset({"bot", "tx"}), ("GET", "/bots/status"): frozenset({"bot", "tx"})}
     ws = _WS(inbound=[SUBSCRIBE], api_key=API_KEY, close_when_drained=False)
     redis, auth = FakeRedis(), _ScopedAuthorizer(["bot"])
     task = asyncio.ensure_future(_run_multiplex(ws, auth, redis, route_scopes=table))
     for _ in range(10):
         await asyncio.sleep(0)
-    assert any(f.get("type") == "subscribed" and f["meetings"] for f in ws.sent), ws.sent
-    assert not _not_enforced(events)
+    assert any(f.get("error") == "insufficient_scope" for f in ws.sent), ws.sent
+    assert not any(f.get("type") == "subscribed" and f["meetings"] for f in ws.sent), ws.sent
+    assert auth.asked == 0
     ws.disconnect()
     await asyncio.wait_for(task, timeout=2)
 
