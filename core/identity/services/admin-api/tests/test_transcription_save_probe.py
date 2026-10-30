@@ -183,7 +183,10 @@ def test_a_redirect_is_not_followed(client, stub):
 def test_the_probe_spec_is_the_one_meeting_api_declares():
     decl = Path(__file__).resolve().parents[4] / "meetings/services/meeting-api/src/meeting_api/config.v1.json"
     declared = json.loads(decl.read_text())["capabilities"]["stt"]["probe"]["http"]
-    assert probe_mod.STT_PROBE_SPEC == declared
+    # Every field the probe uses matches the declaration; the only declared fields it leaves out are
+    # the env-key names (the person's URL and token are passed in, never read from env).
+    assert probe_mod.STT_PROBE_SPEC == {k: declared[k] for k in probe_mod.STT_PROBE_SPEC}
+    assert set(declared) - set(probe_mod.STT_PROBE_SPEC) == {"url_key", "auth_key"}
 
 
 def test_clearing_the_url_does_not_probe(client, stub):
