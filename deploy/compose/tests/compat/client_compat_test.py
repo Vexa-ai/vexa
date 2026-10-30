@@ -1,7 +1,9 @@
 """client-compat · what clients already deployed against 0.12 still need from a 0.13.4 stack.
 
-The `client-compat` stage check (Task #1919, fix #1): it passes on the candidate and fails on
-v0.13.4-rc.1 (negative control), which refused both of the first two below.
+The `client-compat` check (Task #1919, fix #1). It runs inside the `validate-v010-compat` leg of
+release-validate.yml (`bin/stack-test compat` collects all of compat/), and on its own with
+`V010_COMPAT=1 MOCK_BOT=1 bin/stack-test compat/client_compat_test.py`. It passes on the candidate
+and fails on v0.13.4-rc.1 (negative control), which refused both of the first two below.
 
   1. `/ws?api_key=<key>` (the hosted dashboard live view, ASWF DNA, clients built from the 0.12
      docs) opens, answers a ping and subscribes to the caller's own meeting. Deprecated; 0.13.6
@@ -45,10 +47,14 @@ def _mint(stack, scopes: str) -> str:
 
 
 def _meeting(stack, key: str) -> str:
+    # transcribe_enabled=false: the compose test stack has no STT, and the CC4 fail-loud guard would
+    # 503 a transcribing spawn. This file must pass or fail on /ws behaviour alone, also when it runs
+    # by itself (the `client-compat` step, the rc.1 negative control), so it does not lean on the STT
+    # sentinel that v010_rest_compat_test.py sets when that module happens to be imported first.
     native_id = f"cc-{uuid.uuid4().hex[:3]}-{uuid.uuid4().hex[:4]}-{uuid.uuid4().hex[:3]}"
     code, body = post_json(f"{stack.gateway}/bots",
                            {"platform": PLATFORM, "native_meeting_id": native_id,
-                            "bot_name": "mock:immediate-stop"},
+                            "bot_name": "mock:immediate-stop", "transcribe_enabled": False},
                            headers={"x-api-key": key})
     assert code == 201, f"POST /bots → {code} {body}"
     return native_id
