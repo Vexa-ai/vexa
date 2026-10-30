@@ -90,8 +90,11 @@ def test_a_config_fault_is_a_typed_422_and_nothing_is_stored(client, stub, caplo
     with caplog.at_level(logging.DEBUG):
         r = client.put("/user/transcription", headers=h, json={"url": stub["url"], "token": TOKEN})
     assert r.status_code == 422, r.text
-    detail = r.json()["detail"]
-    assert detail["error"] == "transcription_endpoint_rejected" and detail["kind"] == kind
+    body = r.json()
+    # One body shape: `detail` is the sentence (a string every client renders), the typed fields beside it.
+    assert isinstance(body["detail"], str) and body["detail"] == probe_mod.REASONS[kind]
+    assert body["error"] == "transcription_endpoint_rejected" and body["kind"] == kind
+    assert body["status"] == status
     for secret in (TOKEN, stub["url"], "secret-path-7", "127.0.0.1"):
         assert secret not in r.text
         assert secret not in caplog.text
@@ -103,7 +106,7 @@ def test_a_missing_token_against_an_endpoint_that_needs_one_is_refused(client, s
     h = _key(client, "notoken@vexa.ai")
     stub["status"] = 401
     r = client.put("/user/transcription", headers=h, json={"url": stub["url"]})
-    assert r.status_code == 422 and r.json()["detail"]["kind"] == "unauthorized"
+    assert r.status_code == 422 and r.json()["kind"] == "unauthorized"
     assert client.get("/user/transcription", headers=h).json()["url"] is None
 
 
@@ -119,7 +122,8 @@ def test_a_rejected_change_leaves_the_previous_value(client, stub):
 def test_a_working_endpoint_is_stored(client, stub):
     h = _key(client, "ok@vexa.ai")
     r = client.put("/user/transcription", headers=h, json={"url": stub["url"], "token": TOKEN})
-    assert r.status_code == 200 and "probe" not in r.json()
+    assert r.status_code == 200 and r.json()["probe"] == {"ok": True}
+    assert "probe" not in client.get("/user/transcription", headers=h).json()  # the write's response only
     got = client.get("/user/transcription", headers=h).json()
     assert got["url"] == stub["url"] and got["token_set"] is True
     assert stub["hits"] == 1
@@ -148,7 +152,11 @@ def test_a_name_resolving_to_a_private_address_is_refused_without_a_connection(c
     monkeypatch.setattr(httpx.HTTPTransport, "handle_request", lambda self, req: dialled.append(req))
     r = client.put("/user/transcription", headers=h, json={"url": "http://stt.public-looking.example", "token": TOKEN})
     assert r.status_code == 422, r.text
-    assert "internal or private" in r.text and TOKEN not in r.text
+    body = r.json()
+    assert body["error"] == "transcription_endpoint_rejected"
+    assert body["kind"] == "internal_address" and body["status"] is None
+    assert isinstance(body["detail"], str) and "internal or private" in body["detail"]
+    assert TOKEN not in r.text
     assert dialled == []
     assert client.get("/user/transcription", headers=h).json()["url"] is None
 
