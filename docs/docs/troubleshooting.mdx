@@ -26,6 +26,19 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
   it. Admit it like any guest. A run that ended in the lobby says so:
   [`awaiting_admission_timeout` or `awaiting_admission_rejected`](/troubleshooting/completion-reasons),
   and `automatic_leave.max_wait_for_admission` sets how long it waits.
+
+  **Teams flags the bot as a "potential threat".** By default the bot joins Teams as an anonymous
+  guest. Teams may list an anonymous or unverified guest under "potential threats" / "unverified"
+  in the lobby and warn the host that it may be a bot that records the meeting. Microsoft sets this
+  label on its own servers for anonymous and unverified guests. The bot cannot turn it off, and
+  changing the bot's name, camera or audio makes no difference. A host can still admit it from the
+  lobby. To avoid the label:
+  - **Join signed in.** Run [authenticated bots](/authenticated-bots#teams) with a dedicated
+    Microsoft 365 account. The bot then appears under that account's identity, not as an
+    anonymous guest.
+  - **Change the organiser's tenant meeting policy.** The organiser's Teams admin controls lobby
+    bypass, anonymous join and how external or unverified participants are labelled, through Teams
+    meeting policies. These settings live in the organiser's Microsoft 365 tenant, not in Vexa.
 - **Concurrency cap** — a user can run at most `max_concurrent_bots` bots at once (set when the user was
   created). Stop an existing bot or raise the cap.
 
