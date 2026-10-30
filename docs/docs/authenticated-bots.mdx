@@ -9,9 +9,9 @@ participant list shows the account identity, and org-restricted meetings that re
 participants open to it. The flow is three parts: provision a session once, configure the
 deployment to spawn with it, and let normal use keep it alive.
 
-**Validated on Google Meet.** The mechanism is platform-agnostic (the session store never inspects
-a platform; the provisioner also knows Teams and Zoom sign-in surfaces), but Teams and Zoom
-authenticated joins ride the same setup and validate on their own waves. Zoom is expected to move
+**Validated end-to-end on Google Meet.** Teams and Zoom use the same session store and setup (the
+session store never inspects a platform; the provisioner also knows the Teams and Zoom sign-in
+pages); see the [Teams](#teams) notes below. They are validated separately. Zoom is expected to move
 to a server-side (RTMS) lane that would not need browser auth at all.
 
 ## 1. Provision the session — `make login`
@@ -111,6 +111,34 @@ make login    # re-provision; the next spawn picks the fresh session up automati
 If sessions die **soon after provisioning** rather than after weeks, don't just re-provision in a
 loop — check the lifetime levers above (is write-back running? one bot per session? stable
 egress?).
+
+## Teams
+
+By default Teams lists the anonymous bot as a "potential threat" / "unverified" guest in the lobby
+(see [Troubleshooting](/troubleshooting)). A signed-in bot is not an
+anonymous guest.
+
+- **Provision** with a dedicated, licensed Microsoft 365 account (never a personal one):
+
+  ```bash
+  make login AUTH_PLATFORM=teams
+  ```
+
+  Use the same `BOT_USERDATA_S3_PATH` / `BOT_S3_*` setup as above, with its own prefix for this
+  identity.
+- **Identity.** With `BOT_AUTHENTICATED=true`, the bot joins under the account's identity rather
+  than as an anonymous guest.
+- **Lobby.** Whether the signed-in bot skips the lobby still depends on the organiser's lobby
+  policy (for example, "people in my org" bypass). If the account is outside the organiser's
+  tenant, a host may still need to admit it.
+- **Dead session.** If the stored Teams session has expired or is missing, Microsoft redirects the
+  bot to sign-in, or the bot is shown the anonymous guest pre-join. In authenticated mode the bot
+  does not fall back to joining anonymously. It fails the meeting with
+  `completion_reason=auth_session_missing`, which is permanent, so it is not retried. (This verdict
+  arrives with the Teams signed-out detection change; until then, the failure surfaces as the join
+  not proceeding as the signed-in account.) To recover, re-provision with
+  `make login AUTH_PLATFORM=teams`. This is the same loop as
+  [When the session dies anyway](#when-the-session-dies-anyway--the-recovery-loop).
 
 ## Storage layout and security
 
