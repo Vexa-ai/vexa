@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from .ports import RedisBus, TranscriptStore
+from .room_identity import speaker_kind
 
 log = logging.getLogger("meeting_api.collector.adapters")
 
@@ -311,6 +312,14 @@ def _segment_to_api(seg: dict) -> dict:
     for k in ("speaker", "speaker_key", "completed", "segment_id", "source", "absolute_start_time", "absolute_end_time", "created_at"):
         if seg.get(k) is not None:
             out[k] = seg[k]
+    # `speaker_kind` is DERIVED here, not stored. The bot stamps it on transcript.v1, but the
+    # `transcriptions` table has no column for it and rung 1 buys no migration — the classification
+    # is a pure function of the display name, so recomputing it on read gives the same answer and
+    # also classifies rows written before this shipped. A stamped value from the producer wins.
+    # `room` is evidence; `person` means "no room marker", never "confirmed human".
+    kind = seg.get("speaker_kind") or speaker_kind(out.get("speaker"))
+    if kind:
+        out["speaker_kind"] = kind
     return out
 
 

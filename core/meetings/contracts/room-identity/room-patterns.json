@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "id": "room-identity/room-patterns",
+  "description": "The patterns that classify a meeting participant's DISPLAY NAME as a meeting-room device rather than a person. Matched case-insensitively against the display name the platform gives us. This file is the single source of truth: the TypeScript producer (bot) and the Python read path (meeting-api) each embed this table and each gate itself against this file, so the two languages cannot drift apart silently.",
+  "matching": "Each `regex` is a JavaScript/Python-compatible pattern, applied case-insensitively to the trimmed display name. Any match ⇒ kind `room`.",
+  "override": "Set VEXA_ROOM_PATTERNS to a JSON array of regex strings to REPLACE this table at runtime. Make the first element \"+\" to APPEND instead. A malformed value is ignored and these defaults stand.",
+  "patterns": [
+    {
+      "id": "meet-device-resource",
+      "regex": "(^|\\s)devices/",
+      "platforms": ["google_meet"],
+      "why": "`devices/` is Google Meet's resource-name prefix for hardware. Already treated as a non-person string by the Meet tile-name filter (core/meetings/modules/gmeet-capture/src/gmeet-speakers.ts JUNK_NAME)."
+    },
+    {
+      "id": "room-word",
+      "regex": "\\b(meeting\\s*room|conference\\s*room|board\\s*room|boardroom|huddle\\s*(room|space)|training\\s*room|war\\s*room|focus\\s*room|breakout\\s*room)\\b",
+      "platforms": ["*"],
+      "why": "The commonest shape of an admin-configured room name. Google documents that a room device's robot account carries 'the administrator-specified device name. For example, \"Altostrat Room\"' (Meet REST v2 conferenceRecords.participants)."
+    },
+    {
+      "id": "numbered-room",
+      "regex": "\\b(room|rm)[\\s._-]*\\d{1,4}\\b",
+      "platforms": ["*"],
+      "why": "`Room 2`, `Rm-14`, `Room_301` — a room identified by number. Deliberately requires the digits: the bare word `room` appears inside company and product names (a Vexa customer is literally called Roomradar), so matching it alone would misclassify people."
+    },
+    {
+      "id": "room-suffix",
+      "regex": "\\((meeting\\s*)?(room|conference\\s*room)\\)\\s*$",
+      "platforms": ["*"],
+      "why": "Calendar resources and room accounts are frequently published as `<Name> (Room)`."
+    },
+    {
+      "id": "teams-room",
+      "regex": "\\b(microsoft\\s*teams\\s*rooms?|teams\\s*rooms?|\\bMTR\\b|surface\\s*hub)\\b",
+      "platforms": ["teams"],
+      "why": "Microsoft Teams Rooms devices sign in with a room resource account; Surface Hub is Microsoft's own room endpoint."
+    },
+    {
+      "id": "zoom-room",
+      "regex": "\\bzoom\\s*rooms?\\b",
+      "platforms": ["zoom"],
+      "why": "Zoom Rooms appliances join under the room's account name."
+    },
+    {
+      "id": "google-meet-hardware",
+      "regex": "\\b(google\\s*meet\\s*hardware|meet\\s*hardware|series\\s*one\\s*(desk|board)?|chromebase|chromebox)\\b",
+      "platforms": ["google_meet"],
+      "why": "Google's own Meet hardware product names (Series One Desk 27 / Board 65; Chromebase / Chromebox for Meetings) show up verbatim in device names."
+    },
+    {
+      "id": "vendor-room-kit",
+      "regex": "\\b(rally\\s*bar|rallybar|logitech\\s*(rally|tap|roommate)|tap\\s*(ip|scheduler)|roommate|poly\\s*(studio|g7500|x30|x50|x52|x70)|neat\\s*(bar|board|frame|pad)|yealink\\s*(meetingbar|mvc|a\\d{2})|crestron\\s*(flex|uc-)|cisco\\s*(room\\s*(kit|bar|navigator)|webex\\s*room)|webex\\s*room\\s*kit)\\b",
+      "platforms": ["*"],
+      "why": "Room-system model names from the vendors that dominate Meet/Teams-certified hardware. A device left on its factory name reports the model."
+    },
+    {
+      "id": "room-word-non-english",
+      "regex": "\\b(vergaderruimte|vergaderzaal|besprechungsraum|konferenzraum|sitzungszimmer|salle\\s*de\\s*r[eé]union|sala\\s*de\\s*reuni[oó]n|sala\\s*riunioni|sala\\s*de\\s*reuni[oõ]es|m[oö]tesrum|m[oø]terom|neuvotteluhuone)\\b",
+      "platforms": ["*"],
+      "why": "The same room-word shape in the languages where our EU deployments name their rooms. Each is a compound noun that does not occur in personal names, so the false-positive risk is the same as the English `meeting room`."
+    }
+  ]
+}

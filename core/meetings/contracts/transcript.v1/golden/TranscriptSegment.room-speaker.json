@@ -1,0 +1,16 @@
+{
+  "segment_id": "sess-uid:ch-1:4:63200",
+  "speaker": "Amsterdam — Room 2",
+  "speaker_key": "ch-1:4",
+  "speaker_kind": "room",
+  "text": "so that is the number we agreed on",
+  "start": 63.2,
+  "end": 66.1,
+  "language": "en",
+  "completed": true,
+  "absolute_start_time": "2026-09-15T12:05:27.200Z",
+  "absolute_end_time": "2026-09-15T12:05:30.100Z",
+  "source": "glow-bound",
+  "confidence": 1,
+  "words": []
+}
