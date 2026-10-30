@@ -5,8 +5,8 @@ description: "Speaking, chatting, screen-sharing bots — what is actually reach
 
 <Warning>
 **Honest status:** the interactive capability family this page once advertised is **partially available
-in 0.12**. Chat *read* works. Speak, chat *write*, screen share and avatar are contract-sealed but not
-reachable through the API today. The API shape for interactive capabilities is under active design —
+in 0.12**. Chat *read* works. Speak, chat *write* and screen share are contract-sealed but not
+reachable through the API today; avatar is retiring (the bot joins camera-off, see [Camera](#camera)). The API shape for interactive capabilities is under active design —
 it is **not** a straight restoration of the pre-0.12 endpoints.
 </Warning>
 
@@ -18,7 +18,7 @@ it is **not** a straight restoration of the pre-0.12 endpoints.
 | **Speak** | sealed | ❌ 404 | proven live at the bot layer (acts.v1 `speak` → TTS → virtual mic), **not wired at the API layer** — tracked in [#514](https://github.com/Vexa-ai/vexa/issues/514) |
 | Chat **write** | sealed | ❌ 404 | Teams chat write is prepared as [#500](https://github.com/Vexa-ai/vexa/issues/500) |
 | Screen share | sealed | ❌ 404 | planned back in 0.12.x |
-| Avatar / virtual camera | sealed | ❌ 404 | planned back in 0.12.x |
+| Avatar / virtual camera | sealed | ❌ 404 | the bot joins **camera-off** on Google Meet, Teams and Zoom and streams no video. No setting is needed. Retiring from `api.v1` per ADR-0035. |
 
 "Sealed" means the endpoint shape is frozen in the public API contract; it does not mean served. A call
 to an unmounted surface returns `404` on every deployment.
@@ -26,9 +26,22 @@ to an unmounted surface returns `404` on every deployment.
 ## What you can do today
 
 - **Read the meeting chat** while a bot is in the room: `GET /bots/{platform}/{native_meeting_id}/chat`
-  with a `bot`-scoped API key.
+  with your API key.
 - **Capture and transcribe** as usual — the interactive gaps do not affect transcription, recordings,
   or the transcript API.
+
+### Camera
+
+The bot joins **camera-off** on Google Meet, Microsoft Teams and Zoom. Other participants see the
+platform's default no-camera tile (the bot's name or initials): no avatar image, no Vexa logo, no
+video. There is no setting for this (no `SHOW_AVATAR` / `HIDE_AVATAR`), because the bot has no video
+feed to turn off. `default_avatar_url` in `POST /bots` and any camera flag (`cameraEnabled`,
+`camera_enabled`) are accepted and ignored. Self-hosters upgrading from 0.10/0.11 lose the old
+avatar/logo camera feed by moving to 0.12 or later.
+
+To confirm on a self-hosted stack, the bot container log shows `Camera turned off.` (Google Meet),
+`✅ Camera turned off` (Teams) or `[Zoom Web] Stopped video in preview` (Zoom), or the matching
+"already off" line.
 
 **Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
 account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
