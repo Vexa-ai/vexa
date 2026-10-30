@@ -1,0 +1,118 @@
+---
+title: "The admin's flow"
+description: "Create your groups, and everyone in them is onboarded by their first meeting."
+---
+
+<Note>**Status:** designed, not built — see [what is real today](/minutes/status).</Note>
+
+## The principle
+
+One person sets this up. **Everyone else is onboarded by receiving something**, not by
+completing anything: their account comes into being when they click their first artifact, and
+until then they need no password, no invitation to accept, and no knowledge that this product
+exists.
+
+## Step 1 — Create a group
+
+A group is a recurring meeting: *Architecture review*, *Monday standup*, *Vendor calls*.
+
+**Creating one is a conversation, not a form.** The assistant asks what it should be called, then
+what actually happens in that meeting — and from your own words it works out what kind of group it
+is and says so:
+
+> *Sounds like a meeting with an outside party. I'll pay attention to:*
+> *· What was promised, by which side · Open items and their deadlines · Anything that changes the
+> relationship*
+>
+> *Anything to add or change — or "looks right"?*
+
+Because it names its guess, a wrong one costs a sentence to fix. What you settle on becomes the
+group's **seed**: its purpose and the first page of its index, so it starts out knowing what it is
+for rather than empty.
+
+Last, who belongs — **your organisation** (anyone joining from your domain), **a list** you name,
+or **anyone in the meeting**. Organisation is what most standing meetings want: colleagues are
+included by attending, outsiders never are, nothing to maintain.
+
+Naming it produces its address:
+
+> **Architecture review → add `#group:architecture-review` to the meeting description**
+
+**Nothing is provisioned to make that address work.** One mail domain was pointed at one
+assistant's one mailbox; the tag in the description does the rest — see
+[how meetings arrive](/minutes/invitation).
+
+Do this for the meetings your organisation actually holds. It is the only setup step that
+repeats, and it repeats a handful of times, once.
+
+## Step 2 — Invite the group to its meeting
+
+Add the group's address to the recurring calendar invitation, the way you would add a colleague.
+
+The assistant attends. When the meeting ends, **every member of that group receives their own
+artifact** — what changed for them because it happened.
+
+For a member, that email *is* the onboarding: it arrives addressed to them, it is useful on its
+own, and the link inside it is the only door they will ever be asked to walk through.
+
+## Step 3 — There is no step 3
+
+No member list to distribute, no invitations to chase, no software for anyone to install, and
+no calendar to connect — in any direction, for anyone.
+
+## What each member experiences
+
+| When | What happens to them |
+|---|---|
+| You add their email | nothing — no mail, no account |
+| The first meeting ends | an artifact arrives, addressed to them |
+| They click the link in it | their account and personal workspace come into being |
+| They reply in the chat | what they receive next time changes |
+
+**An account is a consequence of reading something useful**, not a precondition for it.
+
+## Personal meetings need no setup at all
+
+A member who invites the **global** `vexa@` address to their *own* meeting gets an artifact
+written from their own perspective, in their own workspace, seen by nobody else. No group, no
+address to look up, no configuration, nothing for you to approve.
+
+If that work should later be shared, they create a group from it themselves — see
+[rule 5](/minutes/workspaces#the-six-rules).
+
+## What being the admin means afterwards
+
+Day to day, the same as everyone else: you receive your own artifacts.
+
+Two things stay yours. **Who belongs to which group** — the mode, and the list where there is
+one, which is also who receives what. And **the model credential**, set once per deployment,
+stored so that it can be rotated and its last characters shown, but returned by no route in the
+system.
+
+## Self-hosted
+
+The person who runs the install is the admin. Setup is **one MX record** pointing a subdomain at
+the assistant's one mailbox, plus the model credential and mail relay — all set once, in
+the deploy configuration, by the same person in the same sitting they were already having.
+
+Everything afterwards lands in **your** mailbox on **your** domain. Mail about
+your meetings never leaves your estate.
+
+## The growth switchboard
+
+Minutes ships **PLG-maximal: every spread mechanic on by default**, and the organisation governs
+them — each is a named switch in the admin panel, shown at first run, changeable any time:
+
+| Switch | Default | What it does |
+|---|---|---|
+| Confirm email to the inviter | on | instant "I'm booked" reply carrying the door |
+| Participant minutes | on | each org-domain participant gets their own minutes after the meeting |
+| Chat doors in emails | on | every minutes email is also an entry into the workspace |
+| Door mints an account | on | first click creates the reader's personal workspace |
+| Assign-to-group prompt | on | the organiser's email offers one-click group binding |
+| Group fan-out | on | bound meetings mail every member per the group's membership mode |
+
+Two things are **not** switches: recipients are always inside the organisation's mail domain, and
+nothing is ever sent to a party outside it without an explicit membership-mode decision. The
+switchboard governs how far the product spreads *inside* the house — the walls are not adjustable.
+

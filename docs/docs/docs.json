@@ -24,6 +24,20 @@
         ]
       },
       {
+        "group": "Vexa Minutes (design)",
+        "pages": [
+          "minutes/manifest",
+          "minutes/invitation",
+          "minutes/artifact",
+          "minutes/steering",
+          "minutes/interface",
+          "minutes/workspaces",
+          "minutes/setup",
+          "minutes/model",
+          "minutes/status"
+        ]
+      },
+      {
         "group": "How-to: Meetings",
         "pages": [
           "how-to/overview",
