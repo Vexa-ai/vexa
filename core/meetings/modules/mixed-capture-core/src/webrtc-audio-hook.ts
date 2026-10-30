@@ -29,6 +29,33 @@ export interface ObservedPeerConnection {
 }
 
 /**
+ * Stream ids that are NOT a participant — Jitsi's SDP placeholders.
+ *
+ * Jitsi's signalling carries a permanent dummy audio m-line so the SDP shape stays stable across
+ * renegotiation: its MediaStream id is `mixedmslabel` (track `mixedlabelaudio0`), and `default` is
+ * the same idea on older builds. The track is `live` and unmuted for the whole meeting and carries
+ * DIGITAL SILENCE forever; the real participant audio arrives later on its own stream. This is not
+ * our reading of the protocol — lib-jitsi-meet refuses exactly these two ids in `isUserStreamById`
+ * before it will treat a remote stream as a person.
+ *
+ * Mirroring it was not a cosmetic error. Measured on `meet.ffmuc.net` 2026-09-17 with a bot alone
+ * in a room where the only other participant was muted: the placeholder was the ONLY mirrored
+ * stream, so `__vexaStreamPresence` reported 1 live remote stream while no PCM frame ever crossed.
+ * That is row 4 of the deaf-capture guard's table (`aloneness.ts`) — streams present, frames
+ * absent — so the guard returned `capture-fault` and HELD the bot open on an empty room instead of
+ * resolving `left_alone`, until the 4h `max_bot_time_exceeded` backstop. It also made the bot's
+ * own log read `[mixed] capture started over 1 stream(s)`, which is indistinguishable from a
+ * working capture and is what sent a live investigation after a transcription-pipeline bug that
+ * does not exist.
+ */
+const PLACEHOLDER_STREAM_IDS = new Set(['mixedmslabel', 'default']);
+
+/** Is this remote stream a real participant (not a Jitsi SDP placeholder)? */
+export function isUserStreamId(streamId: string | undefined | null): boolean {
+  return typeof streamId === 'string' && streamId.length > 0 && !PLACEHOLDER_STREAM_IDS.has(streamId);
+}
+
+/**
  * The peer connections this hook has intercepted, in creation order.
  *
  * The registry itself is not new — `wrapPeerConnection` has always pushed every connection into
@@ -69,8 +96,17 @@ export function installRemoteAudioHook(opts: WebRtcAudioHookOptions = {}): boole
     try {
       if (!event.track || event.track.kind !== 'audio') return;
       if (win.__vexaMirroredTrackIds.has(event.track.id)) return;   // already mirrored (both track paths fire)
-      win.__vexaMirroredTrackIds.add(event.track.id);
       const stream = (event.streams && event.streams[0]) || new MediaStream([event.track]);
+      // A Jitsi SDP placeholder is not a participant (see PLACEHOLDER_STREAM_IDS). Refusing it here
+      // — the one place a remote stream enters the bot — keeps it out of the mix, out of the
+      // recording tap's element walk, and out of the presence oracle at once. NOT recorded in
+      // __vexaMirroredTrackIds: if a later renegotiation ever reuses that track id on a real
+      // stream, it must still be mirrorable.
+      if (!isUserStreamId(stream?.id)) {
+        log(`[Audio Hook] ignoring placeholder stream ${stream?.id} (track ${event.track.id}) — not a participant`);
+        return;
+      }
+      win.__vexaMirroredTrackIds.add(event.track.id);
 
       const audioEl = document.createElement('audio');
       audioEl.autoplay = true;
