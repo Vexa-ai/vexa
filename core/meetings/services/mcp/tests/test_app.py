@@ -24,7 +24,7 @@ def test_health_states_each_capability(client):
     reached no domain, is a green light on a product that quietly does less than the operator
     thinks — so the tri-state rides the same response, computed from the declaration."""
     caps = client.get("/health").json()["capabilities"]
-    assert set(caps) == {"assembly", "private_domains", "ticket_sink"}
+    assert set(caps) == {"assembly", "private_domains", "ticket_sink", "usage_sink"}
     assert set(caps.values()) <= {"configured", "not_configured", "misconfigured"}
 
 

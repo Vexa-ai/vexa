@@ -106,6 +106,10 @@ class Tool:
     auth: str = "subject"
     #: for `auth: admin`, the domain's `{"header": …, "key_env": …}`. None for every other value.
     admin_auth: Optional[dict] = None
+    #: the MCP tool annotations the owning domain declares (#1646) — what kind of action the tool
+    #: is. Optional here: the edge's registry (`annotations.py`) is the fallback.
+    title: str = ""
+    annotations: Optional[dict] = None
 
 
 @dataclass(frozen=True)
@@ -187,6 +191,7 @@ def validate(doc: dict) -> dict:
                     f"{domain}/{name}: declares a credential argument {arg!r} — this edge has "
                     "exactly one authentication path (a bearer header, session-bound). A "
                     "credential in an argument list is in the transcript forever.")
+        _validate_annotations(domain, name, t)
         route = t.get("route")
         if route is None:
             # Edge-owned: the assembler serves it itself. Only legal where there is no door.
@@ -202,6 +207,34 @@ def validate(doc: dict) -> dict:
         if not isinstance(ent, dict) or not ent.get("route") or not ent.get("answers"):
             raise ManifestError(f"{domain}: entitlement needs a route and what it answers")
     return doc
+
+
+#: The MCP `ToolAnnotations` hints a manifest may declare (#1646). Each is a boolean or absent.
+ANNOTATION_HINTS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
+
+
+def _validate_annotations(domain: str, name: str, t: dict) -> None:
+    """`title` is a non-empty string; `annotations` an object of boolean hints (plus an optional
+    `title`). OPTIONAL — a manifest without them is served with the edge's registry, or the
+    cautious default — but a malformed one is a manifest lying about its own tool, so it fails."""
+    title = t.get("title")
+    if title is not None and not (isinstance(title, str) and title.strip()):
+        raise ManifestError(f"{domain}/{name}: title must be a non-empty string")
+    ann = t.get("annotations")
+    if ann is None:
+        return
+    if not isinstance(ann, dict):
+        raise ManifestError(f"{domain}/{name}: annotations must be an object")
+    unknown = sorted(set(ann) - set(ANNOTATION_HINTS) - {"title"})
+    if unknown:
+        raise ManifestError(
+            f"{domain}/{name}: annotations names {unknown} — allowed: "
+            f"{['title', *ANNOTATION_HINTS]}")
+    for hint in ANNOTATION_HINTS:
+        if hint in ann and not isinstance(ann[hint], bool):
+            raise ManifestError(f"{domain}/{name}: annotations.{hint} must be true or false")
+    if "title" in ann and not (isinstance(ann["title"], str) and ann["title"].strip()):
+        raise ManifestError(f"{domain}/{name}: annotations.title must be a non-empty string")
 
 
 def _admin_auth(doc: dict) -> Optional[dict]:
@@ -294,7 +327,9 @@ def assemble(manifests: List[dict], *, deployed: Set[str],
                 requires=frozenset(t["requires"]), route=t.get("route"),
                 base_url_env=doc.get("base_url_env"),
                 arguments=tuple(t.get("arguments") or ()), note=t.get("note", ""),
-                auth=t["auth"], admin_auth=admin_auth))
+                auth=t["auth"], admin_auth=admin_auth,
+                title=str(t.get("title") or ""),
+                annotations=dict(t["annotations"]) if t.get("annotations") else None))
     for doc in manifests:
         if doc["domain"] not in deployed:
             out.absent_domains.add(doc["domain"])

@@ -18,3 +18,12 @@ path and the fake records each hop (method, path, headers, params, body).
   once per result) — including when that result is a REFUSAL (#1549) — the tools that touch
   no meeting carry none, and every way that hop can fail — domain absent, slow, refused,
   malformed — leaves the result, or the refusal, exactly as it was.
+- **`test_tool_annotations.py`** — #1646 contract: `tools/list` over streamable HTTP (built-ins +
+  the repo's flows manifest) gives every tool a title and explicit readOnly/destructive/
+  idempotent/openWorld hints, names ≤ 64 chars, no shipped tool on the cautious fallback; the
+  classification; manifest annotations win over the registry; malformed ones refuse validation.
+- **`test_usage.py`** — the usage hook: initialize → tools/call yields one event with the
+  session's client name and the gateway's `x-user-id`; non-tool methods, missing user id and
+  oversized bodies yield none; refusals record `ok=false`; the SSE GET passes through untouched;
+  the sink signs each batch as `verifyInternalWebhook` checks, batches at 50, drops on overflow,
+  never raises, and never writes the secret to a log line.
