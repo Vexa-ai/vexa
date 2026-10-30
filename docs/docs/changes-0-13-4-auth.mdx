@@ -45,17 +45,13 @@ const ws = new WebSocket("wss://<host>/ws", ["vexa.v1", `vexa.key.${API_KEY}`]);
 
 See [Stream a transcript](/how-to/stream-transcript).
 
-## `/ws` subscribes any valid key until 0.13.6
+## `/ws` subscribes any valid key
 
-As in 0.12, any valid key opens `/ws` and subscribes to the meetings it may read: its own, a meeting
-bound to a workspace it belongs to, or one shared with it. Which meetings those are is checked on
-every subscribe and again about every 15 seconds. The key's scopes are not required on `/ws` in this
-release; a `bot`-only key, such as the one the hosted web app holds, keeps streaming its own meetings.
-A key without `tx` that subscribes is logged (`ws_scope_not_enforced`).
-
-**Deprecated, removed in 0.13.6:** from then on a transcript subscription takes the `tx` scope, as
-`GET /transcripts/{platform}/{native_meeting_id}` does. Use a key that holds `tx` for live transcripts;
-`GET /auth/me` lists the scopes yours holds. See [Authentication → Scopes](/authentication#scopes).
+Any valid key opens `/ws` and subscribes to the meetings it may read: its own, a meeting bound to a
+workspace it belongs to, or one shared with it. Which meetings those are is checked on every
+subscribe and again about every 15 seconds. `/ws` takes no key scope: a key that sends a bot also
+streams that bot's transcript, so a `bot`-only key, such as the one the hosted web app holds, streams
+its own meetings. Ownership, workspace and share checks are the boundary; no later release tightens it.
 
 ## The compatibility switches are gone
 
@@ -65,8 +61,8 @@ still sets `compat.*`.
 
 | Setting (Helm value) | What holds now |
 |---|---|
-| `VEXA_WS_SCOPE_MODE` (`compat.wsScopeMode`) | `/ws` serves any valid key as 0.12 did until 0.13.6, then takes the REST routes' key scopes |
+| `VEXA_WS_SCOPE_MODE` (`compat.wsScopeMode`) | `/ws` takes any valid key; meeting ownership, workspace and share decide what it streams |
 | `VEXA_WEBHOOK_STORED_URL_POLICY` (`compat.webhookStoredUrlPolicy`) | every webhook delivery is held to the outbound-url.v1 guard: a URL that resolves into 100.64/10 or the documentation and benchmarking ranges is recorded `blocked`; save it again with a public address |
-| `VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S` (`compat.legacyUnsignedWindowSeconds`) | a transcript entry is stored when it is signed. Until 0.13.6, a 0.12 bot that was already in a call when meeting-api started keeps storing its unsigned entries for 4 hours, for that meeting only (`segment_entry_unsigned_admitted`); no setting opens or closes it |
+| `VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S` (`compat.legacyUnsignedWindowSeconds`) | a transcript entry is stored only when it is signed; upgrade from 0.12 with no meeting in flight ([Upgrade from 0.12](/upgrade-from-0-12)) |
 
 Remove them from `.env`, `docker run -e` and your Helm values.

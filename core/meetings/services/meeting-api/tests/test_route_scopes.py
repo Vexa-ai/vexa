@@ -145,28 +145,25 @@ def test_a_signed_identity_on_a_route_no_row_reaches_is_refused(client, method, 
 
 @pytest.mark.parametrize("old_setting", [None, "legacy", "strict"])
 @pytest.mark.parametrize("scopes", [["browser"], ["bot"], ["bot", "browser"]])
-def test_the_edge_s_subscribe_hop_is_not_held_to_key_scopes_until_compat_removed_in(
-        client, scopes, monkeypatch, old_setting):
-    """`/ws` as in 0.12.28 until `removed_config.COMPAT_REMOVED_IN`: the hop lets any signed key past
-    the scope gate and its ownership check decides (here: nothing seeded, nothing authorized). Each
-    such key is logged `ws_scope_not_enforced` with a running count; `VEXA_WS_SCOPE_MODE` is not read."""
-    from meeting_api import obs, removed_config
+def test_the_edge_s_subscribe_hop_takes_no_key_scope(client, scopes, monkeypatch, old_setting):
+    """one_key_scope (30 Oct 2026): the hop lets any signed key past the scope gate and its ownership
+    check decides (here: nothing seeded, nothing authorized). Nothing about scope is logged, and
+    `VEXA_WS_SCOPE_MODE` is not read."""
+    from meeting_api import obs
 
     events = []
     monkeypatch.setattr(obs, "log_event", lambda name, **kw: events.append((name, kw)))
-    monkeypatch.setattr(removed_config, "COMPAT_USE", {})
     if old_setting:
         monkeypatch.setenv("VEXA_WS_SCOPE_MODE", old_setting)
     r = client.post("/ws/authorize-subscribe", headers=_signed(scopes),
                     json={"meetings": [{"platform": "google_meet", "native_meeting_id": "abc-defg-hij"}]})
     assert not _scope_refused(r), r.text
     assert r.status_code == 200 and r.json()["authorized"] == [], r.text
-    logged = [kw["fields"] for name, kw in events if name == "ws_scope_not_enforced"]
-    assert logged == [{"required": ["tx"], "count": 1, "removed_in": "0.13.6"}], events
+    assert not [name for name, _ in events if name == "ws_scope_not_enforced"], events
 
 
 def test_the_subscribe_hop_still_decides_by_ownership_for_a_bot_only_key():
-    """Only the key-scope requirement is gone: a `{bot}` key gets its own meeting and not another's."""
+    """Ownership is the boundary: a `{bot}` key gets its own meeting and not another's."""
     from meeting_api.collector.fakes import InMemoryTranscriptStore
 
     store = InMemoryTranscriptStore()
@@ -180,12 +177,6 @@ def test_the_subscribe_hop_still_decides_by_ownership_for_a_bot_only_key():
     assert r.status_code == 200, r.text
     assert [a["meeting_id"] for a in r.json()["authorized"]] == ["42"]
     assert len(r.json()["errors"]) == 1
-
-
-def test_only_the_subscribe_hop_is_let_through(client):
-    """Every REST route keeps its scopes: a `{bot}` key still cannot list meetings or read a transcript."""
-    assert _scope_refused(client.get("/meetings", headers=_signed(["bot"])))
-    assert _scope_refused(client.get("/transcripts/google_meet/abc-defg-hij", headers=_signed(["bot"])))
 
 
 def test_the_edge_s_subscribe_hop_takes_a_transcript_key(client):

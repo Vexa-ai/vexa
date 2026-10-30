@@ -22,14 +22,9 @@ from .ws_auth import accept, ws_credential
 from .ports import Authorizer, AuthUnavailable, RedisBus
 
 
-#: THE REST ROUTES' SCOPES, read from the same rows (the assembled routes.v1 table). A meeting
-#: subscription fans in the live transcript (`tc:meeting:{id}:mutable`), the transcript read's data;
-#: the socket itself carries meeting-status frames, the data of `GET /meetings` / `GET /bots/status`.
-#: Until `changed.COMPAT_REMOVED_IN` the socket does not REQUIRE them, as in 0.12.28: any valid key
-#: opens it and subscribes to the meetings `POST /ws/authorize-subscribe` grants it (ownership,
-#: workspace, share). A key without them is logged `ws_scope_not_enforced`, so its users can be found.
-TRANSCRIPT_ROUTE = ("GET", "/transcripts/{platform}/{native_meeting_id}")
-STATUS_ROUTES = (("GET", "/meetings"), ("GET", "/bots/status"))
+#: THE SOCKET TAKES NO KEY SCOPE (one_key_scope, 30 Oct 2026): any valid key opens it and
+#: subscribes to the meetings `POST /ws/authorize-subscribe` grants it. Meeting ownership, workspace
+#: and share checks, and the live re-authorization, are the boundary; there is no bot/tx split.
 
 
 #: How often an open socket re-authorizes what it already streams (see `_reauthorize`). A reader the
@@ -108,14 +103,9 @@ def signal_annotation(entry_id: str, fields: dict) -> "dict | None":
     return out
 
 
-def _assembled_scopes() -> dict:
-    """The full-profile route table (`gateway.app.ROUTE_SCOPES`) — for a caller that names none."""
-    from .app import ROUTE_SCOPES
-    return ROUTE_SCOPES
-
-
 async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, *,
                         route_scopes: "dict | None" = None) -> None:
+    # ``route_scopes`` is accepted for the callers that pass it and not read: /ws takes no key scope.
     """The ``/ws`` control loop + fan-in, carved verbatim from main.websocket_multiplex.
 
     PUBLIC (P2 follow-up): the conformance ws-harness drives this directly to exercise the SHIPPED
@@ -203,22 +193,6 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
         return
     user_id = user_data["user_id"]
     set_user_id(user_id)
-
-    # A KEY WITHOUT THE REST SCOPES IS SERVED AS IN 0.12.28 (see TRANSCRIPT_ROUTE above), and named.
-    table = route_scopes if route_scopes is not None else _assembled_scopes()
-    held = {str(s) for s in (user_data.get("scopes") or [])}
-    status_scopes = frozenset().union(*(table.get(r, frozenset()) for r in STATUS_ROUTES))
-    transcript_scopes = frozenset(table.get(TRANSCRIPT_ROUTE, frozenset()))
-
-    def scope_not_enforced(on: str, required: frozenset) -> None:
-        log_event("ws_scope_not_enforced", audience="system", level="warning", span="ws",
-                  user_id=user_id,
-                  fields={"path": "/ws", "on": on, "required": sorted(required),
-                          "count": count_compat_use("ws_scope_not_enforced"),
-                          "removed_in": COMPAT_REMOVED_IN})
-
-    if not held & status_scopes:
-        scope_not_enforced("connect", status_scopes)
 
     sub_tasks: Dict[Tuple, asyncio.Task] = {}
     subscribed_meetings: Set[Tuple] = set()
@@ -476,8 +450,6 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
                         "type": "error", "error": "invalid_subscribe_payload",
                         "details": f"'streams' must be a non-empty list of {list(STREAM_NAMES)}"}))
                     continue
-                if not held & transcript_scopes:
-                    scope_not_enforced("subscribe", transcript_scopes)
 
                 # The downstream authorize hop must never crash the socket: a RAISE → authorization_call_failed
                 # frame + continue; a non-200 (errors carried, nothing authorized) → authorization_service_error

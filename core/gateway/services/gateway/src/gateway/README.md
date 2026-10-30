@@ -31,13 +31,13 @@ The production edge logic, injectable. Modules:
 - **`ws_auth.py`** — where a websocket's key comes from: the `x-api-key` header, else a
   `vexa.key.<key>` subprotocol entry (a browser; the edge answers `vexa.v1`), else, deprecated until
   `changed.COMPAT_REMOVED_IN`, the `?api_key=` parameter (`/ws` logs `ws_query_key_deprecated` with a
-  running count). The VNC relay refuses a key in the URL with `api_key_query_removed` and close `4401`
-  (logged `ws_query_key_refused`). ws.v1's own subprotocol entries never travel upstream.
+  running count). The VNC relay refuses any request that carries `?api_key=`, whatever else it
+  carries, with `api_key_query_removed` and close `4401` (logged `ws_query_key_refused`). ws.v1's own subprotocol entries never travel upstream.
 - **`changed.py`** — the refusal an old-style call gets (`{type, error, changed_in, do_instead, docs}`),
   the boot line (`config_key_removed`) for a configuration key the gateway no longer reads, and
-  `COMPAT_REMOVED_IN` (0.13.6), the release that ends what `/ws` still does for 0.12 clients: the URL
-  key, and subscribing without `tx` (`ws_scope_not_enforced`). Each use is counted in-process
-  (`count_compat_use`, the count on every log line); the gateway has no metrics backend.
+  `COMPAT_REMOVED_IN` (0.13.6), the release that turns off the `/ws` URL key. Each use is counted
+  in-process (`count_compat_use`, the count on every log line); the gateway has no metrics backend.
+  `/ws` takes no key scope: ownership, workspace and share decide what a key streams.
 - **`identity_token.py`** — vendored `gateway-identity.v1`: signs the resolved identity onto every
   forward (byte-identical to the contract's canonical copy).
 - **`ratelimit.py`** / **`edge_guard.py`** — the per-user request rate limit and the opt-in

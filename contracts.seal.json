@@ -21,7 +21,7 @@
   "core/gateway/contracts/mcp.tools.v1": "fa2d75321cf8f059f18c4e55f928ef1acadcf2b299036743281797b539eb8af5",
   "core/gateway/contracts/routes.v1": "969426258713960ace763f22dd60c14462909ae000cb126d22ac3d1e310ee4db",
   "core/gateway/contracts/subject-ticket.v1": "432d7660e3f40e15ca6e0f8c014773beb50506265122b17ae78510ca16e80c0c",
-  "core/gateway/contracts/ws.v1": "5bb559fbb2dc2006bb13ee3f4862eefc316fe74c969894ec23d213f4e5071f3d",
+  "core/gateway/contracts/ws.v1": "d0a27bbc7bf22a7a5623e3523fd2a11772e9c95bddbfc719c98c8df7d41d822e",
   "core/identity/contracts/delegation.v1": "087b102c525ec9775f3515fa2fc7f5a4438445a964387b0440d97e20b090655d",
   "core/identity/contracts/identity.v1": "bf9dc370279d7eca50d48bf5554aa6fdbfe68fe3c7ebca9b27503b3bf6965565",
   "core/identity/contracts/signin.v1": "28540ac861b5a343512f8f87a0b645218fbe64fda9ec8d1677a78718ea24c73d",

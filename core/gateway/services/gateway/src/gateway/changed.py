@@ -35,13 +35,11 @@ def refusal(error: str, do_instead: str) -> dict:
 QUERY_KEY_REFUSAL = refusal("api_key_query_removed", WS_KEY_HOW)
 
 
-# -- kept for existing 0.12 clients, for one release -------------------------------------------------
+# -- kept for existing 0.12 clients until COMPAT_REMOVED_IN ------------------------------------------
 #
-# Two things /ws still does as 0.12.28 did, so a client already deployed keeps its live transcript:
-#   * a key in the URL (``?api_key=``) is a credential, logged ``ws_query_key_deprecated``;
-#   * a key without ``tx`` subscribes to the meetings it may read, logged ``ws_scope_not_enforced``.
-# Which meetings a key may read is decided as before (meeting-api ``POST /ws/authorize-subscribe``,
-# and the live re-authorization). Fixed behaviour, not a setting, and removed in this release:
+# /ws still takes a key in the URL (``?api_key=``), as 0.12.28 did, so a client already deployed keeps
+# its live transcript; each use is logged ``ws_query_key_deprecated`` (never the key; log_scrub.py
+# keeps it out of the access log). Fixed behaviour, not a setting; this release turns it off:
 COMPAT_REMOVED_IN = "0.13.6"
 
 #: Running count of each kept behaviour's use since this process started. The gateway has no metrics
@@ -57,8 +55,8 @@ def count_compat_use(event: str) -> int:
 
 #: Configuration keys the gateway does not read, each with what holds now.
 REMOVED_KEYS = {
-    "VEXA_WS_SCOPE_MODE": (f"/ws serves any valid key as 0.12 did until {COMPAT_REMOVED_IN}, "
-                           "then takes the REST routes' key scopes; there is no setting"),
+    "VEXA_WS_SCOPE_MODE": ("/ws takes any valid key; meeting ownership, workspace and share decide "
+                           "what it streams; there is no setting"),
 }
 
 

@@ -156,8 +156,8 @@ async def test_deny_a_reader_removed_mid_meeting_stops_receiving_annotations(mon
 
 
 async def test_signals_ride_the_transcript_rule_for_a_key_without_tx(monkeypatch):
-    """Signals ride the transcript's access rule. Until COMPAT_REMOVED_IN a key without `tx` reads its
-    OWN meeting's annotations, as it reads its transcript (0.12.28); another meeting's it never gets."""
+    """Signals ride the transcript's access rule: any valid key reads its OWN meeting's annotations, as
+    it reads its transcript; another meeting's it never gets (ownership is the boundary)."""
     _fast(monkeypatch)
     redis = FakeRedis()
     await _write(redis, 42)

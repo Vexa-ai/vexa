@@ -8,40 +8,22 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 #: The release whose change these keys describe.
 CHANGED_IN = "0.13.4"
 #: The page that says what changed and what to do instead.
 DOCS = "https://docs.vexa.ai/changes-0-13-4-auth"
 
-#: What this release still does for 0.12 clients, as fixed behaviour (no setting), until this release:
-#: the ``/ws`` subscribe hop takes any key's subscribe and leaves the decision to the ownership check
-#: (``route_scopes.WS_SUBSCRIBE_HOP``), and a 0.12 bot's unsigned transcript entries are stored for the
-#: meetings it was already in when meeting-api started (``collector/legacy_unsigned.py``).
-COMPAT_REMOVED_IN = "0.13.6"
-
 #: Each key meeting-api does not read, with what holds now.
 REMOVED_KEYS = {
-    "VEXA_WS_SCOPE_MODE": (f"the /ws subscribe hop is decided by meeting ownership alone until "
-                           f"{COMPAT_REMOVED_IN}, then also takes the transcript read's scopes (tx)"),
+    "VEXA_WS_SCOPE_MODE": ("the /ws subscribe hop takes any valid key; meeting ownership, "
+                           "workspace and share decide each meeting"),
     "VEXA_WEBHOOK_STORED_URL_POLICY": "every webhook delivery is held to the outbound-url.v1 guard",
-    "VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S": (
-        "a 0.12 bot's unsigned entries are stored for the meetings in flight at boot, for a fixed 4 h, "
-        f"until {COMPAT_REMOVED_IN}; every other entry is stored only when it is signed"),
+    "VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S": "a transcript entry is stored only when it is signed",
 }
 
 log = logging.getLogger(__name__)
-
-#: Running count of each kept 0.12 behaviour's use since this process started (meeting-api has no
-#: metrics backend; the count rides on every log line, so a pod's last line of an event is its total).
-COMPAT_USE: Dict[str, int] = {}
-
-
-def count_compat_use(event: str) -> int:
-    """Count one use of a kept 0.12 behaviour; returns the running total for ``event``."""
-    COMPAT_USE[event] = COMPAT_USE.get(event, 0) + 1
-    return COMPAT_USE[event]
 
 
 def set_keys(env: Optional[dict] = None) -> List[str]:

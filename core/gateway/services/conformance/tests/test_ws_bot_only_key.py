@@ -1,11 +1,11 @@
 """A `bot`-only key streams its OWN meeting over `/ws` and nobody else's, end to end through the
 gateway and meeting-api.
 
-`{bot}` is the hosted webapp's key (and what many API users hold). Until COMPAT_REMOVED_IN (0.13.6)
-neither service requires `tx` for a `/ws` subscription, as in 0.12.28: the gateway subscribes any
-valid key, and meeting-api's `POST /ws/authorize-subscribe` lets it past the route-scope gate, then
-its ownership check decides each meeting exactly as for a `tx` key. Both log `ws_scope_not_enforced`.
-`VEXA_WS_SCOPE_MODE` is not read by either service.
+`{bot}` is the hosted webapp's key (and what many API users hold). Any valid key reads what it owns
+(one_key_scope, 30 Oct 2026): neither service splits bot from tx for a `/ws` subscription. The
+gateway subscribes any valid key, meeting-api's `POST /ws/authorize-subscribe` takes no key scope,
+and its ownership check decides each meeting exactly as for a `tx` key. `VEXA_WS_SCOPE_MODE` is not
+read by either service.
 
 This drives the SHIPPED pieces together, offline:
   the gateway's `/ws` loop (`gateway.run_multiplex`)

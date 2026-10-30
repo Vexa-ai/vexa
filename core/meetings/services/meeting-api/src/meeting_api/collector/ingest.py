@@ -192,13 +192,7 @@ def _admitted(fields: dict) -> bool:
     callers acknowledge a refused entry like any other — a malformed one must not abort the batch
     and come back on every reclaim."""
     try:
-        if _verify_entry(fields):
-            return True
-        # A 0.12 bot still running across the upgrade writes unsigned entries; admitted only for the
-        # meetings it was spawned for and only inside the hand-off window (legacy_unsigned.py), until
-        # removed_config.COMPAT_REMOVED_IN. An entry that carries a signature is never rescued here.
-        from .legacy_unsigned import WINDOW
-        return WINDOW.admits(fields)
+        return _verify_entry(fields)
     except Exception:  # noqa: BLE001 — any fault reading an entry is a refusal, never a stalled batch
         return False
 

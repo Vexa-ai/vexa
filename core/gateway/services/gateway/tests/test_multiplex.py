@@ -225,11 +225,11 @@ async def test_connect_also_fans_in_the_persons_own_notifications():
     await task
 
 
-# ── the REST scopes are not required on /ws until COMPAT_REMOVED_IN (0.12.28's contract) ─────────
+# ── /ws takes no key scope (one_key_scope, 30 Oct 2026) ─────────────────────────────────────────
 #
 # Any valid key opens the socket and subscribes; WHICH meetings it gets is the authorize hop's
-# answer (ownership, workspace, share), as for any key. A key without the scopes is logged
-# `ws_scope_not_enforced` with a running count, so whoever still relies on it can be found.
+# answer (ownership, workspace, share), as for any key. No bot/tx split is computed, logged or
+# refused, and no later release tightens it.
 
 class _ScopedAuthorizer(FakeAuthorizer):
     """A key with the given scopes; records whether the subscribe hop was asked at all."""
@@ -254,7 +254,8 @@ def _capture(monkeypatch):
 
 
 def _not_enforced(events):
-    return [kw["fields"] for name, kw in events if name == "ws_scope_not_enforced"]
+    """Any scope-split event: there must be none."""
+    return [(name, kw) for name, kw in events if name in ("ws_scope_not_enforced", "request_denied_scope")]
 
 
 async def _settle(n=20):
@@ -279,9 +280,7 @@ async def test_a_bot_only_key_subscribes_to_its_own_meeting_and_gets_its_frames(
     await redis.publish("tc:meeting:42:mutable", '{"type": "transcript", "speaker": "A"}')
     await _settle()
     assert {"type": "transcript", "speaker": "A"} in ws.sent
-    logged = _not_enforced(events)
-    assert [f["on"] for f in logged] == ["subscribe"] and logged[0]["count"] == 1
-    assert logged[0]["required"] == ["tx"] and logged[0]["removed_in"] == "0.13.6"
+    assert not _not_enforced(events), events
     ws.disconnect()
     await asyncio.wait_for(task, timeout=2)
 
@@ -301,14 +300,14 @@ async def test_a_bot_only_key_gets_nothing_for_a_meeting_it_may_not_read(monkeyp
     await asyncio.wait_for(task, timeout=2)
 
 
-async def test_a_browser_only_key_opens_the_socket_and_is_counted(monkeypatch):
-    """A key that may read no meeting status over REST still opens the socket, as in 0.12.28."""
+async def test_a_browser_only_key_opens_the_socket_and_nothing_is_logged(monkeypatch):
+    """Any valid key opens the socket; what it streams is decided by ownership, not by scope."""
     events = _capture(monkeypatch)
     ws = _WS(inbound=[{"action": "ping"}], api_key=API_KEY)
     redis, auth = FakeRedis(), _ScopedAuthorizer(["browser"])
     await _run_multiplex(ws, auth, redis)
     assert {"type": "pong"} in ws.sent and ws.close_code is None, ws.sent
-    assert [f["on"] for f in _not_enforced(events)] == ["connect"]
+    assert not _not_enforced(events), events
 
 
 async def test_a_transcript_key_still_subscribes_and_is_not_counted(monkeypatch):
@@ -336,12 +335,12 @@ async def test_a_key_in_the_url_connects_and_subscribes(monkeypatch):
     await asyncio.wait_for(task, timeout=2)
 
 
-async def test_the_socket_reads_the_scopes_from_the_route_table(monkeypatch):
-    """The rule is the rows', not a literal: a table in which the transcript read takes `bot` counts
-    nothing for a `bot` key."""
+async def test_the_socket_takes_no_scope_from_the_route_table(monkeypatch):
+    """No split at the socket: even a table in which the reads take only `tx` lets a `bot` key
+    subscribe to the meeting it owns, and nothing is logged."""
     events = _capture(monkeypatch)
-    from gateway.multiplex import STATUS_ROUTES, TRANSCRIPT_ROUTE
-    table = {TRANSCRIPT_ROUTE: frozenset({"bot"}), **{r: frozenset({"bot"}) for r in STATUS_ROUTES}}
+    table = {("GET", "/transcripts/{platform}/{native_meeting_id}"): frozenset({"tx"}),
+             ("GET", "/meetings"): frozenset({"tx"}), ("GET", "/bots/status"): frozenset({"tx"})}
     ws = _WS(inbound=[SUBSCRIBE], api_key=API_KEY, close_when_drained=False)
     redis, auth = FakeRedis(), _ScopedAuthorizer(["bot"])
     task = asyncio.ensure_future(_run_multiplex(ws, auth, redis, route_scopes=table))

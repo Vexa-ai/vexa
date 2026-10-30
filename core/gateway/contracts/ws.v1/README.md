@@ -17,18 +17,12 @@ SDKs, and any client build against.
   `{type:"error", error:"api_key_query_removed", changed_in, do_instead, docs}` and close `4401`.
   Missing key → `{type:"error", error:"missing_api_key"}` then close `4401`; a key that
   resolves to nobody → `invalid_api_key`, close `4401`; the key cannot be resolved now →
-  `auth_unavailable`, close `4503`. Any valid key opens the socket, as in 0.12; a key that may read no
-  meeting status over REST (`GET /meetings`, `GET /bots/status`) is logged `ws_scope_not_enforced`.
-  **Deprecated, removed in 0.13.6:** from then such a key gets `insufficient_scope` (with `changed_in`,
-  `do_instead`, `docs`) and close `4403`.
+  `auth_unavailable`, close `4503`. Any valid key opens the socket; `/ws` takes no key scope.
 - **Client → server:** `SubscribeRequest` `{action:"subscribe", meetings:[{platform, native_id}]}`
   (and `UnsubscribeRequest`). Authorization is delegated to the collector
   (`POST /ws/authorize-subscribe`): you only receive meetings your key may read (its own, a meeting
-  bound to a workspace it belongs to, a meeting shared with it). Any valid key may subscribe, as in
-  0.12; one without the scopes of `GET /transcripts/{platform}/{native_meeting_id}` (`tx`) is logged
-  `ws_scope_not_enforced`. **Deprecated, removed in 0.13.6:** from then a subscription takes `tx`, on
-  the gateway and in `POST /ws/authorize-subscribe`; otherwise `insufficient_scope`, and the socket
-  stays open.
+  bound to a workspace it belongs to, a meeting shared with it). Any valid key may subscribe: one
+  key sends bots and reads what it owns, and ownership, workspace and share checks are the boundary.
 - **Live re-authorization:** access is re-checked while the socket is open, not only at subscribe.
   Every ~15 s the gateway asks `POST /ws/authorize-subscribe` again for the meetings this socket is
   subscribed to; a meeting that no longer passes (the owner removed the reader, turned a share link
@@ -91,6 +85,6 @@ on a `lane:contract` PR; a breaking change opens `ws.v2`, leaving `ws.v1` until 
 **Re-sealed in place in 0.13.4.** The founder ruled to keep one socket protocol and change `ws.v1` in
 place: «вычищай, пожалуйста, все… Нужно чтобы все было состояло из минимального количества
 примитивов». 0.13.4 adds the `vexa.key.<key>` subprotocol, and the `api_key_query_removed` code and the
-`changed_in` / `do_instead` / `docs` fields on `Error`. It keeps what 0.12 clients rely on (the URL key,
-and subscribing without `tx`) as deprecated, so no client already deployed breaks; 0.13.6 removes both.
+`changed_in` / `do_instead` / `docs` fields on `Error`. It keeps the URL key 0.12 clients rely on as
+deprecated, so no client already deployed breaks; 0.13.6 turns it off.
 See [What changed in 0.13.4: auth](https://docs.vexa.ai/changes-0-13-4-auth).
