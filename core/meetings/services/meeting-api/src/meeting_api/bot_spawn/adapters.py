@@ -836,6 +836,15 @@ class SqlAlchemyMeetingRepo:
                 metadata["teardown_confirmed"] = False
                 data["stop_requested"] = True
                 row.status = "stopping"
+            elif (
+                decision.enforced
+                and not decision.allow
+                and decision.stop_scope == "billable_service"
+            ):
+                # Replayed debt minute of a row that is no longer live: the
+                # deny is recorded, but there is no workload left to stop.
+                metadata["teardown_confirmed"] = True
+                metadata["teardown_skipped"] = "meeting_not_live"
             data["service_authority"] = metadata
             row.data = data
             flag_modified(row, "data")

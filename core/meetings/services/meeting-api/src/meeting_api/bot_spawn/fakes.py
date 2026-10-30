@@ -422,6 +422,14 @@ class InMemoryMeetingRepo:
             metadata["teardown_confirmed"] = False
             row["data"]["stop_requested"] = True
             row["status"] = "stopping"
+        elif (
+            decision.enforced
+            and not decision.allow
+            and decision.stop_scope == "billable_service"
+        ):
+            # Replayed debt minute of a row that is no longer live.
+            metadata["teardown_confirmed"] = True
+            metadata["teardown_skipped"] = "meeting_not_live"
         return True
 
     async def record_service_authority_debt(
