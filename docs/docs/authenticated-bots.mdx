@@ -132,13 +132,18 @@ anonymous guest.
   policy (for example, "people in my org" bypass). If the account is outside the organiser's
   tenant, a host may still need to admit it.
 - **Dead session.** If the stored Teams session has expired or is missing, Microsoft redirects the
-  bot to sign-in, or the bot is shown the anonymous guest pre-join. In authenticated mode the bot
-  does not fall back to joining anonymously. It fails the meeting with
-  `completion_reason=auth_session_missing`, which is permanent, so it is not retried. (This verdict
-  arrives with the Teams signed-out detection change; until then, the failure surfaces as the join
-  not proceeding as the signed-in account.) To recover, re-provision with
-  `make login AUTH_PLATFORM=teams`. This is the same loop as
-  "When the session dies anyway" above.
+  bot to sign-in, or the bot is shown the anonymous guest pre-join.
+  - *Today*, the Teams join flow does not yet check authenticated mode. A dead session can make the
+    bot type the guest name and quietly **join anonymously**, labelled "potential threat" /
+    "unverified" again. It can also hit the sign-in redirect, which is reported as a `join_failure`
+    and retried.
+  - *After the Teams signed-out detection change lands*, a dead Teams session in authenticated mode
+    will not fall back to an anonymous join. It will fail the meeting with
+    `completion_reason=auth_session_missing`, which is permanent and not retried.
+
+  Either way, to recover, re-provision with `make login AUTH_PLATFORM=teams`. This is the same loop
+  as "When the session dies anyway" above. Until the detection change lands, check that an
+  authenticated Teams bot shows up under its account name and not as a guest.
 
 ## Storage layout and security
 
