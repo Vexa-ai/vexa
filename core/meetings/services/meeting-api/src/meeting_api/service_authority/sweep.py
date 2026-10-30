@@ -19,9 +19,11 @@ class ServiceAuthoritySweepObservation:
     decisions: int = 0
     teardowns_confirmed: int = 0
     faults: int = 0
-    # Debt minutes (fail-open boundaries) that reached a real decision this tick.
+    # Debt minutes (fail-open boundaries) that reached a real decision this
+    # tick.  The durable totals live on the row:
+    # ``data.service_authority.debt_open`` / ``debt_settled_count``.
     debt_settled_count: int = 0
-    # Whether any admitted session still carries an unsettled debt minute.
+    # Whether any swept session still carries an unsettled debt minute.
     debt_open: bool = False
 
 
@@ -52,6 +54,35 @@ def _debt_by_boundary(metadata: dict[str, Any]) -> dict[str, dict[str, Any]]:
         for item in entries
         if isinstance(item, dict) and isinstance(item.get("boundary"), str)
     }
+
+
+async def _continuation_request(
+    repo: Any,
+    *,
+    row: dict[str, Any],
+    service_identity: str,
+    provider: Any,
+    admitted_at: datetime,
+    boundary: datetime,
+    debt_entry: Optional[dict[str, Any]],
+) -> ServiceAuthorityRequest:
+    """The continuation request for one minute; same ``request_id`` on replay."""
+    stored = debt_entry.get("active_concurrency") if debt_entry else None
+    if isinstance(stored, int) and not isinstance(stored, bool) and stored >= 0:
+        # Replay a debt minute with the concurrency observed when it was
+        # served, not with today's count.
+        active = stored
+    else:
+        active = await repo.count_active_bots(user_id=row["user_id"])
+    return ServiceAuthorityRequest.continuation(
+        user_id=row["user_id"],
+        request_id=f"{service_identity}:continue:{boundary.isoformat()}",
+        service_identity=service_identity,
+        transcription_provider=provider,
+        active_concurrency=active,
+        admitted_at=admitted_at,
+        boundary_at=boundary,
+    )
 
 
 async def run_service_authority_sweep(
@@ -90,6 +121,13 @@ async def run_service_authority_sweep(
     outage = False
 
     sessions = await repo.list_service_authority_sessions()
+    live_ids = {row.get("id") for row in sessions}
+    list_debt = getattr(repo, "list_service_authority_debt_sessions", None)
+    debt_rows = [
+        row
+        for row in (await list_debt() if list_debt is not None else [])
+        if row.get("id") not in live_ids
+    ]
     for row in sessions:
         metadata = (
             row.get("data", {}).get("service_authority")
@@ -132,42 +170,24 @@ async def run_service_authority_sweep(
                 faults += 1
                 break
             boundary_key = boundary.isoformat()
-            request_id = f"{service_identity}:continue:{boundary_key}"
-            prior_debt = debt.get(boundary_key)
-            stored_concurrency = (
-                prior_debt.get("active_concurrency")
-                if prior_debt is not None
-                else None
-            )
-            if (
-                isinstance(stored_concurrency, int)
-                and not isinstance(stored_concurrency, bool)
-                and stored_concurrency >= 0
-            ):
-                # Replay a debt minute with the concurrency observed when it
-                # was served, not with today's count.
-                active = stored_concurrency
-            else:
-                active = await repo.count_active_bots(
-                    user_id=row["user_id"],
-                )
-            request = ServiceAuthorityRequest.continuation(
-                user_id=row["user_id"],
-                request_id=request_id,
+            request = await _continuation_request(
+                repo,
+                row=row,
                 service_identity=service_identity,
-                transcription_provider=provider,
-                active_concurrency=active,
+                provider=provider,
                 admitted_at=admitted_at,
-                boundary_at=boundary,
+                boundary=boundary,
+                debt_entry=debt.get(boundary_key),
             )
             decision = None
             if not outage:
                 try:
                     decision = await authority.decide(request)
                 except ServiceAuthorityUnavailable:
+                    # One fault per tick for the outage, not one per minute.
                     outage = True
+                    faults += 1
             if decision is None:
-                faults += 1
                 booked = await repo.record_service_authority_debt(
                     meeting_id=row["id"],
                     request=request,
@@ -196,6 +216,70 @@ async def run_service_authority_sweep(
                 break
             boundary += timedelta(minutes=1)
         if open_debt:
+            debt_open = True
+
+    # Debt of rows that are no longer live (stopped by a catch-up deny, or
+    # ended during the outage).  The bot did run through those minutes, so
+    # each is still replayed and settled; a deny settles it without a stop.
+    # The list is read before this tick's live decisions ran, so a row that a
+    # deny stopped this tick has its remaining debt replayed on the next tick.
+    for row in debt_rows:
+        metadata = row.get("data", {}).get("service_authority")
+        debt = _debt_by_boundary(metadata) if isinstance(metadata, dict) else {}
+        if not debt:
+            continue
+        service_identity = metadata.get("service_identity")
+        provider = metadata.get("transcription_provider")
+        admitted_at = _admitted_at(row)
+        if (
+            metadata.get("mode") != authority.mode
+            or admitted_at is None
+            or not isinstance(service_identity, str)
+            or provider not in ("vexa", "customer", "none")
+        ):
+            faults += 1
+            debt_open = True
+            continue
+        try:
+            ordered = sorted(
+                (parse_time(key, "debt boundary"), entry)
+                for key, entry in debt.items()
+            )
+        except (TypeError, ValueError):
+            faults += 1
+            debt_open = True
+            continue
+        remaining = len(ordered)
+        for boundary, entry in ordered:
+            if outage:
+                break
+            request = await _continuation_request(
+                repo,
+                row=row,
+                service_identity=service_identity,
+                provider=provider,
+                admitted_at=admitted_at,
+                boundary=boundary,
+                debt_entry=entry,
+            )
+            try:
+                decision = await authority.decide(request)
+            except ServiceAuthorityUnavailable:
+                outage = True
+                faults += 1
+                break
+            recorded = await repo.record_service_authority_decision(
+                meeting_id=row["id"],
+                request=request,
+                decision=decision,
+            )
+            if not recorded:
+                faults += 1
+                break
+            decisions += 1
+            debt_settled += 1
+            remaining -= 1
+        if remaining:
             debt_open = True
 
     for pending in await repo.list_service_authority_teardowns():

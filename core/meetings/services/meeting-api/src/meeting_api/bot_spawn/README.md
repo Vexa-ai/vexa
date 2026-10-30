@@ -102,11 +102,14 @@ minute in `service_authority.debt_boundaries` (`record_service_authority_debt`, 
 leaves the bot running. After the first unavailable answer a sweep makes no further authority
 call that tick. When the authority answers again the sweep replays every debt minute in order
 with the same `request_id` and stored concurrency; each real decision settles its entry exactly
-once (`debt_settled_count`), and an enforced deny on a replayed minute still stops the bot.
-See [`../service_authority/README.md`](../service_authority/README.md).
+once, and the row carries `service_authority.debt_open` and `debt_settled_count`
+(`debt_boundaries` is `[]` once settled). An enforced deny on a replayed minute still stops the
+bot. Debt left on a meeting stopped by that deny, or one that ended during the outage, is replayed
+on later sweeps through `list_service_authority_debt_sessions`; a deny there settles the minute
+without a stop. See [`../service_authority/README.md`](../service_authority/README.md).
 
-No config means explicit stock OSS allow-all. Once configured, unavailable, malformed, stale, or
-cross-bound decisions fail closed. `mode=observe` records the authority response but cannot satisfy
+No config means explicit stock OSS allow-all. Once configured, malformed, stale, or cross-bound
+decisions are refused, and an unavailable authority fails closed at admission only (above). `mode=observe` records the authority response but cannot satisfy
 a hosted hard-spend-cap claim.
 
 ## Auto-join block lists

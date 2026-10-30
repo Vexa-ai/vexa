@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from ..lifecycle.machine import dominant_completion_reason
+from .adapters import _settle_debt_entry
 from .ports import (
     DuplicateMeeting,
     MaxBotsExceeded,
@@ -367,6 +368,15 @@ class InMemoryMeetingRepo:
             in ("enforce", "observe")
         ]
 
+    async def list_service_authority_debt_sessions(self) -> list[dict]:
+        """Rows in any status still carrying unsettled fail-open debt."""
+        return [
+            dict(m)
+            for m in self._meetings.values()
+            if isinstance(m.get("data", {}).get("service_authority"), dict)
+            and m["data"]["service_authority"].get("debt_open") is True
+        ]
+
     async def record_service_authority_decision(
         self,
         *,
@@ -402,23 +412,12 @@ class InMemoryMeetingRepo:
         metadata.update(decision.to_record())
         metadata["last_boundary_at"] = boundary
         metadata["last_decision_id"] = decision.decision_id
-        debt = metadata.get("debt_boundaries")
-        if isinstance(debt, list):
-            remaining = [
-                item for item in debt
-                if not (
-                    isinstance(item, dict)
-                    and item.get("boundary") == boundary
-                )
-            ]
-            if remaining:
-                metadata["debt_boundaries"] = remaining
-            else:
-                metadata.pop("debt_boundaries", None)
+        _settle_debt_entry(metadata, boundary)
         if (
             decision.enforced
             and not decision.allow
             and decision.stop_scope == "billable_service"
+            and row["status"] in ("active", "needs_help")
         ):
             metadata["teardown_confirmed"] = False
             row["data"]["stop_requested"] = True
@@ -463,6 +462,8 @@ class InMemoryMeetingRepo:
             "active_concurrency": request.active_concurrency,
         })
         metadata["debt_boundaries"] = debt
+        metadata["debt_open"] = True
+        metadata.setdefault("debt_settled_count", 0)
         return True
 
     async def list_service_authority_teardowns(self) -> list[dict]:

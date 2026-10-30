@@ -585,8 +585,13 @@ async def test_active_boundary_unavailable_fails_open_and_records_debt(
     ]
     assert all(o.decisions == 0 for o in observations)
     assert all(o.teardowns_confirmed == 0 for o in observations)
+    # The persisted row carries the debt marker, not only the observation.
+    assert persisted["debt_open"] is True
+    assert persisted["debt_settled_count"] == 0
     assert all(o.debt_open is True for o in observations)
     assert observations[-1].debt_settled_count == 0
+    # The outage is one fault per tick, not one per open debt minute.
+    assert [o.faults for o in observations] == [1, 1, 1]
     alerts = [
         r for r in caplog.records
         if r.getMessage().startswith("service_authority_fail_open ")

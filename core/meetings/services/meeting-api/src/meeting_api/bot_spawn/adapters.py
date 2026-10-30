@@ -73,6 +73,28 @@ def _row_to_dict(m) -> dict:
     }
 
 
+def _settle_debt_entry(metadata: dict, boundary: str) -> None:
+    """Settle the debt entry for ``boundary`` (if any) on the persisted row.
+
+    ``debt_boundaries`` stays on the row (``[]`` once empty), ``debt_open``
+    says whether any entry remains, and ``debt_settled_count`` counts every
+    entry a real decision has settled.
+    """
+    debt = metadata.get("debt_boundaries")
+    if not isinstance(debt, list):
+        return
+    remaining = [
+        item for item in debt
+        if not (isinstance(item, dict) and item.get("boundary") == boundary)
+    ]
+    settled = len(debt) - len(remaining)
+    metadata["debt_boundaries"] = remaining
+    metadata["debt_open"] = bool(remaining)
+    metadata["debt_settled_count"] = (
+        int(metadata.get("debt_settled_count") or 0) + settled
+    )
+
+
 class SqlAlchemyMeetingRepo:
     """``MeetingRepo`` over a SQLAlchemy-async ``session_factory`` (``meetings`` /
     ``meeting_sessions`` tables). Carve of the parent ``meetings.request_bot`` DB ops."""
@@ -723,6 +745,34 @@ class SqlAlchemyMeetingRepo:
                 in ("enforce", "observe")
             ]
 
+    async def list_service_authority_debt_sessions(self) -> list[dict]:
+        """Rows in any status that still carry unsettled fail-open debt.
+
+        Matches ``data @> {"service_authority": {"debt_open": true}}`` so a
+        meeting stopped by a catch-up deny, or one that ended during an
+        outage, still has its remaining debt minutes replayed.
+        """
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(Meeting).where(
+                        Meeting.data.contains(
+                            {"service_authority": {"debt_open": True}}
+                        ),
+                    )
+                )
+            ).scalars().all()
+            return [
+                _row_to_dict(row)
+                for row in rows
+                if isinstance(row.data, dict)
+                and isinstance(row.data.get("service_authority"), dict)
+            ]
+
     async def record_service_authority_decision(
         self,
         *,
@@ -773,23 +823,15 @@ class SqlAlchemyMeetingRepo:
             metadata["last_boundary_at"] = boundary
             metadata["last_decision_id"] = decision.decision_id
             # A real decision for a fail-open minute settles that debt entry.
-            debt = metadata.get("debt_boundaries")
-            if isinstance(debt, list):
-                remaining = [
-                    item for item in debt
-                    if not (
-                        isinstance(item, dict)
-                        and item.get("boundary") == boundary
-                    )
-                ]
-                if remaining:
-                    metadata["debt_boundaries"] = remaining
-                else:
-                    metadata.pop("debt_boundaries", None)
+            _settle_debt_entry(metadata, boundary)
             if (
                 decision.enforced
                 and not decision.allow
                 and decision.stop_scope == "billable_service"
+                # A replayed debt minute of a meeting that is no longer live
+                # (stopped by an earlier deny, or ended during the outage) is
+                # settled, but there is nothing left to stop.
+                and row.status in ("active", "needs_help")
             ):
                 metadata["teardown_confirmed"] = False
                 data["stop_requested"] = True
@@ -857,6 +899,8 @@ class SqlAlchemyMeetingRepo:
                 "active_concurrency": request.active_concurrency,
             })
             metadata["debt_boundaries"] = debt
+            metadata["debt_open"] = True
+            metadata.setdefault("debt_settled_count", 0)
             data["service_authority"] = metadata
             row.data = data
             flag_modified(row, "data")
