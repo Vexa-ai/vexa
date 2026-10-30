@@ -36,7 +36,7 @@ import { createCaptureSignalRecorder, startBotLogSidecar, wrapTranscribeWithTap,
 import { uploadSignalTapes } from './signal-upload.js';
 import { createSttFaultReporter } from './stt-faults.js';
 import { launchBrowser, startCaptureBridge, startRecording, restartMixedCapture, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
-import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
+import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs, resolveCaptureFaultMaxMs } from './aloneness.js';
 import { installSignalHandlers } from './signals.js';
 import type {
   JoinDriver,
@@ -223,12 +223,18 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   // the browser exists, and the restart needs the live page. Unset until the session launches
   // (and after a launch failure), in which case the guard just holds and keeps checking.
   let restartCapture: (() => void) | undefined;
+  // #1673: the guard's hold is bounded. Teams keeps advertising a remote audio stream after the
+  // last human leaves, so a hold with no expiry is permanent there — the bot sat in an empty
+  // meeting for 15 minutes and only left on an explicit DELETE.
+  const captureFaultMaxMs = resolveCaptureFaultMaxMs(aloneSilenceWindowMs, env);
   const aloneness = createSilenceAlonenessSource({
     activity: remoteAudioActivity,
     windowMs: aloneSilenceWindowMs,
     onCaptureFault: () => restartCapture?.(),
+    captureFaultMaxMs,
   });
-  console.log(`[bot] aloneness: silence adapter + deaf-capture guard enabled (window_ms=${aloneSilenceWindowMs})`);
+  console.log(`[bot] aloneness: silence adapter + deaf-capture guard enabled (window_ms=${aloneSilenceWindowMs},`
+    + ` capture_fault_max_hold_ms=${captureFaultMaxMs})`);
   if (speakerStreamConfig) console.log(`[bot] speaker-stream tuning enabled: ${JSON.stringify(speakerStreamConfig)}`);
 
   try {

@@ -26,6 +26,26 @@ export const DEFAULT_STREAM_PRESENCE_STALENESS_MS = 30_000;
 /** How often a persisting capture-fault re-states itself in the log (it is a live incident, not a
  *  one-shot event: a bot that has been deaf for 40 minutes should say so more than once). */
 export const CAPTURE_FAULT_LOG_INTERVAL_MS = 60_000;
+/** How long the deaf-capture hold may suppress `left_alone` before aloneness wins anyway (#1673).
+ *
+ *  #1192 made the hold UNCONDITIONAL, and on Teams that turned out to be permanent: the page keeps
+ *  advertising a remote audio stream after the last human leaves, so presence never goes stale, no
+ *  frame ever arrives, and the guard re-states the same verdict once a minute forever. The bot sits
+ *  in an empty meeting holding a quota slot and recording silence that is then transcribed at the
+ *  operator's expense, while `/bots/status` reports it healthy — indistinguishable from a hang.
+ *
+ *  The trade #1192 made is still the right one, it just needed an upper bound. Leaving late is
+ *  recoverable (the meeting goes terminal, the recording is intact, a bot can be sent again);
+ *  staying forever is not, and nothing else in the bot can tell the difference — the size-based
+ *  liveness checks all see a growing recording.
+ *
+ *  Sized as a MULTIPLE of the caller's own silence window, so a caller who asked for a 2-minute
+ *  `max_time_left_alone` is not held for half an hour, clamped at both ends: the floor gives a real
+ *  capture restart several polls to redeliver one frame even when the window is seconds long, and
+ *  the ceiling keeps a deaf bot's grace inside the quarter-hour no matter how long the window is. */
+export const DEFAULT_CAPTURE_FAULT_GRACE_WINDOWS = 3;
+export const MIN_CAPTURE_FAULT_MAX_MS = 60_000;
+export const MAX_CAPTURE_FAULT_MAX_MS = 15 * 60 * 1000;
 
 export interface RemoteAudioActivitySnapshot {
   available: boolean;
@@ -220,6 +240,33 @@ export function resolveAloneSilenceWindowMs(
   return DEFAULT_ALONE_SILENCE_WINDOW_MS;
 }
 
+/** The default bound for the deaf-capture hold, derived from the silence window alone (#1673). */
+export function defaultCaptureFaultMaxMs(windowMs: number): number {
+  const scaled = Number.isFinite(windowMs) && windowMs > 0
+    ? windowMs * DEFAULT_CAPTURE_FAULT_GRACE_WINDOWS
+    : MIN_CAPTURE_FAULT_MAX_MS;
+  return Math.min(Math.max(scaled, MIN_CAPTURE_FAULT_MAX_MS), MAX_CAPTURE_FAULT_MAX_MS);
+}
+
+/**
+ * How long a capture-fault may hold `left_alone` (#1673). `BOT_CAPTURE_FAULT_MAX_MS` overrides the
+ * derived default; `0` disables the hold entirely (the pre-#1192 behaviour, for an operator who
+ * would rather leave a live meeting than sit in an empty one).
+ */
+export function resolveCaptureFaultMaxMs(
+  windowMs: number,
+  env: NodeJS.ProcessEnv = process.env,
+  warn: (message: string) => void = (message) => console.warn(`[bot] ${message}`),
+): number {
+  const raw = env.BOT_CAPTURE_FAULT_MAX_MS;
+  if (raw !== undefined && raw.trim() !== '') {
+    const value = Number(raw);
+    if (Number.isFinite(value) && value >= 0) return value;
+    warn(`BOT_CAPTURE_FAULT_MAX_MS=${JSON.stringify(raw)} is invalid; using the window-derived default`);
+  }
+  return defaultCaptureFaultMaxMs(windowMs);
+}
+
 export function createSilenceAlonenessSource(options: {
   activity: RemoteAudioActivitySource;
   windowMs: number;
@@ -233,6 +280,10 @@ export function createSilenceAlonenessSource(options: {
    *  the one cheap repair attempt (restart the page-side capture). Optional — with no hook the
    *  guard still holds the meeting open and keeps checking. */
   onCaptureFault?: () => void;
+  /** Upper bound on ONE continuous capture-fault hold (#1673). Past it the guard's objection is
+   *  overruled and the silence verdict is emitted. Defaults to `defaultCaptureFaultMaxMs(windowMs)`;
+   *  `0` means the guard may not hold at all. */
+  captureFaultMaxMs?: number;
 }): AlonenessSource {
   const now = options.now ?? Date.now;
   const pollMs = options.pollMs ?? DEFAULT_ALONENESS_POLL_MS;
@@ -240,6 +291,7 @@ export function createSilenceAlonenessSource(options: {
   const setIntervalFn = options.setInterval ?? ((callback, ms) => setInterval(callback, ms));
   const clearIntervalFn = options.clearInterval ?? ((handle) => clearInterval(handle as ReturnType<typeof setInterval>));
   const log = options.log ?? ((message) => console.log(`[bot] ${message}`));
+  const captureFaultMaxMs = options.captureFaultMaxMs ?? defaultCaptureFaultMaxMs(options.windowMs);
 
   return {
     onAlone(callback): () => void {
@@ -262,33 +314,50 @@ export function createSilenceAlonenessSource(options: {
         const at = now();
         const snapshot = options.activity.snapshot();
         let captureFault = false;
+        let vetoed = false;
         for (const adapter of adapters) {
           const verdict = adapter.evaluate(snapshot, at, options.windowMs);
           // A deaf capture is not a leave and not a veto: it withholds the verdict and reports.
           if (verdict === 'capture-fault') { captureFault = true; continue; }
-          if (verdict !== 'alone') return;
+          if (verdict !== 'alone') { vetoed = true; break; }
         }
+        // The incident clock measures ONE CONTINUOUS fault, so any tick that is not one ends it —
+        // including a veto. Without this the clock survived across an audible stretch (the veto
+        // path returned early), and a second, brand-new fault an hour later would inherit an
+        // already-expired hold and leave on its first tick.
+        if (vetoed || !captureFault) { captureFaultSince = null; captureFaultLoggedAt = null; }
+        if (vetoed) return;
         if (captureFault) {
           // Streams are connected and delivering nothing — the bot is deaf, not alone (#1192).
-          // Hold the meeting open and keep checking; the orchestrator's maxActiveMs ceiling still
-          // bounds the run, so holding can never mean running forever.
+          // Hold the meeting open and keep checking, but only for a bounded grace (#1673): past it
+          // the guard is overruled and the silence verdict below is emitted after all.
           if (captureFaultSince === null) captureFaultSince = at;
-          if (captureFaultLoggedAt === null || at - captureFaultLoggedAt >= CAPTURE_FAULT_LOG_INTERVAL_MS) {
-            captureFaultLoggedAt = at;
-            log(`aloneness: capture-fault suspected (streams=${snapshot.streamsConnected}, no frames for window)`
-              + ` — holding left_alone (frames_delivered=${snapshot.framesDelivered ?? 0},`
-              + ` last_frame_at=${snapshot.lastRemoteFrameAt ?? 'never'}, window_ms=${options.windowMs},`
-              + ` deaf_for_ms=${at - captureFaultSince})`);
+          const heldForMs = at - captureFaultSince;
+          if (heldForMs < captureFaultMaxMs) {
+            if (captureFaultLoggedAt === null || at - captureFaultLoggedAt >= CAPTURE_FAULT_LOG_INTERVAL_MS) {
+              captureFaultLoggedAt = at;
+              log(`aloneness: capture-fault suspected (streams=${snapshot.streamsConnected}, no frames for window)`
+                + ` — holding left_alone (frames_delivered=${snapshot.framesDelivered ?? 0},`
+                + ` last_frame_at=${snapshot.lastRemoteFrameAt ?? 'never'}, window_ms=${options.windowMs},`
+                + ` deaf_for_ms=${heldForMs}, max_hold_ms=${captureFaultMaxMs})`);
+            }
+            if (!captureFaultRepairAttempted && options.onCaptureFault) {
+              captureFaultRepairAttempted = true;
+              log('aloneness: capture-fault — attempting one capture restart');
+              try { options.onCaptureFault(); } catch { /* a repair attempt must never break the monitor */ }
+            }
+            return;
           }
-          if (!captureFaultRepairAttempted && options.onCaptureFault) {
-            captureFaultRepairAttempted = true;
-            log('aloneness: capture-fault — attempting one capture restart');
-            try { options.onCaptureFault(); } catch { /* a repair attempt must never break the monitor */ }
-          }
-          return;
+          // Either the room emptied and the page is lying about its streams (Teams, #1673), or
+          // capture is genuinely dead and one restart did not fix it. Both are terminal: leaving
+          // late is recoverable, staying forever is not.
+          log(`aloneness: capture-fault hold EXPIRED — leaving anyway (deaf_for_ms=${heldForMs},`
+            + ` max_hold_ms=${captureFaultMaxMs}, streams=${snapshot.streamsConnected},`
+            + ` frames_delivered=${snapshot.framesDelivered ?? 0},`
+            + ` last_frame_at=${snapshot.lastRemoteFrameAt ?? 'never'}, window_ms=${options.windowMs})`);
+          captureFaultSince = null;
+          captureFaultLoggedAt = null;
         }
-        captureFaultSince = null;
-        captureFaultLoggedAt = null;
         fired = true;
         stop();
         log(`aloneness: silence verdict (last_remote_audio_at=${snapshot.lastRemoteAudioAt}, window_ms=${options.windowMs})`);
