@@ -283,13 +283,19 @@ def create_app(
 
         return await delete_recording_objects(storage, recording)
 
+    async def _delete_signal_tapes(user_id: int, meeting_id: int) -> list[str]:
+        from .recordings.deletion import delete_signal_tapes
+
+        return await delete_signal_tapes(storage, user_id=user_id, meeting_id=meeting_id)
+
     # --- collector: transcripts + meetings + ws-authorize (api.v1) ---
     if transcript_store is None:
         transcript_store = _collector_fakes().InMemoryTranscriptStore()
     app.include_router(_build_collector_router(transcript_store, redis,
                                             calendar_sync_now=calendar_sync_now,
                                             calendar_sync_status=calendar_sync_status,
-                                            artifact_object_deleter=_delete_recording_objects))
+                                            artifact_object_deleter=_delete_recording_objects,
+                                            artifact_signal_deleter=_delete_signal_tapes))
 
     # --- recordings: chunk upload + finalize → meeting.data JSONB (recording.v1) ---
     if recording_repo is None:

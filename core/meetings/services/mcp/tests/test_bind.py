@@ -2,7 +2,7 @@
 
 A manifest binds a NAME to a ROUTE. It carries no JSON schema and no description of its own: both
 are DERIVED from the bound route's OpenAPI operation, which is the mechanism this service already
-runs on for its own fourteen tools (`operation_id` on a FastAPI route, read by `FastApiMCP`). One
+runs on for its own fifteen tools (`operation_id` on a FastAPI route, read by `FastApiMCP`). One
 place to write a tool's shape means the tool and the route it forwards to cannot disagree.
 
 So the manifest is a claim about another service, and this is where the claim is checked. A route

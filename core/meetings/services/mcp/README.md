@@ -51,7 +51,7 @@ previous shape — including one supplied through `VEXA_MCP_MANIFEST_DIR` — re
 the tool and the field. That is deliberate: a default is a guess applied silently to every tool, and
 the guess was wrong for the four it was applied to.
 
-## Tools (10)
+## Tools (15)
 
 | Tool | Wraps |
 |---|---|
@@ -65,6 +65,11 @@ the guess was wrong for the four it was applied to.
 | `list_recordings` | `GET /recordings` |
 | `get_recording` | `GET /recordings/{recording_id}` |
 | `report_issue` | `GET /meetings` to authenticate the caller, then the ticket is POSTed to `VEXA_TICKET_SINK_URL` |
+| `search_transcripts` | `GET /transcripts/search` |
+| `annotate_meeting` | `POST /meetings/{platform}/{native}/annotate` |
+| `get_meeting_chat` | `GET /bots/{platform}/{native}/chat` |
+| `speak_in_meeting` | `POST /bots/{platform}/{native}/speak` |
+| `delete_meeting_artifacts` | `DELETE /meetings/{platform}/{native}` — **irreversible**: erases the transcript, transcript-derived notes/shares, recording objects and the captured-signal tape of a terminal meeting (#116) |
 
 **Zoom URLs `parse_meeting_link` accepts:** `zoom.us` and any subdomain of it (`us02web.`, a company vanity subdomain) plus `zoomgov.com`, on `/j/<id>`, `/w/<id>` or `/wc/join/<id>`, passcode read from `?pwd=` or `?password=`; **and** a tenancy fronted on an organisation's OWN hostname, which carries no "zoom" anywhere — any host whose path is `/meeting/<10-11 digits>` or `/j/<10-11 digits>` **and** which carries `?password=` or `?pwd=` (e.g. `https://zoom-lfx.platform.linuxfoundation.org/meeting/<id>?password=<uuid>`), answered with a warning saying the platform was read from the path shape rather than recognised from the host. `/my/<personal-room>` and `events.zoom.us` links are refused 422 with the reason.
 
@@ -76,13 +81,24 @@ the guess was wrong for the four it was applied to.
 These 0.10.6 tools wrap REST routes the v0.12 gateway does not expose yet; port them when
 the routes land:
 
-- `delete_recording` — no `DELETE /recordings/{id}`
+- `delete_recording` — the route exists now (`DELETE /recordings/{id}`), and the tool is still
+  **deliberately** unported. The gateway scopes that route **BOT**, while an agent integration is
+  normally handed a transcript-scoped key, so the tool would answer 403 for exactly the callers who
+  would reach for it — and `delete_meeting_artifacts` already erases the recordings along with
+  everything else. Port it when a bot-scoped agent has a reason to erase one recording of a meeting
+  and keep the rest.
 - `get_recording_media_download` — v0.12 serves `/recordings/{id}/media/{mf}/raw` (a byte
   stream, not a download-URL JSON); needs a deliberate MCP shape
 - `get_recording_config` / `update_recording_config` — no `/recording-config` routes
 - `create_transcript_share_link` — no `POST /transcripts/{platform}/{native}/share`
-- `update_meeting_data` / `delete_meeting` — no `PATCH`/`DELETE /meetings/{platform}/{native}`
+- `update_meeting_data` — no `PATCH /meetings/{platform}/{native}` tool yet (the route exists;
+  `annotate_meeting` covers the caller's own description of a meeting, not its dispatch parameters)
 - `get_meeting_bundle` — composed share-link + media-download tools above
+
+**Ported since:** 0.10.6's `delete_meeting` now lands as **`delete_meeting_artifacts`**, renamed
+because the v0.12 route has two meanings on one verb — it removes a *plan* before the bot spawns and
+*erases artifacts* after the meeting ends — and an agent must not reach for the second while meaning
+the first.
 
 The 0.10.6 interactive-bot / calendar / webhook / TTS tool families predate the carve and are
 likewise out of scope here.

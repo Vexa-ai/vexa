@@ -1,4 +1,4 @@
-"""L1 — the MCP surface: the /mcp mount exists, exactly the 14 tools are exposed,
+"""L1 — the MCP surface: the /mcp mount exists, exactly the 15 tools are exposed,
 and the 4 prompts render."""
 import httpx
 import pytest
@@ -21,6 +21,7 @@ EXPECTED_TOOLS = {
     "speak_in_meeting",
     "get_meeting_chat",
     "search_transcripts",
+    "delete_meeting_artifacts",
 }
 
 
@@ -58,7 +59,7 @@ def test_prompts_only_reference_ported_tools():
     """A prompt must not instruct a tool that was NOT ported (README: blocked on API parity)."""
     skipped = {
         "get_meeting_bundle", "create_transcript_share_link", "update_meeting_data",
-        "delete_meeting", "delete_recording", "get_recording_media_download",
+        "delete_recording", "get_recording_media_download",
         "get_recording_config", "update_recording_config",
     }
     for name in PROMPTS:
