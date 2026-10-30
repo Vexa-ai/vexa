@@ -95,6 +95,35 @@ def _settle_debt_entry(metadata: dict, boundary: str) -> None:
     )
 
 
+def _book_debt_entry(metadata: dict, request) -> bool:
+    """Append ``request``'s minute to ``debt_boundaries`` in place.
+
+    Refused for another service identity, a boundary at or before
+    ``last_boundary_at``, or one already listed.  Returns whether it is new.
+    """
+    if metadata.get("service_identity") != request.service_identity:
+        return False
+    prior = metadata.get("last_boundary_at")
+    if prior and datetime.fromisoformat(
+        prior.replace("Z", "+00:00")
+    ) >= request.boundary_at:
+        return False
+    boundary = request.boundary_at.isoformat()
+    debt = metadata.get("debt_boundaries")
+    debt = list(debt) if isinstance(debt, list) else []
+    if any(isinstance(i, dict) and i.get("boundary") == boundary for i in debt):
+        return False
+    debt.append({
+        "boundary": boundary,
+        "request_id": request.request_id,
+        "active_concurrency": request.active_concurrency,
+    })
+    metadata["debt_boundaries"] = debt
+    metadata["debt_open"] = True
+    metadata.setdefault("debt_settled_count", 0)
+    return True
+
+
 class SqlAlchemyMeetingRepo:
     """``MeetingRepo`` over a SQLAlchemy-async ``session_factory`` (``meetings`` /
     ``meeting_sessions`` tables). Carve of the parent ``meetings.request_bot`` DB ops."""
@@ -745,34 +774,6 @@ class SqlAlchemyMeetingRepo:
                 in ("enforce", "observe")
             ]
 
-    async def list_service_authority_debt_sessions(self) -> list[dict]:
-        """Rows in any status that still carry unsettled fail-open debt.
-
-        Matches ``data @> {"service_authority": {"debt_open": true}}`` so a
-        meeting stopped by a catch-up deny, or one that ended during an
-        outage, still has its remaining debt minutes replayed.
-        """
-        from sqlalchemy import select
-
-        from ..sessions.models import Meeting
-
-        async with self._session_factory() as db:
-            rows = (
-                await db.execute(
-                    select(Meeting).where(
-                        Meeting.data.contains(
-                            {"service_authority": {"debt_open": True}}
-                        ),
-                    )
-                )
-            ).scalars().all()
-            return [
-                _row_to_dict(row)
-                for row in rows
-                if isinstance(row.data, dict)
-                and isinstance(row.data.get("service_authority"), dict)
-            ]
-
     async def record_service_authority_decision(
         self,
         *,
@@ -828,23 +829,10 @@ class SqlAlchemyMeetingRepo:
                 decision.enforced
                 and not decision.allow
                 and decision.stop_scope == "billable_service"
-                # A replayed debt minute of a meeting that is no longer live
-                # (stopped by an earlier deny, or ended during the outage) is
-                # settled, but there is nothing left to stop.
-                and row.status in ("active", "needs_help")
             ):
                 metadata["teardown_confirmed"] = False
                 data["stop_requested"] = True
                 row.status = "stopping"
-            elif (
-                decision.enforced
-                and not decision.allow
-                and decision.stop_scope == "billable_service"
-            ):
-                # Replayed debt minute of a row that is no longer live: the
-                # deny is recorded, but there is no workload left to stop.
-                metadata["teardown_confirmed"] = True
-                metadata["teardown_skipped"] = "meeting_not_live"
             data["service_authority"] = metadata
             row.data = data
             flag_modified(row, "data")
@@ -880,36 +868,11 @@ class SqlAlchemyMeetingRepo:
                 return False
             data = dict(row.data) if isinstance(row.data, dict) else {}
             metadata = data.get("service_authority")
-            if (
-                not isinstance(metadata, dict)
-                or metadata.get("service_identity")
-                != request.service_identity
-            ):
+            if not isinstance(metadata, dict):
                 return False
             metadata = dict(metadata)
-            boundary = request.boundary_at.isoformat()
-            prior_boundary = metadata.get("last_boundary_at")
-            if prior_boundary:
-                prior = datetime.fromisoformat(
-                    prior_boundary.replace("Z", "+00:00")
-                )
-                if prior >= request.boundary_at:
-                    return False
-            debt = metadata.get("debt_boundaries")
-            debt = list(debt) if isinstance(debt, list) else []
-            if any(
-                isinstance(item, dict) and item.get("boundary") == boundary
-                for item in debt
-            ):
+            if not _book_debt_entry(metadata, request):
                 return False
-            debt.append({
-                "boundary": boundary,
-                "request_id": request.request_id,
-                "active_concurrency": request.active_concurrency,
-            })
-            metadata["debt_boundaries"] = debt
-            metadata["debt_open"] = True
-            metadata.setdefault("debt_settled_count", 0)
             data["service_authority"] = metadata
             row.data = data
             flag_modified(row, "data")
