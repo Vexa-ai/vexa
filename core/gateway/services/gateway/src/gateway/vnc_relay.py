@@ -105,7 +105,9 @@ async def run_vnc_relay(ws: WebSocket, session_id: str, *, authorizer: Authorize
                         route_scopes: Mapping, meeting_api_url: str, identity_key=None,
                         connect: Optional[Connector] = None) -> None:
     credential = ws_credential(ws)
-    if credential.source == "query":
+    # A key in the URL is refused WHATEVER ELSE the request carries (a header or subprotocol key
+    # does not make a URL key acceptable here): the URL lands in logs and browser history.
+    if "api_key" in ws.query_params or credential.source == "query":
         log_event("ws_query_key_refused", audience="system", level="warning", span="ws",
                   fields={"path": PATH})
         return await _refuse(ws, 4401, QUERY_KEY_REFUSAL)

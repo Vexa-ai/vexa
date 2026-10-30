@@ -15,7 +15,7 @@ from typing import Dict, List, Set, Tuple
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from .changed import QUERY_KEY_REFUSAL, SCOPE_HOW, refusal
+from .changed import COMPAT_REMOVED_IN, SCOPE_HOW, count_compat_use, refusal
 from .delegation import is_delegated
 from .obs import log_event, set_user_id
 from .ws_auth import accept, ws_credential
@@ -123,7 +123,8 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
     multiplex against its fakes — exposed on the front door (``gateway.run_multiplex``) so the
     harness no longer reaches for a private (the P1-flagged smell).
 
-    guard (PRE-accept, opt-in) → accept → authenticate (missing key → error + close 4401) →
+    guard (PRE-accept, opt-in) → accept → authenticate (missing key → error + close 4401; a key in
+      the URL is still taken, deprecated, and logged) →
       loop over client frames:
       subscribe   → authorize, register a redis fan-in per meeting, ack ``subscribed``;
       unsubscribe → cancel the fan-in task(s), ack ``unsubscribed`` (stops forwarding);
@@ -159,13 +160,11 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
     await accept(ws, credential.subprotocol)
 
     if credential.source == "query":
-        log_event("ws_query_key_refused", audience="system", level="warning", span="ws",
-                  fields={"path": "/ws"})
-        try:
-            await ws.send_text(json.dumps(QUERY_KEY_REFUSAL))
-        finally:
-            await ws.close(code=4401)  # Unauthorized: the URL carries no credential
-        return
+        # DEPRECATED, still a credential for 0.12 clients (changed.py). Never the key in the line.
+        log_event("ws_query_key_deprecated", audience="system", level="warning", span="ws",
+                  fields={"path": "/ws", "count": count_compat_use("ws_query_key_deprecated"),
+                          "removed_in": COMPAT_REMOVED_IN,
+                          "use": "x-api-key header or the vexa.key.<key> subprotocol"})
 
     api_key = credential.key
     if not api_key:

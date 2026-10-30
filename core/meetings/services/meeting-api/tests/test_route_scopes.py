@@ -150,17 +150,35 @@ def test_a_signed_identity_on_a_route_no_row_reaches_is_refused(client, method, 
     assert _scope_refused(client.request(method, path, headers=_signed(["bot", "tx"]), json={}))
 
 
-@pytest.mark.parametrize("old_setting", [None, "legacy"])
+@pytest.mark.parametrize("old_setting", [None, "legacy", "strict"])
 @pytest.mark.parametrize("scopes", [["browser"]])
 def test_the_edge_s_subscribe_hop_refuses_a_key_that_may_not_read_transcripts(client, scopes, monkeypatch,
                                                                                old_setting):
     """`/ws` subscribing opens a meeting's live transcript: the hop takes the transcript read's
-    scopes, as the gateway's socket does before it asks (R6-9); `VEXA_WS_SCOPE_MODE` is not read."""
+    scopes (["bot","tx"], #1922), as the gateway's socket does before it asks (R6-9), so only a
+    browser-only key is refused; `VEXA_WS_SCOPE_MODE` is not read."""
     if old_setting:
         monkeypatch.setenv("VEXA_WS_SCOPE_MODE", old_setting)
     r = client.post("/ws/authorize-subscribe", headers=_signed(scopes),
                     json={"meetings": [{"platform": "google_meet", "native_meeting_id": "abc-defg-hij"}]})
     assert _scope_refused(r), r.text
+
+
+def test_the_subscribe_hop_still_decides_by_ownership_for_a_bot_only_key():
+    """Ownership is the boundary: a `{bot}` key gets its own meeting and not another's."""
+    from meeting_api.collector.fakes import InMemoryTranscriptStore
+
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(user_id=7, platform="google_meet", native_meeting_id="abc-defg-hij", meeting_id=42)
+    store.seed_meeting(user_id=8, platform="google_meet", native_meeting_id="xyz-wxyz-xyz", meeting_id=43)
+    c = TestClient(create_app(transcript_store=store, open_callbacks=True, identity_key=KEY.public_key(),
+                              internal_secret=INTERNAL))
+    r = c.post("/ws/authorize-subscribe", headers=_signed(["bot"], sub="7"),
+               json={"meetings": [{"platform": "google_meet", "native_meeting_id": "abc-defg-hij"},
+                                  {"platform": "google_meet", "native_meeting_id": "xyz-wxyz-xyz"}]})
+    assert r.status_code == 200, r.text
+    assert [a["meeting_id"] for a in r.json()["authorized"]] == ["42"]
+    assert len(r.json()["errors"]) == 1
 
 
 @pytest.mark.parametrize("scopes", [["tx"], ["bot"], ["bot", "browser"]])

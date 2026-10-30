@@ -225,7 +225,11 @@ async def test_connect_also_fans_in_the_persons_own_notifications():
     await task
 
 
-# ── R6-9: the socket is held to the REST routes' key scopes ─────────────────────────────────────
+# ── /ws takes the REST rows' scopes, all ["bot","tx"] (#1922, one_key_scope) ─────────────────────
+#
+# Any key holding bot or tx opens the socket and subscribes; WHICH meetings it gets is the authorize
+# hop's answer (ownership, workspace, share), as for any key. No bot/tx split is computed or refused;
+# only a browser-only key, which holds neither, is.
 
 class _ScopedAuthorizer(FakeAuthorizer):
     """A key with the given scopes; records whether the subscribe hop was asked at all."""
@@ -240,23 +244,18 @@ class _ScopedAuthorizer(FakeAuthorizer):
         return await super().authorize_subscribe(api_key, meetings)
 
 
-@pytest.mark.parametrize("old_setting", [None, "legacy"])
-async def test_a_bot_only_key_subscribes_to_a_transcript(monkeypatch, old_setting):
-    """One key does everything its owner may do (#1922): the transcript row is ["bot","tx"], so the
-    default `bot`-only key subscribes to its own meeting; ownership (the subscribe hop) decides which.
-    The removed `VEXA_WS_SCOPE_MODE=legacy` changes nothing."""
-    if old_setting:
-        monkeypatch.setenv("VEXA_WS_SCOPE_MODE", old_setting)
-    ws = _WS(inbound=[SUBSCRIBE], api_key=API_KEY, close_when_drained=False)
-    redis, auth = FakeRedis(), _ScopedAuthorizer(["bot"])
-    task = asyncio.ensure_future(_run_multiplex(ws, auth, redis))
-    for _ in range(10):
-        await asyncio.sleep(0)
-    assert any(f.get("type") == "subscribed" and f["meetings"] for f in ws.sent), ws.sent
-    assert not any(f.get("type") == "error" for f in ws.sent), ws.sent
-    assert auth.asked == 1                           # ownership is asked downstream
-    ws.disconnect()
-    await asyncio.wait_for(task, timeout=2)
+def _capture(monkeypatch):
+    import gateway.changed as changed
+
+    events = []
+    monkeypatch.setattr(gw_app, "log_event", lambda name, **kw: events.append((name, kw)))
+    monkeypatch.setattr(changed, "COMPAT_USE", {})
+    return events
+
+
+def _not_enforced(events):
+    """Any scope-split event: there must be none."""
+    return [(name, kw) for name, kw in events if name in ("ws_scope_not_enforced", "request_denied_scope")]
 
 
 @pytest.mark.parametrize("old_setting", [None, "legacy"])
@@ -277,28 +276,88 @@ async def test_a_browser_only_key_opens_no_socket(monkeypatch, old_setting):
     assert auth.asked == 0
 
 
-async def test_a_transcript_key_still_subscribes():
-    ws = _WS(inbound=[SUBSCRIBE], api_key=API_KEY, close_when_drained=False)
-    redis, auth = FakeRedis(), _ScopedAuthorizer(["tx"])
-    task = asyncio.ensure_future(_run_multiplex(ws, auth, redis))
-    for _ in range(10):
+async def _settle(n=20):
+    for _ in range(n):
         await asyncio.sleep(0)
-    assert any(f.get("type") == "subscribed" and f["meetings"] for f in ws.sent), ws.sent
+
+
+@pytest.mark.parametrize("old_setting", [None, "legacy", "strict"])
+async def test_a_bot_only_key_subscribes_to_its_own_meeting_and_gets_its_frames(monkeypatch, old_setting):
+    """`{bot}` is the hosted webapp's key: it streams its own meeting's transcript as in 0.12.28. The
+    removed `VEXA_WS_SCOPE_MODE` changes nothing either way."""
+    if old_setting:
+        monkeypatch.setenv("VEXA_WS_SCOPE_MODE", old_setting)
+    events = _capture(monkeypatch)
+    ws = _WS(inbound=[SUBSCRIBE], api_key=API_KEY, close_when_drained=False)
+    redis, auth = FakeRedis(), _ScopedAuthorizer(["bot"])
+    task = asyncio.ensure_future(_run_multiplex(ws, auth, redis))
+    await _settle()
+    assert {"type": "subscribed", "meetings": [{"platform": "google_meet", "native_id": "room-1"}]} in ws.sent
+    assert not [f for f in ws.sent if f.get("type") == "error"], ws.sent
+    assert auth.asked == 1                                 # ownership is still the hop's answer
+    await redis.publish("tc:meeting:42:mutable", '{"type": "transcript", "speaker": "A"}')
+    await _settle()
+    assert {"type": "transcript", "speaker": "A"} in ws.sent
+    assert not _not_enforced(events), events
     ws.disconnect()
     await asyncio.wait_for(task, timeout=2)
 
 
-async def test_the_socket_reads_the_scopes_from_the_route_table():
-    """The rule is the rows', not a literal: a table in which the transcript read takes `bot` lets a
-    `bot` key subscribe."""
-    from gateway.multiplex import STATUS_ROUTES, TRANSCRIPT_ROUTE
-    table = {TRANSCRIPT_ROUTE: frozenset({"bot"}), **{r: frozenset({"bot"}) for r in STATUS_ROUTES}}
+async def test_a_bot_only_key_gets_nothing_for_a_meeting_it_may_not_read(monkeypatch):
+    _capture(monkeypatch)
+    other = {"action": "subscribe", "meetings": [{"platform": "google_meet", "native_id": "room-9"}]}
+    ws = _WS(inbound=[other], api_key=API_KEY, close_when_drained=False)
+    redis, auth = FakeRedis(), _ScopedAuthorizer(["bot"])
+    task = asyncio.ensure_future(_run_multiplex(ws, auth, redis))
+    await _settle()
+    assert not any(f.get("type") == "subscribed" and f.get("meetings") for f in ws.sent), ws.sent
+    await redis.publish("tc:meeting:42:mutable", '{"type": "transcript", "speaker": "A"}')
+    await _settle()
+    assert {"type": "transcript", "speaker": "A"} not in ws.sent
+    ws.disconnect()
+    await asyncio.wait_for(task, timeout=2)
+
+
+async def test_a_transcript_key_still_subscribes_and_is_not_counted(monkeypatch):
+    events = _capture(monkeypatch)
+    ws = _WS(inbound=[SUBSCRIBE], api_key=API_KEY, close_when_drained=False)
+    redis, auth = FakeRedis(), _ScopedAuthorizer(["tx"])
+    task = asyncio.ensure_future(_run_multiplex(ws, auth, redis))
+    await _settle()
+    assert any(f.get("type") == "subscribed" and f["meetings"] for f in ws.sent), ws.sent
+    assert not _not_enforced(events)
+    ws.disconnect()
+    await asyncio.wait_for(task, timeout=2)
+
+
+async def test_a_key_in_the_url_connects_and_subscribes(monkeypatch):
+    events = _capture(monkeypatch)
+    ws = _WS(inbound=[SUBSCRIBE], api_key=None, close_when_drained=False)
+    ws.query_params = {"api_key": API_KEY}
+    redis, auth = FakeRedis(), _ScopedAuthorizer(["bot", "tx"])
+    task = asyncio.ensure_future(_run_multiplex(ws, auth, redis))
+    await _settle()
+    assert any(f.get("type") == "subscribed" and f["meetings"] for f in ws.sent), ws.sent
+    assert [kw["fields"]["count"] for name, kw in events if name == "ws_query_key_deprecated"] == [1]
+    ws.disconnect()
+    await asyncio.wait_for(task, timeout=2)
+
+
+async def test_the_socket_reads_its_scopes_from_the_route_table(monkeypatch):
+    """The socket holds no table of its own: it takes the REST rows' scopes, so a table in which the
+    transcript read took only `tx` would refuse a `bot` key's subscription (the assembled table is
+    ["bot","tx"] everywhere, #1922, so in practice only a browser-only key is refused)."""
+    _capture(monkeypatch)
+    table = {("GET", "/transcripts/{platform}/{native_meeting_id}"): frozenset({"tx"}),
+             ("GET", "/meetings"): frozenset({"bot", "tx"}), ("GET", "/bots/status"): frozenset({"bot", "tx"})}
     ws = _WS(inbound=[SUBSCRIBE], api_key=API_KEY, close_when_drained=False)
     redis, auth = FakeRedis(), _ScopedAuthorizer(["bot"])
     task = asyncio.ensure_future(_run_multiplex(ws, auth, redis, route_scopes=table))
     for _ in range(10):
         await asyncio.sleep(0)
-    assert any(f.get("type") == "subscribed" and f["meetings"] for f in ws.sent), ws.sent
+    assert any(f.get("error") == "insufficient_scope" for f in ws.sent), ws.sent
+    assert not any(f.get("type") == "subscribed" and f["meetings"] for f in ws.sent), ws.sent
+    assert auth.asked == 0
     ws.disconnect()
     await asyncio.wait_for(task, timeout=2)
 

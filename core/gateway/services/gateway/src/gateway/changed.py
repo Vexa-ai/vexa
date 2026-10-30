@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Optional
+from typing import Dict, Optional
 
 #: The release whose auth change these refusals describe.
 CHANGED_IN = "0.13.4"
@@ -35,12 +35,33 @@ SCOPE_HOW = ("use a key that holds the bot or tx scope (every key the quickstart
              "GET /auth/me lists your key's scopes")
 
 
-#: A websocket that names its key in the URL (``?api_key=``); close 4401 follows.
+#: A websocket that names its key in the URL (``?api_key=``); close 4401 follows. The bot-account
+#: live view (``vnc_relay.py``) refuses it; ``/ws`` still takes it until COMPAT_REMOVED_IN.
 QUERY_KEY_REFUSAL = refusal("api_key_query_removed", WS_KEY_HOW)
+
+
+# -- kept for existing 0.12 clients until COMPAT_REMOVED_IN ------------------------------------------
+#
+# /ws still takes a key in the URL (``?api_key=``), as 0.12.28 did, so a client already deployed keeps
+# its live transcript; each use is logged ``ws_query_key_deprecated`` (never the key; log_scrub.py
+# keeps it out of the access log). Fixed behaviour, not a setting; this release turns it off:
+COMPAT_REMOVED_IN = "0.13.6"
+
+#: Running count of each kept behaviour's use since this process started. The gateway has no metrics
+#: backend; the count rides on every log line, so a pod's last line of an event is its total.
+COMPAT_USE: Dict[str, int] = {}
+
+
+def count_compat_use(event: str) -> int:
+    """Count one use of a kept 0.12 behaviour; returns the running total for ``event``."""
+    COMPAT_USE[event] = COMPAT_USE.get(event, 0) + 1
+    return COMPAT_USE[event]
+
 
 #: Configuration keys the gateway does not read, each with what holds now.
 REMOVED_KEYS = {
-    "VEXA_WS_SCOPE_MODE": "/ws always takes the REST routes' key scopes",
+    "VEXA_WS_SCOPE_MODE": ("/ws takes any key holding bot or tx, as the REST routes do; meeting "
+                           "ownership, workspace and share decide what it streams; there is no setting"),
 }
 
 

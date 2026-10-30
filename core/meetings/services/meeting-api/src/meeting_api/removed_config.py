@@ -17,7 +17,8 @@ DOCS = "https://docs.vexa.ai/changes-0-13-4-auth"
 
 #: Each key meeting-api does not read, with what holds now.
 REMOVED_KEYS = {
-    "VEXA_WS_SCOPE_MODE": "the /ws subscribe hop always takes the transcript read's scopes (tx)",
+    "VEXA_WS_SCOPE_MODE": ("the /ws subscribe hop takes the transcript read's scopes (bot or "
+                           "tx); meeting ownership, workspace and share decide each meeting"),
     "VEXA_WEBHOOK_STORED_URL_POLICY": "every webhook delivery is held to the outbound-url.v1 guard",
     "VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S": "a transcript entry is stored only when it is signed",
 }

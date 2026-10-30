@@ -1,10 +1,11 @@
 ---
 title: "What changed in 0.13.4: auth"
-description: "One way to send an API key, and no compatibility switches. What a refused call is told, and what to send instead."
+description: "How to send an API key, what is deprecated until 0.13.6, and no compatibility switches. What a refused call is told, and what to send instead."
 ---
 
-From 0.13.4 there is one way to authenticate and one behaviour per concern. A call in an older form is
-refused with an answer that says what to do, never silently.
+From 0.13.4 there is one recommended way to authenticate and one behaviour per concern. A call in an
+older form is either refused with an answer that says what to do, or, where clients already deployed
+depend on it, still served until 0.13.6 and logged so its users can be found.
 
 ## A refused call says what to do
 
@@ -22,12 +23,13 @@ Every refusal below carries the same fields, so a client (or an agent) reading i
 
 ## The websocket key goes in a header or the subprotocol list
 
-`/ws` and the bot-account live view (`/bot-accounts/sessions/{id}/vnc`) no longer read a key from the
-URL. A key in the URL ends up in proxy and access logs.
+A key in the URL ends up in proxy and access logs. Send it in the `X-API-Key` header instead; it works
+on 0.12 and on 0.13.
 
-| Before | Now |
+| Socket | `?api_key=<API_KEY>` in the URL |
 |---|---|
-| `wss://<host>/ws?api_key=<API_KEY>` | `api_key_query_removed` frame, then close `4401`, even when a header or subprotocol key is also sent |
+| `/ws` | **Deprecated, still accepted until 0.13.6**, so clients built on 0.12 keep their live transcript. Each use is logged (`ws_query_key_deprecated`, without the key). A header or subprotocol key, when also sent, is used first. Removed in 0.13.6. |
+| the bot-account live view (`/bot-accounts/sessions/{id}/vnc`) | `api_key_query_removed` frame, then close `4401` |
 
 Send the key one of two ways:
 
@@ -59,8 +61,8 @@ still sets `compat.*`.
 
 | Setting (Helm value) | What holds now |
 |---|---|
-| `VEXA_WS_SCOPE_MODE` (`compat.wsScopeMode`) | `/ws` always takes the REST routes' key scopes |
+| `VEXA_WS_SCOPE_MODE` (`compat.wsScopeMode`) | `/ws` takes any key holding `bot` or `tx`, as REST does; meeting ownership, workspace and share decide what it streams |
 | `VEXA_WEBHOOK_STORED_URL_POLICY` (`compat.webhookStoredUrlPolicy`) | every webhook delivery is held to the outbound-url.v1 guard: a URL that resolves into 100.64/10 or the documentation and benchmarking ranges is recorded `blocked`; save it again with a public address |
-| `VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S` (`compat.legacyUnsignedWindowSeconds`) | a transcript entry is stored only when it is signed, so a 0.12 bot still in a call after an upgrade keeps its live frames but stores nothing more; upgrade from 0.12 with no meeting in flight ([Upgrading from 0.12](/upgrade-from-0-12#upgrade-every-component-together)) |
+| `VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S` (`compat.legacyUnsignedWindowSeconds`) | a transcript entry is stored only when it is signed; upgrade from 0.12 with no meeting in flight ([Upgrade from 0.12](/upgrade-from-0-12)) |
 
 Remove them from `.env`, `docker run -e` and your Helm values.

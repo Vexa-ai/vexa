@@ -502,7 +502,8 @@ content, so the terminal treats them as untrusted input in the reader's own sign
 - **Browser sign-ins end.** A session, and the older sign-in key, ends with its 30-day cookie. No key is
   traded up to a session: a browser that still holds one signs in again.
 - **Keys stay out of URLs.** A browser connects to `/ws` with the key in the WebSocket subprotocol
-  list. A key in the URL (`?api_key=`) is refused with `api_key_query_removed` and close `4401`.
+  list. A key in the URL (`?api_key=`) is deprecated: `/ws` still accepts it until 0.13.6 for clients
+  built on 0.12, logs each use without the key, and redacts it from the access log.
 - **Data-driven navigation stays on this origin.** A link from a notification, a reference or a sign-in
   arrival is followed only when it is a path on the terminal itself.
 
