@@ -182,3 +182,41 @@ def find_meeting_link(text: str) -> Optional[tuple[str, str, str]]:
         if parsed:
             return (parsed[0], parsed[1], url)
     return None
+
+
+# Zoom's HOST START link: ``https://<host>/s/<id>?zak=<host token>`` (#1845). Calendars write it
+# into the organiser's own copy of an event. ``zak`` is the host's Zoom access token — a
+# credential — and the bot join brick accepts only ``/j/<id>`` on a zoom.us host.
+_ZOOM_START_PATH = re.compile(r"^/s/(\d{9,11})/?$")
+
+
+def is_zoom_start_link(url: str) -> bool:
+    """True when ``url`` is a Zoom start link: a host containing "zoom" (the same rule
+    ``parse_meeting_url`` uses) and the path ``/s/<9-11 digits>``."""
+    try:
+        parsed = urlparse((url or "").strip())
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    return "zoom" in host and bool(_ZOOM_START_PATH.match(parsed.path))
+
+
+def canonical_zoom_url(url: str) -> str:
+    """Map a Zoom start link to the equivalent GUEST join link on the same host —
+    ``https://<host>/j/<id>``, keeping only ``pwd`` (``?pwd=<pwd>``); every other query
+    parameter (``zak``, ``tk``, …) is dropped. Any other URL is returned unchanged, byte for byte
+    (``/j/``, ``/wc/``, events.zoom.us, LFX/white-label hosts, every non-Zoom URL)."""
+    if not is_zoom_start_link(url):
+        return url
+    from urllib.parse import parse_qs, urlencode
+
+    parsed = urlparse(url.strip())
+    meeting_id = _ZOOM_START_PATH.match(parsed.path).group(1)  # type: ignore[union-attr]
+    host = parsed.hostname or ""
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    canonical = f"https://{host}/j/{meeting_id}"
+    pwd = parse_qs(parsed.query).get("pwd")
+    if pwd and pwd[0]:
+        canonical += "?" + urlencode({"pwd": pwd[0]})
+    return canonical

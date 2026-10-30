@@ -29,6 +29,7 @@ import uuid
 from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+from ..collector.meeting_link import canonical_zoom_url
 from ..config_preflight import CONFIG_FAULT_KINDS, cached_probe_verdict
 from ..obs import log_event
 from ..service_authority import (
@@ -448,6 +449,12 @@ async def request_bot(
     constructed_url = meeting_url or construct_meeting_url(
         platform, native_meeting_id, teams_base_host=teams_base_host
     )
+    # A Zoom HOST start link (`/s/<id>?zak=<host token>`, #1845) is stored and handed to the bot
+    # as the equivalent guest join link (`/j/<id>[?pwd=]`): the brick joins only `/j/`, and the
+    # host's zak must never reach `data.constructed_meeting_url` or the bot. Identity on every
+    # other shape. POST /bots and auto-join both pass through here.
+    if platform == "zoom" and constructed_url:
+        constructed_url = canonical_zoom_url(constructed_url)
     # The address the BOT gets, which is not the address we STORE: the passcode rides on the join
     # URL (Teams' own `?p=`) and stays off `data.constructed_meeting_url`, which every
     # MeetingResponse reads back. Both derive from the same constructed URL, so they address the
