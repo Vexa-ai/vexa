@@ -140,7 +140,7 @@ Runs vitest against `tests/` — covers `parseMeetingInput`, `parseUTCTimestamp`
 - Login or admin routes fail: verify `VEXA_ADMIN_API_KEY` is valid.
 - Dashboard loads but data is empty: verify `VEXA_API_URL` is reachable from the container/runtime.
 - OAuth callbacks fail: verify `NEXTAUTH_URL` and provider redirect URIs match exactly.
-- Transcript page shows no data: verify the dashboard's `VEXA_API_KEY` (or user's token) has `tx` scope. Tokens with only `bot` scope can create bots but can't read transcripts (403 on `/transcripts` endpoints).
+- Transcript page shows no data: verify the dashboard's `VEXA_API_KEY` (or user's token) is a `bot` or `tx` key, and that the meeting belongs to (or is shared with) that key's user. A `browser`-only key gets 403 on `/transcripts` endpoints.
 - Browser session creation fails: verify the token has `browser` scope and concurrent bot limit is not exceeded (error: "Concurrent bot limit reached (N/5)").
 - POST /bots returns 422 `[object Object]`: the gateway requires `platform` + `native_meeting_id` fields. The dashboard client-side parses meeting URLs to extract these. If the URL parse fails, the raw URL is sent and the gateway rejects it.
 
