@@ -56,7 +56,7 @@ same key, the same gateway — and you get Vexa's meeting tools and prompts with
 ```
 
 The key lives in `VEXA_API_KEY`. **Scopes decide which tools work**: a `bot`-only key dispatches
-bots and reads recordings but gets `403 Insufficient scope` on transcripts and meetings. The
+bots, reads recordings and transcripts and deletes meetings, but gets `403 Insufficient scope` on meeting records (`/meetings` lists). The
 key's prefix is a hint, not the truth — call `GET /auth/me` for the scopes you actually hold.
 Full page: https://docs.vexa.ai/vexa-mcp
 

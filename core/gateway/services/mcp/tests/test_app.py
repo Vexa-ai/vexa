@@ -295,7 +295,7 @@ def test_parse_meeting_link_no_gateway_hop(client, gateway, auth):
 # --- error mapping: the gateway's status/detail is surfaced, not swallowed ----
 
 def test_downstream_error_propagates(client, gateway: FakeGateway, auth):
-    gateway.routes[("GET", "/meetings")] = (403, {"detail": "Insufficient scope for this endpoint"})
+    gateway.routes[("GET", "/meetings")] = (403, {"detail": "Insufficient scope: this endpoint requires one of [tx]; your key has [bot]."})
     r = client.get("/meetings", headers=auth)
     assert r.status_code == 403
     assert "Insufficient scope" in str(r.json()["detail"])

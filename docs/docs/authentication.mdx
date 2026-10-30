@@ -73,8 +73,8 @@ is refused with `422` — never silently dropped.
 
 | Scope | Grants |
 |---|---|
-| `bot` | bot lifecycle — `POST`/`GET`/`DELETE /bots`, `/bots/status`, bot config — and the calendar connections (`/user/calendar`, `/user/calendars/*`), because an auto-join feed spawns bots |
-| `tx` | the transcript and meeting-record plane — `/meetings*`, `/transcripts/*` |
+| `bot` | bot lifecycle — `POST`/`GET`/`DELETE /bots`, `/bots/status`, bot config — reading a bot's transcripts (`/transcripts/*`), deleting meetings (`DELETE /meetings*`), and the calendar connections (`/user/calendar`, `/user/calendars/*`), because an auto-join feed spawns bots |
+| `tx` | the read/record plane — `/meetings*`, `/transcripts/*`; a `tx`-only key reads but cannot delete meetings |
 | `browser` | browser-tool capabilities. **Reaches no API route today** — a browser-only key can call [`/auth/me`](/api/settings#identity) and nothing else |
 
 `/recordings*`, `/user/webhook*`, `/user/models`, `/user/transcription`, `/agent/*` and `/mcp` accept
@@ -262,6 +262,6 @@ Deny tests:
 |---|---|---|
 | `401` | `Missing API key` | no `X-API-Key` header |
 | `401` | `Invalid API key` | unknown or revoked key |
-| `403` | `Insufficient scope for this endpoint` | key lacks the scope this route needs |
+| `403` | `Insufficient scope: this endpoint requires one of [bot, tx]; your key has [...]. Mint a key with the scope: POST /admin/users/{user_id}/tokens {"scopes":["bot","tx"]}` | key lacks the scope this route needs; the text lists the route's real scopes |
 
 See the full [error reference](/api/errors).

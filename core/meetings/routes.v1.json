@@ -189,7 +189,7 @@
       "method": "DELETE",
       "path": "/meetings/{meeting_id}",
       "scopes": [
-        "tx"
+        "bot"
       ],
       "mcp_reentry": true,
       "shared": "refuse"
@@ -296,7 +296,7 @@
       "method": "DELETE",
       "path": "/meetings/{platform}/{native_meeting_id}",
       "scopes": [
-        "tx"
+        "bot"
       ],
       "shared": "refuse"
     },
@@ -419,6 +419,7 @@
       "method": "GET",
       "path": "/transcripts/by-id/{meeting_id}",
       "scopes": [
+        "bot",
         "tx"
       ],
       "mcp_reentry": true,
@@ -454,6 +455,7 @@
       "method": "GET",
       "path": "/transcripts/{platform}/{native_meeting_id}",
       "scopes": [
+        "bot",
         "tx"
       ],
       "mcp_reentry": true,

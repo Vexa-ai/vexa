@@ -15,7 +15,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from meeting_api import create_app, identity_token, route_scopes
-from meeting_api.route_scopes import INSUFFICIENT_SCOPE, ROUTE_SCOPES, ScopeTableError, scopes_by_route
+from meeting_api.route_scopes import (
+    INSUFFICIENT_SCOPE, ROUTE_SCOPES, ScopeTableError, scope_refusal_detail, scopes_by_route)
 
 KEY = identity_token.generate_signing_key()
 INTERNAL = "route-scopes-internal-secret"
@@ -59,7 +60,10 @@ def _served(app) -> set:
 
 
 def _scope_refused(r) -> bool:
-    return r.status_code == 403 and r.json().get("detail") == INSUFFICIENT_SCOPE
+    if r.status_code != 403:
+        return False
+    d = r.json().get("detail")
+    return d == INSUFFICIENT_SCOPE or (isinstance(d, str) and d.startswith("Insufficient scope: this endpoint requires one of ["))
 
 
 # ── the table is the manifest ────────────────────────────────────────────────────────────────────
@@ -144,7 +148,7 @@ def test_a_signed_identity_on_a_route_no_row_reaches_is_refused(client, method, 
 
 
 @pytest.mark.parametrize("old_setting", [None, "legacy"])
-@pytest.mark.parametrize("scopes", [["browser"], ["bot"], ["bot", "browser"]])
+@pytest.mark.parametrize("scopes", [["browser"], ["browser", "browser"]])
 def test_the_edge_s_subscribe_hop_refuses_a_key_that_may_not_read_transcripts(client, scopes, monkeypatch,
                                                                                old_setting):
     """`/ws` subscribing opens a meeting's live transcript: the hop takes the transcript read's
@@ -186,3 +190,38 @@ def test_the_image_carries_the_manifest_where_this_module_reads_it():
     assert "COPY core/meetings/routes.v1.json" in dockerfile
     assert "./meetings/routes.v1.json" in dockerfile
     assert route_scopes.MANIFEST == Path("meetings") / "routes.v1.json"
+
+
+def test_the_scope_refusal_names_the_missing_scopes_and_the_mint_instruction(client):
+    r = client.get("/transcripts/by-id/1", headers=_signed(["browser"]))
+    assert r.status_code == 403
+    d = r.json()["detail"]
+    assert "requires one of [bot, tx]" in d and "your key has [browser]" in d
+    assert 'POST /admin/users/{user_id}/tokens {"scopes":["bot","tx"]}' in d
+    assert d == scope_refusal_detail({"bot", "tx"}, {"browser"})
+
+
+def test_the_text_is_identical_to_the_gateway_s():
+    gateway_src = (Path(__file__).resolve().parents[5]
+                   / "gateway/services/gateway/src/gateway")
+    import importlib.util, sys
+    sys.path.insert(0, str(gateway_src.parent))
+    try:
+        gw = importlib.import_module("gateway.app")
+    except Exception:  # gateway toolchain not importable from this package's env
+        pytest.skip("gateway package not importable here")
+    finally:
+        sys.path.remove(str(gateway_src.parent))
+    for req, held in [({"bot", "tx"}, {"browser"}), ({"bot"}, set()), (None, {"x"})]:
+        assert gw.scope_refusal_detail(req, held) == scope_refusal_detail(req, held)
+
+
+def test_a_bot_key_may_delete_a_meeting_and_a_tx_key_may_not(client):
+    for path in ("/meetings/1", "/meetings/google_meet/abc-defg-hij"):
+        assert _scope_refused(client.delete(path, headers=_signed(["tx"])))
+        assert not _scope_refused(client.delete(path, headers=_signed(["bot"])))
+
+
+def test_a_bot_key_reads_transcripts(client):
+    for path in ("/transcripts/by-id/1", "/transcripts/google_meet/abc-defg-hij"):
+        assert not _scope_refused(client.get(path, headers=_signed(["bot"])))

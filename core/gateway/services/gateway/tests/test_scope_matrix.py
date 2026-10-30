@@ -325,7 +325,49 @@ def test_scope_matrix(method, url, template, scope):
         assert r.status_code != 403, f"{method} {url} with [{scope}] should pass the scope gate"
     else:
         assert r.status_code == 403, f"{method} {url} with [{scope}] → {r.status_code}, expected 403"
-        assert r.json()["detail"] == "Insufficient scope for this endpoint"
+        assert r.json()["detail"] == app_module.scope_refusal_detail(
+            ROUTE_SCOPES[(method, template)], {scope})
+
+
+DELETE_ROWS = [c for c in CASES if c[0] == "DELETE" and not _agent_row(c[2])]
+
+
+@pytest.mark.parametrize("method,url,template", DELETE_ROWS, ids=[f"{c[0]} {c[1]}" for c in DELETE_ROWS])
+@pytest.mark.parametrize("scopes", [["bot"], ["tx"], ["browser"], []], ids=["bot", "tx", "browser", "none"])
+def test_every_delete_row_crossed_with_every_scope(method, url, template, scopes):
+    allowed = bool(set(scopes) & set(ROUTE_SCOPES[(method, template)]))
+    status = _request(_client(scopes), method, url).status_code
+    assert (status != 403) == allowed, f"{method} {url} with {scopes} → {status}"
+
+
+def test_meeting_delete_is_bot_and_not_tx():
+    for t in ("/meetings/{meeting_id}", "/meetings/{platform}/{native_meeting_id}"):
+        assert set(ROUTE_SCOPES[("DELETE", t)]) == {"bot"}
+    for t in ("/transcripts/by-id/{meeting_id}", "/transcripts/{platform}/{native_meeting_id}"):
+        assert set(ROUTE_SCOPES[("GET", t)]) == {"bot", "tx"}
+
+
+def test_scope_403_over_http_names_scopes_and_mint_instruction():
+    r = _request(_client(["browser"]), "GET", "/transcripts/by-id/1")
+    assert r.status_code == 403
+    d = r.json()["detail"]
+    assert "requires one of [bot, tx]" in d and "your key has [browser]" in d
+    assert 'POST /admin/users/{user_id}/tokens {"scopes":["bot","tx"]}' in d
+
+
+def test_authentication_docs_match_the_manifest():
+    import json, re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[5]
+    doc = (root / "docs/docs/authentication.mdx").read_text()
+    assert "Insufficient scope: this endpoint requires one of [" in doc
+    man = json.loads((root / "core/meetings/routes.v1.json").read_text())
+    rows = {(r["method"], r["path"]): set(r["scopes"]) for r in man["routes"]}
+    bot_row = next(l for l in doc.splitlines() if l.startswith("| `bot` |"))
+    tx_row = next(l for l in doc.splitlines() if l.startswith("| `tx` |"))
+    assert rows[("DELETE", "/meetings/{meeting_id}")] == {"bot"} and "delete meetings" in bot_row
+    assert rows[("GET", "/transcripts/by-id/{meeting_id}")] == {"bot", "tx"} and "transcript" in bot_row
+    assert "cannot delete" in tx_row
 
 
 def test_browser_only_key_reaches_no_route_at_all():

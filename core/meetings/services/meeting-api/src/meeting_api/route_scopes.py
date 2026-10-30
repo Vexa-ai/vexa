@@ -53,7 +53,7 @@ EDGE_HOPS: Dict[RouteKey, RouteKey] = {
     ("GET", "/bot-accounts/sessions/{session_id}/vnc"): ("GET", "/bot-accounts/sessions/{session_id}"),
 }
 
-#: The answer the edge gives a key without the route's scope (`gateway/app.py`), so a client reads
+#: The generic answer (undeclared route) the edge gives; a declared route names its scopes (`gateway/app.py`), so a client reads
 #: one refusal whichever side refused it.
 INSUFFICIENT_SCOPE = "Insufficient scope for this endpoint"
 
@@ -113,8 +113,21 @@ def _matched(request: HTTPConnection) -> Optional[RouteKey]:
     return (method, path) if path else None
 
 
-def _refuse() -> HTTPException:
-    return HTTPException(status_code=403, detail=INSUFFICIENT_SCOPE)
+def scope_refusal_detail(required=None, held=()) -> str:
+    """Copy of ``gateway.app.scope_refusal_detail`` (pinned equal by a test): one text whichever side refuses."""
+    if not required:
+        return INSUFFICIENT_SCOPE
+    req = sorted(required)
+    return (
+        f"Insufficient scope: this endpoint requires one of [{', '.join(req)}]; "
+        f"your key has [{', '.join(sorted(held))}]. "
+        "Mint a key with the scope: POST /admin/users/{user_id}/tokens "
+        '{"scopes":[' + ",".join(f'"{x}"' for x in req) + "]}"
+    )
+
+
+def _refuse(required=None, held=()) -> HTTPException:
+    return HTTPException(status_code=403, detail=scope_refusal_detail(required, held))
 
 
 def scope_gate(request: HTTPConnection) -> None:
@@ -130,7 +143,7 @@ def scope_gate(request: HTTPConnection) -> None:
         raise _refuse()
     held = {s.strip() for s in (request.headers.get("x-user-scopes") or "").split(",") if s.strip()}
     if not held & required:
-        raise _refuse()
+        raise _refuse(required, held)
 
 
 #: The dependency `create_app` installs on the whole app.
