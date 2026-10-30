@@ -165,21 +165,74 @@ server {
 }
 ```
 
-If you publish the **gateway** (`:18056`) through a reverse proxy, set `GUARD_TRUSTED_PROXIES` to the
-proxy's IP and have the proxy forward the real client IP. The edge guard is **on by default**, so this
-applies unless you have explicitly opted out:
+The terminal carries its own Google/Microsoft OAuth login, so the proxy needs no auth of its own.
+
+### Publishing the API (gateway) at its own domain
+
+To serve the API at `https://api.<your-domain>`, proxy that hostname to the gateway port
+(`API_GATEWAY_HOST_PORT`, default `18056`). **The gateway has no base-URL setting, and doesn't need
+one:** it serves every route at the root (`/health`, `/meetings`, `/ws`, …), builds no absolute URLs
+and issues no redirects, so a proxy from `https://api.<your-domain>/` to `http://127.0.0.1:18056/`
+works as-is. Hosted Vexa runs this exact shape at `https://api.cloud.vexa.ai`. Clients and SDKs take
+the base URL as their own argument — point them at `https://api.<your-domain>`.
 
 ```nginx
-proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+server {
+    listen 443 ssl;
+    server_name api.your-domain.com;
+    ssl_certificate     /etc/letsencrypt/live/api.your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.your-domain.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:18056;       # API_GATEWAY_HOST_PORT
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;                      # MCP streams over SSE
+        proxy_read_timeout 3600;
+    }
+
+    location /ws {
+        proxy_pass http://127.0.0.1:18056;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 86400;                 # long-lived transcript socket
+        access_log off;                           # keeps ?api_key= out of proxy logs
+    }
+}
 ```
 
-Without it, every request keys to the proxy IP — one global rate-limit/ban bucket shared by all
-clients, so one abuser throttles everyone. The gateway honors the `X-Forwarded-For` chain only from an
-IP named in `GUARD_TRUSTED_PROXIES` (it reads the rightmost entry); a spoofed header from any other
-source is ignored, so it cannot rotate an abuser's budget. See
-[Configuration → Gateway edge protection](/configuration#gateway-edge-protection).
+**Set `GUARD_TRUSTED_PROXIES`.** The edge guard is **on by default**. Without this setting every
+request keys to the proxy IP — one global rate-limit/ban bucket shared by all clients, so one abuser
+throttles everyone. The gateway honors the `X-Forwarded-For` chain only from an IP named in
+`GUARD_TRUSTED_PROXIES` (it reads the rightmost entry); a spoofed header from any other source is
+ignored, so it cannot rotate an abuser's budget. The value is a comma-separated list; each entry may
+be an IP or a CIDR.
 
-The terminal carries its own Google/Microsoft OAuth login, so the proxy needs no auth of its own.
+<Note>
+When nginx runs on the host and the gateway runs in Docker, the gateway sees the **Docker bridge
+gateway IP** (e.g. `172.18.0.1`), not `127.0.0.1`. Find it with
+`docker network inspect <project>_default --format '{{(index .IPAM.Config 0).Gateway}}'`, or trust the
+bridge subnet as a CIDR: `GUARD_TRUSTED_PROXIES=172.16.0.0/12`.
+</Note>
+
+Behind a TLS terminator, also set `GUARD_TRUST_X_FORWARDED_PROTO=true` so scheme checks use the
+proxy's `X-Forwarded-Proto`. See [Configuration → Gateway edge protection](/configuration#gateway-edge-protection).
+
+Set these for a public domain (in `deploy/compose/.env`):
+
+| Variable | Example | Why |
+|---|---|---|
+| `NEXTAUTH_URL` | `https://your-host.example.com` | Terminal's public origin (cookies, OAuth callbacks). |
+| `DASHBOARD_PUBLIC_API_URL` | `https://api.your-domain.com` | API URL the opt-in dashboard shows in code samples and calls from the browser (default `http://localhost:18056`). |
+| `DASHBOARD_PUBLIC_WS_URL` | `wss://api.your-domain.com/ws` | Dashboard's live socket (default `ws://localhost:18056/ws`). |
+| `GUARD_TRUSTED_PROXIES` | `172.18.0.1` or `172.16.0.0/12` | Real client IPs for rate limits and bans. |
+| `GUARD_TRUST_X_FORWARDED_PROTO` | `true` | Scheme checks behind the TLS proxy. |
 
 ## No egress
 
