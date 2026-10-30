@@ -47,6 +47,10 @@ def _server(state):
 
 @pytest.fixture()
 def stub(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", "admin-key-for-tests-0123456789abcdef")
+    monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", "/run/vexa-identity/public/key.pem")
+    monkeypatch.setenv("RUNTIME_API_TOKEN", "runtime-caller-token-for-tests-0123456789abcdef")
+    monkeypatch.setenv("DB_PASSWORD", "db-password-for-tests-0123456789abcdef")
     state = {"status": 200, "requests": []}
     env_state = {"status": 200, "requests": []}
     srv, env_srv = _server(state), _server(env_state)
