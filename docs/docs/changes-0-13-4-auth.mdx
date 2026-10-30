@@ -45,10 +45,11 @@ See [Stream a transcript](/how-to/stream-transcript).
 
 ## `/ws` takes the same scopes as REST
 
-A socket that can read no meeting status is closed with `4403`; a transcript subscription takes the
-`tx` scope, as `GET /transcripts/{platform}/{native_meeting_id}` does. A `bot`-only key gets
-`insufficient_scope`, with `changed_in`, `do_instead` and `docs`. Use a key that holds `tx`; `GET /auth/me`
-lists the scopes yours holds. See [Authentication → Scopes](/authentication#scopes).
+A socket opens for any key that holds `bot` or `tx`, the same keys every REST route takes. Which
+meetings it may subscribe to is decided by ownership: the meetings the key's user owns, or can see
+through a workspace. A `browser`-only key gets `insufficient_scope`, with `changed_in`, `do_instead`
+and `docs`, and the socket is closed with `4403`. `GET /auth/me` lists the scopes your key holds. See
+[Authentication → Scopes](/authentication#scopes).
 
 ## The compatibility switches are gone
 

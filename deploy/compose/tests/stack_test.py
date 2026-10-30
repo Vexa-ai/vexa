@@ -171,10 +171,14 @@ def test_02_auth_surface(stack):
     code, body = http("GET", f"{stack.gateway}/meetings", headers={"x-api-key": "vxa_tx_not-a-real-token"})
     assert code == 401, f"invalid key → {code} {body}"
 
-    # REJECT out-of-scope → 403: a bot-only token on /meetings (which requires the tx scope).
+    # One key does everything its owner may do (#1922): a bot-only token (the quickstart default)
+    # reads /meetings; only a browser-only token, which holds neither bot nor tx, is refused.
     bot_only = _mint_token(stack, user_id, "bot")
     code, body = http("GET", f"{stack.gateway}/meetings", headers={"x-api-key": bot_only})
-    assert code == 403, f"out-of-scope bot token on /meetings → {code} {body}"
+    assert code == 200, f"bot-only token on /meetings → {code} {body}"
+    browser_only = _mint_token(stack, user_id, "browser")
+    code, body = http("GET", f"{stack.gateway}/meetings", headers={"x-api-key": browser_only})
+    assert code == 403, f"out-of-scope browser token on /meetings → {code} {body}"
     print(f"\n[2/auth] mint→accept(200)·missing(401)·invalid(401)·out-of-scope(403); proxy reached meeting-api")
 
 

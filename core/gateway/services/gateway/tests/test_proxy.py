@@ -92,11 +92,18 @@ def test_auth_unavailable_names_vexa_as_the_source_in_a_typed_body():
 
 
 def test_insufficient_scope_is_403():
-    """A tx-only token on a /bots route → 403 (ROUTE_SCOPES carve)."""
-    client, _ = _client(authorizer=FakeAuthorizer(user={"user_id": 7, "scopes": ["tx"], "max_concurrent": 1}))
+    """A browser-only token on a /bots route → 403: it holds neither bot nor tx (#1922)."""
+    client, _ = _client(authorizer=FakeAuthorizer(user={"user_id": 7, "scopes": ["browser"], "max_concurrent": 1}))
     r = client.get("/bots/status", headers=AUTH)
     assert r.status_code == 403
     assert "scope" in r.json()["detail"].lower()
+
+
+def test_a_tx_only_key_reaches_bot_routes():
+    """`bot` and `tx` grant the same routes (#1922): a tx-only key is not scope-refused on /bots."""
+    client, _ = _client(authorizer=FakeAuthorizer(user={"user_id": 7, "scopes": ["tx"], "max_concurrent": 1}))
+    r = client.get("/bots/status", headers=AUTH)
+    assert r.status_code != 403, r.text
 
 
 def test_authed_request_passes_body_and_status_verbatim():

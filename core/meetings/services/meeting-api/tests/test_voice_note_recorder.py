@@ -74,5 +74,5 @@ def test_the_tool_is_declared_and_described_for_an_agent():
 def test_the_gateway_fronts_the_route_for_the_mcp():
     routes = json.loads((MEETINGS / "routes.v1.json").read_text())["routes"]
     row = next(r for r in routes if r["method"] == "POST" and r["path"] == "/voice-notes/recorder")
-    assert row["scopes"] == ["bot"]
+    assert row["scopes"] == ["bot", "tx"]
     assert row.get("mcp_reentry") is True
