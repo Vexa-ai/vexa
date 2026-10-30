@@ -1,0 +1,8 @@
+{
+  "labels": [],
+  "focus": "Wake when a speaker addresses the assistant (by name, or by a likely mis-hearing of it) WITH a request, question or instruction for it, not a bare mention or a remark like \"the assistant is listening\". Also wake when a speaker gives a short imperative to the assistant even without its name (\"read the transcript\", \"take it from there\"), when someone says that was a question and expects an answer, and on decisions, prices, deadlines and commitments. Do not wake for musings, thinking aloud, complaints, filler, or talk ABOUT the assistant.",
+  "known": "",
+  "wake_at": 1.0,
+  "max_wait_s": 3600,
+  "rules": []
+}
