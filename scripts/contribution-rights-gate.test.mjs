@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { editedOnlyByAuthor, evaluatePullRequest, mergedDeclaration, registeredStanding, run } from "./contribution-rights-gate.mjs";
+import { editedOnlyByAuthor, evaluatePullRequest, maintainerStanding, mergedDeclaration, registeredStanding, run } from "./contribution-rights-gate.mjs";
 
 const sha = "a".repeat(40);
 const oldSha = "b".repeat(40);
@@ -394,17 +394,75 @@ test("grandfathering is unchanged", () => {
   assert.equal(evaluatePullRequest(authored("known-dev", { number: 100 }), [], registry, {}).ok, true);
 });
 
-test("the shipped registry holds only the maintainer's standing and corporate authorizations", () => {
+test("the shipped registry: maintainers exempt, independents backfilled from a named merged PR", () => {
   const shipped = JSON.parse(readFileSync(new URL("../.github/contribution-rights.json", import.meta.url), "utf8"));
   const maintainers = shipped.verifiers.map((login) => login.toLowerCase());
   for (const [login, entry] of Object.entries(shipped.contributors)) {
     assert.ok(registeredStanding(login, shipped), `invalid registry entry for ${login}`);
     assert.match(entry.declared, /^\d{4}-\d{2}-\d{2}$/, `declared date for ${login}`);
     assert.ok(entry.source, `source for ${login}`);
-    assert.ok(entry.path === "corporate" || maintainers.includes(login.toLowerCase()),
-      `${login}: independent contributors are found from their merged PRs, never added by hand`);
+    assert.ok(entry.path === "corporate" || maintainers.includes(login.toLowerCase()) || /^PR #\d+$/.test(entry.source),
+      `${login}: an independent entry names the merged PR that carried the author's own declaration`);
   }
   assert.equal(registeredStanding("dmitriyg228", shipped).path, "independent");
+  assert.equal(maintainerStanding("dmitriyg228", null, shipped).path, "maintainer");
+});
+
+// --- Declared once per contributor; maintainers never (founder ruling 2026-10-21) ---
+
+test("an exempt owner, member or collaborator passes with no box ticked", () => {
+  for (const association of ["OWNER", "MEMBER", "COLLABORATOR"]) {
+    const verdict = evaluatePullRequest(authored("org-dev", { author_association: association }), [], config, noCoAuthors);
+    assert.equal(verdict.ok, true, association);
+    assert.match(verdict.title, /Maintainer: no declaration needed/);
+  }
+  for (const association of ["CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "NONE", undefined]) {
+    assert.equal(evaluatePullRequest(authored("org-dev", { author_association: association }), [], config, { authorStanding: null, coAuthors: [] }).ok, false, String(association));
+  }
+});
+
+test("a login in the maintainers list is exempt whatever its association", () => {
+  const listed = { ...config, maintainers: ["Lead-Dev"] };
+  assert.equal(evaluatePullRequest(authored("lead-dev", { author_association: "NONE" }), [], listed, noCoAuthors).ok, true);
+});
+
+test("an exempt author who ticks Unsure or Employer still goes to review", () => {
+  assert.equal(evaluatePullRequest(authored("org-dev", { author_association: "MEMBER", body: body("uncertain") }), [], config, noCoAuthors).ok, false);
+  assert.equal(evaluatePullRequest(authored("org-dev", { author_association: "MEMBER", body: body("corporate") }), [], config, noCoAuthors).ok, false);
+});
+
+test("an exempt author's PR still needs a declaration for an undeclared co-author's commits", () => {
+  const verdict = evaluatePullRequest(authored("org-dev", { author_association: "MEMBER" }), [], config, { coAuthors: [{ login: "drive-by", standing: null }] });
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.summary, /@drive-by/);
+});
+
+test("a first-time contributor's tick passes and proposes the registry entry", () => {
+  const verdict = evaluatePullRequest(authored("new-dev", { author_association: "FIRST_TIME_CONTRIBUTOR", body: body("independent") }), [], config, {});
+  assert.equal(verdict.ok, true);
+  assert.match(verdict.summary, /@new-dev is not asked again/);
+  assert.match(verdict.summary, /"new-dev": \{"path":"independent","declared":"\d{4}-\d{2}-\d{2}","source":"PR #101"\}/);
+});
+
+test("a first-time contributor without a tick fails", () => {
+  const verdict = evaluatePullRequest(authored("new-dev", { author_association: "FIRST_TIME_CONTRIBUTOR" }), [], config, { authorStanding: null, coAuthors: [] });
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.summary, /needed once per contributor/);
+});
+
+test("run: a member's PR passes with no box and never searches for an earlier declaration", async () => {
+  const mock = mockGitHub([
+    [/\/issues\/101\/comments/, []],
+    [/\/pulls\/101\/commits/, [{ author: { login: "org-dev" } }]],
+  ]);
+  try {
+    const event = { repository: { full_name: "Vexa-ai/vexa" }, pull_request: authored("org-dev", { author_association: "MEMBER" }) };
+    assert.equal(await run({ event, config, token: "t", apiBase: "https://example.test" }), true);
+    assert.match(mock.published().output.summary, /repository member, so no rights declaration is needed/);
+    assert.ok(!mock.calls.some((c) => c.url.includes("/search/")));
+  } finally {
+    mock.restore();
+  }
 });
 
 function mockGitHub(routes) {

@@ -16,6 +16,7 @@ yourself on a merged pull request in this repository, later pull requests need n
 gate finds that pull request automatically. Corporate standing comes only from an authorization on
 file (see *Administration*). If a later contribution falls under a different path, for example work
 an employer now owns, select that path on that pull request; it decides that pull request.
+Maintainers (repository owners, organization members and collaborators) never select a path.
 
 ### Independent
 
@@ -65,7 +66,9 @@ whether the independent or corporate path applies, without asking you to draft l
 
 ## What the automated gate proves
 
-The `contribution-rights` check passes without a selection when the author has an earlier merged
+The `contribution-rights` check passes without a selection when the author is a maintainer: their
+GitHub `author_association` is OWNER, MEMBER or COLLABORATOR, or their login is in the `maintainers`
+list of `.github/contribution-rights.json`. It also passes when the author has an earlier merged
 pull request whose independent box they ticked themselves: every edit to that body must be the
 author's, so a box a maintainer ticked does not count. It also passes for an author in the registry
 described under *Administration*. A corporate receipt on an earlier pull request never carries
@@ -192,11 +195,12 @@ Head: <40-character commit SHA>
 contribution at the named head. Only `verifiers` listed in `.github/contribution-rights.json` are
 accepted, and all decisions are re-evaluated in the merge queue.
 
-Independent contributors are never added by hand: their standing comes from their own earlier
-merged declaration. The `contributors` map in `.github/contribution-rights.json`, keyed by GitHub
-login, exists only for the maintainer's standing declaration and for corporate authorizations that
-cover a contributor's future contributions, which are rare and verified against the private
-register first:
+An independent contributor's standing comes from their own earlier merged declaration. The
+`contributors` map in `.github/contribution-rights.json`, keyed by GitHub login, records those
+declarations (`"source": "PR #N"`), written only by `scripts/contribution-rights-backfill.mjs`, which
+applies the same test as the gate (read-only; `--write` updates the file for a maintainer to
+commit). It also holds corporate authorizations that cover a contributor's future contributions,
+which are rare and verified against the private register first:
 
 ```json
 "octocat": {

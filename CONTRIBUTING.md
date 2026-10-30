@@ -14,8 +14,8 @@ one-call roadmap fetch, claiming, and the session rules. Security reports: [`SEC
 
 ## Rights and DCO — one choice, then automatic
 
-Every new pull request selects exactly one rights path: independent, employer/client-controlled,
-or unsure. Independent contributors sign each commit under DCO 1.1 and do **not** sign an
+Your first pull request selects exactly one rights path: independent, employer/client-controlled,
+or unsure. Later pull requests ask nothing, and maintainers and org members never tick it. Independent contributors sign each commit under DCO 1.1 and do **not** sign an
 individual CLA. Corporate or uncertain contributions enter private rights review while technical
 review continues; only merge waits. Read [`CONTRIBUTOR_RIGHTS.md`](CONTRIBUTOR_RIGHTS.md) for the
 exact choices, `git commit --signoff` workflow, safe remediation commands, and corporate process.
