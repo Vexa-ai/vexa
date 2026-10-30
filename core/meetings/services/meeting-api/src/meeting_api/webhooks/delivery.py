@@ -32,6 +32,11 @@ WEBHOOK_API_VERSION = "2026-03-01"
 _DEFAULT_ENABLED = frozenset({"meeting.completed"})
 
 # Internal meeting.data keys stripped before delivery (parent's _INTERNAL_DATA_KEYS).
+#
+# These are the keys the DELIVERY path drops on top of the response-edge omissions
+# (``collector.projection.RESPONSE_OMIT_KEYS`` + the credential-shaped-name rule) that
+# ``clean_meeting_data`` also applies — see its docstring for why the outbound body is held to at
+# least the strictness of an API response to a non-owner.
 _INTERNAL_DATA_KEYS = frozenset({
     "webhook_delivery", "webhook_deliveries", "webhook_secret", "webhook_secrets",
     "webhook_events", "webhook_url", "outbound_events",
@@ -64,10 +69,48 @@ def build_envelope(event_type: str, data: Dict[str, Any], event_id: Optional[str
 
 
 def clean_meeting_data(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Strip internal keys from meeting.data before it ships in a payload."""
+    """Strip internal keys from ``meeting.data`` before it ships in a delivered payload.
+
+    The outbound body is held to AT LEAST the strictness of an API response served to someone who
+    is not the owner. ``meeting.data`` is an open multi-producer blob, and a webhook body leaves our
+    trust boundary entirely — it is POSTed to an operator-configured system endpoint or to an
+    arbitrary URL the user put in their settings, where it lands in someone else's logs. Anything
+    the response edge withholds from a second party has no business crossing that boundary either.
+
+    So the drop set is the union of three rules:
+
+    * :data:`_INTERNAL_DATA_KEYS` — delivery-specific noise (container ids, the webhook config and
+      its own delivery bookkeeping, the internal rating input);
+    * ``collector.projection.RESPONSE_OMIT_KEYS`` — everything a non-owner API response omits. That
+      adds the three classes #1244 found riding the same blob and this path did not drop:
+      ``share_grants`` (per-link ``secret_hash`` + allow-list — the credential half of the share
+      machinery), ``transcript_viewers`` (the reader roster: OTHER PEOPLE's identities, which the
+      owner's endpoint operator has no claim to), and ``auth_userdata_path`` (the S3 pointer to a
+      live authenticated browser session's cookies);
+    * ``collector.projection.is_sensitive_key`` — the credential-SHAPED name rule (``*_secret``,
+      ``*_token``, ``*_api_key``, …), so a key a future producer stamps into ``data`` is withheld by
+      DEFAULT rather than shipped to every subscriber until someone notices. That default is the
+      whole point: ``webhook_secret`` reached a second party for months precisely because a new key
+      arriving in a shared blob is nobody's review item.
+
+    The import is deferred to call time: ``collector`` is the read side and ``webhooks`` the write
+    side of the same service, and a module-level edge between them would couple their import order
+    for a constant that is only needed once a delivery is actually being built.
+
+    Pure and non-mutating. It shapes the PAYLOAD only — the stored row keeps every key, so the
+    signing secret the delivery path itself reads, the grants the redeem path matches, and the
+    session material the spawn path resolves are all untouched.
+    """
     if not data:
         return {}
-    return {k: v for k, v in data.items() if k not in _INTERNAL_DATA_KEYS}
+    from ..collector.projection import RESPONSE_OMIT_KEYS, is_sensitive_key
+
+    return {
+        k: v for k, v in data.items()
+        if k not in _INTERNAL_DATA_KEYS
+        and k not in RESPONSE_OMIT_KEYS
+        and not is_sensitive_key(k)
+    }
 
 
 def sign_payload(payload_bytes: bytes, secret: str, timestamp: str) -> str:
