@@ -2,6 +2,7 @@
 flowchart TB
   subgraph runtime_wl["runtime workloads"]
     bot["bot"]
+    discord_bot["discord-bot"]
     agent_worker["agent-worker"]
   end
   meeting_api -->|"meeting-api drives the kernel with Authorization: Bearer RUNTIME_API_TOKEN (runtime.v1 CallerCredential): POST /workloads to spawn a bot, GET /workloads/{id} to read it and DELETE /workloads/{id} to tear it down; its RuntimeEvents come back signed on rt-ma"| runtime_wl

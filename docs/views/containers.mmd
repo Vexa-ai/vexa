@@ -46,6 +46,7 @@ flowchart LR
   subgraph signals["signals"]
     signals_service["signals"]
   end
+  discord_bot["discord-bot"]
   slim["slim"]
   extension["extension"]
   claude_plugin["claude-plugin"]
@@ -58,6 +59,8 @@ flowchart LR
   meeting_api -->|"write"| segments_table
   bot -->|"HTTP"| meeting_api
   bot -->|"HTTPS"| transcription
+  discord_bot -->|"HTTPS"| transcription
+  discord_bot -->|"HTTP"| meeting_api
   meeting_api -->|"JDBC"| postgres
   meeting_api -->|"HTTPS"| object_store
   meeting_api -->|"HTTP"| livekit

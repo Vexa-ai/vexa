@@ -172,6 +172,11 @@ edges:
   gateway -read-> recording-blob
   bot -call-> transcription  # audio -> first-party STT via TRANSCRIPTION_SERVICE_URL
   bot -read-> bot-commands  # SUBSCRIBE acts.v1 commands
+  discord-bot -write-> segments-stream
+  discord-bot -write-> tc-mutable
+  discord-bot -call-> transcription  # audio -> first-party STT via transcriptionServiceUrl (invocation.v1)
+  discord-bot -read-> bot-commands  # SUBSCRIBE acts.v1 commands
+  discord-bot -req-> meeting-api  # the discord bot's calls back: every lifecycle.v1 event to POST /bots/internal/callback/lifecycle with Authorization: Bearer <MeetingToken> (invocation.v1 token), bound to the bot's own session, as on bot-ma; it uploads no recording
   meeting-api -write-> bm-status  # PUBLISH status
   meeting-api -write-> u-meetings  # PUBLISH per-user status
   meeting-api -write-> bot-commands  # PUBLISH leave/reconfigure/chat_send
@@ -290,7 +295,7 @@ edges:
   model-proxy -call-> model-provider  # an agent turn's model request, forwarded by the model proxy with the turn route's credential: the prompt with its meeting grounding (transcript excerpts) and the workspace context the turn reads
   agent-api -call-> model-provider  # the one model call a home composition may make (core/agent/control_plane/home_model.py): the cheapest catalog model orders the cards it is handed, at most once per composition
   meeting-api -call-> customer-webhook  # signed webhook.v1 delivery of meeting lifecycle, recording and transcription-ready events to the customer's registered URL
-  bot, agent-worker deployed-in runtime
+  bot, discord-bot, agent-worker deployed-in runtime
   gateway, meeting-api, agent-api, model-proxy, admin-api, runtime, redis, postgres, object-store, transcription deployed-in deploy
   flows-api, flows-worker deployed-in deploy
 
