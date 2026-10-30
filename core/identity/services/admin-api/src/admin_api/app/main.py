@@ -1202,8 +1202,31 @@ def create_app() -> FastAPI:
                 transcription_language_mod.apply(stored, language_fields)
             except transcription_language_mod.Refused as refused:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(refused))
+        probe_note = None
+        if "url" in fields or "token" in fields:
+            # Judge the MERGED endpoint before anything is stored. A config fault (bad/missing token,
+            # unfunded, wrong path) is refused with nothing stored; `unreachable` is liveness, not
+            # config, so it saves (same rule as the env gate) and is reported additively.
+            merged = apply_config_update(
+                (user.data if isinstance(user.data, dict) else {}).get("transcription_prefs") or {},
+                validate_config_fields(dict(fields)))
+            if merged.get("url"):
+                import asyncio  # noqa: PLC0415
+                from . import transcription_probe as probe_mod  # noqa: PLC0415
+                verdict = await asyncio.to_thread(probe_mod.probe_endpoint, merged["url"], merged.get("token") or "")
+                if not verdict["ok"] and probe_mod.is_config_fault(verdict["kind"]):
+                    logger.info("transcription endpoint rejected user=%s kind=%s status=%s",
+                                user.id, verdict["kind"], verdict.get("status"))
+                    raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={
+                        "error": "transcription_endpoint_rejected",
+                        "kind": verdict["kind"], "reason": verdict["reason"]})
+                if not verdict["ok"]:
+                    probe_note = {"ok": False, "kind": verdict["kind"]}
         await _put_user_prefs(fields, "transcription_prefs", user, db, language_fields=language_fields)
-        return await get_user_transcription(user)
+        view = await get_user_transcription(user)
+        if probe_note:
+            view["probe"] = probe_note
+        return view
 
     @app.get("/user/transcription")
     async def get_user_transcription(user: User = Depends(get_current_user)):
