@@ -357,6 +357,13 @@ class JobRunner:
             # THE NEXT ACT ON THIS PAGE IS ALREADY DECIDED, HERE, UNDER THE LOCK — the target moves
             # from this job to its successor in one step, so a press arriving in the gap queues
             # behind the successor instead of finding the page free and starting a third writer.
+            #
+            # AND THE DONE LINE GOES OUT BEFORE THE LOCK IS LET GO. With it emitted after, a press
+            # arriving on a page this job had just freed (no queue, an instant act) started its own
+            # thread and could post ITS done line first — ten presses read as nine done in order
+            # and two swapped (`test_ten_acts_on_one_page…`, seen on a CI runner). `spawn` already
+            # emits its queued/collapsed lines under this lock; the done line is held to the same
+            # rule, so no act can find the page free until the line for the last one is out.
             with self._lock:
                 self._running.pop(key, None)
                 queue = self._waiting.get(key) or []
@@ -365,11 +372,11 @@ class JobRunner:
                     self._waiting.pop(key, None)
                 if nxt is not None:
                     self._running[key] = nxt
-            self._forget(job_id)
-            self._emit(self._own(
-                {"type": "job-done" if ok else "job-failed", "job_id": job_id,
-                 "kind": kind, "target": target, "ok": ok,
-                 "line": done_line(kind, target) if ok else failed_line(kind, target, why)}))
+                self._forget(job_id)
+                self._emit(self._own(
+                    {"type": "job-done" if ok else "job-failed", "job_id": job_id,
+                     "kind": kind, "target": target, "ok": ok,
+                     "line": done_line(kind, target) if ok else failed_line(kind, target, why)}))
             # …and only then does the queued one announce itself: its line arrives after the line of
             # the job it was waiting for, which is the order the person pressed and read them in.
             if nxt is not None:
