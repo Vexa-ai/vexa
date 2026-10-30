@@ -1,9 +1,11 @@
 """client-compat · what clients already deployed against 0.12 still need from a 0.13.4 stack.
 
 The `client-compat` check (Task #1919, fix #1). It runs inside the `validate-v010-compat` leg of
-release-validate.yml (`bin/stack-test compat` collects all of compat/), and on its own with
+release-validate.yml (`bin/stack-test compat` collects all of compat/), and on its own as
+`make -C deploy/compose stack-test-client-compat`, i.e.
 `V010_COMPAT=1 MOCK_BOT=1 bin/stack-test compat/client_compat_test.py`. It passes on the candidate
-and fails on v0.13.4-rc.1 (negative control), which refused both of the first two below.
+and fails on v0.13.4-rc.1 (negative control: `COMPOSE_NO_BUILD=1 IMAGE_TAG=v0.13.4-rc.1`), which
+refused both of the first two below.
 
   1. `/ws?api_key=<key>` (the hosted dashboard live view, ASWF DNA, clients built from the 0.12
      docs) opens, answers a ping and subscribes to the caller's own meeting. Deprecated; 0.13.6

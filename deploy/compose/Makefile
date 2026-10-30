@@ -77,6 +77,15 @@ stack-test-mock:
 stack-test-v010:
 	V010_COMPAT=1 MOCK_BOT=1 BROWSER_IMAGE=$(BROWSER_IMAGE) ./bin/stack-test compat
 
+## stack-test-client-compat — the `client-compat` check (Task #1919): what clients already deployed
+## against 0.12 still need from a 0.13.4 stack (`/ws?api_key=`, a bot-only key streaming its own
+## meeting, nothing for another user's). One file of the compat suite above, run on its own; the
+## release-validate `validate-v010-compat` leg collects it with that suite. Needs mock-bot:dev. Pass
+## IMAGE_TAG + COMPOSE_NO_BUILD=1 to run it against published images (IMAGE_TAG=v0.13.4-rc.1 is the
+## negative control: tests 1 and 2 fail there).
+stack-test-client-compat:
+	V010_COMPAT=1 MOCK_BOT=1 BROWSER_IMAGE=$(BROWSER_IMAGE) ./bin/stack-test compat/client_compat_test.py
+
 ## up — the INSTALL entrypoint: PULLS the published, release-validated images (#569 — what users
 ## run must be the bytes the release machinery proved; a local build must never shadow a published
 ## release tag). Seeds .env from .env.example if absent and mints every secret the services refuse
