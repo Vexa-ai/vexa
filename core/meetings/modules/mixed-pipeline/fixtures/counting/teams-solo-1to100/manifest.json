@@ -1,0 +1,34 @@
+{
+  "args": {
+    "cadence": 25,
+    "gap_ms": 800,
+    "jitter_ms": 0,
+    "seed": 499
+  },
+  "lane": "mixed",
+  "n": 100,
+  "platform": "teams",
+  "scenario": "solo",
+  "sha256": {
+    "hints.jsonl": "259d5ce3ebdc73bf7ba2923d39a1c241c121f1498eb7b35934eeee3c15c4f72a",
+    "truth.jsonl": "6bc91c86619f50565f9f25b59baf8d2b6e0e8b736c025a174a73762b0fd13a29"
+  },
+  "speakers": {
+    "A": {
+      "csrc": 101,
+      "name": "Alice Adams"
+    }
+  },
+  "timing": {
+    "csrc_lead_ms": 150,
+    "hint_lag_ms": 400,
+    "hint_shape": "dom-outline",
+    "num_ms": 600,
+    "start_ms": 1000
+  },
+  "tts": "none (scripted half only)",
+  "turns": 4,
+  "voices": {
+    "A": "aura-asteria-en"
+  }
+}
