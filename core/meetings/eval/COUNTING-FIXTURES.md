@@ -61,7 +61,9 @@ the repo); regenerate any time with `counting_fixture.py`.
 
 ### Not present yet
 - **`EVAL_CACHE` (`~/vexa-test-rig/cache`)** — the live-rig TTS clip pool — empty; regen with `FORCE_REGEN=1` (needs DG key).
-- **No zoom/teams fixtures**, and **no `captured-signal.v1` for counting** yet (the reuse that would give counting real capture/diarization coverage — see "Closing the capture gap" below).
+- **No zoom fixtures**; Teams has only the scripted mixed-lane half committed
+  (`core/meetings/modules/mixed-pipeline/fixtures/counting/teams-solo-1to100`, built with
+  `counting_fixture.py --lane mixed --platform teams --scenario solo --n 100 --turn 25 --out <dir>`), and **no `captured-signal.v1` for counting** yet (the reuse that would give counting real capture/diarization coverage — see "Closing the capture gap" below).
 
 ## Scenarios (the speaker-switch knob — same 1..N oracle, different stress)
 `silence` (clean turns, gap) · `overlap` (boundary overlap) · `dynamic` (rapid 1–2-number switches) ·

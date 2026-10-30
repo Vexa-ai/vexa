@@ -156,3 +156,11 @@ behind `COMPOSE_BOT=1`; the always-on subset never spawns one.
   deterministic.
 - **Replay fixtures** — captured transcript material (a scripted call) plus a VTT→fixture converter, so
   an agent turn can be re-driven offline without a live meeting.
+- **Counting fixtures** — a deterministic **1..N counting** meeting whose oracle is trivial (a missing
+  number is a drop, a wrong speaker a mislabel). `core/meetings/eval/src/counting_fixture.py` builds
+  them; `--lane mixed --platform teams` writes the offline, keyless, byte-stable scripted half for the
+  mixed (Teams) lane — `truth.jsonl` (one row per number: speaker, CSRC, `t0/t1`), a dom-outline-shaped
+  `hints.jsonl`, and a `manifest.json` carrying the sha256 of both. The committed
+  `core/meetings/modules/mixed-pipeline/fixtures/counting/teams-solo-1to100` is built this way; `--audio`
+  adds the store-only TTS/STT half. See
+  [`COUNTING-FIXTURES.md`](https://github.com/Vexa-ai/vexa/tree/main/core/meetings/eval/COUNTING-FIXTURES.md).
