@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from meeting_api import create_app, identity_token, route_scopes
 from meeting_api.route_scopes import INSUFFICIENT_SCOPE, ROUTE_SCOPES, ScopeTableError, scopes_by_route
@@ -59,7 +61,11 @@ def _served(app) -> set:
 
 
 def _scope_refused(r) -> bool:
-    return r.status_code == 403 and r.json().get("detail") == INSUFFICIENT_SCOPE
+    return r.status_code == 403 and str(r.json().get("detail")).startswith(INSUFFICIENT_SCOPE + ":")
+
+
+UNDECLARED = ("Insufficient scope: this endpoint declares no scope, so no key reaches it "
+              "(a server-side omission; report it). GET /auth/me lists your key's scopes.")
 
 
 # ── the table is the manifest ────────────────────────────────────────────────────────────────────
@@ -147,7 +153,40 @@ def test_a_bot_key_reaches_the_meeting_record_and_transcript_routes(client):
 def test_a_signed_identity_on_a_route_no_row_reaches_is_refused(client, method, path):
     """Deny by default: the edge forwards a signed identity only along its rows (and its own `/ws`
     hop), so one anywhere else did not come from a row the edge checked."""
-    assert _scope_refused(client.request(method, path, headers=_signed(["bot", "tx"]), json={}))
+    r = client.request(method, path, headers=_signed(["bot", "tx"]), json={})
+    assert _scope_refused(r)
+    # No scope would help there, so none is named: the text says it is a server-side omission.
+    assert r.json()["detail"] == UNDECLARED
+
+
+# ── the refusal names the scopes and the way to a key that has them (#1922 s3) ──────────────────
+
+def test_the_scope_gate_names_the_scopes_the_route_takes_the_key_holds_and_the_mint_call():
+    """meeting-api's own gate, called directly: on a healthy stack the edge refuses first, so the
+    second gate's text is pinned here rather than over HTTP."""
+    # What routing leaves on the scope once GET /transcripts/by-id/1 matched, and what the identity
+    # door leaves in the headers once it verified a browser-only key's signed identity.
+    request = Request({"type": "http", "method": "GET", "path": "/transcripts/by-id/1",
+                       "route": SimpleNamespace(path="/transcripts/by-id/{meeting_id}"),
+                       "headers": [(identity_token.HEADER.lower().encode(), b"verified"),
+                                   (b"x-user-scopes", b"browser")]})
+    with pytest.raises(route_scopes.HTTPException) as refused:
+        route_scopes.scope_gate(request)
+    assert refused.value.status_code == 403
+    assert refused.value.detail == (
+        "Insufficient scope: this endpoint takes a key with one of [bot, tx]; this key has [browser]. "
+        'Mint one with POST /admin/users/{user_id}/tokens {"scopes":["bot","tx"]} '
+        "(see docs.vexa.ai/authentication); GET /auth/me lists your key's scopes.")
+
+
+def test_a_browser_key_on_the_transcript_read_is_told_which_scopes_and_how_to_mint(client):
+    r = client.get("/transcripts/by-id/1", headers=_signed(["browser"]))
+    assert r.status_code == 403
+    detail = r.json()["detail"]
+    assert detail == route_scopes.insufficient_scope_detail({"bot", "tx"}, {"browser"})
+    for part in ("[bot, tx]", "[browser]", "POST /admin/users/{user_id}/tokens",
+                 '{"scopes":["bot","tx"]}', "GET /auth/me"):
+        assert part in detail, part
 
 
 @pytest.mark.parametrize("old_setting", [None, "legacy"])

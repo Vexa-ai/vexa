@@ -263,6 +263,6 @@ Deny tests:
 |---|---|---|
 | `401` | `Missing API key` | no `X-API-Key` header |
 | `401` | `Invalid API key` | unknown or revoked key |
-| `403` | `Insufficient scope for this endpoint` | key lacks the scope this route needs |
+| `403` | `Insufficient scope: this endpoint takes a key with one of [bot, tx]; this key has [browser]. Mint one with POST /admin/users/{user_id}/tokens {"scopes":["bot","tx"]} (see docs.vexa.ai/authentication); GET /auth/me lists your key's scopes.` | the key holds neither `bot` nor `tx` (a `browser`-only key); the text names the scopes the route takes, the ones the key holds, and the mint call. A route that declares no scope answers `Insufficient scope: this endpoint declares no scope, so no key reaches it (a server-side omission; report it).` |
 
 See the full [error reference](/api/errors).

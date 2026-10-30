@@ -277,7 +277,7 @@ retry budget on the first emit (≤ ~15s) already rides out brief transient prog
 |---|---|---|
 | `401 Missing API key` | no `X-API-Key` header | add the header |
 | `401 Invalid API key` | unknown or revoked key | mint a fresh one ([Authentication](/authentication)) |
-| `403 Insufficient scope for this endpoint` | key lacks the route's scope | mint with the right `scopes=` |
+| `403 Insufficient scope: this endpoint takes a key with one of [bot, tx]; this key has [browser] …` | the key holds neither `bot` nor `tx` | mint one as the message says: `POST /admin/users/{user_id}/tokens` with `{"scopes":["bot","tx"]}`; `GET /auth/me` lists your key's scopes |
 | `403 Invalid or missing admin token.` on `/admin/*` | missing or wrong `ADMIN_TOKEN` | use the `X-Admin-API-Key` matching your `ADMIN_TOKEN` |
 | `503 Authentication temporarily unavailable, retry` | the gateway could not get an answer from admin-api about the key; the key was **not** rejected | retry after the `Retry-After` seconds; if it persists, check admin-api ([below](#503-authentication-temporarily-unavailable)) |
 

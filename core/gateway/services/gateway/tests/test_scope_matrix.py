@@ -16,6 +16,9 @@ single-scope key, and a guard proving a route with no declaration is denied rath
 """
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
@@ -325,7 +328,8 @@ def test_scope_matrix(method, url, template, scope):
         assert r.status_code != 403, f"{method} {url} with [{scope}] should pass the scope gate"
     else:
         assert r.status_code == 403, f"{method} {url} with [{scope}] → {r.status_code}, expected 403"
-        assert r.json()["detail"] == "Insufficient scope for this endpoint"
+        assert r.json()["detail"] == app_module.insufficient_scope_detail(
+            ROUTE_SCOPES[(method, template)], {scope})
 
 
 def test_browser_only_key_reaches_no_route_at_all():
@@ -435,7 +439,8 @@ def test_an_undeclared_route_is_denied_at_request_time(monkeypatch):
     client = TestClient(create_app(FakeAuthorizer(), FakeDownstream(), FakeRedis()))
     r = client.get("/bots/status", headers=AUTH)
     assert r.status_code == 403
-    assert r.json()["detail"] == "Insufficient scope for this endpoint"
+    # No scope would help, so none is named: it says the route declares none.
+    assert r.json()["detail"] == UNDECLARED
 
 
 def test_an_undeclared_route_cannot_be_built(monkeypatch):
@@ -528,6 +533,54 @@ def test_a_bot_only_key_reads_transcripts_and_meetings():
     client = _client(["bot"])
     for url in ("/transcripts/by-id/42", "/transcripts/google_meet/abc", "/meetings"):
         assert client.get(url, headers=AUTH).status_code == 200, url
+
+
+# ── the scope 403 names the scopes and the way to a key that has them (#1922 s3) ────────────────
+
+SCOPE_NAMED = (
+    "Insufficient scope: this endpoint takes a key with one of [bot, tx]; this key has [browser]. "
+    'Mint one with POST /admin/users/{user_id}/tokens {"scopes":["bot","tx"]} '
+    "(see docs.vexa.ai/authentication); GET /auth/me lists your key's scopes.")
+UNDECLARED = ("Insufficient scope: this endpoint declares no scope, so no key reaches it "
+              "(a server-side omission; report it). GET /auth/me lists your key's scopes.")
+
+
+def test_a_browser_key_on_a_transcript_is_told_which_scopes_and_how_to_mint():
+    """Over HTTP: the 403 names the scopes the route takes, the ones the key holds, the mint call
+    and GET /auth/me."""
+    r = _client(["browser"]).get("/transcripts/by-id/1", headers=AUTH)
+    assert r.status_code == 403
+    assert r.json() == {"detail": SCOPE_NAMED}
+
+
+def _lift(path: Path, name: str):
+    """One self-contained function out of a source file, without importing its module (meeting-api's
+    package does not import in the gateway's environment)."""
+    tree = ast.parse(path.read_text())
+    node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
+    namespace: dict = {}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), "exec"), namespace)
+    return namespace[name]
+
+
+_MEETING_API_SCOPES = (Path(__file__).resolve().parents[4]
+                       / "meetings/services/meeting-api/src/meeting_api/route_scopes.py")
+
+
+@pytest.mark.parametrize("required,held", [
+    (frozenset({"bot", "tx"}), {"browser"}),
+    (frozenset({"bot", "tx"}), set()),
+    (frozenset({"tx"}), {"bot", "browser"}),
+    (None, {"bot", "tx"}),
+    (None, set()),
+])
+def test_the_gateway_and_meeting_api_refuse_with_identical_text(required, held):
+    """The two services share no package, so the formatter is written in both; this pins that a
+    client reads one refusal whichever side refused it."""
+    meeting_api_text = _lift(_MEETING_API_SCOPES, "insufficient_scope_detail")(required, held)
+    gateway_text = app_module.insufficient_scope_detail(required, held)
+    assert gateway_text == meeting_api_text
+    assert gateway_text.startswith("Insufficient scope")  # the prefix MCP clients match
 
 
 def test_app_is_a_fastapi_instance_after_the_build_guard():

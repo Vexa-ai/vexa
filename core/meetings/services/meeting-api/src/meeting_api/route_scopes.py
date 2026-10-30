@@ -56,9 +56,10 @@ EDGE_HOPS: Dict[RouteKey, RouteKey] = {
     ("GET", "/bot-accounts/sessions/{session_id}/vnc"): ("GET", "/bot-accounts/sessions/{session_id}"),
 }
 
-#: The answer the edge gives a key without the route's scope (`gateway/app.py`), so a client reads
-#: one refusal whichever side refused it.
-INSUFFICIENT_SCOPE = "Insufficient scope for this endpoint"
+#: How every scope 403 begins, here and at the edge (`gateway/app.py`); the rest of the text is
+#: `insufficient_scope_detail`, the same on both sides, so a client reads one refusal whichever
+#: side refused it.
+INSUFFICIENT_SCOPE = "Insufficient scope"
 
 
 class ScopeTableError(Exception):
@@ -116,8 +117,23 @@ def _matched(request: HTTPConnection) -> Optional[RouteKey]:
     return (method, path) if path else None
 
 
-def _refuse() -> HTTPException:
-    return HTTPException(status_code=403, detail=INSUFFICIENT_SCOPE)
+def insufficient_scope_detail(required, held) -> str:
+    """The scope 403's text: the scopes the route takes, the ones the key holds, and how to get a key
+    that reaches it. ``required`` None is a route that declares no scope (a server-side omission).
+    The gateway's `insufficient_scope_detail` (`gateway/app.py`), letter for letter: the two services
+    share no package, and the gateway's scope-matrix test pins that both give the same text."""
+    if required is None:
+        return ("Insufficient scope: this endpoint declares no scope, so no key reaches it "
+                "(a server-side omission; report it). GET /auth/me lists your key's scopes.")
+    need = ", ".join(sorted(required))
+    have = ", ".join(sorted(held))
+    return (f"Insufficient scope: this endpoint takes a key with one of [{need}]; this key has [{have}]. "
+            'Mint one with POST /admin/users/{user_id}/tokens {"scopes":["bot","tx"]} '
+            "(see docs.vexa.ai/authentication); GET /auth/me lists your key's scopes.")
+
+
+def _refuse(required=None, held=()) -> HTTPException:
+    return HTTPException(status_code=403, detail=insufficient_scope_detail(required, held))
 
 
 def scope_gate(request: HTTPConnection) -> None:
@@ -133,7 +149,7 @@ def scope_gate(request: HTTPConnection) -> None:
         raise _refuse()
     held = {s.strip() for s in (request.headers.get("x-user-scopes") or "").split(",") if s.strip()}
     if not held & required:
-        raise _refuse()
+        raise _refuse(required, held)
 
 
 #: The dependency `create_app` installs on the whole app.

@@ -21,7 +21,7 @@ failures (`422`).
 | `204` | success, no body (e.g. token deleted, `DELETE /meetings/{id}`) | — |
 | `400` | malformed request — non-conformant envelope on `POST /invocations` | `Invocation envelope is not conformant` |
 | `401` | missing or invalid API key — no/unknown/revoked `X-API-Key` | `Missing API key` · `Invalid API key` |
-| `403` | under-scoped key, or bad/missing admin token | `Insufficient scope for this endpoint` · `Invalid or missing admin token.` |
+| `403` | under-scoped key (`browser`-only), or bad/missing admin token | `Insufficient scope: this endpoint takes a key with one of [bot, tx]; this key has [browser]. Mint one with POST /admin/users/{user_id}/tokens {"scopes":["bot","tx"]} …` · `Invalid or missing admin token.` |
 | `404` | resource not found — user, token, meeting, or workspace file | `User not found` · `not found` |
 | `413` | request body too large — a JSON, text or form body over 1 MiB is refused at the gateway (file uploads and bundle imports are bounded by their own routes) | `request body is larger than 1048576 bytes` |
 | `422` | semantic validation failed — bad field, invalid scope, event with no plan | `Invalid scope(s): ['foo']. Valid: ['bot', 'browser', 'tx']` |

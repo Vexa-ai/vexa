@@ -39,7 +39,7 @@ def rig():
 
 
 def _not_scope_refused(r) -> bool:
-    return not (r.status_code == 403 and r.json().get("detail") == INSUFFICIENT_SCOPE)
+    return not (r.status_code == 403 and str(r.json().get("detail")).startswith(INSUFFICIENT_SCOPE))
 
 
 @pytest.mark.parametrize("scopes", [["bot"], ["tx"]])

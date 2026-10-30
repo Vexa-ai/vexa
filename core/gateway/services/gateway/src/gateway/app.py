@@ -283,9 +283,25 @@ def _is_authority_header(name: str) -> bool:
     return name in _AUTHORITY_HEADER_EXACT or name.startswith(_AUTHORITY_HEADER_PREFIXES)
 
 
-def _insufficient_scope_response() -> Response:
+def insufficient_scope_detail(required, held) -> str:
+    """The scope 403's text: the scopes the route takes, the ones the key holds, and how to get a key
+    that reaches it. ``required`` None is a route that declares no scope (a server-side omission).
+    Written out again, letter for letter, in meeting-api (`meeting_api/route_scopes.py`): the two
+    services share no package, and the gateway's scope-matrix test pins that both give the same
+    text. Self-contained (no module names) so that test can lift it from either file."""
+    if required is None:
+        return ("Insufficient scope: this endpoint declares no scope, so no key reaches it "
+                "(a server-side omission; report it). GET /auth/me lists your key's scopes.")
+    need = ", ".join(sorted(required))
+    have = ", ".join(sorted(held))
+    return (f"Insufficient scope: this endpoint takes a key with one of [{need}]; this key has [{have}]. "
+            'Mint one with POST /admin/users/{user_id}/tokens {"scopes":["bot","tx"]} '
+            "(see docs.vexa.ai/authentication); GET /auth/me lists your key's scopes.")
+
+
+def _insufficient_scope_response(required=None, held=()) -> Response:
     return Response(
-        content=json.dumps({"detail": "Insufficient scope for this endpoint"}),
+        content=json.dumps({"detail": insufficient_scope_detail(required, held)}),
         status_code=403,
         media_type="application/json",
     )
@@ -573,7 +589,7 @@ def create_app(
                 user_id=user_id,
                 fields={"method": method, "path": request.url.path, "required": sorted(required)},
             )
-            return None, _insufficient_scope_response()
+            return None, _insufficient_scope_response(required, user_scopes)
 
         # THE AGENT TIER, PER PERSON (`VEXA_AGENT_ALLOW`). Asked of every agent-domain row — literal,
         # streamed or catch-all, a person's key or the MCP's re-entry with a worker's token, which
