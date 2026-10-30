@@ -67,7 +67,7 @@ describe("agendaWindow", () => {
 
   it("BUG-1 carry-over: a future synced meeting with old runs shows ONCE as upcoming", () => {
     const scheduled = m({ id: "S", live_status: "scheduled", calendar_uid: "u1", scheduled_at: "2026-07-09T10:00:00" });
-    const oldRun = m({ id: "R", live_status: "completed", calendar_uid: "u1", start_time: "2026-07-01T10:00:00Z", has_recording: true });
+    const oldRun = m({ id: "R", live_status: "completed", calendar_uid: "u1", start_time: "2026-07-01T10:00:00Z", has_capture: true });
     const days = window0([scheduled, oldRun]);
     const all = days.flatMap((d) => d.groups.map((g) => g.current.id));
     expect(all).toEqual(["S"]);
@@ -76,14 +76,14 @@ describe("agendaWindow", () => {
 
 describe("pastFeed", () => {
   it("newest finished run per meeting, newest first, day-grouped, capped", () => {
-    const a = m({ id: "A", live_status: "completed", start_time: "2026-07-08T09:00:00Z", has_recording: true, native_id: "aaa" });
-    const b = m({ id: "B", live_status: "completed", start_time: "2026-07-07T09:00:00Z", has_recording: true, native_id: "bbb" });
+    const a = m({ id: "A", live_status: "completed", start_time: "2026-07-08T09:00:00Z", has_capture: true, native_id: "aaa" });
+    const b = m({ id: "B", live_status: "completed", start_time: "2026-07-07T09:00:00Z", has_capture: true, native_id: "bbb" });
     const days = pastFeed(groupMeetings([b, a]));
     expect(days.map((d) => d.entries.map((e) => e.run.id))).toEqual([["A"], ["B"]]);
   });
   it("cap trims oldest", () => {
     const rows = Array.from({ length: 5 }, (_, i) =>
-      m({ id: `P${i}`, live_status: "completed", start_time: `2026-07-0${i + 1}T09:00:00Z`, has_recording: true, native_id: `n${i}` }));
+      m({ id: `P${i}`, live_status: "completed", start_time: `2026-07-0${i + 1}T09:00:00Z`, has_capture: true, native_id: `n${i}` }));
     const days = pastFeed(groupMeetings(rows), 2);
     expect(days.flatMap((d) => d.entries.map((e) => e.run.id))).toEqual(["P4", "P3"]);
   });

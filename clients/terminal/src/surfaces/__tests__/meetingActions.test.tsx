@@ -19,7 +19,7 @@ function row(live_status: string): MeetingMock {
     status: "past",
     live_status,
     platform: "Google Meet",
-    has_recording: false,
+    has_capture: false,
     docs: [],
     participants: [],
     mentioned: [],

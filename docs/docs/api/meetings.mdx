@@ -388,6 +388,14 @@ identity such as `calendar_connection_id`, `calendar_uid`, and `scheduled_at` re
 list row. Fetch a meeting's full `data` from `GET /meetings/{meeting_id}` — the detail endpoint is
 unaffected and still returns every key.
 
+**Did this meeting capture anything?** Read `has_capture` on the row — a top-level boolean present on
+both the list and the detail response. It is `true` when the meeting has at least one stored recording
+**or** a non-zero `data.segments_captured`, which is the same test the
+[completion service provenance](#completion-service-provenance) uses to rate `transcription_outcome`
+as `served`. Do **not** derive capture from `data.recordings`: the list omits it, so it is absent on
+every list row whether or not audio arrived. Do not derive it from `data.recording_enabled` either —
+that is the **setting** the spawn requested, and it is `true` on a bot that never joined.
+
 The list is also **paged**: with no `limit`, a default page size of `50` applies (pass `limit`/`offset`
 to page explicitly). `GET /bots` returns `has_more: true` when more rows remain past the current page.
 Pass `exclude_planned=true` to either endpoint when rendering run/transcript history: the server

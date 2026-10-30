@@ -15,7 +15,7 @@ const NATIVE = "abc-defg-hij";
 function row(live_status: string, status: "live" | "past" = live_status === "active" ? "live" : "past"): MeetingMock {
   return {
     id: NATIVE, native_id: NATIVE, title: "Google Meet · " + NATIVE, when: "now",
-    status, live_status, platform: "Google Meet", has_recording: false,
+    status, live_status, platform: "Google Meet", has_capture: false,
     docs: [], participants: [], mentioned: [], actions: [], transcript: [], insights: [],
   } as MeetingMock;
 }

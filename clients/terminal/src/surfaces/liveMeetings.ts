@@ -1,7 +1,7 @@
 "use client";
 /** meetings feed — the terminal's REAL meetings list (live AND past), sourced from meeting-api via the
  *  gateway: `GET /api/meetings` → gateway → meeting-api `GET /meetings`. Each row is shaped
- *  {id, platform, native_meeting_id, status, start_time, end_time, data:{recordings:[...]}}, newest-first.
+ *  {id, platform, native_meeting_id, status, has_capture, start_time, end_time, data:{…}}, newest-first.
  *  Live meetings carry a `session_uid` so the tab subscribes to the copilot stream; past meetings open a
  *  recorded view whose transcript is fetched on demand from `GET /api/transcripts/{platform}/{native}`. */
 import { useSyncExternalStore } from "react";
@@ -18,8 +18,14 @@ interface MeetingRowDTO {
   start_time?: string | null;
   end_time?: string | null;
   constructed_meeting_url?: string | null;
+  /** Did this meeting capture anything — audio, words, or both? The core's own answer, on the row
+   *  because the list omits the heavy evidence (`data.recordings`). Optional: a core older than
+   *  this field omits it, and `captureOf` below covers that case. */
+  has_capture?: boolean;
   data?: {
     recordings?: unknown[];
+    /** Transcript segments counted at the terminal transition. Light, so the list keeps it. */
+    segments_captured?: number;
     docs?: { workspace: string; path: string; title?: string; kind?: string }[];
     scheduled_at?: string;
     stop_requested?: boolean;
@@ -32,6 +38,14 @@ interface MeetingRowDTO {
     constructed_meeting_url?: string;
     attendees?: { email: string; name?: string; partstat?: string }[];
   } | null;
+}
+
+/** Did this meeting capture anything? The core answers on the row (`has_capture`). Against a core
+ *  that does not send it, fall back to the evidence the list still carries — never to
+ *  `recording_enabled`, which is the setting and is true on a bot that never joined. */
+function captureOf(d: MeetingRowDTO): boolean {
+  if (typeof d.has_capture === "boolean") return d.has_capture;
+  return !!(d.data?.recordings?.length || (d.data?.segments_captured ?? 0) > 0);
 }
 
 /** `stopped` is not a DB enum value — it's derived from a terminal `completed` row that the user stopped
@@ -189,7 +203,7 @@ function toMock(d: MeetingRowDTO): MeetingMock {
     start_time: d.start_time ?? undefined,
     end_time: d.end_time ?? undefined,
     platform: d.platform === "google_meet" ? "Google Meet" : d.platform,
-    has_recording: !!(d.data?.recordings?.length),
+    has_capture: captureOf(d),
     docs: d.data?.docs ?? [],
     participants: [],
     mentioned: [],
@@ -214,7 +228,7 @@ async function snapshot() {
     const seen = new Set<string>();
     const next = (list || []).map(toMock).filter((m) => !seen.has(m.id) && (seen.add(m.id), true));
     const key = (m: MeetingMock[]) => m.map((x) =>
-      `${x.id}|${x.live_status}|${x.has_recording}|${x.title_custom ?? ""}|${x.scheduled_at ?? ""}|${x.workspace_id ?? ""}|${x.auto_join ?? ""}|${x.auto_join_error ?? ""}|${x.native_id ?? ""}|${(x.attendees ?? []).map((a) => a.email).join("+")}`,
+      `${x.id}|${x.live_status}|${x.has_capture}|${x.title_custom ?? ""}|${x.scheduled_at ?? ""}|${x.workspace_id ?? ""}|${x.auto_join ?? ""}|${x.auto_join_error ?? ""}|${x.native_id ?? ""}|${(x.attendees ?? []).map((a) => a.email).join("+")}`,
     ).join(",");
     const wasLoaded = loaded;
     loaded = true;
