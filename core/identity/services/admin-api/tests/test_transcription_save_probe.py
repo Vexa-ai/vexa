@@ -135,7 +135,7 @@ def test_an_unreachable_endpoint_saves_and_says_so(client, caplog):
     assert r.json()["probe"] == {"ok": False, "kind": "unreachable"}
     # the refused connection's exception text names the address; it must reach neither side
     for secret in (TOKEN, str(closed), "refused", "ConnectError"):
-        assert secret not in r.text
+        assert secret not in json.dumps(r.json()["probe"])  # the view itself echoes the saved url
         assert secret not in caplog.text
     assert client.get("/user/transcription", headers=h).json()["url"] == url
 
