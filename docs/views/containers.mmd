@@ -37,6 +37,7 @@ flowchart LR
     flows_api["flows-api"]
     flows_worker["flows-worker"]
   end
+  discord_bot["discord-bot"]
   slim["slim"]
   extension["extension"]
   claude_plugin["claude-plugin"]
@@ -44,6 +45,7 @@ flowchart LR
   dashboard["dashboard (deprecated)"]
   meeting_api -->|"write"| segments_table
   bot -->|"HTTPS"| transcription
+  discord_bot -->|"HTTPS"| transcription
   meeting_api -->|"JDBC"| postgres
   meeting_api -->|"HTTPS"| object_store
   meeting_api -->|"HTTPS"| runtime

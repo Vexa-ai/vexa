@@ -1,0 +1,41 @@
+# syntax=docker/dockerfile:1
+#
+# discord-mock-bot:dev — the tiny Lane A instrument image (A:V0), the Discord-lane twin of
+# services/bot/Dockerfile.mock. Swapped in as DISCORD_BOT_IMAGE for an offline control-plane
+# proof: the discord-bot profile carries an explicit command (`python -m discord_bot`, see
+# runtime_kernel/profiles.py) — this image overrides CMD to run the mock module instead, so the
+# runtime spawns it exactly like the real bot in every other respect (same env, same profile).
+#
+# It fakes ONLY the Discord-specific ports (voice join + PCM receive + transcription result) and
+# reuses the REAL adapters (discord_bot/mock/main.py) — no Discord token, no DAVE handshake, no
+# GPU/STT worker; REAL redis (transcript.v1/acts.v1) + REAL HTTP (lifecycle.v1) still required.
+#
+# Build (REPO ROOT context):
+#   docker build -f core/meetings/services/discord-bot/Dockerfile.mock -t discord-mock-bot:dev .
+FROM python:3.11-slim
+
+RUN pip install --no-cache-dir uv==0.9.22
+
+ENV UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/src \
+    PATH=/opt/venv/bin:$PATH
+
+WORKDIR /app
+
+# The mock only needs the REAL adapters' own deps (redis/httpx/jsonschema/referencing) — never
+# dave.py/py-cord/PyNaCl (no real Discord join happens in this image). A minimal local install, so
+# the mock image stays small and builds without the DAVE/opus native deps the real image needs.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system \
+      "httpx>=0.27,<1" "redis>=5,<6" "jsonschema>=4.21,<5" "referencing>=0.34,<1"
+
+COPY core/meetings/services/discord-bot/src ./src
+
+COPY core/meetings/contracts/invocation.v1/invocation.schema.json ./meetings/contracts/invocation.v1/invocation.schema.json
+COPY core/meetings/contracts/transcript.v1/transcript.schema.json ./meetings/contracts/transcript.v1/transcript.schema.json
+COPY core/meetings/contracts/lifecycle.v1/lifecycle.schema.json   ./meetings/contracts/lifecycle.v1/lifecycle.schema.json
+COPY core/meetings/contracts/acts.v1/acts.schema.json             ./meetings/contracts/acts.v1/acts.schema.json
+
+CMD ["python", "-m", "discord_bot.mock"]

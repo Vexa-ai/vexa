@@ -113,6 +113,10 @@ edges:
   gateway -read-> recording-blob
   bot -call-> transcription  # audio -> first-party STT via TRANSCRIPTION_SERVICE_URL
   bot -read-> bot-commands  # SUBSCRIBE acts.v1 commands
+  discord-bot -write-> segments-stream
+  discord-bot -write-> tc-mutable
+  discord-bot -call-> transcription  # audio -> first-party STT via transcriptionServiceUrl (invocation.v1)
+  discord-bot -read-> bot-commands  # SUBSCRIBE acts.v1 commands
   meeting-api -write-> bm-status  # PUBLISH status
   meeting-api -write-> u-meetings  # PUBLISH per-user status
   meeting-api -write-> bot-commands  # PUBLISH leave/speak
@@ -151,7 +155,7 @@ edges:
   flows-worker -req-> agent-api  # steps reach domains only over their published HTTP surfaces (core/flows/src/flows_steps/common.py) — a domain never knows flows exists
   flows-worker -req-> gateway
   flows-worker -req-> admin-api
-  bot, agent-worker deployed-in runtime
+  bot, discord-bot, agent-worker deployed-in runtime
   gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, object-store, transcription deployed-in deploy
   flows-api, flows-worker deployed-in deploy
 
