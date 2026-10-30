@@ -10,6 +10,8 @@ never the URL, the token or the exception text.
 """
 from __future__ import annotations
 
+import logging
+
 import httpx
 
 from .. import config_preflight as cp
@@ -23,6 +25,11 @@ STT_PROBE_SPEC = {
     "invalid_statuses": [404], "exhausted_statuses": [402], "payload": "audio",
 }
 PROBE_TIMEOUT_S = 15.0
+
+# httpx logs every request line (the person's URL) at INFO and httpcore traces at DEBUG; the URL
+# must stay out of logs, so those loggers speak only for problems.
+for _name in ("httpx", "httpcore"):
+    logging.getLogger(_name).setLevel(logging.WARNING)
 
 REASONS = {
     "unauthorized": "the endpoint rejected the token (missing or wrong)",
