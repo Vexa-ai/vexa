@@ -179,6 +179,14 @@ def test_02_auth_surface(stack):
     browser_only = _mint_token(stack, user_id, "browser")
     code, body = http("GET", f"{stack.gateway}/meetings", headers={"x-api-key": browser_only})
     assert code == 403, f"out-of-scope browser token on /meetings → {code} {body}"
+    # The scope 403 says which scopes the route takes, which the key holds, and how to mint one that
+    # reaches it (#1922 s3), on the transcript read as everywhere.
+    code, body = http("GET", f"{stack.gateway}/transcripts/by-id/1", headers={"x-api-key": browser_only})
+    assert code == 403, f"browser token on /transcripts/by-id/1 → {code} {body}"
+    detail = body.get("detail", "") if isinstance(body, dict) else ""
+    for part in ("[bot, tx]", "[browser]", "POST /admin/users/{user_id}/tokens",
+                 '{"scopes":["bot","tx"]}', "GET /auth/me"):
+        assert part in detail, f"scope 403 does not name {part!r}: {detail!r}"
     print(f"\n[2/auth] mint→accept(200)·missing(401)·invalid(401)·out-of-scope(403); proxy reached meeting-api")
 
 
