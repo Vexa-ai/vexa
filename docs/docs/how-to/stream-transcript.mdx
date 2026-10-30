@@ -12,8 +12,21 @@ Connect to `/ws` on the gateway and authenticate with your API key — as a head
 query parameter when the client can't set headers:
 
 ```
-ws://localhost:18056/ws          # header:  X-API-Key: <API_KEY>
+ws://localhost:18056/ws                 # header:  X-API-Key: <API_KEY>
+wss://api.<your-domain>/ws              # header:  X-API-Key: <API_KEY>  (behind your TLS proxy)
 ws://localhost:18056/ws?api_key=<API_KEY>
+```
+
+Prefer the `X-API-Key` header: any server-side client (Node `ws`, Python `websockets`, curl) can set
+it. Use `?api_key=` only from clients that can't set headers (browsers); a query-string key passes
+through proxy access logs unless the vhost turns them off for `/ws`. Hosted, the URL is
+`wss://api.cloud.vexa.ai/ws`; self-hosted at your own domain, see
+[Deployment → Publishing the API (gateway) at its own domain](/deployment#publishing-the-api-gateway-at-its-own-domain).
+
+```bash
+websocat -H 'X-API-Key: <API_KEY>' wss://api.<your-domain>/ws
+{"action":"ping"}
+# → {"type":"pong"}
 ```
 
 A missing key gets a `missing_api_key` error frame; an invalid key is rejected with close code **4401**.
