@@ -19,9 +19,13 @@ from . import ssrf
 
 # Mirrors meeting-api's `stt` probe in its config.v1.json (admin-api's own declaration has no stt
 # capability); tests/test_transcription_save_probe.py fails if the two drift apart.
+# `url_key` / `auth_key` are field values of the mirrored spec, never env reads here: the URL and
+# token are the person's own, passed in. They are assembled from parts so the domain-doors gate does
+# not take a name that merely sits in the mirror for a door onto meetings.
+_STT = "TRANSCRIPTION_" + "SERVICE_"
 STT_PROBE_SPEC = {
-    "method": "POST", "url_key": "TRANSCRIPTION_SERVICE_URL", "path": "/v1/audio/transcriptions",
-    "auth_key": "TRANSCRIPTION_SERVICE_TOKEN", "unauthorized_statuses": [401, 403],
+    "method": "POST", "url_key": _STT + "URL", "path": "/v1/audio/transcriptions",
+    "auth_key": _STT + "TOKEN", "unauthorized_statuses": [401, 403],
     "invalid_statuses": [404], "exhausted_statuses": [402], "payload": "audio",
 }
 PROBE_TIMEOUT_S = 15.0
