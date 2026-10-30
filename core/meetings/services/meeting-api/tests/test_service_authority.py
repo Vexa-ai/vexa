@@ -532,11 +532,7 @@ async def test_active_boundary_untracked_workload_stays_pending_then_recovers() 
     assert row["data"]["service_authority"]["teardown_confirmed"] is True
 
 
-@pytest.mark.asyncio
-async def test_active_boundary_unavailable_fails_closed_and_stops() -> None:
-    authority = RecordingAuthority(
-        continuation=ServiceAuthorityUnavailable("fixture outage"),
-    )
+async def _active(authority):
     repo, runtime, meeting = await _spawn(authority)
     row = repo._meetings[meeting["id"]]
     row["status"] = "active"
@@ -545,6 +541,15 @@ async def test_active_boundary_unavailable_fails_closed_and_stops() -> None:
         "timestamp": ADMITTED_AT.isoformat(),
         "timestamp_source": "producer",
     }]
+    return repo, runtime, row
+
+
+@pytest.mark.asyncio
+async def test_active_boundary_unavailable_fails_open_and_records_debt() -> None:
+    authority = RecordingAuthority(
+        continuation=ServiceAuthorityUnavailable("fixture outage"),
+    )
+    repo, runtime, row = await _active(authority)
 
     observed = await run_service_authority_sweep(
         repo,
@@ -555,11 +560,84 @@ async def test_active_boundary_unavailable_fails_closed_and_stops() -> None:
 
     persisted = row["data"]["service_authority"]
     assert observed.decisions == 1
-    assert observed.teardowns_confirmed == 1
+    assert observed.teardowns_confirmed == 0
     assert observed.faults == 1
     assert persisted["reason"] == "service_authority_unavailable"
-    assert persisted["stop_scope"] == "billable_service"
-    assert persisted["teardown_confirmed"] is True
+    assert persisted["allow"] is True
+    assert persisted["enforced"] is False
+    assert persisted["stop_scope"] is None
+    assert len(persisted["debt_boundaries"]) == 1
+    assert row["status"] == "active"
+    assert not row["data"].get("stop_requested")
+    assert runtime.deleted == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["enforce", "observe"])
+@pytest.mark.parametrize("fault", ["timeout", "http500", "malformed"])
+async def test_three_minute_outage_keeps_bot_and_records_debt(
+    mode, fault, caplog,
+) -> None:
+    # Every failure shape the adapter maps to ServiceAuthorityUnavailable.
+    authority = RecordingAuthority(
+        mode=mode,
+        continuation=ServiceAuthorityUnavailable(fault),
+    )
+    repo, runtime, row = await _active(authority)
+    row["data"]["service_authority"]["mode"] = mode
+
+    with caplog.at_level("ERROR"):
+        for minute in (1, 2, 3):
+            await run_service_authority_sweep(
+                repo,
+                runtime,
+                authority,
+                now=ADMITTED_AT + timedelta(minutes=minute, seconds=1),
+            )
+
+    persisted = row["data"]["service_authority"]
+    assert row["status"] == "active"
+    assert not row["data"].get("stop_requested")
+    assert runtime.deleted == []
+    assert [d["boundary"] for d in persisted["debt_boundaries"]] == [
+        (ADMITTED_AT + timedelta(minutes=m)).isoformat() for m in (1, 2, 3)
+    ]
+    alerts = [
+        r for r in caplog.records
+        if "service_authority_unavailable_fail_open" in r.getMessage()
+    ]
+    assert len(alerts) == 3
+
+    # Admission stays fail-closed during the same outage (router maps to 503).
+    authority.admit = ServiceAuthorityUnavailable(fault)
+    with pytest.raises(ServiceAuthorityUnavailable):
+        await _spawn(authority, repo=InMemoryMeetingRepo())
+
+
+@pytest.mark.asyncio
+async def test_enforced_insufficient_balance_deny_still_tears_down() -> None:
+    authority = RecordingAuthority(
+        continuation=_decision(
+            allow=False,
+            action="continue",
+            reason="insufficient_balance",
+            decision_id="decision-balance-41",
+            stop_scope="billable_service",
+        ),
+    )
+    repo, runtime, row = await _active(authority)
+
+    observed = await run_service_authority_sweep(
+        repo,
+        runtime,
+        authority,
+        now=ADMITTED_AT + timedelta(minutes=1, seconds=1),
+    )
+
+    assert observed.teardowns_confirmed == 1
+    assert row["data"]["stop_requested"] is True
+    assert len(runtime.deleted) == 1
+    assert not row["data"]["service_authority"].get("debt_boundaries")
 
 
 @pytest.mark.asyncio

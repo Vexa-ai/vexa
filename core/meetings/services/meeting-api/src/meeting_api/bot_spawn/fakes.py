@@ -402,6 +402,14 @@ class InMemoryMeetingRepo:
         metadata.update(decision.to_record())
         metadata["last_boundary_at"] = boundary
         metadata["last_decision_id"] = decision.decision_id
+        if decision.reason == "service_authority_unavailable":
+            metadata["debt_boundaries"] = [
+                *(metadata.get("debt_boundaries") or []),
+                {
+                    "boundary": boundary,
+                    "active_concurrency": request.active_concurrency,
+                },
+            ]
         if (
             decision.enforced
             and not decision.allow

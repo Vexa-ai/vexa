@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -15,6 +16,8 @@ from .models import (
     parse_time,
 )
 from .ports import ServiceAuthority, ServiceAuthorityUnavailable
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -52,10 +55,13 @@ def _unavailable_decision(
         decision_id=f"service-authority:unavailable:{digest}",
         request_id=request.request_id,
         service_identity=request.service_identity,
-        allow=False,
+        # An admitted session fails OPEN: an authority fault is ours, not the
+        # customer's, so the bot keeps running and the minute is recorded as debt.
+        allow=True,
         reason="service_authority_unavailable",
         decided_at=now,
-        stop_scope="billable_service",
+        stop_scope=None,
+        enforced=False,
     )
 
 
@@ -149,6 +155,13 @@ async def run_service_authority_sweep(
             )
             if recorded:
                 decisions += 1
+                if decision.reason == "service_authority_unavailable":
+                    logger.error(
+                        "service_authority_unavailable_fail_open "
+                        "meeting_id=%s boundary=%s",
+                        row["id"],
+                        boundary.isoformat(),
+                    )
             if decision.enforced and not decision.allow:
                 break
             boundary += timedelta(minutes=1)
