@@ -17,8 +17,8 @@ transcription.vexa.ai. Usage:
   python counting_fixture.py --scenario silence --n 30 --store ~/vexa-test-rig/fixtures
 
 Mixed lane (Teams): the SCRIPTED half is offline, needs no key, and is byte-stable on rebuild:
-  python counting_fixture.py --lane mixed --platform teams --scenario silence --n 500 --turn 25 \
-      --out core/meetings/modules/mixed-pipeline/fixtures/counting/teams-1to500
+  python counting_fixture.py --lane mixed --platform teams --scenario solo --n 100 --turn 25 \
+      --out core/meetings/modules/mixed-pipeline/fixtures/counting/teams-solo-1to100
   → truth.jsonl  {n, speaker, label, csrc, t0_ms, t1_ms, turn}   (one row per number — the oracle)
     hints.jsonl  {type:'csrc',t,csrc,active} + {type:'hint',t,name,isEnd}  (Teams dom-outline-shaped WHO)
     manifest.json (args, seed, names, csrcs, timing, sha256 of truth + hints)
