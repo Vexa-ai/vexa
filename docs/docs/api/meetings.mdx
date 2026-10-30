@@ -374,6 +374,10 @@ that rejects the token, can't pay or has a wrong path answers `422` and is not s
 those env vars for the whole deployment ([Configuration](/configuration#transcription-stt)). Capture-only:
 `{"transcribe_enabled": false}` (or `TRANSCRIBE_ENABLED=false` for the deployment). Configured and
 still failing? See [Troubleshooting](/troubleshooting#bot-joins-but-theres-no-transcript).
+The same `503` also refuses a spawn whose endpoint saved in Settings has stopped working (it
+answers unauthorized, exhausted or not found, or resolves to an internal address): the detail starts
+`your saved transcription endpoint is not working: …`, the fix is a re-save in Settings, not env,
+and it re-tests within 60s. An unreachable endpoint never refuses.
 
 ### Completion service provenance
 

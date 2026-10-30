@@ -43,16 +43,18 @@ stays GPU-free and reaches it over the network via the two variables above.
 ### When the backend is wrong, you learn at configure time
 
 A URL or token that does not work is refused where you set it, not by an empty transcript hours
-later. The same live check runs at three surfaces, and all three name the same cause:
+later. The same live check runs at four surfaces, and all four name the same cause:
 
 | Surface | What you see |
 |---|---|
 | Setup wizard — **Save & test** | Red with the endpoint's own status: `Token REJECTED by … (HTTP 401)` or `No transcriptions endpoint at … (HTTP 404)`. A green here means a bot will transcribe — the wizard verifies with the exact request a bot's first audio chunk makes. |
 | Boot log + `GET /health` | The `stt` capability row reads `misconfigured` with a `probe.reason`, instead of `configured`. A failing probe warns loudly but never blocks boot. |
 | `POST /bots` | `503` carrying that same reason, **before** any meeting row is written — never a bot that joins and silently transcribes nothing. |
+| Settings → Transcription backend / `PUT /user/transcription` | A personal endpoint is refused with `422` on save when it rejects the token; a saved one that stops working refuses `POST /bots` with the same `503` shape, before any row. |
 
 The verdict is cached for 60s, so after fixing the value either wait a minute or call
-`GET /health?force=1` to re-probe immediately.
+`GET /health?force=1` to re-probe immediately. `/health?force=1` re-probes the deployment's backend
+only; a personal endpoint re-tests by itself within 60s after a refusal, or at once on a re-save.
 
 <Note>
 A `404` from the transcriptions path is treated as a **wrong URL**, not as proof of life: a real
