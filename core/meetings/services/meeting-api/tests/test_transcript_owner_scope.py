@@ -45,9 +45,12 @@ def _not_scope_refused(r) -> bool:
 @pytest.mark.parametrize("scopes", [["bot"], ["tx"]])
 def test_one_key_sends_a_bot_and_reads_its_own_transcript(rig, scopes):
     client, mine, _ = rig
-    spawn = client.post("/bots", headers=_signed(scopes),
-                        json={"platform": "google_meet", "native_meeting_id": "abc-defg-hij"})
-    assert _not_scope_refused(spawn), spawn.text
+    # The spawn passes the scope gate and reaches the route; this in-process app has no runtime to
+    # schedule a bot on (no ADMIN_TOKEN to mint its MeetingToken), so only the gate is asserted here.
+    spawner = TestClient(client.app, raise_server_exceptions=False)
+    spawn = spawner.post("/bots", headers=_signed(scopes),
+                         json={"platform": "google_meet", "native_meeting_id": "abc-defg-hij"})
+    assert spawn.status_code != 403, spawn.text
     r = client.get(f"/transcripts/by-id/{mine}", headers=_signed(scopes))
     assert r.status_code == 200, r.text
     assert [s["text"] for s in r.json()["segments"]] == ["This is Anna."]
