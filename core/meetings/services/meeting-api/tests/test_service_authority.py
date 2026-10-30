@@ -98,6 +98,7 @@ async def _spawn(
     *,
     repo: InMemoryMeetingRepo | None = None,
     runtime: FakeRuntimeClient | None = None,
+    native_meeting_id: str = "authority-fixture",
 ):
     repo = repo or InMemoryMeetingRepo()
     runtime = runtime or FakeRuntimeClient()
@@ -107,7 +108,7 @@ async def _spawn(
         authority=authority,
         user_id=41,
         platform="google_meet",
-        native_meeting_id="authority-fixture",
+        native_meeting_id=native_meeting_id,
         transcribe_enabled=False,
         recording_enabled=False,
         token_secret="fixture-token-secret",
@@ -573,7 +574,10 @@ async def test_active_boundary_unavailable_fails_open_and_records_debt(
     persisted = row["data"]["service_authority"]
     assert persisted.get("last_boundary_at") == admitted.get("last_boundary_at")
     assert persisted.get("last_boundary_at") is None
-    assert persisted.get("last_decision_id") is None
+    # Admission records its own decision id; no continuation decision may
+    # replace it while the authority is down.
+    assert persisted.get("last_decision_id") == admitted["decision_id"]
+    assert persisted.get("last_decision_id") == admitted.get("last_decision_id")
     assert persisted["decision_id"] == admitted["decision_id"]
     assert persisted["reason"] == admitted["reason"]
     assert [d["boundary"] for d in persisted["debt_boundaries"]] == [

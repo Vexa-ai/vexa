@@ -45,6 +45,7 @@ async def test_outage_costs_one_authority_call_per_tick() -> None:
     repo, runtime, first = await _active(authority)
     _repo2, _runtime2, second_meeting = await _spawn(
         authority, repo=repo, runtime=runtime,
+        native_meeting_id="authority-fixture-second",
     )
     second = repo._meetings[second_meeting["id"]]
     second["status"] = "active"
@@ -93,7 +94,10 @@ async def test_recovery_settles_each_debt_minute_once() -> None:
     assert len(debt_before) == 3
     outage_request_ids = [d["request_id"] for d in debt_before]
     # Concurrency changes during the outage; replay must use the stored value.
-    _r, _rt, other = await _spawn(authority, repo=repo, runtime=runtime)
+    _r, _rt, other = await _spawn(
+        authority, repo=repo, runtime=runtime,
+        native_meeting_id="authority-fixture-other",
+    )
     repo._meetings[other["id"]]["status"] = "active"
     repo._meetings[other["id"]]["data"]["service_authority"]["mode"] = "unconfigured"
     authority.requests.clear()
