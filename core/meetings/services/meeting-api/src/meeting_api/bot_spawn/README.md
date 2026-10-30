@@ -94,14 +94,23 @@ runtime teardown and converges after restart; repeated sweeps never apply the sa
 Observe-only sessions are never later reinterpreted as enforced sessions.
 
 `failure_policy=closed` applies to **admission only**: with the authority unavailable `POST /bots`
-answers 503 `service_authority_unavailable`. An **admitted** session fails open: the minute is booked
-as debt (`record_service_authority_debt`), no decision is recorded, the bot keeps running, and the
-minute is replayed once when the authority answers again. See
-[`../service_authority/README.md`](../service_authority/README.md).
+answers 503 `service_authority_unavailable`. An **admitted** session fails open: an unavailable
+answer at a minute boundary records no decision — `last_boundary_at` stays put — and books the
+minute in `service_authority.debt_boundaries` (`record_service_authority_debt`, with the
+`request_id` and `active_concurrency` of that minute), logs
+`service_authority_fail_open meeting_id=… boundary=… reason=unavailable` once per minute, and
+leaves the bot running. After the first unavailable answer a sweep makes no further authority
+call that tick. When the authority answers again the sweep replays every debt minute in order
+with the same `request_id` and stored concurrency; each real decision settles its entry exactly
+once, and the row carries `service_authority.debt_open` and `debt_settled_count`
+(`debt_boundaries` is `[]` once settled). An enforced deny on a replayed minute still stops the
+bot. Debt left on a meeting stopped by that deny, or one that ended during the outage, is replayed
+on later sweeps through `list_service_authority_debt_sessions`; a deny there settles the minute
+without a stop. See [`../service_authority/README.md`](../service_authority/README.md).
 
 No config means explicit stock OSS allow-all. Once configured, malformed, stale, or cross-bound
-decisions are refused, and an unavailable authority fails closed at admission only (above).
-`mode=observe` records the authority response but cannot satisfy a hosted hard-spend-cap claim.
+decisions are refused, and an unavailable authority fails closed at admission only (above). `mode=observe` records the authority response but cannot satisfy
+a hosted hard-spend-cap claim.
 
 ## Auto-join block lists
 `auto_join_block.py` — domains and addresses the auto-join sweep never joins: the operator's

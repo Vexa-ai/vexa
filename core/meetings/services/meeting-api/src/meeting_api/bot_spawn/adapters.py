@@ -774,6 +774,34 @@ class SqlAlchemyMeetingRepo:
                 in ("enforce", "observe")
             ]
 
+    async def list_service_authority_debt_sessions(self) -> list[dict]:
+        """Rows in any status that still carry unsettled fail-open debt.
+
+        Matches ``data @> {"service_authority": {"debt_open": true}}`` so a
+        meeting stopped by a catch-up deny, or one that ended during an
+        outage, still has its remaining debt minutes replayed.
+        """
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(Meeting).where(
+                        Meeting.data.contains(
+                            {"service_authority": {"debt_open": True}}
+                        ),
+                    )
+                )
+            ).scalars().all()
+            return [
+                _row_to_dict(row)
+                for row in rows
+                if isinstance(row.data, dict)
+                and isinstance(row.data.get("service_authority"), dict)
+            ]
+
     async def record_service_authority_decision(
         self,
         *,
@@ -830,9 +858,16 @@ class SqlAlchemyMeetingRepo:
                 and not decision.allow
                 and decision.stop_scope == "billable_service"
             ):
-                metadata["teardown_confirmed"] = False
-                data["stop_requested"] = True
-                row.status = "stopping"
+                if row.status in ("active", "needs_help"):
+                    metadata["teardown_confirmed"] = False
+                    data["stop_requested"] = True
+                    row.status = "stopping"
+                else:
+                    # Replayed debt minute of a row that is no longer live
+                    # (stopped by an earlier deny, or ended during the
+                    # outage): the deny is recorded, nothing is left to stop.
+                    metadata["teardown_confirmed"] = True
+                    metadata["teardown_skipped"] = "meeting_not_live"
             data["service_authority"] = metadata
             row.data = data
             flag_modified(row, "data")

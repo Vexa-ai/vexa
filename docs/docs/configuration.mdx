@@ -88,12 +88,15 @@ an enforced stop intent is committed before runtime teardown and resumed after r
 
 `failure_policy: "closed"` applies to admission only. If the authority is unavailable at an
 active-service minute boundary, a bot that is already running keeps running in both modes: the
-minute is recorded as debt on the meeting (`data.service_authority.debt_boundaries`, `debt_open:
-true`) and meeting-api logs `service_authority_fail_open … reason=unavailable` once per minute.
-When the authority answers again, the debt minutes of a still-running meeting are replayed once, in
-order, with their original request ID and concurrency (`debt_settled_count`); an enforced deny on a
-replayed minute stops the bot. Debt of a meeting that stops or ends before the authority recovers
-stays open (`debt_open: true`) and is not yet replayed.
+minute is recorded as debt on the meeting (`data.service_authority.debt_boundaries`), meeting-api
+logs `service_authority_fail_open … reason=unavailable` once per minute, and an outage costs one
+authority call per sweep rather than one per meeting. When the authority answers again, each debt
+minute is replayed once, in order, with its original request ID and the concurrency observed at the
+time; an enforced deny on a replayed minute stops the bot like any other enforced deny. Debt minutes
+after that deny, and those of a meeting that ended during the outage, are still replayed and settled
+on later sweeps, because the bot did run through them; a deny there settles the minute without a
+stop. The meeting record carries `data.service_authority.debt_open` (true while any debt minute is
+unsettled) and `debt_settled_count`; `debt_boundaries` is `[]` once everything is settled.
 
 `mode: "observe"` records decisions without refusing or stopping service. It is useful for rollout,
 but it is not evidence that a hard service control is enforced. A session admitted in one mode is
