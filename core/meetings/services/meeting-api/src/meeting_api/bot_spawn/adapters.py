@@ -772,15 +772,20 @@ class SqlAlchemyMeetingRepo:
             metadata.update(decision.to_record())
             metadata["last_boundary_at"] = boundary
             metadata["last_decision_id"] = decision.decision_id
-            if decision.reason == "service_authority_unavailable":
-                # Fail-open minute: keep a debt marker for later settlement.
-                metadata["debt_boundaries"] = [
-                    *(metadata.get("debt_boundaries") or []),
-                    {
-                        "boundary": boundary,
-                        "active_concurrency": request.active_concurrency,
-                    },
+            # A real decision for a fail-open minute settles that debt entry.
+            debt = metadata.get("debt_boundaries")
+            if isinstance(debt, list):
+                remaining = [
+                    item for item in debt
+                    if not (
+                        isinstance(item, dict)
+                        and item.get("boundary") == boundary
+                    )
                 ]
+                if remaining:
+                    metadata["debt_boundaries"] = remaining
+                else:
+                    metadata.pop("debt_boundaries", None)
             if (
                 decision.enforced
                 and not decision.allow
@@ -789,6 +794,69 @@ class SqlAlchemyMeetingRepo:
                 metadata["teardown_confirmed"] = False
                 data["stop_requested"] = True
                 row.status = "stopping"
+            data["service_authority"] = metadata
+            row.data = data
+            flag_modified(row, "data")
+            await db.commit()
+            return True
+
+    async def record_service_authority_debt(
+        self,
+        *,
+        meeting_id,
+        request,
+    ) -> bool:
+        """Book one fail-open minute as debt under a row lock.
+
+        The boundary is NOT advanced: the next sweep asks the authority about
+        the same minute again (same ``request_id``) and the matching decision
+        removes the entry.  Returns whether the entry is new.
+        """
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            row = (
+                await db.execute(
+                    select(Meeting)
+                    .where(Meeting.id == meeting_id)
+                    .with_for_update()
+                )
+            ).scalars().first()
+            if row is None:
+                return False
+            data = dict(row.data) if isinstance(row.data, dict) else {}
+            metadata = data.get("service_authority")
+            if (
+                not isinstance(metadata, dict)
+                or metadata.get("service_identity")
+                != request.service_identity
+            ):
+                return False
+            metadata = dict(metadata)
+            boundary = request.boundary_at.isoformat()
+            prior_boundary = metadata.get("last_boundary_at")
+            if prior_boundary:
+                prior = datetime.fromisoformat(
+                    prior_boundary.replace("Z", "+00:00")
+                )
+                if prior >= request.boundary_at:
+                    return False
+            debt = metadata.get("debt_boundaries")
+            debt = list(debt) if isinstance(debt, list) else []
+            if any(
+                isinstance(item, dict) and item.get("boundary") == boundary
+                for item in debt
+            ):
+                return False
+            debt.append({
+                "boundary": boundary,
+                "request_id": request.request_id,
+                "active_concurrency": request.active_concurrency,
+            })
+            metadata["debt_boundaries"] = debt
             data["service_authority"] = metadata
             row.data = data
             flag_modified(row, "data")

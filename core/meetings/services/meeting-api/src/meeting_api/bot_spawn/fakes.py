@@ -402,14 +402,19 @@ class InMemoryMeetingRepo:
         metadata.update(decision.to_record())
         metadata["last_boundary_at"] = boundary
         metadata["last_decision_id"] = decision.decision_id
-        if decision.reason == "service_authority_unavailable":
-            metadata["debt_boundaries"] = [
-                *(metadata.get("debt_boundaries") or []),
-                {
-                    "boundary": boundary,
-                    "active_concurrency": request.active_concurrency,
-                },
+        debt = metadata.get("debt_boundaries")
+        if isinstance(debt, list):
+            remaining = [
+                item for item in debt
+                if not (
+                    isinstance(item, dict)
+                    and item.get("boundary") == boundary
+                )
             ]
+            if remaining:
+                metadata["debt_boundaries"] = remaining
+            else:
+                metadata.pop("debt_boundaries", None)
         if (
             decision.enforced
             and not decision.allow
@@ -418,6 +423,46 @@ class InMemoryMeetingRepo:
             metadata["teardown_confirmed"] = False
             row["data"]["stop_requested"] = True
             row["status"] = "stopping"
+        return True
+
+    async def record_service_authority_debt(
+        self,
+        *,
+        meeting_id,
+        request,
+    ) -> bool:
+        row = self._meetings.get(meeting_id)
+        if row is None:
+            return False
+        metadata = row.get("data", {}).get("service_authority")
+        if (
+            not isinstance(metadata, dict)
+            or metadata.get("service_identity")
+            != request.service_identity
+        ):
+            return False
+        boundary = request.boundary_at.isoformat()
+        if metadata.get("last_boundary_at"):
+            from datetime import datetime
+
+            previous = datetime.fromisoformat(
+                metadata["last_boundary_at"].replace("Z", "+00:00")
+            )
+            if previous >= request.boundary_at:
+                return False
+        debt = metadata.get("debt_boundaries")
+        debt = list(debt) if isinstance(debt, list) else []
+        if any(
+            isinstance(item, dict) and item.get("boundary") == boundary
+            for item in debt
+        ):
+            return False
+        debt.append({
+            "boundary": boundary,
+            "request_id": request.request_id,
+            "active_concurrency": request.active_concurrency,
+        })
+        metadata["debt_boundaries"] = debt
         return True
 
     async def list_service_authority_teardowns(self) -> list[dict]:

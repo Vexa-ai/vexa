@@ -196,7 +196,19 @@ class MeetingRepo(Protocol):
         request: Any,
         decision: Any,
     ) -> bool:
-        """Append the next monotonic boundary decision; return whether it was new."""
+        """Append the next monotonic boundary decision; return whether it was new.
+
+        A decision for a boundary held in ``debt_boundaries`` settles that entry."""
+        ...
+
+    async def record_service_authority_debt(
+        self,
+        *,
+        meeting_id: int,
+        request: Any,
+    ) -> bool:
+        """Book one fail-open minute (authority unavailable) as debt WITHOUT advancing
+        ``last_boundary_at``; idempotent per boundary. Return whether the entry is new."""
         ...
 
     async def list_service_authority_teardowns(self) -> list[dict]:

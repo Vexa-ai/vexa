@@ -93,6 +93,18 @@ asks again at every admitted-time + N-minute boundary. An enforced stop is persi
 runtime teardown and converges after restart; repeated sweeps never apply the same decision twice.
 Observe-only sessions are never later reinterpreted as enforced sessions.
 
+`failure_policy=closed` applies to **admission only**: with the authority unavailable `POST /bots`
+answers 503 `service_authority_unavailable`. An **admitted** session fails open: an unavailable
+answer at a minute boundary records no decision — `last_boundary_at` stays put — and books the
+minute in `service_authority.debt_boundaries` (`record_service_authority_debt`, with the
+`request_id` and `active_concurrency` of that minute), logs
+`service_authority_fail_open meeting_id=… boundary=… reason=unavailable` once per minute, and
+leaves the bot running. After the first unavailable answer a sweep makes no further authority
+call that tick. When the authority answers again the sweep replays every debt minute in order
+with the same `request_id` and stored concurrency; each real decision settles its entry exactly
+once (`debt_settled_count`), and an enforced deny on a replayed minute still stops the bot.
+See [`../service_authority/README.md`](../service_authority/README.md).
+
 No config means explicit stock OSS allow-all. Once configured, unavailable, malformed, stale, or
 cross-bound decisions fail closed. `mode=observe` records the authority response but cannot satisfy
 a hosted hard-spend-cap claim.

@@ -545,83 +545,64 @@ async def _active(authority):
 
 
 @pytest.mark.asyncio
-async def test_active_boundary_unavailable_fails_open_and_records_debt() -> None:
+@pytest.mark.parametrize("mode", ["enforce", "observe"])
+async def test_active_boundary_unavailable_fails_open_and_records_debt(
+    mode, caplog,
+) -> None:
+    # B1: three injected outage minutes. No decision is recorded, the boundary
+    # does not move, every minute is booked as debt, one alert per minute, and
+    # the bot keeps running — in enforce AND observe mode.
     authority = RecordingAuthority(
+        mode=mode,
         continuation=ServiceAuthorityUnavailable("fixture outage"),
     )
     repo, runtime, row = await _active(authority)
-
-    observed = await run_service_authority_sweep(
-        repo,
-        runtime,
-        authority,
-        now=ADMITTED_AT + timedelta(minutes=1, seconds=1),
-    )
-
-    persisted = row["data"]["service_authority"]
-    assert observed.decisions == 1
-    assert observed.teardowns_confirmed == 0
-    assert observed.faults == 1
-    assert persisted["reason"] == "service_authority_unavailable"
-    assert persisted["allow"] is True
-    assert persisted["enforced"] is False
-    assert persisted["stop_scope"] is None
-    assert len(persisted["debt_boundaries"]) == 1
-    assert row["status"] == "active"
-    assert not row["data"].get("stop_requested")
-    assert runtime.deleted == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["enforce", "observe"])
-@pytest.mark.parametrize("fault", ["timeout", "http500", "malformed"])
-async def test_three_minute_outage_keeps_bot_and_records_debt(
-    mode, fault, caplog,
-) -> None:
-    # Every failure shape the adapter maps to ServiceAuthorityUnavailable.
-    authority = RecordingAuthority(
-        mode=mode,
-        continuation=ServiceAuthorityUnavailable(fault),
-    )
-    repo, runtime, row = await _active(authority)
     row["data"]["service_authority"]["mode"] = mode
+    admitted = dict(row["data"]["service_authority"])
 
+    observations = []
     with caplog.at_level("ERROR"):
         for minute in (1, 2, 3):
-            await run_service_authority_sweep(
+            observations.append(await run_service_authority_sweep(
                 repo,
                 runtime,
                 authority,
                 now=ADMITTED_AT + timedelta(minutes=minute, seconds=1),
-            )
+            ))
 
     persisted = row["data"]["service_authority"]
-    assert row["status"] == "active"
-    assert not row["data"].get("stop_requested")
-    assert runtime.deleted == []
+    assert persisted.get("last_boundary_at") == admitted.get("last_boundary_at")
+    assert persisted.get("last_boundary_at") is None
+    assert persisted.get("last_decision_id") is None
+    assert persisted["decision_id"] == admitted["decision_id"]
+    assert persisted["reason"] == admitted["reason"]
     assert [d["boundary"] for d in persisted["debt_boundaries"]] == [
         (ADMITTED_AT + timedelta(minutes=m)).isoformat() for m in (1, 2, 3)
     ]
+    assert all(o.decisions == 0 for o in observations)
+    assert all(o.teardowns_confirmed == 0 for o in observations)
+    assert all(o.debt_open is True for o in observations)
+    assert observations[-1].debt_settled_count == 0
     alerts = [
         r for r in caplog.records
-        if "service_authority_unavailable_fail_open" in r.getMessage()
+        if r.getMessage().startswith("service_authority_fail_open ")
+        and "reason=unavailable" in r.getMessage()
     ]
     assert len(alerts) == 3
-
-    # Admission stays fail-closed during the same outage (router maps to 503).
-    authority.admit = ServiceAuthorityUnavailable(fault)
-    with pytest.raises(ServiceAuthorityUnavailable):
-        await _spawn(authority, repo=InMemoryMeetingRepo())
+    assert row["status"] == "active"
+    assert not row["data"].get("stop_requested")
+    assert runtime.deleted == []
 
 
 @pytest.mark.asyncio
-async def test_enforced_insufficient_balance_deny_still_tears_down() -> None:
+async def test_active_boundary_enforced_deny_still_stops() -> None:
+    # B5: a real enforced deny is not an outage; it stops the bot and books no debt.
     authority = RecordingAuthority(
         continuation=_decision(
             allow=False,
             action="continue",
-            reason="insufficient_balance",
-            decision_id="decision-balance-41",
+            reason="opaque_limit",
+            decision_id="decision-enforced-stop-41",
             stop_scope="billable_service",
         ),
     )
@@ -634,8 +615,13 @@ async def test_enforced_insufficient_balance_deny_still_tears_down() -> None:
         now=ADMITTED_AT + timedelta(minutes=1, seconds=1),
     )
 
+    assert observed.decisions == 1
     assert observed.teardowns_confirmed == 1
+    assert observed.debt_open is False
     assert row["data"]["stop_requested"] is True
+    assert row["data"]["service_authority"]["last_decision_id"] == (
+        "decision-enforced-stop-41"
+    )
     assert len(runtime.deleted) == 1
     assert not row["data"]["service_authority"].get("debt_boundaries")
 
