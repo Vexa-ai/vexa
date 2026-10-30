@@ -86,17 +86,10 @@ configured authority that is unavailable, malformed, stale, or bound to another 
 closed before a new bot is spawned (`503 service_authority_unavailable`). During active service,
 an enforced stop intent is committed before runtime teardown and resumed after restart.
 
-`failure_policy: "closed"` applies to admission only. If the authority is unavailable at an
-active-service minute boundary, a bot that is already running keeps running in both modes: the
-minute is recorded as debt on the meeting (`data.service_authority.debt_boundaries`), meeting-api
-logs `service_authority_fail_open … reason=unavailable` once per minute, and an outage costs one
-authority call per sweep rather than one per meeting. When the authority answers again, each debt
-minute is replayed once, in order, with its original request ID and the concurrency observed at the
-time; an enforced deny on a replayed minute stops the bot like any other enforced deny. Debt minutes
-after that deny, and those of a meeting that ended during the outage, are still replayed and settled
-on later sweeps, because the bot did run through them; a deny there settles the minute without a
-stop. The meeting record carries `data.service_authority.debt_open` (true while any debt minute is
-unsettled) and `debt_settled_count`; `debt_boundaries` is `[]` once everything is settled.
+`failure_policy: "closed"` applies to admission only. A running bot keeps running if the authority is
+unavailable at a minute boundary: the minute is recorded as debt (`data.service_authority.debt_boundaries`,
+`debt_open`), `service_authority_fail_open` is logged, and on recovery each debt minute of a running
+meeting is replayed once (`debt_settled_count`). Debt of a meeting that stops or ends first stays open.
 
 `mode: "observe"` records decisions without refusing or stopping service. It is useful for rollout,
 but it is not evidence that a hard service control is enforced. A session admitted in one mode is

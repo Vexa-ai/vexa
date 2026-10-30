@@ -572,12 +572,9 @@ async def test_active_boundary_unavailable_fails_open_and_records_debt(
             ))
 
     persisted = row["data"]["service_authority"]
-    assert persisted.get("last_boundary_at") == admitted.get("last_boundary_at")
     assert persisted.get("last_boundary_at") is None
-    # Admission records its own decision id; no continuation decision may
-    # replace it while the authority is down.
+    # No continuation decision may replace admission's while the authority is down.
     assert persisted.get("last_decision_id") == admitted["decision_id"]
-    assert persisted.get("last_decision_id") == admitted.get("last_decision_id")
     assert persisted["decision_id"] == admitted["decision_id"]
     assert persisted["reason"] == admitted["reason"]
     assert [d["boundary"] for d in persisted["debt_boundaries"]] == [

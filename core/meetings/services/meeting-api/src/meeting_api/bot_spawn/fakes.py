@@ -368,15 +368,6 @@ class InMemoryMeetingRepo:
             in ("enforce", "observe")
         ]
 
-    async def list_service_authority_debt_sessions(self) -> list[dict]:
-        """Rows in any status still carrying unsettled fail-open debt."""
-        return [
-            dict(m)
-            for m in self._meetings.values()
-            if isinstance(m.get("data", {}).get("service_authority"), dict)
-            and m["data"]["service_authority"].get("debt_open") is True
-        ]
-
     async def record_service_authority_decision(
         self,
         *,
@@ -418,14 +409,9 @@ class InMemoryMeetingRepo:
             and not decision.allow
             and decision.stop_scope == "billable_service"
         ):
-            if row["status"] in ("active", "needs_help"):
-                metadata["teardown_confirmed"] = False
-                row["data"]["stop_requested"] = True
-                row["status"] = "stopping"
-            else:
-                # Replayed debt minute of a row that is no longer live.
-                metadata["teardown_confirmed"] = True
-                metadata["teardown_skipped"] = "meeting_not_live"
+            metadata["teardown_confirmed"] = False
+            row["data"]["stop_requested"] = True
+            row["status"] = "stopping"
         return True
 
     async def record_service_authority_debt(
