@@ -64,12 +64,12 @@ def client(pg_url, pg_async_url, monkeypatch):
     monkeypatch.setenv("ADMIN_API_TOKEN", ADMIN_TOKEN)
     monkeypatch.setenv("INTERNAL_API_SECRET", INTERNAL_SECRET)
     monkeypatch.setenv("DEV_MODE", "false")
-    # The stub lives on loopback: an operator allowance admits loopback ONLY. The guard itself stays
-    # on — any other private address is still refused (see the guard tests below).
-    loop = ssrf.parse_allowance("127.0.0.0/8")
-    real_validate = ssrf.validate_url
-    monkeypatch.setattr(ssrf, "validate_url", lambda url, *a, **k: real_validate(url, *a, **{**k, "allow": loop}))
-    monkeypatch.setattr(probe_mod, "ALLOW", loop)
+    # The stub lives on loopback, which the guard (rightly) never lets an operator allow. Only the
+    # loopback verdict is lifted; the guard stays on, so any other private address is still refused
+    # (see the guard tests below).
+    real_blocked = ssrf.is_blocked_ip
+    monkeypatch.setattr(ssrf, "is_blocked_ip",
+                        lambda a: False if str(a).startswith("127.") else real_blocked(a))
     app_db.configure(pg_async_url)
     with TestClient(create_app()) as c:
         yield c

@@ -23,8 +23,6 @@ STT_PROBE_SPEC = {
     "invalid_statuses": [404], "exhausted_statuses": [402], "payload": "audio",
 }
 PROBE_TIMEOUT_S = 15.0
-#: Operator allowance for the outbound guard. None = the rule with no exception (tests only set it).
-ALLOW = None
 
 REASONS = {
     "unauthorized": "the endpoint rejected the token (missing or wrong)",
@@ -40,7 +38,7 @@ def _status(url: str, token: str, resolver=None) -> int:
     headers = {"Content-Type": content_type}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    transport = ssrf.build_pinned_sync_transport(resolver=resolver, allow=ALLOW)
+    transport = ssrf.build_pinned_sync_transport(resolver=resolver)
     with httpx.Client(transport=transport, follow_redirects=False, timeout=PROBE_TIMEOUT_S) as client:
         return client.post(cp.probe_url(url, STT_PROBE_SPEC["path"]), content=body, headers=headers).status_code
 
@@ -51,7 +49,7 @@ def probe_endpoint(url: str, token: str, resolver=None) -> dict:
     Raises ``ssrf.SSRFError`` when the URL, or any address its host resolves to, is internal: it is
     refused before any connection is made."""
     try:
-        ssrf.validate_url(url, resolver, what="url", resolve=True, allow=ALLOW)
+        ssrf.validate_url(url, resolver, what="url", resolve=True)
     except ssrf.SSRFError as exc:
         if "could not be resolved" not in str(exc):
             raise
