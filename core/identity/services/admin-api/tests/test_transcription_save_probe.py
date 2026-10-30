@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 
 from admin_api.app import db as app_db
+from admin_api.app import calendars as _calendars  # noqa: F401 — binds its real ssrf import before any patch
 from admin_api.app import ssrf
 from admin_api.app.main import create_app
 from admin_api.schema.models import Base
