@@ -389,9 +389,10 @@ instructions. These turns read, and they **propose**; a person decides.
    transcript, the room's workspace and what was shared explicitly. No other attendee's personal
    workspace is mounted, whoever the invite names.
 8. **An unattended turn leaves your live bot alone.** A routine's turn, a mail's turn and a call
-   signal's turn cannot stop your bot, change its settings, type into the meeting chat or speak in
-   the call. meeting-api answers them `403 human_session_required`. The one exception: a routine
-   you granted `bot.stop` when you made it may stop the bot. You, and a turn you are watching in
+   signal's turn cannot stop your bot, change its settings, type into the meeting chat (including
+   a `chat_on_join` notice on a bot it sends) or speak in the call. meeting-api answers them `403
+   human_session_required`. The exceptions: a routine you granted `bot.stop` when you made it may
+   stop the bot, and one you granted `bot.request` may send a bot, without `chat_on_join`. You, and a turn you are watching in
    your own chat, keep every one of these. On a deployment without the model proxy, an unattended
    worker is also offered none of these tools.
 

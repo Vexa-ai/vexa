@@ -48,7 +48,11 @@ failures (`422`).
   `VEXA_MEETING_DELETE_LIVE=stop`, asks the bot to leave and returns `202` (`deletion_scheduled`), and
   the deletion completes when the meeting ends.
 - `POST /bots` → `409` when a bot is already active on that link (a *planned* record on the link is
-  fine — the spawn claims it); `429` past your concurrency limit.
+  fine — the spawn claims it); `429` past your concurrency limit; `422` naming `chat_on_join` when
+  it is blank, not a string, over 500 characters, or sent for a `voice_note` / `vexa_call`; `403`
+  with `detail.reason` `human_session_required` (an unattended turn, a routine granted `bot.request`
+  included) or `shared_conversation` (a shared turn or a room's principal) when the request carries
+  `chat_on_join`. The same request without it is not refused for this.
 - `DELETE /bots/{platform}/{native_meeting_id}` → `200` with a body
   (`{"status":"stopping","meeting_id":…}`), not `204`.
 - A bot that fails to join surfaces in `GET /bots/status` rather than as an HTTP error on `POST /bots`
