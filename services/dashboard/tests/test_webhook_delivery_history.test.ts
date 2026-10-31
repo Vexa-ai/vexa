@@ -24,17 +24,19 @@ const SECRET = "whsec_topsecret_value";
 const TEST_URL = `https://hooks.example.com/vexa/inbox?token=${SECRET}`;
 const now = () => new Date().toISOString();
 
-const ledgerRow = (over: Record<string, unknown>) => ({
-  event_type: "meeting.status_change",
-  event_id: `evt_${String(over.outcome)}_${String(over.meeting_id ?? 1)}`,
-  target_host: "hooks.example.com",
-  outcome: "delivered",
-  status_code: 200,
-  attempt: 0,
-  created_at: now(),
-  meeting_id: 1,
-  ...over,
-});
+const ledgerRow = (over: Record<string, unknown>) => {
+  const row = {
+    event_type: "meeting.status_change",
+    target_host: "hooks.example.com",
+    outcome: "delivered",
+    status_code: 200,
+    attempt: 0,
+    created_at: now(),
+    meeting_id: 1,
+    ...over,
+  };
+  return { event_id: `evt_${String(row.outcome)}_${String(row.meeting_id)}`, ...row };
+};
 
 const testRow = () => ({
   id: "test-1",
