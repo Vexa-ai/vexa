@@ -786,6 +786,17 @@ class InMemoryTranscriptStore:
             return
         self._row_or_placeholder(meeting_id)["segments"][segment["segment_id"]] = segment
 
+    async def live_rows(self, meeting_id) -> dict:
+        """#1973: the live tail — HGETALL of the redis hash in prod-topology mode, else the row's dict."""
+        if self._redis is not None:
+            from .db_writer import segments_hash_key
+
+            raw = await self._redis.hgetall(segments_hash_key(meeting_id))
+            return {
+                (k.decode() if isinstance(k, bytes) else k): json.loads(v) for k, v in (raw or {}).items()
+            }
+        return {sid: dict(seg) for sid, seg in self._row_or_placeholder(meeting_id)["segments"].items()}
+
     async def delete_segments(self, meeting_id, segment_ids) -> None:
         ids = [str(s) for s in (segment_ids or []) if s]
         if not ids:

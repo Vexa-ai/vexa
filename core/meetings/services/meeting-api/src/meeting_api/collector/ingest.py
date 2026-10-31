@@ -157,6 +157,67 @@ def _log_publish_failure(meeting_id: int, e: Exception) -> None:
         pass
 
 
+# #1973: a draft is "covered" by a confirmed row of the same track whose window contains it (the reconfirm
+# lane's A' spans [A.start, C.end]); 1 ms slack, in the segments' seconds.
+_COVER_EPS = 1e-3
+
+
+def _is_csrc(row: dict) -> bool:
+    """Teams CSRC rows (the discriminator ``db_writer.threshold_for`` uses): Teams sends its own snapshot."""
+    return row.get("source") == "merged" and str(row.get("speaker_key") or "").startswith("csrc:")
+
+
+def _is_open_draft(row: dict) -> bool:
+    return (not row.get("completed")) and bool((row.get("text") or "").strip()) and row.get("source") != "chat"
+
+
+def _same_track(a: dict, b: dict) -> bool:
+    if a.get("speaker_key") and b.get("speaker_key"):
+        return a["speaker_key"] == b["speaker_key"]
+    return (a.get("speaker") or "") == (b.get("speaker") or "")
+
+
+def _covered(d: dict, confirmed: list) -> bool:
+    try:
+        ds, de = float(d["start"]), float(d["end"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if de - ds <= _COVER_EPS:  # the in-progress (zero-length) window is never covered
+        return False
+    for c in confirmed:
+        try:
+            cs, ce = float(c["start"]), float(c["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if _same_track(c, d) and cs - _COVER_EPS <= ds and de <= ce + _COVER_EPS:
+            return True
+    return False
+
+
+def open_drafts(rows: dict, speaker: str) -> list:
+    """#1973: ``speaker``'s COMPLETE open-draft set in the live tail, in start order: non-empty, non-chat
+    drafts of that slot (``""`` for unnamed) that no confirmed row of the same track covers."""
+    confirmed = [r for r in rows.values() if r.get("completed")]
+    out = [
+        r for r in rows.values()
+        if (r.get("speaker") or "") == speaker and _is_open_draft(r) and not _covered(r, confirmed)
+    ]
+    return sorted(out, key=lambda r: float(r.get("start") or 0.0))
+
+
+async def _live_rows(store: TranscriptStore, meeting_id: int) -> Optional[dict]:
+    """The live tail, or ``None`` when the store has no reader or the read fails (→ today's bundle, P18)."""
+    fn = getattr(store, "live_rows", None)
+    if fn is None:
+        return None
+    try:
+        rows = await fn(meeting_id)
+    except Exception as e:  # noqa: BLE001 — the fallback is today's entry-only bundle
+        _log_publish_failure(meeting_id, e)
+        return None
+    return rows if isinstance(rows, dict) else None
+
+
 async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
     """Process ONE ``transcription_segments`` stream message.
 
@@ -207,6 +268,16 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
         if meeting_id is None or not isinstance(seg_ids, list) or not seg_ids:
             return 0
         ids = [str(s) for s in seg_ids if s]
+        # #1973: note the speakers whose OPEN draft this withdraws, so each gets its updated set after.
+        before = await _live_rows(store, meeting_id)
+        affected: list = []
+        if before is not None:
+            for sid in ids:
+                row = before.get(sid)
+                if row and _is_open_draft(row) and not _is_csrc(row):
+                    spk = row.get("speaker") or ""
+                    if spk not in affected:
+                        affected.append(spk)
         try:
             await store.delete_segments(meeting_id, ids)
         except Exception as e:  # noqa: BLE001 — best-effort; never abort the batch on a retract
@@ -219,6 +290,19 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
             )
         except Exception as e:  # noqa: BLE001 — best-effort live fan-out
             _log_publish_failure(meeting_id, e)
+        if affected:
+            remaining = {k: v for k, v in before.items() if k not in set(ids)}
+            for spk in affected:
+                try:
+                    await redis.publish(
+                        _mutable_channel(meeting_id),
+                        json.dumps({
+                            "type": "transcript", "meeting": {"id": meeting_id}, "speaker": spk,
+                            "confirmed": [], "pending": open_drafts(remaining, spk), "ts": _now_iso(),
+                        }),
+                    )
+                except Exception as e:  # noqa: BLE001 — best-effort live fan-out
+                    _log_publish_failure(meeting_id, e)
         return 0
     if msg_type not in ("transcription", "transcript"):
         # session_start / speaker events are out of scope for this segment unit.
@@ -247,6 +331,17 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
         confirmed = [s for s in persisted if s["completed"]]
         pending = [s for s in persisted if not s["completed"]]
         speaker = persisted[0].get("speaker") or ""
+        # #1973: ``pending`` is the speaker's COMPLETE open-draft set (the reconfirm lane keeps several
+        # drafts per speaker; every reader replaces the slot with it), plus this entry's drafts of other
+        # speakers. Teams CSRC entries keep the entry-only bundle (Teams sends its own snapshot).
+        if not any(_is_csrc(s) for s in persisted):
+            live = await _live_rows(store, meeting_id)
+            if live is not None:
+                rows = dict(live)
+                rows.update({s["segment_id"]: s for s in persisted})
+                pending = open_drafts(rows, speaker) + [
+                    s for s in pending if (s.get("speaker") or "") != speaker and (s.get("text") or "").strip()
+                ]
         # Stamp the NATIVE meeting id (and platform) so the agent-api live relay can re-key
         # numeric→native WITHOUT a user-scoped /meetings lookup (which fails for any meeting not owned
         # by the relay's bot key → segments never reach the terminal's native channel). The collector
