@@ -920,6 +920,18 @@ class SqlAlchemyTranscriptStore:
             pipe.expire(hash_key, ttl)
             await pipe.execute()
 
+    async def live_rows(self, meeting_id) -> dict:
+        """#1973: the live tail (one HGETALL of ``meeting:{id}:segments``), JSON-decoded."""
+        from .db_writer import segments_hash_key
+
+        if self._redis is None:
+            return {}
+        raw = await self._redis.hgetall(segments_hash_key(meeting_id))
+        out: dict = {}
+        for k, v in (raw or {}).items():
+            out[k.decode() if isinstance(k, bytes) else k] = json.loads(v)
+        return out
+
     async def delete_segments(self, meeting_id, segment_ids) -> None:
         # Retraction: withdraw superseded/over-extended pending drafts by segment id. Two legs mirror the
         # append path — HDEL the live hash so an UN-flushed draft never reaches Postgres, and DELETE any

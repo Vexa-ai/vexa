@@ -78,7 +78,7 @@ LLM/turn). Where an LLM reply is inherently non-deterministic, assert the *plumb
 
 | ID | Path | Owner | Fixture → output |
 |---|---|---|---|
-| **CP1** | raw `transcription_segments` → collector `ingest()` → `:mutable` + durable hash | meetings | 2 segments (1 confirmed, 1 pending) → exact bundle + stored hash |
+| **CP1** | raw `transcription_segments` → collector `ingest()` → `:mutable` + durable hash | meetings | 2 segments (1 confirmed, 1 pending) → bundle (`pending` = the speaker's open drafts in the live hash) + stored hash; a retract → `retract` + `transcript_retract` + the speaker's updated bundle |
 | **CP2** | collector single-writer → native transcript feed (D7) | meetings | numeric segments → exact native-keyed, time-anchored entries |
 | **CP3** | `proc:on` → watcher arms → worker reads from `:cursor` | agent | flag + 3-seg stream + cursor → dispatch with right `transcript_start_id`; cursor advances |
 | **CP4** | `serve_meeting`: segments → gate → stub `card_turn` → notes/cards + doc | agent | 3 segs (speaker change) → exact cards/notes/doc |

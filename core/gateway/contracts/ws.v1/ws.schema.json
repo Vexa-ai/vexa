@@ -66,7 +66,7 @@
     },
     "Transcript": {
       "type": "object",
-      "description": "server → client: the canonical 0.10.6 per-speaker transcript bundle (forwarded from tc:meeting:{id}:mutable) — `confirmed` (completed) + `pending` (in-progress) segment arrays for one speaker tick. This is what the collector publishes + the dashboard consumes live.",
+      "description": "server → client: the per-speaker transcript bundle (forwarded from tc:meeting:{id}:mutable). `confirmed`: the speaker's newly completed segments, added by `segment_id`; one confirmed segment can replace several drafts. `pending`: that speaker's COMPLETE set of open drafts, in start order; a client replaces the speaker's drafts with it. A frame with no `speaker` key carries no draft set and leaves drafts as they are. After a `transcript_retract` of an open draft, the collector sends the speaker's updated bundle.",
       "required": ["type"],
       "properties": {
         "type": { "const": "transcript" },

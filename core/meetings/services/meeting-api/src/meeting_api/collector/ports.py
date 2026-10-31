@@ -142,6 +142,13 @@ class TranscriptStore(Protocol):
         persistence)."""
         ...
 
+    async def live_rows(self, meeting_id: int) -> dict:
+        """OPTIONAL (#1973): the live tail, ``{segment_id: row}`` from the ``meeting:{id}:segments`` hash
+        (rows the db-writer has not flushed yet). Ingest reads it to publish a speaker's COMPLETE open-draft
+        set; it is called via ``getattr`` inside a ``try``, so a store without it (or a raising read) falls
+        back to the entry-only bundle. Persistence never depends on it."""
+        ...
+
     async def delete_segments(self, meeting_id: int, segment_ids: list) -> None:
         """Withdraw retracted drafts by ``segment_id``: drop them from the live segments hash (before an
         un-flushed draft reaches Postgres) AND delete any already-flushed rows. Idempotent — a missing id

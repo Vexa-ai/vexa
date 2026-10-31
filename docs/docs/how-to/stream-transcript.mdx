@@ -38,9 +38,14 @@ The gateway authorizes each meeting against your key and acks with what you're n
 { "type": "subscribed", "meetings": [ { "platform": "google_meet", "native_id": "abc-defg-hij" } ] }
 ```
 
-Transcript segments then stream in as frames. **Live drafts arrive as `completed: false`** and are
-replaced by `completed: true` confirmations — render the draft, then overwrite it when the confirmation
-lands. `health` frames surface engine/no-signal faults in-band.
+Transcript segments then stream in as frames. **Live drafts arrive as `completed: false`**. Since
+0.13.4 (Google Meet, Zoom) a speaker can have several open drafts. A `transcript` frame's `pending` is
+that speaker's complete open set, in time order: replace the speaker's drafts with it. A frame with no
+`speaker` field carries no draft set; leave drafts as they are. Speakers we could not name share
+`speaker: ""`. `confirmed` rows are added by `segment_id`. One confirmed segment can replace several
+drafts, and its text can differ from them. A `transcript_retract` frame `{segment_ids}` withdraws ids,
+and the collector then sends the speaker's updated `transcript` frame. `health` frames surface
+engine/no-signal faults in-band.
 
 ## Unsubscribe and keepalive
 

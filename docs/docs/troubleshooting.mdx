@@ -132,7 +132,8 @@ The bot is capturing audio, but transcription isn't configured — or the bot wa
 - Confirm `TRANSCRIPTION_SERVICE_URL` and `TRANSCRIPTION_SERVICE_TOKEN` are set (see
   [Configuration](/configuration#transcription-stt)). Unset → audio is recorded, no text is produced.
 - Segments arrive draft-first (`completed: false`) then confirmed (`completed: true`) — a short delay is
-  normal, not a failure.
+  normal, not a failure. Since 0.13.4 the confirmed text can differ from the drafts it replaces, and the
+  drafts it covers are withdrawn (`transcript_retract` over the WebSocket): both are normal.
 - A stale bot key shows up as `native_resolve:{ok:false,kind:"unauthorized"}` on
   `GET /api/meeting/relay-health` rather than as silent dead air.
 
