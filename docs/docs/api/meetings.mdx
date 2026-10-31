@@ -407,8 +407,9 @@ text-level (who said what), via speaker binding / clustering / captions — *not
 Times are seconds from session start; `absolute_start_time` / `absolute_end_time` give wall-clock.
 
 The same segments arrive **live** (`completed: false`, a pending draft) and then **confirmed**
-(`completed: true`) — the gateway forwards the confirmed-plus-pending bundle to subscribers as the meeting
-runs.
+(`completed: true`) — the gateway forwards a bundle of the speaker's new confirmed rows and their
+complete set of open drafts to subscribers as the meeting runs. One confirmed segment can replace
+several drafts.
 
 ## Meeting participants
 
