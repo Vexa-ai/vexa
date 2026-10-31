@@ -326,8 +326,9 @@ curl -H "X-API-Key: $API_KEY" \
 ```
 
 Segments stream in while the meeting runs — poll this endpoint, or subscribe over **WebSocket** for live,
-per-segment updates. Live drafts arrive as `completed: false` and are replaced by `completed: true`
-confirmations.
+per-segment updates. Live drafts arrive as `completed: false`; each live `transcript` frame carries the
+speaker's complete set of open drafts, and one `completed: true` confirmation can replace several of them.
+See [Stream the transcript](/how-to/stream-transcript) for how to apply the frames.
 
 The same response is reachable **by record id**, which is what you have after planning a meeting that
 has no link yet:

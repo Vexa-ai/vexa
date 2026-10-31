@@ -184,8 +184,11 @@ curl -H "X-API-Key: $API_KEY" \
 ```
 
 Each segment is diarized (who said what) with word-level timestamps. Live drafts arrive as
-`completed: false` and are replaced by `completed: true` confirmations. For live, per-segment push instead
-of polling, subscribe over **WebSocket** — see the [Meetings API](/api/meetings#get-the-transcript).
+`completed: false`; on Google Meet and Zoom a speaker can have several open drafts at once. Confirmed
+segments arrive as `completed: true`, and one confirmed segment can replace several drafts. Drafts that a
+confirmation covers are withdrawn: by a `transcript_retract` frame over the WebSocket, and by a `retract`
+event over the agent SSE stream. For live, per-segment push instead of polling, subscribe over
+**WebSocket** — see [Stream the transcript](/how-to/stream-transcript).
 
 ## 3. Manage and stop
 
