@@ -52,7 +52,8 @@ export function parseMeetingInput(input: string): ParsedMeetingInput | null {
   // Zoom URL patterns
   // https://zoom.us/j/85173157171?pwd=xxx
   // https://us05web.zoom.us/j/85173157171?pwd=xxx
-  const zoomUrlRegex = /(?:https?:\/\/)?(?:[\w-]+\.)?zoom\.us\/j\/(\d+)/i;
+  // https://us06web.zoom.us/s/85173157171?zak=xxx   (host start link; same meeting)
+  const zoomUrlRegex = /(?:https?:\/\/)?(?:[\w-]+\.)?zoom\.us\/[js]\/(\d+)/i;
   const zoomMatch = trimmed.match(zoomUrlRegex);
   if (zoomMatch) {
     const passcodeMatch = trimmed.match(/[?&]pwd=([^&]+)/i);

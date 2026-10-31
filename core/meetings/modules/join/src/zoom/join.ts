@@ -18,7 +18,14 @@ import {
 /**
  * Build the Zoom Web Client URL from a meeting invite URL.
  * Input:  https://us05web.zoom.us/j/84335626851?pwd=...
+ *         https://us06web.zoom.us/s/84335626851?zak=...   (host start link)
  * Output: https://app.zoom.us/wc/84335626851/join?pwd=...
+ *
+ * `/j/<id>` is the attendee join link and `/s/<id>` the host's start link — the
+ * form a calendar shows the meeting's owner. Both name the same meeting, and the
+ * bot always joins it as a guest: only `pwd` is carried over. Every other query
+ * parameter is dropped — `zak` in particular is the host's start token, and a bot
+ * holding it would start the meeting as the host.
  *
  * For Zoom Events URLs (events.zoom.us/ejl/...) the URL is returned as-is
  * because the events page handles its own redirect to the web client.
@@ -38,7 +45,7 @@ import {
  *       VNC in and assist when it doesn't.
  *
  * Strategy: ONLY rewrite when the host is canonical zoom.us / *.zoom.us
- * AND the path matches /j/<digits>. Anything else returns as-is and the
+ * AND the path matches /j/<digits> or /s/<digits>. Anything else returns as-is and the
  * bot navigates the original URL — letting a human VNC in to click through
  * whatever extra page the portal renders. Once past the portal, the bot's
  * selector waits pick up from the standard Zoom pre-join page (name input, etc.).
@@ -64,7 +71,7 @@ export function buildZoomWebClientUrl(meetingUrl: string): string {
     // For canonical zoom.us URLs we rewrite to the web-client URL — gives
     // a faster, more reliable join (no portal, no redirects).
     if (isCanonicalZoomHost) {
-      const pathMatch = url.pathname.match(/\/j\/(\d+)/);
+      const pathMatch = url.pathname.match(/\/[js]\/(\d+)/);
       const meetingId = pathMatch?.[1];
       if (!meetingId) {
         throw new Error(`Cannot extract meeting ID from Zoom URL: ${meetingUrl}`);
