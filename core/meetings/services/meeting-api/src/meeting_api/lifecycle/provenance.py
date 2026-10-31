@@ -87,3 +87,29 @@ def build_service_provenance(meeting: Dict[str, Any]) -> Optional[Dict[str, Any]
         "transcription_outcome": transcription_outcome,
         "lifecycle_contract_version": LIFECYCLE_CONTRACT_VERSION,
     }
+
+
+def terminal_without_producer_time(meeting: Dict[str, Any]) -> bool:
+    """True when an admitted session's terminal entry is not the bot's own producer report.
+
+    An admitted session (its ``active`` entry is producer-stamped) whose terminal entry carries
+    receiver time, or was written by a server path (``source`` other than ``bot_callback``), means
+    the bot's departure report was lost. Operator signal only: it changes no output.
+    """
+    data = meeting.get("data") if isinstance(meeting.get("data"), dict) else {}
+    transitions = data.get("status_transition")
+    if not isinstance(transitions, list):
+        return False
+    transitions = _latest_session([item for item in transitions if isinstance(item, dict)])
+    if _producer_time(_transition(transitions, "active")) is None:
+        return False
+    terminal_status = meeting.get("status")
+    if terminal_status not in ("completed", "failed"):
+        return False
+    terminal = _transition(transitions, terminal_status)
+    if terminal is None:
+        return False
+    return (
+        terminal.get("timestamp_source") != "producer"
+        or terminal.get("source") != "bot_callback"
+    )

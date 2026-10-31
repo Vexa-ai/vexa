@@ -375,6 +375,12 @@ class MeetingStore:
             self._records[connection_id] = rec
         return rec
 
+    def evict(self, connection_id: str) -> None:
+        """Forget a record, leaving this process in exactly the state a restart leaves it in.
+
+        Used when a terminal advance could not be persisted: the next delivery re-reads the row."""
+        self._records.pop(connection_id, None)
+
     def rehydrate(
         self,
         connection_id: str,

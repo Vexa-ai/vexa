@@ -36,6 +36,10 @@ ownership remains unresolved for downstream billing. An admitted mixed-version s
 lifecycle event lacks a producer timestamp is likewise unresolved: receiver time remains useful
 for operations, but retry latency makes it invalid for rating.
 
+`POST /bots/internal/callback/lifecycle` answers **503** to a terminal event (`completed`/`failed`)
+it could not persist, and fires none of its side effects; the producer retries it with the same
+`timestamp`. A non-terminal event whose persist fails is still acknowledged with 200.
+
 ## `join_evidence` — typed join-failure evidence (#1059, #1058)
 
 An **additive** field on a terminal `failed` event, riding this contract's liberal ingestion

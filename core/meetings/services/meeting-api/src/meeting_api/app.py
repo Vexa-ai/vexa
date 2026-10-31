@@ -372,7 +372,7 @@ def _mount_lifecycle(
     import jsonschema
 
     from .lifecycle.machine import IllegalTransition, TransitionSource
-    from .lifecycle.provenance import build_service_provenance
+    from .lifecycle.provenance import build_service_provenance, terminal_without_producer_time
     from .lifecycle.receiver import conforms
     from .lifecycle.webhook import build_status_change_envelope, build_typed_envelope
     from .obs import log_event
@@ -525,10 +525,9 @@ def _mount_lifecycle(
         # webhook deliver, and the ws publish below are already no_op-gated (they hang off meeting_row,
         # set only on a real persist), so end-user delivery is exactly-once; this keeps the in-process
         # envelope log honest too.
+        # The envelope is recorded AFTER the persist below (#1974): a terminal that was not saved
+        # is answered 503 and must leave no envelope behind.
         envelope = None
-        if not change.no_op:
-            envelope = build_status_change_envelope(change)
-            app.state.status_change_webhooks.append(envelope)
         # Persist the FSM advance to the DB meeting row → durable + queryable (GET /meetings reflects
         # it, survives a restart), not only the in-process MeetingStore. Best-effort: a DB hiccup must
         # never fail the bot's lifecycle callback (the in-process FSM + webhook already advanced).
@@ -545,9 +544,24 @@ def _mount_lifecycle(
                     failure_stage=rec.failure_stage.value if rec.failure_stage else None,
                     data=rec.data if isinstance(rec.data, dict) else None,
                 )
-            except Exception as e:  # noqa: BLE001 — persistence is best-effort
+            except Exception as e:  # noqa: BLE001 — non-terminal persistence is best-effort
                 log_event("lifecycle_persist_failed", audience="system", level="warning",
                           span="lifecycle.callback", fields={"error": str(e)})
+                if rec.status.value in ("completed", "failed"):
+                    # #1974: never acknowledge a terminal that was not saved. A 200 here made the
+                    # bot stop retrying while the row stayed `active`, and a server path later
+                    # closed it without the bot's departure time. Forget the in-memory advance (the
+                    # state a restart leaves) and ask the producer to retry; nothing downstream
+                    # (envelope, finalization, provenance, webhooks, ws) has fired yet.
+                    sink.store.evict(rec.connection_id)
+                    return (
+                        503,
+                        {"status": "error",
+                         "detail": "lifecycle terminal not persisted; retry"},
+                    )
+        if not change.no_op:
+            envelope = build_status_change_envelope(change)
+            app.state.status_change_webhooks.append(envelope)
         # COMPLETION FINALIZATION — the moment the FSM lands on a terminal status, flush the
         # meeting's remaining live redis segments to the durable store (threshold 0: the mutable
         # tail included, no more updates are coming) and persist the processed doc into
@@ -605,6 +619,28 @@ def _mount_lifecycle(
                           fields={"meeting_id": terminal_meeting_id, "error": str(e)})
         if terminal_advanced and isinstance(meeting_row, dict):
             data = dict(meeting_row.get("data") or {})
+            if terminal_without_producer_time({**meeting_row, "data": data}):
+                # Operator count of admitted sessions closed without the bot's own departure
+                # report (#1974): the row was closed by a server path, so its provenance is
+                # missing or runtime-timed.
+                _terminal = next(
+                    (t for t in reversed(data.get("status_transition") or [])
+                     if isinstance(t, dict) and t.get("to") == rec.status.value),
+                    {},
+                )
+                log_event(
+                    "lifecycle_terminal_without_producer_time",
+                    audience="system", level="warning", span="lifecycle.terminal",
+                    fields={
+                        "meeting_id": meeting_row.get("id"),
+                        "transition_source": _terminal.get("source"),
+                        "timestamp_source": _terminal.get("timestamp_source"),
+                        "terminal_status": rec.status.value,
+                        "completion_reason": (
+                            rec.completion_reason.value if rec.completion_reason else None
+                        ),
+                    },
+                )
             provenance = build_service_provenance({**meeting_row, "data": data})
             if provenance is not None:
                 data["service_provenance"] = provenance

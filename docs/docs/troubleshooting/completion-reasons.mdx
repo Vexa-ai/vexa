@@ -111,6 +111,24 @@ meeting where the capture path failed and the bot genuinely heard nothing. If yo
 zero segments points at capture, not at an empty room. Tracked in
 [`Vexa-ai/vexa#1192`](https://github.com/Vexa-ai/vexa/issues/1192) — open.
 
+### A meeting closed by the server, not by the bot
+
+Normally the bot reports its own departure. When an admitted bot exits without that report being
+saved, a server path closes the meeting instead: the runtime's workload callback, or the stale
+sweep. meeting-api then logs one `lifecycle_terminal_without_producer_time` warning (span
+`lifecycle.terminal`) with these fields:
+
+| Field | Meaning |
+|---|---|
+| `meeting_id` | The meeting row. |
+| `transition_source` | The path that wrote the terminal entry (`runtime_destroy` for both server paths). |
+| `timestamp_source` | `producer` when the runtime supplied its own teardown time, `receiver` when the sweep had none. |
+| `terminal_status` | `completed` or `failed`. |
+| `completion_reason` | The reason stored on the terminal. |
+
+Such a meeting carries a null or runtime-timed `service_provenance`. The usual cause is a
+meeting-api outage longer than the bot's retry window at the moment the bot ended.
+
 ### `completed` is not proof of a transcript
 
 A run can reach `completed` with a benign reason and still have produced no segments. The
