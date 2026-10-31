@@ -1,6 +1,6 @@
 ---
 title: "Webhooks"
-description: "Configure a signed webhook destination and choose the events — delivery is proven in production; the delivery-history surface is not."
+description: "Configure a signed webhook destination and choose the events — delivery is proven in production, and the delivery history reads the same ledger the sender writes."
 ---
 
 Vexa posts signed JSON to a URL you own when a meeting's state changes. Configuration is
@@ -34,15 +34,14 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/user/webhook"
 The secret is masked to its last four characters on read-back — enough to recognize which secret is
 set, never enough to use it.
 
-<Warning>
-**Delivery works; the delivery *history* does not.** A production walk on 2026-07-19 (v0.12.15)
-delivered `meeting.status_change`, `meeting.completed` and `bot.failed` to an external
-`webhook.site` endpoint — the receiver's inbox and meeting-api's own delivery-outcome log matched
-one-for-one at `code=200`. What is still broken is the user-facing **Delivery History**, which
-reads a store those deliveries were never written to and so shows none of them
-([#841](https://github.com/Vexa-ai/vexa/issues/841), open). Deliveries now succeed *silently* —
-the exact inversion of [#815](https://github.com/Vexa-ai/vexa/issues/815), where they failed silently.
-</Warning>
+<Note>
+**Delivery and its history both work.** A production walk on 2026-07-19 (v0.12.15) delivered
+`meeting.status_change`, `meeting.completed` and `bot.failed` to an external `webhook.site`
+endpoint, matched one-for-one by meeting-api's delivery-outcome log at `code=200`. The user-facing
+**Delivery History** was blind to those rows until [#841](https://github.com/Vexa-ai/vexa/issues/841):
+the core now records every outcome in a per-user ledger (`GET /user/webhook/deliveries`, below),
+and the dashboard's Webhooks → Delivery History reads that ledger rather than a store of its own.
+</Note>
 
 <Warning>
 `PUT /user/webhook` currently answers with the **whole user record**, including
@@ -101,12 +100,8 @@ attempts per account, so it is a recent window rather than a permanent audit log
 what your endpoint answered, when it answered. A row carries the **host only** — never the
 configured URL, never the secret.
 
-<Warning>
-That is the contract. Today the store behind it is not the one real deliveries are written to
-([#841](https://github.com/Vexa-ai/vexa/issues/841), open), so this endpoint can answer with an
-empty `deliveries` array for an account whose webhooks are in fact arriving. **Do not read an empty
-history as "nothing was delivered."**
-</Warning>
+A row records the **first** attempt's outcome. A `queued` row is not updated when a later retry
+delivers it, so read `queued` as "handed to the retry queue", not as a final failure.
 
 **Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
 account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
@@ -117,9 +112,10 @@ required. Self-hosted: `make all` prints a key when the stack comes up.
 - **Live delivery — proven.** Owner-witnessed production walk, 2026-07-19: POSTs arrived at an
   external `webhook.site` inbox from production IPs, one per walk event, matched one-for-one by
   meeting-api's delivery-outcome log at `code=200`.
-- **Delivery History — broken.** The user-facing history reads a store real deliveries were never
-  written to, so it lists none of them ([#841](https://github.com/Vexa-ai/vexa/issues/841), open).
-  Do not read an empty history as "nothing was delivered."
+- **Delivery History — fixed ([#841](https://github.com/Vexa-ai/vexa/issues/841)).** The core
+  records every delivery outcome in the per-user ledger served by `GET /user/webhook/deliveries`,
+  and the dashboard's Webhooks → Delivery History reads that ledger, so real deliveries (not only
+  the Test button's) are listed with their named outcome and status code.
 - **CI does not exercise the network leg.** The module and eval tests drive the real `WebhookSink`
   against a fake in-memory receiver, so a regression in the transport itself would not be caught
   by tests — only by another live walk.

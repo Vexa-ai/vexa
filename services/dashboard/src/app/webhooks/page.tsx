@@ -38,7 +38,8 @@ function StatusDot({ status }: { status: WebhookDeliveryStatus }) {
         "inline-block w-2 h-2 rounded-full",
         status === "delivered" && "bg-emerald-400",
         status === "retrying" && "bg-amber-400",
-        status === "failed" && "bg-red-400"
+        status === "failed" && "bg-red-400",
+        status === "suppressed" && "bg-muted-foreground/50"
       )}
     />
   );
@@ -79,6 +80,7 @@ export default function WebhooksPage() {
     deliveries,
     stats,
     isLoading,
+    ledgerUnavailable,
     isLoadingConfig: isLoadingWebhookConfig,
     isSavingConfig,
     statusFilter,
@@ -328,6 +330,7 @@ export default function WebhooksPage() {
               <SelectItem value="delivered">Delivered</SelectItem>
               <SelectItem value="retrying">Retrying</SelectItem>
               <SelectItem value="failed">Failed</SelectItem>
+              <SelectItem value="suppressed">Suppressed</SelectItem>
             </SelectContent>
           </Select>
           <Select
@@ -374,6 +377,13 @@ export default function WebhooksPage() {
         </Card>
       </div>
 
+      {ledgerUnavailable && (
+        <p className="text-xs text-amber-400">
+          The delivery history could not be read from the API right now; only Test deliveries are
+          shown. This does not mean nothing was delivered.
+        </p>
+      )}
+
       {/* Deliveries table */}
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
@@ -416,6 +426,11 @@ export default function WebhooksPage() {
                       <span className="font-mono text-xs text-muted-foreground">
                         {delivery.event}
                       </span>
+                      {delivery.source === "test" && (
+                        <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
+                          test
+                        </span>
+                      )}
                     </td>
                     <td className="px-5 py-3 font-medium">{delivery.meeting_name}</td>
                     <td className="px-5 py-3">
@@ -426,10 +441,11 @@ export default function WebhooksPage() {
                             "text-xs",
                             delivery.status === "delivered" && "text-emerald-400",
                             delivery.status === "retrying" && "text-amber-400",
-                            delivery.status === "failed" && "text-red-400"
+                            delivery.status === "failed" && "text-red-400",
+                            delivery.status === "suppressed" && "text-muted-foreground"
                           )}
                         >
-                          {delivery.status}
+                          {delivery.outcome ?? delivery.status}
                         </span>
                       </span>
                     </td>
