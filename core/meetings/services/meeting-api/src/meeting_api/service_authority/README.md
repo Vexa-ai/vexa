@@ -25,5 +25,12 @@ answer opens a per-tick circuit: no further authority call that tick.
 Recovery replays each debt minute in order with the same `request_id` and the
 stored `active_concurrency`; each decision settles its entry once
 (`debt_settled_count`, `debt_open`). An enforced deny still stops the bot.
-**Limit (next slice):** debt of a meeting stopped by that deny, or ended
-during the outage, keeps `debt_open: true` and is not replayed yet.
+Debt outlives the session: every sweep also lists rows in any status whose
+`data @> {"service_authority": {"debt_open": true}}`
+(`list_service_authority_debt_sessions`) and replays their remaining debt
+minutes, because the bot did run through them. A row stopped by a deny this
+tick is replayed from the next tick, once its teardown is confirmed (a pending
+stop is never overwritten by a later allow); such a row books no new minute,
+and a deny on one of its minutes is recorded with
+`teardown_skipped=meeting_not_live` and stops nothing. So each debt minute is
+settled exactly once, provided the authority eventually answers it.

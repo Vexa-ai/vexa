@@ -715,15 +715,13 @@ def _attach_background_loops(
                 runtime,
                 service_authority,
             )
-            if observation.faults or observation.debt_settled_count:
+            if observation.faults:
                 log.warning(
                     "service-authority sweep faults=%s decisions=%s "
-                    "teardowns_confirmed=%s debt_settled=%s debt_open=%s",
+                    "teardowns_confirmed=%s",
                     observation.faults,
                     observation.decisions,
                     observation.teardowns_confirmed,
-                    observation.debt_settled_count,
-                    observation.debt_open,
                 )
 
         while True:

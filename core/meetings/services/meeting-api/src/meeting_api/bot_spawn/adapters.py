@@ -774,6 +774,29 @@ class SqlAlchemyMeetingRepo:
                 in ("enforce", "observe")
             ]
 
+    async def list_service_authority_debt_sessions(self) -> list[dict]:
+        """Rows in any status still carrying unsettled fail-open debt.
+
+        ``data @> {"service_authority": {"debt_open": true}}`` (served by the
+        whole-column GIN index), so a meeting stopped by a catch-up deny, or
+        ended during an outage, still has its remaining minutes replayed.
+        """
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(Meeting).where(
+                        Meeting.data.contains(
+                            {"service_authority": {"debt_open": True}}
+                        ),
+                    )
+                )
+            ).scalars().all()
+            return [_row_to_dict(row) for row in rows]
+
     async def record_service_authority_decision(
         self,
         *,
@@ -830,9 +853,15 @@ class SqlAlchemyMeetingRepo:
                 and not decision.allow
                 and decision.stop_scope == "billable_service"
             ):
-                metadata["teardown_confirmed"] = False
-                data["stop_requested"] = True
-                row.status = "stopping"
+                if row.status in ("active", "needs_help"):
+                    metadata["teardown_confirmed"] = False
+                    data["stop_requested"] = True
+                    row.status = "stopping"
+                else:
+                    # A replayed debt minute of a row that is no longer live:
+                    # the deny is recorded, there is nothing left to stop.
+                    metadata["teardown_confirmed"] = True
+                    metadata["teardown_skipped"] = "meeting_not_live"
             data["service_authority"] = metadata
             row.data = data
             flag_modified(row, "data")

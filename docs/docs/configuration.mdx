@@ -83,13 +83,8 @@ The request contains service identity, authoritative user ID, service mode, froz
 provider, concurrency, and lifecycle timestamps. It deliberately contains no email, customer or
 payment-provider identifier, price, balance, transcription endpoint URL, or credential. A
 configured authority that is unavailable, malformed, stale, or bound to another request fails
-closed before a new bot is spawned (`503 service_authority_unavailable`). During active service,
-an enforced stop intent is committed before runtime teardown and resumed after restart.
-
-`failure_policy: "closed"` applies to admission only. A running bot keeps running if the authority is
-unavailable at a minute boundary: the minute is recorded as debt (`data.service_authority.debt_boundaries`,
-`debt_open`), `service_authority_fail_open` is logged, and on recovery each debt minute of a running
-meeting is replayed once (`debt_settled_count`). Debt of a meeting that stops or ends first stays open.
+closed before a new bot is spawned. During active service, its stop intent is committed before
+runtime teardown and resumed after restart.
 
 `mode: "observe"` records decisions without refusing or stopping service. It is useful for rollout,
 but it is not evidence that a hard service control is enforced. A session admitted in one mode is

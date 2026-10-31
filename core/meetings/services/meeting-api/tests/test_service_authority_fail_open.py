@@ -1,8 +1,9 @@
 """#1923 s1: an authority outage never cuts an admitted bot.
 
 Debt minutes are booked without moving the boundary, the outage costs one
-authority call per tick, recovery settles each debt minute exactly once, and
-a catch-up deny still stops the bot while later minutes stay in debt.
+authority call per tick, recovery settles each debt minute exactly once, a
+catch-up deny still stops the bot, and the debt of a meeting that stopped or
+ended first is still replayed (never over a pending stop).
 """
 from __future__ import annotations
 
@@ -10,6 +11,7 @@ from datetime import timedelta
 
 import pytest
 
+from meeting_api.bot_spawn.ports import WorkloadUnknown
 from meeting_api.service_authority import (
     ServiceAuthorityUnavailable,
     run_service_authority_sweep,
@@ -153,8 +155,9 @@ class ScriptedAuthority(RecordingAuthority):
 async def test_catch_up_deny_after_outage_stops_live_bot() -> None:
     # B6: three debt minutes. On recovery the authority allows b1 and denies
     # b2: b1 is settled, b2 is recorded as the stop, the bot is torn down and
-    # b3 stays in debt with debt_open on the row. Replaying b3 of the stopped
-    # row comes with the debt_open listing (next slice).
+    # b3 stays in debt with debt_open on the row. The bot did run through b3,
+    # so b3 is still replayed and settled on the next tick, without a second
+    # teardown.
     authority = ScriptedAuthority(
         {}, continuation=ServiceAuthorityUnavailable("fixture outage"),
     )
@@ -178,6 +181,9 @@ async def test_catch_up_deny_after_outage_stops_live_bot() -> None:
             decision_id="decision-catch-up-stop",
             stop_scope="billable_service",
         ),
+        _minute(3): _decision(
+            allow=True, action="continue", decision_id="decision-b3-allow",
+        ),
     }
     recovered = await run_service_authority_sweep(
         repo, runtime, authority, now=_minute(3) + timedelta(seconds=20),
@@ -200,4 +206,154 @@ async def test_catch_up_deny_after_outage_stops_live_bot() -> None:
     assert persisted["debt_settled_count"] == 2
     assert row["data"]["stop_requested"] is True
     assert row["status"] not in ("active", "needs_help")
+    assert runtime.deleted == [row["bot_container_id"]]
+    status_after_stop = row["status"]
+
+    # Next tick: the stopped row is no longer live, yet its remaining debt
+    # minute b3 is replayed with its own request_id and settled once. No new
+    # minute is booked for a stopped meeting and there is no second teardown.
+    authority.requests.clear()
+    replayed = await run_service_authority_sweep(
+        repo, runtime, authority, now=_minute(3) + timedelta(seconds=40),
+    )
+    assert [r.request_id for r in _continue_requests(authority)] == [
+        f"{persisted['service_identity']}:continue:{_minute(3).isoformat()}",
+    ]
+    assert replayed.decisions == 1
+    assert replayed.debt_settled_count == 1
+    assert replayed.debt_open is False
+    assert replayed.teardowns_confirmed == 0
+    assert persisted["debt_boundaries"] == []
+    assert persisted["debt_open"] is False
+    assert persisted["debt_settled_count"] == 3
+    assert persisted["last_boundary_at"] == _minute(3).isoformat()
+    assert persisted["last_decision_id"] == "decision-b3-allow"
+    assert row["status"] == status_after_stop
+    assert runtime.deleted == [row["bot_container_id"]]
+
+    # Settled exactly once: a later tick asks nothing about this row.
+    authority.requests.clear()
+    quiet = await run_service_authority_sweep(
+        repo, runtime, authority, now=_minute(5) + timedelta(seconds=1),
+    )
+    assert _continue_requests(authority) == []
+    assert quiet.decisions == 0
+    assert persisted["debt_boundaries"] == []
+
+
+@pytest.mark.asyncio
+async def test_meeting_ended_during_outage_still_settles_debt() -> None:
+    # A meeting that ends while the authority is down keeps debt_open: true on
+    # its row. Once the authority answers again its debt minutes are replayed
+    # and settled, although the row is no longer live; a deny on such a minute
+    # settles it without a stop, since there is nothing left to tear down.
+    authority = RecordingAuthority(
+        continuation=ServiceAuthorityUnavailable("fixture outage"),
+    )
+    repo, runtime, row = await _active(authority)
+    for minute in (1, 2):
+        await run_service_authority_sweep(
+            repo, runtime, authority, now=_minute(minute) + timedelta(seconds=1),
+        )
+    row["status"] = "completed"
+    still_down = await run_service_authority_sweep(
+        repo, runtime, authority, now=_minute(3) + timedelta(seconds=1),
+    )
+    persisted = row["data"]["service_authority"]
+    assert still_down.debt_open is True
+    assert persisted["debt_open"] is True
+    # An ended meeting books no new minute: b3 is not debt.
+    assert [d["boundary"] for d in persisted["debt_boundaries"]] == [
+        _minute(1).isoformat(), _minute(2).isoformat(),
+    ]
+    authority.requests.clear()
+
+    authority.continuation = _decision(
+        allow=False,
+        action="continue",
+        reason="opaque_limit",
+        stop_scope="billable_service",
+    )
+    recovered = await run_service_authority_sweep(
+        repo, runtime, authority, now=_minute(4) + timedelta(seconds=1),
+    )
+
+    assert [r.boundary_at for r in _continue_requests(authority)] == [
+        _minute(1), _minute(2),
+    ]
+    assert recovered.decisions == 2
+    assert recovered.debt_settled_count == 2
+    assert recovered.debt_open is False
+    assert recovered.teardowns_confirmed == 0
+    assert persisted["debt_boundaries"] == []
+    assert persisted["debt_open"] is False
+    assert persisted["debt_settled_count"] == 2
+    assert persisted["teardown_skipped"] == "meeting_not_live"
+    assert row["status"] == "completed"
+    assert not row["data"].get("stop_requested")
+    assert runtime.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_pending_stop_outranks_debt_replay() -> None:
+    # A catch-up deny whose teardown is not yet confirmed (runtime 404) keeps
+    # its stop intent on the row. The later debt minute is not replayed until
+    # the teardown confirms, so an allow can never overwrite the pending stop.
+    authority = ScriptedAuthority(
+        {}, continuation=ServiceAuthorityUnavailable("fixture outage"),
+    )
+    repo, runtime, row = await _active(authority)
+    for minute in (1, 2):
+        await run_service_authority_sweep(
+            repo, runtime, authority, now=_minute(minute) + timedelta(seconds=1),
+        )
+    authority.script = {
+        _minute(1): _decision(
+            allow=False, action="continue", reason="opaque_limit",
+            decision_id="decision-stop", stop_scope="billable_service",
+        ),
+        _minute(2): _decision(allow=True, action="continue"),
+    }
+    real_delete = runtime.delete_workload
+
+    async def _untracked(workload_id):
+        raise WorkloadUnknown(workload_id)
+
+    runtime.delete_workload = _untracked
+    stopped = await run_service_authority_sweep(
+        repo, runtime, authority, now=_minute(3) + timedelta(seconds=1),
+    )
+    persisted = row["data"]["service_authority"]
+    assert stopped.teardowns_confirmed == 0
+    assert persisted["teardown_confirmed"] is False
+    assert persisted["allow"] is False
+
+    # Teardown still pending: b2 is not asked about, the stop intent stays.
+    authority.requests.clear()
+    waiting = await run_service_authority_sweep(
+        repo, runtime, authority, now=_minute(5) + timedelta(seconds=1),
+    )
+    assert _continue_requests(authority) == []
+    assert waiting.debt_open is True
+    assert persisted["allow"] is False
+    assert [d["boundary"] for d in persisted["debt_boundaries"]] == [
+        _minute(2).isoformat(),
+    ]
+
+    # The runtime tracks the workload again: teardown confirms, then the
+    # remaining debt minute is replayed and settled on the following tick.
+    runtime.delete_workload = real_delete
+    confirmed = await run_service_authority_sweep(
+        repo, runtime, authority, now=_minute(7) + timedelta(seconds=1),
+    )
+    assert confirmed.teardowns_confirmed == 1
+    assert runtime.deleted == [row["bot_container_id"]]
+    replayed = await run_service_authority_sweep(
+        repo, runtime, authority, now=_minute(7) + timedelta(seconds=20),
+    )
+    assert [r.boundary_at for r in _continue_requests(authority)] == [_minute(2)]
+    assert replayed.debt_settled_count == 1
+    assert replayed.debt_open is False
+    assert persisted["debt_boundaries"] == []
+    assert persisted["teardown_confirmed"] is True
     assert runtime.deleted == [row["bot_container_id"]]

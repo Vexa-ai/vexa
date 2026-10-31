@@ -56,6 +56,39 @@ def _debt_by_boundary(metadata: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+def _stop_pending(metadata: dict[str, Any]) -> bool:
+    """The row's last decision is an enforced stop not yet torn down."""
+    return (
+        metadata.get("enforced") is True
+        and metadata.get("allow") is False
+        and metadata.get("stop_scope") == "billable_service"
+        and metadata.get("teardown_confirmed") is not True
+    )
+
+
+def _pending_minutes(
+    debt: dict[str, dict[str, Any]],
+    last_boundary: datetime,
+    until: datetime,
+    *,
+    live: bool,
+) -> list[datetime]:
+    """Minutes to ask about this tick, in order.
+
+    A live row owes every minute after ``last_boundary`` up to ``until`` (its
+    debt minutes are among them, since booking debt never moves the boundary).
+    A row that is no longer live owes only the debt minutes it already booked.
+    """
+    if not live:
+        return sorted(parse_time(key, "debt boundary") for key in debt)
+    pending = []
+    boundary = last_boundary + timedelta(minutes=1)
+    while boundary <= until:
+        pending.append(boundary)
+        boundary += timedelta(minutes=1)
+    return pending
+
+
 async def _continuation_request(
     repo: Any,
     *,
@@ -106,6 +139,12 @@ async def run_service_authority_sweep(
     tick, no further authority call is made that tick (the outage costs one
     timeout per sweep, not one per due minute per live meeting).  New
     admissions keep failing closed in the router (503).
+
+    Debt outlives the session: a row stopped by a catch-up deny, or ended
+    during the outage, is still listed (``list_service_authority_debt_sessions``)
+    and its remaining debt minutes are replayed from the next tick, because the
+    bot did run through them.  Such a row books no new minute, and a deny on
+    one of its minutes settles the minute without a stop.
     """
     if not authority.configured:
         return ServiceAuthoritySweepObservation()
@@ -121,7 +160,14 @@ async def run_service_authority_sweep(
     outage = False
 
     sessions = await repo.list_service_authority_sessions()
-    for row in sessions:
+    live_ids = {row.get("id") for row in sessions}
+    # Rows no longer live whose debt is unsettled: replayed, never extended.
+    indebted = [
+        row
+        for row in await repo.list_service_authority_debt_sessions()
+        if row.get("id") not in live_ids
+    ]
+    for row, live in [(r, True) for r in sessions] + [(r, False) for r in indebted]:
         metadata = (
             row.get("data", {}).get("service_authority")
             if isinstance(row.get("data"), dict)
@@ -135,6 +181,12 @@ async def run_service_authority_sweep(
         # cannot retroactively turn an observed session into a hard-cap claim.
         if metadata.get("mode") != authority.mode:
             faults += 1
+            continue
+        if not live and _stop_pending(metadata):
+            # The persisted stop outranks the replay: a later allow would
+            # overwrite the intent that list_service_authority_teardowns reads.
+            # The debt stays open and is replayed once the teardown confirms.
+            debt_open = True
             continue
         admitted_at = _admitted_at(row)
         if admitted_at is None:
@@ -152,8 +204,15 @@ async def run_service_authority_sweep(
             continue
         debt = _debt_by_boundary(metadata)
         open_debt = set(debt)
-        boundary = last_boundary + timedelta(minutes=1)
-        while boundary <= observed_at:
+        try:
+            pending = _pending_minutes(
+                debt, last_boundary, observed_at, live=live
+            )
+        except ValueError:
+            faults += 1
+            debt_open = True
+            continue
+        for boundary in pending:
             service_identity = metadata.get("service_identity")
             provider = metadata.get("transcription_provider")
             if (
@@ -181,6 +240,9 @@ async def run_service_authority_sweep(
                     outage = True
                     faults += 1
             if decision is None:
+                if not live:
+                    # Its minutes are already booked; nothing new this tick.
+                    break
                 booked = await repo.record_service_authority_debt(
                     meeting_id=row["id"],
                     request=request,
@@ -193,7 +255,6 @@ async def run_service_authority_sweep(
                         boundary_key,
                     )
                 open_debt.add(boundary_key)
-                boundary += timedelta(minutes=1)
                 continue
             recorded = await repo.record_service_authority_decision(
                 meeting_id=row["id"],
@@ -205,9 +266,10 @@ async def run_service_authority_sweep(
                 if boundary_key in open_debt:
                     open_debt.discard(boundary_key)
                     debt_settled += 1
-            if decision.enforced and not decision.allow:
+            if decision.enforced and not decision.allow and live:
+                # The stop is persisted; the row is not live from here, so its
+                # later debt minutes are replayed on the next tick (B6).
                 break
-            boundary += timedelta(minutes=1)
         if open_debt:
             debt_open = True
 

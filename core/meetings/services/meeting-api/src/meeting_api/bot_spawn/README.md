@@ -95,7 +95,9 @@ Observe-only sessions are never later reinterpreted as enforced sessions.
 
 No config means explicit stock OSS allow-all. Once configured, malformed, stale, or cross-bound
 decisions are refused. An unavailable authority fails closed at admission only (503); an admitted
-session fails open: the minute is booked as debt and replayed once on recovery
+session fails open: the minute is booked as debt and replayed once on recovery, also when the
+meeting has stopped or ended by then (`list_service_authority_debt_sessions`; an enforced deny
+moves only a live row to `stopping`)
 ([`../service_authority/README.md`](../service_authority/README.md)). `mode=observe` records the authority response but cannot satisfy a hosted hard-spend-cap claim.
 
 ## Auto-join block lists
