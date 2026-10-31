@@ -72,15 +72,13 @@ def test_annotating_by_db_id_writes_the_row_you_named():
     )
 
 
-def test_the_room_code_route_still_resolves_to_the_newest_meeting():
-    """UNCHANGED, and asserted so: the pair route's behaviour is not a bug to be fixed, it is the
-    correct answer to a different question ("the meeting on this link"). It is only wrong when a
-    caller meant one specific past meeting, which is what the new route is for."""
+def test_the_room_code_route_requires_selection_for_recurring_meetings():
     client, store, older, newer = _recurring()
     r = client.post(f"/meetings/{PLAT}/{NID}/annotate", headers=H, json={"title": "whichever"})
-    assert r.status_code == 200, r.text
-    assert r.json()["id"] == newer
+    assert r.status_code == 409, r.text
+    assert {m["id"] for m in r.json()["detail"]["candidates"]} == {older, newer}
     assert "title" not in store._meetings[older]["data"]
+    assert "title" not in store._meetings[newer]["data"]
 
 
 def test_both_routes_coexist_and_neither_shadows_the_other():
@@ -89,7 +87,7 @@ def test_both_routes_coexist_and_neither_shadows_the_other():
     client, _store, older, newer = _recurring()
     assert client.post(f"/meetings/{older}/annotate", headers=H,
                        json={"title": "by id"}).json()["id"] == older
-    assert client.post(f"/meetings/{PLAT}/{NID}/annotate", headers=H,
+    assert client.post(f"/meetings/{PLAT}/{NID}/annotate?meeting_id={newer}", headers=H,
                        json={"title": "by room"}).json()["id"] == newer
 
 

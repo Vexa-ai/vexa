@@ -186,6 +186,11 @@ class InMemoryTranscriptStore:
         # Same decision, two uses: whether the read is allowed, and which tier of ``data`` it carries.
         return await self._transcript_doc(mid, viewer_is_owner=is_owner) if authorized else None
 
+    async def find_owned_native_meetings(self, user_id, platform, native_meeting_id):
+        rows = await self.list_meetings(user_id, platform=platform)
+        return [row for row in rows if not row.get("shared")
+                and row.get("native_meeting_id") == native_meeting_id]
+
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
                             member_workspaces=None, list_view=False, meeting_id=None, slim=False,
                             metadata_filter=None):
@@ -311,8 +316,14 @@ class InMemoryTranscriptStore:
             "speakers": sorted(first_at, key=lambda n: (first_at[n], n)),
         }
 
-    async def bind_workspace(self, user_id, platform, native_meeting_id, workspace_id):
-        mid = self._find(user_id, platform, native_meeting_id)
+    def _find_selected(self, user_id, platform, native_meeting_id, meeting_id):
+        if meeting_id is None:
+            return self._find(user_id, platform, native_meeting_id)
+        row = self._meetings.get(meeting_id)
+        return meeting_id if row and row["user_id"] == user_id and row["platform"] == platform and row["native_meeting_id"] == native_meeting_id else None
+
+    async def bind_workspace(self, user_id, platform, native_meeting_id, workspace_id, *, meeting_id=None):
+        mid = self._find_selected(user_id, platform, native_meeting_id, meeting_id)
         if mid is None:
             return None
         self._meetings[mid]["data"]["workspace_id"] = workspace_id
@@ -370,10 +381,10 @@ class InMemoryTranscriptStore:
             viewers.append(user_id)
         return {"meeting_id": mid, "ok": True}
 
-    async def connect_doc(self, user_id, platform, native_meeting_id, doc):
+    async def connect_doc(self, user_id, platform, native_meeting_id, doc, *, meeting_id=None):
         from .adapters import _upsert_doc
 
-        mid = self._find(user_id, platform, native_meeting_id)
+        mid = self._find_selected(user_id, platform, native_meeting_id, meeting_id)
         if mid is None:
             return None
         data = self._meetings[mid]["data"]
@@ -381,10 +392,10 @@ class InMemoryTranscriptStore:
         data["docs"] = docs
         return docs
 
-    async def disconnect_doc(self, user_id, platform, native_meeting_id, path):
+    async def disconnect_doc(self, user_id, platform, native_meeting_id, path, *, meeting_id=None):
         from .adapters import _remove_doc
 
-        mid = self._find(user_id, platform, native_meeting_id)
+        mid = self._find_selected(user_id, platform, native_meeting_id, meeting_id)
         if mid is None:
             return None
         data = self._meetings[mid]["data"]
@@ -392,8 +403,8 @@ class InMemoryTranscriptStore:
         data["docs"] = docs
         return docs
 
-    async def set_intent(self, user_id, platform, native_meeting_id, status, scheduled_at=None):
-        mid = self._find(user_id, platform, native_meeting_id)
+    async def set_intent(self, user_id, platform, native_meeting_id, status, scheduled_at=None, *, meeting_id=None):
+        mid = self._find_selected(user_id, platform, native_meeting_id, meeting_id)
         if mid is None:
             return None
         m = self._meetings[mid]
