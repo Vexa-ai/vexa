@@ -228,8 +228,17 @@ class PlatformBillingDataPatch(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+# The per-account bot ramp dials (#1962): PATCH field -> key in users.data.bot_ramp. An explicit
+# null clears that key back to the deployment value (meeting-api BOT_RAMP_*).
+BOT_RAMP_FIELDS = {"bot_ramp_burst": "burst", "bot_ramp_share": "share",
+                   "bot_ramp_window_s": "window_s"}
+
+
 class UserAdminPatch(BaseModel):
     max_concurrent_bots: Optional[int] = Field(default=None, ge=0)
+    bot_ramp_burst: Optional[int] = Field(default=None, ge=1)
+    bot_ramp_share: Optional[float] = Field(default=None, ge=0, le=1)
+    bot_ramp_window_s: Optional[int] = Field(default=None, ge=10, le=3600)
     data: Optional[PlatformBillingDataPatch] = None
 
     model_config = {"extra": "forbid"}
@@ -237,9 +246,29 @@ class UserAdminPatch(BaseModel):
     @model_validator(mode="after")
     def require_change(self):
         has_data = self.data is not None and bool(self.data.model_fields_set)
-        if self.max_concurrent_bots is None and not has_data:
+        has_ramp = bool(self.model_fields_set & BOT_RAMP_FIELDS.keys())
+        if self.max_concurrent_bots is None and not has_data and not has_ramp:
             raise ValueError("at least one user field must be supplied")
         return self
+
+
+def merge_bot_ramp(data: Dict[str, Any], patch: "UserAdminPatch") -> Dict[str, Any]:
+    """``data`` with the patch's ramp dials merged into ``bot_ramp``: a value sets its key, an
+    explicit null removes it, and the ``bot_ramp`` key goes away once no dial is left."""
+    supplied = patch.model_fields_set & BOT_RAMP_FIELDS.keys()
+    if not supplied:
+        return data
+    ramp = dict(data.get("bot_ramp") or {})
+    for field in supplied:
+        value = getattr(patch, field)
+        if value is None:
+            ramp.pop(BOT_RAMP_FIELDS[field], None)
+        else:
+            ramp[BOT_RAMP_FIELDS[field]] = value
+    out = {key: value for key, value in data.items() if key != "bot_ramp"}
+    if ramp:
+        out["bot_ramp"] = ramp
+    return out
 
 
 class UserResponse(BaseModel):
@@ -764,6 +793,9 @@ def create_app() -> FastAPI:
                 **(user.data or {}),
                 **patch.data.model_dump(exclude_unset=True),
             }
+        ramp_data = merge_bot_ramp(dict(user.data or {}), patch)
+        if ramp_data != (user.data or {}):
+            user.data = ramp_data
         await db.commit()
         await db.refresh(user)
         return UserResponse.model_validate(user)
@@ -1125,6 +1157,10 @@ def create_app() -> FastAPI:
             "bot_name": data.get("calendar_bot_name") or "Vexa",
             "auto_join_block": list(data.get("auto_join_block") or []),
         }
+        # The account's bot ramp override (#1962), only the keys set; meeting-api fills the rest
+        # from its BOT_RAMP_* deployment defaults.
+        if isinstance(data.get("bot_ramp"), dict) and data["bot_ramp"]:
+            resp["bot_ramp"] = dict(data["bot_ramp"])
 
     # --- user tier: model + transcription self-serve prefs (users.data JSONB, like webhook) ---
     async def _put_user_prefs(update_fields: dict, data_key: str, user: User,
@@ -1874,6 +1910,10 @@ def create_app() -> FastAPI:
             # the sweep never has to tell "no list" from "an older identity".
             "auto_join_block": list(data.get("auto_join_block") or []),
         }
+        # The account's bot ramp override (#1962), only the keys set; meeting-api fills the rest
+        # from its BOT_RAMP_* deployment defaults.
+        if isinstance(data.get("bot_ramp"), dict) and data["bot_ramp"]:
+            resp["bot_ramp"] = dict(data["bot_ramp"])
         # Fixture collection (O-TEL-1): whether this spawn tapes its raw captured-signal stream.
         # ALWAYS present in the response — a missing key downstream is indistinguishable from an
         # unreachable identity, and bot_spawn must default ON in BOTH cases, so it is stated here
