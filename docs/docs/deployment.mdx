@@ -50,7 +50,7 @@ required. Self-hosted: `make all` prints a key when the stack comes up.
 
 | Service | Role |
 |---|---|
-| **gateway** (`:18056`) | the one front door — auth, scopes, routing |
+| **gateway** (`:18056`) | the one front door — auth, scopes, routing, public `/status` |
 | **admin-api** | users + API keys |
 | **meeting-api** | bots, transcripts, **recordings** (to object storage) |
 | **runtime** | spawns bot + agent **containers** on demand (via the Docker socket) |

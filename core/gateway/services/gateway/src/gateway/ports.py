@@ -175,3 +175,12 @@ class RedisBus(Protocol):
     forwards every raw payload to the socket (``main.fan_in`` — main.py:2195-2212)."""
 
     def pubsub(self) -> PubSub: ...
+
+
+@runtime_checkable
+class MaintenanceStore(Protocol):
+    """Where the maintenance record is read from (#1964): the raw JSON string under
+    ``vexa:maintenance:active``, or ``None`` when no record is active. admin-api is the only
+    writer; ``maintenance.MaintenanceCache`` is the only caller, and bounds every read."""
+
+    async def get(self) -> Optional[str]: ...

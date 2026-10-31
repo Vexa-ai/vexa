@@ -23,7 +23,7 @@ stores (postgres, object storage), and the **first-party, self-hostable STT** bo
 
 | Layer | Nodes |
 |---|---|
-| Edge | `gateway` — the one authenticated door (auth · routing · WS fan-out) |
+| Edge | `gateway` — the one authenticated door (auth · routing · WS fan-out · public `/status`) |
 | Services | `meeting-api` (collector hub) · `agent-api` (copilot) · `admin-api` (identity) |
 | Workers | `bot` · `agent-worker` — ephemeral, spawned per meeting / per dispatch |
 | Carriers | the redis [streams + pub/sub](/architecture/streaming) (transcript live + durable planes) |

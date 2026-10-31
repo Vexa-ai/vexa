@@ -75,6 +75,7 @@ most coding agents).
 - [Settings API](https://docs.vexa.ai/api/settings.md): identity, per-user model and transcription overrides, webhook configuration
 - [Webhooks](https://docs.vexa.ai/webhooks.md): signed delivery, event selection, delivery history
 - [Agent API](https://docs.vexa.ai/api/agent.md): dispatch units, chat turns, routines, workspace — **not served on the hosted service or on Kubernetes**
+- [Status](https://docs.vexa.ai/api/status.md): public `GET /status` and the `X-Vexa-Maintenance` header during updates and incidents
 - [Errors](https://docs.vexa.ai/api/errors.md): status codes and shapes across both APIs
 - [Deployment](https://docs.vexa.ai/deployment.md): compose · [Vexa Lite](https://docs.vexa.ai/deployment-lite.md) · [Kubernetes](https://docs.vexa.ai/deployment-kubernetes.md) ([agent tools on Kubernetes](https://docs.vexa.ai/deployment-helm-agent-tools.md))
 - [Configuration](https://docs.vexa.ai/configuration.md): every env var and capability
