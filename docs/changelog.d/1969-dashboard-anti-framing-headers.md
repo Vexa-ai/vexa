@@ -1,0 +1,1 @@
+- **Dashboard refuses to be framed by other sites (#1969).** Every dashboard page and API response now sends `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors 'none'`. A self-hosted deployment that embedded the dashboard in another site's iframe must open it in its own tab instead. The in-dashboard Browser view (`/b/`) is unaffected.
