@@ -1157,10 +1157,6 @@ def create_app() -> FastAPI:
             "bot_name": data.get("calendar_bot_name") or "Vexa",
             "auto_join_block": list(data.get("auto_join_block") or []),
         }
-        # The account's bot ramp override (#1962), only the keys set; meeting-api fills the rest
-        # from its BOT_RAMP_* deployment defaults.
-        if isinstance(data.get("bot_ramp"), dict) and data["bot_ramp"]:
-            resp["bot_ramp"] = dict(data["bot_ramp"])
 
     # --- user tier: model + transcription self-serve prefs (users.data JSONB, like webhook) ---
     async def _put_user_prefs(update_fields: dict, data_key: str, user: User,

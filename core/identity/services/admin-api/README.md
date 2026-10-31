@@ -47,6 +47,7 @@ uv run pytest -q     # L3 integration (testcontainers Postgres) · L1 health
 
 - ✅ delivered — `User` + `APIToken` tables (one `Base`, v0.12 carve)
 - ✅ delivered — admin tier: `POST /admin/users`, `GET /admin/users/email/{email}`, `POST /admin/users/{id}/tokens`, `DELETE /admin/tokens/{id}`
+- ✅ delivered — per-account bot ramp dials: `PATCH /admin/users/{id}` takes `bot_ramp_burst` (≥1), `bot_ramp_share` (0–1) and `bot_ramp_window_s` (10–3600) into `users.data.bot_ramp` (`null` clears one dial); `GET /internal/users/{id}/bot-context` returns `bot_ramp` when the account has any dial set
 - ✅ delivered — `/internal/validate` authz oracle → `ValidatedIdentity`, fail-closed, expiry-rejecting, `last_used_at` bump; also resolves a worker's delegation token
 - ✅ delivered — sign-in allow-list: `POST /internal/signin-admission` + the `signin` platform setting (`app/signin_allow.py`; exact addresses and `@domain` entries; env `VEXA_SIGNIN_ALLOW` merged in)
 - ✅ delivered — scoped/multi-scope/expiring token mint (`vxa_<scope>_…`, `VALID_SCOPES`)

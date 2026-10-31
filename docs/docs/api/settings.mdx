@@ -335,6 +335,25 @@ account carries a stored credential: the model key and the transcription token a
 nothing returns **422** — the patch requires at least one field. Unrecognized fields are refused
 rather than dropped.
 
+The same patch sets the account's **bot ramp**, which controls how fast the account may add running bots
+beside its ceiling. Each dial overrides one deployment default:
+
+| Field | Range | Stored as |
+|---|---|---|
+| `bot_ramp_burst` | integer ≥ 1 | `data.bot_ramp.burst` |
+| `bot_ramp_share` | 0–1 | `data.bot_ramp.share` |
+| `bot_ramp_window_s` | 10–3600 | `data.bot_ramp.window_s` |
+
+```bash
+curl -X PATCH "$ADMIN/admin/users/1" \
+  -H "X-Admin-API-Key: $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"max_concurrent_bots": 25, "bot_ramp_burst": 3, "bot_ramp_share": 0.2, "bot_ramp_window_s": 120}'
+```
+
+The response shows `data.bot_ramp` with the dials that are set. A dial sent as `null` goes back to
+the deployment default. When all three are `null`, `data.bot_ramp` is removed. A value outside its
+range returns **422**.
+
 The same patch also accepts a `data` object of platform-billing fields, which the hosted
 deployment's billing integration writes. A self-hosted deployment does not need it.
 

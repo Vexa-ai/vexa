@@ -287,6 +287,10 @@ export async function updateUser(
     name?: string;
     image_url?: string;
     max_concurrent_bots?: number;
+    /** Per-account bot ramp dials (stored in data.bot_ramp); null resets one to the deployment default. */
+    bot_ramp_burst?: number | null;
+    bot_ramp_share?: number | null;
+    bot_ramp_window_s?: number | null;
     data?: Record<string, unknown>;
   }
 ): Promise<ApiResult<VexaUserData>> {
