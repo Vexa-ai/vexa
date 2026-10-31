@@ -73,6 +73,57 @@ def _row_to_dict(m) -> dict:
     }
 
 
+def _settle_debt_entry(metadata: dict, boundary: str) -> None:
+    """Settle the debt entry for ``boundary`` (if any) on the persisted row.
+
+    ``debt_boundaries`` stays on the row (``[]`` once empty), ``debt_open``
+    says whether any entry remains, and ``debt_settled_count`` counts every
+    entry a real decision has settled.
+    """
+    debt = metadata.get("debt_boundaries")
+    if not isinstance(debt, list):
+        return
+    remaining = [
+        item for item in debt
+        if not (isinstance(item, dict) and item.get("boundary") == boundary)
+    ]
+    settled = len(debt) - len(remaining)
+    metadata["debt_boundaries"] = remaining
+    metadata["debt_open"] = bool(remaining)
+    metadata["debt_settled_count"] = (
+        int(metadata.get("debt_settled_count") or 0) + settled
+    )
+
+
+def _book_debt_entry(metadata: dict, request) -> bool:
+    """Append ``request``'s minute to ``debt_boundaries`` in place.
+
+    Refused for another service identity, a boundary at or before
+    ``last_boundary_at``, or one already listed.  Returns whether it is new.
+    """
+    if metadata.get("service_identity") != request.service_identity:
+        return False
+    prior = metadata.get("last_boundary_at")
+    if prior and datetime.fromisoformat(
+        prior.replace("Z", "+00:00")
+    ) >= request.boundary_at:
+        return False
+    boundary = request.boundary_at.isoformat()
+    debt = metadata.get("debt_boundaries")
+    debt = list(debt) if isinstance(debt, list) else []
+    if any(isinstance(i, dict) and i.get("boundary") == boundary for i in debt):
+        return False
+    debt.append({
+        "boundary": boundary,
+        "request_id": request.request_id,
+        "active_concurrency": request.active_concurrency,
+    })
+    metadata["debt_boundaries"] = debt
+    metadata["debt_open"] = True
+    metadata.setdefault("debt_settled_count", 0)
+    return True
+
+
 class SqlAlchemyMeetingRepo:
     """``MeetingRepo`` over a SQLAlchemy-async ``session_factory`` (``meetings`` /
     ``meeting_sessions`` tables). Carve of the parent ``meetings.request_bot`` DB ops."""
@@ -723,6 +774,29 @@ class SqlAlchemyMeetingRepo:
                 in ("enforce", "observe")
             ]
 
+    async def list_service_authority_debt_sessions(self) -> list[dict]:
+        """Rows in any status still carrying unsettled fail-open debt.
+
+        ``data @> {"service_authority": {"debt_open": true}}`` (served by the
+        whole-column GIN index), so a meeting stopped by a catch-up deny, or
+        ended during an outage, still has its remaining minutes replayed.
+        """
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(Meeting).where(
+                        Meeting.data.contains(
+                            {"service_authority": {"debt_open": True}}
+                        ),
+                    )
+                )
+            ).scalars().all()
+            return [_row_to_dict(row) for row in rows]
+
     async def record_service_authority_decision(
         self,
         *,
@@ -772,14 +846,62 @@ class SqlAlchemyMeetingRepo:
             metadata.update(decision.to_record())
             metadata["last_boundary_at"] = boundary
             metadata["last_decision_id"] = decision.decision_id
+            # A real decision for a fail-open minute settles that debt entry.
+            _settle_debt_entry(metadata, boundary)
             if (
                 decision.enforced
                 and not decision.allow
                 and decision.stop_scope == "billable_service"
             ):
-                metadata["teardown_confirmed"] = False
-                data["stop_requested"] = True
-                row.status = "stopping"
+                if row.status in ("active", "needs_help"):
+                    metadata["teardown_confirmed"] = False
+                    data["stop_requested"] = True
+                    row.status = "stopping"
+                else:
+                    # A replayed debt minute of a row that is no longer live:
+                    # the deny is recorded, there is nothing left to stop.
+                    metadata["teardown_confirmed"] = True
+                    metadata["teardown_skipped"] = "meeting_not_live"
+            data["service_authority"] = metadata
+            row.data = data
+            flag_modified(row, "data")
+            await db.commit()
+            return True
+
+    async def record_service_authority_debt(
+        self,
+        *,
+        meeting_id,
+        request,
+    ) -> bool:
+        """Book one fail-open minute as debt under a row lock.
+
+        The boundary is NOT advanced: the next sweep asks the authority about
+        the same minute again (same ``request_id``) and the matching decision
+        removes the entry.  Returns whether the entry is new.
+        """
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            row = (
+                await db.execute(
+                    select(Meeting)
+                    .where(Meeting.id == meeting_id)
+                    .with_for_update()
+                )
+            ).scalars().first()
+            if row is None:
+                return False
+            data = dict(row.data) if isinstance(row.data, dict) else {}
+            metadata = data.get("service_authority")
+            if not isinstance(metadata, dict):
+                return False
+            metadata = dict(metadata)
+            if not _book_debt_entry(metadata, request):
+                return False
             data["service_authority"] = metadata
             row.data = data
             flag_modified(row, "data")

@@ -196,7 +196,28 @@ class MeetingRepo(Protocol):
         request: Any,
         decision: Any,
     ) -> bool:
-        """Append the next monotonic boundary decision; return whether it was new."""
+        """Append the next monotonic boundary decision; return whether it was new.
+
+        A decision for a boundary held in ``debt_boundaries`` settles that entry: the entry
+        leaves the list (``[]`` once empty), ``debt_settled_count`` is incremented and
+        ``debt_open`` turns false once no entry remains. An enforced deny moves only a live
+        (``active``/``needs_help``) row to ``stopping``; on any other row it is recorded with
+        ``teardown_skipped=meeting_not_live`` and nothing is torn down."""
+        ...
+
+    async def list_service_authority_debt_sessions(self) -> list[dict]:
+        """Rows in ANY status whose ``service_authority.debt_open`` is true, so the debt of a
+        meeting stopped by a catch-up deny, or ended during an outage, is still replayed."""
+        ...
+
+    async def record_service_authority_debt(
+        self,
+        *,
+        meeting_id: int,
+        request: Any,
+    ) -> bool:
+        """Book one fail-open minute (authority unavailable) as debt WITHOUT advancing
+        ``last_boundary_at``; idempotent per boundary. Return whether the entry is new."""
         ...
 
     async def list_service_authority_teardowns(self) -> list[dict]:
