@@ -62,7 +62,7 @@ The same check covers every caller:
 - custom-service connections and their OAuth exchanges, in the credential broker;
 - repository attaches;
 - the model endpoint check under Settings → Models;
-- a person's own transcription endpoint, when it is saved and on every request the bot makes.
+- a person's own transcription endpoint, when it is saved, before each spawn, and on every request the bot makes.
 
 A URL that is stored before it is used is checked as written when it is saved. A calendar feed,
 webhook or transcription endpoint that names an internal destination is refused with `422` at save

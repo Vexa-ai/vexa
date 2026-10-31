@@ -38,6 +38,18 @@ def _meeting_hosts_resolve_publicly(monkeypatch):
     monkeypatch.setattr(meeting_host, "resolver", lambda host: ["93.184.215.14"])
 
 
+@pytest.fixture(autouse=True)
+def _saved_stt_endpoint_answers_ok(monkeypatch):
+    """No network: a Settings-saved STT endpoint's pre-spawn probe (#1924) answers ok and the verdict
+    cache starts empty. tests/test_saved_endpoint_gate.py replaces the stub per test."""
+    from meeting_api.bot_spawn import saved_stt_probe
+
+    saved_stt_probe.reset_cache()
+    monkeypatch.setattr(saved_stt_probe, "_probe", lambda url, token: {"ok": True, "kind": None, "status": 200})
+    yield
+    saved_stt_probe.reset_cache()
+
+
 # --- lifecycle.v1 goldens (the seam) ---------------------------------------------------
 
 def _repo_root() -> Path:

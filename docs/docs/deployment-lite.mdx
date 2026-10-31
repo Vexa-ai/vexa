@@ -79,7 +79,8 @@ known findings are listed in [`security/known-advisories.md`](https://github.com
 
 Without a transcription backend, bots join and capture but produce no text — a default
 `POST /bots` answers `503` unless the spawn opts out
-([capture-only](/how-to/send-a-bot#capture-only-no-stt)).
+([capture-only](/how-to/send-a-bot#capture-only-no-stt)). The same `503` answers when the endpoint
+saved in Settings refuses its token.
 
 ## What's in the container
 

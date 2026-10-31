@@ -113,7 +113,9 @@ keep the main stack CPU-only.
 
 ## Preflight before a meeting
 
-Test the endpoint from the Vexa host before sending a bot:
+For an endpoint saved in Settings (`PUT /user/transcription`), Vexa runs this check itself — on save
+and before each spawn — and refuses a rejected token with `422` / `503`. For the deployment's env
+backend, test the endpoint from the Vexa host before sending a bot:
 
 ```bash
 curl -sS "$TRANSCRIPTION_SERVICE_URL/v1/audio/transcriptions" \
