@@ -528,8 +528,9 @@ class SqlAlchemyTranscriptStore:
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
                             member_workspaces=None, list_view=False, meeting_id=None, slim=False,
                             metadata_filter=None):
-        from sqlalchemy import cast, func, literal, select, text, union_all
-        from sqlalchemy.dialects.postgresql import JSONB
+        from sqlalchemy import (Boolean, Integer, String, any_, bindparam, cast, func, literal,
+                                literal_column, select)
+        from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 
         from .models import Meeting
         from .projection import DEFAULT_LIST_LIMIT, LIST_PIN_STATUSES, project_list_data
@@ -538,113 +539,155 @@ class SqlAlchemyTranscriptStore:
             # ACCESS = owner OR transcript-share viewer OR member of the bound workspace. Shared meetings
             # (owned by someone else) surface in the caller's list so a share recipient can find + open them.
             #
-            # #800: the branches are UNIONed, never OR-ed. A single `WHERE a OR b` plans as a backward
-            # walk of the created_at index with the OR as a Filter — for a caller with few/old meetings
-            # that scans most of the table (100s+ per call under production load). Each branch below is
-            # independently index-scannable (owner → ix_meeting_user_event_order /
-            # ix_meeting_user_created_at, viewer → ix_meeting_transcript_viewers_gin, workspace →
-            # ix_meeting_workspace_event_order / ix_meeting_workspace_created_at — event-order for
-            # the list_view sort, created_at for internal enumeration) with its own top-N
-            # ORDER BY/LIMIT; the outer query dedups the merged ids and re-orders.
-            access = [
-                _owned(Meeting, user_id),
-                cast(Meeting.data["transcript_viewers"], JSONB).op("@>")(func.to_jsonb(user_id)),
+            # #800, #1968: each access branch is its OWN index-served statement returning only
+            # (id, sort keys); the ids are merged and paged HERE, then the page's rows are read with ONE
+            # `id = ANY(:ids)`. Never one `UNION` under `id IN (…) ORDER BY` (the 0.13.4 storm: every list
+            # call seq-scanned and detoasted `meetings`, ~2.4 s each, and drained the pool):
+            #  * viewer → ix_meeting_transcript_viewers_gin, written `data -> 'transcript_viewers'` with a
+            #    LITERAL key — the index's exact expression. SQLAlchemy 2.0.54 renders `data["k"]` as the
+            #    PG14 subscript `data['k']`, which no index matches; `.op("->")` never renders that way.
+            #  * owner → ix_meeting_user_event_order / ix_meeting_user_created_at, with NO room predicate
+            #    in SQL: `(data ->> 'room_principal') IS NULL` made the planner bitmap-scan and sort the
+            #    whole account. A room row is not owned (share_access.owns), so it is dropped from rows in
+            #    hand: bounded calls read `room` beside the top-N; unbounded ones check the fetched row.
+            #  * workspace → ix_meeting_workspace_event_order / ix_meeting_workspace_created_at.
+            viewers_expr = Meeting.data.op("->", return_type=JSONB)(literal_column("'transcript_viewers'"))
+            workspace_expr = Meeting.data.op("->>", return_type=String)(literal_column("'workspace_id'"))
+            room_expr = Meeting.data.op("->>", return_type=String)(
+                literal_column("'{}'".format(share_access.ROOM_PRINCIPAL)))
+            branches = [
+                ("owner", Meeting.user_id == user_id),
+                ("viewer", viewers_expr.op("@>")(func.to_jsonb(user_id))),
             ]
             if member_workspaces:
-                access.append(Meeting.data["workspace_id"].astext.in_(list(member_workspaces)))
+                branches.append(("workspace", workspace_expr.in_(sorted(member_workspaces))))
 
             if list_view:
                 fetch_bound = (offset or 0) + (limit if limit is not None else DEFAULT_LIST_LIMIT) + 1
             else:
                 fetch_bound = ((offset or 0) + limit) if limit else None
 
-            # #1222: the USER-FACING list orders by (non-terminal pin, MEETING EVENT time), not
-            # row-creation time — a calendar-managed row is created at import time, so created_at
-            # buried the meeting that was live right now under every row created since the import.
-            # The expressions are verbatim the ones in ix_meeting_user_event_order /
-            # ix_meeting_workspace_event_order (sessions/models.py): the branch top-N must stay an
-            # index walk (#800), and the planner only substitutes an expression index when the
-            # ORDER BY expression matches it structurally. `meeting_event_time()` is the IMMUTABLE
-            # SQL wrapper for COALESCE(data.scheduled_at, start_time, created_at) — created by the
-            # admin-api schema sync (MIGRATION-0005). Semantics mirrored by the fake via
-            # projection.list_order_key. Internal enumeration (get-by-id filter, /bots/status,
-            # calendar sync) keeps created_at DESC — _resolve_owned_native documents "newest owned
-            # row" against exactly that order.
+            # #1222: the USER-FACING list orders by (non-terminal pin, MEETING EVENT time, id), not
+            # row-creation time. The expressions are verbatim the ones in ix_meeting_user_event_order /
+            # ix_meeting_workspace_event_order (sessions/models.py), so each branch's top-N is an index
+            # walk and the key is read from the index expression, never by detoasting `data`.
+            # `meeting_event_time()` is the IMMUTABLE SQL wrapper for COALESCE(data.scheduled_at,
+            # start_time, created_at) (MIGRATION-0005); the fake mirrors it via projection.list_order_key.
+            # Internal enumeration (get-by-id filter, /bots/status, calendar sync) keeps created_at DESC
+            # (id DESC breaks ties) — _resolve_owned_native's "newest owned row" is that order.
             _pin_sql = "status IN ({})".format(
                 ", ".join(f"'{s}'" for s in sorted(LIST_PIN_STATUSES)))
-            event_order = (
-                text(f"({_pin_sql}) DESC"),
-                text("meeting_event_time(data, start_time, created_at) DESC"),
-                Meeting.id.desc(),
-            )
+            pin_col = literal_column(f"({_pin_sql})", Boolean)
+            evt_col = literal_column("meeting_event_time(data, start_time, created_at)")
+            branch_order = ((pin_col.desc(), evt_col.desc(), Meeting.id.desc()) if list_view
+                            else (Meeting.created_at.desc(), Meeting.id.desc()))
+            statuses = (frozenset(status) if isinstance(status, (list, tuple, set, frozenset))
+                        else frozenset([status]) if status else frozenset())
+            # /bots/status: a status set inside the pinned ones makes the pin a no-op predicate that
+            # lets the owner/workspace branch range-scan the (key, pin) prefix of the event-order index
+            # instead of visiting every row the account owns.
+            pin_prefix = bool(statuses) and statuses <= LIST_PIN_STATUSES
 
-            def _branch(cond):
-                s = select(Meeting.id).where(cond)
+            def _branch(name, cond, with_room):
+                cols = [Meeting.id]
+                cols += ([pin_col.label("pin"), evt_col.label("evt")] if list_view
+                         else [Meeting.created_at])
+                if with_room:
+                    cols.append(room_expr.label("room"))
+                s = select(*cols).where(cond)
                 if status:
                     # A sequence selects a SET of statuses in SQL (`/bots/status` wants the five
-                    # non-terminal ones). Filtering here instead of in Python is the difference
-                    # between reading a caller's handful of live meetings and reading their entire
-                    # history — see the `slim=` note below (#803).
+                    # non-terminal ones) — a caller's handful of live meetings, not their history (#803).
                     s = s.where(
                         Meeting.status.in_(tuple(status))
                         if isinstance(status, (list, tuple, set, frozenset))
                         else Meeting.status == status
                     )
+                    if pin_prefix and name != "viewer":
+                        s = s.where(pin_col)
                 if meeting_id is not None:
-                    # Detail-by-id: constrain in SQL rather than enumerating the account and
-                    # filtering in Python. The access union still decides WHETHER the caller may
-                    # see it, so ownership/share semantics are unchanged.
+                    # Detail-by-id: `id = :mid` in EVERY branch, so it never enumerates the account
+                    # (#803); the branches still decide WHETHER the caller may see it.
                     s = s.where(Meeting.id == meeting_id)
                 if platform:
                     s = s.where(Meeting.platform == platform)
                 if metadata_filter:
-                    # JSONB containment on the whole `data` blob, nesting the caller's filter under
-                    # `metadata` — `data @> '{"metadata": {...}}'`. Written against `data` (not
-                    # `data->'metadata'`) deliberately: THAT is the shape `ix_meeting_data_gin`
-                    # indexes, so this stays an index scan instead of degrading to a seq scan the
-                    # moment an account has history. Filtering in SQL rather than in Python is also
-                    # the difference between "the meetings tagged acme-42" and "the tagged ones on
-                    # the page you happened to fetch" — the latter is a wrong answer, not a slow one.
+                    # JSONB containment on the whole `data` blob (`data @> '{"metadata": {...}}'`), the
+                    # shape ix_meeting_data_gin indexes — filtered in SQL, not on a fetched page.
                     s = s.where(
                         cast(Meeting.data, JSONB).op("@>")(
                             cast(literal(json.dumps({"metadata": metadata_filter})), JSONB)
                         )
                     )
-                if fetch_bound is not None:
-                    # ORDER BY inside a compound member is only meaningful (and only kept by
-                    # the compiler) together with LIMIT; an unbounded branch returns its full
-                    # set, so the outer ORDER BY alone decides. The branch MUST pre-limit by the
-                    # SAME key the outer sort uses — a created_at top-N under the event-time sort
-                    # would silently drop the very rows the sort exists to surface (#1222).
-                    branch_order = event_order if list_view else (Meeting.created_at.desc(),)
-                    s = s.order_by(*branch_order).limit(fetch_bound)
-                return s
+                return s.order_by(*branch_order)
 
-            ids = union_all(*[_branch(c) for c in access]).subquery()
-            stmt = (
-                select(Meeting)
-                .where(Meeting.id.in_(select(ids.c.id)))
-                .order_by(*(event_order if list_view else (Meeting.created_at.desc(),)))
-            )
+            async def _collect(name, cond):
+                """One branch's (id, key) rows: its top `fetch_bound` non-room rows, or all of them."""
+                with_room = name == "owner" and fetch_bound is not None
+                base = _branch(name, cond, with_room)
+                if fetch_bound is None:
+                    return (await db.execute(base)).all()
+                out, skip = [], 0
+                while True:
+                    stmt_b = base.limit(fetch_bound)
+                    if skip:
+                        stmt_b = stmt_b.offset(skip)
+                    got = (await db.execute(stmt_b)).all()
+                    out += [r for r in got if not with_room or r.room is None]
+                    # Short only because room rows were dropped: read on from where this batch ended,
+                    # so a page is never short and has_more never wrong.
+                    if len(out) >= fetch_bound or len(got) < fetch_bound:
+                        return out[:fetch_bound]
+                    skip += len(got)
+
+            def _desc(v):
+                # PostgreSQL `DESC` puts NULL first: under reverse=True, (True, …) outranks (False, …).
+                return (True, 0) if v is None else (False, v)
+
+            def _key(r):
+                if list_view:
+                    return (_desc(r.pin), _desc(r.evt), r.id)
+                return (_desc(r.created_at), r.id)
+
+            keyed: dict = {}
+            not_owner_only: set = set()
+            for name, cond in branches:
+                for r in await _collect(name, cond):
+                    keyed[r.id] = _key(r)
+                    if name != "owner":
+                        not_owner_only.add(r.id)
+            ordered = sorted(keyed, key=keyed.__getitem__, reverse=True)
+
+            async def _fetch(ids):
+                if not ids:
+                    return []
+                found = (await db.execute(
+                    select(Meeting).where(
+                        Meeting.id == any_(bindparam("page_ids", list(ids), type_=ARRAY(Integer))))
+                )).scalars().all()
+                by_id = {m.id: m for m in found}
+                return [by_id[i] for i in ids if i in by_id]
+
             if list_view:
-                # #584: the paginated, slim list-view path (GET /bots, GET /meetings). Bound the response
-                # with a default page size (an explicit `limit` still wins) and over-fetch one row past
-                # the page to compute `has_more` without a second COUNT query.
+                # #584: the paginated, slim list-view path (GET /bots, GET /meetings). A default page
+                # size (an explicit `limit` still wins), one row over-fetched for `has_more`.
                 effective_limit = limit if limit is not None else DEFAULT_LIST_LIMIT
-                if offset:
-                    stmt = stmt.offset(offset)
-                stmt = stmt.limit(effective_limit + 1)
-                rows = (await db.execute(stmt)).scalars().all()
-                has_more = len(rows) > effective_limit
-                rows = rows[:effective_limit]
+                page = ordered[(offset or 0):(offset or 0) + effective_limit + 1]
+                has_more = len(page) > effective_limit
+                rows = await _fetch(page[:effective_limit])
+            elif fetch_bound is not None:
+                # Internal enumeration with a limit: room rows already dropped by _collect.
+                rows = await _fetch(ordered[(offset or 0):fetch_bound])
+                has_more = False
             else:
-                # Internal enumeration (get-by-id filter, /bots/status, calendar sync): unchanged —
-                # explicit `limit` only, NO default cap, full `data` retained below.
-                if limit:
-                    stmt = stmt.limit(limit)
-                if offset:
-                    stmt = stmt.offset(offset)
-                rows = (await db.execute(stmt)).scalars().all()
+                # Unbounded internal enumeration: NO default cap, full `data`. A row reached ONLY
+                # through the owner branch is dropped if it is a room's (the `_owned()` rule, applied
+                # to the row in hand), BEFORE `offset` counts it.
+                rows = [m for m in await _fetch(ordered)
+                        if m.id in not_owner_only
+                        or not (isinstance(m.data, dict)
+                                and m.data.get(share_access.ROOM_PRINCIPAL) is not None)]
+                rows = rows[(offset or 0):]
                 has_more = False
 
             def _row(m):
