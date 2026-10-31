@@ -72,9 +72,13 @@ security model has to cover (nothing more):
 
 | Group | Endpoints | Owner rule | Scope |
 |---|---|---|---|
-| **Front door** | `GET /health`, `GET /auth/me`, `WS /ws` | n/a / "who am I" / per-meeting subscribe | — |
+| **Front door** | `GET /health`, `GET /status`, `GET /auth/me`, `WS /ws` | n/a / n/a (public status) / "who am I" / per-meeting subscribe | — |
 | **Meetings** (you must own the meeting) | `GET·POST /bots`, `…/bots/{platform}/{native}` (delete · config · speak), `GET /transcripts/{platform}/{native}`, `GET /recordings…`, `GET /meetings…` | owner = `meetings.user_id` | `bot` · `browser` · `tx` |
 | **Your agent space** (yours by construction) | `POST /agent/chat`, `GET /agent/meeting/stream`, and `/agent/*` → `chat`, `workspace/{tree,file,init,swap,git,upload}`, `sessions`, `routines`, `models`, `meeting/{start,process,stream}` | owner = you, **by partition** (you can only name your own workspace/session) | none today |
+
+While maintenance is announced, every gateway HTTP reply also carries the output-only
+`X-Vexa-Maintenance: <id>` header ([Status](/api/status)); it takes no input and protects nothing,
+so it adds no attack surface.
 
 Two safety shapes result:
 
@@ -119,7 +123,7 @@ What actually exists today, with the real names.
   webhook), **internal** (`X-Internal-Secret`, the validate oracle).
 
 **Gateway** — the edge that resolves the key, stamps `X-User-Id`, enforces coarse route scopes, and runs
-the `/ws` multiplex.
+the `/ws` multiplex; it also serves the public `/status` and stamps `X-Vexa-Maintenance`.
 
 ---
 
