@@ -161,13 +161,21 @@ async function main(argv: string[]) {
     return console.log(JSON.stringify((await createMeeting(arg as Platform)).receipt));
   }
   if (cmd === 'delete' && arg) {
+    const receipt: Receipt = JSON.parse(readFileSync(arg, 'utf8'));
+    if (!PLATFORMS.includes(receipt.platform)) {
+      console.error(`receipt ${arg}: platform must be one of ${PLATFORMS.join('|')}, got ${JSON.stringify(receipt.platform)}`);
+      process.exitCode = 2;
+      return;
+    }
     if (dry) {
-      const p = (PLATFORMS.includes(arg as Platform) ? arg : 'zoom') as Platform;
-      return console.log(JSON.stringify({ dry_run: true, plan: plan('delete', p), deleted: { at: '<iso>',
+      const p = receipt.platform;
+      const ids = (s: string) => s.replace(/<(?:id|event_id)>/g, receipt.platform_meeting_id)
+        .replace('<space>', receipt.space || '<space>');
+      return console.log(JSON.stringify({ dry_run: true, plan: plan('delete', p).map(ids), deleted: { at: '<iso>',
         delete_status: '<2xx>', verify_status: '<404|410>', note: p === 'google_meet'
           ? 'space persists; conference ended (<status>), event cancelled' : '' } }, null, 2));
     }
-    const r = await deleteMeeting(JSON.parse(readFileSync(arg, 'utf8')));
+    const r = await deleteMeeting(receipt);
     console.log(JSON.stringify({ ...r, platform_meeting_deleted: deletedOk(r) }));
     if (!deletedOk(r)) process.exitCode = 1;
     return;

@@ -20,19 +20,3 @@ A row is `green` ONLY after opening the named probe and confirming it asserts th
 never on a similarly-named test's mere existence.
 
 Depends on: nothing (documentation). Consumed by humans + the autonomous hardening session.
-
-## Real meetings for a `live_probe`
-
-A `live_probe` needs a real meeting on the platform it tests. Create one with
-`core/meetings/modules/join/scripts/platform-meetings.ts` (#1970), run from the join module with `tsx`:
-
-- `tsx scripts/platform-meetings.ts create <google_meet|zoom|teams>` creates a meeting with the test
-  accounts and prints a JSON receipt (platform id, native meeting id, meeting URL without passcode).
-- `tsx scripts/platform-meetings.ts delete <receipt.json>` deletes it after the probe, checks that it is
-  gone and prints the receipt with `deleted` filled in. Exit 1 means it was not deleted.
-- `--dry-run` prints the planned requests and the receipt shape without credentials.
-
-Credentials come from `VERIFY_SECRETS` (default `~/vexa-test-rig/secrets.env`, outside the repo). They
-are test-rig inputs, not product settings. The full input list and the per-platform delete semantics
-(Meet has no space delete, so the conference is ended and the event cancelled) are in
-`core/meetings/modules/join/scripts/README.md`.
