@@ -20,6 +20,7 @@ vi.mock("next/headers", () => ({
 const ENV_KEYS = ["VEXA_API_URL", "VEXA_ADMIN_API_URL", "VEXA_ADMIN_API_KEY"];
 const savedEnv: Record<string, string | undefined> = {};
 
+type Row = Record<string, unknown>;
 const SECRET = "whsec_topsecret_value";
 const TEST_URL = `https://hooks.example.com/vexa/inbox?token=${SECRET}`;
 const now = () => new Date().toISOString();
@@ -61,7 +62,7 @@ function stubFetch(opts: {
   user?: unknown;
   meetings?: unknown;
 }) {
-  const spy = vi.fn(async (url: string) => {
+  const spy = vi.fn(async (url: string, _init?: RequestInit) => {
     if (url.includes("/user/webhook/deliveries")) {
       if (opts.ledgerThrows) throw new Error("ECONNREFUSED");
       return new Response(JSON.stringify(opts.ledger ?? { deliveries: [] }), {
@@ -119,7 +120,9 @@ describe("T1 mapping: ledger rows → Delivery History rows", () => {
     const { res, body } = await listDeliveries();
     expect(res.status).toBe(200);
     expect(body.ledger_unavailable).toBe(false);
-    const byOutcome = Object.fromEntries(body.deliveries.map((d: any) => [d.outcome, d]));
+    const byOutcome: Record<string, Row> = Object.fromEntries(
+      body.deliveries.map((d: Row) => [String(d.outcome), d])
+    );
     expect(byOutcome.delivered).toMatchObject({
       id: "evt_delivered_11",
       event: "meeting.status_change",
@@ -145,10 +148,10 @@ describe("T1 mapping: ledger rows → Delivery History rows", () => {
     ];
     stubFetch({ ledger: { deliveries: rows } });
     const failed = (await listDeliveries("status=failed")).body.deliveries;
-    expect(failed.map((d: any) => d.outcome)).toEqual(["blocked"]);
+    expect(failed.map((d: Row) => d.outcome)).toEqual(["blocked"]);
     stubFetch({ ledger: { deliveries: rows } });
     const suppressed = (await listDeliveries("status=suppressed")).body.deliveries;
-    expect(suppressed.map((d: any) => d.outcome)).toEqual(["suppressed"]);
+    expect(suppressed.map((d: Row) => d.outcome)).toEqual(["suppressed"]);
   });
 });
 
@@ -158,7 +161,7 @@ describe("T2 negative control: the rows come from the ledger read and nowhere el
     const meetings = { meetings: [{ id: 1, data: { name: "Standup" }, updated_at: now() }] };
     const spy = stubFetch({ meetings, ledger: { deliveries: [] } });
     const { body } = await listDeliveries();
-    expect(body.deliveries.filter((d: any) => d.source !== "test")).toEqual([]);
+    expect(body.deliveries.filter((d: Row) => d.source !== "test")).toEqual([]);
     expect(spy.mock.calls.some((c) => String(c[0]).endsWith("/meetings"))).toBe(false);
   });
 
@@ -169,9 +172,9 @@ describe("T2 negative control: the rows come from the ledger read and nowhere el
       ledger: { deliveries: [ledgerRow({ meeting_id: 1 }), ledgerRow({ meeting_id: 1, event_type: "meeting.completed", event_id: "evt_b" })] },
     });
     const { body } = await listDeliveries();
-    const ledgerRows = body.deliveries.filter((d: any) => d.source === "ledger");
+    const ledgerRows = body.deliveries.filter((d: Row) => d.source === "ledger");
     expect(ledgerRows).toHaveLength(2);
-    expect(ledgerRows.map((d: any) => d.id).sort()).toEqual(["evt_b", "evt_delivered_1"]);
+    expect(ledgerRows.map((d: Row) => d.id).sort()).toEqual(["evt_b", "evt_delivered_1"]);
     const ledgerCall = spy.mock.calls.find((c) => String(c[0]).includes("/user/webhook/deliveries"))!;
     expect(String(ledgerCall[0])).toBe("http://gateway.test/user/webhook/deliveries?limit=100");
     expect((ledgerCall[1] as RequestInit).headers).toMatchObject({ "X-API-Key": "user-token" });
@@ -185,7 +188,7 @@ describe("T3 P14: no URL path, query or secret in a non-test row", () => {
       user: { data: { webhook_deliveries: [testRow()] } },
     });
     const { body } = await listDeliveries();
-    const nonTest = body.deliveries.filter((d: any) => d.source !== "test");
+    const nonTest = body.deliveries.filter((d: Row) => d.source !== "test");
     expect(nonTest).toHaveLength(1);
     for (const row of nonTest) {
       const text = JSON.stringify(row);
@@ -194,7 +197,7 @@ describe("T3 P14: no URL path, query or secret in a non-test row", () => {
       expect(text).not.toContain("?");
       expect(row.endpoint_url).toBe("hooks.example.com");
     }
-    const test = body.deliveries.find((d: any) => d.source === "test");
+    const test = body.deliveries.find((d: Row) => d.source === "test");
     expect(test).toMatchObject({ id: "test-1", endpoint_url: TEST_URL });
   });
 });
@@ -208,7 +211,7 @@ describe("T4 ledger down: Test rows still come back, flagged", () => {
     const { res, body } = await listDeliveries();
     expect(res.status).toBe(200);
     expect(body.ledger_unavailable).toBe(true);
-    expect(body.deliveries.map((d: any) => d.source)).toEqual(["test"]);
+    expect(body.deliveries.map((d: Row) => d.source)).toEqual(["test"]);
     expect(body.stats.total).toBe(1);
   });
 
@@ -264,7 +267,7 @@ describe("T6 isolation: the ledger is read for the session user only", () => {
   it("fetches with the session token and no userId value reaches any fetch URL", async () => {
     const spy = stubFetch({ ledger: { deliveries: [ledgerRow({ meeting_id: 61 })] } });
     const { body } = await listDeliveries("userId=7&time_range=7d");
-    expect(body.deliveries.map((d: any) => d.source)).toEqual(["ledger"]);
+    expect(body.deliveries.map((d: Row) => d.source)).toEqual(["ledger"]);
     const urls = spy.mock.calls.map((c) => String(c[0]));
     expect(urls).toContain("http://gateway.test/user/webhook/deliveries?limit=100");
     expect(urls).toContain("http://admin.test/admin/users/42");
