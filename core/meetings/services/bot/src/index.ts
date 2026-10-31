@@ -40,7 +40,7 @@ import { createSttFaultReporter } from './stt-faults.js';
 import { withNavigationRefusal } from './meeting-navigation.js';
 import { launchBrowser, startCaptureBridge, startRecording, restartMixedCapture, createSpeakController, createChatSender, type BrowserSession } from './capture-bridge.js';
 import { createActDispatch } from './act-dispatch.js';
-import { createDeafLaneMonitor, createRemoteAudioActivityTap, deafLaneFault, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
+import { createDeafLaneMonitor, createRemoteAudioActivityTap, deafLaneFault, createSilenceAlonenessSource, defaultCaptureFaultMaxMs, resolveAloneSilenceWindowMs } from './aloneness.js';
 import { installSignalHandlers } from './signals.js';
 import { createVoiceNoteJoinDriver, createVoiceNotePipeline, createVoiceNoteSource, voiceNoteIdleMs, voiceNoteMaxActiveMs } from './voice-note.js';
 import { createRedisAudioStreamReader, redisStreamClientFrom, type LiveRedisStreamClient } from './adapters/voice-note-redis.js';
@@ -241,12 +241,17 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   // the browser exists, and the restart needs the live page. Unset until the session launches
   // (and after a launch failure), in which case the guard just holds and keeps checking.
   let restartCapture: (() => void) | undefined;
+  // #1673: the guard's hold is bounded by a multiple of the same window (no separate env) — on
+  // Teams an unbounded hold kept the bot in every emptied meeting until the 4h ceiling.
+  const captureFaultMaxMs = defaultCaptureFaultMaxMs(aloneSilenceWindowMs);
   const aloneness = createSilenceAlonenessSource({
     activity: remoteAudioActivity,
     windowMs: aloneSilenceWindowMs,
     onCaptureFault: () => restartCapture?.(),
+    captureFaultMaxMs,
   });
-  console.log(`[bot] aloneness: silence adapter + deaf-capture guard enabled (window_ms=${aloneSilenceWindowMs})`);
+  console.log(`[bot] aloneness: silence adapter + deaf-capture guard enabled (window_ms=${aloneSilenceWindowMs},`
+    + ` capture_fault_max_hold_ms=${captureFaultMaxMs})`);
   // The deaf-lane guard: audio keeps arriving and no STT round-trip settles. Its incident is a
   // typed fault on the same accumulator the terminal lifecycle event reports, so a lane that went
   // deaf mid-meeting ends `degraded`, never as a clean meeting that just stopped talking.

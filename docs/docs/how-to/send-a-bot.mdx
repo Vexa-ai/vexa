@@ -236,6 +236,13 @@ four-hour active-phase cap remains a backstop. A participant who stays but says 
 silence window will also be left; increase the window when silent attendance is expected. Self-hosters can
 change the deployment fallback with `BOT_ALONE_SILENCE_WINDOW_MS`; an explicit per-meeting value wins.
 
+Departure can come later than the window in one case. If the meeting page still reports connected remote
+audio streams while no audio reaches the bot, the bot treats the silence as its own capture failing, not as
+an empty room. It restarts capture once and holds on. That hold is bounded: one continuous fault may delay
+the leave by at most three silence windows (at least a minute, at most fifteen). After that the bot leaves
+anyway as `completed(left_alone)`. On Teams an emptied meeting can look like this, so a Teams bot can leave
+up to about five windows after the last person goes (about 10 minutes for a 2-minute window), not four hours.
+
 ## Next
 
 The transcript compiles into your [workspace](/concepts#workspace), where agents act on it. Turn that into

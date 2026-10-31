@@ -67,7 +67,7 @@ Pass `automatic_leave` on `POST /bots` (all values in milliseconds):
 |---|---|
 | `max_wait_for_admission` | how long the bot waits in the lobby → `awaiting_admission_timeout` |
 | `no_one_joined_timeout` | how long it waits for a first participant → `startup_alone` |
-| `max_time_left_alone` | how long it tolerates silence before leaving → `left_alone` |
+| `max_time_left_alone` | how long it tolerates silence before leaving → `left_alone`; also bounds a suspected capture-fault hold to three windows (1–15 min) |
 | `max_bot_time` | the absolute lifetime cap → `max_bot_time_exceeded` |
 
 ```bash
