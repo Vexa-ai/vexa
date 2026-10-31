@@ -21,8 +21,12 @@ SDKs, and any client build against.
   conformance harness): `authorization_service_error` (carries `status`+`detail`),
   `authorization_call_failed` (carries `details`).
 - **Server → client (live data, forwarded raw from redis) — the canonical 0.10.6 shapes:**
-  - `Transcript` `{type:"transcript", speaker?, confirmed[], pending[], meeting?, ts?}` — the per-speaker
-    bundle the collector publishes + the dashboard renders live — from `tc:meeting:{id}:mutable`.
+  - `Transcript` `{type:"transcript", speaker?, confirmed[], pending[], meeting?, ts?}`: the per-speaker
+    bundle the collector publishes from `tc:meeting:{id}:mutable`. `pending` is that speaker's complete
+    open-draft set (replace, do not merge); `confirmed` rows add by `segment_id`. Since 0.13.4 the
+    collector also sends the speaker's updated bundle after it withdraws an open draft.
+    - `transcript_retract` `{type:"transcript_retract", meeting, segment_ids[]}`: withdraws ids.
+      Forwarded raw, not in `$defs`.
   - `TranscriptionSegment` `{type:"transcription_segment", text, speaker?, …}` — a single segment, also
     valid on `tc:meeting:{id}:mutable` (the G5 sample shape).
   - `MeetingStatus` `{type:"meeting.status", meeting:{id,platform,native_id}, payload:{status}, user_id?, ts?}`

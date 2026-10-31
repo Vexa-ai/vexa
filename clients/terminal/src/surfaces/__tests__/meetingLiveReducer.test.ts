@@ -172,3 +172,25 @@ describe("meetingLive reducer — lifecycle + inert events", () => {
     }
   });
 });
+
+describe("meetingLive reducer — #1973 reconfirm wire (tc:meeting A,B,C,D,A',retract B,retract C)", () => {
+  it("ends with A' and D and no draft for B or C", () => {
+    const { result } = renderHook(() => useMeetingLive("m1973", "uid-1973"));
+    const sp = "Dmitriy";
+    emit({ type: "transcript", id: "k1:0", speaker: sp, text: "A draft", t: 0, completed: false });
+    emit({ type: "transcript", id: "k1:3000", speaker: sp, text: "B draft", t: 3, completed: false });
+    emit({ type: "transcript", id: "k1:6000", speaker: sp, text: "C draft", t: 6, completed: false });
+    emit({ type: "transcript", id: "k1:9000", speaker: sp, text: "D draft", t: 9, completed: false });
+    emit({ type: "transcript", id: "k1:0", speaker: sp, text: "A prime confirmed", t: 0, completed: true });
+    emit({ type: "retract", segment_ids: ["k1:3000"] });
+    expect(result.current.transcript.some((s) => s.id === "k1:3000")).toBe(false);
+    emit({ type: "retract", segment_ids: ["k1:6000"] });
+    const ids = result.current.transcript.map((s) => s.id).sort();
+    expect(ids).toEqual(["k1:0", "k1:9000"]);
+    const a = result.current.transcript.find((s) => s.id === "k1:0");
+    expect(a?.text).toBe("A prime confirmed");
+    expect(a?.completed).not.toBe(false);
+    const d = result.current.transcript.find((s) => s.id === "k1:9000");
+    expect(d?.text).toBe("D draft");
+  });
+});
