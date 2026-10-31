@@ -621,7 +621,7 @@ class SqlAlchemyTranscriptStore:
                     )
                 return s.order_by(*branch_order)
 
-            async def _collect(name, cond):
+            async def _collect(db, name, cond):
                 """One branch's (id, key) rows: its top `fetch_bound` non-room rows, or all of them."""
                 with_room = name == "owner" and fetch_bound is not None
                 base = _branch(name, cond, with_room)
@@ -652,13 +652,13 @@ class SqlAlchemyTranscriptStore:
             keyed: dict = {}
             not_owner_only: set = set()
             for name, cond in branches:
-                for r in await _collect(name, cond):
+                for r in await _collect(db, name, cond):
                     keyed[r.id] = _key(r)
                     if name != "owner":
                         not_owner_only.add(r.id)
             ordered = sorted(keyed, key=keyed.__getitem__, reverse=True)
 
-            async def _fetch(ids):
+            async def _fetch(db, ids):
                 if not ids:
                     return []
                 found = (await db.execute(
@@ -674,16 +674,16 @@ class SqlAlchemyTranscriptStore:
                 effective_limit = limit if limit is not None else DEFAULT_LIST_LIMIT
                 page = ordered[(offset or 0):(offset or 0) + effective_limit + 1]
                 has_more = len(page) > effective_limit
-                rows = await _fetch(page[:effective_limit])
+                rows = await _fetch(db, page[:effective_limit])
             elif fetch_bound is not None:
                 # Internal enumeration with a limit: room rows already dropped by _collect.
-                rows = await _fetch(ordered[(offset or 0):fetch_bound])
+                rows = await _fetch(db, ordered[(offset or 0):fetch_bound])
                 has_more = False
             else:
                 # Unbounded internal enumeration: NO default cap, full `data`. A row reached ONLY
                 # through the owner branch is dropped if it is a room's (the `_owned()` rule, applied
                 # to the row in hand), BEFORE `offset` counts it.
-                rows = [m for m in await _fetch(ordered)
+                rows = [m for m in await _fetch(db, ordered)
                         if m.id in not_owner_only
                         or not (isinstance(m.data, dict)
                                 and m.data.get(share_access.ROOM_PRINCIPAL) is not None)]
