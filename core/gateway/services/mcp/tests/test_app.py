@@ -295,10 +295,17 @@ def test_parse_meeting_link_no_gateway_hop(client, gateway, auth):
 # --- error mapping: the gateway's status/detail is surfaced, not swallowed ----
 
 def test_downstream_error_propagates(client, gateway: FakeGateway, auth):
-    gateway.routes[("GET", "/meetings")] = (403, {"detail": "Insufficient scope for this endpoint"})
+    # What the gateway answers a browser-only key (#1922 s3): the scopes the route takes, the key's,
+    # and the mint call. The mouth passes it through whole; clients match the prefix.
+    gateway.routes[("GET", "/meetings")] = (403, {"detail": (
+        "Insufficient scope: this endpoint takes a key with one of [bot, tx]; this key has [browser]. "
+        'Mint one with POST /admin/users/{user_id}/tokens {"scopes":["bot","tx"]} '
+        "(see docs.vexa.ai/authentication); GET /auth/me lists your key's scopes.")})
     r = client.get("/meetings", headers=auth)
     assert r.status_code == 403
-    assert "Insufficient scope" in str(r.json()["detail"])
+    detail = str(r.json()["detail"])
+    assert detail.startswith("Insufficient scope")
+    assert "[bot, tx]" in detail and 'POST /admin/users/{user_id}/tokens {"scopes":["bot","tx"]}' in detail
 
 
 # --- report_issue: the mouth's write direction (biz#434, Grow-Mouth § The ticket) ------
