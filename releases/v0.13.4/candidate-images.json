@@ -2,27 +2,27 @@
   "schema_version": 4,
   "release": "v0.13.4",
   "stable_tag": "v0.13.4",
-  "candidate_tag": "v0.13.4-rc.1",
-  "build_source": "b96617fbb0ce3e42746d91aad3f086b31e68542e",
-  "build_run": "https://github.com/Vexa-ai/vexa/actions/runs/40768159179",
-  "validation_source": "b96617fbb0ce3e42746d91aad3f086b31e68542e",
-  "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/40768159179",
+  "candidate_tag": "v0.13.4-rc.2",
+  "build_source": "febe2c83ecb60c82166720d425ae46f38e975529",
+  "build_run": "https://github.com/Vexa-ai/vexa/actions/runs/41195993176",
+  "validation_source": "febe2c83ecb60c82166720d425ae46f38e975529",
+  "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/41195993176",
   "images": {
     "vexaai/vexa-admin-api": {
       "class": "prod_deployed",
-      "digest": "sha256:506346571d4120b2411d3db78adceba84d492429253ffc9dce1dc990b22e32a1",
+      "digest": "sha256:3f14de81fa5e4c96bca8726f77f0dc1dadf6b217ea49d04e2131711dca27f955",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
       ],
       "platform_manifests": {
         "linux/amd64": {
-          "manifest_digest": "sha256:91107105c72e8f4bb77c5b3a89e52a345367f6c1802fb3c41db520b260d11286",
-          "config_digest": "sha256:c83ad5008f60d63e428c99e98096ad562c4410def7ba19d263cf8b779cf455de"
+          "manifest_digest": "sha256:d18e051ba4a688c23d56265eb6b7929baacef0cc403f077c94efc27af6a74676",
+          "config_digest": "sha256:bec03b29938b469c69390750978e2760d55e704bf336e44f4ac99a9db04ba345"
         },
         "linux/arm64": {
-          "manifest_digest": "sha256:5f5df97fe46136b4033b28331e62a82102512e4845f2accdde4533a1b61cbe23",
-          "config_digest": "sha256:84edbea36197c02a196a7b6059fd3626c575c172c48c565eb75aaac14d844343"
+          "manifest_digest": "sha256:e8b006c5fddebd5ae229ae7bfd671438f3aaede639157d454dcf0bd8f7cffe94",
+          "config_digest": "sha256:c56149d4cebd66d10946382e6778a77e4fc5bcc814b330ce4c02f588364b0f7d"
         }
       },
       "attestations": true,
@@ -30,19 +30,19 @@
     },
     "vexaai/vexa-agent-api": {
       "class": "oss_only",
-      "digest": "sha256:7b86e596761e053a53726b93b5c3807e0d3cc9f43b96221aa83509edb227a2b1",
+      "digest": "sha256:5c28f33c7c11f742bc767b68269dd664092303db4e93a7c7f843c094d7024e9b",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
       ],
       "platform_manifests": {
         "linux/amd64": {
-          "manifest_digest": "sha256:92780bc5b2cb011fd024d81404609306cf5cb5593bb5af15e8eb68e206a7518a",
-          "config_digest": "sha256:6d385100e4163ac6f6e05f6b91804035edd0ddf4be7b6782c50e0bba7b1b6895"
+          "manifest_digest": "sha256:109ab8ae866cc3d2c4947ef7cf894972bb91e804f562b89424e721be890c7009",
+          "config_digest": "sha256:970900ba989e5c784b698a014d7f2b9a62160442258bd7af43aa6005aec1056a"
         },
         "linux/arm64": {
-          "manifest_digest": "sha256:4923ab1d89faac38dc294c7ef3ffcc6dd26a6fb9441ee82acf246ab14f2ccbf7",
-          "config_digest": "sha256:40d656cf2aef724384c9edc7d20dfd62b39640f3e7d102ddd2f18adec966c3bc"
+          "manifest_digest": "sha256:9a6b02208b34be1251790ddecc62f54ca73319f03f616f46c721d5ae7a7994d5",
+          "config_digest": "sha256:c0a0d9a838a90d43d2a53c1b50d2c2a856566172a20aea795a37352530e62dbd"
         }
       },
       "attestations": true,
@@ -50,19 +50,19 @@
     },
     "vexaai/vexa-agent-worker": {
       "class": "oss_only",
-      "digest": "sha256:6c8a40fe5814cc6e027c88774159598564307a4b94af3bec75699d8cd5712d9b",
+      "digest": "sha256:c9cade1be12b67a2b38e03aef531ef83005e446964ef56dda6830e5b15969457",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
       ],
       "platform_manifests": {
         "linux/amd64": {
-          "manifest_digest": "sha256:2971f4f7983381a881e10510c71200f14f0c7e15723e96afbf102cbd9590b645",
-          "config_digest": "sha256:c49adb4d2c5bf561bd375a10f01ba753daf88aec44c15bd895a5e7c9f8b47a68"
+          "manifest_digest": "sha256:35cd6a677b651b0b9aec6a387b091bcebd11aed3dfded45fc34e18c9f235365a",
+          "config_digest": "sha256:e9fdd827feeca34bad65c6ebc629bfb6156a3723cf22c3adb27e004881cc20a0"
         },
         "linux/arm64": {
-          "manifest_digest": "sha256:87f438d2ff75284d1139b0a679af0c247f894c3b04c5c95191c85cd1e67a4a31",
-          "config_digest": "sha256:8f98545fafd659264c809a1e23e602ce08e62c557ca4892ec360b0f9239e19f7"
+          "manifest_digest": "sha256:839319fa33962d03f274fc0780b2072caddf8e951cb5ae78e5f1d9d5f19797f0",
+          "config_digest": "sha256:2b0871e7e8bc8ef9dcae77f7c76cb65eabba640492f98a2712ed80a25513dc8f"
         }
       },
       "attestations": true,
@@ -70,14 +70,14 @@
     },
     "vexaai/vexa-bot": {
       "class": "prod_deployed",
-      "digest": "sha256:44b329b3b045fb17a5ed0dc8a925f93553ee57033b106c32be2550922ea4d76c",
+      "digest": "sha256:7867250a5cc50d34fc745572cd3610e2b620ef2c9ecc7b4df59585abad9dc7b7",
       "platforms": [
         "linux/amd64"
       ],
       "platform_manifests": {
         "linux/amd64": {
-          "manifest_digest": "sha256:d1a24954bc5f28296441a9a1fb299d10e662baf80d91e7148fb3d7311bc65354",
-          "config_digest": "sha256:24aeb795832c8ad8152c75f6faaffb60eed72ef9f715ac34dea1a444c4f31073"
+          "manifest_digest": "sha256:adf6e903075354a3332cb8a7cc54f7fb5608bd93b9ea9f9af025e8c088eb80dc",
+          "config_digest": "sha256:2d05955d2c29331e40b765f7ca9d9e014021e4869694dd0c95ff58455b31dff9"
         }
       },
       "attestations": true,
@@ -85,19 +85,19 @@
     },
     "vexaai/vexa-credential-broker": {
       "class": "oss_only",
-      "digest": "sha256:613de0c8aba796c1a1feb505136501fbbf40a07cd0cc0031660b9a157b93aa6b",
+      "digest": "sha256:1dda7f74423ba5f60dfe6f60a506e138d47959cfb5ff01432030980e703b0702",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
       ],
       "platform_manifests": {
         "linux/amd64": {
-          "manifest_digest": "sha256:cf23cabc8c0138e619276b93a5bb32a67fc1e68122ee4907a1d45646ee30d942",
-          "config_digest": "sha256:85133427f369e6910ebfb1085306a0b17e8585155809263ad0a5f9289f6e84d0"
+          "manifest_digest": "sha256:918df3cd9d45b084a61158e91b3fdf85a17d6726e6921e776d6ede6bc16af0f2",
+          "config_digest": "sha256:b23c7519ffb200bbd4f6f374510679a21b4cd2f4076921281d382b6a12cdab0b"
         },
         "linux/arm64": {
-          "manifest_digest": "sha256:ebf40e7760c9faeb9e41fe1a1de386cc6a292b3a553d82144770e758a5552b7f",
-          "config_digest": "sha256:dc2b327b40c3876ed174daff4556c326f38f8878032b8f1b39ea9b3450df57a4"
+          "manifest_digest": "sha256:dff93f31e3b9c24c2f321b952a1c5f75e55ab6f73d5d01aeae103063c3867813",
+          "config_digest": "sha256:15ba3d48e64c927d642dcf83c893cb89efc71d84b8a3b699a437aefbfae54a11"
         }
       },
       "attestations": true,
@@ -105,19 +105,19 @@
     },
     "vexaai/vexa-flows": {
       "class": "oss_only",
-      "digest": "sha256:ad7d98627f6d14839ac66791ed3b2cff96da2a730870cce0c7f1aad2f87ab42b",
+      "digest": "sha256:4c4b43576fb5ebc52576cd8fcf1bdcfc74095e4391afe1d47db5d257bb56e06d",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
       ],
       "platform_manifests": {
         "linux/amd64": {
-          "manifest_digest": "sha256:55326d43ff735242dd3c193949551527df3946a8c30ce90fd9d7c421604e9ac3",
-          "config_digest": "sha256:1367621bfe83b3319f960ddbcb658a7996ebf9bba84236efd25a49d36b7f1001"
+          "manifest_digest": "sha256:6761257f2f2c3d19faf0fc9c971fcaa967b5123280639fe5d8747c318330611a",
+          "config_digest": "sha256:476b1893db2171a59acb173313a0b0fbd61bb99d7494ebf8fa1074ec70183815"
         },
         "linux/arm64": {
-          "manifest_digest": "sha256:e0128102711e0be6c266730001326dea7ea3b2042a27eb70ed4417bc2ba7734e",
-          "config_digest": "sha256:99af3a4957f06ff3329beb87be79c5d6bf5ab623f70911741b6e425b0ffef993"
+          "manifest_digest": "sha256:2d4f7bc9efdb5d6c078a4853f2349394de35fabf243ba7a9b036e7e96454f4f2",
+          "config_digest": "sha256:2347d50b976ed71928a467900f014de8813662c17eb82bcf146ecbabb9542aa8"
         }
       },
       "attestations": true,
@@ -125,19 +125,19 @@
     },
     "vexaai/vexa-gateway": {
       "class": "prod_deployed",
-      "digest": "sha256:f5b4116d4882d229e1fa565e2f36f09df174e116ee02a56fda8a98e5999ab77b",
+      "digest": "sha256:c10e23db806003362d2eaee756045e7809a0d2528497c50266032e8bee188c03",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
       ],
       "platform_manifests": {
         "linux/amd64": {
-          "manifest_digest": "sha256:fb5ac4aa7464ee0ab3bb68ae5ad80e2d91e17b895bcb36da6c66ad8ca6ea6f09",
-          "config_digest": "sha256:c90029169fbca603c663504e40743379c8996355b42b50985f5b594d32c472ce"
+          "manifest_digest": "sha256:b96818a54208fba39a109a5f1d0e12ec3d6015ca18beae7b03ecbbbded730a95",
+          "config_digest": "sha256:8927631aab06c9dc2fbdb84a3a4926842f9152dda7f3b82a9c9a6ff31a7aeae2"
         },
         "linux/arm64": {
-          "manifest_digest": "sha256:64effab5d047430a38b05d2942a835b781f1e9c10633c9900c2bff12bf5bf02d",
-          "config_digest": "sha256:3197f0ebc6ddf78e9e71bd4a55ee4bd0a6cdd29a0d0fee38ba079b15f608fbe5"
+          "manifest_digest": "sha256:bc6f8dfd10fb9555b9aab53f740d30619fcd7c2eae570fb86c2dc026a78581a2",
+          "config_digest": "sha256:0d824fd1449f5fac02bee81fc0ea329d6c3e66e2311c87b94903250c306b77b6"
         }
       },
       "attestations": true,
@@ -145,19 +145,19 @@
     },
     "vexaai/vexa-lite": {
       "class": "oss_only",
-      "digest": "sha256:b8df98a34bf32807e4edb2b46a6a91af379c3c00193eddf6da088aa63c3c5b0c",
+      "digest": "sha256:7bbcd7fbc0906a5662620205ce6a53c2757b9932d10a71b4022a86aedbe48041",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
       ],
       "platform_manifests": {
         "linux/amd64": {
-          "manifest_digest": "sha256:73e412f6555bf8f647e2cf4a0fa3fdce2d713a5a7c8de6f4b483435611bf7504",
-          "config_digest": "sha256:2add0f86a16e232d37aebea509156c102df2a96942bdd37bafdc2fb4ab48847b"
+          "manifest_digest": "sha256:8952917f95347e2029977c77813ba4bff6366c0bec151b531ec94a00818521be",
+          "config_digest": "sha256:6e88c0aa5603bd4d6c0f6ac6b7220c3c38c876e0432f07416ca07a99283f1885"
         },
         "linux/arm64": {
-          "manifest_digest": "sha256:14cc4b933aa5ce3b90bd49811fd91359e2974f013276aac4a12edbd61a17d584",
-          "config_digest": "sha256:e1ef92d9a41a4fa5a69eb890bb3af0adcd58d42f022ffe58fba779b8ee9e063d"
+          "manifest_digest": "sha256:d6dea9a8b0ceec761122502a61722ae23b73deed8eb1b26d1c9774d7ba002a28",
+          "config_digest": "sha256:7963df894cfdd2d78ae9da272a487118c58f31ac179adc004d99248c9a9b48df"
         }
       },
       "attestations": true,
@@ -165,19 +165,19 @@
     },
     "vexaai/vexa-mcp": {
       "class": "oss_only",
-      "digest": "sha256:25534dfebf680953f0a9c5f12a7af10ed66d5432273dffd1c84cda97de41e20a",
+      "digest": "sha256:52d41abf084d141c184f3ebe2da40151267588a13255fee02d45c8e3b32e0a80",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
       ],
       "platform_manifests": {
         "linux/amd64": {
-          "manifest_digest": "sha256:d93adbc29c36be5b3e111db88f9cda6e20617c62782c33e9935b6fd3cd0ccfbb",
-          "config_digest": "sha256:4aeddf3501ea07ce65b392bbbe51d618f6f14b0c0941184b962cc4947e517c2a"
+          "manifest_digest": "sha256:d78030ab854ae0b14be36c4eada1c101e27dc3873d6b6e6d590343e6121cb935",
+          "config_digest": "sha256:7cec97a9212561546b9674eb489ffaf0bf755ece6603694a7360632db2d6967f"
         },
         "linux/arm64": {
-          "manifest_digest": "sha256:fc1c70fdc5a3fb1001aabf8226541fdbecb2b7184a65d1fc6aee0272abc45166",
-          "config_digest": "sha256:7f67492c9e683c143d7f215acab58f3a59131ab6eee46b55f8df4722aeb3c864"
+          "manifest_digest": "sha256:f4f68511b40a83cf85cfc0153fb4116cee6bf02db915f58b94ae4c360c8c4aee",
+          "config_digest": "sha256:7230f8e0a71e5d8e6d4dd004f9ef783b1478e8be309a7d493769aa07be10f3c2"
         }
       },
       "attestations": true,
@@ -185,19 +185,19 @@
     },
     "vexaai/vexa-meeting-api": {
       "class": "prod_deployed",
-      "digest": "sha256:555503f6595cd9d96b16acc41ad2e2b5a93bcbb4af24bd91e0586c23d0a84b92",
+      "digest": "sha256:bf6262e0b8f2f629b8ef76082d946cc5940abf078b5fb0bd3451a495e0c47599",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
       ],
       "platform_manifests": {
         "linux/amd64": {
-          "manifest_digest": "sha256:de9a9ac1c266c5bd3d50f8918cd84beae3ec0a7ee5c6d2228b4c307449f4e66c",
-          "config_digest": "sha256:e9d058195b8b387fdde0282424770c487273213d6ba14e0db45b96567cdbfffd"
+          "manifest_digest": "sha256:4efa7f3f59a0ff542e97eec54cf8affce370c2dc383950a7f870e0e94e7be6c6",
+          "config_digest": "sha256:0527bf1f343f833d677c693ba1e2c2f1192e5a7bc2e97ef1f32dcaa4a65731ac"
         },
         "linux/arm64": {
-          "manifest_digest": "sha256:3b740f6f0fae29468ee69a3f2b33703b3fa0fbc7f5db209dc80c428550d812c5",
-          "config_digest": "sha256:59c7e604da43888b2c8415113cfec55a965c2817d793a9bc46af9e12732e3be4"
+          "manifest_digest": "sha256:67e486a8312d92f3fa231d7c81f6f0550c812d56f8a0d659294cc9358527de57",
+          "config_digest": "sha256:db910d22bb98b85969200648ca84beab9ea1f07ffad84d5afdf727a9da3b32db"
         }
       },
       "attestations": true,
@@ -205,19 +205,19 @@
     },
     "vexaai/vexa-runtime": {
       "class": "prod_deployed",
-      "digest": "sha256:8f6042599f40ffd71f935f69467793ef5803e463fa48bede8a82f8ebdc1c90f6",
+      "digest": "sha256:1781d210ad947c88921c8adbf5e1a40e1ffc4b1487fe3baf827ca7f9b908a358",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
       ],
       "platform_manifests": {
         "linux/amd64": {
-          "manifest_digest": "sha256:26ed0a63e76bcb99afe5ce38035cf738f3616c13d48e36c3ef9c06afa9ee760b",
-          "config_digest": "sha256:204bbfdc210bf314daddc38caf77c63ebba91e5f2c67d4981908b8f25774da6a"
+          "manifest_digest": "sha256:7f0c4d9190c9509f1802495cd1c5c86af5a89d5b7d6777da5cee40231a62cd12",
+          "config_digest": "sha256:b218476ed3f1def6a5bc73905332ade54d492fcd95fafe4dc3334d7a04993dfb"
         },
         "linux/arm64": {
-          "manifest_digest": "sha256:daf55f683aa5e493a9764258e28633ea0313505701e148a9a0188d1510040a5f",
-          "config_digest": "sha256:6a6606cbfa9675cf91eb6adb5381b84054b23b8666a1026b347f1aacc8b4ddaf"
+          "manifest_digest": "sha256:b1d4dd7f0af3a78630ff96784d2d84fb27dbd857096d6c9ddfb00234427cca68",
+          "config_digest": "sha256:5eeb8acc87cbcafb6451a77e5248a37774d1bb10a12d3acf16533d1e5f3aaa5c"
         }
       },
       "attestations": true,
@@ -225,19 +225,19 @@
     },
     "vexaai/vexa-terminal": {
       "class": "oss_only",
-      "digest": "sha256:acdd8768ad4cad6adc341d55e74c864bc21d0b07d0b0364d9a2c33268411a773",
+      "digest": "sha256:50d5c1a5f91a5e12e878d46b18adc9dd4ba90d0cd075b06a95276e958e40c0d6",
       "platforms": [
         "linux/amd64",
         "linux/arm64"
       ],
       "platform_manifests": {
         "linux/amd64": {
-          "manifest_digest": "sha256:ddee9df009f6058367082aac19ef0af0346ba15c4e33bc795b5b1a82a214d07f",
-          "config_digest": "sha256:61076bb09064fe7e5c500faf2ea9b0c00e1c68e0e45c96a3a0fb4fd1ef9d78c3"
+          "manifest_digest": "sha256:7cd4a7220d010e6e3e87d90a86ffd58a3384077dd5a54a4412fa900ff04d6774",
+          "config_digest": "sha256:80da7f664afc253abaf75c155df38abe7de8d2112bf7339ae7f137474672c24f"
         },
         "linux/arm64": {
-          "manifest_digest": "sha256:f37c2d62e5c30edb8ba604d20d4c7104c4273d449c14d459f32d9867872cc8cb",
-          "config_digest": "sha256:071adb5d500a46ee1ba406ce0d553f64b799394fbec5555529a4234483e8b144"
+          "manifest_digest": "sha256:2d1220340b826a5dfe1b3195bcb529fe0fa78dca850e047789ca9061e4d35d37",
+          "config_digest": "sha256:2d832b672cf1d06c567e77a157d16bd7bfe641bae7325851942d2033df150f50"
         }
       },
       "attestations": true,
