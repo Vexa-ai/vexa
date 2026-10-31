@@ -192,6 +192,13 @@
    "targets": ["compose", "helm", "lite"]
   },
   {
+   "key": "VEXA_CSRC_INACTIVE_MS",
+   "class": "defaulted",
+   "default": "(unset — bot default 800 ms)",
+   "description": "Microsoft Teams CSRC transport-sensor inactivity window in ms; forwarded to spawned bots",
+   "targets": ["compose", "helm", "lite"]
+  },
+  {
    "key": "AGENT_IMAGE",
    "class": "capability",
    "capability": "agent_spawn",

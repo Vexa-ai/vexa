@@ -651,8 +651,8 @@ export class ChunkedTranscriber {
         if (!mine()) return;
         if (this.turn && ev.tracks) this.turn.spanTracks = ev.tracks;
         // A segmenter's speech-end lands a little early and needs a trailing STT pad; a transport
-        // deactivation already carries the sensor's own 400ms inactivity window, so padding it
-        // again would only feed Whisper more silence.
+        // deactivation already carries the sensor's inactivity window (800 ms as the bot composes
+        // it), so padding it again would only feed Whisper more silence.
         this.closeTurn(ev.t1, ev.reason === 'silence' ? SILENCE_CLOSE_CONTEXT_MS : 0);
       },
     };
