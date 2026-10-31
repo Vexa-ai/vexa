@@ -203,12 +203,17 @@ export class TranscriptionClient {
       ));
     }
 
-    // Request word-level timestamps
-    parts.push(Buffer.from(
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="timestamp_granularities"\r\n\r\n` +
-      `word\r\n`
-    ));
+    // Request segment- AND word-level timestamps. The field is an ARRAY in the OpenAI audio API,
+    // so each granularity is its own `timestamp_granularities[]` part; backends that validate the
+    // schema (Groq) reject the bare `timestamp_granularities` name outright. `segment` is listed
+    // explicitly because asking for `word` alone answers with `segments: null`.
+    for (const granularity of ['segment', 'word']) {
+      parts.push(Buffer.from(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="timestamp_granularities[]"\r\n\r\n` +
+        `${granularity}\r\n`
+      ));
+    }
 
     // Max speech segment duration (controls how often Whisper splits segments)
     if (this.maxSpeechDurationSec !== undefined) {
