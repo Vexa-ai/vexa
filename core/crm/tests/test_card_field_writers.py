@@ -366,3 +366,18 @@ def test_only_the_founder_starts_and_pauses_a_destination(cards, store, agent):
     assert got['Started'] == '2026-11-01T14:58:18+00:00' and got['State'] == card['state']   # State stays the rule's
     store.change(ORG, THE_FOUNDER, card['id'], card['revision'] + 1, {'Started': None}, reason='pause')
     assert fields_of(store, card['id']).get('Started') is None
+
+
+
+# ── About names a record that exists (L1.4) ─────────────────────────────────────────────────
+
+def test_about_must_name_an_existing_record(cards, store):
+    other = plain(cards)
+    card = cards.create(ORG, CEO, title='Reply', workspace='sales', about=f"crm:{other['id']}")['card']
+    assert fields_of(store, card['id'])['About'] == f"crm:{other['id']}"
+    with pytest.raises(CRMError):
+        cards.create(ORG, CEO, title='Ghost', workspace='sales', about='crm:no-such-record')
+    with pytest.raises(CRMError):
+        cards.update(ORG, CEO, card['id'], card['revision'], fields={'About': 'crm:no-such-record'})
+    assert fields_of(store, card['id'])['About'] == f"crm:{other['id']}"           # rolled back
+    cards.update(ORG, CEO, card['id'], card['revision'], fields={'Next': 'call'})   # an unchanged About is not re-read

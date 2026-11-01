@@ -631,12 +631,27 @@ class Store:
                 c.execute(s.relationships.insert().values(org_id=org,id=str(uuid4()),record_id=row['id'],
                     kind='Description',target_domain='crm',target_id=target))
 
+    def _about_exists(self, c, org, before, after):
+        """A card's ``About: crm:<id>`` names a record of this org that exists (founder 1 Nov 2026, L1.4): checked
+        whenever About is set or changed, in the write's own transaction, so a dangling link is never stored."""
+        about = ((after or {}).get('fields') or {}).get('About')
+        if not isinstance(about, str) or not about.startswith('crm:'):
+            return
+        if about == ((before or {}).get('fields') or {}).get('About'):
+            return
+        target = about[4:]
+        found = c.execute(select(s.records.c.id).where(s.records.c.org_id == org, s.records.c.id == target,
+                                                       s.records.c.deleted == False)).first()  # noqa: E712
+        if not found:
+            raise CRMError(f'About names no record: {about}')
+
     def _revision(self, c, org, actor, before, after, reason, evidence, decision=None):
         """One append-only revision and its fact. ``decision`` (D13) makes it a decision record:
         ``{decision, credential_class, nonce, content_hash}``. A revision under the founder's subject needs his
         verified Access proof on this request (``founder_proof.require``)."""
         from . import founder_proof
         founder_proof.require(actor)
+        self._about_exists(c, org, before, after)
         record = {k: str((decision or {}).get(k) or '') for k in ('decision', 'credential_class', 'nonce', 'content_hash')}
         c.execute(s.revisions.insert().values(org_id=org, record_id=after['id'], revision=after['revision'],
             actor_id=actor, created_at=datetime.now(timezone.utc).isoformat(), reason=reason,
