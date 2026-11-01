@@ -283,7 +283,9 @@ describe("GET /api/webhooks/deliveries", () => {
   it("skips user-data deliveries when the session does not resolve to a user", async () => {
     cookieValues.set("vexa-token", "user-token");
     getAuthenticatedUserId.mockResolvedValue(null);
-    const fetchSpy = vi.fn(async (_url: string) => new Response(JSON.stringify({ meetings: [] })));
+    const fetchSpy = vi.fn(
+      async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ deliveries: [] }))
+    );
     vi.stubGlobal("fetch", fetchSpy);
 
     const { GET } = await import("@/app/api/webhooks/deliveries/route");
@@ -291,9 +293,13 @@ describe("GET /api/webhooks/deliveries", () => {
       new NextRequest("https://dashboard.example.com/api/webhooks/deliveries?userId=..%2Fusers")
     );
     expect(res.status).toBe(200);
+    // Only the owner-scoped ledger read, with the session's own token (#841): no user-data
+    // fetch without a resolved user, and the userId parameter reaches no URL.
     expect(fetchSpy.mock.calls.map((call) => String(call[0]))).toEqual([
-      "http://gateway.test/meetings",
+      "http://gateway.test/user/webhook/deliveries?limit=100",
     ]);
+    const [, init] = fetchSpy.mock.calls[0];
+    expect((init?.headers as Record<string, string>)["X-API-Key"]).toBe("user-token");
   });
 });
 
@@ -377,7 +383,7 @@ describe("GET /api/webhooks/deliveries/:meetingId", () => {
     );
     expect(res.status).toBe(200);
     const [url, init] = fetchSpy.mock.calls[0];
-    expect(url).toBe("http://gateway.test/admin/webhooks/deliveries/5");
+    expect(url).toBe("http://gateway.test/user/webhook/deliveries?limit=100");
     expect((init?.headers as Record<string, string>)["X-API-Key"]).toBe("user-token");
   });
 });
