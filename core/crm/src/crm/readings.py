@@ -75,9 +75,12 @@ _EMAIL = re.compile(r"^[^@\s/:]+@[^@\s/:]+\.[^@\s/:]+$")
 
 
 def email_of(link) -> str:
-    """A bare email (or ``email:<addr>``) a reading names as its subject, lower-cased; else ''."""
+    """A bare email, ``email:<addr>`` or a mail header ``Name <addr>`` a reading names as its subject, lower-cased;
+    else ''."""
     text = str(link or "").strip()
     text = text[6:] if text.startswith("email:") else text
+    if text.endswith(">") and "<" in text:
+        text = text.rsplit("<", 1)[1][:-1].strip()
     return text.lower() if _EMAIL.match(text) else ""
 
 

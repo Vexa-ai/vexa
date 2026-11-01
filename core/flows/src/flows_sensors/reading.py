@@ -23,6 +23,9 @@ are), read from the JSON file `VEXA_FLOWS_CONNECTIONS_FILE`:
                                               # text, the first read starts there too; text: from ""
          "first_window_s": 86400,             # how far a first read (and sensor_test) looks back, ≤ 1 day
          "empty_when_absent": true,           # optional: an answer without the item list reads as empty
+         "detail": {"path": "/x/{id}", "params": {}, "max": 20},  # optional: one more GET per new item (its
+                                              # key's first field fills {id}), merged into the item before
+                                              # `keep` (Gmail lists only ids); at most `max` per tick
          "first": "baseline",                 # optional: the first read only sets the cursor and emits
                                               # nothing (a feed whose cursor is an id, not a time: Discord)
          "where": {"status": "succeeded"},    # optional: keep only items whose fields equal these
@@ -355,6 +358,7 @@ class ReadingSensor(SensorKind):
                     "path": spec["path"], "query": query, "cursor": since, "read_at": now}
         best = cursor
         changes = []
+        detailed = 0
         for it in items:
             if not isinstance(it, dict) or not _key(it, spec["key"]):
                 continue
@@ -366,6 +370,19 @@ class ReadingSensor(SensorKind):
                     best = str(int(c)) if epoch else str(c)
             if any(_dig(it, k) != v for k, v in where.items()):
                 continue
+            det = spec.get("detail") or {}
+            if det.get("path"):
+                if detailed >= int(det.get("max") or 20):
+                    break                                  # the rest is read on the next tick
+                first = spec["key"][0] if isinstance(spec["key"], list) else spec["key"]
+                ident = str(_dig(it, first) or "")
+                if not ident or "/" in ident or "?" in ident:
+                    continue
+                more = self._get(conn, det["path"].replace("{id}", urllib.parse.quote(ident, safe="")),
+                                 dict(det.get("params") or {}))
+                detailed += 1
+                if isinstance(more, dict):
+                    it = {**it, **more}
             refs = {name: _dig(it, p) for name, p in (spec.get("keep") or {}).items()}
             refs["_evidence"] = evidence
             changes.append(Change(spec["event_type"], _key(it, spec["key"]), refs))

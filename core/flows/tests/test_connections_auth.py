@@ -202,3 +202,24 @@ def test_a_path_steps_into_a_list():
     row = {"dimensionValues": [{"value": "20261101"}], "metricValues": [{"value": "12"}, {"value": "30"}]}
     assert rk._dig(row, "dimensionValues.0.value") == "20261101" and rk._dig(row, "metricValues.1.value") == "30"
     assert rk._dig(row, "metricValues.5.value") is None
+
+
+
+def test_a_detail_read_fills_each_new_item_bounded_per_tick():
+    from flows_sensors.base import SensorRow
+    cfg = {"connections": {"g": {"transport": "http_json", "base_url": "https://g", "auth": "none"}},
+           "readings": {"g/inbox": {"path": "/m", "items": "messages", "key": "id", "cursor_type": "epoch",
+                                    "detail": {"path": "/m/{id}", "params": {"format": "metadata"}, "max": 2},
+                                    "keep": {"message": "id", "subject": "payload.headers.0.value"},
+                                    "event_type": "business.support"}}}
+    calls = []
+
+    def get(conn, path, params):
+        calls.append((path, params))
+        if path == "/m":
+            return {"messages": [{"id": "a"}, {"id": "b"}, {"id": "c"}]}
+        return {"payload": {"headers": [{"name": "From", "value": f"Ann <{path[-1]}@globex.test>"}]}}
+    k = rk.ReadingSensor(get=get, config=lambda: cfg)
+    out = k.tick(SensorRow(scope="instance", name="g", kind="reading", connection_id="g/inbox"), "1")
+    assert [c.refs["subject"] for c in out.changes] == ["Ann <a@globex.test>", "Ann <b@globex.test>"]
+    assert calls[1:] == [("/m/a", {"format": "metadata"}), ("/m/b", {"format": "metadata"})]   # max 2 per tick

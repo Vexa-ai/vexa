@@ -216,3 +216,10 @@ def test_a_reading_by_email_lands_on_the_matched_person_only_through_the_reading
     assert rev['actor_id'] == 'reading:posthog/signup'
     with pytest.raises(_E):                                          # nobody writes Reading by hand
         st.change('acme', admin, pid, rec['revision'], {'Reading': None}, reason='x')
+
+
+
+def test_a_mail_header_names_its_email():
+    assert rd.email_of("Ann Lee <Ann@Globex.test>") == "ann@globex.test"
+    assert rd.email_of("email:ann@globex.test") == "ann@globex.test"
+    assert rd.email_of("https://github.com/x/y/pull/1") == "" and rd.email_of("Ann <not-an-email>") == ""
