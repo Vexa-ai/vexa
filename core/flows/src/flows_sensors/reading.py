@@ -22,6 +22,8 @@ are), read from the JSON file `VEXA_FLOWS_CONNECTIONS_FILE`:
                                               # first_window_s; iso: ISO-8601 UTC times (…Z), compared as
                                               # text, the first read starts there too; text: from ""
          "first_window_s": 86400,             # how far a first read (and sensor_test) looks back, ≤ 1 day
+         "first": "baseline",                 # optional: the first read only sets the cursor and emits
+                                              # nothing (a feed whose cursor is an id, not a time: Discord)
          "where": {"status": "succeeded"},    # optional: keep only items whose fields equal these
          "keep": {"email": "billing_details.email", "amount": "amount"},   # ref name → dotted item path
          "event_type": "business.paid"}}}
@@ -225,4 +227,6 @@ class ReadingSensor(SensorKind):
             refs = {name: _dig(it, p) for name, p in (spec.get("keep") or {}).items()}
             refs["_evidence"] = evidence
             changes.append(Change(spec["event_type"], _key(it, spec["key"]), refs))
+        if cursor is None and spec.get("first") == "baseline":
+            changes = []                                   # first sight: where to start, nothing to tell
         return Tick(changes=changes, cursor=best if best != cursor else None)

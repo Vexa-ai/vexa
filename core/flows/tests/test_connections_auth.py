@@ -88,3 +88,20 @@ def test_connections_lists_what_is_declared_and_never_a_secret(client, tmp_path,
     assert body["readings"] == [{"id": "github/pulls", "connection": "github", "event_type": "business.reading"}]
     assert "s3cr3t-value" not in r.text and "GH_T" not in r.text
     assert client.get("/connections").status_code == 401
+
+
+def test_first_read_baseline_sets_the_cursor_and_emits_nothing():
+    from flows_sensors.base import SensorRow
+    cfg = {"connections": {"d": {"transport": "http_json", "base_url": "https://d", "auth": "none"}},
+           "readings": {"d/c": {"path": "/m", "params": {"after": "{cursor}"}, "items": "", "key": "id", "cursor": "id",
+                                "cursor_type": "text", "first": "baseline", "keep": {"id": "id"},
+                                "event_type": "business.reading"}}}
+    seen = []
+    row = SensorRow(scope="instance", name="d", kind="reading", connection_id="d/c")
+    k = rk.ReadingSensor(get=lambda conn, path, params: seen.append(params) or [{"id": "105"}, {"id": "107"}],
+                         config=lambda: cfg)
+    first = k.tick(row, None)
+    assert first.changes == [] and first.cursor == "107" and seen[0] == {}
+    k2 = rk.ReadingSensor(get=lambda conn, path, params: seen.append(params) or [{"id": "108"}], config=lambda: cfg)
+    nxt = k2.tick(row, "107")
+    assert [c.key for c in nxt.changes] == ["108"] and seen[-1] == {"after": "107"}
