@@ -219,6 +219,7 @@ def build_production_app(
         health_check_interval=30, retry_on_timeout=True,
     )
 
+    from .maintenance import RedisMaintenanceStore, apply_maintenance_header
     from .ratelimit import from_env as _rate_limiter_from_env
 
     app = create_app(
@@ -230,6 +231,8 @@ def build_production_app(
         admin_api_url=admin_api_url,  # /user/webhook self-serve proxies to identity (admin-api)
         mcp_url=mcp_url,              # #795: the MCP streamable-HTTP front door under /mcp
         rate_limiter=_rate_limiter_from_env(),  # WS-6: per-user DoS guard (generous defaults; env-tunable)
+        # #1964: /status reads the maintenance record admin-api writes, through the same redis.
+        maintenance_store=RedisMaintenanceStore(redis_client),
     )
 
     # --- fastapi-guard: per-IP rate limiting, IP allow/deny + auto-ban (edge_guard.py) ---
@@ -239,6 +242,9 @@ def build_production_app(
     from .edge_guard import apply_guard
 
     apply_guard(app)
+    # #1964: X-Vexa-Maintenance on EVERY reply while a record is active — installed after the
+    # guard so it is the outermost layer and the guard's own 429/403 carry it too.
+    apply_maintenance_header(app)
     return app
 
 

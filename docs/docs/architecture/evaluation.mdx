@@ -14,8 +14,9 @@ code against this. Read this one if you are going to *depend* on it.
 ## 1. What runs where
 
 Five core domains behind one front door. The **gateway** is the only world-facing process: it
-resolves `x-api-key` fail-closed, enforces per-route scopes, and proxies the REST surface plus a
-`/ws` multiplex. Everything else binds loopback or the internal network.
+resolves `x-api-key` fail-closed, enforces per-route scopes, proxies the REST surface plus a
+`/ws` multiplex, and serves the public `/status` (with the `X-Vexa-Maintenance` header during
+maintenance). Everything else binds loopback or the internal network.
 
 - **core/meetings** — joins the call, captures audio, emits a speaker-attributed `transcript.v1`.
 - **core/gateway** — the edge; the one authenticated boundary.

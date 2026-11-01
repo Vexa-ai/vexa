@@ -27,6 +27,12 @@ failures (`422`).
 | `429` | rate-limited — per-IP edge throttle or per-user limiter; honor the `Retry-After` header (seconds) | — |
 | `500` | unexpected server error | — |
 
+### Maintenance and incidents
+
+An error during an announced update or incident is not a mystery: poll [`GET /status`](/api/status),
+or watch for the `X-Vexa-Maintenance: <id>` header, which the gateway's replies carry while a record
+is active (all but a bare `500` from an unhandled gateway exception, so poll `/status` on a `500`).
+
 ## By surface
 
 **Authentication / admin** (`/admin/*`)

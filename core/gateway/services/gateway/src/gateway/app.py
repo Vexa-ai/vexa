@@ -39,11 +39,12 @@ import httpx  # the downstream adapter's transport errors are mapped to 502/504 
 from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 
 from . import routes_manifest
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.routing import APIRoute
 
+from .maintenance import MaintenanceCache, status_body
 from .obs import TRACE_HEADER, TraceMiddleware, get_trace_id, log_event, set_user_id
-from .ports import Authorizer, AuthUnavailable, DownstreamClient, RedisBus
+from .ports import Authorizer, AuthUnavailable, DownstreamClient, MaintenanceStore, RedisBus
 
 # #495: the honest answer when the auth path itself is unreachable — a retryable 503, never a
 # 401 that blames the caller's (valid) key. Shared by /auth/me and the proxy authorizer. Also
@@ -246,6 +247,7 @@ def create_app(
     admin_api_url: str = _DEFAULT_ADMIN_API_URL,
     mcp_url: str = _DEFAULT_MCP_URL,
     rate_limiter=None,
+    maintenance_store: Optional[MaintenanceStore] = None,
 ) -> FastAPI:
     """Build the gateway FastAPI app over the injected ports.
 
@@ -253,6 +255,8 @@ def create_app(
     ``downstream``  — forwards proxied HTTP requests to meeting-api (the unified control plane:
                       /bots + /transcripts + /meetings + /recordings all live there now, P2).
     ``redis``       — pub/sub bus for the ``/ws`` fan-in.
+    ``maintenance_store`` — where ``/status`` reads the maintenance record (#1964). ``None`` is a
+                      null store that never holds a record, so the harness and tests see no change.
     """
     # ── WHICH DOMAINS THIS DEPLOYMENT FRONTS (PRD decisions 40.6 + 40.7) ─────────────────────
     #
@@ -290,6 +294,19 @@ def create_app(
     @app.get("/health")
     async def health():
         return {"status": "ok", "service": "gateway"}
+
+    # --- /status (#1964): the public maintenance/incident read. No auth, no downstream call;
+    # built from the in-process snapshot (one bounded Redis read per TTL). Public like /health
+    # and excluded from the edge guard the same way. ``apply_maintenance_header`` (adapters)
+    # finds the cache on ``app.state`` to stamp X-Vexa-Maintenance on every reply.
+    maintenance_cache = MaintenanceCache(maintenance_store)
+    app.state.maintenance_cache = maintenance_cache
+
+    @app.get("/status")
+    async def status():
+        state, record = await maintenance_cache.snapshot()
+        return JSONResponse(status_body(state, record, maintenance_cache.updated_at),
+                            headers={"Cache-Control": "max-age=15"})
 
     # --- /auth/me — caller identity from the API key (GET /auth/me with x-api-key →
     # user_id/email/scopes); the dashboard's login + session-validation resolve the user via this.

@@ -1,0 +1,56 @@
+---
+title: "Status"
+description: "GET /status — is an update or incident on right now — and the X-Vexa-Maintenance header the gateway's replies carry while one is."
+---
+
+Integrators can tell when Vexa is being updated or has an incident in two ways: **poll `/status`**,
+or **watch for `X-Vexa-Maintenance`** on the replies you already get. Both come from one record,
+set and cleared by the operator.
+
+## `GET /status`
+
+Public: no `X-API-Key`. Makes no downstream call. Not rate-limited by the per-IP edge guard (like
+`/health`). Replies with `Cache-Control: max-age=15`.
+
+```bash
+curl -s "$API/status"
+```
+
+```json
+{
+  "status": "operational",
+  "components": {
+    "api": "operational",
+    "bots": { "google_meet": "operational", "zoom": "operational", "teams": "operational" },
+    "transcription": "operational",
+    "dashboard": "operational"
+  },
+  "maintenance": null,
+  "updated_at": "2026-11-01T09:00:00Z"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `status` | `operational` · `maintenance` (a record is active) · `degraded` (the gateway cannot read the record right now) · `outage` (reserved for live per-component signals) |
+| `components` | each reads `operational`, `maintenance`, `degraded` or `outage`. During maintenance the components the record names read `maintenance`; a record that names none marks all of them |
+| `maintenance` | `null`, or `{id, kind: "update" \| "incident", started_at, expected_end, message}` |
+| `updated_at` | when the gateway last refreshed its view (it re-reads the record every ~5 s) |
+
+The body exposes no versions, hosts, counts or internal names.
+
+## The `X-Vexa-Maintenance` header
+
+While a record is active, every HTTP reply the gateway builds carries
+`X-Vexa-Maintenance: <id>`, whatever the route and status code, including `401`, `404`, `429` and the
+`502`/`504` it returns when a service behind it fails. One reply does not: a bare `500` from an
+unhandled exception inside the gateway is built outside the code that adds the header, so it
+arrives without it. With no record there is no header. The header is output only; it takes no input and protects
+nothing. The `/ws` handshake is not decorated: WebSocket clients should poll `/status`.
+
+```http
+HTTP/1.1 200 OK
+X-Vexa-Maintenance: m-2026-11-01
+```
+
+A change shows on the gateway's replies within about 5 s of the operator setting or clearing the record.
