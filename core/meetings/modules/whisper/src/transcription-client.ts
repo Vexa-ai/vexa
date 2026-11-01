@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { log } from './log.js';
 import { isLowConfidenceSegment } from './confidence.js';
 
@@ -87,6 +88,12 @@ function classifyHttp(status: number, detail?: string): TranscriptionError {
   return new TranscriptionError('unknown', status, detail, false);
 }
 
+/** One logical STT request, exactly as the wire sees it on every attempt. */
+interface SttRequest {
+  headers: Record<string, string>;
+  body: Buffer;
+}
+
 /**
  * HTTP client for the transcription-service.
  * Converts Float32Array audio to WAV, sends as multipart form,
@@ -126,10 +133,14 @@ export class TranscriptionClient {
    */
   async transcribe(audioData: Float32Array, language?: string, prompt?: string): Promise<TranscriptionResult> {
     const wavBuffer = this.float32ToWav(audioData);
+    // One logical request = one Idempotency-Key + one byte-exact body, re-sent unchanged by every
+    // retry so the backend can recognise a retry of this window instead of transcribing (and
+    // billing) it twice. Only a format renegotiation, which changes the body, builds a new one.
+    let request = this.buildRequest(wavBuffer, language, prompt);
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
-        const result = await this.sendRequest(wavBuffer, language, prompt);
+        const result = await this.sendRequest(request, language);
         return result;
       } catch (err: any) {
         // Normalize anything non-HTTP (abort/network) into a typed fault too, so the
@@ -140,6 +151,7 @@ export class TranscriptionClient {
         if (fault.kind === 'bad_request' && this.responseFormat === 'verbose_json' && /verbose_json/i.test(fault.detail ?? '')) {
           log('[TranscriptionClient] backend rejected verbose_json; falling back to json for this and later requests');
           this.responseFormat = 'json';
+          request = this.buildRequest(wavBuffer, language, prompt);
           attempt--; // Capability negotiation does not consume a configured retry.
           continue;
         }
@@ -163,9 +175,11 @@ export class TranscriptionClient {
   }
 
   /**
-   * Send the WAV buffer to the transcription-service as multipart form data.
+   * Build one logical request: the multipart body for the WAV buffer plus the headers that
+   * identify it, including its `Idempotency-Key` (a UUID — within the 1..255 characters the
+   * hosted transcription API requires, and unique per audio window).
    */
-  private async sendRequest(wavBuffer: Buffer, language?: string, prompt?: string): Promise<TranscriptionResult> {
+  private buildRequest(wavBuffer: Buffer, language?: string, prompt?: string): SttRequest {
     // Build multipart form data manually (no external dependency needed)
     const boundary = `----FormBoundary${Date.now().toString(36)}`;
 
@@ -244,11 +258,18 @@ export class TranscriptionClient {
 
     const headers: Record<string, string> = {
       'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      'Idempotency-Key': randomUUID(),
     };
     if (this.apiToken) {
       headers['Authorization'] = `Bearer ${this.apiToken}`;
     }
+    return { headers, body };
+  }
 
+  /**
+   * Send one built request to the transcription-service.
+   */
+  private async sendRequest({ headers, body }: SttRequest, language?: string): Promise<TranscriptionResult> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.requestTimeoutMs);
 

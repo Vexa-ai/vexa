@@ -43,6 +43,7 @@ import os
 import time
 import urllib.error
 import urllib.request
+import uuid
 from functools import lru_cache
 from pathlib import Path
 from typing import List, Mapping, Optional
@@ -187,6 +188,17 @@ def audio_probe_body(model: str = "whisper-1") -> tuple:
     return _multipart({"model": model, "response_format": "json"}, "probe.wav", _probe_wav())
 
 
+#: The header that names one transcription request. The hosted transcription API refuses (400) a
+#: request without one of 1..255 characters — before it prices the audio — so an audio probe that
+#: omits it can never see the 402 it exists to catch. Shared with the terminal's Test button.
+IDEMPOTENCY_HEADER = "Idempotency-Key"
+
+
+def new_idempotency_key() -> str:
+    """A fresh key for one probe: every probe is its own request, never a retry of an earlier one."""
+    return str(uuid.uuid4())
+
+
 def _multipart(fields: Mapping[str, str], filename: str, payload: bytes) -> tuple:
     """Encode one file + simple fields as multipart/form-data (urllib has no encoder, and this file
     takes no dependencies). Returns (content_type, body)."""
@@ -233,6 +245,7 @@ def _http_probe(spec: dict, env: Mapping[str, str], timeout: float) -> dict:
     req = urllib.request.Request(url, data=body, method=(spec.get("method") or "POST"))
     if content_type:
         req.add_header("Content-Type", content_type)
+        req.add_header(IDEMPOTENCY_HEADER, new_idempotency_key())
     token = (env.get(spec["auth_key"]) or "").strip() if spec.get("auth_key") else ""
     if token:
         req.add_header("Authorization", f"Bearer {token}")
