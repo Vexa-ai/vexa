@@ -10,9 +10,13 @@ are), read from the JSON file `VEXA_FLOWS_CONNECTIONS_FILE`:
      "readings":    {"<name>/<reading>": {
          "path": "/v1/things", "params": {"since": "{cursor}", "limit": "100"},
          "items": "data",                     # dotted path to the list in the answer ("" = the answer)
-         "key": "id",                         # the item field that names it (dedupe)
+         "key": "id",                         # the item field that names it (dedupe); a list of fields
+                                              # joins them with "@" (an item read again once it changed:
+                                              # ["html_url", "updated_at"])
          "cursor": "created",                 # the item field the cursor follows (monotonic)
-         "cursor_type": "epoch" | "text",     # epoch: numbers, the first read starts at now - first_window_s
+         "cursor_type": "epoch" | "iso" | "text",  # epoch: numbers, the first read starts at now -
+                                              # first_window_s; iso: ISO-8601 UTC times (…Z), compared as
+                                              # text, the first read starts there too; text: from ""
          "first_window_s": 86400,             # how far a first read (and sensor_test) looks back, ≤ 1 day
          "where": {"status": "succeeded"},    # optional: keep only items whose fields equal these
          "keep": {"email": "billing_details.email", "amount": "amount"},   # ref name → dotted item path
@@ -26,8 +30,9 @@ What a tick does — no model, read-only by construction:
     the secret is read from the process env by NAME at call time — never stored, never in a ref, an
     error or a log;
   * each item that passes `where` becomes one `Change(event_type, key, refs)`; refs = the `keep`
-    fields plus `_evidence` {connection, reading, path, read_at} — where the reading came from, so a
-    step that writes it onto a record can cite it;
+    fields plus `_evidence` {connection, reading, path, query, cursor, read_at} — where the reading
+    came from (the query is the path with its params, never a credential; the cursor the read
+    started from), so a step that writes it onto a record can cite it;
   * the next cursor is the largest cursor value seen (unchanged when nothing new).
 One page per tick: a reading is sized (`limit`) for its interval.
 """
@@ -48,6 +53,17 @@ from .base import Change, SensorFault, SensorKind, SensorRow, Tick
 TIMEOUT_S = 20.0
 MAX_WINDOW_S = 86400.0
 TRANSPORTS = ("http_json",)
+CURSOR_TYPES = ("epoch", "iso", "text")
+
+
+def _iso(epoch: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+
+def _key(item, key) -> str:
+    """The item's dedupe key: one field, or several joined with "@"; '' when any is missing."""
+    parts = [_dig(item, k) for k in (key if isinstance(key, list) else [key])]
+    return "" if any(p in (None, "") for p in parts) else "@".join(str(p) for p in parts)
 
 
 def _dig(obj, path: str):
@@ -81,6 +97,8 @@ def resolve(cfg: dict, connection_id: str) -> tuple[dict, dict]:
         raise SensorFault(f"unsupported transport on '{name}'", retryable=False)
     if not spec.get("path") or not spec.get("key") or not spec.get("event_type"):
         raise SensorFault(f"reading '{connection_id}' lacks path, key or event_type", retryable=False)
+    if spec.get("cursor_type", "epoch") not in CURSOR_TYPES:
+        raise SensorFault(f"reading '{connection_id}' has an unknown cursor_type", retryable=False)
     return conn, spec
 
 
@@ -120,9 +138,11 @@ class ReadingSensor(SensorKind):
     def tick(self, sensor: SensorRow, cursor: Optional[str]) -> Tick:
         conn, spec = resolve(self._config(), sensor.connection_id or "")
         now = self._now()
-        epoch = spec.get("cursor_type", "epoch") == "epoch"
+        ctype = spec.get("cursor_type", "epoch")
+        epoch = ctype == "epoch"
         window = min(float(spec.get("first_window_s") or MAX_WINDOW_S), MAX_WINDOW_S)
-        since = cursor if cursor is not None else (str(int(now - window)) if epoch else "")
+        first = {"epoch": str(int(now - window)), "iso": _iso(now - window)}.get(ctype, "")
+        since = cursor if cursor is not None else first
         params = {k: str(v).replace("{cursor}", since) for k, v in (spec.get("params") or {}).items()}
         params = {k: v for k, v in params.items() if v != ""}
         answer = self._get(conn, spec["path"], params)
@@ -131,12 +151,13 @@ class ReadingSensor(SensorKind):
             raise SensorFault("the answer has no item list")
         where = spec.get("where") or {}
         cf = spec.get("cursor") or ""
+        query = spec["path"] + ("?" + urllib.parse.urlencode(params) if params else "")
         evidence = {"connection": sensor.connection_id.split("/", 1)[0], "reading": sensor.connection_id,
-                    "path": spec["path"], "read_at": now}
+                    "path": spec["path"], "query": query, "cursor": since, "read_at": now}
         best = cursor
         changes = []
         for it in items:
-            if not isinstance(it, dict) or _dig(it, spec["key"]) in (None, ""):
+            if not isinstance(it, dict) or not _key(it, spec["key"]):
                 continue
             c = _dig(it, cf) if cf else None
             if c is not None:
@@ -148,5 +169,5 @@ class ReadingSensor(SensorKind):
                 continue
             refs = {name: _dig(it, p) for name, p in (spec.get("keep") or {}).items()}
             refs["_evidence"] = evidence
-            changes.append(Change(spec["event_type"], str(_dig(it, spec["key"])), refs))
+            changes.append(Change(spec["event_type"], _key(it, spec["key"]), refs))
         return Tick(changes=changes, cursor=best if best != cursor else None)

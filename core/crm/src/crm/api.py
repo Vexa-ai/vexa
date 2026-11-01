@@ -190,7 +190,7 @@ FIELDS_DESCRIPTION = ("Optional card fields: Next (what happens next, <=200), Wa
                       "a stage moves with `transition`. AN OBLIGATION (D11): Kind (commitment | approval | question | ask | "
                       "invitation | policy_change) with NextActor (the person id whose move it is — required with a Kind), "
                       "Requester (the person id waiting on it; defaults to the person you act for), Due, Origin "
-                      "(session:<id> or message:<session>/<message id>) and Chain ({blocks: [card ids], blocked_by: [card ids]}). "
+                      "(session:<id> or message:<session>/<message id>) and Chain ({blocks: [card ids], blocked_by: [card ids]}), Source (what the card tracks: an https URL, or owner/repo#N on GitHub; the system then reads the title and state there itself). "
                       "A card with a Kind is OFFERED to its next actor at once and only that person moves it.")
 FACE_DESCRIPTION = ("Optional face: up to 8 blocks. Structural: {type: stepper|people|movement|waiting|next|subcards|ref|status}. "
                     "Data blocks NAME a field and never carry a value: {type: metric|text|progress|due|checklist|list, "
@@ -248,6 +248,13 @@ class CardInbox(Body):
     pass
 class CardRef(Body):
     card: str = Field(min_length=1, max_length=128)
+class SourceLink(Body):
+    link: str = Field(min_length=1, max_length=300, description='What cards track: an https URL, or owner/repo#N.')
+class ReadingWrite(Body):
+    record: str = Field(min_length=1, max_length=128)
+    source: str = Field(min_length=3, max_length=129, description='<connection>/<reading> that read it.')
+    fields: dict = Field(description='The declared reading fields only (readings.FIELDS).')
+    evidence: dict = Field(description='read_at (epoch seconds), and the query and cursor the read used.')
 class CardDecide(Body):
     card: str = Field(min_length=1, max_length=128)
     action: Literal['acknowledge', 'decline', 'deliver', 'confirm', 'decide', 'execute', 'answer', 'use']
@@ -678,6 +685,22 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
             **({'Due': c.due} if c.due else {})}} for c in body.cards]
         return audited('card.offer', actor, '', lambda: cards.offer_many(org_id, actor, ws, body.origin, specs,
                                                                          body.reason))
+
+    @app.post('/internal/cards/by-source', include_in_schema=False)
+    def internal_cards_by_source(body: SourceLink, caller=Depends(internal)):
+        """The cards that track a link (their typed ``Source``, or a legacy «GitHub: owner/repo#N» in
+        ``Summary`` on a card with none): ids only. Flows' ``write_reading_to_crm`` asks it which
+        records a reading refers to. Internal tier only; it acts for nobody."""
+        return audited('card.by_source', caller, '', lambda: cards.by_source(org_id, body.link))
+
+    @app.post('/internal/records/reading', include_in_schema=False)
+    def internal_records_reading(body: ReadingWrite, caller=Depends(internal)):
+        """Write a sensor reading onto a record (``readings.py``): its declared fields, with
+        evidence, as the card's ``Reading`` — never a field a person or an agent writes. Idempotent by
+        (record, source, read_at); a later reading replaces an earlier one. Internal tier only (flows
+        holds the secret); it acts for nobody."""
+        return audited('card.reading', caller, body.record, lambda: cards.write_reading(
+            org_id, body.record, body.source, body.fields, body.evidence))
 
     @app.post('/internal/orgs/{org}/erase', include_in_schema=False)
     def erase_org(org: str, caller=Depends(internal)):

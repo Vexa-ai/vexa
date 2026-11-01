@@ -1,0 +1,37 @@
+{
+  "connections": {
+    "github": {
+      "transport": "http_json",
+      "base_url": "https://api.github.com",
+      "auth": "bearer",
+      "secret_env": "VEXA_GITHUB_READ_TOKEN"
+    }
+  },
+  "readings": {
+    "github/vexa-issues": {
+      "path": "/repos/Vexa-ai/vexa/issues",
+      "params": {"state": "all", "sort": "updated", "direction": "asc", "since": "{cursor}", "per_page": "100"},
+      "items": "",
+      "key": ["html_url", "updated_at"],
+      "cursor": "updated_at",
+      "cursor_type": "iso",
+      "first_window_s": 86400,
+      "where": {"pull_request": null},
+      "keep": {"subject": "html_url", "url": "html_url", "title": "title", "state": "state",
+               "labels": "labels", "updated_at": "updated_at"},
+      "event_type": "business.reading"
+    },
+    "github/vexa-pulls": {
+      "path": "/repos/Vexa-ai/vexa/pulls",
+      "params": {"state": "all", "sort": "updated", "direction": "desc", "per_page": "100"},
+      "items": "",
+      "key": ["html_url", "updated_at"],
+      "cursor": "updated_at",
+      "cursor_type": "iso",
+      "first_window_s": 86400,
+      "keep": {"subject": "html_url", "url": "html_url", "title": "title", "state": "state",
+               "merged_at": "merged_at", "head_sha": "head.sha", "labels": "labels", "updated_at": "updated_at"},
+      "event_type": "business.reading"
+    }
+  }
+}

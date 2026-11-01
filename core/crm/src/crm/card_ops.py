@@ -40,6 +40,7 @@ from sqlalchemy import delete, select, update
 from . import card_face
 from . import card_templates as tpl
 from . import features
+from . import readings as rd
 from . import schema as s
 from .caller import Caller, as_caller
 from .policies import DEFAULTS as LIMIT_DEFAULTS, front_matter
@@ -57,9 +58,14 @@ REASON_MAX = 500
 EDITABLE = ('Title', 'About', 'Next', 'Waiting', 'Summary', 'Due', 'Progress', 'Checklist', 'Parent', 'Face',
             # D11: the lifecycle coordination fields a person (or a proposal) may set. The handoff phase,
             # an answer, evidence and a receipt are written only by a gate (``decide``).
-            'Kind', 'NextActor', 'Requester', 'NextCheckAt', 'Chain', 'Origin')
+            'Kind', 'NextActor', 'Requester', 'NextCheckAt', 'Chain', 'Origin',
+            # 1 Nov 2026: the typed link to what the card tracks (readings.py).
+            'Source')
 #: Written only by a gate decision (D12), never by an edit or a proposal.
 GATE_ONLY = ('Handoff', 'HandoffSince', 'Answer', 'Evidence', 'Receipt')
+#: Written only by a sensor reading (``write_reading``, ``/internal/records/reading``), never by an
+#: edit, a proposal or a gate: what the system read at the card's Source.
+SENSOR_ONLY = ('Reading',)
 #: How long a decision nonce lives (D13): long enough to read the card, short enough not to linger.
 NONCE_TTL = timedelta(minutes=15)
 #: An open card of a kind is checked again this long after its last move unless its due date is
@@ -276,6 +282,8 @@ class Cards:
     #: Set while a gate decision writes (``decide``): the only writer of a kind card's stage and of
     #: the gate-only fields. Thread-local, because one Cards object serves concurrent requests.
     _gate = threading.local()
+    #: Set while a sensor reading writes (``write_reading``): the only writer of ``SENSOR_ONLY``.
+    _reading = threading.local()
 
     def normalise_fields(self, object_type, fields, before, actor=None):
         """A card's fields as every write path stores them. ``actor`` is the person whose write is
@@ -291,6 +299,13 @@ class Cards:
             check_about(fields['About'])
         if not gate_write and set(fields) & set(GATE_ONLY):
             raise CRMError('A card\'s handoff, answer, evidence and receipt change only through its gates (decide)')
+        reading_write = bool(getattr(self._reading, 'on', False))
+        if set(fields) & set(SENSOR_ONLY) and not reading_write:
+            raise CRMError("A card's Reading is what the system read at its Source; only a sensor reading writes it")
+        if reading_write and set(fields) - set(SENSOR_ONLY):
+            raise CRMError('A sensor reading writes the Reading field only')
+        if 'Source' in fields:
+            fields['Source'] = rd.check_source(fields['Source'])
         kind = fields.get('Kind', prior.get('Kind'))
         if prior.get('Kind') and 'Kind' in fields and fields['Kind'] != prior.get('Kind'):
             raise CRMError("A card's kind does not change; make a new card")
@@ -492,6 +507,9 @@ class Cards:
             'states': life['stages'], 'side_states': life['side'],
             'next': f.get('Next'), 'waiting': f.get('Waiting'), 'summary': f.get('Summary'),
             'due': f.get('Due'), 'progress': f.get('Progress'),
+            # the typed link and what the system read there (readings.py § RENDERER CONTRACT)
+            'source': f.get('Source') if ('*' in readable or 'Source' in readable) else None,
+            'reading': f.get('Reading') if ('*' in readable or 'Reading' in readable) else None,
             'workspaces': bindings, 'parent': parent,
             'children': {'done': sum(1 for i in items if i['done']), 'total': len(items), 'items': items[:20]},
             'members': [] if cross_org else self._members(c, org, row['id']),
@@ -1155,6 +1173,62 @@ class Cards:
             except (NotFound, SharedRefused):
                 continue
         return out
+
+    # ── sensor readings (readings.py; flows' ``write_reading_to_crm``) ─────────────────────────────
+    def by_source(self, org, link, limit=50):
+        """The cards that track ``link``: their typed ``Source`` names the same subject
+        (``readings.subject``), or, for a card with no ``Source``, its ``Summary`` carries the legacy
+        «GitHub: owner/repo#N». Internal tier only: it answers ids, never a field."""
+        want = rd.subject(link)
+        if not want:
+            raise CRMError('Not a link a reading can name')
+        with self.store.engine.connect() as c:
+            types = [n for n, d in c.execute(select(s.object_types.c.name, s.object_types.c.definition)
+                                             .where(s.object_types.c.org_id == org)).all()
+                     if isinstance(d, dict) and d.get('x-card')]
+            r = s.records
+            rows = c.execute(select(r.c.id, r.c.fields).where(
+                r.c.org_id == org, r.c.object_type.in_(types), r.c.deleted.is_(False),
+                r.c.merged_into.is_(None)).order_by(r.c.id)).all()
+        ids = []
+        for rid, fields in rows:
+            fields = fields or {}
+            have = rd.subject(fields.get('Source')) if fields.get('Source') else rd.summary_subject(fields.get('Summary'))
+            if have == want:
+                ids.append(rid)
+                if len(ids) >= limit:
+                    break
+        return {'subject': want, 'cards': ids}
+
+    def write_reading(self, org, record, source, fields, evidence):
+        """Write one sensor reading onto a card as its ``Reading``: the declared fields only, with
+        the reading's evidence. Idempotent by (record, source, read_at): the same reading again is
+        ``unchanged``; one older than the card's is ``stale``; one whose values equal the card's is
+        ``unchanged`` (no revision). Otherwise it replaces the earlier reading as one revision by
+        ``reading:<source>``, whose evidence is the reading's. No other field is touched."""
+        values = rd.normalise_fields(fields)
+        ev = rd.normalise_evidence(source, evidence)
+        with self.store.begin() as c:
+            row = self._card_row(c, org, record)
+            raw = row['fields'] or {}
+            prior = raw.get('Reading') if isinstance(raw.get('Reading'), dict) else None
+            prior_ev = (prior or {}).get('evidence') or {}
+            base = {'record': row['id'], 'revision': row['revision'], 'source': ev['source'], 'read_at': ev['read_at']}
+            if prior is not None:
+                if prior_ev.get('source') == ev['source'] and prior_ev.get('read_at') == ev['read_at']:
+                    return {**base, 'status': 'unchanged'}
+                if float(prior_ev.get('read_at') or 0) > ev['read_at']:
+                    return {**base, 'status': 'stale'}
+                if prior.get('fields') == values:
+                    return {**base, 'status': 'unchanged'}
+            patch = {'Reading': {'fields': values, 'evidence': ev}}
+            self._reading.on = True
+            try:
+                self._apply(c, org, 'reading:' + ev['source'], row, patch, f'Read at {ev["source"]}',
+                            [{'reading': ev}], None)
+            finally:
+                self._reading.on = False
+            return {**base, 'revision': row['revision'] + 1, 'status': 'applied'}
 
     def list(self, org, actor, workspace=None, about=None, state=None, mine=False, limit=LIST_MAX):
         caller = as_caller(actor)

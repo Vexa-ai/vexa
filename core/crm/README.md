@@ -175,6 +175,8 @@ https on the network's own domain, stored as given; nothing is fetched or import
 | `card_update_propose` | POST `/card/update/propose` | Propose a change or a stage move — a member accepts it |
 | — | POST `/card/read` · `/card/create` · `/card/update` · `/card/members` · `/card/membership` | The person's own card verbs: read with activity, make, change or move, share, accept being added |
 | — | POST `/internal/references` | A workspace's references and roster at one commit (internal secret) |
+| — | POST `/internal/cards/by-source` | The ids of the cards that track a link: their typed `Source`, or a legacy «GitHub: owner/repo#N» in `Summary` on a card with none (internal secret; flows' `write_reading_to_crm`) |
+| — | POST `/internal/records/reading` | Write a sensor reading onto a card as its `Reading`: the declared fields with evidence, idempotent by (record, source, read_at), a later reading replacing an earlier one (internal secret; flows' `write_reading_to_crm`). See *Sensor readings on a card* |
 | — | POST `/internal/accounts` | Attach an account to its person (internal secret) |
 | — | POST `/person/profile` | The person's own profile: read, edit, claim, unclaim, publish, import (D35) |
 | — | POST `/internal/profiles` · `/internal/profiles/public` | Profile fields for agent-api's directory; a published public page (internal secret) |
@@ -191,6 +193,35 @@ from `core/agent/contracts/blocks.v1/card_face.py` (parity fact `card-face`). Sc
 
 Every caller is resolved by identity's `/internal/validate` (memberships, delegation, shared turn);
 every route is audited in `crm_audit`.
+
+## Sensor readings on a card
+
+A card that tracks something outside the CRM names it in its typed link **`Source`** (an https URL,
+or `owner/repo#N` for a GitHub issue or pull request); a person or an agent sets it like any card
+field. What the system READS there is the card's **`Reading`**, which only
+`/internal/records/reading` writes: every edit, proposal, `crm_change` and gate refuses it
+(`card_ops.SENSOR_ONLY`). Flows' generic `reading` sensor reads the source on a schedule (the
+`github` connection: `core/flows/src/flows_sensors/connections.github.example.json`), and the CRM
+pack's `write_reading_to_crm` step asks `/internal/cards/by-source` which cards track the item and
+writes the reading onto each. Details in `src/crm/readings.py`.
+
+```json
+"Reading": {"fields":   {"title": "…", "state": "open | closed | merged", "merged_at": "…",
+                         "head_sha": "…", "labels": ["…"], "url": "https://…", "updated_at": "…"},
+            "evidence": {"source": "github/vexa-pulls", "query": "/repos/…/pulls?…",
+                         "read_at": 1793500000.0, "cursor": "2026-10-31T00:00:00Z"}}
+```
+
+Only the declared fields are written, each in its declared shape. Idempotent by (record, source,
+read_at); an older reading is `stale` and a reading with the same values is `unchanged`, neither
+making a revision; otherwise the later reading replaces the earlier one as one revision by
+`reading:<source>` whose evidence is the reading's.
+
+**Renderer contract.** The card's read answer carries `source` and `reading`. A card with a reading
+shows the source's title (`reading.fields.title`) and state (`reading.fields.state`) and links
+`reading.fields.url` (else `source`); the typed `Title` is shown only on a card with no reading.
+Nothing is shown from free text (`Summary`, `Next`) in their place, and no model is involved: the
+same card answer renders the same way every time.
 
 ## Import
 
