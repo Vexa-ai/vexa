@@ -18,6 +18,9 @@ from .base import SensorKind, SensorRow
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 #: Sensors one person may hold (`sensors_per_user`).
 PER_SCOPE = 20
+#: Sensors the instance (the company) may hold: its readings are the operator's declared connections, one sensor
+#: per reading (a Discord channel, a PostHog event), so it outgrows a person's twenty.
+PER_INSTANCE = 100
 
 
 class SensorError(ValueError):
@@ -65,8 +68,9 @@ def create(db, kinds: dict, scope: str, *, name: str, kind: str, filter: str = "
     if get(db, scope, name):
         raise SensorError("exists", 409, name=name)
     held = db.execute("SELECT COUNT(*) FROM sensor WHERE scope = :sc", {"sc": scope})
-    if int(held[0][0] or 0) >= PER_SCOPE:
-        raise SensorError("quota_sensors", 403, maximum=PER_SCOPE)
+    cap = PER_INSTANCE if scope == "instance" else PER_SCOPE
+    if int(held[0][0] or 0) >= cap:
+        raise SensorError("quota_sensors", 403, maximum=cap)
     now = time.time() if now is None else now
     db.execute("INSERT INTO sensor (scope, name, kind, connection_id, filter, interval_s, version, "
                "status, mode, next_due_at, failures, created_by, created_at) VALUES (:sc, :n, :k, "

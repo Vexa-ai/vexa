@@ -120,3 +120,14 @@ def test_an_absent_item_list_is_empty_only_when_declared():
         k.tick(row, "1")
     spec["empty_when_absent"] = True
     assert k.tick(row, "1").changes == []
+
+
+def test_the_instance_holds_more_sensors_than_a_person():
+    """A person keeps PER_SCOPE (its own quota tests); the instance, one sensor per declared reading, holds more."""
+    from flows_sensors import store
+    from sqlite_double import SqliteDB
+    db = SqliteDB()
+    kinds = {"reading": rk.ReadingSensor()}
+    for i in range(store.PER_SCOPE + 5):
+        store.create(db, kinds, "instance", name=f"i{i}", kind="reading", filter=None, connection_id="x/y",
+                     interval_s=300, by="t", now=1.0)
