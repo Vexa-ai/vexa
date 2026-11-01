@@ -1948,6 +1948,26 @@ def sensor_list(scope: str = "", caller: Caller = Depends(subject_or_operator)):
                        "min_interval_s": k.min_interval_s} for k in _sensor_kinds().values()]}
 
 
+@app.get("/connections", dependencies=[Depends(auth)])
+def connections_list():
+    """WHAT THIS DEPLOYMENT MAY READ, for the operator: the connections and readings declared in
+    `VEXA_FLOWS_CONNECTIONS_FILE`. Each connection says its transport, its auth kind and whether its
+    secret is set in this process (a yes/no, never a value or an env name's content); each reading
+    says its connection and the event type it emits. Which of them RUN is `GET /sensors`."""
+    from flows_sensors import reading as rk
+    from flows_sensors.base import SensorFault
+    try:
+        cfg = rk.load_config()
+    except SensorFault as e:
+        return {"connections": [], "readings": [], "error": str(e)}
+    conns = [{"name": n, "transport": c.get("transport"), "auth": c.get("auth", "none"),
+              "secret_set": rk.secret_set(c) if c.get("auth", "none") != "none" else None}
+             for n, c in sorted((cfg.get("connections") or {}).items())]
+    reads = [{"id": rid, "connection": rid.split("/", 1)[0], "event_type": r.get("event_type")}
+             for rid, r in sorted((cfg.get("readings") or {}).items())]
+    return {"connections": conns, "readings": reads}
+
+
 @app.post("/sensors", status_code=201)
 def sensor_create(body: SensorBody, caller: Caller = Depends(subject_or_operator)):
     """Make a sensor of your own, as a DRAFT: a `kind` (e.g. `calendar`), an optional `filter` over

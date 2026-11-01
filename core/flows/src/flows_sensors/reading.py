@@ -6,7 +6,11 @@ usage are CONNECTIONS, not kinds. So this kind knows no provider. A sensor of it
 are), read from the JSON file `VEXA_FLOWS_CONNECTIONS_FILE`:
 
     {"connections": {"<name>": {"transport": "http_json", "base_url": "https://…",
-                                "auth": "bearer" | "none", "secret_env": "<ENV NAME>"}},
+                                "auth": "bearer" | "oauth_refresh" | "none", "secret_env": "<ENV NAME>",
+                                "scheme": "Bearer"}},   # bearer: the Authorization scheme (Discord: "Bot")
+    # oauth_refresh (Google): {"token_url": "https://oauth2.googleapis.com/token", "client_id_env": …,
+    #   "client_secret_env": …, "refresh_token_env": …}: an access token is exchanged for the refresh token
+    #   (the one POST, to the token endpoint, never to the source) and kept in this process until it expires.
      "readings":    {"<name>/<reading>": {
          "path": "/v1/things", "params": {"since": "{cursor}", "limit": "100"},
          "items": "data",                     # dotted path to the list in the answer ("" = the answer)
@@ -95,11 +99,60 @@ def resolve(cfg: dict, connection_id: str) -> tuple[dict, dict]:
         raise SensorFault(f"unknown reading '{connection_id}'", retryable=False)
     if conn.get("transport") not in TRANSPORTS:
         raise SensorFault(f"unsupported transport on '{name}'", retryable=False)
+    if conn.get("auth", "none") not in AUTHS:
+        raise SensorFault(f"unsupported auth on '{name}'", retryable=False)
     if not spec.get("path") or not spec.get("key") or not spec.get("event_type"):
         raise SensorFault(f"reading '{connection_id}' lacks path, key or event_type", retryable=False)
     if spec.get("cursor_type", "epoch") not in CURSOR_TYPES:
         raise SensorFault(f"reading '{connection_id}' has an unknown cursor_type", retryable=False)
     return conn, spec
+
+
+AUTHS = ("bearer", "oauth_refresh", "none")
+OAUTH_ENVS = ("client_id_env", "client_secret_env", "refresh_token_env")
+_TOKENS: dict = {}
+
+
+def secret_envs(conn: dict) -> list[str]:
+    """The env NAMES a connection reads its secret from (never their values)."""
+    if conn.get("auth") == "bearer":
+        return [conn.get("secret_env") or ""]
+    if conn.get("auth") == "oauth_refresh":
+        return [conn.get(k) or "" for k in OAUTH_ENVS]
+    return []
+
+
+def secret_set(conn: dict) -> bool:
+    return all(n and os.environ.get(n) for n in secret_envs(conn))
+
+
+def _access_token(conn: dict, now: Optional[float] = None) -> str:
+    """An OAuth access token for the connection's refresh token, kept until 60 s before it expires."""
+    now = time.time() if now is None else now
+    if not secret_set(conn):
+        raise SensorFault("the connection's secret is not set on this deployment", retryable=False)
+    key = tuple(conn.get(k) for k in ("token_url",) + OAUTH_ENVS)
+    held = _TOKENS.get(key)
+    if held and held[1] - 60 > now:
+        return held[0]
+    body = urllib.parse.urlencode({"grant_type": "refresh_token",
+                                   "client_id": os.environ[conn["client_id_env"]],
+                                   "client_secret": os.environ[conn["client_secret_env"]],
+                                   "refresh_token": os.environ[conn["refresh_token_env"]]}).encode()
+    req = urllib.request.Request(conn.get("token_url") or "", data=body, method="POST",
+                                 headers={"Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:  # noqa: S310 — operator-declared URL
+            out = json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        raise SensorFault(f"token exchange failed ({e.code})", retryable=e.code >= 500) from None
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        raise SensorFault("the token endpoint could not be reached") from None
+    tok = out.get("access_token")
+    if not tok:
+        raise SensorFault("the token endpoint answered no access token", retryable=False)
+    _TOKENS[key] = (tok, now + float(out.get("expires_in") or 3600))
+    return tok
 
 
 def http_get(conn: dict, path: str, params: dict) -> object:
@@ -111,7 +164,9 @@ def http_get(conn: dict, path: str, params: dict) -> object:
         secret = os.environ.get(conn.get("secret_env") or "") or ""
         if not secret:
             raise SensorFault("the connection's secret is not set on this deployment", retryable=False)
-        headers["Authorization"] = "Bearer " + secret
+        headers["Authorization"] = f"{conn.get('scheme') or 'Bearer'} {secret}"
+    elif conn.get("auth") == "oauth_refresh":
+        headers["Authorization"] = "Bearer " + _access_token(conn)
     req = urllib.request.Request(url, method="GET", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:  # noqa: S310 — operator-declared URL
