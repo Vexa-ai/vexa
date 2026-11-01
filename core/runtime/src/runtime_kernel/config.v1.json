@@ -90,6 +90,13 @@
    "targets": []
   },
   {
+   "key": "RUNTIME_RECLAIM_CONFIRM_SEC",
+   "class": "defaulted",
+   "default": "10",
+   "description": "how long (s) a docker reclaim that lost to a concurrent remover waits for the container's confirmed absence before failing; clamped to 1..120",
+   "targets": []
+  },
+  {
    "key": "RUNTIME_K8S_TOLERATIONS",
    "class": "defaulted",
    "default": "(chart's global.tolerations, JSON — the runtime's own tolerations)",
