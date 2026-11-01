@@ -84,7 +84,10 @@ function npmPackages() {
   let raw = "";
   try {
     raw = execSync("pnpm licenses list --json", { cwd: ROOT, stdio: ["ignore", "pipe", "ignore"] }).toString();
-  } catch (e) { raw = (e.stdout || "").toString(); }
+  } catch {
+    warn("`pnpm licenses list --json` failed — run `pnpm install` first; emitting SBOM without the npm tree");
+    return [];
+  }
   if (!raw.trim()) { warn("`pnpm licenses list --json` produced no output — run `pnpm install` first; emitting SBOM without the npm tree"); return []; }
   let data;
   try { data = JSON.parse(raw); } catch { warn("`pnpm licenses list --json` returned non-JSON — skipping npm tree"); return []; }
