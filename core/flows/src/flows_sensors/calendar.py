@@ -114,3 +114,9 @@ def register(kind: SensorKind) -> None:
 from .mailbox import MailboxSensor as _MailboxSensor  # noqa: E402
 
 register(_MailboxSensor())
+
+# The generic sensor (`reading.py`): one kind for every connection — Stripe, a product's usage, … are
+# operator-declared connections and readings, not kinds (founder, 1 Nov 2026).
+from .reading import ReadingSensor as _ReadingSensor  # noqa: E402
+
+register(_ReadingSensor())

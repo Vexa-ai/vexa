@@ -13,6 +13,16 @@
       ]
     },
     {
+      "key": "VEXA_FLOWS_CONNECTIONS_FILE",
+      "class": "capability",
+      "description": "A JSON file of operator-declared connections (transport, base URL, the env NAME of the credential) and readings (path, params with {cursor}, item list, key, cursor field, kept fields, event type) for the generic `reading` sensor kind. A sensor names one reading as connection_id `<connection>/<reading>`. GET only. UNSET: no reading sensor reads anything.",
+      "capability": "sensors",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
       "key": "VEXA_FLOWS_SENSORS_BROKER_URL",
       "class": "capability",
       "description": "The credential broker's base URL for sensors' read-only provider calls (ADR-0050): a calendar sensor asks it for a person's calendar changes since a cursor; the broker holds the token and makes the call. UNSET: no sensor reads a connection (a sensor of that kind answers `not configured` in its test and stays a draft).",

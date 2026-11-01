@@ -112,6 +112,11 @@ DECLARED: dict[str, tuple[str, object, str]] = {
     "VEXA_FLOWS_SENSORS_BROKER_URL": ("capability", None,
                                       "the credential broker, for sensors' read-only provider calls "
                                       "(ADR-0050). UNSET: no sensor reads a connection."),
+    "VEXA_FLOWS_CONNECTIONS_FILE": ("capability", None,
+                                    "the operator-declared connections and readings the generic "
+                                    "`reading` sensor kind may run (flows_sensors.reading). Secrets "
+                                    "are named, never held: each connection names the env key that "
+                                    "carries its credential. UNSET: no reading sensor reads anything."),
     "VEXA_FLOWS_SENSORS_KEY_FILE": ("capability", None,
                                     "the broker's sensors-role key file (ADR-0050); the broker holds "
                                     "the same file. UNSET: no sensor reads a connection."),
