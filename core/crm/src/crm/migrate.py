@@ -563,12 +563,12 @@ def main(argv):
         created = bootstrap_org(engine, org, os.environ.get('CRM_ORG_NAME', '') or org)
         if upgrade_card_definition(engine, org):
             created.append('Card lifecycle properties')
-        extra = os.environ.get('CRM_DEFINITIONS_FILE', '').strip()
+        extra, differs = os.environ.get('CRM_DEFINITIONS_FILE', '').strip(), []
         if extra:
             # the install's own fields, declared as configuration and added additively
             try:
                 with open(extra, encoding='utf-8') as f:
-                    added = extend_definitions(engine, org, json.load(f))
+                    added, differs = extend_definitions(engine, org, json.load(f))
             except (OSError, ValueError) as exc:
                 print(f'[crm-schema] STOP: CRM_DEFINITIONS_FILE: {exc}', flush=True)
                 return 1
@@ -577,9 +577,13 @@ def main(argv):
                 return 1
             if added:
                 created.append(f'fields {", ".join(added)}')
+            for name in differs:
+                print(f'[crm-schema] CRM_DEFINITIONS_FILE: {name} differs from the stored definition; left as is', flush=True)
         print(f'[crm-schema] role {role} and the crm_* tables are ready (schema version {SCHEMA_VERSION}; '
               f'grants on those tables only); audit kept {audit_days or "for ever"}'
-              f'{" days" if audit_days else ""}; created: {", ".join(created) or "nothing"}', flush=True)
+              f'{" days" if audit_days else ""}; created: {", ".join(created) or "nothing"}'
+              f'{"; left as is (the file differs from the stored definition): " + ", ".join(differs) if differs else ""}',
+              flush=True)
         return 0
     if cmd == 'check':
         engine = create_engine(os.environ['CRM_DATABASE_URL'], pool_pre_ping=True, pool_size=1, max_overflow=0)

@@ -135,7 +135,7 @@
       "key": "CRM_DEFINITIONS_FILE",
       "class": "defaulted",
       "default": "(unset — the product's definitions only)",
-      "description": "`crm.migrate init` only: a JSON file of the install's own fields, `{object_type: {field: <JSON-schema property>}}`, added to the org's existing definitions additively (a field already defined is left as it is; a type the org lacks is refused). Definitions are configuration: crm-api's role cannot write them, so this is the path an install extends them by",
+      "description": "`crm.migrate init` only: a JSON file of the install's own fields, `{object_type: {field: <JSON-schema property>}}`, added to the org's existing definitions additively (a field already defined is left as it is; a type the org lacks is refused). Definitions are configuration: crm-api's role cannot write them, so this is the path an install extends them by. A field the product defines is refused, a field already stored whose property differs is reported and left as is, and a property's `x-class` may be only `private` or `org` (never a workspace share). Manual only: compose and helm do not set it; an install that uses it mounts the file into the container that runs `crm.migrate init` and sets the variable there",
       "targets": []
     },
     {

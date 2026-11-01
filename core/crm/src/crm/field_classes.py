@@ -56,7 +56,7 @@ DEFAULT_ROOM_RULE = 'intersection'
 _PRIVATE_NAME = re.compile(r'(lastcontact|contacthistory|lastemail|lastmessage|lastmeeting|lastinteraction'
                            r'|lastreply|emailthread|mailthread|interactions|timeline|emailsnippet|emailbody'
                            r'|emailsubject|threadsummary)')
-_PRIVATE_SOURCES = ('email', 'mail', 'calendar')
+PRIVATE_SOURCES = ('email', 'mail', 'calendar')
 
 
 def _norm(name: str) -> str:
@@ -75,7 +75,7 @@ def default_class(name: str, prop: dict | None = None) -> tuple[str, tuple]:
         return 'private', ()
     if name == NARRATIVE:
         return 'org', ()
-    if str(prop.get('x-source') or '').lower() in _PRIVATE_SOURCES or _PRIVATE_NAME.search(_norm(name)):
+    if str(prop.get('x-source') or '').lower() in PRIVATE_SOURCES or _PRIVATE_NAME.search(_norm(name)):
         return 'private', ()
     return 'org', ()
 
