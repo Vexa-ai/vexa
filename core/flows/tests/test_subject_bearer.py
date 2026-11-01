@@ -494,11 +494,13 @@ PERSON_ONLY_ROUTES = sorted(k for k, v in fa.DELEGATED_REACH.items() if v == fa.
 OPEN_ROUTES = sorted(k for k, v in fa.DELEGATED_REACH.items() if v == fa.OPEN)
 #: A concrete URL for each templated path: Anna's own reaction, the verb that calls off her join.
 PATH_PARAMS = {"reaction_id": "r-anna-uid", "verb": "cancel",
-               "name": "annas-brief", "version": 1, "action": "pause", "kind": "minutes"}
+               "name": "annas-brief", "version": 1, "action": "pause", "kind": "minutes",
+               "recipient": "126"}
 #: The body each POST needs to get past validation — a person's own routine for `POST /flows`.
 BODIES = {"/flows": {"name": "annas-brief", "trigger": {"kind": "schedule", "cron": "0 7 * * *"},
                      "steps": ["agent_run"], "params": {"instruction": "brief me"}},
           "/flows/{name}/claim": {"thread": "pchat-anna"},
+          "/streams/{recipient}/ack": {"ids": ["00000000000000000-000000000000"]},
           "/concerns/stage": {"thread": "pchat-anna", "stage": "waiting"},
           "/sinks": {"thread": "pchat-anna", "name": "annas-brief", "event": "mail.received"},
           "/sensors": {"name": "annas-new-sensor", "kind": "calendar"},

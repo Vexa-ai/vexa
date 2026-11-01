@@ -101,6 +101,16 @@
       ]
     },
     {
+      "key": "VEXA_FLOWS_STREAM_OWNERS",
+      "class": "capability",
+      "description": "A JSON object naming who owns each ROLE stream (`{\"ceo\": \"<uid>\"}`): that subject's own credential reads and acknowledges `GET /streams/<role>`. A stream named by a uid or an address is its subject's without this. UNSET: a role stream is read by the operator key only.",
+      "capability": "stream_roles",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
       "key": "VEXA_FLOWS_SERVICE_KEY",
       "class": "required-explicit",
       "description": "The flows tier's ONE credential into the other domains (read through `common.SERVICE_KEY_ENV`). It opens the gateway's service door (gateway/service_door.py), which forwards exactly the calls on its flows allow-list — over the internal tier, or to meeting-api with the subject's identity signed by the gateway — and refuses everything else; the door's inbound leg stamps it on the internal-tier calls into flows-api, so flows never sees INTERNAL_API_SECRET either. The gateway holds the same value. Flows holds no internal-tier secret and no admin key: neither can be used from here to mint a token for, or act as, an arbitrary person on an arbitrary route.",
@@ -810,6 +820,10 @@
     "timeline_read_key": {
       "description": "A narrower credential for `GET /timeline` than the operator key.",
       "when_unconfigured": "The timeline stays readable, by the operator key only."
+    },
+    "stream_roles": {
+      "description": "Role streams (`ceo`, `software`, …) read by the role's own credential, not only by the operator.",
+      "when_unconfigured": "Streams still fill and the operator key reads them; a role's own credential is refused its role stream (403 not_your_stream)."
     },
     "fact_seal_key": {
       "description": "The producers' public keys for event.v2 fact envelopes (D8) — the sealed audience: a fact reaches the people its producer names, not only its subject.",

@@ -10,7 +10,7 @@ This module is imported ONLY by tooling and the postgres composition path — ne
 engine modules (the isolation gate enforces that)."""
 from __future__ import annotations
 
-from sqlalchemy import CheckConstraint, Double, ForeignKey, Index, Integer, Text
+from sqlalchemy import CheckConstraint, Double, ForeignKey, Index, Integer, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -71,7 +71,33 @@ class Signal(Base):
     created_at: Mapped[float] = mapped_column(Double, nullable=False)
     consumed_at: Mapped[float | None] = mapped_column(Double)
     __table_args__ = (CheckConstraint(
-        "kind IN ('resume','retry','cancel','wake','claim','release')", name="signal_kind"),)
+        "kind IN ('resume','retry','cancel','wake','claim','release','ack')", name="signal_kind"),)
+
+
+class StreamItem(Base):
+    """EVENTS FOR ONE RECIPIENT, KEPT UNTIL ACKNOWLEDGED (the stream primitive, factory concept
+    1 Nov 2026). `to_stream` appends the event that started its run; `GET /streams/{recipient}` reads
+    the unacknowledged items oldest first; `POST /streams/{recipient}/ack` sets `acked_at`/`acked_by`
+    and records an `ack` signal on the run that appended it. `recipient` is a role (`ceo`, `software`,
+    `business`, `founder`) or a subject (a uid). `item_id` is time-ordered (zero-padded microseconds,
+    then a hash of recipient and source event), so `?after=<item_id>` pages in order; one source
+    event reaches one recipient once (`stream_item_once`). `refs` are the run's refs as admitted,
+    without the engine's `_` keys. ONE WRITER: flows (`flows.stream`)."""
+    __tablename__ = "stream_item"
+    item_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    recipient: Mapped[str] = mapped_column(Text, nullable=False)
+    source_event_id: Mapped[str] = mapped_column(Text, nullable=False)
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    refs: Mapped[str] = mapped_column(Text, nullable=False)
+    reaction_id: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    acked_at: Mapped[float | None] = mapped_column(Double)
+    acked_by: Mapped[str | None] = mapped_column(Text)
+    __table_args__ = (
+        UniqueConstraint("recipient", "source_event_id", name="stream_item_once"),
+        Index("stream_unacked", "recipient", "item_id",
+              postgresql_where="acked_at IS NULL", sqlite_where="acked_at IS NULL"),
+    )
 
 
 class MailThread(Base):

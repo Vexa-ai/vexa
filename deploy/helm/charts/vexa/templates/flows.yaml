@@ -46,6 +46,9 @@ stringData:
   {{- with .Values.flows.timelineKey }}
   VEXA_FLOWS_TIMELINE_KEY: {{ . | toString | quote }}
   {{- end }}
+  {{- with .Values.flows.streamOwners }}
+  VEXA_FLOWS_STREAM_OWNERS: {{ . | toJson | quote }}
+  {{- end }}
   {{- with $m.inbox }}
   VEXA_MAIL_INBOX: {{ . | toString | quote }}
   {{- end }}

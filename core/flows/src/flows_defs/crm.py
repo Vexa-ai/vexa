@@ -30,6 +30,11 @@ flow ends ``not_present`` rather than knocking on a missing door.
   file's ``delivery`` block: the pull request, its check runs, the prod pin, the newest releases),
   writes that as the card's ``github/delivery`` reading, and any move it makes is a CORRECTION the
   card shows («was X, now Y, because …»).
+* ``card_due_alarms`` puts a card's Due into its owner's stream (the card's ``Waiting``, through
+  ``to_stream``): ``card.due_soon`` one working day before, ``card.due`` on the day. Its keyed schedule
+  (one row per alarm per card) is kept by ``card_due_arm`` (``crm.record.changed``: a moved Due moves
+  it, a cleared Due or a closed card cancels it) and ``card_due_recheck`` (hourly). Both read the cards
+  through ``/internal/cards/due``; the refs are the card id, the due date and the owner.
 """
 import time
 import flows_config
@@ -46,6 +51,28 @@ NOT_FIELDS = ("subject", "uid")
 #: How often every open software card is read afresh and its stage checked (cron, UTC).
 RECHECK_CRON = "*/20 * * * *"
 STAGE_FLOW, RECHECK_FLOW = "crm_card_stage", "crm_card_stage_recheck"
+#: A card's Due (the date we told someone) as two alarms in its owner's stream: ``card.due_soon`` one
+#: working day before, ``card.due`` on the day (UTC midnights). ``card_due_arm`` keeps the keyed schedule
+#: true on every record change; ``card_due_recheck`` re-reads every open card with a Due each hour, so an
+#: alarm the worker was down for fires late instead of never, and one whose card went is cancelled.
+DUE_FLOW, DUE_ARM_FLOW, DUE_RECHECK_FLOW = "card_due_alarms", "card_due_arm", "card_due_recheck"
+DUE_RECHECK_CRON = "7 * * * *"
+DUE_EVENT, DUE_SOON_EVENT = "card.due", "card.due_soon"
+
+
+def due_times(due) -> "tuple[float, float] | None":
+    """A ``Due`` date (``YYYY-MM-DD``) → (due_soon_at, due_at): the previous working day's midnight and the
+    due date's, UTC. A Monday's working day before is the Friday. ``None`` for anything not a date."""
+    from datetime import date, datetime, timedelta, timezone
+    try:
+        d = date.fromisoformat(str(due or "")[:10])
+    except ValueError:
+        return None
+    soon = d - timedelta(days=1)
+    while soon.weekday() >= 5:
+        soon -= timedelta(days=1)
+    at = lambda day: datetime(day.year, day.month, day.day, tzinfo=timezone.utc).timestamp()  # noqa: E731
+    return at(soon), at(d)
 
 
 def build(reg, db):
@@ -248,6 +275,62 @@ def build(reg, db):
         return Done({'cards': len(done), 'corrected': [r for r in done if r.get('status') in ('corrected', 'restored')],
                      'unread': sum(1 for r in done if r['read'] != 'read')})
 
+    class _At:
+        def __init__(self, t):
+            self.t = t
+
+        def now(self):
+            return self.t
+
+    def _arm_due(flow, card, clock):
+        """Arm, move or cancel one card's two alarms. Refs: card id, due date, owner — nothing else."""
+        from flows import keyed, stream
+        cid = str(card.get('id') or '')
+        times = due_times(card.get('due')) if card.get('open') else None
+        owner = str(card.get('owner') or '').strip()
+        if times is None or not stream.RECIPIENT.match(owner):
+            gone = [k for k in (f'{cid}:soon', f'{cid}:due') if keyed.cancel(db, clock, flow, key=k)]
+            return {'card': cid, 'status': 'cancelled' if gone else 'none'}
+        soon_at, due_at = times
+        payload = {'card': cid, 'due': str(card['due'])[:10], 'owner': owner}
+        # one row per alarm per card, bounded by the cards themselves: no per-person cap applies
+        out = {'card': cid, 'due': keyed.upsert(db, clock, flow, key=f'{cid}:due', fire_at=due_at,
+                                                event_type=DUE_EVENT, payload=payload, per_user=-1)}
+        if clock.now() < due_at:
+            out['soon'] = keyed.upsert(db, clock, flow, key=f'{cid}:soon', fire_at=soon_at,
+                                       event_type=DUE_SOON_EVENT, payload=payload, per_user=-1)
+        else:
+            keyed.cancel(db, clock, flow, key=f'{cid}:soon')
+            out['soon'] = 'past'
+        return out
+
+    @reg.step
+    def arm_card_due(ctx):
+        """Keep a card's due alarms true to its Due: ``card.due_soon`` one working day before and ``card.due``
+        on the day, into the card's owner's stream (its Waiting). A record change re-reads that card; the
+        hourly run re-reads every open card with a Due and cancels the alarms of any card no longer among
+        them. Reads: refs.record_id (absent on the hourly run) · Effect: the keyed schedule of
+        ``card_due_alarms`` · Result: {cards, armed}."""
+        base = flows_config.get(CRM_URL_ENV).rstrip('/')
+        if not base:
+            return NotPresent('crm')
+        flow = reg.newest('instance', DUE_FLOW)
+        if flow is None:
+            return Done({'status': 'no_flow'})
+        clock = _At(ctx.clock_now)
+        record = str(ctx.refs.get('record_id') or '').strip()
+        cards = _crm_post(base, '/internal/cards/due', {'record': record} if record else {}).get('cards') or []
+        if record and not cards:
+            cards = [{'id': record, 'open': False}]       # the record is gone, or is not a card
+        done = [_arm_due(flow, card, clock) for card in cards]
+        if not record:
+            live = {str(c.get('id')) for c in cards}
+            for (key,) in db.execute("SELECT key FROM keyed_schedule WHERE scope = 'instance' AND flow = :f "
+                                     "AND status = 'armed'", {'f': DUE_FLOW}):
+                if key.rsplit(':', 1)[0] not in live:
+                    done.append(_arm_due(flow, {'id': key.rsplit(':', 1)[0], 'open': False}, clock))
+        return Done({'cards': len(cards), 'armed': [d for d in done if d.get('status') != 'none']})
+
     for kind in BUSINESS_EVENTS:
         reg.flow(name=f'business_{kind}', version=1, on=EventType(f'business.{kind}'),
                  steps=[reg.steps['record_business_event']])
@@ -265,5 +348,15 @@ def build(reg, db):
                    steps=('recheck_card_stages',), cron=RECHECK_CRON)
     reg.flows[(recheck.ident, recheck.version)] = recheck
     reg.scheduled.setdefault(recheck.ident, []).append(recheck)
+    # the due alarms: armed by a record change or the hourly re-read, fired by the keyed schedule into
+    # `to_stream` (refs.owner is the card's Waiting)
+    from flows.keyed import KEYED_EVENT
+    from flows_steps import stream as stream_steps
+    reg.flow(name=DUE_FLOW, version=1, on=EventType(KEYED_EVENT), steps=[stream_steps.register(reg, db)])
+    reg.flow(name=DUE_ARM_FLOW, version=1, on=EventType('crm.record.changed'), steps=[reg.steps['arm_card_due']])
+    due_recheck = Flow(name=DUE_RECHECK_FLOW, version=1, on=EventType(SCHEDULE_EVENT),
+                       steps=('arm_card_due',), cron=DUE_RECHECK_CRON)
+    reg.flows[(due_recheck.ident, due_recheck.version)] = due_recheck
+    reg.scheduled.setdefault(due_recheck.ident, []).append(due_recheck)
     reg.flow(name='crm_references', version=1, on=EventType('workspace.references.changed'),
              steps=[reg.steps['hand_references_to_crm']])

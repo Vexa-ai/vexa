@@ -44,16 +44,17 @@ SWAP_KEY = (
 
 
 #: `signal.kind` gains `claim` and `release` (a hold taken and given back by someone working
-#: outside the engine, `signals.claim_hold`). Postgres has no `ADD CONSTRAINT IF NOT EXISTS`, so the
-#: CHECK is swapped only while the catalogue's definition still lacks `claim`.
-SIGNAL_KIND_HAS_CLAIM = """SELECT COUNT(*) FROM pg_constraint
-                           WHERE conname = 'signal_kind'
-                             AND pg_get_constraintdef(oid) LIKE '%claim%'"""
+#: outside the engine, `signals.claim_hold`), then `ack` (a stream item acknowledged by its
+#: recipient, `flows.stream.ack`). Postgres has no `ADD CONSTRAINT IF NOT EXISTS`, so the CHECK is
+#: swapped only while the catalogue's definition still lacks the newest kind, `'ack'`.
+SIGNAL_KIND_CURRENT = """SELECT COUNT(*) FROM pg_constraint
+                         WHERE conname = 'signal_kind'
+                           AND pg_get_constraintdef(oid) LIKE '%''ack''%'"""
 
 SWAP_SIGNAL_KIND = (
     "ALTER TABLE signal DROP CONSTRAINT IF EXISTS signal_kind",
     "ALTER TABLE signal ADD CONSTRAINT signal_kind "
-    "CHECK (kind IN ('resume','retry','cancel','wake','claim','release'))",
+    "CHECK (kind IN ('resume','retry','cancel','wake','claim','release','ack'))",
 )
 
 
@@ -61,7 +62,7 @@ def apply(execute: Callable) -> dict:
     """Bring an existing database up to the models. Returns what it changed (no row data)."""
     for stmt in ADD_COLUMNS:
         execute(stmt)
-    rows = execute(SIGNAL_KIND_HAS_CLAIM)
+    rows = execute(SIGNAL_KIND_CURRENT)
     if not (rows and int(rows[0][0] or 0) > 0):
         for stmt in SWAP_SIGNAL_KIND:
             execute(stmt)
