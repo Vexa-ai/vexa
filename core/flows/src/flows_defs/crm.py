@@ -258,8 +258,11 @@ def build(reg, db):
                 try:
                     fields = card_stage.read_delivery(rk.http_get, conn, spec, subject, card.get('source'), cache,
                                                       pin_conn)
+                except card_stage.PinFault as e:
+                    row['read'] = f'not read: prod pin: {e}'
                 except (card_stage.ReadFault, SensorFault) as e:
                     row['read'] = f'not read: {e}'
+                    row['failed'] = True
                 else:
                     evidence = {'read_at': now, 'query': f'delivery {subject}'}
                     _crm_post(base, '/internal/records/reading', {'record': card['id'], 'source': card_stage.DELIVERY_SOURCE,
@@ -277,8 +280,15 @@ def build(reg, db):
                 readings['unread'] = row['read']
             row.update(_put_stage(base, card, readings, 'recheck'))
             done.append(row)
+        # each reading's own failures (founder 1 Nov: a source's state comes from its own latest reads): the card's
+        # GitHub reads that failed, and the pin's one read this pass; a card with no GitHub link is no failure
+        name = (spec or {}).get('connection') or 'github'
+        pin_name = ((spec or {}).get('prod_pin') or {}).get('connection') or name
+        failed = {f'{name}/delivery': sum(1 for r in done if r.get('failed') or (conn is None and r['read'] != 'read')),
+                  f'{pin_name}/prod-pin': 1 if cache.pin_fault is not None else 0}
         return Done({'cards': len(done), 'corrected': [r for r in done if r.get('status') in ('corrected', 'restored')],
-                     'unread': sum(1 for r in done if r['read'] != 'read')})
+                     'unread': sum(1 for r in done if r['read'] != 'read'), 'failed': failed,
+                     'pin_read': cache.pin is not None or cache.pin_fault is not None})
 
     class _At:
         def __init__(self, t):

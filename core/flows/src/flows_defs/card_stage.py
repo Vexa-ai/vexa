@@ -245,6 +245,11 @@ class ReadFault(Exception):
     """One card could not be read; the re-check skips it and says why."""
 
 
+class PinFault(ReadFault):
+    """The prod pin could not be read (its own reading, ``<connection>/prod-pin``): the card is left unread, and
+    the failure is the pin's, not the card's GitHub read's."""
+
+
 def _path(template: str, **values) -> str:
     for k, v in values.items():
         v = str(v)
@@ -330,17 +335,24 @@ class PassCache:
 
     def __init__(self):
         self.pin = None
+        self.pin_fault = None          # a pin read that failed this pass: read once, never retried per card
         self.releases = {}
 
 
 def read_pin(get, conn, spec, cache: PassCache) -> dict:
+    if cache.pin_fault is not None:
+        raise PinFault(cache.pin_fault)
     if cache.pin is None:
         pin = spec.get('prod_pin') or {}
         params = {'ref': pin.get('ref') or 'main'}
-        chart = pin_target(_contents_text(get(conn, pin['app'], params)))
-        entry = channel_entries(_contents_text(get(conn, pin['channel'], params))).get(chart)
-        if not entry:
-            raise ReadFault(f'the channel names no publish entry for chart {chart}')
+        try:
+            chart = pin_target(_contents_text(get(conn, pin['app'], params)))
+            entry = channel_entries(_contents_text(get(conn, pin['channel'], params))).get(chart)
+            if not entry:
+                raise ReadFault(f'the channel names no publish entry for chart {chart}')
+        except (ReadFault, SensorFault) as e:
+            cache.pin_fault = str(e)
+            raise PinFault(cache.pin_fault) from None
         cache.pin = {'chart': chart, **entry, 'repo': str(pin.get('repo') or '').lower(),
                      'pin_ref': f"{pin['app']}@{params['ref']}"}
     return cache.pin

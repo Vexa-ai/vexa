@@ -518,3 +518,26 @@ def test_the_pin_reads_through_its_own_connection_and_a_refused_check_read_is_no
     get1, _ = github(answers)
     with pytest.raises(SensorFault):                                 # any other failure stays a failed read
         cs.read_delivery(get1, {}, SPEC, 'github.com/vexa-ai/vexa#1962', PR_URL, pin_conn={})
+
+
+
+def test_a_pin_that_cannot_be_read_fails_the_pin_reading_once_not_each_card_read(monkeypatch):
+    from flows_sensors import reading as rk
+    db, reg, clock, _ = rig()
+    build(reg, db)
+    other = {**SOFT, 'id': 'c3'}
+    _crm(monkeypatch, lambda url, body: (200, {'cards': [SOFT, other]}) if url == '/internal/cards/software'
+         else (200, {'status': 'kept'}))
+    cfg = json.load(open(cs.__file__.replace('flows_defs/card_stage.py', 'flows_sensors/connections.github.example.json')))
+    cfg['connections']['github-stations'] = dict(cfg['connections']['github'])
+    cfg['delivery']['prod_pin']['connection'] = 'github-stations'
+    monkeypatch.setattr(rk, 'load_config', lambda path='': cfg)
+    pull = {'html_url': PR_URL, 'number': 1962, 'state': 'open', 'draft': False, 'head': {'sha': HEAD}, 'merged_at': None}
+    answers = base_answers(pull, {'status': 'diverged'})
+    answers['/repos/DmitriyG228/vexa-stations/contents/channels/vexa-internal/channel.yaml'] = b64('entries:\n')
+    get, calls = github(answers)
+    monkeypatch.setattr(rk, 'http_get', get)
+    out = reg.steps['recheck_card_stages'](SimpleNamespace(refs={'slot': T}))
+    assert out.result['unread'] == 2                                  # both cards keep what they had …
+    assert out.result['failed'] == {'github/delivery': 0, 'github-stations/prod-pin': 1}   # … the pin failed, once
+    assert sum(1 for c in calls if c.endswith('channel.yaml')) == 1   # read once per pass, not per card
