@@ -32,11 +32,13 @@ def test_bearer_scheme(monkeypatch):
 
     def fake(req, timeout=0):
         seen["auth"] = req.get_header("Authorization")
+        seen["ua"] = req.get_header("User-agent")
         return _Answer(b"[]")
     monkeypatch.setattr(rk.urllib.request, "urlopen", fake)
     monkeypatch.setenv("DISCORD_T", "tok")
     rk.http_get({"base_url": "https://x", "auth": "bearer", "scheme": "Bot", "secret_env": "DISCORD_T"}, "/a", {})
     assert seen["auth"] == "Bot tok"
+    assert seen["ua"] == rk.USER_AGENT
     rk.http_get({"base_url": "https://x", "auth": "bearer", "secret_env": "DISCORD_T"}, "/a", {})
     assert seen["auth"] == "Bearer tok"
 
@@ -105,3 +107,16 @@ def test_first_read_baseline_sets_the_cursor_and_emits_nothing():
     k2 = rk.ReadingSensor(get=lambda conn, path, params: seen.append(params) or [{"id": "108"}], config=lambda: cfg)
     nxt = k2.tick(row, "107")
     assert [c.dedupe_key for c in nxt.changes] == ["108"] and seen[-1] == {"after": "107"}
+
+
+def test_an_absent_item_list_is_empty_only_when_declared():
+    from flows_sensors.base import SensorRow
+    spec = {"path": "/m", "items": "messages", "key": "id", "cursor_type": "epoch", "event_type": "business.support"}
+    cfg = {"connections": {"g": {"transport": "http_json", "base_url": "https://g", "auth": "none"}},
+           "readings": {"g/inbox": spec}}
+    row = SensorRow(scope="instance", name="g", kind="reading", connection_id="g/inbox")
+    k = rk.ReadingSensor(get=lambda conn, path, params: {"resultSizeEstimate": 0}, config=lambda: cfg)
+    with pytest.raises(SensorFault):
+        k.tick(row, "1")
+    spec["empty_when_absent"] = True
+    assert k.tick(row, "1").changes == []

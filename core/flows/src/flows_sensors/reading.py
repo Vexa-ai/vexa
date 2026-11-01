@@ -22,6 +22,7 @@ are), read from the JSON file `VEXA_FLOWS_CONNECTIONS_FILE`:
                                               # first_window_s; iso: ISO-8601 UTC times (…Z), compared as
                                               # text, the first read starts there too; text: from ""
          "first_window_s": 86400,             # how far a first read (and sensor_test) looks back, ≤ 1 day
+         "empty_when_absent": true,           # optional: an answer without the item list reads as empty
          "first": "baseline",                 # optional: the first read only sets the cursor and emits
                                               # nothing (a feed whose cursor is an id, not a time: Discord)
          "where": {"status": "succeeded"},    # optional: keep only items whose fields equal these
@@ -59,6 +60,8 @@ from .base import Change, SensorFault, SensorKind, SensorRow, Tick
 TIMEOUT_S = 20.0
 MAX_WINDOW_S = 86400.0
 TRANSPORTS = ("http_json",)
+#: Every read names itself (Discord refuses the library's default agent with 403).
+USER_AGENT = "vexa-flows-sensor (read only)"
 CURSOR_TYPES = ("epoch", "iso", "text")
 
 
@@ -161,7 +164,7 @@ def http_get(conn: dict, path: str, params: dict) -> object:
     url = conn["base_url"].rstrip("/") + "/" + path.lstrip("/")
     if params:
         url += "?" + urllib.parse.urlencode(params)
-    headers = {"Accept": "application/json"}
+    headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
     if conn.get("auth") == "bearer":
         secret = os.environ.get(conn.get("secret_env") or "") or ""
         if not secret:
@@ -204,6 +207,8 @@ class ReadingSensor(SensorKind):
         params = {k: v for k, v in params.items() if v != ""}
         answer = self._get(conn, spec["path"], params)
         items = _dig(answer, spec.get("items", "")) if spec.get("items") else answer
+        if items is None and isinstance(answer, dict) and spec.get("empty_when_absent"):
+            items = []                                     # the provider leaves an empty list out (Gmail)
         if not isinstance(items, list):
             raise SensorFault("the answer has no item list")
         where = spec.get("where") or {}
