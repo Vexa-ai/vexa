@@ -279,7 +279,7 @@ export default function UserDetailPage() {
       await fetchUser(userId);
       setIsEditingRamp(false);
       toast.success("Bot ramp updated successfully");
-    } catch (error) {
+    } catch {
       toast.error("Failed to update bot ramp");
     } finally {
       setIsSavingRamp(false);
