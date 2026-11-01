@@ -204,6 +204,17 @@ check(
   ) === 'exogenous_platform',
 );
 check(
+  'Meet refusing the knock ("You can\'t join this video call") is exogenous, not the host declining',
+  attributeJoinFailure(
+    'awaiting_admission_rejected',
+    "google_meet_join_refused: Google Meet refused the join on 3 of 3 knocks (CreateMeetingDevice answered HTTP 403; Meet showed \"You can't join this video call\"); the host never received a request to admit the bot",
+  ) === 'exogenous_platform',
+);
+check(
+  'a refused Meet knock classifies as a rejection, whatever the timing',
+  classifyJoinFailure('rejected', { detail: 'google_meet_join_refused: Google Meet refused the join on 3 of 3 knocks', reachedLobby: false }) === 'awaiting_admission_rejected',
+);
+check(
   'a captcha wall is exogenous, not the host declining',
   attributeJoinFailure('awaiting_admission_rejected', 'reCAPTCHA challenge presented') === 'exogenous_platform',
 );

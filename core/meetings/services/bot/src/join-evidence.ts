@@ -119,6 +119,9 @@ const PLATFORM_POLICY_MARKERS = [
   'bot detection',
   'bot-detection',
   'unusual traffic',
+  // @vexa/join GoogleJoinRefusedError: Meet answered the knock with "You can't join this video call"
+  // (CreateMeetingDevice 403). No request reached the host.
+  'google_meet_join_refused',
 ];
 
 /** Markers that identify OUR admission flow as the thing that broke — the join layer could not read
