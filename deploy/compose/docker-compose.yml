@@ -1347,6 +1347,7 @@ services:
       # Sensors (ADR-0050): read-only provider calls through the broker, signed as its `sensors` role.
       - VEXA_FLOWS_SENSORS_BROKER_URL=${VEXA_FLOWS_SENSORS_BROKER_URL-http://credential-broker:8100}
       - VEXA_FLOWS_SENSORS_KEY_FILE=/run/vexa-connections/sensors/key
+      - VEXA_FLOWS_CONNECTIONS_FILE=${VEXA_FLOWS_CONNECTIONS_FILE:-}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8200/health').status==200 else 1)"]
@@ -1463,6 +1464,7 @@ services:
       - VEXA_MAIL_RECIPIENT_ALLOW=${VEXA_MAIL_RECIPIENT_ALLOW:-}
       - VEXA_FLOWS_SENSORS_BROKER_URL=${VEXA_FLOWS_SENSORS_BROKER_URL-http://credential-broker:8100}
       - VEXA_FLOWS_SENSORS_KEY_FILE=/run/vexa-connections/sensors/key
+      - VEXA_FLOWS_CONNECTIONS_FILE=${VEXA_FLOWS_CONNECTIONS_FILE:-}
       # the relay's TLS policy and trust, and the IMAP endpoint — every default is the Gmail preset;
       # a *_CA_FILE is a path INSIDE the container (mount the bundle in an override)
       - VEXA_MAIL_SMTP_TLS=${VEXA_MAIL_SMTP_TLS:-auto}
@@ -1697,6 +1699,7 @@ services:
       # Sensors (ADR-0050): read-only provider calls through the broker, signed as its `sensors` role.
       - VEXA_FLOWS_SENSORS_BROKER_URL=${VEXA_FLOWS_SENSORS_BROKER_URL-http://credential-broker:8100}
       - VEXA_FLOWS_SENSORS_KEY_FILE=/run/vexa-connections/sensors/key
+      - VEXA_FLOWS_CONNECTIONS_FILE=${VEXA_FLOWS_CONNECTIONS_FILE:-}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     init: true
     depends_on:

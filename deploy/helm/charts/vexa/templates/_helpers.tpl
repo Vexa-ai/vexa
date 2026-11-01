@@ -245,6 +245,8 @@ credential broker with the broker's sensors key, mounted below. Set, it is the o
   value: {{ include "vexa.credentialBrokerUrl" . | quote }}
 - name: VEXA_FLOWS_SENSORS_KEY_FILE
   value: /run/vexa-connections/sensors/key
+- name: VEXA_FLOWS_CONNECTIONS_FILE
+  value: {{ .Values.flows.connectionsFile | default "" | quote }}
 {{- end }}
 {{- /* The recipient allowlist (PRD 0.13.4 S2): set, mail to anybody else is diverted, never sent. */}}
 - name: VEXA_MAIL_RECIPIENT_ALLOW
