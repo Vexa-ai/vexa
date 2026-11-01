@@ -73,9 +73,8 @@ that stored copy (see below).
   upgrade finish on version 3.
 - **`invite_join` runs from the code (0.13.4).** On its first start the flows worker removes the
   stored copy of the company flow `invite_join` that earlier releases wrote (`created_by: seed`),
-  once, together with any version the company account submitted on top of it or a retirement of
-  it, and logs at warning level what it removed when it had been changed. A version submitted
-  after the upgrade is not touched.
+  once. Versions the company account submitted on top of it are kept and retired (re-activate one
+  to run it again), and a warning names them. A version submitted after the upgrade is not touched.
 - **Two tables are added at startup**, `sensor` and `keyed_schedule` (`CREATE TABLE IF NOT EXISTS`).
   A stack that ran the first cut of `keyed_schedule` gains its `person` column; every stack gains
   `deadline` and the `retired` status (`flows/migrations.py`).

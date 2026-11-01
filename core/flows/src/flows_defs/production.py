@@ -3331,11 +3331,12 @@ FORMER_SEEDS = ("invite_join",)
 
 def drop_former_seeds(db) -> list:
     """THE ONE-OFF MIGRATION (ADR-0052 §6): for each flow in `FORMER_SEEDS` whose seed row is still
-    stored (`created_by = 'seed'`), remove every instance version of it, so the code's version is the
-    one that runs. A version the global account authored on top of the seed, or a seed it retired,
-    is removed too and said at warning level (the edit is lost; the code's flow runs). Once the seed
-    row is gone this does nothing, so a version the operator submits later is never touched.
-    Returns the names whose stored copy was removed."""
+    stored (`created_by = 'seed'`), delete that seed row (the copy Vexa wrote) and RETIRE every other
+    instance version of it (versions the company account authored on top: kept, with their history,
+    never deleted), so the code's version is the one that runs. A retired version stays readable and
+    may be re-activated by the company. Said at warning level when such versions existed. Once the
+    seed row is gone this does nothing, so a version submitted later is never touched.
+    Returns the names whose seed copy was removed."""
     removed = []
     for name in FORMER_SEEDS:
         try:
@@ -3345,14 +3346,17 @@ def drop_former_seeds(db) -> list:
             return removed
         if not any(by == "seed" for _, _, by in rows):
             continue
-        edited = [f"v{v} ({st}, by {by or 'unknown'})" for v, st, by in rows
-                  if not (by == "seed" and int(v) == 1 and st == "active")]
-        db.execute("DELETE FROM flow_version WHERE scope = 'instance' AND name = :n", {"n": name})
-        if edited:
-            logger.warning("former seed %s: the stored copy had been changed (%s); removed — the flow "
-                         "now runs from the code (ADR-0052)", name, ", ".join(edited))
+        db.execute("DELETE FROM flow_version WHERE scope = 'instance' AND name = :n "
+                   "AND created_by = 'seed'", {"n": name})
+        authored = [f"v{v} ({st}, by {by or 'unknown'})" for v, st, by in rows if by != "seed"]
+        if authored:
+            db.execute("UPDATE flow_version SET status = 'retired' WHERE scope = 'instance' "
+                       "AND name = :n AND status = 'active'", {"n": name})
+            logger.warning("former seed %s: seed copy removed; the company's own versions %s are "
+                           "kept and retired — the flow now runs from the code (ADR-0052)", name,
+                           ", ".join(authored))
         else:
-            logger.info("former seed %s: stored copy removed; the flow now runs from the code", name)
+            logger.info("former seed %s: seed copy removed; the flow now runs from the code", name)
         removed.append(name)
     return removed
 

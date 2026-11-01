@@ -111,9 +111,11 @@ def upsert(db: DB, clock: Clock, flow: Flow, *, key: str, fire_at: float, event_
         return "armed"
     old_at, status, version, fired_for = rows[0]
     same_time = abs(float(old_at) - float(fire_at)) < 1.0
-    if status in ("fired", "armed") and same_time:
+    if status in ("fired", "armed", "missed") and same_time:
         # NOTHING MOVED: a duplicate delivery, or an update that kept the time. `updated_at` is the
-        # moment the row last really changed — the old missed rule counts from it — so it stays.
+        # moment the row last really changed — the old missed rule counts from it — so it stays. A
+        # MISSED row stays missed: re-arming it on a redelivery would fire it late, the very thing
+        # `missed` exists to prevent. Only a real move (a new time) re-arms it.
         db.execute("UPDATE keyed_schedule SET payload = :p, event_type = :et, deadline = :dl "
                    "WHERE scope = :sc AND flow = :f AND key = :k",
                    {"p": dumps(payload), "et": event_type, "dl": dl, "sc": flow.scope,
