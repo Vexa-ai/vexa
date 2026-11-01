@@ -633,7 +633,10 @@ class Store:
 
     def _revision(self, c, org, actor, before, after, reason, evidence, decision=None):
         """One append-only revision and its fact. ``decision`` (D13) makes it a decision record:
-        ``{decision, credential_class, nonce, content_hash}``."""
+        ``{decision, credential_class, nonce, content_hash}``. A revision under the founder's subject needs his
+        verified Access proof on this request (``founder_proof.require``)."""
+        from . import founder_proof
+        founder_proof.require(actor)
         record = {k: str((decision or {}).get(k) or '') for k in ('decision', 'credential_class', 'nonce', 'content_hash')}
         c.execute(s.revisions.insert().values(org_id=org, record_id=after['id'], revision=after['revision'],
             actor_id=actor, created_at=datetime.now(timezone.utc).isoformat(), reason=reason,

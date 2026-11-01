@@ -386,6 +386,10 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
 
     def person(request: Request) -> Caller:
         caller = identity(request)
+        from . import founder_proof           # Q7 «A»: the founder's writes need his Cloudflare Access proof
+        cfg = founder_proof.config()
+        founder_proof.PROVEN.set(bool(cfg) and str(caller.subject) == str(cfg['subject'])
+                                 and founder_proof.verify(request.headers.get('X-Founder-Proof'), cfg))
         try:
             caller = dataclasses.replace(caller, org=resolver.org_for(caller))
         except caller_mod.IdentityUnavailable as e:
