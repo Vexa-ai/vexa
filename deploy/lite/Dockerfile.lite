@@ -184,7 +184,12 @@ RUN cd /tmp/agent && uv venv --python 3.12 /opt/venvs/agent \
 COPY core/gateway/services/mcp/pyproject.toml core/gateway/services/mcp/uv.lock /tmp/mcp/
 RUN cd /tmp/mcp && uv venv --python 3.12 /opt/venvs/mcp \
  && UV_PROJECT_ENVIRONMENT=/opt/venvs/mcp uv sync --frozen --no-install-project --no-dev --group production
-RUN rm -rf /tmp/admin /tmp/runtime /tmp/meeting /tmp/gateway /tmp/agent /tmp/mcp
+# Flows — the one clock booked bots start from (ADR-0052 §3): required in every profile. Its venv
+# mirrors core/flows/Dockerfile (uv sync --frozen --no-dev: the lock, nothing beside it).
+COPY core/flows/pyproject.toml core/flows/uv.lock /tmp/flows/
+RUN cd /tmp/flows && uv venv --python 3.12 /opt/venvs/flows \
+ && UV_PROJECT_ENVIRONMENT=/opt/venvs/flows uv sync --frozen --no-install-project --no-dev
+RUN rm -rf /tmp/admin /tmp/runtime /tmp/meeting /tmp/gateway /tmp/agent /tmp/mcp /tmp/flows
 
 # The agent worker is the ONE venv exec'd as a NON-ROOT per-subject uid (the runtime process
 # backend's POSIX tenant isolation — core/runtime/src/runtime_kernel/isolation.py). Its interpreter
@@ -236,6 +241,15 @@ RUN cd /app/gateway && PYTHONPATH=/app/gateway/src /opt/venvs/gateway/bin/python
 COPY core/gateway/services/mcp/src /app/mcp/src
 RUN cd /app/mcp && PYTHONPATH=/app/mcp/src /opt/venvs/mcp/bin/python -c "import vexa_mcp.app"
 # meeting-api (PYTHONPATH=/app/meeting-api/src; repo_root walk-up == /app/meeting-api)
+# ── Flows (flows-api :8200 and flows-worker, ADR-0052 §3) — laid out as in its image: the engine reads
+#    schema.sql from parents[2] of flows/db.py and the tool manifest from parents[2] of flows_api.py
+#    (/app/flows here); the in-repo showcase prompts resolve to /behavior, as in the flows image. ──
+COPY core/flows/schema.sql        /app/flows/schema.sql
+COPY core/flows/mcp.tools.v1.json /app/flows/mcp.tools.v1.json
+COPY core/flows/src               /app/flows/src
+COPY behavior                     /behavior
+RUN cd /app/flows/src && PYTHONPATH=/app/flows/src /opt/venvs/flows/bin/python -c "import flows_integrations.flows_api, flows_defs.production"
+
 COPY core/meetings/services/meeting-api/src /app/meeting-api/src
 COPY core/meetings/contracts/invocation.v1/invocation.schema.json /app/meeting-api/meetings/contracts/invocation.v1/invocation.schema.json
 COPY core/meetings/contracts/lifecycle.v1/lifecycle.schema.json   /app/meeting-api/meetings/contracts/lifecycle.v1/lifecycle.schema.json
