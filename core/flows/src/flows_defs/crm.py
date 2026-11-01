@@ -213,8 +213,12 @@ def build(reg, db):
             conn = (cfg.get('connections') or {}).get(spec.get('connection') or '')
             if not conn or conn.get('transport') not in rk.TRANSPORTS:
                 raise SensorFault('no delivery connection is declared', retryable=False)
+            pin_name = (spec.get('prod_pin') or {}).get('connection')
+            pin_conn = (cfg.get('connections') or {}).get(pin_name) if pin_name else None
+            if pin_name and (not pin_conn or pin_conn.get('transport') not in rk.TRANSPORTS):
+                raise SensorFault('the prod pin names an undeclared connection', retryable=False)
         except SensorFault as e:
-            spec, conn, why = None, None, str(e)
+            spec, conn, pin_conn, why = None, None, None, str(e)
         else:
             why = ''
         cache = card_stage.PassCache()
@@ -225,7 +229,8 @@ def build(reg, db):
             if conn is not None and subject:
                 now = time.time()
                 try:
-                    fields = card_stage.read_delivery(rk.http_get, conn, spec, subject, card.get('source'), cache)
+                    fields = card_stage.read_delivery(rk.http_get, conn, spec, subject, card.get('source'), cache,
+                                                      pin_conn)
                 except (card_stage.ReadFault, SensorFault) as e:
                     row['read'] = f'not read: {e}'
                 else:

@@ -34,10 +34,11 @@ class SensorFault(Exception):
     """A tick that failed. `reason` is safe to show the person (it names the failure class, never a
     credential); `retryable=False` stops the sensor until something changes (e.g. disconnected)."""
 
-    def __init__(self, reason: str, *, retryable: bool = True):
+    def __init__(self, reason: str, *, retryable: bool = True, status: Optional[int] = None):
         super().__init__(reason)
         self.reason = reason
         self.retryable = retryable
+        self.status = status                    # the source's HTTP status, when it answered one
 
 
 @dataclass

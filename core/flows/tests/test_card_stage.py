@@ -494,3 +494,27 @@ def test_an_open_pull_request_that_changes_only_design_docs_reads_design():
     fields = cs.read_delivery(get, {}, SPEC, 'github.com/vexa-ai/vexa#1962', PR_URL)
     assert fields['pr']['design_doc'] is False
     assert cs.stage({k: {**v, 'evidence': ev()} for k, v in fields.items()}, None)[0] == 'Code'
+
+
+
+def test_the_pin_reads_through_its_own_connection_and_a_refused_check_read_is_no_fact():
+    from flows_sensors.base import SensorFault
+    pull = {'html_url': PR_URL, 'number': 1962, 'state': 'open', 'draft': False, 'head': {'sha': HEAD},
+            'merge_commit_sha': None, 'merged_at': None}
+    answers = base_answers(pull, lambda p: {'status': 'ahead'} if p.endswith(f'{HEAD}...{PIN_SHA}') else {'status': 'diverged'})
+    answers[f'/repos/vexa-ai/vexa/commits/{HEAD}/check-runs'] = SensorFault('read failed (403)', retryable=False, status=403)
+    seen = []
+    get0, _ = github(answers)
+
+    def get(conn, path, params):
+        seen.append((conn.get('name'), path.split('/')[2]))
+        return get0(conn, path, params)
+    fields = cs.read_delivery(get, {'name': 'github'}, SPEC, 'github.com/vexa-ai/vexa#1962', PR_URL,
+                              pin_conn={'name': 'github-stations'})
+    assert 'checks' not in fields and fields['prod']['contains'] is True
+    assert {c for c, owner in seen if owner == 'DmitriyG228'} == {'github-stations'}
+    assert {c for c, owner in seen if owner == 'vexa-ai'} == {'github'}
+    answers[f'/repos/vexa-ai/vexa/commits/{HEAD}/check-runs'] = SensorFault('read failed (500)', status=500)
+    get1, _ = github(answers)
+    with pytest.raises(SensorFault):                                 # any other failure stays a failed read
+        cs.read_delivery(get1, {}, SPEC, 'github.com/vexa-ai/vexa#1962', PR_URL, pin_conn={})

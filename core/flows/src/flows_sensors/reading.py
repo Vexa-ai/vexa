@@ -255,7 +255,7 @@ def http_get(conn: dict, path: str, params: dict) -> object:
         with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:  # noqa: S310 — operator-declared URL
             return json.loads(r.read() or b"null")
     except urllib.error.HTTPError as e:
-        raise SensorFault(f"read failed ({e.code})", retryable=e.code not in (401, 403)) from None
+        raise SensorFault(f"read failed ({e.code})", retryable=e.code not in (401, 403), status=e.code) from None
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         raise SensorFault("the connection could not be read") from None
 
@@ -298,7 +298,7 @@ def http_post(conn: dict, path: str, body: dict) -> object:
         with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:  # noqa: S310 — allow-listed URL
             return json.loads(r.read() or b"null")
     except urllib.error.HTTPError as e:
-        raise SensorFault(f"read failed ({e.code})", retryable=e.code not in (401, 403)) from None
+        raise SensorFault(f"read failed ({e.code})", retryable=e.code not in (401, 403), status=e.code) from None
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         raise SensorFault("the connection could not be read") from None
 

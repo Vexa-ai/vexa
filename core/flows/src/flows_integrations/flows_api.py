@@ -1972,6 +1972,10 @@ def connections_list():
         from flows_defs.crm import RECHECK_FLOW
         reads.append({"id": f"{spec['connection']}/delivery", "connection": spec["connection"], "event_type": None,
                       "run_by": RECHECK_FLOW})
+        pin_name = (spec.get("prod_pin") or {}).get("connection")
+        if pin_name:                          # the pin, read by the same flow through its own connection
+            reads.append({"id": f"{pin_name}/prod-pin", "connection": pin_name, "event_type": None,
+                          "run_by": RECHECK_FLOW})
     return {"connections": conns, "readings": reads}
 
 

@@ -60,6 +60,8 @@ import base64
 import re
 from typing import Callable, Optional
 
+from flows_sensors.base import SensorFault
+
 STAGES = ('Idea', 'Design', 'Code', 'Review', 'On prod', 'Done')
 SIDE = ('Dropped',)
 #: The reading the re-check writes (``<connection>/<reading>``).
@@ -345,10 +347,12 @@ def read_pin(get, conn, spec, cache: PassCache) -> dict:
 
 
 def read_delivery(get: Callable, conn: dict, spec: dict, subject: str, source: str = '',
-                  cache: Optional[PassCache] = None) -> dict:
+                  cache: Optional[PassCache] = None, pin_conn: Optional[dict] = None) -> dict:
     """The ``github/delivery`` reading's fields for one card: its issue (if it tracks one), its pull
     request (the card's own, or the newest one that references the issue), the head commit's check
-    runs, the prod pin and the newest releases. GET only, through ``get(conn, path, params)``."""
+    runs, the prod pin and the newest releases. GET only, through ``get(conn, path, params)``. The pin
+    is read through ``pin_conn`` when the pin names its own connection (a private repo, its own key).
+    A check-runs read the key may not make (403) is a missing fact: no ``checks``, never a stage."""
     cache = cache or PassCache()
     owner, repo, number = parse_subject(subject)
     fields: dict = {}
@@ -383,10 +387,15 @@ def read_delivery(get: Callable, conn: dict, spec: dict, subject: str, source: s
         if isinstance(files, list):            # anything else answers nothing about the files
             fields['pr']['design_doc'] = is_design_doc(files)
     if head:
-        runs = get(conn, _path(spec['check_runs'], owner=owner, repo=repo, sha=head), {'per_page': '100'})
-        fields['checks'] = summarise_checks(runs, head)
+        try:
+            runs = get(conn, _path(spec['check_runs'], owner=owner, repo=repo, sha=head), {'per_page': '100'})
+        except SensorFault as e:
+            if e.status != 403:
+                raise
+        else:
+            fields['checks'] = summarise_checks(runs, head)
     commits = [(c, via) for c, via in ((head, 'head'), (merge, 'merge')) if c]
-    pin = read_pin(get, conn, spec, cache) if spec.get('prod_pin') else None
+    pin = read_pin(get, pin_conn or conn, spec, cache) if spec.get('prod_pin') else None
     if pin and pin['repo'] == f'{owner}/{repo}'.lower():
         found = None
         for commit, via in commits:
