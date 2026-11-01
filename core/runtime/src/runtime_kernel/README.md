@@ -11,7 +11,7 @@ Conforms to `runtime.v1` (and `schedule.v1` for the scheduler). Files:
   container to `worker-…` and labels it, keying on agent-api's id scheme. `configured_credentials` is the one place that
   maps the operator's credential settings to files.
 - `pod_scheduling` — a profile's Pod placement on Kubernetes (node selector, tolerations, priority class,
-  image pull secrets), read from `RUNTIME_K8S_BOT_*` / `RUNTIME_K8S_AGENT_WORKER_*` and validated at boot.
+  image pull secrets, scheduler name), read from `RUNTIME_K8S_BOT_*` / `RUNTIME_K8S_AGENT_WORKER_*` and validated at boot.
 - `isolation` — the identity of every process-backend child under a root runtime: subject uid or a
   per-workload uid, a fresh private HOME, the store's ownership — never root, never through a link.
 - `store` — the WorkloadStore port (persistence): `InMemoryStore` (default) + `RedisStore` (durable).
