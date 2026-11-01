@@ -524,6 +524,67 @@ async function main(): Promise<void> {
     check('gate reachable: secondary channel NEVER probed (fast path, zero added latency)', secondaryProbed === 0, `probed=${secondaryProbed}`);
   }
 
+  // ── ADR-0052 s1: joinAt in the future — no `joining`, no navigation, no gate before it ──
+  {
+    const lc = recordingSink();
+    const t0 = Date.now();
+    let joinCalledAt = -1;
+    let probed = 0;
+    const join: JoinDriver = { ...mockJoin('admitted'), async join(report) { joinCalledAt = Date.now(); return mockJoin('admitted').join(report); } };
+    let fireLeave: (a: { action: 'leave' }) => void = () => {};
+    const o = createOrchestrator(inv({ joinAt: new Date(t0 + 400).toISOString() }), {
+      lifecycle: lc, join, pipeline: noopPipeline(), acts: noopActs((f) => { fireLeave = f; }), aloneness: noopAloneness(),
+      reachability: { async probeSecondary() { probed++; return true; } },
+    });
+    const runP = o.run();
+    await new Promise((r) => setTimeout(r, 200));
+    check('joinAt future: nothing emitted while waiting', lc.events.length === 0, JSON.stringify(seq(lc.events)));
+    check('joinAt future: the join driver (navigation) is not called while waiting', joinCalledAt === -1);
+    await new Promise((r) => setTimeout(r, 400));
+    fireLeave({ action: 'leave' });
+    const res = await runP;
+    check('joinAt future: join starts at joinAt, not before', joinCalledAt >= t0 + 390, `joined ${joinCalledAt - t0}ms after start`);
+    check('joinAt future: then the normal lifecycle', JSON.stringify(seq(lc.events)) === JSON.stringify(['joining', 'awaiting_admission', 'active', 'completed']), JSON.stringify(seq(lc.events)));
+    check('joinAt future: completed', res.status === 'completed');
+    check('joinAt future: gate not probed (callback reachable)', probed === 0);
+  }
+
+  // ── ADR-0052 s1: joinAt already past — joins at once ──
+  {
+    const lc = recordingSink();
+    const t0 = Date.now();
+    let joinCalledAt = -1;
+    const join: JoinDriver = { ...mockJoin('admitted'), async join(report) { joinCalledAt = Date.now(); return mockJoin('admitted').join(report); } };
+    let fireLeave: (a: { action: 'leave' }) => void = () => {};
+    const o = createOrchestrator(inv({ joinAt: new Date(t0 - 60_000).toISOString() }), {
+      lifecycle: lc, join, pipeline: noopPipeline(), acts: noopActs((f) => { fireLeave = f; }), aloneness: noopAloneness(),
+    });
+    const runP = o.run();
+    setTimeout(() => fireLeave({ action: 'leave' }), 5);
+    const res = await runP;
+    check('joinAt past: joins immediately', joinCalledAt >= 0 && joinCalledAt - t0 < 100, `joined ${joinCalledAt - t0}ms after start`);
+    check('joinAt past: completed', res.status === 'completed');
+  }
+
+  // ── ADR-0052 s1: a stop while waiting ends it at stage `requested`, never navigating ──
+  {
+    const lc = recordingSink();
+    let joinCalled = false;
+    let withdrawn = 0;
+    const join: JoinDriver = { ...mockJoin('admitted'), async join(report) { joinCalled = true; return mockJoin('admitted').join(report); }, async withdraw() { withdrawn++; } };
+    const o = createOrchestrator(inv({ joinAt: new Date(Date.now() + 60_000).toISOString() }), {
+      lifecycle: lc, join, pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness(),
+    });
+    const runP = o.run();
+    setTimeout(() => o.stop('stopped'), 20);
+    const res = await runP;
+    check('joinAt stop: run ends promptly as failed(stopped)', res.status === 'failed' && res.completionReason === 'stopped' && res.exitCode === 0, JSON.stringify(res));
+    check('joinAt stop: one terminal event, nothing before it', JSON.stringify(seq(lc.events)) === JSON.stringify(['failed']), JSON.stringify(seq(lc.events)));
+    check('joinAt stop: failure_stage requested', last(lc.events).failure_stage === 'requested');
+    check('joinAt stop: conforms to lifecycle.v1', allConform(lc.events), ajv.errorsText(validateLifecycle.errors));
+    check('joinAt stop: never navigated or withdrew', !joinCalled && withdrawn === 0);
+  }
+
   // ── #865: missing required port fails loud with the port name (not a TypeError on .onAlone) ──
   {
     let threw: unknown;
