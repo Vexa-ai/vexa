@@ -541,3 +541,30 @@ def test_a_pin_that_cannot_be_read_fails_the_pin_reading_once_not_each_card_read
     assert out.result['unread'] == 2                                  # both cards keep what they had …
     assert out.result['failed'] == {'github/delivery': 0, 'github-stations/prod-pin': 1}   # … the pin failed, once
     assert sum(1 for c in calls if c.endswith('channel.yaml')) == 1   # read once per pass, not per card
+
+
+
+def test_no_link_and_a_repo_outside_the_declared_ones_are_no_failure_and_a_refusal_keeps_its_code(monkeypatch):
+    from flows_sensors import reading as rk
+    from flows_sensors.base import SensorFault
+    db, reg, clock, _ = rig()
+    build(reg, db)
+    no_link = {'id': 'c4', 'revision': 1, 'state': 'Idea', 'source': None, 'reading': None}
+    outside = {**SOFT, 'id': 'c5', 'source': 'https://github.com/DmitriyG228/biz/issues/7'}
+    refused = {**SOFT, 'id': 'c6', 'source': 'https://github.com/Vexa-ai/vexa-platform/pull/9'}
+    _crm(monkeypatch, lambda url, body: (200, {'cards': [no_link, outside, refused]}) if url == '/internal/cards/software'
+         else (200, {'status': 'kept'}))
+    cfg = json.load(open(cs.__file__.replace('flows_defs/card_stage.py', 'flows_sensors/connections.github.example.json')))
+    cfg['delivery']['repos'] = ['Vexa-ai/vexa', 'Vexa-ai/vexa-platform']
+    monkeypatch.setattr(rk, 'load_config', lambda path='': cfg)
+    calls = []
+
+    def get(conn, path, params):
+        calls.append(path)
+        raise SensorFault('read failed (404)', retryable=True, status=404)
+    monkeypatch.setattr(rk, 'http_get', get)
+    out = reg.steps['recheck_card_stages'](SimpleNamespace(refs={'slot': T}))
+    assert out.result['unread'] == 3
+    assert out.result['failed']['github/delivery'] == 1                 # only the real refusal
+    assert out.result['refused'] == [{'card': 'c6', 'status': 404}]
+    assert not any('DmitriyG228/biz' in c for c in calls)               # outside the declared repos: never asked

@@ -253,7 +253,11 @@ def build(reg, db):
         for card in _crm_post(base, '/internal/cards/software', {}).get('cards') or []:
             row = {'card': card['id']}
             subject = card_stage.subject_of(card.get('source'))
-            if conn is not None and subject:
+            repos = {str(x).lower() for x in (spec or {}).get('repos') or []}
+            repo = subject.split('#', 1)[0].split('/', 1)[-1] if subject else ''
+            if conn is not None and subject and repos and repo not in repos:
+                row['read'] = f'not read: {repo} is outside the declared repos'   # not this connection's to read
+            elif conn is not None and subject:
                 now = time.time()
                 try:
                     fields = card_stage.read_delivery(rk.http_get, conn, spec, subject, card.get('source'), cache,
@@ -263,6 +267,8 @@ def build(reg, db):
                 except (card_stage.ReadFault, SensorFault) as e:
                     row['read'] = f'not read: {e}'
                     row['failed'] = True
+                    if getattr(e, 'status', None):
+                        row['refused'] = e.status                 # the source's own answer, per card
                 else:
                     evidence = {'read_at': now, 'query': f'delivery {subject}'}
                     _crm_post(base, '/internal/records/reading', {'record': card['id'], 'source': card_stage.DELIVERY_SOURCE,
@@ -288,6 +294,7 @@ def build(reg, db):
                   f'{pin_name}/prod-pin': 1 if cache.pin_fault is not None else 0}
         return Done({'cards': len(done), 'corrected': [r for r in done if r.get('status') in ('corrected', 'restored')],
                      'unread': sum(1 for r in done if r['read'] != 'read'), 'failed': failed,
+                     'refused': [{'card': r['card'], 'status': r['refused']} for r in done if r.get('refused')][:50],
                      'pin_read': cache.pin is not None or cache.pin_fault is not None})
 
     class _At:
