@@ -195,3 +195,10 @@ def test_no_other_method():
     k = rk.ReadingSensor(get=lambda *a: [], config=lambda: cfg, post=lambda *a: [])
     with pytest.raises(SensorFault):
         k.tick(SensorRow(scope="instance", name="x", kind="reading", connection_id="x/y"), None)
+
+
+
+def test_a_path_steps_into_a_list():
+    row = {"dimensionValues": [{"value": "20261101"}], "metricValues": [{"value": "12"}, {"value": "30"}]}
+    assert rk._dig(row, "dimensionValues.0.value") == "20261101" and rk._dig(row, "metricValues.1.value") == "30"
+    assert rk._dig(row, "metricValues.5.value") is None

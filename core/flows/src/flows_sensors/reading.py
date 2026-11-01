@@ -82,7 +82,11 @@ def _key(item, key) -> str:
 
 
 def _dig(obj, path: str):
+    """A dotted path into an answer; a number steps into a list (GA4 rows: ``dimensionValues.0.value``)."""
     for part in [p for p in (path or "").split(".") if p]:
+        if isinstance(obj, list) and part.isdigit():
+            obj = obj[int(part)] if int(part) < len(obj) else None
+            continue
         if not isinstance(obj, dict):
             return None
         obj = obj.get(part)
