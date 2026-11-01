@@ -421,9 +421,12 @@ class Cards:
         if fields.get('Origin') is not None and not _ORIGIN.fullmatch(str(fields['Origin'])):
             raise CRMError('Origin is session:<id>, meeting:<id> or message:<session>/<message id>')
         if 'Chain' in fields:
+            # one stored edge (founder, 1 Nov 2026): a card says what it waits on; what it blocks is computed
             chain = fields['Chain'] if isinstance(fields['Chain'], dict) else {}
-            fields['Chain'] = {k: [str(x) for x in (chain.get(k) or []) if _ID.fullmatch(str(x))][:20]
-                               for k in ('blocks', 'blocked_by')}
+            if chain.get('blocks'):
+                raise CRMError('Chain stores blocked_by only: write the wait on the waiting card; blocks is computed')
+            fields['Chain'] = {'blocked_by': [str(x) for x in (chain.get('blocked_by') or [])
+                                              if _ID.fullmatch(str(x))][:20]}
         creating = before is None
         if creating or writer is not None or gate_write or rule_write:
             self._check_writers({k: fields[k] for k in asked if k in fields}, prior, creating, writer,
@@ -638,6 +641,16 @@ class Cards:
             s.card_seen.c.org_id == org, s.card_seen.c.person == person,
             s.card_seen.c.record_id == record_id)).scalar_one_or_none()
 
+    def _blocks(self, c, org, record_id):
+        """The cards that wait on this one: computed from their ``Chain.blocked_by``, never stored."""
+        out = []
+        for rid, fields in c.execute(select(s.records.c.id, s.records.c.fields).where(
+                s.records.c.org_id == org, s.records.c.deleted == False)):  # noqa: E712
+            ch = (fields or {}).get('Chain') if isinstance(fields, dict) else None
+            if isinstance(ch, dict) and record_id in (ch.get('blocked_by') or []):
+                out.append(rid)
+        return sorted(out)
+
     def _coordination(self, c, org, row, raw, kind, template, caller, cross_org, state):
         """The lifecycle coordination fields (D8's enumerated class: kind, state, next actor, next
         check, handoff) and the viewer's own position on the card. They are what a card fact carries
@@ -657,7 +670,7 @@ class Cards:
         out = {
             'kind': kind, 'next_actor': next_actor, 'requester': requester,
             'next_check_at': raw.get('NextCheckAt') or None,
-            'chain': {'blocks': list(chain.get('blocks') or []), 'blocked_by': list(chain.get('blocked_by') or [])},
+            'chain': {'blocks': self._blocks(c, org, row['id']), 'blocked_by': list(chain.get('blocked_by') or [])},
             'origin': raw.get('Origin') or None,
             'handoff': {'phase': raw.get('Handoff') or None, 'since': raw.get('HandoffSince') or None},
             'decisions': decisions,

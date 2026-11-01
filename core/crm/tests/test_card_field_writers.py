@@ -253,3 +253,30 @@ def test_a_door_that_stops_answering_keeps_the_lock():
     assert text() == POLICY                       # nor does a missing answer
     door.text, now[0] = '---\n---\n', 15.0
     assert text() == '---\n---\n'                 # an answered change applies
+
+
+
+# ── one stored edge, and who wrote what (founder, 1 Nov 2026) ────────────────────────────────
+
+def test_chain_stores_blocked_by_only_and_blocks_is_computed(cards, store):
+    first = plain(cards)
+    then = cards.create(ORG, CEO, title='After it', workspace='sales',
+                        fields={'Chain': {'blocked_by': [first['id']]}})['card']
+    assert fields_of(store, then['id'])['Chain'] == {'blocked_by': [first['id']]}
+    with pytest.raises(CRMError):
+        cards.create(ORG, CEO, title='Says it blocks', workspace='sales', fields={'Chain': {'blocks': [first['id']]}})
+    with store.engine.connect() as c:
+        view = cards.view(c, ORG, store._policy(c, ORG, CEO), cards._card_row(c, ORG, first['id']))
+    assert view['chain']['blocks'] == [then['id']] and view['chain']['blocked_by'] == []
+
+
+def test_history_names_who_wrote_each_revision(cards, store):
+    card = plain(cards, who=BUSINESS)
+    cards.update(ORG, CEO, card['id'], fields_of_rev(store, card['id']), fields={'Next': 'call them'})
+    revs = store.history(ORG, CEO, card['id'])['revisions']
+    assert [r['actor_id'] for r in revs] == [CEO.subject, BUSINESS.subject]
+
+
+def fields_of_rev(store, rid):
+    with store.engine.connect() as c:
+        return store._row(c, ORG, rid)['revision']

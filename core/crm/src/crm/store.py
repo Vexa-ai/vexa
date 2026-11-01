@@ -774,6 +774,8 @@ class Store:
                     'after':self._visible(policy,revision['after']),
                     'reason':revision['reason'] if view.full else None,
                     'evidence':revision['evidence'] if view.full else []})
+                if view.full and not caller.cross_org:
+                    result[-1]['actor_id']=revision['actor_id']   # who wrote it; a room from outside reads no owner
             out={'revisions':result}
             return cross_org_answer('history',out) if caller.cross_org else out
 
