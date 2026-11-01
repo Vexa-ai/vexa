@@ -11,7 +11,7 @@ A fact grants no record access. With no CRM deployed (``VEXA_FLOWS_CRM_API_URL``
 flow ends ``not_present`` rather than knocking on a missing door.
 
 * ``business_<kind>`` (one per kind in ``BUSINESS_EVENTS``) keeps a business event a sensor read
-  (``business.registered|paid|bot|support|stage``, from the generic ``reading`` sensor kind) as
+  (``business.registered|paid|bot|support|stage|traffic``, from the generic ``reading`` sensor kind) as
   one reaction: the event's durable row, with its ``_evidence`` (connection, reading, path,
   read_at).
 * ``crm_reading`` (``business.reading``) writes a reading onto the CRM cards it is about: the
@@ -38,7 +38,7 @@ from flows import Done, EventType, NotPresent, StepError
 CRM_URL_ENV = "VEXA_FLOWS_CRM_API_URL"
 SNAPSHOT_KEYS = ("workspace", "commit", "committed_at", "references")
 #: The business events a sensor may emit; each gets a flow that keeps it.
-BUSINESS_EVENTS = ("registered", "paid", "bot", "support", "stage")
+BUSINESS_EVENTS = ("registered", "paid", "bot", "support", "stage", "traffic")
 #: A reading about something cards track (``crm_reading``).
 READING_EVENT = "business.reading"
 #: Refs of a reading event that are not reading fields: the link it is about, and the engine's own.

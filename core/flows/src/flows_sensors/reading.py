@@ -27,7 +27,11 @@ are), read from the JSON file `VEXA_FLOWS_CONNECTIONS_FILE`:
                                               # nothing (a feed whose cursor is an id, not a time: Discord)
          "where": {"status": "succeeded"},    # optional: keep only items whose fields equal these
          "keep": {"email": "billing_details.email", "amount": "amount"},   # ref name → dotted item path
-         "event_type": "business.paid"}}}
+         "event_type": "business.paid",
+         "method": "POST", "body": {...}}}} # optional, founder 1 Nov 2026 Q4 «Allow POST»: a declared report query.
+                                              # Only to POST_ALLOWED (GA4 runReport, Search Console
+                                              # searchAnalytics.query), only on a connection whose Google
+                                              # grant is read-only (READ_ONLY_SCOPES); any other POST is refused.
 
 Why the reading is operator config and not the sensor owner's free text: a sensor may read a
 production system; its owner chooses WHICH declared reading runs, never writes the request.
@@ -45,8 +49,10 @@ One page per tick: a reading is sized (`limit`) for its interval.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -113,7 +119,16 @@ def resolve(cfg: dict, connection_id: str) -> tuple[dict, dict]:
     return conn, spec
 
 
-AUTHS = ("bearer", "oauth_refresh", "none")
+AUTHS = ("bearer", "oauth_refresh", "service_account", "none")
+#: The only POST a reading may make (founder 1 Nov 2026, Q4): two report queries that read and change nothing.
+POST_ALLOWED = (
+    re.compile(r"^https://analyticsdata\.googleapis\.com/v1beta/properties/\d+:runReport$"),
+    re.compile(r"^https://(?:www\.googleapis\.com|searchconsole\.googleapis\.com)/webmasters/v3/sites/[^/?#]+"
+               r"/searchAnalytics/query$"),
+)
+#: ... and only with a Google grant that can read and nothing else.
+READ_ONLY_SCOPES = frozenset({"https://www.googleapis.com/auth/analytics.readonly",
+                              "https://www.googleapis.com/auth/webmasters.readonly"})
 OAUTH_ENVS = ("client_id_env", "client_secret_env", "refresh_token_env")
 _TOKENS: dict = {}
 
@@ -122,6 +137,8 @@ def secret_envs(conn: dict) -> list[str]:
     """The env NAMES a connection reads its secret from (never their values)."""
     if conn.get("auth") == "bearer":
         return [conn.get("secret_env") or ""]
+    if conn.get("auth") == "service_account":
+        return [conn.get("key_env") or ""]
     if conn.get("auth") == "oauth_refresh":
         return [conn.get(k) or "" for k in OAUTH_ENVS]
     return []
@@ -129,6 +146,58 @@ def secret_envs(conn: dict) -> list[str]:
 
 def secret_set(conn: dict) -> bool:
     return all(n and os.environ.get(n) for n in secret_envs(conn))
+
+
+def _b64u(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+
+def _service_account_token(conn: dict, now: Optional[float] = None) -> tuple[str, frozenset]:
+    """A Google access token for a service account (its JSON key in the env var ``key_env``, plain or base64): a JWT
+    signed RS256 asking for exactly the connection's ``scopes``, exchanged at the key's token_uri. Kept until 60 s
+    before it expires. Answers (token, the scopes granted)."""
+    now = time.time() if now is None else now
+    raw = os.environ.get(conn.get("key_env") or "") or ""
+    if not raw:
+        raise SensorFault("the connection's secret is not set on this deployment", retryable=False)
+    try:
+        info = json.loads(raw if raw.lstrip().startswith("{") else base64.b64decode(raw))
+    except (ValueError, TypeError):
+        raise SensorFault("the service account key cannot be read", retryable=False) from None
+    scopes = " ".join(conn.get("scopes") or [])
+    key = ("sa", info.get("client_email"), scopes)
+    held = _TOKENS.get(key)
+    if held and held[1] - 60 > now:
+        return held[0], held[2]
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+    head = _b64u(json.dumps({"alg": "RS256", "typ": "JWT"}).encode())
+    uri = info.get("token_uri") or "https://oauth2.googleapis.com/token"
+    claims = _b64u(json.dumps({"iss": info.get("client_email"), "scope": scopes, "aud": uri,
+                               "iat": int(now), "exp": int(now) + 3600}).encode())
+    pk = serialization.load_pem_private_key(str(info.get("private_key") or "").encode(), password=None)
+    sig = _b64u(pk.sign(f"{head}.{claims}".encode(), padding.PKCS1v15(), hashes.SHA256()))
+    body = urllib.parse.urlencode({"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                                   "assertion": f"{head}.{claims}.{sig}"}).encode()
+    out = _token_post(uri, body)
+    granted = frozenset((out.get("scope") or scopes).split())
+    _TOKENS[key] = (out["access_token"], now + float(out.get("expires_in") or 3600), granted)
+    return out["access_token"], granted
+
+
+def _token_post(url: str, body: bytes) -> dict:
+    req = urllib.request.Request(url, data=body, method="POST",
+                                 headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:  # noqa: S310 — operator-declared URL
+            out = json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        raise SensorFault(f"token exchange failed ({e.code})", retryable=e.code >= 500) from None
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        raise SensorFault("the token endpoint could not be reached") from None
+    if not out.get("access_token"):
+        raise SensorFault("the token endpoint answered no access token", retryable=False)
+    return out
 
 
 def _access_token(conn: dict, now: Optional[float] = None) -> str:
@@ -156,7 +225,7 @@ def _access_token(conn: dict, now: Optional[float] = None) -> str:
     tok = out.get("access_token")
     if not tok:
         raise SensorFault("the token endpoint answered no access token", retryable=False)
-    _TOKENS[key] = (tok, now + float(out.get("expires_in") or 3600))
+    _TOKENS[key] = (tok, now + float(out.get("expires_in") or 3600), frozenset((out.get("scope") or "").split()))
     return tok
 
 
@@ -172,6 +241,8 @@ def http_get(conn: dict, path: str, params: dict) -> object:
         headers["Authorization"] = f"{conn.get('scheme') or 'Bearer'} {secret}"
     elif conn.get("auth") == "oauth_refresh":
         headers["Authorization"] = "Bearer " + _access_token(conn)
+    elif conn.get("auth") == "service_account":
+        headers["Authorization"] = "Bearer " + _service_account_token(conn)[0]
     req = urllib.request.Request(url, method="GET", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:  # noqa: S310 — operator-declared URL
@@ -182,6 +253,60 @@ def http_get(conn: dict, path: str, params: dict) -> object:
         raise SensorFault("the connection could not be read") from None
 
 
+def granted_scopes(conn: dict) -> frozenset:
+    """The scopes the connection's Google token was actually granted (a token is fetched if none is held)."""
+    if conn.get("auth") == "service_account":
+        return _service_account_token(conn)[1]
+    if conn.get("auth") == "oauth_refresh":
+        _access_token(conn)
+        key = tuple(conn.get(k) for k in ("token_url",) + OAUTH_ENVS)
+        return (_TOKENS.get(key) or (None, 0, frozenset()))[2]
+    return frozenset()
+
+
+def check_post(conn: dict, path: str) -> None:
+    """Refuse every POST but the declared report queries on a read-only Google grant (founder 1 Nov 2026, Q4)."""
+    url = conn["base_url"].rstrip("/") + "/" + path.lstrip("/")
+    if not any(rx.match(url) for rx in POST_ALLOWED):
+        raise SensorFault("a reading may POST only to a declared report query (GA4 runReport, Search Console query)",
+                          retryable=False)
+    if conn.get("auth") not in ("service_account", "oauth_refresh"):
+        raise SensorFault("a report query needs a Google grant (service account or OAuth)", retryable=False)
+    if conn.get("auth") == "service_account" and not set(conn.get("scopes") or []) <= READ_ONLY_SCOPES:
+        raise SensorFault("a report query asks only for read-only scopes", retryable=False)
+    granted = granted_scopes(conn)
+    if not granted or not granted <= READ_ONLY_SCOPES:
+        raise SensorFault("the connection's grant is not read-only", retryable=False)
+
+
+def http_post(conn: dict, path: str, body: dict) -> object:
+    """The one POST a reading makes: a declared report query (``check_post`` first), JSON in and out."""
+    check_post(conn, path)
+    url = conn["base_url"].rstrip("/") + "/" + path.lstrip("/")
+    headers = {"Accept": "application/json", "Content-Type": "application/json", "User-Agent": USER_AGENT}
+    headers["Authorization"] = "Bearer " + (_service_account_token(conn)[0] if conn.get("auth") == "service_account"
+                                            else _access_token(conn))
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:  # noqa: S310 — allow-listed URL
+            return json.loads(r.read() or b"null")
+    except urllib.error.HTTPError as e:
+        raise SensorFault(f"read failed ({e.code})", retryable=e.code not in (401, 403)) from None
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        raise SensorFault("the connection could not be read") from None
+
+
+def _fill(value, since: str):
+    """``{cursor}`` substituted in every string of a declared body."""
+    if isinstance(value, str):
+        return value.replace("{cursor}", since)
+    if isinstance(value, list):
+        return [_fill(v, since) for v in value]
+    if isinstance(value, dict):
+        return {k: _fill(v, since) for k, v in value.items()}
+    return value
+
+
 class ReadingSensor(SensorKind):
     kind = "reading"
     event_types = ("business.*",)
@@ -190,8 +315,9 @@ class ReadingSensor(SensorKind):
     scopes = ("instance",)
 
     def __init__(self, get: Optional[Callable] = None, config: Optional[Callable] = None,
-                 clock: Callable = time.time):
+                 clock: Callable = time.time, post: Optional[Callable] = None):
         self._get = get or http_get
+        self._post = post or http_post
         self._config = config or load_config
         self._now = clock
 
@@ -205,7 +331,14 @@ class ReadingSensor(SensorKind):
         since = cursor if cursor is not None else first
         params = {k: str(v).replace("{cursor}", since) for k, v in (spec.get("params") or {}).items()}
         params = {k: v for k, v in params.items() if v != ""}
-        answer = self._get(conn, spec["path"], params)
+        if str(spec.get("method") or "GET").upper() == "POST":
+            if params:
+                raise SensorFault("a report query carries its query in the body, not in params", retryable=False)
+            answer = self._post(conn, spec["path"], _fill(spec.get("body") or {}, since))
+        elif str(spec.get("method") or "GET").upper() != "GET":
+            raise SensorFault("a reading only GETs, or POSTs a declared report query", retryable=False)
+        else:
+            answer = self._get(conn, spec["path"], params)
         items = _dig(answer, spec.get("items", "")) if spec.get("items") else answer
         if items is None and isinstance(answer, dict) and spec.get("empty_when_absent"):
             items = []                                     # the provider leaves an empty list out (Gmail)

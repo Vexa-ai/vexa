@@ -134,3 +134,64 @@ def test_the_instance_holds_more_sensors_than_a_person():
     for i in range(store.PER_SCOPE + 5):
         store.create(db, kinds, "instance", name=f"i{i}", kind="reading", filter=None, connection_id="x/y",
                      interval_s=300, by="t", now=1.0)
+
+
+
+# ── the declared report POST (founder 1 Nov 2026, Q4 «Allow POST») ───────────────────────────
+GA4 = {"transport": "http_json", "base_url": "https://analyticsdata.googleapis.com", "auth": "service_account",
+       "key_env": "SA_JSON", "scopes": ["https://www.googleapis.com/auth/analytics.readonly"]}
+
+
+@pytest.mark.parametrize("path", ["/v1beta/properties/123:batchRunReports", "/v1beta/properties/123", "/admin/x",
+                                  "/v1beta/properties/123:runReport/extra"])
+def test_a_post_anywhere_else_is_refused(monkeypatch, path):
+    monkeypatch.setattr(rk, "granted_scopes", lambda conn: frozenset(GA4["scopes"]))
+    with pytest.raises(SensorFault):
+        rk.check_post(GA4, path)
+
+
+def test_the_two_report_queries_pass_on_a_read_only_grant(monkeypatch):
+    monkeypatch.setattr(rk, "granted_scopes", lambda conn: frozenset(conn.get("scopes") or []))
+    rk.check_post(GA4, "/v1beta/properties/123:runReport")
+    gsc = {**GA4, "base_url": "https://www.googleapis.com", "scopes": ["https://www.googleapis.com/auth/webmasters.readonly"]}
+    rk.check_post(gsc, "/webmasters/v3/sites/sc-domain%3Avexa.ai/searchAnalytics/query")
+
+
+def test_a_grant_that_can_write_is_refused(monkeypatch):
+    wide = {**GA4, "scopes": ["https://www.googleapis.com/auth/analytics"]}
+    monkeypatch.setattr(rk, "granted_scopes", lambda conn: frozenset(conn["scopes"]))
+    with pytest.raises(SensorFault):
+        rk.check_post(wide, "/v1beta/properties/123:runReport")
+    oauth = {"transport": "http_json", "base_url": "https://analyticsdata.googleapis.com", "auth": "oauth_refresh"}
+    monkeypatch.setattr(rk, "granted_scopes",
+                        lambda conn: frozenset({"https://www.googleapis.com/auth/analytics.readonly",
+                                                "https://www.googleapis.com/auth/gmail.compose"}))
+    with pytest.raises(SensorFault):
+        rk.check_post(oauth, "/v1beta/properties/123:runReport")
+    bearer = {**GA4, "auth": "bearer"}
+    with pytest.raises(SensorFault):
+        rk.check_post(bearer, "/v1beta/properties/123:runReport")
+
+
+def test_a_reading_posts_its_declared_body_with_the_cursor():
+    from flows_sensors.base import SensorRow
+    cfg = {"connections": {"ga4": GA4},
+           "readings": {"ga4/daily": {"method": "POST", "path": "/v1beta/properties/123:runReport",
+                                      "body": {"dateRanges": [{"startDate": "{cursor}", "endDate": "today"}]},
+                                      "items": "rows", "key": "k", "cursor_type": "text", "keep": {"k": "k"},
+                                      "event_type": "business.traffic"}}}
+    sent = []
+    k = rk.ReadingSensor(get=lambda *a: pytest.fail("GET used"), config=lambda: cfg,
+                         post=lambda conn, path, body: sent.append(body) or {"rows": [{"k": "a"}]})
+    row = SensorRow(scope="instance", name="ga4", kind="reading", connection_id="ga4/daily")
+    assert [c.dedupe_key for c in k.tick(row, "2026-10-31").changes] == ["a"]
+    assert sent == [{"dateRanges": [{"startDate": "2026-10-31", "endDate": "today"}]}]
+
+
+def test_no_other_method():
+    from flows_sensors.base import SensorRow
+    cfg = {"connections": {"x": {"transport": "http_json", "base_url": "https://x", "auth": "none"}},
+           "readings": {"x/y": {"method": "DELETE", "path": "/a", "key": "id", "event_type": "business.reading"}}}
+    k = rk.ReadingSensor(get=lambda *a: [], config=lambda: cfg, post=lambda *a: [])
+    with pytest.raises(SensorFault):
+        k.tick(SensorRow(scope="instance", name="x", kind="reading", connection_id="x/y"), None)
