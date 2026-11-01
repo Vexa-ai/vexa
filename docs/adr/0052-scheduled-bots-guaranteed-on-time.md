@@ -2,8 +2,8 @@
 
 **Status:** proposed · 2026-11-01 · [#1962](https://github.com/Vexa-ai/vexa/issues/1962) (replaces its
 31 Oct ramp-limit design) · builds on ADR-0046 (flows own time) and ADR-0050 (keyed schedules) ·
-founder rulings of 2026-11-01 are quoted where they settle a choice; what they do not settle is listed
-under *Open questions*, not decided here
+founder rulings of 2026-11-01 are quoted where they settle a choice; the three questions this ADR
+first left open were answered by the founder the same day (*Decided after review*)
 
 ## Context
 
@@ -155,8 +155,8 @@ Under the per-user advisory lock and a row lock it:
 - **One booking cap, enforced where every booked row is created.** The repository function that
   creates a planned row is the one path for `POST /meetings`, calendar sync and `invite_join`. In the
   same transaction it validates `scheduled_at` as ISO-8601 (today any string passes) and counts the
-  account's future `scheduled` rows with `auto_join` on against `BOOKED_MAX_PER_ACCOUNT` (value
-  under *Open questions*). Over the cap: `POST /meetings` answers 429 with the cap in the body;
+  account's future `scheduled` rows with `auto_join` on against `BOOKED_MAX_PER_ACCOUNT` = 500,
+  with no horizon on how far ahead (founder, 1 Nov 2026). Over the cap: `POST /meetings` answers 429 with the cap in the body;
   calendar sync still mirrors the event but creates the row with no alarm and `auto_join_error`
   stamped "booking cap reached".
 - One account's bookings can no longer fill another's: the keyed share for `booked_bot` is per
@@ -224,7 +224,10 @@ billed, `unknown` included.
   counting real bots only (placeholders do not count; never on a node already draining). A marked
   node goes when its last meeting ends. No live bot is ever moved (bot pods are bare pods and the
   autoscaler does not drain nodes holding them).
-- The guarantee is also bounded by the pool max (20 on `main` today): the controller alarms when a
+- **Pool max 50 nodes** (founder, 1 Nov 2026: «50 nodes»; 20 on `main` today). s3 sets the LKE
+  autoscaler max of the main pool to 50, landing or superseding
+  [vexa-platform#561](https://github.com/Vexa-ai/vexa-platform/pull/561), which already proposes 50.
+- The guarantee is also bounded by that pool max: the controller alarms when a
   bot is Pending because the pool is at max.
 
 ### 12. What was dropped (founder, 2026-11-01)
@@ -241,7 +244,7 @@ The 31 Oct ramp curve; fair-share admission for ad-hoc bots; separate booked/ad-
 | **s2b Flows in every profile** | vexa (deploy) | lite supervisord programs for Flows; Helm `flows.enabled: true`; bank profile; `meeting_api/events.py` wording | lite boots with Flows; Helm default renders Flows; bank profile renders Flows |
 | **s2c outbox + start route** (sweep still on) | vexa (meeting-api, gateway) | outbox table + drain on the CRM outbox pattern; `POST /internal/meetings/{id}/start` with the sweep's safeguards; planned-row creation path with ISO check and booking cap (API and calendar sync); ceiling counts `needs_help` / `needs_human_help`; gateway service-door allow-list | cancel-before-fire and cancel-during-fire → 409, no bot; recurring link starts the right row; block lists, bot name, last-attempt stamp applied; outbox survives a Flows outage and delivers in revision order; cap refuses `POST /meetings` with 429 and calendar sync rows over the cap get no alarm |
 | **s2d switch the clock** | vexa (meeting-api, flows) | `booked_bot` flow; one-time backfill of facts for future `scheduled` rows; `_auto_join_loop` / `auto_join_tick` removed, keys to `removed_config.py`; `invite_join` registered in code, rewritten to `POST/PATCH /meetings`, stored seed removed by a one-off migration | a row booked before the upgrade is armed by the backfill and gets its bot; booked < 10 min and after `join_at`; ceiling full → starts when a slot frees; rescheduled invite moves the bot; no meeting-api clock left (grep gate) |
-| **s3 cluster** | vexa-platform (+ vexa runtime knob) | controller replacing `deployment-capacity-reserve.yaml` + `cronjob-capacity-resize.yaml`; second scheduler Deployment, RBAC, config; bot PriorityClass at 0; `RUNTIME_K8S_BOT_SCHEDULER_NAME` in vexa runtime and chart | render tests for the chart; controller unit tests (placeholders not counted, draining nodes skipped, no bot moved); runtime test that the scheduler name reaches the pod spec; staging rehearsal: burst at :58 with booked pods started at :50 |
+| **s3 cluster** | vexa-platform (+ vexa runtime knob) | main-pool autoscaler max 20 → 50 (`infra/main.tf`, lands or supersedes vexa-platform#561); controller replacing `deployment-capacity-reserve.yaml` + `cronjob-capacity-resize.yaml`; second scheduler Deployment, RBAC, config; bot PriorityClass at 0; `RUNTIME_K8S_BOT_SCHEDULER_NAME` in vexa runtime and chart | render tests for the chart; controller unit tests (placeholders not counted, draining nodes skipped, no bot moved); runtime test that the scheduler name reaches the pod spec; staging rehearsal: burst at :58 with booked pods started at :50 |
 | **s5 billing** | vexa + vexa-platform | platform rating dual acceptance, pod-start minutes, `ours` not billed, transcription split, account page and `/pricing` text, `bot_never_joined` reason retired for v2 rows; bot emits `pod_started_at`; meeting-api grading table + `outcome_class` at terminal transition + provenance fields + version bump; service-authority boundaries from pod start | rating fixtures for both versions; never-admitted v2 run billed from pod start; `ours` run not billed, `unknown` billed; transcription minutes unchanged by wait; after s1 + s2c: a waiting bot's minutes counted from pod start, and a zero-balance account's waiting bot is stopped |
 | **s4 docs** | vexa (`docs/docs/`) | `api/meetings.mdx` (auto-join section, `scheduled_at`, booking cap, PATCH 409 from start − 10 min, 429 counts waiting bots, the promise verbatim); `core/meetings.mdx:76-87`; `how-to/calendar-sync.mdx:102-103`; `configuration.mdx:314-332`; `deployment-kubernetes.mdx:366, 690-694` and lite/Helm pages (Flows required); `concepts.mdx:36`; troubleshooting "a scheduled meeting didn't auto-join"; ADR-0050 lead values; `quickstart.mdx:19` bot time defined from pod start; changelog entry (earlier pod start, wait and lobby billing, PATCH window) | `docs-current` gate; link check; the "~60 s" claim gone everywhere |
 
@@ -264,12 +267,16 @@ Order:
 - `PATCH /meetings` is refused from `start − 10 min` (was `− 2 min`).
 - The guarantee holds only within the account ceiling and the cluster pool max.
 
-## Open questions for the founder
+## Decided after review (founder, 1 Nov 2026)
 
-1. **Booking cap value.** `BOOKED_MAX_PER_ACCOUNT`: proposed 500 future booked rows per account,
-   with no horizon on how far ahead.
-2. **Pool max versus the promise.** The guarantee fails for everyone when the pool is at max. Whether
-   the pool max is raised (an open vexa-platform PR proposes 50) and what spend that allows is a money
-   decision.
-3. **Notice before release.** Wait and lobby billing changes what customers pay. Does the release wait
-   until a notice has gone to customers? No one has ruled on this commitment yet.
+1. **Booking cap.** «500 future bookings; above that the API refuses» — yes.
+   `BOOKED_MAX_PER_ACCOUNT` = 500, no horizon (§8).
+2. **Cluster ceiling.** «50 nodes». The main pool's autoscaler max is 50 (§11, s3), through or in
+   place of vexa-platform#561.
+3. **Notice before release.** Asked whether the release ships only after the lobby-billing notice
+   has gone to customers: «NO». The release does not wait for the notice; it is not a release
+   prerequisite.
+
+## Open questions
+
+None.
