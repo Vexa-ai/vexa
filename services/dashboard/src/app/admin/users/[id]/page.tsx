@@ -53,6 +53,73 @@ import { useAdminStore } from "@/stores/admin-store";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
+// Per-account bot ramp dials (#1962), stored by the admin API in users.data.bot_ramp.
+// PATCH field names and server-side bounds match admin-api's UserAdminPatch.
+type RampKey = "burst" | "share" | "window_s";
+type RampDraft = Record<RampKey, string>;
+const EMPTY_RAMP_DRAFT: RampDraft = { burst: "", share: "", window_s: "" };
+
+const RAMP_FIELDS: {
+  key: RampKey;
+  patch: "bot_ramp_burst" | "bot_ramp_share" | "bot_ramp_window_s";
+  label: string;
+  min: number;
+  max?: number;
+  step: number;
+  integer: boolean;
+}[] = [
+  { key: "burst", patch: "bot_ramp_burst", label: "Burst (bots at once)", min: 1, step: 1, integer: true },
+  { key: "share", patch: "bot_ramp_share", label: "Share of running (0-1)", min: 0, max: 1, step: 0.05, integer: false },
+  { key: "window_s", patch: "bot_ramp_window_s", label: "Window (seconds)", min: 10, max: 3600, step: 1, integer: true },
+];
+
+function readBotRamp(data: Record<string, unknown> | undefined): Partial<Record<RampKey, number>> {
+  const raw = data?.bot_ramp;
+  if (!raw || typeof raw !== "object") return {};
+  const out: Partial<Record<RampKey, number>> = {};
+  for (const field of RAMP_FIELDS) {
+    const value = (raw as Record<string, unknown>)[field.key];
+    if (typeof value === "number") out[field.key] = value;
+  }
+  return out;
+}
+
+function rampToDraft(ramp: Partial<Record<RampKey, number>>): RampDraft {
+  return {
+    burst: ramp.burst !== undefined ? String(ramp.burst) : "",
+    share: ramp.share !== undefined ? String(ramp.share) : "",
+    window_s: ramp.window_s !== undefined ? String(ramp.window_s) : "",
+  };
+}
+
+function parseRampDraft(
+  draft: RampDraft
+):
+  | { bot_ramp_burst: number | null; bot_ramp_share: number | null; bot_ramp_window_s: number | null }
+  | { error: string } {
+  const out = { bot_ramp_burst: null, bot_ramp_share: null, bot_ramp_window_s: null } as {
+    bot_ramp_burst: number | null;
+    bot_ramp_share: number | null;
+    bot_ramp_window_s: number | null;
+  };
+  for (const field of RAMP_FIELDS) {
+    const text = draft[field.key].trim();
+    if (text === "") continue;
+    const value = Number(text);
+    const bad =
+      !Number.isFinite(value) ||
+      (field.integer && !Number.isInteger(value)) ||
+      value < field.min ||
+      (field.max !== undefined && value > field.max);
+    if (bad) {
+      const range = field.max !== undefined ? `${field.min}-${field.max}` : `>= ${field.min}`;
+      return { error: `${field.label} must be ${field.integer ? "a whole number " : ""}${range}, or empty for the default` };
+    }
+    out[field.patch] = value;
+  }
+  return out;
+}
+
 export default function UserDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -82,6 +149,9 @@ export default function UserDetailPage() {
   const [isEditingMaxBots, setIsEditingMaxBots] = useState(false);
   const [tempMaxBots, setTempMaxBots] = useState(3);
   const [isSavingMaxBots, setIsSavingMaxBots] = useState(false);
+  const [isEditingRamp, setIsEditingRamp] = useState(false);
+  const [rampDraft, setRampDraft] = useState<RampDraft>(EMPTY_RAMP_DRAFT);
+  const [isSavingRamp, setIsSavingRamp] = useState(false);
   const [showNewTokenDialog, setShowNewTokenDialog] = useState(false);
   const [copiedTokenId, setCopiedTokenId] = useState<string | null>(null);
 
@@ -182,6 +252,38 @@ export default function UserDetailPage() {
   const handleCancelEditMaxBots = () => {
     setTempMaxBots(selectedUser?.max_concurrent_bots ?? 3);
     setIsEditingMaxBots(false);
+  };
+
+  const currentRamp = readBotRamp(selectedUser?.data);
+
+  const handleStartEditRamp = () => {
+    setRampDraft(rampToDraft(currentRamp));
+    setIsEditingRamp(true);
+  };
+
+  const handleCancelEditRamp = () => {
+    setRampDraft(rampToDraft(currentRamp));
+    setIsEditingRamp(false);
+  };
+
+  const handleSaveRamp = async () => {
+    const parsed = parseRampDraft(rampDraft);
+    if ("error" in parsed) {
+      toast.error(parsed.error);
+      return;
+    }
+    setIsSavingRamp(true);
+    try {
+      // Every dial is sent: a value sets it, null (empty field) resets it to the deployment default.
+      await updateUser(userId, parsed);
+      await fetchUser(userId);
+      setIsEditingRamp(false);
+      toast.success("Bot ramp updated successfully");
+    } catch (error) {
+      toast.error("Failed to update bot ramp");
+    } finally {
+      setIsSavingRamp(false);
+    }
   };
 
   const handleCreateToken = async () => {
@@ -403,6 +505,93 @@ export default function UserDetailPage() {
                     <p className="text-sm text-muted-foreground">
                       {selectedUser.max_concurrent_bots}
                     </p>
+                  )}
+                </div>
+              </div>
+
+              <Separator />
+
+              <div className="flex items-start gap-3">
+                <Bot className="h-4 w-4 mt-0.5 text-muted-foreground" />
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 group/ramp">
+                    <p className="text-sm font-medium">Bot Ramp</p>
+                    {!isEditing && !isEditingRamp && (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-6 w-6 opacity-0 group-hover/ramp:opacity-100 transition-opacity"
+                        onClick={handleStartEditRamp}
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </Button>
+                    )}
+                  </div>
+                  {isEditingRamp ? (
+                    <div className="mt-1 space-y-2">
+                      {RAMP_FIELDS.map((field) => (
+                        <div key={field.key} className="flex items-center gap-2">
+                          <Label htmlFor={`ramp-${field.key}`} className="w-40 text-xs text-muted-foreground">
+                            {field.label}
+                          </Label>
+                          <Input
+                            id={`ramp-${field.key}`}
+                            type="number"
+                            min={field.min}
+                            max={field.max}
+                            step={field.step}
+                            placeholder="default"
+                            value={rampDraft[field.key]}
+                            onChange={(e) =>
+                              setRampDraft((d) => ({ ...d, [field.key]: e.target.value }))
+                            }
+                            className="h-8 w-28"
+                            disabled={isSavingRamp}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                handleSaveRamp();
+                              } else if (e.key === "Escape") {
+                                handleCancelEditRamp();
+                              }
+                            }}
+                          />
+                        </div>
+                      ))}
+                      <p className="text-xs text-muted-foreground">
+                        Leave a field empty to use the deployment default.
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-8 w-8"
+                          onClick={handleSaveRamp}
+                          disabled={isSavingRamp}
+                        >
+                          <Check className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-8 w-8"
+                          onClick={handleCancelEditRamp}
+                          disabled={isSavingRamp}
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-sm text-muted-foreground">
+                      {RAMP_FIELDS.map((field) => (
+                        <p key={field.key}>
+                          {field.label}:{" "}
+                          {currentRamp[field.key] !== undefined
+                            ? String(currentRamp[field.key])
+                            : "default"}
+                        </p>
+                      ))}
+                    </div>
                   )}
                 </div>
               </div>

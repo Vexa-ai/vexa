@@ -568,6 +568,10 @@ export interface UpdateUserRequest {
   name?: string;
   max_concurrent_bots?: number;
   image_url?: string;
+  /** Per-account bot ramp dials (stored in data.bot_ramp); null resets one to the deployment default. */
+  bot_ramp_burst?: number | null;
+  bot_ramp_share?: number | null;
+  bot_ramp_window_s?: number | null;
   data?: Record<string, unknown>;
 }
 
