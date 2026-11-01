@@ -125,6 +125,15 @@
       "targets": []
     },
     {
+      "key": "VEXA_GATEWAY_SERVICE_DOOR_HOST",
+      "class": "defaulted",
+      "default": "",
+      "description": "The address the service door listens on. Empty: the edge's own HOST. Lite sets 127.0.0.1, since every caller of its door (flows-api, flows-worker) is in the same container.",
+      "targets": [
+        "lite"
+      ]
+    },
+    {
       "key": "VEXA_JITSI_HOSTS",
       "class": "defaulted",
       "default": "",
