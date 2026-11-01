@@ -84,6 +84,7 @@ def test_since_and_one_state_filter(client):  # noqa: F811
     _row("r-new", status="blocked", updated=T0 + 100)
     assert set(_get(client, f"/flows/factory_obligation/reactions?since={T0 + 50}")) == {"r-new"}
     assert set(_get(client, "/flows/factory_obligation/reactions?status=blocked")) == {"r-new"}
+    assert set(_get(client, "/flows/factory_obligation/reactions?status=all")) == {"r-old", "r-new"}
     r = client.get("/flows/factory_obligation/reactions?status=nonsense", headers=operator())
     assert r.status_code == 422
 

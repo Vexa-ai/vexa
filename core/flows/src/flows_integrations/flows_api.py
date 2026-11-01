@@ -2082,8 +2082,8 @@ def instance_flow_reactions(name: str, status: str = "open", since: float = 0.0,
     """THE REACTIONS OF ONE INSTANCE FLOW, for the operator: what a board over the instance's own
     queue reads, so it never needs a database role of its own.
 
-    `status`: `open` (admitted · retrying · running · blocked), `closed` (done · cancelled), or one
-    state. `since`: only reactions updated at or after this epoch. Each reaction carries its
+    `status`: `open` (admitted · retrying · running · blocked), `closed` (done · cancelled), `all`,
+    or one state. `since`: only reactions updated at or after this epoch. Each reaction carries its
     `refs` (the subject refs it was admitted with), its `lease_until`, the live `hold` on it
     (`flows.signals.hold_of`: holder, claimed_at, lease_until, or null), `hold_moved_at` (the last
     claim or release signal), and for a closed one its `close`: who ended it, with what receipt,
@@ -2093,7 +2093,8 @@ def instance_flow_reactions(name: str, status: str = "open", since: float = 0.0,
     from flows.signals import hold_of
     if name.startswith("user:"):
         raise HTTPException(status_code=403, detail={"refused": "not_an_instance_flow", "flow": name})
-    states = {"open": OPEN_STATES, "closed": CLOSED_STATES}.get(status)
+    states = {"open": OPEN_STATES, "closed": CLOSED_STATES,
+              "all": OPEN_STATES + CLOSED_STATES + ("failed",)}.get(status)
     if states is None:
         if status not in OPEN_STATES + CLOSED_STATES + ("failed",):
             raise HTTPException(status_code=422, detail={"refused": "unknown_status", "status": status})
