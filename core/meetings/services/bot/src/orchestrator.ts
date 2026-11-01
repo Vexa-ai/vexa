@@ -6,6 +6,7 @@
  * whole control flow is unit-testable offline (L2): inject fakes and assert the emitted
  * lifecycle.v1 sequence conforms to the schema + state machine.
  *
+ *   [wait until invocation.joinAt, if set] ─►
  *   joining ─► [join driver: awaiting_admission ─(needs_help)─► active] ─► pipeline.start
  *           ─► subscribe acts ─► await end ─► leave ─► completed
  *
@@ -70,6 +71,16 @@ export interface OrchestratorDeps {
   /** Producer clock for lifecycle facts. Injected by tests; each logical event is stamped once
    *  before the lifecycle adapter performs any HTTP retry. */
   now?: () => string;
+  /** Wall clock (epoch ms) the `joinAt` wait is measured against. Injected by tests. */
+  nowMs?: () => number;
+}
+
+/** How long (ms) the bot waits before it opens the meeting: until invocation.v1 `joinAt`, or 0 when
+ *  the field is absent or already past (ADR-0052). The schema has already checked the format. */
+export function msUntilJoinAt(joinAt: string | undefined, nowMs: number): number {
+  if (!joinAt) return 0;
+  const at = Date.parse(joinAt);
+  return Number.isFinite(at) ? Math.max(0, at - nowMs) : 0;
 }
 
 /** The dedicated non-zero exit code for a pre-join control-plane-unreachable abort (#530). On
@@ -271,6 +282,30 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
   }
 
   async function run(opts: RunOptions = {}): Promise<MeetingResult> {
+    // ── the join time (ADR-0052) — a booked bot's pod starts early and WAITS here ──
+    // The browser and capture pipeline are already up (the composition root built them); no meeting
+    // page is opened, no `joining` is sent and the reachability gate does not run before `joinAt`,
+    // so the row stays `requested` while it waits. A stop or SIGTERM during the wait ends the run
+    // at stage `requested` with nothing to withdraw.
+    const waitMs = msUntilJoinAt(inv.joinAt, deps.nowMs?.() ?? Date.now());
+    if (waitMs > 0) {
+      console.log(`[bot] waiting ${Math.round(waitMs / 1000)}s until joinAt ${inv.joinAt} before opening the meeting`);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const stoppedWhileWaiting = await Promise.race([
+        new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), waitMs); }),
+        aborted.then(() => true as const),
+      ]);
+      clearTimeout(timer);
+      if (stoppedWhileWaiting) {
+        const waitDetail = `stopped while waiting for joinAt ${inv.joinAt} (the meeting was never opened)`;
+        await emit('failed', {
+          failure_stage: 'requested', completion_reason: 'stopped', reason: waitDetail, exit_code: 0,
+          ...joinEvidenceFor('stopped', 'requested', { reachedLobby: false }, waitDetail),
+        });
+        return { exitCode: 0, status: 'failed', completionReason: 'stopped' };
+      }
+    }
+
     // ── reachability gate (#530, P18) — the FIRST lifecycle emit is LOAD-BEARING ──
     // The `joining` event must be sent regardless; we consult its delivery verdict. Reachable ⇒
     // ZERO added latency (the secondary channel is never probed). Primary unreachable ⇒ probe the
