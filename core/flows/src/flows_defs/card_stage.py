@@ -23,13 +23,16 @@ THE RULES (first match wins; each names the fact that decided it):
       tracks only the pull request), else **Released**;
    b. otherwise → **In main**.
 3. Its pull request is open:
-   a. the prod pin's chart was built from a commit that contains the head commit → **On prod**
+   a. it is a design document (every file it changes is under ``docs/adr/`` or ``docs/design/``,
+      the delivery reading's ``design_doc``) → **Design**;
+   b. the prod pin's chart was built from a commit that contains the head commit → **On prod**
       (delivery order: prod first, then main);
-   b. the pull request is a draft → **Code** (code exists, not yet offered for review);
-   c. otherwise → **Review**.
+   c. the pull request is a draft → **Code** (code exists, not yet offered for review);
+   d. otherwise → **Review**.
 4. No pull request, or it was closed without a merge:
    a. the card's issue is closed as completed → **Done**;
-   b. a live Flows claim holds the card → **Design** (someone is working it; no code is up yet);
+   b. a live Flows claim holds the card → **Code** (a worker is writing code and running tests;
+      founder, 1 Nov 2026: Design is only a design document under review, never «someone holds it»);
    c. otherwise → **Idea**.
 
 ABSENCE IS NOT A FACT (founder, 1 Nov 2026: a missing source shows as «no source», never a
@@ -37,10 +40,10 @@ substitute). A card with a typed ``Source`` and no reading of it gets NO stage: 
 ``None`` with the evidence «no reading yet for <source>», and the CRM keeps the card's State.
 Rules 4b and 4c («no pull request») need a reading that says so: a card whose Source was read but
 whose readings say nothing about a pull request also gets no stage. Only a card with no Source at
-all (a pure idea, nothing to read) may be an Idea, or Design under a claim, without a reading.
+all (a pure idea, nothing to read) may be an Idea, or Code under a claim, without a reading.
 
 So every revert follows from the facts: a pull request closed after review goes back to Idea (or
-Design while someone holds the card); a head commit the prod pin no longer contains (a rollback, or a
+Code while someone holds the card); a head commit the prod pin no longer contains (a rollback, or a
 new push not yet pinned) goes back to Review. A merge is never undone: a merged card the pin rolled
 back from stays In main.
 
@@ -65,6 +68,8 @@ SIDE = ('Dropped',)
 DELIVERY_SOURCE = 'github/delivery'
 #: How many of the newest releases a re-check compares a merged commit with.
 RELEASES_CHECKED = 3
+#: A pull request whose changed files all sit under these is a design document (rule 3a).
+DESIGN_DIRS = ('docs/adr/', 'docs/design/')
 _NAME = re.compile(r'^[A-Za-z0-9_.\-]{1,100}$')
 _SHA = re.compile(r'^[0-9a-f]{7,64}$')
 _SUBJECT = re.compile(r'^github\.com/([A-Za-z0-9_.\-]+)/([A-Za-z0-9_.\-]+)#(\d+)$')
@@ -99,8 +104,8 @@ def stage(readings: dict, flows_claim: Optional[dict] = None) -> tuple[Optional[
     pr_known = r.get('pr_known', pr is not None)
     facts, activity = [], []
     if pr:
-        facts.append(_fact('pr', {k: pr.get(k) for k in ('url', 'state', 'draft', 'head_sha', 'merge_commit_sha',
-                                                         'merged_at') if pr.get(k) is not None}, pr))
+        facts.append(_fact('pr', {k: pr.get(k) for k in ('url', 'state', 'draft', 'design_doc', 'head_sha',
+                                                         'merge_commit_sha', 'merged_at') if pr.get(k) is not None}, pr))
     if issue:
         facts.append(_fact('issue', {k: issue.get(k) for k in ('url', 'state', 'state_reason') if issue.get(k)}, issue))
     if flows_claim:
@@ -153,6 +158,8 @@ def stage(readings: dict, flows_claim: Optional[dict] = None) -> tuple[Optional[
         return out('In main', f"{num} was merged at {pr.get('merged_at') or 'an unknown time'}"
                    + (f" as {_short(merge)}" if merge else ''))
     if pr_state == 'open':
+        if pr.get('design_doc') is True:
+            return out('Design', f'{num} is an open design document (it changes only {" or ".join(DESIGN_DIRS)})')
         if prod_ok and prod.get('contains'):
             return out('On prod', f"the prod pin {prod.get('chart')} (built from {_short(prod.get('source_sha'))}) "
                                   f"contains head {_short(prod.get('commit') or head)}")
@@ -165,8 +172,9 @@ def stage(readings: dict, flows_claim: Optional[dict] = None) -> tuple[Optional[
     if source and not pr_known:
         return unread('of a pull request for ')
     if flows_claim:
-        return out('Design', f"held by {flows_claim.get('holder') or 'a Flows claim'}"
-                           + (f" since {flows_claim['since']}" if flows_claim.get('since') else ''))
+        return out('Code', f"held by {flows_claim.get('holder') or 'a Flows claim'}"
+                           + (f" since {flows_claim['since']}" if flows_claim.get('since') else '')
+                           + ', no pull request yet')
     if pr_state == 'closed':
         return out('Idea', f'{num} was closed without a merge')
     return out('Idea', 'no pull request and nobody holds the card')
@@ -377,6 +385,10 @@ def read_delivery(get: Callable, conn: dict, spec: dict, subject: str, source: s
     fields['pr'] = {'url': pull.get('html_url'), 'number': pull.get('number'), 'state': state,
                     'draft': bool(pull.get('draft')), 'head_sha': head, 'merge_commit_sha': merge,
                     'merged_at': pull.get('merged_at'), 'updated_at': pull.get('updated_at')}
+    if state == 'open' and spec.get('files'):
+        files = get(conn, _path(spec['files'], owner=owner, repo=repo, number=pr_number), {'per_page': '100'})
+        if isinstance(files, list):            # anything else answers nothing about the files
+            fields['pr']['design_doc'] = is_design_doc(files)
     if head:
         runs = get(conn, _path(spec['check_runs'], owner=owner, repo=repo, sha=head), {'per_page': '100'})
         fields['checks'] = summarise_checks(runs, head)
@@ -415,6 +427,13 @@ def _contains_tag(get, conn, spec, owner, repo, commit, tag) -> bool:
     except Exception:  # noqa: BLE001
         return False
     return isinstance(ans, dict) and ans.get('status') in ('ahead', 'identical')
+
+
+def is_design_doc(files) -> bool:
+    """A pull request's changed files (``GET /pulls/{n}/files``) are a design document when there
+    is at least one and every one is under ``DESIGN_DIRS``."""
+    names = [str((f or {}).get('filename') or '') for f in files if isinstance(f, dict)]
+    return bool(names) and all(n.startswith(DESIGN_DIRS) for n in names)
 
 
 def linked_pr(timeline, owner: str, repo: str) -> Optional[int]:

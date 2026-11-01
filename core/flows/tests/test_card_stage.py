@@ -54,7 +54,11 @@ MERGED = pr('merged', merge=MERGE, merged_at='2026-11-01T10:00:00Z')
 @pytest.mark.parametrize('readings, claim, want, because', [
     ({}, None, 'Idea', 'no pull request and nobody holds the card'),
     ({'issue': issue()}, None, 'Idea', 'no pull request'),
-    ({'issue': issue()}, CLAIM, 'Design', 'held by s1-worker@bbb'),
+    ({'issue': issue()}, CLAIM, 'Code', 'held by s1-worker@bbb'),
+    ({'pr': {**pr(), 'design_doc': True}}, None, 'Design', 'is an open design document'),
+    ({'pr': {**pr(draft=True), 'design_doc': True}}, CLAIM, 'Design', 'design document'),
+    ({'pr': {**pr(), 'design_doc': False}}, CLAIM, 'Review', 'open for review'),
+    ({'pr': {**MERGED, 'design_doc': True}}, None, 'In main', 'was merged'),
     ({'pr': pr(draft=True)}, None, 'Code', '#1962 is a draft'),
     ({'pr': pr()}, None, 'Review', '#1962 is open for review at abc1234a'),
     ({'pr': pr(), 'prod': prod(False)}, None, 'Review', 'not in the prod pin'),
@@ -95,7 +99,7 @@ def test_a_pull_request_closed_after_review_goes_back():
     closed = pr('closed')
     got, evidence = cs.stage({'pr': closed}, None)
     assert got == 'Idea' and evidence['because'] == '#1962 was closed without a merge'
-    assert cs.stage({'pr': closed}, CLAIM)[0] == 'Design'                     # someone still holds it
+    assert cs.stage({'pr': closed}, CLAIM)[0] == 'Code'                       # someone still holds it
 
 
 def test_a_commit_dropped_from_the_pin_goes_back_to_review():
@@ -199,8 +203,9 @@ def github(answers):
     return get, calls
 
 
-def base_answers(pull, compare):
+def base_answers(pull, compare, files=()):
     return {
+        '/repos/vexa-ai/vexa/pulls/1962/files': [{'filename': f} for f in files] or [{'filename': 'core/x.py'}],
         '/repos/vexa-ai/vexa/pulls/1962': pull,
         f'/repos/vexa-ai/vexa/commits/{HEAD}/check-runs': {'check_runs': [
             {'status': 'completed', 'conclusion': 'success'}, {'status': 'in_progress', 'conclusion': None}]},
@@ -442,13 +447,13 @@ def test_a_card_with_a_source_and_no_reading_gets_no_stage():
                                                    '(not read: no delivery connection is declared)')
 
 
-def test_a_pure_idea_with_no_source_may_be_an_idea_or_design():
+def test_a_pure_idea_with_no_source_may_be_an_idea_or_code():
     r = cs.readings_from_card({'id': 'c8', 'state': 'Idea', 'source': None, 'reading': None})
     assert cs.stage(r, None)[0] == 'Idea'
-    assert cs.stage(r, CLAIM)[0] == 'Design'
+    assert cs.stage(r, CLAIM)[0] == 'Code'
 
 
-def test_design_and_idea_need_a_reading_that_proves_there_is_no_pull_request():
+def test_code_on_a_claim_and_idea_need_a_reading_that_proves_there_is_no_pull_request():
     # the issue was read, but nothing said which pull request delivers it: no stage
     card = {'id': 'c7', 'source': ISSUE_URL, 'reading': {'sources': {
         'github/vexa-issues': {'fields': {'state': 'open', 'title': 'x'}, 'evidence': ev('github/vexa-issues')}}}}
@@ -456,12 +461,12 @@ def test_design_and_idea_need_a_reading_that_proves_there_is_no_pull_request():
     assert r['read'] is True and r['pr_known'] is False
     got, evidence = cs.stage(r, CLAIM)
     assert got is None and evidence['because'] == f'no reading yet of a pull request for {ISSUE_URL}'
-    # the delivery reading answered «no pull request» (pr: None): now Design under a claim, else Idea
+    # the delivery reading answered «no pull request» (pr: None): now Code under a claim, else Idea
     card['reading']['sources']['github/delivery'] = {'fields': {'issue': {'state': 'open'}, 'pr': None},
                                                       'evidence': ev()}
     r = cs.readings_from_card(card)
     assert r['pr_known'] is True
-    assert cs.stage(r, CLAIM)[0] == 'Design' and cs.stage(r, None)[0] == 'Idea'
+    assert cs.stage(r, CLAIM)[0] == 'Code' and cs.stage(r, None)[0] == 'Idea'
     # facts that decide without a pull request still decide: a closed issue
     card['reading']['sources']['github/vexa-issues']['fields'] = {'state': 'closed', 'state_reason': 'not_planned'}
     card['reading']['sources']['github/vexa-issues']['evidence'] = ev('github/vexa-issues', T + 9)
@@ -485,3 +490,18 @@ def test_no_reading_keeps_the_state_and_tells_the_crm_once(monkeypatch):
     held = {**bare, 'stage_evidence': {'stage': None, 'no_reading': True, 'because': f'no reading yet for {PR_URL}'}}
     sent = _crm(monkeypatch, lambda url, body: (200, {'cards': [held]}))
     assert step(SimpleNamespace(refs={'record_id': 'c1'})).result['status'] == 'unchanged' and len(sent) == 1
+
+
+def test_an_open_pull_request_that_changes_only_design_docs_reads_design():
+    assert cs.is_design_doc([{'filename': 'docs/adr/0051-stages.md'}, {'filename': 'docs/design/stages.md'}])
+    assert not cs.is_design_doc([{'filename': 'docs/adr/0051.md'}, {'filename': 'core/crm/x.py'}])
+    assert not cs.is_design_doc([]) and not cs.is_design_doc([{'filename': 'docs/guide.md'}])
+    pull = {'html_url': PR_URL, 'number': 1962, 'state': 'open', 'draft': True, 'head': {'sha': HEAD}, 'merged_at': None}
+    get, calls = github(base_answers(pull, {'status': 'diverged'}, files=('docs/adr/0051-stages.md',)))
+    fields = cs.read_delivery(get, {}, SPEC, 'github.com/vexa-ai/vexa#1962', PR_URL)
+    assert fields['pr']['design_doc'] is True and '/repos/vexa-ai/vexa/pulls/1962/files' in calls
+    assert cs.stage({k: {**v, 'evidence': ev()} for k, v in fields.items()}, None)[0] == 'Design'
+    get, _ = github(base_answers(pull, {'status': 'diverged'}))                # code changed: a draft is Code
+    fields = cs.read_delivery(get, {}, SPEC, 'github.com/vexa-ai/vexa#1962', PR_URL)
+    assert fields['pr']['design_doc'] is False
+    assert cs.stage({k: {**v, 'evidence': ev()} for k, v in fields.items()}, None)[0] == 'Code'

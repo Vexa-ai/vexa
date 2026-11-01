@@ -118,8 +118,10 @@ def test_the_rule_moves_it_with_the_fact_that_moved_it(cards, store):
 
 def test_a_recheck_that_moves_a_card_marks_a_readable_correction(cards, store):
     card = software(cards)
-    cards.set_stage(ORG, card['id'], 'On prod', 'the prod pin contains head abc1234', [FACT])
-    out = cards.set_stage(ORG, card['id'], 'Review', 'the prod pin no longer contains head abc1234', [FACT],
+    pinned = {**FACT, 'fact': 'prod', 'value': {'contains': True, 'commit': 'abc1234'}}
+    cards.set_stage(ORG, card['id'], 'On prod', 'the prod pin contains head abc1234', [FACT, pinned])
+    gone = {**pinned, 'value': {'contains': False, 'commit': 'abc1234'}}
+    out = cards.set_stage(ORG, card['id'], 'Review', 'the prod pin no longer contains head abc1234', [FACT, gone],
                           mode='recheck')
     assert out['status'] == 'corrected'
     ev = cards.read(ORG, ANA, card['id'])['stage_evidence']
@@ -236,7 +238,9 @@ def test_the_stage_routes_are_internal_tier_only(store, cards):
     r = client.post('/internal/cards/stage', json=stage, headers=hdr)
     assert r.status_code == 200 and r.json()['status'] == 'moved', r.text
     assert client.post('/internal/cards/stage', json=stage, headers=hdr).json()['status'] == 'unchanged'
-    r = client.post('/internal/cards/stage', json={**stage, 'stage': 'Done', 'mode': 'recheck'}, headers=hdr)
+    merged = {**FACT, 'value': {'state': 'merged', 'head_sha': 'abc1234'}}
+    r = client.post('/internal/cards/stage', json={**stage, 'stage': 'Done', 'mode': 'recheck', 'facts': [merged]},
+                    headers=hdr)
     assert r.json()['status'] == 'corrected'
     assert 400 <= client.post('/internal/cards/stage', json={**stage, 'stage': 'Doing'}, headers=hdr).status_code < 500
     # null: the rule has no stage (no reading); the route keeps the State and says so
@@ -290,3 +294,32 @@ def test_a_stage_set_on_a_read_fact_is_never_reverted_by_no_reading(cards):
     out = cards.set_stage(ORG, card['id'], None, f'no reading yet for {PR}', [])
     assert out['status'] == 'kept' and cards.read(ORG, ANA, card['id'])['state'] == 'Idea'
 
+
+def test_a_correction_marks_only_a_change_of_read_facts(cards, store):
+    card = software(cards)
+    # a stage that rested on no read fact (a hold, an absence): the first facts move it plainly
+    claim = {'fact': 'claim', 'value': {'holder': 's2-worker@bbb'}, 'source': 'flows/claim', 'read_at': 1.0}
+    cards.set_stage(ORG, card['id'], 'Code', 'held by s2-worker@bbb, no pull request yet', [claim])
+    out = cards.set_stage(ORG, card['id'], 'Review', '#1962 is open for review at abc1234', [FACT], mode='recheck')
+    assert out['status'] == 'moved'
+    ev = cards.read(ORG, ANA, card['id'])['stage_evidence']
+    assert 'correction' not in ev and revisions(store, card['id'])[-1].reason.startswith('Moved to Review')
+    # the same read facts, another stage (the rule itself changed): a plain move, no correction
+    out = cards.set_stage(ORG, card['id'], 'Code', '#1962 is a draft', [FACT], mode='recheck')
+    assert out['status'] == 'moved' and 'correction' not in cards.read(ORG, ANA, card['id'])['stage_evidence']
+    # the facts changed (the pull request was closed): a correction
+    closed = {**FACT, 'value': {'state': 'closed', 'head_sha': 'abc1234'}}
+    out = cards.set_stage(ORG, card['id'], 'Idea', '#1962 was closed without a merge', [closed], mode='recheck')
+    assert out['status'] == 'corrected'
+    assert cards.read(ORG, ANA, card['id'])['stage_evidence']['correction'].startswith('was Code, now Idea')
+
+
+def test_reverting_a_stage_set_on_no_reading_is_not_a_correction(cards, store):
+    card = software(cards)
+    cards.set_stage(ORG, card['id'], 'Review', '#1962 is open for review at abc1234', [FACT])
+    cards.set_stage(ORG, card['id'], 'Idea', 'no pull request and nobody holds the card', [], mode='recheck')
+    out = cards.set_stage(ORG, card['id'], None, f'no reading yet for {PR}', [], mode='recheck')
+    assert out['status'] == 'restored'
+    ev = cards.read(ORG, ANA, card['id'])['stage_evidence']
+    assert 'correction' not in ev and ev['restored'].startswith('was Idea, back to Review')
+    assert not revisions(store, card['id'])[-1].reason.startswith('Corrected')

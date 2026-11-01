@@ -219,7 +219,7 @@ def _state(name, value):
     return _enum(name, value, STATES)
 
 
-_pr = {'url': _url, 'number': _int, 'state': _state, 'draft': _bool, 'head_sha': _sha,
+_pr = {'url': _url, 'number': _int, 'state': _state, 'draft': _bool, 'design_doc': _bool, 'head_sha': _sha,
        'merge_commit_sha': _sha, 'merged_at': _iso, 'updated_at': _iso}
 _issue = {'url': _url, 'state': _state, 'state_reason': lambda n, v: _enum(n, v, STATE_REASONS),
           'closed_at': _iso}

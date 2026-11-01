@@ -39,6 +39,7 @@
     "issue": "/repos/{owner}/{repo}/issues/{number}",
     "timeline": "/repos/{owner}/{repo}/issues/{number}/timeline",
     "pull": "/repos/{owner}/{repo}/pulls/{number}",
+    "files": "/repos/{owner}/{repo}/pulls/{number}/files",
     "check_runs": "/repos/{owner}/{repo}/commits/{sha}/check-runs",
     "compare": "/repos/{owner}/{repo}/compare/{base}...{head}",
     "releases": "/repos/{owner}/{repo}/releases",

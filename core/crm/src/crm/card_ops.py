@@ -1348,9 +1348,10 @@ class Cards:
             at = self.clock().isoformat()
             evidence = {'stage': stage, 'because': because, 'facts': facts, 'at': at, 'by': STAGE_RULE_ACTOR,
                         'mode': mode, 'was': was}
-            if mode == 'recheck':
+            corrected = mode == 'recheck' and self._facts_changed(raw.get('StageEvidence'), was, facts)
+            if corrected:
                 evidence['correction'] = f'was {was}, now {stage}, because {because}'
-            reason = (f'Corrected: {evidence["correction"]}' if mode == 'recheck'
+            reason = (f'Corrected: {evidence["correction"]}' if corrected
                       else f'Moved to {stage}: {because}')
             self._rule.on = True
             try:
@@ -1358,7 +1359,22 @@ class Cards:
                             _clip(reason, REASON_MAX), [{'stage': evidence}], None)
             finally:
                 self._rule.on = False
-            return {**base, 'revision': row['revision'] + 1, 'status': 'corrected' if mode == 'recheck' else 'moved'}
+            return {**base, 'revision': row['revision'] + 1, 'status': 'corrected' if corrected else 'moved'}
+
+    @staticmethod
+    def _read_facts(facts):
+        return sorted((f.get('fact'), json.dumps(f.get('value'), sort_keys=True, default=str))
+                      for f in facts or [] if isinstance(f, dict) and f.get('fact') in READ_FACTS)
+
+    def _facts_changed(self, prior, was, facts):
+        """A CORRECTION is the facts read at the card's Source changing under a stage the rule set
+        from them (a pull request closed or reverted, a commit gone from the pin). A stage that rested
+        on no read fact (an absence, a hold, a person's or a backfill's move) is not corrected by the
+        first facts: that is a plain move."""
+        if not isinstance(prior, dict) or prior.get('by') != STAGE_RULE_ACTOR or prior.get('stage') != was:
+            return False
+        before = self._read_facts(prior.get('facts'))
+        return bool(before) and before != self._read_facts(facts)
 
     def _no_reading(self, c, org, row, raw, template, because, facts, mode):
         """``set_stage(stage=None)``: keep the State (or revert one the rule set on an absence)."""

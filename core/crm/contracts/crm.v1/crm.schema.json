@@ -1886,7 +1886,7 @@
                     "object",
                     "null"
                   ],
-                  "description": "The pull request the card is delivered by (delivery reading): url, number, state, draft, head_sha, merge_commit_sha, merged_at, updated_at."
+                  "description": "The pull request the card is delivered by (delivery reading): url, number, state, draft, design_doc (every changed file under docs/adr/ or docs/design/), head_sha, merge_commit_sha, merged_at, updated_at."
                 },
                 "issue": {
                   "type": [
@@ -1970,7 +1970,7 @@
             "object",
             "null"
           ],
-          "description": "A software card only: what set its stage (written by the stage rule only, flows card_stage). stage, because (the fact that moved it), facts (each {fact, value, source, read_at}), at, by (rule:card-stage), mode (event|recheck), was, and correction («was X, now Y, because …») when a scheduled re-check found the card disagreeing with the facts. stage null with no_reading true: the rule has no stage because the card's Source was never read; the State is kept (kept), and restored («was X, back to Y: …») when it reverted a stage the rule had set on that absence. RENDERER CONTRACT: a software card shows its state with because, and a correction as a flagged fact. Null on any other card, or when the viewer may not read it.",
+          "description": "A software card only: what set its stage (written by the stage rule only, flows card_stage). stage, because (the fact that moved it), facts (each {fact, value, source, read_at}), at, by (rule:card-stage), mode (event|recheck), was, and correction («was X, now Y, because …») only when a scheduled re-check found the facts READ at the card's Source changed since the rule last set its stage (a pull request closed or reverted, a commit gone from the pin); a move from a stage that rested on no read fact is a plain move. stage null with no_reading true: the rule has no stage because the card's Source was never read; the State is kept (kept), and restored («was X, back to Y: …») when it reverted a stage the rule had set on that absence. RENDERER CONTRACT: a software card shows its state with because, and a correction as a flagged fact. Null on any other card, or when the viewer may not read it.",
           "properties": {
             "stage": {
               "type": [
