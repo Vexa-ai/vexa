@@ -15,6 +15,7 @@
   POST /flows/{name}/{v}/activate   · POST /flows/{name}/{v}/retire
   GET  /reactions[?status=…]        the operator projection
   POST /reactions/{id}/{retry|resume|cancel}    the signal verbs (audited rows)
+  POST /reactions/{id}/{claim|release}          a hold: `running` under a lease, then back
   GET  /queue/waiting               WHAT IS WAITING FOR ONE PERSON — the subject-scoped pending
                                     reactions, each naming the flow that produced it and its
                                     typed reason (PRD decision 42.2). The subject is the
@@ -95,7 +96,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
-from flows import Registry, SystemClock, admit, cancel, db_from_url, resume, retry, wake  # noqa: E402
+from flows import (Registry, SystemClock, admit, cancel, claim_hold, db_from_url,  # noqa: E402
+                   release_hold, resume, retry, wake)
 from flows import tickets  # noqa: E402 — subject tickets a request presents on its door calls
 from flows_steps import subject_ticket  # noqa: E402 — subject-ticket.v1 (carried, never minted)
 from flows import fact_envelope  # noqa: E402 — event.v2: the sealed fact envelope (D8)
@@ -2105,6 +2107,31 @@ def list_reactions(status: Optional[str] = None, subject: str = "",
         for r in rows]}
 
 
+#: The hold pair (`flows.signals.claim_hold`): someone working OUTSIDE the engine (an agent session
+#: on the obligation a row stands for) marks the row as being worked. It reads `running` for as long
+#: as the lease lives, and returns to the waiting state it came from on release or on expiry.
+HOLD_VERBS = ("claim", "release")
+
+
+def _hold_verb(verb: str, reaction_id: str, subj: str, x_actor: str, body: dict) -> dict:
+    """`claim` body: `holder` (default: the X-Actor header, else the caller's subject), `lease_s`
+    (default 2 h, at most 24 h), `reason`. `release` body: `reason` (the receipt), `holder`
+    (optional: refused when it is not the one holding). Same holder claiming again renews."""
+    holder = str(body.get("holder") or (x_actor if x_actor and x_actor != "api" else subj) or "")
+    reason = body.get("reason")
+    if verb == "claim":
+        out = claim_hold(db, reaction_id, holder, clock,
+                         lease_s=float(body.get("lease_s") or 0), reason=reason)
+        if not out.get("claimed"):
+            raise HTTPException(status_code=409, detail={"claim": False, **out})
+        return {"claim": True, **out}
+    out = release_hold(db, reaction_id, holder, clock,
+                       holder=body.get("holder"), reason=reason)
+    if not out.get("released"):
+        raise HTTPException(status_code=409, detail={"release": False, **out})
+    return {"release": True, **out}
+
+
 @app.post("/reactions/{reaction_id}/{verb}")
 def signal_reaction(reaction_id: str, verb: str, subject: str = "",
                     x_actor: str = Header(default="api"), body: dict = Body(default={}),
@@ -2127,8 +2154,8 @@ def signal_reaction(reaction_id: str, verb: str, subject: str = "",
     always asked. An operator steering a reaction they do not own still can: they say whose it is.
     """
     fns = {"retry": retry, "resume": resume, "cancel": cancel, "wake": wake}
-    if verb not in fns:
-        raise HTTPException(status_code=404, detail="retry | resume | cancel | wake")
+    if verb not in fns and verb not in HOLD_VERBS:
+        raise HTTPException(status_code=404, detail="retry | resume | cancel | wake | claim | release")
     subj = scoped_subject(caller, subject)
     owns = reaction_concerns(db, reaction_id, subject=subj, identity=_as_me(caller))
     if owns == REACTION_MISSING:
@@ -2137,6 +2164,8 @@ def signal_reaction(reaction_id: str, verb: str, subject: str = "",
         # Deliberately NOT 404: the caller named a real id and a real account, and telling them
         # "no such reaction" for something that exists sends them off to re-derive it.
         raise HTTPException(status_code=403, detail="that reaction is not yours")
+    if verb in HOLD_VERBS:
+        return _hold_verb(verb, reaction_id, subj, x_actor, body)
     ok = fns[verb](db, reaction_id, actor=x_actor, clock=clock, reason=body.get("reason"))
     if not ok:
         raise HTTPException(status_code=409, detail=f"{verb} not applicable in current status")

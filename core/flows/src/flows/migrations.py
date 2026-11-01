@@ -43,10 +43,28 @@ SWAP_KEY = (
 )
 
 
+#: `signal.kind` gains `claim` and `release` (a hold taken and given back by someone working
+#: outside the engine, `signals.claim_hold`). Postgres has no `ADD CONSTRAINT IF NOT EXISTS`, so the
+#: CHECK is swapped only while the catalogue's definition still lacks `claim`.
+SIGNAL_KIND_HAS_CLAIM = """SELECT COUNT(*) FROM pg_constraint
+                           WHERE conname = 'signal_kind'
+                             AND pg_get_constraintdef(oid) LIKE '%claim%'"""
+
+SWAP_SIGNAL_KIND = (
+    "ALTER TABLE signal DROP CONSTRAINT IF EXISTS signal_kind",
+    "ALTER TABLE signal ADD CONSTRAINT signal_kind "
+    "CHECK (kind IN ('resume','retry','cancel','wake','claim','release'))",
+)
+
+
 def apply(execute: Callable) -> dict:
     """Bring an existing database up to the models. Returns what it changed (no row data)."""
     for stmt in ADD_COLUMNS:
         execute(stmt)
+    rows = execute(SIGNAL_KIND_HAS_CLAIM)
+    if not (rows and int(rows[0][0] or 0) > 0):
+        for stmt in SWAP_SIGNAL_KIND:
+            execute(stmt)
     rows = execute(KEY_HAS_SCOPE)
     if rows and int(rows[0][0] or 0) > 0:
         return {"key_swapped": False}

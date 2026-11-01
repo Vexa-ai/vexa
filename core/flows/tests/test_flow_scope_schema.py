@@ -45,7 +45,8 @@ def test_a_row_written_without_a_scope_is_the_instances():
 
 
 class _Recorder:
-    """A Postgres stand-in that answers the one catalogue question the migration asks."""
+    """A Postgres stand-in that answers the catalogue questions the migration asks: is the key
+    swapped, and does `signal_kind` already carry `claim` (both yes on a migrated database)."""
 
     def __init__(self, key_has_scope: bool):
         self.key_has_scope = key_has_scope
@@ -53,7 +54,7 @@ class _Recorder:
 
     def __call__(self, sql: str, params=None):
         self.sql.append(" ".join(sql.split()))
-        if "information_schema" in sql:
+        if "information_schema" in sql or "pg_constraint" in sql:
             return [(1,)] if self.key_has_scope else [(0,)]
         return []
 
