@@ -58,6 +58,7 @@ from . import provider_subjects as provider_subjects_mod
 from . import signin_links as signin_links_mod
 from . import validate as validate_mod
 from . import transcription_language as transcription_language_mod
+from . import admin_read as admin_read_mod
 from .platform_settings import (MODELS_FIELDS, TRANSCRIPTION_FIELDS, apply_config_update,
                                 read_platform_setting, validate_config_fields)
 from .internal_tier import check_internal, check_internal_no_dev_bypass
@@ -1299,6 +1300,10 @@ def create_app() -> FastAPI:
     app.include_router(profile_doors_mod.build_router(get_current_person, get_current_person_for_update))
     profile_doors_mod.gate(app)
 
+    # The admin READ surface (`admin_read.py`): four GETs behind a key that opens nothing else, and
+    # every write verb under its prefix refused whoever asks.
+    app.include_router(admin_read_mod.write_refusal)
+    app.include_router(admin_read_mod.build_router())
     app.include_router(validate_mod.router)  # POST /internal/validate — the gateway's authz oracle
     app.include_router(signin_links_mod.router)  # POST /internal/signin-links/redeem — a link signs in once
 
