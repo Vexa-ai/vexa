@@ -79,7 +79,8 @@ def test_connections_lists_what_is_declared_and_never_a_secret(client, tmp_path,
         "connections": {"github": {"transport": "http_json", "base_url": "https://api.github.com", "auth": "bearer",
                                    "secret_env": "GH_T"},
                         "pub": {"transport": "http_json", "base_url": "https://p", "auth": "none"}},
-        "readings": {"github/pulls": {"path": "/p", "key": "id", "event_type": "business.reading"}}}))
+        "readings": {"github/pulls": {"path": "/p", "key": "id", "event_type": "business.reading"}},
+        "delivery": {"connection": "github", "pull": "/repos/{owner}/{repo}/pulls/{number}"}}))
     monkeypatch.setenv("VEXA_FLOWS_CONNECTIONS_FILE", str(f))
     monkeypatch.setenv("GH_T", "s3cr3t-value")
     monkeypatch.setattr(rk.flows_config, "get", lambda k, d=None: str(f) if k == "VEXA_FLOWS_CONNECTIONS_FILE" else d)
@@ -87,7 +88,9 @@ def test_connections_lists_what_is_declared_and_never_a_secret(client, tmp_path,
     assert r.status_code == 200, r.text
     body = r.json()
     assert {c["name"]: c["secret_set"] for c in body["connections"]} == {"github": True, "pub": None}
-    assert body["readings"] == [{"id": "github/pulls", "connection": "github", "event_type": "business.reading"}]
+    assert body["readings"] == [
+        {"id": "github/pulls", "connection": "github", "event_type": "business.reading", "run_by": "sensor"},
+        {"id": "github/delivery", "connection": "github", "event_type": None, "run_by": "crm_card_stage_recheck"}]
     assert "s3cr3t-value" not in r.text and "GH_T" not in r.text
     assert client.get("/connections").status_code == 401
 

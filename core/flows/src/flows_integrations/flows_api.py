@@ -1963,8 +1963,15 @@ def connections_list():
     conns = [{"name": n, "transport": c.get("transport"), "auth": c.get("auth", "none"),
               "secret_set": rk.secret_set(c) if c.get("auth", "none") != "none" else None}
              for n, c in sorted((cfg.get("connections") or {}).items())]
-    reads = [{"id": rid, "connection": rid.split("/", 1)[0], "event_type": r.get("event_type")}
+    reads = [{"id": rid, "connection": rid.split("/", 1)[0], "event_type": r.get("event_type"), "run_by": "sensor"}
              for rid, r in sorted((cfg.get("readings") or {}).items())]
+    # the stage re-check's per-card read (`delivery`, flows_defs/card_stage.read_delivery) is a reading too: it is
+    # declared in the same file and run by a schedule flow, not a sensor, and is listed so that nothing reads unlisted
+    spec = cfg.get("delivery") or {}
+    if spec.get("connection"):
+        from flows_defs.crm import RECHECK_FLOW
+        reads.append({"id": f"{spec['connection']}/delivery", "connection": spec["connection"], "event_type": None,
+                      "run_by": RECHECK_FLOW})
     return {"connections": conns, "readings": reads}
 
 
