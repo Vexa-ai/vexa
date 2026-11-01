@@ -43,7 +43,7 @@ const TAPE = arg('tape');
 const TURNS = arg('turns');
 const TURN_SOURCE = (arg('turn-source') ?? (TURNS ? 'recorded' : 'pyannote')) as 'recorded' | 'pyannote' | 'csrc' | 'auto';
 if (!TAPE || (TURN_SOURCE === 'recorded' && !TURNS)) {
-  console.error('usage: tsx src/tape-replay.ts --tape <jsonl> [--turns <psv> | --turn-source pyannote|csrc|auto] [--csrc <jsonl>] [--captions <jsonl>] [--gt <json>] [--cc-oracle]');
+  console.error('usage: tsx src/tape-replay.ts --tape <jsonl> [--turns <psv> | --turn-source pyannote|csrc|auto] [--csrc <jsonl>] [--captions <jsonl>] [--gt <json>] [--cc-oracle] [--hint-cuts [--hint-cut-lag-ms <n>]]');
   process.exit(2);
 }
 
@@ -326,6 +326,9 @@ async function main(): Promise<void> {
     // (m29 carries 201.6s of audio across a 913s meeting) — so a default 20s of audio can be
     // minutes of meeting. Overridable for that reason.
     ...(arg('grace-ms') ? { turnSourceGraceMs: Number(arg('grace-ms')) } : {}),
+    // --hint-cuts: the platform's start-hints cut turns (what the bot runs on Jitsi).
+    ...(process.argv.includes('--hint-cuts') ? { hintCutsTurns: true } : {}),
+    ...(arg('hint-cut-lag-ms') ? { hintCutLagMs: Number(arg('hint-cut-lag-ms')) } : {}),
     // The bot is a participant in every meeting it records; without its own name the namer cannot
     // tell it from a person in the roster. Defaults to the name our bots actually join under.
     selfName: arg('self-name') ?? 'Vexa',
@@ -431,7 +434,7 @@ async function main(): Promise<void> {
   console.log(`  renames issued: ${renames.length}`);
   if (client) console.log(`  REAL STT: ${sttCalls} call(s), ${sttFailures} failure(s)`);
   const st = tc.stats();
-  console.log(`  spine at end: ${st.spine}; contested turns: ${st.contested}; turns: ${st.turns}`);
+  console.log(`  spine at end: ${st.spine}; contested turns: ${st.contested}; turns: ${st.turns}; hint cuts: ${st.hintCuts}; fragments named by support: ${st.fragmentsNamedBySupport}`);
   console.log(`  turn sources: ${JSON.stringify(st.sources)}`);
   console.log(`  tracks: ${st.tracks.named}/${st.tracks.tracks} named — ${JSON.stringify(st.tracks.how)}`);
   console.log(`  track evidence: ${JSON.stringify(st.tracks.evidence)}; roster: ${JSON.stringify(st.tracks.roster)}`);

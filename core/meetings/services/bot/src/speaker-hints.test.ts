@@ -13,6 +13,7 @@
  *     and teardown all cross the injected CSRC/GMeet transcriber seam.
  * Run: npx tsx src/speaker-hints.test.ts
  */
+import { hintCutsTurnsFor } from './config.js';
 import { ChunkedTranscriber, type BoundarySource, type TeamsCsrcGmeetPipelineOptions } from '@vexa/mixed-pipeline';
 import { createBotPipeline, hintKindForPlatform, type BotPipeline } from './pipeline.js';
 import { makeSpeakerHintSink } from './capture-bridge.js';
@@ -110,6 +111,17 @@ async function main(): Promise<void> {
   }
 
   // ── C1: counters — received per hint; matched/missed via onHintOutcome ──
+  // ── hint cuts: on where the hint is the server's voice verdict (Jitsi), off everywhere else ──
+  {
+    const spy = mixedSpyFactory();
+    const pipe = createBotPipeline(inv('jitsi'), nullSink, { createMixedTranscriber: spy.factory });
+    await pipe.start();
+    const got = (spy.getCb() as any)?.hintCutsTurns;
+    await pipe.stop();
+    check("jitsi: mixed-lane hintCutsTurns = true", got === true, String(got));
+    for (const p of ['teams', 'zoom', 'google_meet'] as const) check(`${p}: hintCutsTurnsFor = false`, hintCutsTurnsFor(p) === false);
+  }
+
   console.log('C1 — hint-hop counters');
   {
     const spy = teamsSpyFactory();
