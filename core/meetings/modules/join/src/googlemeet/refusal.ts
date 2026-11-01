@@ -16,9 +16,11 @@
  *
  * The 403 is FLAKY on Google's side, not deterministic: on the harness (bbb, our own Meet rooms,
  * 29 Oct 16:18-16:52Z) 9 of 22 knocks that reached the click were refused, and every refused bot got
- * through on its second or third knock (same room, same browser). So the bot re-knocks a bounded
- * number of times, and when Meet keeps refusing it fails fast with a typed `denial` whose message
- * names the refusal — never a lobby wait, never "nobody admitted the bot".
+ * through on its second or third knock (same room, same browser). In prod (31 Oct-1 Nov) refusals came
+ * in runs: three knocks seconds apart were all refused, while a fresh bot a minute later got in. So the
+ * bot re-knocks a bounded number of times with growing waits and a fresh guest state, and when Meet
+ * keeps refusing it fails with a typed `denial` whose message names the refusal — never a lobby wait,
+ * never "nobody admitted the bot".
  */
 import { Page } from "playwright";
 import { log } from "../_host";
@@ -30,7 +32,52 @@ export const GOOGLE_JOIN_REFUSED = "google_meet_join_refused";
 
 /** Knocks per join, the first included. Meet's refusal is flaky; a meeting that refuses every one of
  *  these is reported as refused rather than knocked on until the lobby budget runs out. */
-export const GOOGLE_JOIN_MAX_KNOCKS = 3;
+export const GOOGLE_JOIN_MAX_KNOCKS = 5;
+
+/**
+ * Wait before knock 2, 3, 4, 5. Prod, 31 Oct-1 Nov 2026: 23 of 90 Meet runs were refused on all 3 knocks
+ * taken ~5 s apart on the same page, while a fresh bot a minute or more later usually got in (3 of 4
+ * meetings on 1 Nov). Knocking again within seconds meets the same refusal; time and a fresh Google
+ * state are what changed. 15 + 30 + 60 + 120 s = 225 s of waiting, and the lobby budget still bounds
+ * every wait.
+ */
+export const GOOGLE_JOIN_REKNOCK_BACKOFF_MS: readonly number[] = [15_000, 30_000, 60_000, 120_000];
+
+/** The origins whose cookies and storage make up an anonymous guest's Google identity. */
+const GOOGLE_ORIGINS = ["https://meet.google.com", "https://accounts.google.com", "https://www.google.com"];
+
+/**
+ * Drop the anonymous guest's Google state before a re-knock, so the next knock reaches Meet as a new
+ * guest would: the context's cookies, plus every storage kind of the Google origins (Chromium, via CDP).
+ * Never called for a signed-in bot, whose persistent profile is its identity. Best effort: a wipe that
+ * fails leaves the knock as it was before this change, so it is logged, never thrown.
+ */
+export async function freshenGoogleGuestState(page: Page): Promise<void> {
+  try {
+    await page.context().clearCookies();
+  } catch (e) {
+    log(`⚠️ could not clear cookies before the re-knock: ${(e as Error)?.message ?? e}`);
+  }
+  try {
+    const cdp = await page.context().newCDPSession(page);
+    for (const origin of GOOGLE_ORIGINS) {
+      await cdp.send("Storage.clearDataForOrigin", { origin, storageTypes: "all" }).catch(() => {});
+    }
+    await cdp.detach().catch(() => {});
+  } catch (e) {
+    log(`⚠️ could not clear Google site storage before the re-knock: ${(e as Error)?.message ?? e}`);
+  }
+}
+
+export interface KnockOptions {
+  /** Wipe the guest's Google state between knocks (anonymous bots only). */
+  freshen?: boolean;
+  /** Injected for tests. */
+  sleep?: (ms: number) => Promise<void>;
+  freshenState?: (page: Page) => Promise<void>;
+}
+
+const sleepFor = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 // The two calls whose 403 is Meet refusing this join. Group 1 names the call in the evidence.
 const REFUSING_RPC = /(MeetingSpaceService\/ResolveMeetingSpace|MeetingDeviceService\/CreateMeetingDevice)/;
@@ -105,16 +152,20 @@ export async function throwIfGoogleJoinRefused(page: Page, context: string): Pro
 
 /**
  * Run one knock (`knock` = join click + admission wait) and knock again while Meet refuses it, up to
- * GOOGLE_JOIN_MAX_KNOCKS. Any other outcome — admitted, denied by the host, a lobby timeout, a crash
- * — ends the loop as it is. `knock` receives the lobby budget still left, so re-knocks never extend
- * the wait the control plane issued.
+ * GOOGLE_JOIN_MAX_KNOCKS, waiting GOOGLE_JOIN_REKNOCK_BACKOFF_MS before each re-knock and, for an
+ * anonymous bot, starting it from a fresh Google state. Any other outcome — admitted, denied by the
+ * host, a lobby timeout, a crash — ends the loop as it is. `knock` receives the lobby budget still
+ * left, so neither the waits nor the re-knocks extend the wait the control plane issued.
  */
 export async function knockUntilGoogleAccepts(
   page: Page,
   timeoutMs: number,
   knock: (remainingMs: number) => Promise<boolean>,
   now: () => number = Date.now,
+  opts: KnockOptions = {},
 ): Promise<boolean> {
+  const sleep = opts.sleep ?? sleepFor;
+  const freshenState = opts.freshenState ?? freshenGoogleGuestState;
   const deadline = now() + timeoutMs;
   for (let attempt = 1; ; attempt++) {
     resetGoogleJoinRefusal(page);
@@ -122,10 +173,14 @@ export async function knockUntilGoogleAccepts(
       return await knock(Math.max(deadline - now(), 0));
     } catch (e) {
       if (!(e instanceof GoogleJoinRefusedError)) throw e;
-      if (attempt >= GOOGLE_JOIN_MAX_KNOCKS || deadline - now() <= 0) {
+      const wait = GOOGLE_JOIN_REKNOCK_BACKOFF_MS[Math.min(attempt - 1, GOOGLE_JOIN_REKNOCK_BACKOFF_MS.length - 1)];
+      // A wait that would use up the budget leaves no time to knock: report the refusal now.
+      if (attempt >= GOOGLE_JOIN_MAX_KNOCKS || deadline - now() <= wait) {
         throw new GoogleJoinRefusedError(e.evidence, attempt);
       }
-      log(`🔁 Google Meet refused knock ${attempt} of ${GOOGLE_JOIN_MAX_KNOCKS} (${e.evidence}); knocking again`);
+      log(`🔁 Google Meet refused knock ${attempt} of ${GOOGLE_JOIN_MAX_KNOCKS} (${e.evidence}); knocking again in ${Math.round(wait / 1000)} s${opts.freshen ? " as a fresh guest" : ""}`);
+      await sleep(wait);
+      if (opts.freshen) await freshenState(page);
     }
   }
 }
