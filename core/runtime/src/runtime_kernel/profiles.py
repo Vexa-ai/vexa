@@ -29,6 +29,8 @@ from .pod_scheduling import PodScheduling
 from .workload_env import CODEX_HOME_ENV, WORKER_CODEX_HOME, WORKER_FORWARD_ENV
 
 
+#: The env var a meeting bot reads the node it runs on from (k8s backend, downward API).
+NODE_NAME_ENV = "VEXA_NODE_NAME"
 #: The label a workload's class rides on, on every substrate (container labels, Pod labels). The
 #: chart's NetworkPolicies select on it. Its values are profile data (``default_registry``) — never
 #: taken from the caller's spec or workload id.
@@ -87,6 +89,10 @@ class Runnable:
     #: Where the k8s backend places this workload's Pods (node selector, tolerations, priority
     #: class, image pull secrets) — operator configuration read at boot, never from a spec.
     scheduling: PodScheduling = field(default_factory=PodScheduling)
+    #: The env var the k8s backend fills with the node the Pod runs on (downward API
+    #: ``spec.nodeName``), so the workload can report it; ``None`` ⇒ none. A meeting bot reports it on
+    #: a join failure, and meeting-api places the next attempt on another node.
+    node_name_env: Optional[str] = None
     #: The credential files the runtime hands this workload (see :class:`CredentialFile`).
     credential_files: tuple[CredentialFile, ...] = ()
     #: Settings a container workload that receives credentials is given, unless its spec sets them
@@ -379,6 +385,8 @@ def default_registry() -> ProfileRegistry:
                     # A meeting bot joins DOCKER_NETWORK (meeting-api for its callbacks and uploads,
                     # redis for its streams) and is given no model credential.
                     labels={CLASS_LABEL: "bot"},
+                    # The node an attempt ran on, for the join retry's placement (k8s only).
+                    node_name_env=NODE_NAME_ENV,
                     # As a process-backend child it joins no host group: it brings up its own
                     # display and audio server (deploy/lite/bin/vexa-bot-launch). It may create user
                     # namespaces, which its browser's sandbox needs; no other child may.
