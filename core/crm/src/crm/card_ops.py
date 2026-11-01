@@ -720,6 +720,47 @@ class Cards:
             row = self._card_row(c, org, card)
             return self.view(c, org, policy, row, activity=True)
 
+    #: How many cards one plan may hold (a guard against a runaway graph, not a business rule).
+    PLAN_MAX = 500
+
+    def plan(self, org, actor, destination):
+        """A plan (founder, 1 Nov 2026): a DESTINATION card (``Destination`` set by the founder) and every card it
+        waits on, transitively through ``Chain.blocked_by``. Not stored: computed on every read. Each node carries
+        its revision, so a reader can trace exactly what it saw. A link to a card that does not exist (deleted, or
+        never written) is a node with ``missing: true``. A card that is not a destination is refused."""
+        caller = as_caller(actor)
+        with self.engine.connect() as c:
+            policy = self.store._policy(c, org, caller)
+            head = self._card_row(c, org, destination)
+            if not (head['fields'] or {}).get('Destination'):
+                raise CRMError('A plan starts at a destination card (Destination is set by the founder)')
+
+            def node(row):
+                f = self.store._visible(policy, row)['fields']
+                return {'id': row['id'], 'title': f.get('Title'), 'state': f.get('State'), 'kind': f.get('Kind'),
+                        'source': f.get('Source'), 'revision': row['revision']}
+
+            nodes, edges, seen, todo = [], [], {head['id']}, [head]
+            while todo:
+                row = todo.pop(0)
+                chain = (row['fields'] or {}).get('Chain')
+                for up in sorted((chain or {}).get('blocked_by') or []) if isinstance(chain, dict) else []:
+                    edges.append({'card': row['id'], 'waits_on': up})
+                    if up in seen:
+                        continue
+                    seen.add(up)
+                    if len(seen) > self.PLAN_MAX:
+                        raise CRMError(f'A plan holds at most {self.PLAN_MAX} cards')
+                    try:
+                        other = self._card_row(c, org, up)
+                    except NotFound:
+                        nodes.append({'id': up, 'missing': True})
+                        continue
+                    nodes.append(node(other))
+                    todo.append(other)
+            return {'plan': {'destination': node(head), 'nodes': nodes, 'edges': edges,
+                             'nodes_total': len(nodes), 'edges_total': len(edges)}}
+
     @staticmethod
     def _require_session(caller):
         """D13: decisions and the seen relation take the terminal's session credential — never an API

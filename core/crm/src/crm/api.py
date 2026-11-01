@@ -222,6 +222,8 @@ class CardUpdatePropose(Body):
     reason: str = Field(min_length=1, max_length=500, description='One line the person reads: why this change.')
 class CardRead(Body):
     card: str = Field(min_length=1, max_length=128)
+class CardsPlan(Body):
+    destination: str = Field(min_length=1, max_length=128)
 class CardCreate(Body):
     title: str = Field(min_length=1, max_length=200)
     workspace: str | None = Field(default=None, max_length=128)
@@ -616,6 +618,12 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
         privacy.hold(request, caller, surface='card_proposal')
         return audited('card.update.propose', caller, body.card, lambda: cards.update_propose(
             caller.org, caller, body.card, body.expected_revision, body.fields, body.face, body.transition, body.reason))
+
+    @app.post('/cards/plan')
+    def cards_plan(body: CardsPlan, caller=Depends(person)):
+        """A plan: the destination card and every card it waits on (Chain.blocked_by, transitively), with
+        their revisions and the waits-on edges. Computed on read; refuses a card that is not a destination."""
+        return audited('cards.plan', caller, body.destination, lambda: cards.plan(caller.org, caller, body.destination))
 
     @app.post('/card/read')
     def card_read(body: CardRead, caller=Depends(person)):

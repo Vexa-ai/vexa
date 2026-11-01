@@ -280,3 +280,37 @@ def test_history_names_who_wrote_each_revision(cards, store):
 def fields_of_rev(store, rid):
     with store.engine.connect() as c:
         return store._row(c, ORG, rid)['revision']
+
+
+
+# ── the plan: a destination and everything it waits on, computed on read ─────────────────────
+
+def test_a_plan_is_the_destination_and_what_it_waits_on(cards, store):
+    a = plain(cards)
+    b = cards.create(ORG, CEO, title='B', workspace='sales', fields={'Chain': {'blocked_by': [a['id']]}})['card']
+    other = plain(cards)
+    d = cards.create(ORG, THE_FOUNDER, title='Goal', workspace='sales',
+                     fields={'Chain': {'blocked_by': [b['id'], 'gone-card']}})['card']
+    mark_destination(store, d['id'])
+    p = cards.plan(ORG, CEO, d['id'])['plan']
+    assert p['destination']['id'] == d['id'] and p['destination']['revision'] >= 1
+    got = {n['id']: n for n in p['nodes']}
+    assert set(got) == {a['id'], b['id'], 'gone-card'} and other['id'] not in got
+    assert got['gone-card'] == {'id': 'gone-card', 'missing': True}
+    assert got[a['id']]['title'] == 'Reply to the venue' and isinstance(got[a['id']]['revision'], int)
+    assert {(e['card'], e['waits_on']) for e in p['edges']} == {
+        (d['id'], b['id']), (d['id'], 'gone-card'), (b['id'], a['id'])}
+    assert (p['nodes_total'], p['edges_total']) == (3, 3)
+
+
+def test_a_plan_starts_only_at_a_destination(cards):
+    with pytest.raises(CRMError):
+        cards.plan(ORG, CEO, plain(cards)['id'])
+
+
+def mark_destination(store, rid):
+    """As the founder's /change writes it (the card verbs do not take Destination)."""
+    with store.begin() as c:
+        row = store._row(c, ORG, rid)
+        c.execute(s.records.update().where(s.records.c.org_id == ORG, s.records.c.id == rid)
+                  .values(fields={**row['fields'], 'Destination': True}))
