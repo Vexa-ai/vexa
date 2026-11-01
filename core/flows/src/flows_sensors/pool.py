@@ -203,7 +203,8 @@ def health(db, scope: str, name: str = "") -> list[dict]:
             last = json.loads(r[-1] or "[]")
         except ValueError:
             last = []
-        out.append({"name": s.name, "kind": s.kind, "status": s.status, "mode": s.mode,
+        out.append({"name": s.name, "kind": s.kind, "connection": s.connection_id,
+                    "status": s.status, "mode": s.mode,
                     "filter": s.filter, "interval_s": s.interval_s, "version": s.version,
                     "tested": s.tested_version == s.version, "failures": s.failures,
                     "reason": s.reason, "last_tick_at": s.last_tick_at,

@@ -2072,6 +2072,64 @@ def flow_runs(subject: str = "", limit: int = 50,
     return {"subject": uid, "runs": runs}
 
 
+#: The open states of a reaction (the queue), and the closed ones a person ends it in.
+OPEN_STATES = ("admitted", "retrying", "running", "blocked")
+CLOSED_STATES = ("done", "cancelled")
+
+
+@app.get("/flows/{name}/reactions", dependencies=[Depends(auth)])
+def instance_flow_reactions(name: str, status: str = "open", since: float = 0.0, limit: int = 500):
+    """THE REACTIONS OF ONE INSTANCE FLOW, for the operator: what a board over the instance's own
+    queue reads, so it never needs a database role of its own.
+
+    `status`: `open` (admitted · retrying · running · blocked), `closed` (done · cancelled), or one
+    state. `since`: only reactions updated at or after this epoch. Each reaction carries its
+    `refs` (the subject refs it was admitted with), its `lease_until`, the live `hold` on it
+    (`flows.signals.hold_of`: holder, claimed_at, lease_until, or null), `hold_moved_at` (the last
+    claim or release signal), and for a closed one its `close`: who ended it, with what receipt,
+    when (done: the confirmed receipt; cancelled: the cancel signal).
+
+    A person's flow (`user:<uid>/…`) is never read here: its runs are `GET /flows/runs`."""
+    from flows.signals import hold_of
+    if name.startswith("user:"):
+        raise HTTPException(status_code=403, detail={"refused": "not_an_instance_flow", "flow": name})
+    states = {"open": OPEN_STATES, "closed": CLOSED_STATES}.get(status)
+    if states is None:
+        if status not in OPEN_STATES + CLOSED_STATES + ("failed",):
+            raise HTTPException(status_code=422, detail={"refused": "unknown_status", "status": status})
+        states = (status,)
+    limit = max(1, min(int(limit or 500), 5000))
+    marks = ", ".join(f":s{i}" for i in range(len(states)))
+    rows = db.execute(
+        "SELECT reaction_id, event_type, subject_refs, status, step, reason, next_run_at, created_at, "
+        f"updated_at, lease_until FROM reaction WHERE flow = :f AND status IN ({marks}) "
+        "AND updated_at >= :since ORDER BY created_at LIMIT :lim",
+        {"f": name, "since": float(since or 0), "lim": limit,
+         **{f"s{i}": s for i, s in enumerate(states)}})
+    out = []
+    for rid, et, refs, st, step, reason, nxt, created, updated, lease in rows:
+        moved = db.execute("SELECT max(created_at) FROM signal WHERE reaction_id = :r "
+                           "AND kind IN ('claim', 'release')", {"r": rid})
+        r = {"id": rid, "event_type": et, "refs": _json_or_none(refs) or {}, "status": st,
+             "step": step, "reason": reason, "next_run_at": nxt, "created_at": created,
+             "updated_at": updated, "lease_until": lease,
+             "hold": hold_of(db, rid) if st == "running" else None,
+             "hold_moved_at": moved[0][0] if moved else None, "close": None}
+        if st == "done":
+            rec = db.execute("SELECT result, confirmed_at FROM effect_receipt WHERE reaction_id = :r "
+                             "ORDER BY attempted_at DESC LIMIT 1", {"r": rid})
+            res = (_json_or_none(rec[0][0]) or {}) if rec else {}
+            r["close"] = {"verb": "done", "by": res.get("resumed_by"), "receipt": res.get("reason"),
+                          "at": rec[0][1] if rec else updated}
+        elif st == "cancelled":
+            sig = db.execute("SELECT actor, reason, created_at FROM signal WHERE reaction_id = :r "
+                             "AND kind = 'cancel' ORDER BY created_at DESC LIMIT 1", {"r": rid})
+            r["close"] = {"verb": "cancel", "by": sig[0][0] if sig else None,
+                          "receipt": sig[0][1] if sig else None, "at": sig[0][2] if sig else updated}
+        out.append(r)
+    return {"flow": name, "status": status, "since": since, "reactions": out}
+
+
 def _json_or_none(text):
     try:
         return json.loads(text) if text else None
