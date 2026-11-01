@@ -92,7 +92,8 @@
       ],
       "targets": [
         "compose",
-        "helm"
+        "helm",
+        "lite"
       ]
     },
     {
@@ -102,7 +103,8 @@
       "description": "flows-api's base URL (the name flows' mcp.tools.v1 manifest binds for the edge, base_url_env), for the door's inbound leg (/to-flows/*): the signals service's wake and the terminal's sign-in mail present X-Internal-Secret to the door, never to flows, and the door forwards the allow-listed calls (FLOWS_INBOUND) with the flows key.",
       "targets": [
         "compose",
-        "helm"
+        "helm",
+        "lite"
       ]
     },
     {

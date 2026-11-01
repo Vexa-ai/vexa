@@ -274,13 +274,14 @@ else
   echo "  FAIL: agent-api did not render type: Recreate under default RWO workspace"; fail=1
 fi
 # The other API/UI Deployments keep the shared zero-downtime RollingUpdate — redis + agent-api are
-# the only two single-PVC opt-outs, so exactly 7 RollingUpdate blocks remain (gateway, admin-api,
-# meeting-api, runtime, terminal, mcp, model-proxy).
+# the only two single-PVC opt-outs, so exactly 9 RollingUpdate blocks remain (gateway, admin-api,
+# meeting-api, runtime, terminal, mcp, model-proxy, and flows-api + flows-worker: flows is on by
+# default since ADR-0052 §3).
 roll_count="$(grep -cE '^    type: RollingUpdate' <<< "$RENDER" || true)"
-if [ "$roll_count" -eq 7 ]; then
-  echo "  OK: 7 non-PVC Deployments keep RollingUpdate (agent-api + redis excepted)"
+if [ "$roll_count" -eq 9 ]; then
+  echo "  OK: 9 non-PVC Deployments keep RollingUpdate (agent-api + redis excepted)"
 else
-  echo "  FAIL: expected 7 RollingUpdate Deployments, got $roll_count"; fail=1
+  echo "  FAIL: expected 9 RollingUpdate Deployments, got $roll_count"; fail=1
 fi
 # A ReadWriteMany workspace lifts the single-mount constraint → agent-api takes the shared rolling
 # strategy back (conditional is on accessMode, not hardcoded).
@@ -924,7 +925,9 @@ fi
 identity_pair_ok() {  # identity_pair_ok <render>
   local priv pub derived tmp
   tmp="$(mktemp -d)"
-  priv="$(awk '/^  signing-key.pem: /{print $2}' <<< "$1")"
+  # the identity Secret's key: the first `signing-key.pem` (the subject-ticket Secrets that render with
+  # flows, on by default since ADR-0052, carry one each)
+  priv="$(awk '/^  signing-key.pem: /{print $2; exit}' <<< "$1")"
   pub="$(awk '/^  public-key.pem: \|/{f=1;next} f&&/^    /{sub(/^    /,"");print;next} f{exit}' <<< "$1")"
   [ -n "$priv" ] && [ -n "$pub" ] || { rm -rf "$tmp"; return 1; }
   printf '%s' "$priv" | base64 -d > "$tmp/k" 2>/dev/null || printf '%s' "$priv" | base64 -D > "$tmp/k"
@@ -942,7 +945,7 @@ if command -v openssl >/dev/null 2>&1; then
   OWN_KEY="$(openssl genpkey -algorithm ed25519 2>/dev/null)"
   OWN="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set-string identity.signingKey="$OWN_KEY")"
   if identity_pair_ok "$OWN" \
-     && [ "$(awk '/^  signing-key.pem: /{print $2}' <<< "$OWN")" = "$(printf '%s' "$OWN_KEY" | base64 | tr -d '\n')" ]; then
+     && [ "$(awk '/^  signing-key.pem: /{print $2; exit}' <<< "$OWN")" = "$(printf '%s' "$OWN_KEY" | base64 | tr -d '\n')" ]; then
     echo "  OK: identity.signingKey is used as given and its public half derived"
   else
     echo "  FAIL: identity.signingKey wiring"; fail=1
@@ -1822,7 +1825,7 @@ else echo "  FAIL: the gateway or the MCP does not name the CRM's door"; fail=1;
 if ! helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set crm.enabled=true >/dev/null 2>&1; then
   echo "  OK: rendering refuses a CRM with no organisation"
 else echo "  FAIL: the CRM renders without crm.orgId"; fail=1; fi
-crm_np="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" --set networkPolicy.enabled=true --show-only templates/networkpolicy-namespace.yaml)"
+crm_np="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" --set flows.enabled=false --set networkPolicy.enabled=true --show-only templates/networkpolicy-namespace.yaml)"
 if grep -q 'values: \[admin-api, meeting-api, agent-api, pgbouncer, migrations, crm-api\]' <<< "$crm_np" \
    && grep -q 'name: vexa-vexa-crm-api-ingress' <<< "$crm_np"; then
   echo "  OK: with the CRM on, crm-api reaches Postgres and the chart's pods reach crm-api"
@@ -1879,9 +1882,9 @@ if command -v openssl >/dev/null 2>&1; then
   tb "factSeal.crm.existingSecret: refused without publicKey; with it no generated Secret, the ConfigMap carries the given key, crm-outbox mounts the named Secret" 'grep -q "factSeal.crm.publicKey is required with factSeal.crm.existingSecret" <<< "$no_pub" && [ -z "$(doc Secret vexa-vexa-fact-seal-crm-key "$ext_seal")" ] && [ "$(crm_pem "$(doc ConfigMap vexa-vexa-fact-verify-keys "$ext_seal")")" = "$OWN_PUB" ] && grep -q "secretName: my-seal" <<< "$(doc Deployment vexa-vexa-crm-outbox "$ext_seal")"'
   unset NOT_ED OWN_PUB
 fi
-crm_only="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}")"
+crm_only="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" --set flows.enabled=false)"
 tb "with crm off (or flows off) neither fact-seal object renders" '! grep -qE "vexa-vexa-fact-(seal-crm-key|verify-keys)" <<< "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --show-only templates/fact-seal-keys.yaml 2>&1 || true)" && ! grep -qE "^  name: vexa-vexa-fact-(seal-crm-key|verify-keys)$" <<< "$crm_only"'
-tb "with flows off there is no crm outbox" '! grep -q "vexa-vexa-crm-outbox" <<< "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}")"'
+tb "with flows off there is no crm outbox" '! grep -q "vexa-vexa-crm-outbox" <<< "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" --set flows.enabled=false)"'
 crm_np_fl="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" --set flows.enabled=true --set networkPolicy.enabled=true --show-only templates/networkpolicy-namespace.yaml)"
 tb "with the CRM and flows on, the crm outbox reaches Postgres" 'grep -q "values: \[admin-api, meeting-api, agent-api, pgbouncer, migrations, crm-api, crm-outbox\]" <<< "$crm_np_fl"'
 
@@ -1935,12 +1938,30 @@ tb "the sign-in browser's extra hosts are empty by default and reach meeting-api
   '[ "$(envval VEXA_BOT_SIGNIN_EXTRA_HOSTS "$sx_def")" = "\"\"" ] && [ "$(envval VEXA_BOT_SIGNIN_EXTRA_HOSTS "$sx_set")" = "\"adfs.bank.example,login.bank.okta.com\"" ]'
 refuse "a wildcard sign-in host" "wildcards are not accepted" -f "$CHART/values-test.yaml" --set credentialBroker.botSigninExtraHosts='adfs.bank.example\,*.okta.bank.example'
 
+# ADR-0052 §3 — FLOWS IN EVERY PROFILE: booked bots start from its clock. The chart's own defaults
+# (no values file at all) render flows-api and flows-worker, the bank profile's values
+# (values-openshift.yaml then deploy/bank-profile/values-bank.yaml) render them too, and `false` is
+# still honoured.
+# the least a render needs that the chart cannot default (an S3 bucket, the internal-tier secret)
+S3_MIN=(--set storage.s3.endpoint=https://s3.example.test --set storage.s3.bucket=b --set storage.s3.existingSecret=s3 \
+  --set secrets.internalApiSecret=render-only)
+fl_bare="$(helm template vexa "$CHART" -n vexa "${S3_MIN[@]}" 2>&1 || true)"
+tb "Flows in every profile: the chart's defaults render flows-api and flows-worker" \
+  '[ -n "$(doc Deployment vexa-vexa-flows-api "$fl_bare")" ] && [ -n "$(doc Deployment vexa-vexa-flows-worker "$fl_bare")" ]'
+fl_bank="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-openshift.yaml" -f "$HELM_DIR/../bank-profile/values-bank.yaml" \
+  --set secrets.internalApiSecret=render-only 2>&1 || true)"
+tb "Flows in every profile: the bank profile renders flows-api and flows-worker" \
+  '[ -n "$(doc Deployment vexa-flows-api "$fl_bank")" ] && [ -n "$(doc Deployment vexa-flows-worker "$fl_bank")" ]'   # fullnameOverride: vexa
+tb "flows.enabled=false still renders no flows Deployment" \
+  '[ -z "$(doc Deployment vexa-vexa-flows-api "$(helm template vexa "$CHART" -n vexa "${S3_MIN[@]}" --set flows.enabled=false)")" ]'
+
 # A3: meeting-api and admin-api tell flows their facts on Helm as they do under compose — the in-chart
 # flows-api and its operator key, only when flows is on. Without flows they hold no flows edge at all.
 fl_on="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true)"
+fl_off="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=false)"
 fl_url="\"http://vexa-vexa-flows-api:18200\""
 for svc in meeting-api admin-api; do
-  d_on="$(doc Deployment "vexa-vexa-$svc" "$fl_on")"; d_off="$(doc Deployment "vexa-vexa-$svc" "$compat_def")"
+  d_on="$(doc Deployment "vexa-vexa-$svc" "$fl_on")"; d_off="$(doc Deployment "vexa-vexa-$svc" "$fl_off")"
   tb "flows on: $svc publishes to the in-chart flows-api" '[ "$(envval VEXA_FLOWS_API_URL "$d_on")" = "$fl_url" ]'
   tb "flows on: $svc presents the flows operator key from the flows Secret" \
     'grep -A4 "name: VEXA_FLOWS_API_KEY$" <<< "$d_on" | has "name: vexa-vexa-flows" && grep -A4 "name: VEXA_FLOWS_API_KEY$" <<< "$d_on" | has "key: VEXA_FLOWS_API_KEY"'
@@ -2409,7 +2430,7 @@ tb "subject tickets: the OpenShift profile renders them with flows on, wired the
   'helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.enabled=true -f "$CHART/values-openshift.yaml" --set agentApi.workspaces.storageClassName=rwx-class | st_check on meetings,agent,mail >/dev/null'
 tb "subject tickets: with agent-api off there is no agent key and no agent.pem" \
   'helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.enabled=true --set agentApi.enabled=false | st_check on meetings,mail >/dev/null'
-tb "subject tickets (control): with flows off nothing renders, the gateway has no keys dir, no producer mounts a key" 'st_check off <<< "$RENDER" >/dev/null'
+tb "subject tickets (control): with flows off nothing renders, the gateway has no keys dir, no producer mounts a key" 'helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=false | st_check off >/dev/null'
 if command -v openssl >/dev/null 2>&1; then
   NOT_ED="$(openssl genpkey -algorithm rsa -pkeyopt rsa_keygen_bits:2048 2>/dev/null)"
   st_rsa="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set-string subjectTickets.meetings.signingKey="$NOT_ED" 2>&1 || true)"
