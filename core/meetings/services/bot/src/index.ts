@@ -35,6 +35,7 @@ import { languageActHandler, observationOf, summarize, type LanguageObservation 
 import { createBotRecordingSink } from './recording.js';
 import { createCaptureSignalRecorder, startBotLogSidecar, wrapTranscribeWithTap, wrapTranscriptWithSnapshot, type CaptureSignalRecorder } from './telemetry.js';
 import { uploadSignalTapes } from './signal-upload.js';
+import { uploadJoinFailureScreenshot } from './join-screenshot.js';
 import { describeGaps, mergeDegraded, transcriptGapsReport } from './transcript-gaps.js';
 import { createSttFaultReporter } from './stt-faults.js';
 import { withNavigationRefusal } from './meeting-navigation.js';
@@ -440,6 +441,13 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     aloneness: noBrowser ? voiceAloneness : aloneness,
     recording: recording as RecordingSink | undefined,
     reachability,
+    // The node this pod runs on (downward API), and the one picture of a failed join, so the
+    // platform retry can place the next attempt elsewhere and a human can see what the bot saw.
+    nodeName: process.env.VEXA_NODE_NAME || undefined,
+    failureScreenshot: () => uploadJoinFailureScreenshot({
+      inv,
+      capture: join.screenshot ? () => join.screenshot!() : undefined,
+    }),
     // What degraded the meeting, on the terminal event: the STT faults AND every stretch of audio a
     // lane will never transcribe (prod-cutover R4: a loss is a recorded gap, never silent).
     degraded: () => {

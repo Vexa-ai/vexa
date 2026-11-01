@@ -179,6 +179,15 @@ export function createBrowserJoinDriver(
       return { outcome, reason: detail, signals: signals({ detail }) };
     },
     lastSignals: () => lastSignals,
+    async screenshot() {
+      // The screen the join ended on (Meet's "You can't join this video call", the lobby, a 404).
+      // Short bound: the terminal report waits for this, and a wedged page must not hold it.
+      try {
+        return await page.screenshot({ type: 'png', timeout: 2_000 });
+      } catch {
+        return undefined;
+      }
+    },
     onRemoval(cb) {
       if (platform === 'teams') return startTeamsRemovalMonitor(page, cb);
       if (platform === 'zoom')  return startZoomRemovalMonitor(page, cb);
