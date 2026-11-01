@@ -66,11 +66,15 @@ def test_an_existing_table_gains_the_columns_and_the_new_key():
     assert "ADD COLUMN IF NOT EXISTS cron TEXT" in joined
     assert "DROP CONSTRAINT IF EXISTS flow_version_pkey" in joined
     assert "ADD PRIMARY KEY (scope, name, version)" in joined
-    assert did == {"key_swapped": True}
+    # ADR-0052 §7: the keyed statuses gain `retired`, and keyed rows a deadline
+    assert "ADD COLUMN IF NOT EXISTS deadline DOUBLE PRECISION" in joined
+    assert "DROP CONSTRAINT IF EXISTS keyed_status" in joined
+    assert "'missed','retired'" in joined
+    assert did == {"key_swapped": True, "keyed_status_swapped": True}
 
 
 def test_the_migration_is_idempotent():
     rec = _Recorder(key_has_scope=True)
     did = migrations.apply(rec)
     assert not any("ADD PRIMARY KEY" in s or "DROP CONSTRAINT" in s for s in rec.sql)
-    assert did == {"key_swapped": False}
+    assert did == {"key_swapped": False, "keyed_status_swapped": False}

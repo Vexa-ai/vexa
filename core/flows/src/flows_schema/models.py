@@ -264,8 +264,13 @@ class KeyedSchedule(Base):
     payload: Mapped[str | None] = mapped_column(Text)
     fired_for: Mapped[float | None] = mapped_column(Double)
     updated_at: Mapped[float] = mapped_column(Double, nullable=False)
+    # ADR-0052 §7: the last moment this fire is still wanted (the trigger's `deadline`, e.g. the
+    # meeting's start + 10 min). Set: missed only past it. NULL: missed `CATCHUP_S` after the slot or
+    # the last real change. `retired`: the flow has no active version left to fire it.
+    deadline: Mapped[float | None] = mapped_column(Double)
     __table_args__ = (
-        CheckConstraint("status IN ('armed','fired','cancelled','missed')", name="keyed_status"),
+        CheckConstraint("status IN ('armed','fired','cancelled','missed','retired')",
+                        name="keyed_status"),
         Index("keyed_due", "fire_at"),
         Index("keyed_person", "scope", "person"),
     )

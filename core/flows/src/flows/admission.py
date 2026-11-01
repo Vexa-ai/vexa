@@ -247,9 +247,12 @@ def admit(db: DB, registry: Registry, clock: Clock, *, source_event_id: str,
     for flow in registry.match(event_type):
         spec = triggers.spec_of(flow)
         if spec.get("kind") == "relative":
-            _keyed(db, clock, flow, spec, event_type, subject_refs, loop_limit=loop_limit,
-                   max_hops=max_hops, per_user=keyed.PER_USER if keyed_per_user is None
-                   else keyed_per_user)
+            did = _keyed(db, clock, flow, spec, event_type, subject_refs, loop_limit=loop_limit,
+                         max_hops=max_hops, per_user=keyed.PER_USER if keyed_per_user is None
+                         else keyed_per_user)
+            # A SHARE THAT IS FULL IS AN ANSWER, not a log line (ADR-0052 §8): the caller hears it.
+            if did == "refused":
+                _refuse("keyed_share_full", flow, event_type, refusals)
             continue
         if spec.get("filter") and not triggers.passes(spec["filter"], event_type, subject_refs):
             REFUSED["filtered"] += 1
@@ -294,8 +297,12 @@ def _keyed(db: DB, clock: Clock, flow: Flow, spec: dict, event_type: str, refs: 
     if gone or not passes or at is None:
         keyed.cancel(db, clock, flow, key=key)
         return "cancelled"
+    # the last moment the fire is still wanted (ADR-0052 §7), when the trigger names one
+    deadline = triggers.fire_at(spec["deadline"], event_type, refs) if spec.get("deadline") else None
+    share = spec.get("share") if spec.get("share") in keyed.SHARES else "person"
     return keyed.upsert(db, clock, flow, key=key, fire_at=at, event_type=event_type,
-                        payload={k: v for k, v in refs.items() if k != ORIGIN}, per_user=per_user)
+                        payload={k: v for k, v in refs.items() if k != ORIGIN}, per_user=per_user,
+                        deadline=deadline, share=share)
 
 
 def _merge_into_admitted(db: DB, clock: Clock, *, key: str, source_event_id: str,

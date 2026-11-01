@@ -38,7 +38,7 @@ next bots that are armed.
 
 ## Invitations to the shared mailbox
 
-When you invite Vexa (the shared mailbox) to a meeting, the company flow `invite_join` keeps one
+When you invite Vexa (the shared mailbox) to a meeting, the flow `invite_join` keeps one
 pending bot for that meeting:
 
 - an updated invitation moves the bot to the new time;
@@ -46,8 +46,9 @@ pending bot for that meeting:
 - one minute before the start, the bot joins and the meeting is attached to the workspace the
   invitation names (otherwise to the organiser's default).
 
-`invite_join` belongs to the company. The company account changes it from chat with `flows_submit`
-and `scope: instance`, using the same tools anyone uses for their own flows.
+`invite_join` is part of the product: it is registered in the code and changes with each release.
+Until 0.13.4 it was a company flow the company account could change from chat; the upgrade removes
+that stored copy (see below).
 
 ## What is on after an upgrade
 
@@ -70,9 +71,14 @@ and `scope: instance`, using the same tools anyone uses for their own flows.
   overwrites it. `invite_intake` becomes version 4 (account, RSVP, acknowledgement, prepare note),
   and `invite_join` sends the bot one minute before the start. Invitations admitted before the
   upgrade finish on version 3.
+- **`invite_join` runs from the code (0.13.4).** On its first start the flows worker removes the
+  stored copy of the company flow `invite_join` that earlier releases wrote (`created_by: seed`),
+  once, together with any version the company account submitted on top of it or a retirement of
+  it, and logs at warning level what it removed when it had been changed. A version submitted
+  after the upgrade is not touched.
 - **Two tables are added at startup**, `sensor` and `keyed_schedule` (`CREATE TABLE IF NOT EXISTS`).
-  A stack that ran the first cut of `keyed_schedule` gains its `person` column
-  (`flows/migrations.py`).
+  A stack that ran the first cut of `keyed_schedule` gains its `person` column; every stack gains
+  `deadline` and the `retired` status (`flows/migrations.py`).
 
 ## How it works
 
@@ -90,13 +96,20 @@ and `scope: instance`, using the same tools anyone uses for their own flows.
   after it fired re-arms once.
 - **Light runs.** A flow made only of steps that call no model (`request_meeting_bot`) counts on its
   own daily budget, not the agent-run one.
-- **Late and missed fires.** A due row fires within ten minutes of its time, counted from the
-  slot or from when the row was armed or moved, whichever is later: an invitation that arrives after
-  its meeting started still sends the bot. A row the worker could have fired and did not (the worker
-  was down) is marked `missed` and logged, and sends nothing.
-- **Caps.** One person may hold 500 pending keyed fires in a scope, their own or their share of a
-  company flow, and a company flow holds at most 20,000 for everyone. A fire over the cap is refused
-  and logged.
+- **Late and missed fires.** A trigger may name a `deadline` (`payload.start + 600s`): its row
+  fires whenever the worker reaches it before that moment, however long the worker was down, and is
+  marked `missed` after it. A row without a deadline fires within ten minutes of its time, counted
+  from the slot or from when the row was armed or really moved, whichever is later: an invitation
+  that arrives after its meeting started still sends the bot. A repeated delivery that changes
+  nothing does not restart those ten minutes. A row the worker could have fired and did not is
+  marked `missed` and logged, and sends nothing.
+- **No row holds up another.** The worker reads due rows page by page past any it skips (a daily
+  cap that refuses one), so a later row still fires. Rows of a flow that has no active version left
+  are marked `retired`.
+- **Caps.** One person may hold 500 pending keyed fires per flow in a scope, their own or their
+  share of a company flow, and a company flow holds at most 20,000 for everyone. Rows of one flow
+  never count against another's. A fire over the cap is refused, logged, and answered to whoever
+  sent the event (`refused: keyed_share_full` from `POST /events`).
 
 **Who owns which data.**
 
