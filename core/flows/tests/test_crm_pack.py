@@ -43,3 +43,18 @@ def test_references_reach_the_crm_only_where_one_is_deployed(monkeypatch):
     monkeypatch.setattr(common, 'http', lambda *a, **k: (503, {}))
     with pytest.raises(StepError):
         step(SimpleNamespace(refs=SNAP))
+
+
+def test_business_events_are_kept_once_with_their_evidence():
+    db, reg, clock, _ = rig()
+    build(reg, db)
+    for kind in ('registered', 'paid', 'bot', 'support', 'stage'):
+        assert [f.name for f in reg.match(f'business.{kind}')] == [f'business_{kind}']
+    ev = {'reading': 'stripe/charges', 'connection': 'stripe', 'path': '/v1/charges', 'read_at': 1.0}
+    refs = {'email': 'a@x.io', '_evidence': ev}
+    assert admit(db, reg, clock, source_event_id='sensor:instance/s:ch_1', event_type='business.paid', subject_refs=refs) == 1
+    assert admit(db, reg, clock, source_event_id='sensor:instance/s:ch_1', event_type='business.paid', subject_refs=refs) == 0
+    out = reg.steps['record_business_event'](SimpleNamespace(refs=refs))
+    assert out.result == {'reading': 'stripe/charges', 'read_at': 1.0}
+    with pytest.raises(StepError):
+        reg.steps['record_business_event'](SimpleNamespace(refs={'email': 'a@x.io'}))
