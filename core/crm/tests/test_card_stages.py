@@ -239,3 +239,54 @@ def test_the_stage_routes_are_internal_tier_only(store, cards):
     r = client.post('/internal/cards/stage', json={**stage, 'stage': 'Done', 'mode': 'recheck'}, headers=hdr)
     assert r.json()['status'] == 'corrected'
     assert 400 <= client.post('/internal/cards/stage', json={**stage, 'stage': 'Doing'}, headers=hdr).status_code < 500
+    # null: the rule has no stage (no reading); the route keeps the State and says so
+    r = client.post('/internal/cards/stage', json={**stage, 'stage': None, 'because': 'no reading yet for x'}, headers=hdr)
+    assert r.status_code == 200 and r.json()['status'] == 'kept' and r.json()['stage'] == 'Done', r.text
+
+
+# ── no reading: the State is kept; a stage set on that absence is reverted ───────────────────────
+def test_no_reading_keeps_the_state_and_records_why_once(cards, store):
+    card = software(cards)
+    cards.set_stage(ORG, card['id'], 'Review', '#1962 is open for review at abc1234', [FACT])
+    n = len(revisions(store, card['id']))
+    out = cards.set_stage(ORG, card['id'], None, f'no reading yet for {PR}', [], mode='recheck')
+    assert out['status'] == 'kept' and out['stage'] == 'Review'
+    got = cards.read(ORG, ANA, card['id'])
+    assert got['state'] == 'Review'
+    ev = got['stage_evidence']
+    assert ev['stage'] is None and ev['no_reading'] is True and ev['kept'] == 'Review'
+    assert ev['because'] == f'no reading yet for {PR}' and 'restored' not in ev
+    assert revisions(store, card['id'])[-1].reason == f'Kept Review: no reading yet for {PR}'
+    assert len(revisions(store, card['id'])) == n + 1
+    # the same evidence again writes nothing
+    assert cards.set_stage(ORG, card['id'], None, f'no reading yet for {PR}', [], mode='recheck')['status'] == 'unchanged'
+    assert len(revisions(store, card['id'])) == n + 1
+
+
+def test_a_stage_the_rule_set_on_no_reading_is_reverted(cards, store):
+    card = software(cards)
+    cards.set_stage(ORG, card['id'], 'Review', '#1962 is open for review at abc1234', [FACT])
+    # the old rule read «no reading» as «no pull request» and moved it to Idea with no fact
+    cards.set_stage(ORG, card['id'], 'Idea', 'no pull request and nobody holds the card', [])
+    assert cards.read(ORG, ANA, card['id'])['state'] == 'Idea'
+    out = cards.set_stage(ORG, card['id'], None, f'no reading yet for {PR}', [], mode='recheck')
+    assert out['status'] == 'restored' and out['stage'] == 'Review' and out['was'] == 'Idea'
+    got = cards.read(ORG, ANA, card['id'])
+    assert got['state'] == 'Review'
+    ev = got['stage_evidence']
+    assert ev['restored'].startswith('was Idea, back to Review: Idea was set with no reading')
+    last = revisions(store, card['id'])[-1]
+    assert last.actor_id == STAGE_RULE_ACTOR and last.reason.startswith('Restored: was Idea, back to Review')
+    # once kept, a second call is unchanged and never reverts further
+    assert cards.set_stage(ORG, card['id'], None, f'no reading yet for {PR}', [], mode='recheck')['status'] == 'unchanged'
+    assert cards.read(ORG, ANA, card['id'])['state'] == 'Review'
+
+
+def test_a_stage_set_on_a_read_fact_is_never_reverted_by_no_reading(cards):
+    card = software(cards)
+    cards.set_stage(ORG, card['id'], 'Review', '#1962 is open for review at abc1234', [FACT])
+    closed = {**FACT, 'value': {'state': 'closed'}}
+    cards.set_stage(ORG, card['id'], 'Idea', '#1962 was closed without a merge', [closed])
+    out = cards.set_stage(ORG, card['id'], None, f'no reading yet for {PR}', [])
+    assert out['status'] == 'kept' and cards.read(ORG, ANA, card['id'])['state'] == 'Idea'
+

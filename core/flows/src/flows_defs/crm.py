@@ -125,10 +125,20 @@ def build(reg, db):
         return answer
 
     def _put_stage(base, card, readings, mode):
-        """Compute one card's stage and write it when it differs. Answers what was done."""
+        """Compute one card's stage and write it when it differs. Answers what was done. When the
+        rule gives no stage (the card's Source was never read), the State is kept and the CRM records
+        «no reading yet for <source>» once (``stage: null``); the same evidence again writes nothing."""
         from flows_defs import card_stage
         now = time.time()
         name, ev = card_stage.stage(readings, card_stage.claim_for(db, card['id'], now))
+        if name is None:
+            held = card.get('stage_evidence') or {}
+            if held.get('no_reading') and held.get('because') == ev['because'] and held.get('stage') is None:
+                return {'card': card['id'], 'stage': None, 'status': 'unchanged', 'because': ev['because']}
+            out = _crm_post(base, '/internal/cards/stage', {'record': card['id'], 'stage': None, 'because': ev['because'],
+                                                            'facts': ev['facts'], 'mode': mode})
+            return {'card': card['id'], 'stage': None, 'kept': out.get('stage'), 'was': card.get('state'),
+                    'status': out.get('status'), 'because': ev['because']}
         if name == card.get('state'):
             return {'card': card['id'], 'stage': name, 'status': 'unchanged'}
         out = _crm_post(base, '/internal/cards/stage', {'record': card['id'], 'stage': name, 'because': ev['because'],
@@ -197,9 +207,12 @@ def build(reg, db):
                     row['read'] = 'read'
             else:
                 row['read'] = f'not read: {why or "the card tracks no GitHub link"}'
-            row.update(_put_stage(base, card, card_stage.readings_from_card(card), 'recheck'))
+            readings = card_stage.readings_from_card(card)
+            if row['read'] != 'read':
+                readings['unread'] = row['read']
+            row.update(_put_stage(base, card, readings, 'recheck'))
             done.append(row)
-        return Done({'cards': len(done), 'corrected': [r for r in done if r.get('status') == 'corrected'],
+        return Done({'cards': len(done), 'corrected': [r for r in done if r.get('status') in ('corrected', 'restored')],
                      'unread': sum(1 for r in done if r['read'] != 'read')})
 
     for kind in BUSINESS_EVENTS:

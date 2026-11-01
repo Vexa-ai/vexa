@@ -424,3 +424,64 @@ def test_the_recheck_without_a_connection_checks_what_the_cards_have(monkeypatch
     out = reg.steps['recheck_card_stages'](SimpleNamespace(refs={}))
     assert out.result['unread'] == 1 and out.result['corrected'][0]['stage'] == 'Review'
     assert [u for u, _ in sent] == ['/internal/cards/software', '/internal/cards/stage']
+
+
+# ── absence is not a fact (founder, 1 Nov 2026) ──────────────────────────────────────────────────
+def test_a_card_with_a_source_and_no_reading_gets_no_stage():
+    card = {'id': 'c9', 'state': 'Review', 'source': 'Vexa-ai/vexa#1969', 'reading': None}
+    r = cs.readings_from_card(card)
+    assert r['source'] == 'Vexa-ai/vexa#1969' and r['read'] is False and r['pr_known'] is False
+    got, evidence = cs.stage(r, None)
+    assert got is None and evidence['stage'] is None and evidence['no_reading'] is True
+    assert evidence['because'] == 'no reading yet for Vexa-ai/vexa#1969'
+    # a claim is a fact about the hold, never about the pull request: still no stage
+    assert cs.stage(r, CLAIM)[0] is None
+    # the caller's reason for the missing reading is carried in words
+    got, evidence = cs.stage({**r, 'unread': 'not read: no delivery connection is declared'}, None)
+    assert got is None and evidence['because'] == ('no reading yet for Vexa-ai/vexa#1969 '
+                                                   '(not read: no delivery connection is declared)')
+
+
+def test_a_pure_idea_with_no_source_may_be_an_idea_or_design():
+    r = cs.readings_from_card({'id': 'c8', 'state': 'Idea', 'source': None, 'reading': None})
+    assert cs.stage(r, None)[0] == 'Idea'
+    assert cs.stage(r, CLAIM)[0] == 'Design'
+
+
+def test_design_and_idea_need_a_reading_that_proves_there_is_no_pull_request():
+    # the issue was read, but nothing said which pull request delivers it: no stage
+    card = {'id': 'c7', 'source': ISSUE_URL, 'reading': {'sources': {
+        'github/vexa-issues': {'fields': {'state': 'open', 'title': 'x'}, 'evidence': ev('github/vexa-issues')}}}}
+    r = cs.readings_from_card(card)
+    assert r['read'] is True and r['pr_known'] is False
+    got, evidence = cs.stage(r, CLAIM)
+    assert got is None and evidence['because'] == f'no reading yet of a pull request for {ISSUE_URL}'
+    # the delivery reading answered «no pull request» (pr: None): now Design under a claim, else Idea
+    card['reading']['sources']['github/delivery'] = {'fields': {'issue': {'state': 'open'}, 'pr': None},
+                                                      'evidence': ev()}
+    r = cs.readings_from_card(card)
+    assert r['pr_known'] is True
+    assert cs.stage(r, CLAIM)[0] == 'Design' and cs.stage(r, None)[0] == 'Idea'
+    # facts that decide without a pull request still decide: a closed issue
+    card['reading']['sources']['github/vexa-issues']['fields'] = {'state': 'closed', 'state_reason': 'not_planned'}
+    card['reading']['sources']['github/vexa-issues']['evidence'] = ev('github/vexa-issues', T + 9)
+    del card['reading']['sources']['github/delivery']
+    assert cs.stage(cs.readings_from_card(card), None)[0] == 'Dropped'
+
+
+def test_no_reading_keeps_the_state_and_tells_the_crm_once(monkeypatch):
+    db, reg, clock, _ = rig()
+    build(reg, db)
+    step = reg.steps['card_stage_from_readings']
+    bare = {'id': 'c1', 'revision': 3, 'state': 'Review', 'source': PR_URL, 'reading': None}
+    sent = _crm(monkeypatch, lambda url, body: (200, {'cards': [bare]}) if url == '/internal/cards/software'
+                else (200, {'status': 'kept', 'stage': 'Review'}))
+    out = step(SimpleNamespace(refs={'record_id': 'c1'})).result
+    assert out['stage'] is None and out['status'] == 'kept' and out['kept'] == 'Review'
+    url, body = sent[1]
+    assert url == '/internal/cards/stage' and body['stage'] is None
+    assert body['because'] == f'no reading yet for {PR_URL}'
+    # the CRM already holds that evidence: nothing is written
+    held = {**bare, 'stage_evidence': {'stage': None, 'no_reading': True, 'because': f'no reading yet for {PR_URL}'}}
+    sent = _crm(monkeypatch, lambda url, body: (200, {'cards': [held]}))
+    assert step(SimpleNamespace(refs={'record_id': 'c1'})).result['status'] == 'unchanged' and len(sent) == 1

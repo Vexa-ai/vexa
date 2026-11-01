@@ -32,6 +32,13 @@ THE RULES (first match wins; each names the fact that decided it):
    b. a live Flows claim holds the card → **Design** (someone is working it; no code is up yet);
    c. otherwise → **Idea**.
 
+ABSENCE IS NOT A FACT (founder, 1 Nov 2026: a missing source shows as «no source», never a
+substitute). A card with a typed ``Source`` and no reading of it gets NO stage: the rule answers
+``None`` with the evidence «no reading yet for <source>», and the CRM keeps the card's State.
+Rules 4b and 4c («no pull request») need a reading that says so: a card whose Source was read but
+whose readings say nothing about a pull request also gets no stage. Only a card with no Source at
+all (a pure idea, nothing to read) may be an Idea, or Design under a claim, without a reading.
+
 So every revert follows from the facts: a pull request closed after review goes back to Idea (or
 Design while someone holds the card); a head commit the prod pin no longer contains (a rollback, or a
 new push not yet pinned) goes back to Review. A merge is never undone: a merged card the pin rolled
@@ -75,13 +82,21 @@ def _short(sha):
     return str(sha or '')[:8]
 
 
-def stage(readings: dict, flows_claim: Optional[dict] = None) -> tuple[str, dict]:
+def stage(readings: dict, flows_claim: Optional[dict] = None) -> tuple[Optional[str], dict]:
     """The stage a software card's facts put it in, and the evidence: ``because`` (the fact that
     decided, in words), ``facts`` (each fact read, with its source and read time) and ``activity``
-    (what is happening now: an agent holding it, CI running). Pure: same input, same answer."""
+    (what is happening now: an agent holding it, CI running). Pure: same input, same answer.
+
+    ``None`` when the card has a ``source`` and the facts that would decide it were never read
+    (``read`` false, or no ``pr_known`` where only «no pull request» would decide): the evidence then
+    says «no reading yet for <source>» (with ``unread``, why, when the caller knows) and carries
+    ``no_reading: true``. The caller keeps the card's State."""
     r = readings or {}
     pr, issue = r.get('pr'), r.get('issue')
     checks, prod, release = r.get('checks'), r.get('prod'), r.get('release')
+    source = str(r.get('source') or '').strip()
+    read = r.get('read', any(x for x in (pr, issue, checks, prod, release)))
+    pr_known = r.get('pr_known', pr is not None)
     facts, activity = [], []
     if pr:
         facts.append(_fact('pr', {k: pr.get(k) for k in ('url', 'state', 'draft', 'head_sha', 'merge_commit_sha',
@@ -115,6 +130,15 @@ def stage(readings: dict, flows_claim: Optional[dict] = None) -> tuple[str, dict
     def out(name, because):
         return name, {'stage': name, 'because': because, 'facts': facts, 'activity': activity}
 
+    def unread(what):
+        why = str(r.get('unread') or '').strip()
+        because = f'no reading yet {what}{source}' + (f' ({why})' if why else '')
+        return None, {'stage': None, 'because': because[:300], 'facts': facts, 'activity': activity,
+                      'no_reading': True}
+
+    if source and not read:
+        return unread('for ')
+
     pr_state = (pr or {}).get('state')
     num = f"#{pr.get('number')}" if pr and pr.get('number') else 'the pull request'
     issue_closed = bool(issue) and issue.get('state') == 'closed'
@@ -138,6 +162,8 @@ def stage(readings: dict, flows_claim: Optional[dict] = None) -> tuple[str, dict
                    + (' (not in the prod pin)' if prod_ok else ''))
     if issue_closed and issue.get('state_reason') in (None, 'completed'):
         return out('Done', 'the issue was closed as completed, with no pull request on the card')
+    if source and not pr_known:
+        return unread('of a pull request for ')
     if flows_claim:
         return out('Design', f"held by {flows_claim.get('holder') or 'a Flows claim'}"
                            + (f" since {flows_claim['since']}" if flows_claim.get('since') else ''))
@@ -180,9 +206,12 @@ def readings_from_card(card: dict) -> dict:
         sources[str(ev.get('source') or 'reading')] = {'fields': reading['fields'], 'evidence': ev}
     kind = _kind((card or {}).get('source'), sources)
     pr_c, issue_c, rest = [], [], {'checks': [], 'prod': [], 'release': []}
+    pr_known = False
     for entry in sources.values():
         f = (entry or {}).get('fields') or {}
         ev = (entry or {}).get('evidence') or {}
+        if 'pr' in f:                     # a reading that answered «which pull request», None included
+            pr_known = True
         if isinstance(f.get('pr'), dict):
             pr_c.append({'value': f['pr'], 'evidence': ev})
         if isinstance(f.get('issue'), dict):
@@ -193,12 +222,18 @@ def readings_from_card(card: dict) -> dict:
             top.pop('merge_commit_sha', None)      # an open pull request's is GitHub's test merge
         if top.get('state'):
             (pr_c if kind == 'pull' else issue_c).append({'value': top, 'evidence': ev})
+            pr_known = pr_known or kind == 'pull'
         for k in rest:
             if isinstance(f.get(k), dict):
                 rest[k].append({'value': f[k], 'evidence': ev})
     out = {'pr': _latest(pr_c), 'issue': _latest(issue_c) if kind == 'issue' else None}
     for k, cands in rest.items():
         out[k] = _latest(cands)
+    # what the rule needs to tell a fact from an absence: the card's Source, whether anything was
+    # read for it, and whether a reading answered «which pull request» (``pr: None`` included)
+    out['source'] = str((card or {}).get('source') or '').strip() or None
+    out['read'] = bool(sources)
+    out['pr_known'] = pr_known or out['pr'] is not None
     return out
 
 

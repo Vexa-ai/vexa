@@ -72,6 +72,9 @@ RULE_ONLY = ('StageEvidence',)
 #: The actor every stage-rule revision is recorded under.
 STAGE_RULE_ACTOR = 'rule:card-stage'
 STAGE_MODES = ('event', 'recheck')
+#: Facts that come from reading the card's Source. A stage the rule set with none of them (Idea or
+#: Design from «no pull request» alone) rested on an absence, not a fact.
+READ_FACTS = ('pr', 'issue', 'checks', 'prod', 'release')
 #: How long a decision nonce lives (D13): long enough to read the card, short enough not to linger.
 NONCE_TTL = timedelta(minutes=15)
 #: An open card of a kind is checked again this long after its last move unless its due date is
@@ -1308,7 +1311,14 @@ class Cards:
         ``rule:card-stage`` whose reason names the fact that moved it. A ``recheck`` that moves a card
         is a CORRECTION: the card said one stage and the facts another, so the evidence keeps
         ``correction: "was X, now Y, because …"``, readable on the card. Nothing else may set this
-        card's stage (``normalise_fields``)."""
+        card's stage (``normalise_fields``).
+
+        ``stage=None`` is the rule saying it has NO stage for the card: its Source was never read, so
+        there is no fact to move it by. The State is kept and ``StageEvidence`` records it
+        (``stage: null``, ``no_reading: true``, ``because`` «no reading yet for <source>»), once: the
+        same evidence again writes nothing. If the card's current stage was itself set by the rule
+        with no read fact (``READ_FACTS``), it is reverted to the State it had before (``restored``,
+        «was X, back to Y: X was set with no reading»), since that stage rested on an absence."""
         if mode not in STAGE_MODES:
             raise CRMError('mode is event or recheck')
         because = _clip(because, 300)
@@ -1327,6 +1337,8 @@ class Cards:
             template = self.template(raw.get('Kind'))
             if not tpl.moved_by_rule(template):
                 raise CRMError('Only a software card has a stage the rule sets')
+            if stage is None:
+                return self._no_reading(c, org, row, raw, template, because, facts, mode)
             if stage not in template['stages'] + template['side']:
                 raise CRMError(f'"{_clip(stage, 60)}" is not a stage of a software card')
             was = raw.get('State')
@@ -1347,6 +1359,35 @@ class Cards:
             finally:
                 self._rule.on = False
             return {**base, 'revision': row['revision'] + 1, 'status': 'corrected' if mode == 'recheck' else 'moved'}
+
+    def _no_reading(self, c, org, row, raw, template, because, facts, mode):
+        """``set_stage(stage=None)``: keep the State (or revert one the rule set on an absence)."""
+        was = raw.get('State')
+        cur = raw.get('StageEvidence') if isinstance(raw.get('StageEvidence'), dict) else {}
+        base = {'record': row['id'], 'revision': row['revision'], 'stage': was, 'was': was}
+        on_absence = (cur.get('by') == STAGE_RULE_ACTOR and cur.get('stage') == was and was in ('Idea', 'Design')
+                      and not any(isinstance(f, dict) and f.get('fact') in READ_FACTS for f in cur.get('facts') or [])
+                      and cur.get('was') in template['stages'] + template['side'] and cur.get('was') != was)
+        restore = cur.get('was') if on_absence else None
+        if not restore and cur.get('no_reading') and cur.get('because') == because:
+            return {**base, 'status': 'unchanged'}
+        at = self.clock().isoformat()
+        evidence = {'stage': None, 'no_reading': True, 'kept': restore or was, 'because': because, 'facts': facts,
+                    'at': at, 'by': STAGE_RULE_ACTOR, 'mode': mode, 'was': was}
+        changes = {'StageEvidence': evidence}
+        if restore:
+            evidence['restored'] = f'was {was}, back to {restore}: {was} was set with no reading ({_clip(cur.get("because"), 120)})'
+            changes['State'] = restore
+            reason = f'Restored: {evidence["restored"]}; {because}'
+        else:
+            reason = f'Kept {was}: {because}'
+        self._rule.on = True
+        try:
+            self._apply(c, org, STAGE_RULE_ACTOR, row, changes, _clip(reason, REASON_MAX), [{'stage': evidence}], None)
+        finally:
+            self._rule.on = False
+        return {**base, 'stage': restore or was, 'revision': row['revision'] + 1,
+                'status': 'restored' if restore else 'kept'}
 
     def list(self, org, actor, workspace=None, about=None, state=None, mine=False, limit=LIST_MAX):
         caller = as_caller(actor)

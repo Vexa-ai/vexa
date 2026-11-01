@@ -259,7 +259,9 @@ class SoftwareCards(Body):
     record: str | None = Field(default=None, max_length=128, description='One card; omitted: every open software card.')
 class StageWrite(Body):
     record: str = Field(min_length=1, max_length=128)
-    stage: str = Field(min_length=1, max_length=60, description="A stage of the software lifecycle.")
+    stage: str | None = Field(min_length=1, max_length=60, description=(
+        'A stage of the software lifecycle, or null: the rule has no stage because the card\'s Source was never '
+        'read (the State is kept, and one the rule set on that absence is reverted).'))
     because: str = Field(min_length=1, max_length=300, description='The fact that moved it, in words.')
     facts: list = Field(default_factory=list, max_length=12, description='The facts read: {fact, value, source, read_at}.')
     mode: Literal['event', 'recheck'] = 'event'
