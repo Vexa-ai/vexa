@@ -6,6 +6,7 @@ flowchart LR
     gateway["gateway"]
     admin_api["admin-api"]
     bot["bot"]
+    discord_bot["discord-bot"]
     desktop["desktop"]
     meeting_api["meeting-api"]
     service_authority["external service authority"]
@@ -33,6 +34,7 @@ flowchart LR
   end
   transcription["transcription"]
   bot ==>|"audio -> tenant-hosted"| transcription
+  discord_bot ==>|"audio -> tenant-hosted"| transcription
   signal_model["signal model"]
   signals_service ==>|"transcript -> external-saas"| signal_model
   model_provider["model provider"]

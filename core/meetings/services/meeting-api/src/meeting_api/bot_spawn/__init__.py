@@ -1,5 +1,6 @@
 """bot_spawn — the ``POST /bots`` flow (build the invocation + mint the MeetingToken + spawn the
-meeting-bot workload over runtime.v1, eager-creating the MeetingSession on spawn).
+platform's runtime.v1 workload — ``meeting-bot`` for a browser platform, ``discord-bot`` for
+discord — eager-creating the MeetingSession on spawn).
 
 Front door (P6): import from here, never a deep module path.
 

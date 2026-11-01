@@ -49,6 +49,9 @@ PLATFORM_DOMAINS = {
     "teams": TEAMS_HOST_SUFFIXES,
     "zoom": ("zoom.us", "zoom.com", "zoomgov.com"),
     "jitsi": ("meet.jit.si",),
+    # A Discord bot joins by channel id and never opens this URL; a discord.com/channels/... link is
+    # accepted only as the human reference the caller pasted (#875).
+    "discord": ("discord.com",),
 }
 
 #: Platforms whose meetings may also live on a host the organisation chose.

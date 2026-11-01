@@ -204,6 +204,9 @@ def worker_image_for(agent_image: str) -> str:
 # an agent worker is a code harness — they are sized independently, never off one shared knob.
 _RESOURCE_ENV = {
     "meeting-bot": ("RUNTIME_BOT_CPU", "RUNTIME_BOT_MEMORY_MB"),
+    # A discord bot is a meeting bot (same quota, same pool): sized by the bot knobs until it has
+    # its own measured size. It needs far less than a browser, so the bot size is a ceiling.
+    "discord-bot": ("RUNTIME_BOT_CPU", "RUNTIME_BOT_MEMORY_MB"),
     "agent": ("RUNTIME_AGENT_WORKER_CPU", "RUNTIME_AGENT_WORKER_MEMORY_MB"),
 }
 
@@ -212,6 +215,7 @@ _RESOURCE_ENV = {
 # average and bursts onto the node's idle cores.
 _CPU_LIMIT_ENV = {
     "meeting-bot": "RUNTIME_BOT_CPU_LIMIT",
+    "discord-bot": "RUNTIME_BOT_CPU_LIMIT",
 }
 
 
@@ -262,6 +266,7 @@ def _profile_resources(profile: str) -> Optional[Resources]:
 # RUNTIME_K8S_, which a spec's env can never set (workload_env.RUNTIME_OWNED_PREFIXES).
 _SCHEDULING_ENV_PREFIX = {
     "meeting-bot": "RUNTIME_K8S_BOT_",
+    "discord-bot": "RUNTIME_K8S_BOT_",
     "agent": "RUNTIME_K8S_AGENT_WORKER_",
 }
 
@@ -338,6 +343,7 @@ def default_registry() -> ProfileRegistry:
     image surfaces as an empty string the backend rejects, matching 0.11's fail-visible stance)."""
     browser_image = os.environ.get("BROWSER_IMAGE", "")
     agent_image = os.environ.get("AGENT_IMAGE", "")
+    discord_bot_image = os.environ.get("DISCORD_BOT_IMAGE", "")
     # Workers run their OWN image (see worker_image_for — core/agent/worker/Dockerfile, not the
     # agent-api image). The Docker backend ensures it is present at startup, pulling it when absent
     # (build_production_app → DockerBackend.ensure_worker_image).
@@ -359,6 +365,12 @@ def default_registry() -> ProfileRegistry:
         )
         if os.environ.get(key, "").strip()
     }
+    # Unlike every other platform, a Discord "meeting" isn't reached with per-invocation browser
+    # credentials — it needs ONE registered Discord Application bot token, the SAME identity for
+    # every Discord voice channel this deployment ever joins. That makes it deployment config, not
+    # a per-meeting invocation.v1 field (which has no room for it and shouldn't): forwarded here,
+    # like bot_tuning_env, into every discord-bot workload's env.
+    discord_bot_env = {"DISCORD_TOKEN": os.environ["DISCORD_TOKEN"]} if os.environ.get("DISCORD_TOKEN", "").strip() else {}
     return ProfileRegistry(
         {
             # Meeting bot — Playwright browser; lifetime managed by meeting-api, so no idle timeout.
@@ -424,6 +436,28 @@ def default_registry() -> ProfileRegistry:
                 base_env={},
                 resources=_profile_resources("agent"),
             ),
+            # Discord bot (#875) — the first-party in-tree Discord platform lane
+            # (core/meetings/services/discord-bot): a plain Python entrypoint, unlike meeting-bot's
+            # externally-built browser image, so (like "agent") its launch argv rides explicitly on
+            # the profile rather than leaning on an image ENTRYPOINT. Config arrives the same way as
+            # every other meeting-bot kind: one env var VEXA_BOT_CONFIG (invocation.v1,
+            # platform="discord"). Lifetime is managed externally by meeting-api (leave / stop),
+            # exactly like meeting-bot — no idle timeout.
+            "discord-bot": Profile(
+                name="discord-bot",
+                runnable=Runnable(
+                    image=discord_bot_image,
+                    command=["python", "-m", "discord_bot"],
+                    # The bot class: the bot network fences (meeting-api, redis, the open web — the
+                    # Discord gateway and its voice servers), the bot pool and the bot quota.
+                    labels={CLASS_LABEL: "bot"},
+                    scheduling=_profile_scheduling("discord-bot"),
+                    run_as_non_root=True,
+                ),
+                idle_timeout_sec=0,  # 0 ⇒ managed externally; enforcement skips it
+                base_env=discord_bot_env,
+                resources=_profile_resources("discord-bot"),
+            ),
         }
     )
 
@@ -436,6 +470,7 @@ def default_registry() -> ProfileRegistry:
 _COMMAND_OVERRIDE_ENV = {
     "meeting-bot": "BOT_COMMAND",
     "agent": "AGENT_WORKER_COMMAND",
+    "discord-bot": "DISCORD_BOT_COMMAND",
 }
 
 
