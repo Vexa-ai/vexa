@@ -139,6 +139,13 @@
       "targets": []
     },
     {
+      "key": "CRM_FOUNDER_PROOF",
+      "class": "defaulted",
+      "default": "(unset: no founder proof is asked)",
+      "description": "JSON {subject, team_domain, aud, emails}: a write recorded under `subject` is accepted only when the request carries a Cloudflare Access JWT for that Access app and an allowed email in `X-Founder-Proof`, verified against the team's signing keys. The token is never stored or logged; a captured one can be replayed until it expires (the Access session length)",
+      "targets": []
+    },
+    {
       "key": "CRM_WAIT_SEC",
       "class": "defaulted",
       "default": "600",
