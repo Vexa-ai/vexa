@@ -14,8 +14,9 @@ The three templates the converged model fixes (§13), and the kinds that share t
 * **approval** (also ``invitation``, ``policy_change``) — opened → decided (by the signer) →
   executed (an effect receipt) → closed.
 * **question** (also ``ask``) — asked → answered → used (whoever asked acknowledges) → closed.
-* **software** — Idea → Design → Code → Review → On prod → In main → Released → Done, side Dropped (founder,
-  1 Nov 2026: a software card's status is its State, true to GitHub and the prod pin). It has NO
+* **software** — Idea → Design → Code → Review → On prod → Done, side Dropped (founder,
+  1 Nov 2026: a software card's status is its State, true to GitHub and the prod pin; «Done» is merged into
+  main, after prod by the delivery order; a release is a tag and a version is its own destination card, not a stage). It has NO
   gates and no next actor: nobody moves it by hand, an agent least of all. Its stage is computed from
   readings by the flows stage rule (``flows_defs/card_stage.py``) and written only through
   ``Cards.set_stage`` (``/internal/cards/stage``), each move with the facts that made it.
@@ -78,7 +79,7 @@ TEMPLATES: dict = {
         },
     },
     'software': {
-        'stages': ['Idea', 'Design', 'Code', 'Review', 'On prod', 'In main', 'Released', 'Done'],
+        'stages': ['Idea', 'Design', 'Code', 'Review', 'On prod', 'Done'],
         'side': ['Dropped'],
         'gates': {},
         'mover': RULE,

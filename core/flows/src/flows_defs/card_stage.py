@@ -2,8 +2,9 @@
 
 «A card's status is its CRM State, fully deterministic and true to GitHub and other facts;
 deterministic checks keep it from lying.» A software card (the CRM's ``software`` kind,
-``card_templates.py``) moves through ``Idea > Design > Code > Review > On prod > In main > Released > Done``,
-side ``Dropped`` — from idea to release. Nobody sets that by hand: this module computes it, and the crm pack's steps write
+``card_templates.py``) moves through ``Idea > Design > Code > Review > On prod > Done``,
+side ``Dropped`` — from idea to merged into main (founder 1 Nov 2026: «релиз нам здесь не нужен»: a release is a
+tag, and a version is its own destination card, not a card stage). Nobody sets that by hand: this module computes it, and the crm pack's steps write
 it through the CRM's ``/internal/cards/stage`` (the only path that may).
 
 THREE PARTS, the first one pure:
@@ -18,10 +19,7 @@ THREE PARTS, the first one pure:
 THE RULES (first match wins; each names the fact that decided it):
 
 1. The card's issue is closed as ``not_planned`` (or ``duplicate``) and no pull request on it is merged → **Dropped**.
-2. Its pull request is merged:
-   a. a release tag contains the merge commit → **Done** when the card's issue is closed (or the card
-      tracks only the pull request), else **Released**;
-   b. otherwise → **In main**.
+2. Its pull request is merged → **Done** (merged into main; prod came first by the delivery order).
 3. Its pull request is open:
    a. it is a design document (every file it changes is under ``docs/adr/`` or ``docs/design/``,
       the delivery reading's ``design_doc``) → **Design**;
@@ -45,7 +43,7 @@ all (a pure idea, nothing to read) may be an Idea, or Code under a claim, withou
 So every revert follows from the facts: a pull request closed after review goes back to Idea (or
 Code while someone holds the card); a head commit the prod pin no longer contains (a rollback, or a
 new push not yet pinned) goes back to Review. A merge is never undone: a merged card the pin rolled
-back from stays In main.
+back from stays Done.
 
 «IN THE PROD PIN», precisely: ``spec.source.targetRevision`` of the prod Application file
 (``DmitriyG228/vexa-stations`` ``channels/vexa-internal/apps/vexa-prod.yaml`` on ``main``) names a
@@ -62,7 +60,7 @@ import base64
 import re
 from typing import Callable, Optional
 
-STAGES = ('Idea', 'Design', 'Code', 'Review', 'On prod', 'In main', 'Released', 'Done')
+STAGES = ('Idea', 'Design', 'Code', 'Review', 'On prod', 'Done')
 SIDE = ('Dropped',)
 #: The reading the re-check writes (``<connection>/<reading>``).
 DELIVERY_SOURCE = 'github/delivery'
@@ -150,12 +148,7 @@ def stage(readings: dict, flows_claim: Optional[dict] = None) -> tuple[Optional[
     if issue_closed and issue.get('state_reason') in ('not_planned', 'duplicate') and pr_state != 'merged':
         return out('Dropped', f"the issue was closed as {issue['state_reason'].replace('_', ' ')}")
     if pr_state == 'merged':
-        if rel_ok and release.get('tag'):
-            if issue is None or issue_closed:
-                return out('Done', f"released in {release['tag']}"
-                           + (' and the issue is closed' if issue_closed else ''))
-            return out('Released', f"released in {release['tag']}; the issue is still open")
-        return out('In main', f"{num} was merged at {pr.get('merged_at') or 'an unknown time'}"
+        return out('Done', f"{num} was merged at {pr.get('merged_at') or 'an unknown time'}"
                    + (f" as {_short(merge)}" if merge else ''))
     if pr_state == 'open':
         if pr.get('design_doc') is True:

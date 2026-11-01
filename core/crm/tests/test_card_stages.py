@@ -1,7 +1,7 @@
 """A software card's stage is set from facts by the stage rule only (founder, 1 Nov 2026).
 
-The ``software`` kind (``card_templates.py``) moves ``Idea > Design > Code > Review > On prod > In main >
-Released > Done``, side ``Dropped``; ``Cards.set_stage`` (``/internal/cards/stage``) is the only
+The ``software`` kind (``card_templates.py``) moves ``Idea > Design > Code > Review > On prod >
+Done``, side ``Dropped``; ``Cards.set_stage`` (``/internal/cards/stage``) is the only
 writer of its State and ``StageEvidence``. Every other path — a person's edit, an agent's edit or
 proposal, ``crm_change``, a gate — is refused. Readings are kept per source. Offline: SQLite.
 """
@@ -25,7 +25,7 @@ ANA = Caller(subject='7', email='u7@acme.test', workspaces=('sales',), writable=
 AGENT = Caller(subject='7', workspaces=('sales',), writable=('sales',), delegated=True, regime='autonomous',
                session='s1', credential_class='delegation')
 PR = 'https://github.com/Vexa-ai/vexa/pull/1962'
-STAGES = ['Idea', 'Design', 'Code', 'Review', 'On prod', 'In main', 'Released', 'Done']
+STAGES = ['Idea', 'Design', 'Code', 'Review', 'On prod', 'Done']
 FACT = {'fact': 'pr', 'value': {'state': 'open', 'head_sha': 'abc1234'}, 'source': 'github/delivery',
         'read_at': 1_793_500_000.0}
 
