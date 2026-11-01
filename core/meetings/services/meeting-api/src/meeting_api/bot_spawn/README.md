@@ -93,9 +93,12 @@ asks again at every admitted-time + N-minute boundary. An enforced stop is persi
 runtime teardown and converges after restart; repeated sweeps never apply the same decision twice.
 Observe-only sessions are never later reinterpreted as enforced sessions.
 
-No config means explicit stock OSS allow-all. Once configured, unavailable, malformed, stale, or
-cross-bound decisions fail closed. `mode=observe` records the authority response but cannot satisfy
-a hosted hard-spend-cap claim.
+No config means explicit stock OSS allow-all. Once configured, malformed, stale, or cross-bound
+decisions are refused. An unavailable authority fails closed at admission only (503); an admitted
+session fails open: the minute is booked as debt and replayed once on recovery, also when the
+meeting has stopped or ended by then (`list_service_authority_debt_sessions`; an enforced deny
+moves only a live row to `stopping`)
+([`../service_authority/README.md`](../service_authority/README.md)). `mode=observe` records the authority response but cannot satisfy a hosted hard-spend-cap claim.
 
 ## Auto-join block lists
 `auto_join_block.py` — domains and addresses the auto-join sweep never joins: the operator's

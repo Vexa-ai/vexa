@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from ..lifecycle.machine import dominant_completion_reason
+from .adapters import _book_debt_entry, _settle_debt_entry
 from .ports import (
     DuplicateMeeting,
     MaxBotsExceeded,
@@ -367,6 +368,15 @@ class InMemoryMeetingRepo:
             in ("enforce", "observe")
         ]
 
+    async def list_service_authority_debt_sessions(self) -> list[dict]:
+        """Rows in any status still carrying unsettled fail-open debt."""
+        return [
+            dict(m)
+            for m in self._meetings.values()
+            if isinstance(m.get("data", {}).get("service_authority"), dict)
+            and m["data"]["service_authority"].get("debt_open") is True
+        ]
+
     async def record_service_authority_decision(
         self,
         *,
@@ -402,15 +412,33 @@ class InMemoryMeetingRepo:
         metadata.update(decision.to_record())
         metadata["last_boundary_at"] = boundary
         metadata["last_decision_id"] = decision.decision_id
+        _settle_debt_entry(metadata, boundary)
         if (
             decision.enforced
             and not decision.allow
             and decision.stop_scope == "billable_service"
         ):
-            metadata["teardown_confirmed"] = False
-            row["data"]["stop_requested"] = True
-            row["status"] = "stopping"
+            if row["status"] in ("active", "needs_help"):
+                metadata["teardown_confirmed"] = False
+                row["data"]["stop_requested"] = True
+                row["status"] = "stopping"
+            else:
+                # Replayed debt minute of a row that is no longer live.
+                metadata["teardown_confirmed"] = True
+                metadata["teardown_skipped"] = "meeting_not_live"
         return True
+
+    async def record_service_authority_debt(
+        self,
+        *,
+        meeting_id,
+        request,
+    ) -> bool:
+        row = self._meetings.get(meeting_id)
+        if row is None:
+            return False
+        metadata = row.get("data", {}).get("service_authority")
+        return isinstance(metadata, dict) and _book_debt_entry(metadata, request)
 
     async def list_service_authority_teardowns(self) -> list[dict]:
         out = []
