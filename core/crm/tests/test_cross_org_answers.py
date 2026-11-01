@@ -159,7 +159,9 @@ CARD_KEYS = {'id', 'ref', 'type', 'revision', 'title', 'about', 'state', 'states
              # D11–D14 coordination: present, and blank for a cross-org room (no next actor, no
              # requester, no decision records, no viewer actions)
              'kind', 'next_actor', 'requester', 'next_check_at', 'chain', 'origin', 'open', 'handoff', 'gates',
-             'decisions', 'last_decision', 'viewer'}
+             'decisions', 'last_decision', 'viewer',
+             # the typed link and what the system read there (readings.py): none for a cross-org room
+             'source', 'reading'}
 
 
 def _card(store):

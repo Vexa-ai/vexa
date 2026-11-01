@@ -110,6 +110,8 @@ FLOWS_OUTBOUND: Dict[str, Tuple[Tuple[str, str], ...]] = {
     "crm": (
         ("POST", "/internal/references"),                # the crm pack: workspace references
         ("POST", "/internal/cards/offer"),               # post_meeting: the follow-up cards
+        ("POST", "/internal/cards/by-source"),           # the crm pack: which cards a reading is about
+        ("POST", "/internal/records/reading"),           # the crm pack: a sensor reading onto a card
     ),
 }
 T = subject_ticket

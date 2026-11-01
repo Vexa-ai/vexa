@@ -88,6 +88,13 @@ CARD_LIFECYCLE_PROPERTIES = {
     'Evidence': {'type': 'array', 'maxItems': 10, 'items': {'type': 'string', 'maxLength': 300},
                  'description': 'References a delivery cites (a page, a meeting, a commit)'},
     'Receipt': _NULL_STR(300, "The effect receipt an approval's executed gate needs"),
+    # 1 Nov 2026: the typed link to what the card tracks outside the CRM (a GitHub issue or pull
+    # request), and what the system last READ there (``readings.py``). ``Source`` is a person's or an
+    # agent's; ``Reading`` is written only by the reading route (``/internal/records/reading``).
+    'Source': _NULL_STR(300, 'What the card tracks outside the CRM: an https URL, or owner/repo#N on GitHub'),
+    'Reading': {'type': ['object', 'null'], 'additionalProperties': False, 'properties': {
+        'fields': {'type': 'object'}, 'evidence': {'type': 'object'}},
+        'description': 'What a sensor last read at the Source (fields with evidence); written by the system only'},
 }
 DEFINITIONS['Card']['properties'].update(CARD_LIFECYCLE_PROPERTIES)
 

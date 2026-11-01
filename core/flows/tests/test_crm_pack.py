@@ -58,3 +58,88 @@ def test_business_events_are_kept_once_with_their_evidence():
     assert out.result == {'reading': 'stripe/charges', 'read_at': 1.0}
     with pytest.raises(StepError):
         reg.steps['record_business_event'](SimpleNamespace(refs={'email': 'a@x.io'}))
+
+
+READING_EV = {'connection': 'github', 'reading': 'github/vexa-pulls', 'path': '/repos/Vexa-ai/vexa/pulls',
+              'query': '/repos/Vexa-ai/vexa/pulls?state=all', 'cursor': '2026-10-31T00:00:00Z', 'read_at': 1_793_500_000.0}
+PR_URL = 'https://github.com/Vexa-ai/vexa/pull/1962'
+READING_REFS = {'subject': PR_URL, 'url': PR_URL, 'title': 'Per-account ramp limit', 'state': 'closed',
+                'merged_at': '2026-10-31T18:02:11Z', 'head_sha': 'abc1234', 'labels': [{'name': 'bots'}],
+                '_evidence': READING_EV, '_sensor': 'instance/github-pulls'}
+
+
+def _crm(monkeypatch, answers):
+    import flows_steps.common as common
+    sent = []
+    monkeypatch.setenv('VEXA_FLOWS_CRM_API_URL', 'http://crm-api:8300')
+    monkeypatch.setenv('VEXA_FLOWS_SERVICE_KEY', 'flows-service-key-crm')
+
+    def http(method, url, headers, body, timeout=20):
+        sent.append((url, headers, body))
+        return answers(url, body)
+    monkeypatch.setattr(common, 'http', http)
+    return sent
+
+
+def test_a_reading_is_written_onto_every_card_that_tracks_it(monkeypatch):
+    from flows import Done
+    db, reg, clock, _ = rig()
+    build(reg, db)
+    assert [f.name for f in reg.match('business.reading')] == ['crm_reading']
+    assert admit(db, reg, clock, source_event_id='sensor:instance/g:x@1', event_type='business.reading',
+                 subject_refs=READING_REFS) == 1
+
+    def answers(url, body):
+        if url.endswith('/internal/cards/by-source'):
+            return 200, {'subject': 'github.com/vexa-ai/vexa#1962', 'cards': ['c1', 'gone', 'c2']}
+        if body['record'] == 'gone':
+            return 404, {'detail': 'Card not found'}
+        return 200, {'status': 'applied', 'revision': 4}
+    sent = _crm(monkeypatch, answers)
+    out = reg.steps['write_reading_to_crm'](SimpleNamespace(refs=READING_REFS))
+    assert isinstance(out, Done)
+    assert out.result['cards'] == [{'card': 'c1', 'status': 'applied', 'revision': 4},
+                                   {'card': 'c2', 'status': 'applied', 'revision': 4}]
+    url, headers, body = sent[0]
+    assert url == 'http://crm-api:8300/internal/cards/by-source' and body == {'link': PR_URL}
+    assert headers == {'X-Vexa-Service-Key': 'flows-service-key-crm'}
+    url, headers, body = sent[1]
+    assert url == 'http://crm-api:8300/internal/records/reading'
+    # the declared reading fields only: no subject, no engine refs, no evidence among the fields
+    assert body == {'record': 'c1', 'source': 'github/vexa-pulls',
+                    'fields': {'url': PR_URL, 'title': 'Per-account ramp limit', 'state': 'closed',
+                               'merged_at': '2026-10-31T18:02:11Z', 'head_sha': 'abc1234',
+                               'labels': [{'name': 'bots'}]},
+                    'evidence': {'read_at': 1_793_500_000.0, 'query': '/repos/Vexa-ai/vexa/pulls?state=all',
+                                 'cursor': '2026-10-31T00:00:00Z'}}
+
+
+def test_a_reading_no_card_tracks_writes_nothing(monkeypatch):
+    db, reg, clock, _ = rig()
+    build(reg, db)
+    sent = _crm(monkeypatch, lambda url, body: (200, {'subject': 's', 'cards': []}))
+    out = reg.steps['write_reading_to_crm'](SimpleNamespace(refs=READING_REFS))
+    assert out.result['cards'] == [] and len(sent) == 1
+
+
+def test_a_reading_needs_its_subject_evidence_and_a_crm(monkeypatch):
+    from flows import NotPresent
+    db, reg, clock, _ = rig()
+    build(reg, db)
+    step = reg.steps['write_reading_to_crm']
+    for refs in ({**READING_REFS, 'subject': ''}, {k: v for k, v in READING_REFS.items() if k != '_evidence'},
+                 {**READING_REFS, '_evidence': {'reading': 'github/vexa-pulls'}}):
+        with pytest.raises(StepError) as e:
+            step(SimpleNamespace(refs=refs))
+        assert e.value.retryable is False
+    monkeypatch.delenv('VEXA_FLOWS_CRM_API_URL', raising=False)
+    assert isinstance(step(SimpleNamespace(refs=READING_REFS)), NotPresent)
+    _crm(monkeypatch, lambda url, body: (503, {}))
+    with pytest.raises(StepError) as e:
+        step(SimpleNamespace(refs=READING_REFS))
+    assert e.value.retryable is True
+    _crm(monkeypatch, lambda url, body: ((200, {'cards': ['c1']}) if url.endswith('by-source')
+                                         else (422, {'detail': 'not declared'})))
+    with pytest.raises(StepError) as e:
+        step(SimpleNamespace(refs=READING_REFS))
+    assert e.value.retryable is False

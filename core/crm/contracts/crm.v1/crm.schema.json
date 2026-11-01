@@ -1781,6 +1781,109 @@
           ],
           "description": "session:<id> or message:<session>/<message id>"
         },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 300,
+          "description": "The typed link to what the card tracks outside the CRM: an https URL, or owner/repo#N on GitHub. Set by a person or an agent; null when the card tracks nothing, or the viewer may not read it."
+        },
+        "reading": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "fields",
+            "evidence"
+          ],
+          "description": "What the system last read at the Source (readings.py), written only by a sensor reading. RENDERER CONTRACT: a card with a reading shows fields.title and fields.state (and links fields.url, else source); the typed title is shown only on a card with no reading. Null when there is none, or the viewer may not read it.",
+          "properties": {
+            "fields": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 300
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "closed",
+                    "merged"
+                  ]
+                },
+                "merged_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "head_sha": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 64
+                },
+                "labels": {
+                  "type": "array",
+                  "maxItems": 30,
+                  "items": {
+                    "type": "string",
+                    "maxLength": 100
+                  }
+                },
+                "url": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 300
+                },
+                "updated_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "evidence": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "source",
+                "read_at"
+              ],
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "description": "<connection>/<reading> that read it"
+                },
+                "read_at": {
+                  "type": "number",
+                  "description": "epoch seconds"
+                },
+                "query": {
+                  "type": "string",
+                  "maxLength": 500
+                },
+                "cursor": {
+                  "type": "string",
+                  "maxLength": 100
+                }
+              }
+            }
+          }
+        },
         "open": {
           "type": "boolean"
         },
