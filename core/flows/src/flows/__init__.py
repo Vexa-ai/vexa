@@ -9,7 +9,7 @@ from .projection import status, waiting
 from .reconciler import escalate, reclaim
 from . import retention  # noqa: F401 — captured facts expire (`retention.purge`)
 from .registry import EventType, Flow, Registry
-from .signals import cancel, resume, retry, wake
+from .signals import cancel, claim_hold, release_hold, resume, retry, wake
 from . import tickets  # noqa: F401 — subject tickets the running step presents
 from .tickets import current as current_tickets
 
@@ -17,6 +17,7 @@ __all__ = [
     "admit", "Clock", "FakeClock", "SystemClock", "postgres_db", "db_from_url", "pg_engine",
     "claim", "effect_key", "tick", "Block", "Done", "NotPresent", "Reaction", "Receipt",
     "StepCtx", "StepError", "Wait", "status", "waiting", "escalate", "reclaim",
-    "EventType", "Flow", "Registry", "cancel", "resume", "retry", "wake", "tickets",
+    "EventType", "Flow", "Registry", "cancel", "claim_hold", "release_hold", "resume", "retry",
+    "wake", "tickets",
     "current_tickets",
 ]
