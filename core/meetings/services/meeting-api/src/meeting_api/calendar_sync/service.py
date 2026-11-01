@@ -720,6 +720,8 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
             attendees=ev.get("attendees") or None,
             auto_join_last_attempt=(spent or {}).get("auto_join_last_attempt"),
             auto_join_error=(spent or {}).get("auto_join_error"),
+            # Over the account's booking cap the event is still mirrored, with no bot (ADR-0052 §8).
+            over_cap="stamp",
         )
         if isinstance(created, dict) and not created.get("error"):
             by_native[(ev["platform"], ev["native_meeting_id"])] = created

@@ -1499,7 +1499,7 @@
       "fact": "which meeting statuses mean the meeting is LIVE",
       "kind": "set",
       "enforced": false,
-      "decision": "WHAT COUNTS AS A LIVE MEETING, AND WHERE THAT IS DECIDED. Six answers across fourteen production sites. Three of them are load-bearing disagreements, not spellings: (1) the SQL index predicate that four model files share includes `scheduled` and omits `needs_help`, so the index the live queries were built for covers a different set of rows than the application calls live; (2) the rig calls a `joining` meeting not-live, so a meeting the terminal is showing as starting is invisible to the MCP; (3) `auto_join.py` carries the parent-side alias `needs_human_help` that nothing else does. Making them agree means deciding what live MEANS and then serving it from meeting-api as a phase field, which is a product decision about an API and a database index — not something a gate may pick.",
+      "decision": "WHAT COUNTS AS A LIVE MEETING, AND WHERE THAT IS DECIDED. Six answers across fourteen production sites. Three of them are load-bearing disagreements, not spellings: (1) the SQL index predicate that four model files share includes `scheduled` and omits `needs_help`, so the index the live queries were built for covers a different set of rows than the application calls live; (2) the rig calls a `joining` meeting not-live, so a meeting the terminal is showing as starting is invisible to the MCP; (3) `planned_start.py` (the sweep and start route safeguards, moved from `auto_join.py` by ADR-0052 s2c) carries the parent-side alias `needs_human_help` that nothing else does. Making them agree means deciding what live MEANS and then serving it from meeting-api as a phase field, which is a product decision about an API and a database index — not something a gate may pick.",
       "why": "Fourteen production declarations of one concept, in five packages and two languages, plus a shell script. Nothing compares them and the survey found six distinct memberships. DELIBERATELY EXCLUDED as different questions, not copies of this one: `reconcile._PRE_ACTIVE_STATUSES` and `flows_steps/meeting.py`'s pre-active branch (before-active, not live), `reconcile._LIVENESS_GATED` (which rows the liveness sweep may touch), `collector/app._FSM_OWNED_STATUSES` (includes terminals) and `meeting.tsx` BADGE_STATUSES (rendering). Naming the exclusions here is the point: a manifest that quietly folded them in would be asserting a unification nobody decided.",
       "sites": [
         {
@@ -1527,7 +1527,7 @@
           "pattern": "IN_FLIGHT_STATUSES = frozenset\\(\\{([^}]*)\\}"
         },
         {
-          "path": "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/auto_join.py",
+          "path": "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/planned_start.py",
           "pattern": "LIVE_STATUSES = \\(([^)]*)\\)"
         },
         {
@@ -1559,7 +1559,7 @@
         {
           "value": "active · awaiting_admission · joining · needs_help · needs_human_help · requested · stopping",
           "sites": [
-            "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/auto_join.py"
+            "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/planned_start.py"
           ]
         },
         {

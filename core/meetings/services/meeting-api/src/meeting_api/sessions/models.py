@@ -25,6 +25,8 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -170,3 +172,28 @@ class MeetingSession(Base):
     __table_args__ = (
         UniqueConstraint("meeting_id", "session_uid", name="_meeting_session_uc"),
     )
+
+
+class MeetingPlannedOutbox(Base):
+    """The ``meeting.planned.changed`` facts owed to Flows (ADR-0052 §4) (mirror of admin-api's schema of record; capture and delivery: ``planned_outbox``): one row per change of
+    a planned meeting, written in the transaction that changes the meeting and delivered to Flows
+    afterwards, at least once and in id order. ``id`` is the fact's revision."""
+
+    __tablename__ = "meeting_planned_outbox"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    meeting_id = Column(Integer, nullable=False, index=True)
+    event = Column(JSONB, nullable=False)
+    delivered = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    created_at = Column(DateTime, server_default=func.now())
+    delivered_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_meeting_planned_outbox_pending", "id", postgresql_where=text("NOT delivered")),
+    )
+
+
+# Every ORM write of a meeting row carries its planned fact into the outbox in the same flush.
+from .. import planned_outbox as _planned_outbox  # noqa: E402
+
+_planned_outbox.install()

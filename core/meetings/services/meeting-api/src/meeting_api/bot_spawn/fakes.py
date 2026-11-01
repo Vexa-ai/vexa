@@ -20,7 +20,9 @@ from typing import Any, Optional
 
 from ..lifecycle.machine import dominant_completion_reason
 from .ports import (
+    CEILING_STATUSES,
     DuplicateMeeting,
+    NotScheduled,
     MaxBotsExceeded,
     MeetingStopped,
     QuotaExceeded,
@@ -30,6 +32,7 @@ from .ports import (
     _stopped_reopen_detail,
     reconcile_grace_for_status,
     reconcile_reference_time,
+    planned_row_startable,
 )
 
 _ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active")
@@ -136,7 +139,7 @@ class InMemoryMeetingRepo:
 
     async def create_meeting_guarded(
         self, *, user_id, platform, native_meeting_id, data, max_concurrent=None,
-        exclude_meeting_id=None,
+        exclude_meeting_id=None, planned_meeting_id=None,
     ) -> dict:
         """ATOMIC dedup + cap + insert (ROB1/ROB2). The check and the insert run with NO ``await``
         between them, so even ``SlowRepo`` (which adds ``await asyncio.sleep(0)`` inside the SEPARATE
@@ -157,12 +160,17 @@ class InMemoryMeetingRepo:
                 raise DuplicateMeeting(
                     f"An active meeting already exists for {platform}/{native_meeting_id}"
                 )
-        # 2. cap — count the user's ACTIVE bots (browser_session excluded); reject the N+1th (429).
+        # 1b. the start route's row (ADR-0052 §5): still this person's scheduled row, toggle on.
+        if planned_meeting_id is not None and not planned_row_startable(
+                self._meetings.get(planned_meeting_id), user_id=user_id, platform=platform,
+                native_meeting_id=native_meeting_id):
+            raise NotScheduled(f"meeting {planned_meeting_id} is not scheduled")
+        # 2. cap — count the user's bots holding a slot (browser_session excluded); reject the N+1th.
         if max_concurrent is not None:
             active = sum(
                 1 for m in self._meetings.values()
                 if m["user_id"] == user_id
-                and m["status"] in _ACTIVE_STATUSES
+                and m["status"] in CEILING_STATUSES
                 and m["platform"] != "browser_session"
                 and m["id"] != exclude_meeting_id
             )
@@ -178,6 +186,8 @@ class InMemoryMeetingRepo:
             and m["native_meeting_id"] == native_meeting_id
             and m["status"] in ("idle", "scheduled")
         ]
+        if planned_meeting_id is not None:
+            planned_rows = [self._meetings[planned_meeting_id]]   # THIS row, never the newest
         if planned_rows:
             row = max(planned_rows, key=lambda m: m["id"])  # newest, like the real adapter
             row["status"] = "requested"
@@ -379,7 +389,7 @@ class InMemoryMeetingRepo:
         return sum(
             1 for m in self._meetings.values()
             if m["user_id"] == user_id
-            and m["status"] in _ACTIVE_STATUSES
+            and m["status"] in CEILING_STATUSES
             and m["platform"] != "browser_session"   # infra excluded (parent meetings.py:1091)
             and m["id"] != exclude_meeting_id
         )
