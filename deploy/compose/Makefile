@@ -53,10 +53,11 @@ stack-test:
 stack-test-bot:
 	COMPOSE_BOT=1 ./bin/stack-test
 
-## stack-test-stress — the control plane under CONCURRENT load (A:V2): N mock bots at once, no cap overspill.
+## stack-test-stress — the control plane under CONCURRENT load (A:V2): N mock bots at once, no cap overspill
+## (runs with the bot ramp off: `BOT_RAMP_BURST=0`).
 ## Needs mock-bot:dev. Tune STRESS_N / STRESS_CAP. Pass COMPOSE_PROJECT + STORAGE_HOST_PORT to isolate on a shared dev host.
 stack-test-stress:
-	COMPOSE_STRESS=1 MOCK_BOT=1 BROWSER_IMAGE=$(BROWSER_IMAGE) ./bin/stack-test
+	COMPOSE_STRESS=1 MOCK_BOT=1 BOT_RAMP_BURST=0 BROWSER_IMAGE=$(BROWSER_IMAGE) ./bin/stack-test
 
 ## stack-test-chaos — the control plane RECOVERS from injected faults (A:V3): a redis/meeting-api blip
 ## (docker pause/unpause) mid-run → the FSM still reaches terminal. Needs mock-bot:dev.
