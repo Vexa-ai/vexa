@@ -11,6 +11,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { guardTree } from "./test-tree.mjs";
+
+guardTree();
 
 const GATES = join(dirname(fileURLToPath(import.meta.url)), "gates.mjs");
 
