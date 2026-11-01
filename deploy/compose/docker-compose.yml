@@ -1240,6 +1240,7 @@ services:
       # from here to act as an arbitrary person. The gateway reads the same value.
       - VEXA_FLOWS_SERVICE_KEY=${VEXA_FLOWS_SERVICE_KEY:-}
       - VEXA_FLOWS_TIMELINE_KEY=${VEXA_FLOWS_TIMELINE_KEY:-}
+      - VEXA_FLOWS_STREAM_OWNERS=${VEXA_FLOWS_STREAM_OWNERS:-}
       # event.v2 (D8): the sealing producers' PUBLIC keys, `<producer>.pem` (the fact-seal-keys
       # one-shot writes crm.pem); public only, so nothing here can seal. No file = that producer's
       # envelopes do not verify.

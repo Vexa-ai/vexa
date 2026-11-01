@@ -268,6 +268,8 @@ class ReadingWrite(Body):
     evidence: dict = Field(description='read_at (epoch seconds), and the query and cursor the read used.')
 class SoftwareCards(Body):
     record: str | None = Field(default=None, max_length=128, description='One card; omitted: every open software card.')
+class DueCards(Body):
+    record: str | None = Field(default=None, max_length=128, description='One card; omitted: every open card with a Due.')
 class StageWrite(Body):
     record: str = Field(min_length=1, max_length=128)
     stage: str | None = Field(min_length=1, max_length=60, description=(
@@ -751,6 +753,12 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
         """The software cards the stage rule computes (one, or every open one) with their State,
         Source and Reading. Internal tier only (flows' ``card_stage`` rule); it acts for nobody."""
         return audited('card.software', caller, body.record or '', lambda: cards.software_cards(org_id, body.record))
+
+    @app.post('/internal/cards/due', include_in_schema=False)
+    def internal_cards_due(body: DueCards, caller=Depends(internal)):
+        """The cards a due alarm reads (one, or every open card with a Due): id, Due, owner (Waiting),
+        open. Internal tier only (flows' ``card_due_alarms``); it acts for nobody."""
+        return audited('card.due', caller, body.record or '', lambda: cards.due_cards(org_id, body.record))
 
     @app.post('/internal/cards/stage', include_in_schema=False)
     def internal_cards_stage(body: StageWrite, caller=Depends(internal)):

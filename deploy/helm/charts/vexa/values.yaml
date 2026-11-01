@@ -1498,6 +1498,9 @@ flows:
   # A read-only key that opens GET /timeline for one named subject (VEXA_FLOWS_TIMELINE_KEY, rendered
   # into the flows Secret). Empty: only the operator key opens it.
   timelineKey: ""
+  # Who owns each ROLE stream (VEXA_FLOWS_STREAM_OWNERS): a map role -> subject uid, e.g.
+  # {ceo: "900001"}; that subject's credential reads GET /streams/<role>. Empty: the operator key only.
+  streamOwners: {}
   # Extra Jitsi hosts a meeting link may live on (VEXA_JITSI_HOSTS). Set it to the same value
   # meeting-api and the MCP service carry (their extraEnv), so every parser agrees what a link is.
   jitsiHosts: ""

@@ -14,7 +14,7 @@ import pytest
 from fixtures import rig
 from flows import Done, NotPresent, StepError, admit
 from flows_defs import card_stage as cs
-from flows_defs.crm import RECHECK_CRON, RECHECK_FLOW, STAGE_FLOW, build
+from flows_defs.crm import DUE_ARM_FLOW, RECHECK_CRON, RECHECK_FLOW, STAGE_FLOW, build
 
 T = 1_793_500_000.0
 HEAD, HEAD2, MERGE = 'abc1234abc1234abc1234abc1234abc1234abcd', 'def5678def5678def5678def5678def5678defa', \
@@ -336,13 +336,13 @@ SOFT = {'id': 'c1', 'revision': 3, 'state': 'Idea', 'source': PR_URL,
 def test_both_stage_flows_are_registered():
     db, reg, clock, _ = rig()
     build(reg, db)
-    assert {f.name for f in reg.match('crm.record.changed')} == {'crm_change_log', STAGE_FLOW}
+    assert {f.name for f in reg.match('crm.record.changed')} == {'crm_change_log', STAGE_FLOW, DUE_ARM_FLOW}
     sched = {f.name: f for f in reg.schedules()}
     assert sched[RECHECK_FLOW].cron == RECHECK_CRON
     reg.refresh_from_db(db)                                                  # a DB refresh never retires it
     assert RECHECK_FLOW in {f.name for f in reg.schedules()}
     refs = {'org_id': 't', 'record_id': 'c1', 'revision': 2, 'uid': '7'}
-    assert admit(db, reg, clock, source_event_id='crm-c1-2', event_type='crm.record.changed', subject_refs=refs) == 2
+    assert admit(db, reg, clock, source_event_id='crm-c1-2', event_type='crm.record.changed', subject_refs=refs) == 3
 
 
 def test_a_record_change_moves_a_software_card_once(monkeypatch):

@@ -1518,6 +1518,36 @@ class Cards:
                 break
         return {'stages': template['stages'], 'side': template['side'], 'cards': out}
 
+    def due_cards(self, org, record=None, limit=500):
+        """The cards a due alarm reads: one (``record``, whatever it holds, so a cleared Due or a closed
+        card cancels its alarm) or every open card with a ``Due``. Each answers its id, ``due`` (the date we
+        told someone), ``owner`` (its ``Waiting``: whose stream the alarm goes to) and ``open``. Internal
+        tier only; it acts for nobody."""
+        with self.store.engine.connect() as c:
+            types = [n for n, d in c.execute(select(s.object_types.c.name, s.object_types.c.definition)
+                                             .where(s.object_types.c.org_id == org)).all()
+                     if isinstance(d, dict) and d.get('x-card')]
+            r = s.records
+            q = select(r.c.id, r.c.object_type, r.c.fields, r.c.revision).where(
+                r.c.org_id == org, r.c.object_type.in_(types), r.c.deleted.is_(False), r.c.merged_into.is_(None))
+            if record:
+                q = q.where(r.c.id == str(record))
+            rows = c.execute(q.order_by(r.c.id)).all()
+        out = []
+        for rid, object_type, fields, revision in rows:
+            fields = fields or {}
+            life = self.lifecycle(object_type, fields.get('Kind')) or {}
+            stages, side = list(life.get('stages') or []), list(life.get('side') or [])
+            state = fields.get('State')
+            is_open = not (state in side or (stages and state == stages[-1]))
+            if not record and not (is_open and fields.get('Due')):
+                continue
+            out.append({'id': rid, 'revision': revision, 'due': fields.get('Due') or None,
+                        'owner': fields.get('Waiting') or None, 'state': state, 'open': is_open})
+            if len(out) >= max(1, min(int(limit or 500), 2000)):
+                break
+        return {'cards': out}
+
     def set_stage(self, org, record, stage, because, facts=None, mode='event'):
         """The stage rule's write (flows ``card_stage``): a software card's ``State`` and the facts that
         set it (``StageEvidence``). Written only when the stage differs, as one revision by

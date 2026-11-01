@@ -26,6 +26,22 @@ CREATE TABLE IF NOT EXISTS reaction (
 
 CREATE INDEX IF NOT EXISTS reaction_due ON reaction (next_run_at) WHERE status IN ('admitted','retrying');
 
+CREATE TABLE IF NOT EXISTS stream_item (
+	item_id TEXT NOT NULL, 
+	recipient TEXT NOT NULL, 
+	source_event_id TEXT NOT NULL, 
+	event_type TEXT NOT NULL, 
+	refs TEXT NOT NULL, 
+	reaction_id TEXT, 
+	created_at DOUBLE PRECISION NOT NULL, 
+	acked_at DOUBLE PRECISION, 
+	acked_by TEXT, 
+	PRIMARY KEY (item_id), 
+	CONSTRAINT stream_item_once UNIQUE (recipient, source_event_id)
+);
+
+CREATE INDEX IF NOT EXISTS stream_unacked ON stream_item (recipient, item_id) WHERE acked_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS mail_thread (
 	message_id TEXT NOT NULL, 
 	subject_uid TEXT NOT NULL, 
@@ -254,6 +270,6 @@ CREATE TABLE IF NOT EXISTS signal (
 	created_at DOUBLE PRECISION NOT NULL, 
 	consumed_at DOUBLE PRECISION, 
 	PRIMARY KEY (signal_id), 
-	CONSTRAINT signal_kind CHECK (kind IN ('resume','retry','cancel','wake','claim','release')), 
+	CONSTRAINT signal_kind CHECK (kind IN ('resume','retry','cancel','wake','claim','release','ack')), 
 	FOREIGN KEY(reaction_id) REFERENCES reaction (reaction_id)
 );

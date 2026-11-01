@@ -1,0 +1,327 @@
+"""Streams: events for one recipient, kept until acknowledged (factory concept, 1 Nov 2026, PRD L3.2).
+
+What it closes: agents learned of work by timer. A recipient (a role such as `ceo`, or a subject) now
+reads `GET /streams/{recipient}`, and an item stays there until `POST /streams/{recipient}/ack`, so a
+session that restarts reads what it missed. Then `card_due_alarms`: a card's Due puts `card.due_soon`
+(one working day before) and `card.due` (on the day) into its owner's stream.
+"""
+from __future__ import annotations
+
+import calendar
+import json
+
+import pytest
+
+from flows import EventType, FakeClock, Registry, admit, keyed, stream, tick
+from flows_defs import crm as crm_pack
+from flows_steps import stream as stream_steps
+from sqlite_double import SqliteDB
+
+from test_subject_bearer import admin as operator, bearer, client, fa, identity, rows  # noqa: F401 — fixtures
+
+T0 = 1_788_000_000.0
+
+
+# ── the engine ─────────────────────────────────────────────────────────────────────────────────────
+def test_an_item_is_appended_once_per_recipient_and_source_event():
+    db = SqliteDB()
+    a = stream.append(db, T0, recipient="ceo", source_event_id="e1", event_type="card.due",
+                      refs={"card": "c1", "_origin": ["x"], "_key": "k"}, reaction_id="r1")
+    assert a["status"] == "appended"
+    again = stream.append(db, T0 + 5, recipient="ceo", source_event_id="e1", event_type="card.due",
+                          refs={"card": "c1"}, reaction_id="r1")
+    assert again == {"item_id": a["item_id"], "status": "duplicate"}
+    other = stream.append(db, T0, recipient="software", source_event_id="e1", event_type="card.due",
+                          refs={"card": "c1"})
+    assert other["status"] == "appended" and other["item_id"] != a["item_id"]
+    (item,) = stream.unacked(db, "ceo")
+    assert item["refs"] == {"card": "c1"}, "the engine's own _ keys are not kept"
+    assert item["event_type"] == "card.due" and item["created_at"] == T0
+
+
+def test_unacked_items_come_oldest_first_and_page_after_an_item():
+    db = SqliteDB()
+    ids = [stream.append(db, T0 + i, recipient="ceo", source_event_id=f"e{i}", event_type="t",
+                         refs={"n": i})["item_id"] for i in (2, 0, 1)]
+    assert [i["refs"]["n"] for i in stream.unacked(db, "ceo")] == [0, 1, 2]
+    first = stream.unacked(db, "ceo", limit=1)[0]["item_id"]
+    assert first == ids[1]
+    assert [i["refs"]["n"] for i in stream.unacked(db, "ceo", after=first)] == [1, 2]
+    with pytest.raises(stream.StreamError):
+        stream.unacked(db, "ceo", after="not-an-id")
+
+
+def test_ack_removes_items_twice_is_a_no_op_and_writes_an_ack_signal():
+    db = SqliteDB()
+    db.execute("INSERT INTO reaction (reaction_id, source_event_id, event_type, subject_refs, flow, "
+               "flow_version, step, status, attempt, next_run_at, created_at, updated_at) VALUES "
+               "('r1','e1','t','{}','f',1,'to_stream','done',1,0,:t,:t)", {"t": T0})
+    a = stream.append(db, T0, recipient="ceo", source_event_id="e1", event_type="t", refs={},
+                      reaction_id="r1")["item_id"]
+    b = stream.append(db, T0, recipient="ceo", source_event_id="e2", event_type="t", refs={})["item_id"]
+    theirs = stream.append(db, T0, recipient="software", source_event_id="e3", event_type="t",
+                           refs={})["item_id"]
+    out = stream.ack(db, T0 + 1, "ceo", [a, theirs, "00000000000000000-000000000000"],
+                     actor="900001", reason="read")
+    assert out == {"acked": [a], "already": [], "unknown": [theirs, "00000000000000000-000000000000"]}
+    assert [i["item_id"] for i in stream.unacked(db, "ceo")] == [b]
+    assert stream.ack(db, T0 + 2, "ceo", [a], actor="900001") == {"acked": [], "already": [a], "unknown": []}
+    assert [i["item_id"] for i in stream.unacked(db, "software")] == [theirs], "another stream is untouched"
+    (sig,) = db.execute("SELECT kind, actor, reason, created_at FROM signal WHERE reaction_id = 'r1'")
+    assert sig[0] == "ack" and sig[1] == "900001" and sig[3] == T0 + 1
+    assert json.loads(sig[2]) == {"recipient": "ceo", "item_id": a, "reason": "read"}
+    assert db.execute("SELECT acked_at, acked_by FROM stream_item WHERE item_id = :i", {"i": a}) == [(T0 + 1, "900001")]
+
+
+def test_a_recipient_is_a_plain_name_and_refs_are_bounded():
+    db = SqliteDB()
+    for bad in ("", "a b", "../ceo", "x" * 201):
+        with pytest.raises(stream.StreamError):
+            stream.append(db, T0, recipient=bad, source_event_id="e", event_type="t", refs={})
+    with pytest.raises(stream.StreamError):
+        stream.append(db, T0, recipient="ceo", source_event_id="e", event_type="t",
+                      refs={"big": "x" * (stream.MAX_REFS + 1)})
+    assert stream.check_recipient("crm:b602f559-ac45-5dd8-a7dd-c1ee4daeab24")
+
+
+# ── the step, run by the engine ───────────────────────────────────────────────────────────────────
+def _rig(params):
+    db, clock, reg = SqliteDB(), FakeClock(T0), Registry()
+    step = stream_steps.register(reg, db)
+    assert stream_steps.register(reg, db) is step, "a second registration answers the bound step"
+    reg.flow(name="to_ceo", version=1, on=EventType("factory.test"), steps=[step], params=params)
+    return db, clock, reg
+
+
+def test_to_stream_appends_the_triggering_event_to_the_param_recipient():
+    db, clock, reg = _rig({"recipient": "ceo"})
+    assert admit(db, reg, clock, source_event_id="ev-1", event_type="factory.test",
+                 subject_refs={"card": "c1", "owner": "software"}) == 1
+    while tick(db, reg, clock):
+        pass
+    (item,) = stream.unacked(db, "ceo")
+    assert item["event_type"] == "factory.test" and item["refs"] == {"card": "c1", "owner": "software"}
+    assert stream.unacked(db, "software") == [], "the param outranks refs.owner"
+    assert admit(db, reg, clock, source_event_id="ev-1", event_type="factory.test",
+                 subject_refs={"card": "c1"}) == 0
+    assert len(stream.unacked(db, "ceo")) == 1
+
+
+def test_to_stream_falls_back_to_refs_owner_and_refuses_no_recipient():
+    db, clock, reg = _rig({})
+    admit(db, reg, clock, source_event_id="ev-1", event_type="factory.test", subject_refs={"owner": "business"})
+    admit(db, reg, clock, source_event_id="ev-2", event_type="factory.test", subject_refs={"card": "c2"})
+    while tick(db, reg, clock):
+        pass
+    assert [i["refs"] for i in stream.unacked(db, "business")] == [{"owner": "business"}]
+    assert db.execute("SELECT status FROM reaction WHERE source_event_id = 'ev-2::to_ceo'") == [("failed",)]
+
+
+# ── the API ──────────────────────────────────────────────────────────────────────────────────────
+@pytest.fixture
+def streams():
+    fa.db.execute("DELETE FROM stream_item")
+    yield
+    fa.db.execute("DELETE FROM stream_item")
+
+
+def _put(recipient, n):
+    return stream.append(fa.db, T0 + n, recipient=recipient, source_event_id=f"probe-{recipient}-{n}",
+                         event_type="factory.probe", refs={"n": n})["item_id"]
+
+
+def test_the_operator_reads_a_stream_and_ack_removes_items(client, streams):  # noqa: F811
+    a, b = _put("ceo", 1), _put("ceo", 2)
+    r = client.get("/streams/ceo", headers=operator())
+    assert r.status_code == 200, r.text
+    assert [i["item_id"] for i in r.json()["items"]] == [a, b]
+    r = client.post("/streams/ceo/ack", headers={**operator(), "X-Actor": "ceo-session"},
+                    json={"ids": [a], "reason": "seen"})
+    assert r.json() == {"recipient": "ceo", "acked": [a], "already": [], "unknown": []}
+    assert [i["item_id"] for i in client.get("/streams/ceo", headers=operator()).json()["items"]] == [b]
+    assert client.post("/streams/ceo/ack", headers=operator(), json={"ids": [a]}).json()["already"] == [a]
+    assert fa.db.execute("SELECT acked_by FROM stream_item WHERE item_id = :i", {"i": a}) == [("operator:ceo-session",)]
+    assert client.get(f"/streams/ceo?after={b}", headers=operator()).json()["items"] == []
+
+
+def test_wait_holds_the_request_until_the_deadline_when_nothing_is_there(client, streams, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(fa, "STREAM_POLL_S", 0.01)
+    r = client.get("/streams/ceo?wait=0.05", headers=operator())
+    assert r.status_code == 200 and r.json()["items"] == []
+    assert fa.STREAM_WAIT_MAX_S == 25.0
+
+
+def test_a_person_reads_their_own_stream_and_no_one_elses(client, identity, streams):  # noqa: F811
+    mine, ben = _put("126", 1), _put("512", 1)
+    r = client.get("/streams/126", headers=bearer("anna-key"))
+    assert r.status_code == 200 and [i["item_id"] for i in r.json()["items"]] == [mine]
+    assert client.get("/streams/anna@vexa.test", headers=bearer("anna-key")).status_code == 200
+    r = client.get("/streams/512", headers=bearer("anna-key"))
+    assert r.status_code == 403 and r.json()["detail"]["refused"] == "not_your_stream"
+    assert "items" not in r.text
+    r = client.post("/streams/512/ack", headers=bearer("anna-key"), json={"ids": [ben]})
+    assert r.status_code == 403
+    assert [i["item_id"] for i in stream.unacked(fa.db, "512")] == [ben], "nothing acked"
+    r = client.post("/streams/126/ack", headers=bearer("anna-key"), json={"ids": [mine, ben]})
+    assert r.json()["acked"] == [mine] and r.json()["unknown"] == [ben]
+    assert fa.db.execute("SELECT acked_by FROM stream_item WHERE item_id = :i", {"i": mine}) == [("126",)]
+
+
+def test_a_role_stream_is_its_declared_owners_and_otherwise_the_operators(client, identity, streams,  # noqa: F811
+                                                                         monkeypatch):
+    _put("ceo", 1)
+    assert client.get("/streams/ceo", headers=bearer("anna-key")).status_code == 403
+    monkeypatch.setenv("VEXA_FLOWS_STREAM_OWNERS", json.dumps({"ceo": "126"}))
+    r = client.get("/streams/ceo", headers=bearer("anna-key"))
+    assert r.status_code == 200 and len(r.json()["items"]) == 1
+    assert client.get("/streams/ceo", headers=bearer("ben-key")).status_code == 403
+    monkeypatch.setenv("VEXA_FLOWS_STREAM_OWNERS", "not json")
+    assert client.get("/streams/ceo", headers=bearer("anna-key")).status_code == 403
+
+
+def test_no_credential_and_a_bad_recipient_are_refused(client, streams):  # noqa: F811
+    assert client.get("/streams/ceo").status_code == 401
+    assert client.post("/streams/ceo/ack", json={"ids": ["x"]}).status_code == 401
+    assert client.get("/streams/a b", headers=operator()).status_code == 422
+    assert client.post("/streams/ceo/ack", headers=operator(), json={"ids": []}).status_code == 422
+
+
+# ── card_due_alarms ───────────────────────────────────────────────────────────────────────────────
+def _utc(y, m, d):
+    return float(calendar.timegm((y, m, d, 0, 0, 0)))
+
+
+def test_one_working_day_before_a_monday_is_the_friday():
+    assert crm_pack.due_times("2026-11-09") == (_utc(2026, 11, 6), _utc(2026, 11, 9))
+    assert crm_pack.due_times("2026-11-11") == (_utc(2026, 11, 10), _utc(2026, 11, 11))
+    assert crm_pack.due_times("2026-11-08") == (_utc(2026, 11, 6), _utc(2026, 11, 8))
+    assert crm_pack.due_times("") is None and crm_pack.due_times("soon") is None
+
+
+def _crm(monkeypatch, cards):
+    import flows_steps.common as common
+    sent = []
+    monkeypatch.setenv("VEXA_FLOWS_CRM_API_URL", "http://crm-api:8300")
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "flows-service-key-crm")
+
+    def http(method, url, headers, body, timeout=20):
+        path = url.replace("http://crm-api:8300", "")
+        sent.append((path, body))
+        if path != "/internal/cards/due":
+            return 404, {}
+        rec = (body or {}).get("record")
+        return 200, {"cards": [c for c in cards if not rec or c["id"] == rec]}
+    monkeypatch.setattr(common, "http", http)
+    return sent
+
+
+def _due_rig(now):
+    db, clock, reg = SqliteDB(), FakeClock(now), Registry()
+    crm_pack.build(reg, db)
+    return db, clock, reg
+
+
+def _run(db, reg, clock):
+    while tick(db, reg, clock):
+        pass
+    from flows_worker.__main__ import keyed_pass
+    keyed_pass(db, reg, clock, {"loop_limit": 3, "max_hops": 8, "runs_per_day": 100, "messages_per_day": 100})
+    while tick(db, reg, clock):
+        pass
+
+
+def _changed(db, reg, clock, card, rev):
+    return admit(db, reg, clock, source_event_id=f"crm-{card}-{rev}", event_type="crm.record.changed",
+                 subject_refs={"org_id": "t", "record_id": card, "revision": rev})
+
+
+def test_a_card_with_a_due_puts_due_soon_then_due_into_its_owners_stream(monkeypatch):
+    card = {"id": "c1", "due": "2026-11-09", "owner": "ceo", "state": "Doing", "open": True}
+    sent = _crm(monkeypatch, [card])
+    db, clock, reg = _due_rig(_utc(2026, 11, 2))
+    assert _changed(db, reg, clock, "c1", 2) >= 1
+    _run(db, reg, clock)
+    assert ("/internal/cards/due", {"record": "c1"}) in sent
+    armed = dict(db.execute("SELECT key, fire_at FROM keyed_schedule WHERE flow = 'card_due_alarms' "
+                            "AND status = 'armed'"))
+    assert armed == {"c1:soon": _utc(2026, 11, 6), "c1:due": _utc(2026, 11, 9)}
+    assert stream.unacked(db, "ceo") == [], "nothing before its time"
+
+    clock.advance(_utc(2026, 11, 6) - clock.now() + 1)          # Friday, one working day before
+    _run(db, reg, clock)
+    (soon,) = stream.unacked(db, "ceo")
+    assert soon["event_type"] == "card.due_soon"
+    assert soon["refs"] == {"card": "c1", "due": "2026-11-09", "owner": "ceo", "fire_at": _utc(2026, 11, 6)}
+
+    clock.advance(_utc(2026, 11, 9) - clock.now() + 1)          # the due date
+    _run(db, reg, clock)
+    assert [i["event_type"] for i in stream.unacked(db, "ceo")] == ["card.due_soon", "card.due"]
+    _run(db, reg, clock)
+    assert len(stream.unacked(db, "ceo")) == 2, "each alarm once"
+
+
+def test_a_moved_due_moves_the_alarm_and_a_closed_card_cancels_it(monkeypatch):
+    card = {"id": "c1", "due": "2026-11-09", "owner": "ceo", "state": "Doing", "open": True}
+    _crm(monkeypatch, [card])
+    db, clock, reg = _due_rig(_utc(2026, 11, 2))
+    _changed(db, reg, clock, "c1", 2)
+    _run(db, reg, clock)
+    card["due"] = "2026-11-12"
+    card["owner"] = "software"
+    _changed(db, reg, clock, "c1", 3)
+    _run(db, reg, clock)
+    rows = dict(db.execute("SELECT key, fire_at FROM keyed_schedule WHERE flow = 'card_due_alarms' "
+                           "AND status = 'armed'"))
+    assert rows == {"c1:soon": _utc(2026, 11, 11), "c1:due": _utc(2026, 11, 12)}
+    (payload,) = db.execute("SELECT payload FROM keyed_schedule WHERE key = 'c1:due'")
+    assert json.loads(payload[0])["owner"] == "software"
+    card["open"] = False
+    _changed(db, reg, clock, "c1", 4)
+    _run(db, reg, clock)
+    assert db.execute("SELECT DISTINCT status FROM keyed_schedule WHERE flow = 'card_due_alarms'") == [("cancelled",)]
+
+
+def test_an_overdue_card_alarms_now_and_the_hourly_run_finds_cards_and_drops_gone_ones(monkeypatch):
+    cards = [{"id": "late", "due": "2026-10-20", "owner": "founder", "state": "Doing", "open": True},
+             {"id": "c2", "due": "2026-11-20", "owner": "business", "state": "Doing", "open": True},
+             {"id": "nobody", "due": "2026-11-20", "owner": "", "state": "Doing", "open": True}]
+    sent = _crm(monkeypatch, cards)
+    db, clock, reg = _due_rig(_utc(2026, 11, 2))
+    run = reg.steps["arm_card_due"]
+    from flows import StepCtx
+    from flows.model import Reaction
+    ctx = StepCtx(reaction=Reaction("r", "s", "schedule.due", {}, crm_pack.DUE_RECHECK_FLOW, 1, "arm_card_due",
+                                    "running", 1, 0, None, None, None), effect_key="k", prior={},
+                  clock_now=clock.now())
+    out = run(ctx)
+    assert ("/internal/cards/due", {}) in sent and out.result["cards"] == 3
+    _run(db, reg, clock)
+    (late,) = stream.unacked(db, "founder")
+    assert late["event_type"] == "card.due" and late["refs"]["card"] == "late"
+    assert db.execute("SELECT status FROM keyed_schedule WHERE key = 'late:soon'") == [], "no soon for a passed date"
+    assert db.execute("SELECT count(*) FROM keyed_schedule WHERE key LIKE 'nobody:%'") == [(0,)], "no owner, no alarm"
+    cards.pop(1)                                                  # c2 left the open-with-Due set
+    run(ctx)
+    assert db.execute("SELECT DISTINCT status FROM keyed_schedule WHERE key LIKE 'c2:%'") == [("cancelled",)]
+
+
+def test_a_missed_alarm_fires_late_on_the_next_hourly_run(monkeypatch):
+    card = {"id": "c1", "due": "2026-11-09", "owner": "ceo", "state": "Doing", "open": True}
+    _crm(monkeypatch, [card])
+    db, clock, reg = _due_rig(_utc(2026, 11, 2))
+    _changed(db, reg, clock, "c1", 2)
+    _run(db, reg, clock)
+    clock.advance(_utc(2026, 11, 6) - clock.now() + keyed.CATCHUP_S + 60)   # the worker was down
+    _run(db, reg, clock)
+    assert db.execute("SELECT status FROM keyed_schedule WHERE key = 'c1:soon'") == [("missed",)]
+    assert stream.unacked(db, "ceo") == []
+    _changed(db, reg, clock, "c1", 3)                              # or the hourly run: same step
+    _run(db, reg, clock)
+    assert [i["event_type"] for i in stream.unacked(db, "ceo")] == ["card.due_soon"]
+
+
+def test_the_due_flows_are_registered():
+    db, clock, reg = _due_rig(T0)
+    assert crm_pack.DUE_ARM_FLOW in {f.name for f in reg.match("crm.record.changed")}
+    assert {f.name: f.cron for f in reg.schedules()}[crm_pack.DUE_RECHECK_FLOW] == crm_pack.DUE_RECHECK_CRON
+    assert reg.newest("instance", crm_pack.DUE_FLOW).steps == ("to_stream",)

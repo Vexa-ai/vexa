@@ -448,7 +448,7 @@
       "version": "version INTEGER NOT NULL"
     },
     "signal": {
-      "CONSTRAINT signal_kind CHECK (kind IN ('resume','retry','cancel','wake','claim','release'))": "CONSTRAINT signal_kind CHECK (kind IN ('resume','retry','cancel','wake','claim','release'))",
+      "CONSTRAINT signal_kind CHECK (kind IN ('resume','retry','cancel','wake','claim','release','ack'))": "CONSTRAINT signal_kind CHECK (kind IN ('resume','retry','cancel','wake','claim','release','ack'))",
       "FOREIGN KEY(reaction_id) REFERENCES reaction (reaction_id)": "FOREIGN KEY(reaction_id) REFERENCES reaction (reaction_id)",
       "PRIMARY KEY (signal_id)": "PRIMARY KEY (signal_id)",
       "actor": "actor TEXT NOT NULL",
@@ -458,6 +458,19 @@
       "reaction_id": "reaction_id TEXT NOT NULL",
       "reason": "reason TEXT",
       "signal_id": "signal_id TEXT NOT NULL"
+    },
+    "stream_item": {
+      "CONSTRAINT stream_item_once UNIQUE (recipient, source_event_id)": "CONSTRAINT stream_item_once UNIQUE (recipient, source_event_id)",
+      "PRIMARY KEY (item_id)": "PRIMARY KEY (item_id)",
+      "acked_at": "acked_at DOUBLE PRECISION",
+      "acked_by": "acked_by TEXT",
+      "created_at": "created_at DOUBLE PRECISION NOT NULL",
+      "event_type": "event_type TEXT NOT NULL",
+      "item_id": "item_id TEXT NOT NULL",
+      "reaction_id": "reaction_id TEXT",
+      "recipient": "recipient TEXT NOT NULL",
+      "refs": "refs TEXT NOT NULL",
+      "source_event_id": "source_event_id TEXT NOT NULL"
     }
   },
   "core/identity/services/admin-api/src/admin_api/schema/models.py": {

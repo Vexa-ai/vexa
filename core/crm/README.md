@@ -179,6 +179,7 @@ https on the network's own domain, stored as given; nothing is fetched or import
 | — | POST `/internal/records/reading` | Write a sensor reading onto a card as its `Reading`: the declared fields with evidence, idempotent by (record, source, read_at), a later reading replacing an earlier one (internal secret; flows' `write_reading_to_crm`). See *Sensor readings on a card* |
 | — | POST `/internal/cards/software` | The software cards the stage rule computes (one, or every open one) with their State, Source and Reading (internal secret; flows' `card_stage` rule) |
 | — | POST `/internal/cards/stage` | The stage rule's write: a software card's State with the facts that set it, only when it differs; a `recheck` move is a correction. The only path that sets a software card's stage (internal secret). See *A software card's stage, from facts* |
+| — | POST `/internal/cards/due` | The cards a due alarm reads (one, or every open card with a `Due`): id, Due, owner (`Waiting`), open (internal secret; flows' `card_due_alarms`) |
 | — | POST `/internal/accounts` | Attach an account to its person (internal secret) |
 | — | POST `/person/profile` | The person's own profile: read, edit, claim, unclaim, publish, import (D35) |
 | — | POST `/internal/profiles` · `/internal/profiles/public` | Profile fields for agent-api's directory; a published public page (internal secret) |

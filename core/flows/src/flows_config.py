@@ -47,6 +47,11 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "capability", None,
         "a read-only key that opens the timeline projection and nothing else. Unset = only the "
         "operator key opens it."),
+    "VEXA_FLOWS_STREAM_OWNERS": (
+        "capability", None,
+        "a JSON object naming the subject that owns each ROLE stream (`{\"ceo\": \"<uid>\"}`): that "
+        "subject's credential reads and acknowledges `GET /streams/<role>`. Unset = a role stream "
+        "is read by the operator key only."),
     "VEXA_FLOWS_CRM_PUBLISH_KEY": (
         "capability", None,
         "the crm outbox's publish key: `POST /events` for the CRM's own facts (`crm.record.changed`) "

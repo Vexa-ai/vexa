@@ -115,6 +115,8 @@ def test_the_flows_credential_cannot_read_a_calendar(door):
     ("GET", "/meetings/meetings/3/export"),
     ("POST", "/crm/internal/orgs/p-7/erase"),
     ("POST", "/crm/internal/persons"),
+    ("GET", "/crm/internal/cards/due"),                   # card_due_alarms reads with POST only
+    ("POST", "/crm/internal/cards/due/x"),
     ("GET", "/broker/api/internal/sensor/calendar-changes"),
 ])
 def test_routes_off_the_list_are_refused(door, method, path):
@@ -209,6 +211,15 @@ def test_every_listed_call_crosses_to_its_own_route(door, domain, method, templa
     assert str(sent.url) == f"{UPSTREAMS[domain]}{path}?q=1"
     if method in ("POST", "PUT"):
         assert json.loads(sent.content) == {"a": 1}
+
+
+def test_the_due_alarm_read_crosses_to_the_crm_internal_route(door):
+    c, up = door
+    r = c.post("/crm/internal/cards/due", headers=_flows(), json={"record": "c1"})
+    assert r.status_code == 200, r.text
+    (sent,) = up.forwarded()
+    assert str(sent.url) == f"{UPSTREAMS['crm']}/internal/cards/due"
+    assert json.loads(sent.content) == {"record": "c1"}
 
 
 def test_an_internal_tier_call_carries_the_secret_the_subject_and_the_flow_headers(door):

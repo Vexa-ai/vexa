@@ -1349,6 +1349,10 @@ def build(reg: Registry, db) -> None:
         uid = ensure_platform_user(who)
         return Done({"uid": uid}, provider_ref=uid)
 
+    # the stream primitive's producer: events for one recipient, kept until acknowledged
+    from flows_steps import stream as _stream_steps
+    _stream_steps.register(reg, db)
+
     @reg.step
     def rsvp_accept(ctx: StepCtx):
         """Accept the invitation IN THE ORGANIZER'S CALENDAR — iMIP METHOD:REPLY over SMTP;

@@ -25,6 +25,10 @@
                                     `behavior/queue/` file's front-matter). Same door as
                                     /queue/waiting, a much smaller answer: it is built to be asked
                                     on every call and to ride along with unrelated work.
+  GET  /streams/{recipient}         ONE RECIPIENT'S STREAM — its unacknowledged items, oldest
+                                    first (`after`, `limit`, `wait` ≤ 25 s). The operator key or
+                                    the recipient's own credential.
+  POST /streams/{recipient}/ack     {ids, reason}: acknowledged items leave the stream
   GET  /timeline?subject=…          ONE PERSON'S DAY, in order — facts, receipts and the
                                     meetings table merged and scoped to them (PRD decision 31).
                                     Read-only, and it takes the operator key OR the narrower
@@ -488,6 +492,10 @@ DELEGATED_REACH = {
     ("GET", "/friction"): OPEN,
     ("GET", "/queue/waiting"): OPEN,
     ("GET", "/queue/notices"): OPEN,
+    # a recipient's own stream: reading it is a read of their own rows, and acknowledging an item only
+    # marks it read — the agent that listens to its stream has nobody in the loop by design
+    ("GET", "/streams/{recipient}"): OPEN,
+    ("POST", "/streams/{recipient}/ack"): OPEN,
     ("GET", "/mail/address"): OPEN,
     ("GET", "/mail/delivery"): OPEN,
     # the admin account's mail design: reads are open to its chat worker, every write needs the
@@ -3197,6 +3205,77 @@ def queue_notices(subject: str = "", limit: int = 50,
     who = scoped_subject(caller, subject, stamped=x_user_id)
     return _flows_queue.notices(db, subject=who, limit=max(1, min(int(limit), 200)),
                                 identity=_as_me(caller))
+
+
+# ── streams: events for one recipient, kept until acknowledged (factory concept, 1 Nov 2026) ──────
+#: The longest `GET /streams/{recipient}?wait=` holds a request open, and how often it looks again.
+STREAM_WAIT_MAX_S = 25.0
+STREAM_POLL_S = 0.5
+
+
+def _stream_owners() -> dict:
+    """`VEXA_FLOWS_STREAM_OWNERS`: a role recipient → the subject whose credential reads it
+    (`{"ceo": "900001"}`). Unset or unreadable: no role stream has an owner but the operator."""
+    try:
+        raw = json.loads(flows_config.get("VEXA_FLOWS_STREAM_OWNERS") or "{}")
+    except ValueError:
+        return {}
+    return {str(k).strip(): str(v).strip().lower() for k, v in raw.items()} if isinstance(raw, dict) else {}
+
+
+def _stream_of(caller: Caller, recipient: str) -> str:
+    """The recipient this caller may read and acknowledge: the operator any one; a person their own
+    (their uid or address names it, or the role it is declared for them). Else 403, naming no item."""
+    from flows import stream
+    try:
+        recipient = stream.check_recipient(recipient)
+    except stream.StreamError as e:
+        raise HTTPException(status_code=422, detail={"refused": "not_a_recipient", "note": str(e)})
+    if caller.kind == "admin":
+        return recipient
+    owner = _stream_owners().get(recipient, recipient).lower()
+    if owner not in caller.names:
+        raise HTTPException(status_code=403, detail={"refused": "not_your_stream", "recipient": recipient,
+                                                     "you_are": caller.uid})
+    return recipient
+
+
+@app.get("/streams/{recipient}")
+def stream_read(recipient: str, after: str = "", limit: int = 50, wait: float = 0.0,
+                caller: Caller = Depends(subject_or_operator)):
+    """ONE RECIPIENT'S STREAM: its unacknowledged items after `after` (an item id), oldest first. An item
+    stays until the recipient acknowledges it, so a session that restarts reads what it missed. `wait`
+    (seconds, at most 25) holds the request until an item arrives. The operator key, or the recipient's
+    own credential (`VEXA_FLOWS_STREAM_OWNERS` names who owns a role stream)."""
+    from flows import stream
+    who = _stream_of(caller, recipient)
+    deadline = time.monotonic() + max(0.0, min(float(wait or 0), STREAM_WAIT_MAX_S))
+    while True:
+        try:
+            items = stream.unacked(db, who, after=after, limit=limit)
+        except stream.StreamError as e:
+            raise HTTPException(status_code=422, detail={"refused": "bad_after", "note": str(e)})
+        if items or time.monotonic() >= deadline:
+            return {"recipient": who, "items": items}
+        time.sleep(STREAM_POLL_S)
+
+
+class StreamAck(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=500)
+    reason: str = Field(default="", max_length=500)
+
+
+@app.post("/streams/{recipient}/ack")
+def stream_ack(recipient: str, body: StreamAck, x_actor: str = Header(default=""),
+               caller: Caller = Depends(subject_or_operator)):
+    """Acknowledge items of ONE recipient's stream: each leaves the stream, with who acknowledged it and
+    when, and an `ack` signal on the run that appended it. Acknowledging twice changes nothing; another
+    recipient's stream is 403."""
+    from flows import stream
+    who = _stream_of(caller, recipient)
+    actor = caller.uid if caller.kind != "admin" else f"operator:{(x_actor or 'api').strip()[:80]}"
+    out = stream.ack(db, clock.now(), who, body.ids, actor=actor, reason=body.reason)
+    return {"recipient": who, **out}
 
 
 # THE ENTRYPOINT GUARD IS THE LAST THING IN THIS MODULE, and that is load-bearing rather than

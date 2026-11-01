@@ -157,6 +157,10 @@ Poll-composite until completed, over the transcribe window.
 
 RETIRED BY DECISION 29 (2026-09-02). Kept as a no-op, for the reason above. It emitted `onboarding.person.needed` / `onboarding.group.needed`, which started the email conversations that chased a person until they finished setup. Those flows are gone, so the facts now have no consumer — and a step that emits a fact nothing reacts to is worse than one that does nothing, because it leaves rows in the log implying work that never existed. The invite's touches are RSVP accept, the ack mail, and the prepare mail. Three, and no others. Group setup happens in a chat behind a `group-setup` scaffold, where the person is there to be asked. Result: \{\} — no reactions created, deliberately.
 
+### `to_stream`
+
+Append the event that started this run to ONE recipient's stream, where it stays until the recipient acknowledges it (`POST /streams/{recipient}/ack`). The recipient is the flow's `recipient` param, else refs.owner. A keyed fire appends as the event that armed it. Reads: params.recipient · refs.owner · Effect: one stream item, once per (recipient, source event) · Result: \{recipient, item_id, status\}.
+
 ### `wake_meeting_chat`
 
 Wake the meeting's agent in the meeting's chat with what was just said: ask agent-api which chat the meeting wakes, then post `meeting.signal` with that chat as `target.chat` and the plan; the buffer rides as data, never as instructions. Result: \{chat, queued\}.
