@@ -30,8 +30,8 @@ failures (`422`).
 ### Maintenance and incidents
 
 An error during an announced update or incident is not a mystery: poll [`GET /status`](/api/status),
-or watch for the `X-Vexa-Maintenance: <id>` header, which every gateway reply carries while a record
-is active.
+or watch for the `X-Vexa-Maintenance: <id>` header, which the gateway's replies carry while a record
+is active (all but a bare `500` from an unhandled gateway exception, so poll `/status` on a `500`).
 
 ## By surface
 
