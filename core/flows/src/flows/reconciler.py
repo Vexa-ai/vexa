@@ -8,7 +8,12 @@ from .db import DB
 
 def reclaim(db: DB, clock: Clock) -> int:
     """A worker died mid-step: its lease expires, the reaction returns to the queue.
-    The receipt it may have left decides on resume whether the effect already happened."""
+    The receipt it may have left decides on resume whether the effect already happened.
+
+    A lapsed HOLD (`signals.claim_hold`) is not a dead worker: it goes back to the waiting state it
+    was claimed from first (`signals.expire_holds`), and only what is left is requeued here."""
+    from .signals import expire_holds
+    expire_holds(db, clock)
     rows = db.execute(
         """UPDATE reaction SET status = 'retrying', next_run_at = :now,
                   lease_until = NULL, updated_at = :now

@@ -448,7 +448,7 @@
       "version": "version INTEGER NOT NULL"
     },
     "signal": {
-      "CONSTRAINT signal_kind CHECK (kind IN ('resume','retry','cancel','wake'))": "CONSTRAINT signal_kind CHECK (kind IN ('resume','retry','cancel','wake'))",
+      "CONSTRAINT signal_kind CHECK (kind IN ('resume','retry','cancel','wake','claim','release'))": "CONSTRAINT signal_kind CHECK (kind IN ('resume','retry','cancel','wake','claim','release'))",
       "FOREIGN KEY(reaction_id) REFERENCES reaction (reaction_id)": "FOREIGN KEY(reaction_id) REFERENCES reaction (reaction_id)",
       "PRIMARY KEY (signal_id)": "PRIMARY KEY (signal_id)",
       "actor": "actor TEXT NOT NULL",
