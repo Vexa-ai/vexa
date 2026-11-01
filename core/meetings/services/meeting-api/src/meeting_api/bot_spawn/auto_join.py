@@ -54,6 +54,7 @@ from ..service_authority import (
 from .auto_join_block import blocked_reason, parse_block
 from .env_flags import resolve_spawn_flag
 from .ports import MaxBotsExceeded, MeetingStopped, QuotaExceeded, SpawnFailed
+from .ramp import deployment_dials, resolve_ramp
 from .meeting_host import MeetingHostRefused
 from .service import DuplicateMeeting, request_bot
 
@@ -253,6 +254,10 @@ async def auto_join_tick(
     # the two spawners cannot drift again; there is no per-user setting today, and this invents none.
     recording_enabled = resolve_spawn_flag("RECORDING_ENABLED", default=True)
     transcribe_enabled = resolve_spawn_flag("TRANSCRIBE_ENABLED", default=True)
+    # The bot ramp (#1962): the deployment's dials, with each account's own `bot_ramp` from the
+    # bot-context below. A ramp refusal is a `RampExceeded` — a `MaxBotsExceeded` — so it is stamped
+    # and backed off like the ceiling, with no branch of its own.
+    ramp_deployment = deployment_dials()
 
     async def _stamp_error(row: dict, message: str, *, counter: str = "errors",
                            event: str = "auto_join_failed") -> None:
@@ -354,6 +359,7 @@ async def auto_join_tick(
                 recording_enabled=recording_enabled,
                 transcribe_enabled=transcribe_enabled,
                 max_concurrent=ctx.get("max_concurrent"),
+                ramp=resolve_ramp(ctx.get("bot_ramp"), ramp_deployment),
                 webhook_url=ctx.get("webhook_url"),
                 webhook_secret=ctx.get("webhook_secret"),
                 webhook_events=ctx.get("webhook_events"),

@@ -42,6 +42,8 @@ _INTERNAL_DATA_KEYS = frozenset({
     # Stored on the meeting for readers that ask (prod-cutover R4); a 0.12 webhook receiver gets the
     # payload it always got.
     "transcript_gaps",
+    # The bot ramp's admission stamp (#1962): internal bookkeeping, never part of a payload.
+    "spawn_admitted_at",
 })
 
 

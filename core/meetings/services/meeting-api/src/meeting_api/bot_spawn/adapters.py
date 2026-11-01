@@ -56,6 +56,48 @@ def _iso_utc(dt) -> Optional[str]:
     return aware.isoformat().replace("+00:00", "Z")
 
 
+_ACTIVE_BOT_STATUSES = ("requested", "joining", "awaiting_admission", "active")
+
+#: How far before the ramp window ``_ramp_rows`` still reads non-active rows by ``updated_at``. A
+#: stamped row's ``updated_at`` (the transaction's start, ``func.now()``) can precede its stamp (taken
+#: after the advisory lock) by the time the spawn waited for that lock; the slack covers it.
+_RAMP_UPDATED_SLACK_S = 600
+
+
+async def _db_now(db) -> datetime:
+    """The database's clock, read AFTER the per-user advisory lock: every replica stamps and counts
+    the ramp window on one clock, so replica clock skew cannot open or close the window."""
+    from sqlalchemy import text
+
+    at = (await db.execute(text("SELECT clock_timestamp()"))).scalar()
+    if not isinstance(at, datetime):
+        return datetime.now(timezone.utc)
+    return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+
+
+async def _ramp_rows(db, *, user_id: int, now: datetime, window_s: int) -> list:
+    """``(is_active, spawn_admitted_at)`` for the account's rows the ramp can count: every active
+    row (the base) and every row touched since the window opened (a stamp inside it). One query,
+    narrowed by ``ix_meetings_user_id``; ``browser_session`` excluded, like the ceiling."""
+    from datetime import timedelta
+
+    from sqlalchemy import or_, select
+
+    from ..sessions.models import Meeting
+    from .ramp import STAMP_KEY
+
+    since = (now - timedelta(seconds=window_s + _RAMP_UPDATED_SLACK_S)).astimezone(
+        timezone.utc).replace(tzinfo=None)
+    rows = (await db.execute(
+        select(Meeting.status, Meeting.data[STAMP_KEY].astext).where(
+            Meeting.user_id == user_id,
+            Meeting.platform != "browser_session",
+            or_(Meeting.status.in_(_ACTIVE_BOT_STATUSES), Meeting.updated_at >= since),
+        )
+    )).all()
+    return [(status in _ACTIVE_BOT_STATUSES, stamp) for status, stamp in rows]
+
+
 def _row_to_dict(m) -> dict:
     return {
         "id": m.id,
@@ -234,13 +276,38 @@ class SqlAlchemyMeetingRepo:
             ).scalars().first()
             return _row_to_dict(m) if m else None
 
-    async def reopen_meeting(self, *, meeting_id, data_patch=None) -> dict:
-        from sqlalchemy import select
+    async def reopen_meeting(self, *, meeting_id, data_patch=None, ramp=None, user_id=None,
+                             max_concurrent=None) -> dict:
+        from sqlalchemy import bindparam, func, select, text
         from sqlalchemy.orm.attributes import flag_modified
 
         from ..sessions.models import Meeting
+        from .ramp import STAMP_KEY, enforce, format_stamp, ramp_applies
 
         async with self._session_factory() as db:
+            gated = user_id is not None and ramp_applies(ramp, max_concurrent)
+            if gated:
+                # The ramp's count, check and stamp ride the SAME per-user lock the guarded create
+                # takes, taken before the row lock, so a reopen and a fresh spawn serialize.
+                await db.execute(
+                    text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
+                )
+            now = await _db_now(db)
+            if gated:
+                running = int((await db.execute(
+                    select(func.count()).select_from(Meeting).where(
+                        Meeting.user_id == user_id,
+                        Meeting.status.in_(_ACTIVE_BOT_STATUSES),
+                        Meeting.platform != "browser_session",
+                        Meeting.id != meeting_id,
+                    )
+                )).scalar() or 0)
+                if running >= max_concurrent:
+                    raise MaxBotsExceeded(user_id, max_concurrent)
+                enforce(ramp, max_concurrent, user_id=user_id, running=running,
+                        rows=await _ramp_rows(db, user_id=user_id, now=now,
+                                              window_s=ramp.window_s),
+                        now=now)
             m = (
                 await db.execute(
                     select(Meeting).where(Meeting.id == meeting_id).with_for_update()
@@ -270,6 +337,7 @@ class SqlAlchemyMeetingRepo:
                     data.pop(key, None)
                 else:
                     data[key] = value
+            data[STAMP_KEY] = format_stamp(now)  # the ramp's admission stamp (#1962)
             m.data = data
             flag_modified(m, "data")
             # updated_at is set server-side by the column's onupdate=func.now() (main's pattern);
@@ -526,9 +594,9 @@ class SqlAlchemyMeetingRepo:
 
     async def create_meeting_guarded(
         self, *, user_id, platform, native_meeting_id, data, max_concurrent=None,
-        exclude_meeting_id=None,
+        exclude_meeting_id=None, ramp=None,
     ) -> dict:
-        """ATOMIC dedup + cap + insert in ONE transaction (ROB1/ROB2).
+        """ATOMIC dedup + cap + ramp + insert in ONE transaction (ROB1/ROB2, #1962).
 
         The TOCTOU-safe spawn primitive. Two layers guard it:
 
@@ -544,19 +612,23 @@ class SqlAlchemyMeetingRepo:
         from sqlalchemy.exc import IntegrityError
 
         from ..sessions.models import Meeting
+        from .ramp import STAMP_KEY, enforce, format_stamp, ramp_applies
 
         # 0. depleted — a cap <= 0 means NO bots allowed (0 is "depleted", never "unlimited");
         #    reject before touching the DB. Only ``None`` (no cap provided) skips the gate.
         if max_concurrent is not None and max_concurrent <= 0:
             raise MaxBotsExceeded(user_id, max_concurrent)
 
-        active = ["requested", "joining", "awaiting_admission", "active"]
+        active = list(_ACTIVE_BOT_STATUSES)
         async with self._session_factory() as db:
             # Per-user serialization: hold the advisory lock for the whole transaction. asyncpg needs a
             # bound int param (not a literal-format string), so bind it explicitly.
             await db.execute(
                 text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
             )
+            # The admission time, on the database's clock, read under the lock (#1962).
+            now = await _db_now(db)
+            data = {**dict(data or {}), STAMP_KEY: format_stamp(now)}
             # 1. dedup — under the lock, an active row for (user, platform, native) blocks the spawn.
             dup = (
                 await db.execute(
@@ -589,6 +661,13 @@ class SqlAlchemyMeetingRepo:
                 n_active = int((await db.execute(count_stmt)).scalar() or 0)
                 if n_active >= max_concurrent:
                     raise MaxBotsExceeded(user_id, max_concurrent)
+                # 2a. ramp (#1962) — right after the cap, under the same lock: the account's starts
+                #     in the trailing window against max(burst, floor(share × base)).
+                if ramp_applies(ramp, max_concurrent):
+                    enforce(ramp, max_concurrent, user_id=user_id, running=n_active,
+                            rows=await _ramp_rows(db, user_id=user_id, now=now,
+                                                  window_s=ramp.window_s),
+                            now=now)
             # 2b. claim — a PLANNED row (intent status `idle`/`scheduled`, created by POST /meetings
             #     or calendar sync) for the SAME (user, platform, native) is UPGRADED in place instead
             #     of inserting a second row: without this, the unique partial index (which covers

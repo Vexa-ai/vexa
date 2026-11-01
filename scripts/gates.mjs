@@ -418,6 +418,10 @@ function gateComposeStress() {
     console.log("  ✓ gate:compose-stress — opt-in (COMPOSE_STRESS=1 + MOCK_BOT=1 + BROWSER_IMAGE=mock-bot:dev) → skip");
     return true;
   }
+  // The stress suite proves the CEILING under contention; it runs with the bot ramp off (#1962), as
+  // `make -C deploy/compose stack-test-stress` does. The ramp's own contention proof is
+  // core/meetings/services/meeting-api/tests/test_bot_ramp.py.
+  process.env.BOT_RAMP_BURST ??= "0";
   return gateCompose();   // COMPOSE_STRESS=1 makes deploy/compose/tests/stress_test.py run on the live stack
 }
 

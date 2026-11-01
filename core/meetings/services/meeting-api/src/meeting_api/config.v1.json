@@ -413,6 +413,27 @@
    "targets": ["compose", "helm"]
   },
   {
+   "key": "BOT_RAMP_BURST",
+   "class": "defaulted",
+   "default": "5",
+   "description": "bot ramp burst (#1962): how many bots an account may start at once from zero, and the least it may start in any ramp window. 0 turns the ramp off for the whole deployment (only the concurrency ceiling holds). The ramp applies only to an account whose concurrency ceiling is above its burst; a per-account override lives in users.data.bot_ramp (PATCH /admin/users/{id}). An integer >= 0; a value out of range refuses the boot",
+   "targets": ["compose"]
+  },
+  {
+   "key": "BOT_RAMP_SHARE",
+   "class": "defaulted",
+   "default": "0.5",
+   "description": "bot ramp share (#1962): each window an account may start max(burst, floor(share x the bots it was already running before the window)). A number from 0 to 1; a value out of range refuses the boot",
+   "targets": ["compose"]
+  },
+  {
+   "key": "BOT_RAMP_WINDOW_S",
+   "class": "defaulted",
+   "default": "60",
+   "description": "bot ramp window in seconds (#1962): the trailing window starts are counted over; a ramp refusal's Retry-After is at most this. An integer from 10 to 3600; a value out of range refuses the boot",
+   "targets": ["compose"]
+  },
+  {
    "key": "LIVEKIT_URL",
    "class": "capability",
    "capability": "calls",

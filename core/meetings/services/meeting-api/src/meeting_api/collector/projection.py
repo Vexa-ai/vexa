@@ -124,6 +124,9 @@ OPT_IN_KEYS = frozenset({
     # Captured audio the bot never transcribed (prod-cutover R4): the lifecycle receiver persists the
     # bot's report here; the transcript routes render it on request (``collector.gaps``).
     "transcript_gaps",
+    # When the spawn was admitted, for the per-account bot ramp's window (#1962, ``bot_spawn.ramp``).
+    # Internal: no route serves it. Not ``bot_admitted_at`` (public: the bot was let into the meeting).
+    "spawn_admitted_at",
 })
 
 # What a NON-OWNER's response drops explicitly: both tiers. Kept as one name because that is the

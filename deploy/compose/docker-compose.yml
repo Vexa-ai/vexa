@@ -933,6 +933,12 @@ services:
       # stops meeting-api's boot naming the fix.
       - DEFAULT_TRANSCRIPTION_LANGUAGE=${DEFAULT_TRANSCRIPTION_LANGUAGE:-}
       - DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES=${DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES:-}
+      # The per-account bot ramp (#1962): burst, share and window (s). Empty → 5, 0.5, 60;
+      # BOT_RAMP_BURST=0 turns it off. An account whose concurrency ceiling is at or below its burst
+      # never meets it.
+      - BOT_RAMP_BURST=${BOT_RAMP_BURST:-}
+      - BOT_RAMP_SHARE=${BOT_RAMP_SHARE:-}
+      - BOT_RAMP_WINDOW_S=${BOT_RAMP_WINDOW_S:-}
       # Deployment-level defaults for a spawn's transcribe/recording flags when the request does not
       # say (config.v1 `defaulted` keys). TRANSCRIBE_ENABLED=false makes a no-STT deployment spawn
       # capture-only bots instead of 503-ing every default POST /bots.
