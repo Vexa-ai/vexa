@@ -72,8 +72,9 @@ def test_closed_rows_name_who_ended_them_and_the_receipt(client):  # noqa: F811
     assert cancel(fa.db, "r-drop", "business", clock, reason="no longer needed")
     got = _get(client, "/flows/factory_obligation/reactions?status=closed")
     assert set(got) == {"r-done", "r-drop"}
-    assert got["r-done"]["close"] == {"verb": "done", "by": "founder", "receipt": "PR merged",
-                                      "at": got["r-done"]["close"]["at"]}
+    assert {k: got["r-done"]["close"][k] for k in ("verb", "by", "receipt")} == {
+        "verb": "done", "by": "founder", "receipt": "PR merged"}
+    assert got["r-done"]["close"]["result"]["reason"] == "PR merged"
     assert got["r-drop"]["close"]["verb"] == "cancel"
     assert got["r-drop"]["close"]["by"] == "business"
     assert got["r-drop"]["close"]["receipt"] == "no longer needed"

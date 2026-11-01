@@ -2087,7 +2087,7 @@ def instance_flow_reactions(name: str, status: str = "open", since: float = 0.0,
     `refs` (the subject refs it was admitted with), its `lease_until`, the live `hold` on it
     (`flows.signals.hold_of`: holder, claimed_at, lease_until, or null), `hold_moved_at` (the last
     claim or release signal), and for a closed one its `close`: who ended it, with what receipt,
-    when (done: the confirmed receipt; cancelled: the cancel signal).
+    when (done: the confirmed receipt, and its whole `result`; cancelled: the cancel signal).
 
     A person's flow (`user:<uid>/…`) is never read here: its runs are `GET /flows/runs`."""
     from flows.signals import hold_of
@@ -2121,7 +2121,7 @@ def instance_flow_reactions(name: str, status: str = "open", since: float = 0.0,
                              "ORDER BY attempted_at DESC LIMIT 1", {"r": rid})
             res = (_json_or_none(rec[0][0]) or {}) if rec else {}
             r["close"] = {"verb": "done", "by": res.get("resumed_by"), "receipt": res.get("reason"),
-                          "at": rec[0][1] if rec else updated}
+                          "at": rec[0][1] if rec else updated, "result": res}
         elif st == "cancelled":
             sig = db.execute("SELECT actor, reason, created_at FROM signal WHERE reaction_id = :r "
                              "AND kind = 'cancel' ORDER BY created_at DESC LIMIT 1", {"r": rid})
