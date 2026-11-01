@@ -714,9 +714,12 @@ def create_app(
         # Content-Length from the (already httpx-decoded) body; a stale one would corrupt it.
         # ``mcp-session-id``/``mcp-protocol-version`` join them for the same reason: they are the
         # MCP transport's session binding, and a forward that eats them breaks the handshake.
+        # ``retry-after`` is the upstream's own wait on a 429/503 (meeting-api's bot ramp and
+        # concurrency refusals, #1962): a forward that drops it leaves the caller guessing.
         passthrough = {
             k: resp_headers[k]
-            for k in ("content-range", "accept-ranges", "content-disposition") + _MCP_HEADERS
+            for k in ("content-range", "accept-ranges", "content-disposition", "retry-after")
+            + _MCP_HEADERS
             if k in resp_headers
         }
         return Response(
