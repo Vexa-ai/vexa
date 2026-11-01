@@ -323,11 +323,18 @@ class TranscriptStore(Protocol):
         attendees: Optional[list] = None,
         auto_join_last_attempt: Optional[str] = None,
         auto_join_error: Optional[str] = None,
+        over_cap: str = "refuse",
     ) -> dict:
         """Create a PLANNED meeting row — status ``scheduled`` (when ``scheduled_at`` is set) or
         ``idle`` — with NO bot spawned. Link-less plans use ``platform='unknown'`` +
         ``native_meeting_id=None`` (mutations then address the ROW id). ``title`` /
         ``scheduled_at`` / ``workspace_id`` / ``auto_join`` land in ``meeting.data``.
+
+        The ONE path every booked row is created by (ADR-0052 §8): a ``scheduled_at`` that is not
+        ISO-8601 → ``{"error": "invalid_scheduled_at"}``; a scheduled row with ``auto_join`` on when
+        the account already holds ``BOOKED_MAX_PER_ACCOUNT`` future bookings with a bot →
+        ``{"error": "booking_cap", "cap": N}``, or with ``over_cap="stamp"`` (calendar sync) the row
+        is created with ``auto_join`` off and ``auto_join_error`` saying why.
 
         Serializes with concurrent spawns via the same per-user advisory lock
         ``create_meeting_guarded`` takes. Returns the created row (``list_meetings`` shape), or

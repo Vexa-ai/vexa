@@ -411,6 +411,7 @@ def build_production_app():
         runtime_callback_token=os.environ.get("RUNTIME_API_TOKEN", ""),
         voice_note_writer=RedisAudioStreamWriter(redis_client),
         calls=Calls.from_env(),
+        planned_start=_planned_start_deps(redis_client, bot_redis),
     )
 
     _attach_background_loops(
@@ -801,6 +802,30 @@ def _attach_background_loops(
                 log.exception("auto-join tick failed")
             await asyncio.sleep(auto_join_interval)
 
+    # Planned meetings reach Flows (ADR-0052 §4): every create/move/cancel/toggle of a planned row
+    # wrote a `meeting.planned.changed` fact into `meeting_planned_outbox` in its own transaction;
+    # this drains it to Flows in revision order, at least once, single-flight across replicas. A
+    # refused or unreachable Flows leaves the rows pending for the next pass.
+    async def _planned_outbox_loop() -> None:
+        if session_factory is None:
+            return
+        from .planned_outbox import deliver
+
+        last: dict = {}
+
+        async def _tick():
+            last.clear()
+            last.update(await deliver(session_factory))
+
+        while True:
+            try:
+                await _guarded("planned-outbox", _tick)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("planned-outbox delivery failed; rows stay pending")
+            await asyncio.sleep(1.0 if last.get("delivered") else 5.0)
+
     # Calendar sync: each sweep discovers every user with a connected ICS feed (admin-api internal
     # edge), fetches it over the SSRF-pinned transport, and upserts planned meetings (one row per
     # calendar UID — next occurrence only). Per-user try/except: one bad feed never stalls the
@@ -957,6 +982,7 @@ def _attach_background_loops(
             ),
             asyncio.create_task(_auto_join_loop(), name="auto-join"),
             asyncio.create_task(_calendar_sync_loop(), name="calendar-sync"),
+            asyncio.create_task(_planned_outbox_loop(), name="planned-outbox"),
             asyncio.create_task(_signal_tape_janitor_loop(), name="signal-tape-janitor"),
             *([asyncio.create_task(_bot_redis_restore_loop(), name="bot-redis-restore")]
               if bot_redis is not None else []),
@@ -985,6 +1011,36 @@ def __getattr__(name: str):
         return build_production_app()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
+
+
+def _planned_start_deps(redis_client, bot_redis):
+    """What the planned-row start route needs (ADR-0052 §5): the SAME context, block list, spawn
+    secrets and backoff the auto-join sweep is given (``_attach_background_loops``), so a bot started
+    by Flows and one started by the sweep are the same bot under the same rules."""
+    import json as _json
+
+    from .bot_spawn.env_flags import env_flag
+    from .bot_spawn.start_router import StartDeps
+
+    async def publish_status(*, user_id, meeting_id, native_id, status, when):
+        frame = {"type": "meeting.status", "meeting_id": meeting_id,
+                 "native": native_id, "status": status, "when": when}
+        try:
+            await redis_client.publish(f"u:{user_id}:meetings", _json.dumps(frame))
+        except Exception:
+            pass  # best-effort, like the sweep's
+
+    return StartDeps(
+        fetch_bot_context=_bot_context_fetcher((os.getenv("ADMIN_API_URL") or "").rstrip("/"),
+                                               os.getenv("INTERNAL_API_SECRET") or ""),
+        publish_status=publish_status,
+        token_secret=os.getenv("ADMIN_TOKEN") or None,
+        redis_url=os.getenv("REDIS_URL"),
+        redis_grant=bot_redis.grant if bot_redis is not None else None,
+        allow_uncapped=env_flag("AUTO_JOIN_ALLOW_UNCAPPED", default=False),
+        deployment_block=_auto_join_block_at_boot(),
+        retry_backoff_s=float(os.getenv("AUTO_JOIN_RETRY_BACKOFF_S", "300")),
+    )
 
 
 def _bot_context_fetcher(admin_api_url: str, internal_secret: str):

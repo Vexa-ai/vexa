@@ -570,6 +570,10 @@ async def request_bot(
     # BOOKED_POD_LEAD_S + 60 s (``JoinAtRefused``). Not exposed on public POST /bots; the planned-row
     # start route sets it. Stored as ``data.join_at`` so the row says when it will join.
     join_at: Optional[datetime] = None,
+    # THE PLANNED ROW THIS BOT IS FOR (ADR-0052 §5, the start route): claim exactly this row id,
+    # never the room's newest planned row and never a fresh insert. The repo re-checks it under its
+    # locks and raises ``NotScheduled`` when a cancel or toggle landed first.
+    planned_meeting_id: Optional[int] = None,
 ) -> dict:
     """Run the spawn flow and return a MeetingResponse-shaped dict.
 
@@ -744,7 +748,7 @@ async def request_bot(
     #     stays a plain query — the reused-row path reopens an existing terminal row (no NEW active row
     #     is inserted), so it is not part of the dedup/cap TOCTOU window.
     reused_row: Optional[dict] = None
-    if continue_meeting:
+    if continue_meeting and planned_meeting_id is None:
         latest = await repo.find_latest(user_id, platform, native_meeting_id)
         latest_data = (latest or {}).get("data") or {}
         if ((latest_data.get("room_principal") or {}).get("principal")
@@ -942,6 +946,8 @@ async def request_bot(
                 native_meeting_id=native_meeting_id,
                 data=meeting_data,
                 max_concurrent=max_concurrent,
+                **({"planned_meeting_id": planned_meeting_id}
+                   if planned_meeting_id is not None else {}),
             )
         except MaxBotsExceeded:
             log_event(

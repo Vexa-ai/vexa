@@ -106,6 +106,10 @@ FLOWS_OUTBOUND: Dict[str, Tuple[Tuple[str, str], ...]] = {
         ("GET", "/bots"),
         ("POST", "/bots"),
         ("DELETE", "/bots/{}/{}"),
+        # booked_bot (ADR-0052 §5): start the bot for THIS planned row id. Not bound to a ticket:
+        # meeting-api starts only a row its subject owns that is still scheduled with auto-join on,
+        # i.e. the owner already asked for exactly this bot, and refuses everything else.
+        ("POST", "/internal/meetings/{}/start"),
     ),
     "crm": (
         ("POST", "/internal/references"),                # the crm pack: workspace references

@@ -1285,7 +1285,8 @@ class SqlAlchemyTranscriptStore:
                                      calendar_source=None,
                                      workspace_source=None, attendees=None,
                                      auto_join_last_attempt=None,
-                                     auto_join_error=None, room_plan=None) -> dict:
+                                     auto_join_error=None, room_plan=None,
+                                     over_cap="refuse") -> dict:
         """Insert a PLANNED row (intent status, no bot). Takes the SAME per-user advisory lock as
         ``bot_spawn.create_meeting_guarded`` so planned-create serializes with concurrent spawns
         and calendar sync; the unique partial index remains the DB-level backstop (→ duplicate).
@@ -1329,11 +1330,29 @@ class SqlAlchemyTranscriptStore:
             if key in ROOM_PLAN_KEYS and value:
                 data[key] = value
         status = "scheduled" if scheduled_at else "idle"
+        from .booking import booked_max_per_account, cap_message, future_bookings, parse_scheduled_at
+
+        if scheduled_at and parse_scheduled_at(scheduled_at) is None:
+            return {"error": "invalid_scheduled_at"}
 
         async with self._session_factory() as db:
             await db.execute(
                 text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
             )
+            # ADR-0052 §8: under the same lock, the account's future bookings with a bot against
+            # BOOKED_MAX_PER_ACCOUNT. Over it the API is refused; calendar sync (`over_cap="stamp"`)
+            # still mirrors the event, with no bot and the reason on the row.
+            if status == "scheduled" and data.get("auto_join"):
+                cap = booked_max_per_account()
+                held = future_bookings((await db.execute(
+                    select(Meeting.data).where(Meeting.user_id == user_id,
+                                               Meeting.status == "scheduled")
+                )).scalars().all())
+                if held >= cap:
+                    if over_cap != "stamp":
+                        return {"error": "booking_cap", "cap": cap}
+                    data["auto_join"] = False
+                    data["auto_join_error"] = cap_message(cap)
             if native_meeting_id is not None:
                 dup = (await db.execute(
                     select(Meeting.id).where(

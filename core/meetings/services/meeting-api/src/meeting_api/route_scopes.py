@@ -56,6 +56,14 @@ EDGE_HOPS: Dict[RouteKey, RouteKey] = {
     ("GET", "/bot-accounts/sessions/{session_id}/vnc"): ("GET", "/bot-accounts/sessions/{session_id}"),
 }
 
+#: Calls the gateway's SERVICE DOOR makes for Flows that no public row reaches (gateway
+#: `service_door.FLOWS_OUTBOUND`, the meetings domain), with the scopes the door signs on the hop
+#: (`DOOR_SCOPES`). The public edge has no row for them, so a person's key never reaches them.
+#: `POST /internal/meetings/{id}/start` (ADR-0052 §5): Flows starts the bot for a planned row.
+DOOR_ROUTES: Dict[RouteKey, FrozenSet[str]] = {
+    ("POST", "/internal/meetings/{meeting_id}/start"): frozenset({"bot"}),
+}
+
 #: The answer the edge gives a key without the route's scope (`gateway/app.py`), so a client reads
 #: one refusal whichever side refused it.
 INSUFFICIENT_SCOPE = "Insufficient scope for this endpoint"
@@ -128,7 +136,7 @@ def scope_gate(request: HTTPConnection) -> None:
     key = _matched(request)
     if key is None:
         raise _refuse()  # a matched route that cannot be read is treated as undeclared
-    required = ROUTE_SCOPES.get(EDGE_HOPS.get(key, key))
+    required = ROUTE_SCOPES.get(EDGE_HOPS.get(key, key)) or DOOR_ROUTES.get(key)
     if required is None:
         raise _refuse()
     held = {s.strip() for s in (request.headers.get("x-user-scopes") or "").split(",") if s.strip()}

@@ -99,6 +99,7 @@ class MeetingRepo(Protocol):
         data: dict,
         max_concurrent: Optional[int] = None,
         exclude_meeting_id: Optional[int] = None,
+        planned_meeting_id: Optional[int] = None,
     ) -> dict:
         """ATOMIC dedup + cap-check + insert — the TOCTOU-safe spawn primitive (ROB1/ROB2).
 
@@ -118,7 +119,12 @@ class MeetingRepo(Protocol):
         ``pg_advisory_xact_lock`` and backstops dedup with a unique partial index on active rows; the
         in-memory fake performs the check+insert with no ``await`` between them so the race closes
         offline too. Replaces the old separate ``find_active`` + ``count_active_bots`` +
-        ``create_meeting`` pre-check sequence on the fresh-insert path."""
+        ``create_meeting`` pre-check sequence on the fresh-insert path.
+
+        The cap counts ``CEILING_STATUSES``. ``planned_meeting_id`` (ADR-0052 §5, the start route):
+        claim THAT planned row and no other — never the newest planned row of the room, never a
+        fresh insert. Under the same lock and with the row locked it must still pass
+        ``planned_row_startable``; otherwise ``NotScheduled``."""
         ...
 
     async def reopen_meeting(
@@ -421,6 +427,37 @@ class MeetingStopped(Exception):
 
     A stopped meeting is not a broken one: a fresh ``POST /bots`` (without ``continue_meeting``)
     starts a new run on a new row, and that is the documented path. The detail string says so."""
+
+
+#: The statuses a bot counts against its account's concurrency ceiling (ADR-0052 §8, decided by the
+#: CEO 2026-11-01): every pod that holds a slot — the four pre-active/active ones, and a bot that
+#: asked for help (``needs_help`` / ``needs_human_help``), whose pod still runs. ``stopping`` does
+#: not count: its slot is being given back. The ONE list both repos' cap checks read.
+CEILING_STATUSES = (
+    "requested", "joining", "awaiting_admission", "active", "needs_help", "needs_human_help",
+)
+
+
+class NotScheduled(Exception):
+    """A start for a planned row that may no longer start (ADR-0052 §5): the row is not
+    ``scheduled`` any more, its ``auto_join`` is off, its owner stopped it, or it is not this
+    person's row for this room. Raised by ``create_meeting_guarded(planned_meeting_id=…)`` UNDER the
+    per-user lock with the row locked, so a cancel or a toggle that commits first always wins."""
+
+
+def planned_row_startable(row: Optional[dict], *, user_id: int, platform: str,
+                          native_meeting_id: str) -> bool:
+    """May the start route claim this planned row? The ONE predicate the SQL adapter, the fake and
+    the route's pre-check read: this person's row for this room, still ``scheduled``, ``auto_join``
+    not off (absent = on), no stop on it."""
+    if not isinstance(row, dict) or row.get("status") != "scheduled":
+        return False
+    if row.get("user_id") != user_id or row.get("platform") != platform:
+        return False
+    if (row.get("native_meeting_id") or row.get("platform_specific_id")) != native_meeting_id:
+        return False
+    data = row.get("data") if isinstance(row.get("data"), dict) else {}
+    return data.get("auto_join") is not False and not data.get("stop_requested")
 
 
 class DuplicateMeeting(Exception):

@@ -552,9 +552,23 @@ class InMemoryTranscriptStore:
                                      calendar_source=None,
                                      workspace_source=None, attendees=None,
                                      auto_join_last_attempt=None,
-                                     auto_join_error=None, room_plan=None):
+                                     auto_join_error=None, room_plan=None,
+                                     over_cap="refuse"):
+        from .booking import booked_max_per_account, cap_message, future_bookings, parse_scheduled_at
+
+        if scheduled_at and parse_scheduled_at(scheduled_at) is None:
+            return {"error": "invalid_scheduled_at"}
         if self._dup_non_terminal(user_id, platform, native_meeting_id):
             return {"error": "duplicate"}
+        # ADR-0052 §8: the account's future bookings with a bot, against BOOKED_MAX_PER_ACCOUNT.
+        if scheduled_at and auto_join:
+            cap = booked_max_per_account()
+            held = future_bookings(m.get("data") for m in self._meetings.values()
+                                   if m["user_id"] == user_id and m["status"] == "scheduled")
+            if held >= cap:
+                if over_cap != "stamp":
+                    return {"error": "booking_cap", "cap": cap}
+                auto_join, auto_join_error = False, cap_message(cap)
         data: dict = {"auto_join": bool(auto_join)}
         if title:
             data["title"] = title

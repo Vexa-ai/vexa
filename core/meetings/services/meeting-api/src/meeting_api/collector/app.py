@@ -623,6 +623,14 @@ def build_router(
                 status_code=409,
                 detail=f"A meeting already exists for {platform}/{native_id}",
             )
+        if isinstance(row, dict) and row.get("error") == "invalid_scheduled_at":
+            raise HTTPException(status_code=422, detail="'scheduled_at' must be an ISO8601 string")
+        if isinstance(row, dict) and row.get("error") == "booking_cap":
+            # ADR-0052 §8: the account's future bookings with a bot are capped.
+            from .booking import cap_message
+
+            return JSONResponse(status_code=429, content={
+                "detail": cap_message(row["cap"]), "cap": row["cap"]})
         log_event(
             "meeting_planned", audience="user", span="meetings.plan",
             user_id=user_id, meeting_id=str(row.get("id")),
