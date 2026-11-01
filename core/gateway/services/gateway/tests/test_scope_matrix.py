@@ -464,10 +464,10 @@ def test_matrix_covers_every_declared_route():
 
 
 def test_unscoped_routes_are_identity_only():
-    """The escape hatch stays small and deliberate: only /health (the LB probe), /auth/me (who
-    am I) and /internal/mcp/taint (the MCP's privacy-label report, D6) may carry no scope, and none
-    forwards anything downstream."""
-    assert UNSCOPED_ROUTES == frozenset({("GET", "/health"), ("GET", "/auth/me"),
+    """The escape hatch stays small and deliberate: only /health (the LB probe), /status (the
+    public maintenance read, #1964), /auth/me (who am I) and /internal/mcp/taint (the MCP's
+    privacy-label report, D6) may carry no scope, and none forwards anything downstream."""
+    assert UNSCOPED_ROUTES == frozenset({("GET", "/health"), ("GET", "/status"), ("GET", "/auth/me"),
                                          ("POST", "/internal/mcp/taint")})
 
 
