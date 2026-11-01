@@ -1,6 +1,6 @@
 ---
 kind: flow-index
-flows: 16
+flows: 17
 generated: from the code that runs them — edits here are overwritten
 ---
 
@@ -19,6 +19,7 @@ Everything this deployment does on its own, one page each. A flow is a trigger a
 | [`home_compose`](home_compose.md) | `home.stale` | 1 | — |
 | [`invite_intake`](invite_intake.md) | `invite.received` | 9 | — |
 | [`invite_intake`](invite_intake.md) | `invite.received` | 4 | — |
+| [`invite_join`](invite_join.md) | `invite.*` | 5 | — |
 | [`live_meeting`](live_meeting.md) | `meeting.started` | 1 | — |
 | [`meeting_prep`](meeting_prep.md) | `meeting.upcoming` | 1 | `prep_and_invite_mail` |
 | [`meeting_share`](meeting_share.md) | `meeting.shared` | 1 | — |

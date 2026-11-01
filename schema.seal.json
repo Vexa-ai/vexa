@@ -324,8 +324,9 @@
       "uid": "uid TEXT NOT NULL"
     },
     "keyed_schedule": {
-      "CONSTRAINT keyed_status CHECK (status IN ('armed','fired','cancelled','missed'))": "CONSTRAINT keyed_status CHECK (status IN ('armed','fired','cancelled','missed'))",
+      "CONSTRAINT keyed_status CHECK (status IN ('armed','fired','cancelled','missed','retired'))": "CONSTRAINT keyed_status CHECK (status IN ('armed','fired','cancelled','missed','retired'))",
       "PRIMARY KEY (scope, flow, key)": "PRIMARY KEY (scope, flow, key)",
+      "deadline": "deadline DOUBLE PRECISION",
       "event_type": "event_type TEXT NOT NULL",
       "fire_at": "fire_at DOUBLE PRECISION NOT NULL",
       "fired_for": "fired_for DOUBLE PRECISION",

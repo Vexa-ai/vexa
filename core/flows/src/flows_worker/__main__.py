@@ -65,7 +65,8 @@ def admission_limits() -> dict:
 def keyed_pass(db, reg, clock, limits: "dict | None" = None) -> int:
     """KEYED SCHEDULES (ADR-0050): one pending fire per key — the bot one minute before a meeting,
     moved by every update, called off by a cancel — fired here like a slot. The daily cap is the
-    same admission check every other run takes."""
+    same admission check every other run takes; a row it refuses stays armed and the pass reads on
+    past it (ADR-0052 §7)."""
     limits = admission_limits() if limits is None else limits
     return keyed.fire_due(db, reg, clock, admissible=lambda f, refs: admissible(
         db, f, clock, event_type=keyed.KEYED_EVENT, subject_refs=refs, **limits))
@@ -105,6 +106,11 @@ def main() -> int:
     clock = SystemClock()
     reg = Registry()
     production.build(reg, db)
+    # A FLOW THAT WAS A SEED AND IS NOW CODE (ADR-0052 §6): its stored copy goes, once.
+    dropped = production.drop_former_seeds(db)
+    if dropped:
+        print(f"former seed(s) now registered in code, stored copy removed: {', '.join(dropped)}",
+              flush=True)
     # COMPANY FLOWS ARE THE GLOBAL ACCOUNT'S (seeds, written once, never overwritten).
     seeded = production.seed(db)
     if seeded:

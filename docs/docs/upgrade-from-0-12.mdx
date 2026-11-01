@@ -163,6 +163,8 @@ share. The tables admin-api and meeting-api own (`users`, `api_tokens`, `platfor
 | `flow_version` gains `scope` (`TEXT NOT NULL DEFAULT 'instance'`, so every existing flow is an instance flow) and `cron`, and its primary key changes from `(name, version)` to `(scope, name, version)` | flows | the first time a flows process (flows-api, flows-worker or flows-mailbox) uses the database, in one transaction; the key is swapped only while it lacks `scope` |
 | New table `friction_occurrence`, with index `friction_occurrence_by_id` | flows | the same moment |
 | `friction_occurrence` gains `admitted`; new tables `keyed_schedule` (gains `person` on a pre-release database), `sensor`, `mail_send` and `mail_test_send` | flows | the same moment (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`) |
+| `keyed_schedule` gains `deadline`, and its status check gains `retired` (swapped once, while the check lacks it) | flows | the same moment |
+| The stored company flow `invite_join` (`created_by: seed`) and every version on top of it are removed, once: the flow is registered in the code | flows-worker | its first start; a warning names any version that had been changed |
 
 There is no separate migration command for the schema: every step is idempotent and runs on each
 start.
@@ -554,7 +556,7 @@ If you start the Lite image with your own `docker run` instead of `make lite`:
 
 ### Mailbox invitations and calendar sensors
 
-A mailbox invitation now sends its bot from a keyed schedule one minute before the start (`invite_intake` v4 with the company flow `invite_join`), and the schedule moves with a reschedule and is removed on a cancellation. Sensors exist but run nothing until a person creates and enables one; the calendar kind needs the broker’s `sensors` key (Compose: re-run `connections-keys`). Details: [What is on after an upgrade](/flows/sensors#what-is-on-after-an-upgrade).
+A mailbox invitation now sends its bot from a keyed schedule one minute before the start (`invite_intake` v4 with the flow `invite_join`, registered in the code; a company copy stored by an earlier pre-release is removed at the first start), and the schedule moves with a reschedule and is removed on a cancellation. Sensors exist but run nothing until a person creates and enables one; the calendar kind needs the broker’s `sensors` key (Compose: re-run `connections-keys`). Details: [What is on after an upgrade](/flows/sensors#what-is-on-after-an-upgrade).
 
 ## After the upgrade, once
 
