@@ -26,6 +26,7 @@ from .ports import (
     _archive_completion,
     _stopped_reopen_detail,
     reconcile_grace_for_status,
+    reconcile_reference_time,
 )
 
 
@@ -505,6 +506,7 @@ class SqlAlchemyMeetingRepo:
             if mid in out or upd is None or not sid:
                 continue
             u = upd if upd.tzinfo else upd.replace(tzinfo=timezone.utc)
+            u = reconcile_reference_time(status, u, data)
             grace = reconcile_grace_for_status(status, stop_grace, active_grace, preactive_grace)
             if (now - u).total_seconds() >= grace:
                 stop_req = bool(isinstance(data, dict) and data.get("stop_requested"))

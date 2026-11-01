@@ -29,6 +29,7 @@ from .ports import (
     _archive_completion,
     _stopped_reopen_detail,
     reconcile_grace_for_status,
+    reconcile_reference_time,
 )
 
 _ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active")
@@ -531,6 +532,7 @@ class InMemoryMeetingRepo:
                 continue
             if u.tzinfo is None:
                 u = u.replace(tzinfo=timezone.utc)
+            u = reconcile_reference_time(row["status"], u, row.get("data"))
             grace = reconcile_grace_for_status(
                 row["status"], stop_grace, active_grace, preactive_grace
             )

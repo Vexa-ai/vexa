@@ -642,6 +642,13 @@
    "targets": []
   },
   {
+   "key": "BOOKED_POD_LEAD_S",
+   "class": "defaulted",
+   "default": "600",
+   "description": "booked-bot pod lead (s, ADR-0052): a booked meeting's bot pod starts this long before the meeting and waits for its join time. The spawn path refuses a join time later than now + this lead + 60 s, so a waiting pod never holds its MeetingToken longer than that before joining",
+   "targets": []
+  },
+  {
    "key": "MEETING_UNTRACKED_GRACE_SEC",
    "class": "defaulted",
    "default": "600",
