@@ -60,13 +60,17 @@ export interface JoinSignals {
   detail?: string;
 }
 
+/** One intermediate lifecycle report from the join driver. `detail.reason` is the platform-side
+ *  cause the join layer named (on `needs_help`: why it summoned a human, e.g. `consent_required`). */
+export type JoinReport = (s: BotStatus, detail?: { reason?: string }) => void | Promise<void>;
+
 /** Drives the platform join. The real adapter wraps @vexa/join.joinMeeting + admission
  *  watchers + the removal monitor over a @vexa/remote-browser page. */
 export interface JoinDriver {
   /** Join + await admission. `report` fires on each intermediate lifecycle state
    *  (awaiting_admission / needs_help / active). Resolves with the verdict — a bare `JoinOutcome`
    *  or a `JoinResult` that also carries the failure's human reason text (#926). */
-  join(report: (s: BotStatus) => void | Promise<void>): Promise<JoinOutcome | JoinResult>;
+  join(report: JoinReport): Promise<JoinOutcome | JoinResult>;
   /** Watch for being removed from the meeting while active; returns a stop fn. */
   onRemoval(cb: () => void): () => void;
   /** Leave the meeting (best-effort; never throws fatally). */

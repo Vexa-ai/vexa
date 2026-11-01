@@ -8,7 +8,7 @@
  * Run: tsx src/join-driver.test.ts
  */
 import { AdmissionError, AuthSessionError, TeamsJoinRedirectError, TEAMS_AUTH_REDIRECT } from '@vexa/join';
-import { admissionOutcomeToJoinOutcome, wantsIncomingVideoOff } from './join-driver.js';
+import { admissionOutcomeToJoinOutcome, joinStateReason, wantsIncomingVideoOff } from './join-driver.js';
 import type { JoinOutcome } from './ports.js';
 
 let passed = 0, failed = 0;
@@ -23,6 +23,13 @@ const check = (name: string, cond: boolean) => {
 const PERMANENT_OUTCOMES = new Set<JoinOutcome>(['rejected', 'auth_missing']);
 
 console.log('\n=== join-driver: AdmissionError outcome → JoinOutcome (G1) ===');
+
+// The escalation's WHY rides the join layer's state detail (`callNeedsHumanHelpCallback(cfg, reason)`
+// → onState('needs_human_help', { reason, screenshotPath })) — it must survive into the report.
+check('state reason: needs_human_help detail → consent_required',
+  joinStateReason({ reason: 'consent_required', screenshotPath: undefined }) === 'consent_required');
+check('state reason: absent / blank / non-string → undefined',
+  joinStateReason(undefined) === undefined && joinStateReason({ reason: '  ' }) === undefined && joinStateReason({ reason: 42 }) === undefined);
 
 check('denial → rejected (permanent, not retried)', admissionOutcomeToJoinOutcome('denial') === 'rejected');
 check('lobby_timeout → timeout (transient retry)', admissionOutcomeToJoinOutcome('lobby_timeout') === 'timeout');

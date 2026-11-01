@@ -76,6 +76,12 @@ def _resolve_user_id(x_user_id: Optional[str]) -> int:
 # finalizes its recording cleanly); the reconcile loop is the backstop if it never completes.
 _BOOTING_STATUSES = {"requested", "joining", "awaiting_admission"}
 
+# Statuses where the bot has NOT reached the meeting. A stop keeps these as they are instead of
+# writing `stopping` (see `_mark_stop_requested`). `needs_help` is pre-active — an escalation on the way
+# in, reachable from `joining` itself — but it is not BOOTING: the bot subscribed to its command
+# channel before the join began, so the graceful leave (a withdraw of the join request) reaches it.
+_PRE_ACTIVE_STATUSES = _BOOTING_STATUSES | {"needs_help"}
+
 # PLANNED statuses: a row that has a TIME but no bot — no workload, no session, nothing listening on
 # a command channel. A stop here is a CANCELLATION, and it must land the row on a terminal state
 # immediately rather than leaving a `scheduled` row wearing a `stop_requested` flag: the auto-join
@@ -391,7 +397,7 @@ async def _mark_stop_requested(repo, row: dict) -> None:
     if sessions:
         await repo.update_meeting_status(
             session_uid=sessions[-1],
-            status=status if status in _BOOTING_STATUSES else "stopping",
+            status=status if status in _PRE_ACTIVE_STATUSES else "stopping",
             data={"stop_requested": True},
         )
         return
