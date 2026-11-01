@@ -22,6 +22,9 @@ A **card type** is an object definition marked ``"x-card": true`` (bootstrap add
   workspace — the person the agent acted for. Proposals are capped and expire by the desk's limits.
 
 Its movement and activity are the record's own revisions; nothing else is stored for history.
+
+**Who writes which field** is the organisation's ``_global/POLICIES.md`` (``card_field_writers.<Field>``,
+``FIELD_WRITERS_KEY``), checked on every write path in ``normalise_fields``, an administrator's too.
 """
 from __future__ import annotations
 
@@ -72,6 +75,16 @@ RULE_ONLY = ('StageEvidence',)
 #: The actor every stage-rule revision is recorded under.
 STAGE_RULE_ACTOR = 'rule:card-stage'
 STAGE_MODES = ('event', 'recheck')
+#: WHO WRITES WHICH CARD FIELD (founder, 1 Nov 2026: cards are made through the API, their stage moves
+#: only by the rule from facts, nothing is written over a card). ``_global/POLICIES.md`` front matter:
+#: ``card_field_writers.<Field>: <writer>, <writer>`` per field, ``card_field_writers.*`` for every field
+#: not named. A writer is ``anyone`` (whoever the CRM policy lets write it), ``create`` (whoever makes
+#: the card, in the create only: the field is set once), ``rule`` (the stage rule,
+#: ``/internal/cards/stage``), ``gate`` (a gate decision, ``decide``) or a person id (their own write,
+#: or their acceptance of a proposal). A field with no line is as the CRM policy has it. ``*`` never
+#: covers the gate-, sensor- and rule-only fields: they keep their own single writer.
+FIELD_WRITERS_KEY = 'card_field_writers.'
+FIELD_WRITER_TOKENS = ('anyone', 'create', 'rule', 'gate')
 #: Facts that come from reading the card's Source. A stage the rule set with none of them (Idea or
 #: Design from «no pull request» alone) rested on an absence, not a fact.
 READ_FACTS = ('pr', 'issue', 'checks', 'prod', 'release')
@@ -102,6 +115,10 @@ STAGE_FROM_FACTS = _refusal(
     'stage_from_facts',
     "A software card's stage is set from facts (its pull request, the prod pin, the release tag, a Flows "
     'claim) by the stage rule only. Nobody moves it by hand. Change the facts instead; do not retry it.')
+STAGE_BY_RULE = _refusal(
+    'stage_from_facts',
+    "A card's stage is set from facts by the stage rule only. Nobody moves it by hand. Change the facts "
+    'instead; do not retry it.')
 PROPOSE_CARD = _refusal(
     'propose_instead',
     'You may not make or change a card yourself. Call card_propose (a new card) or card_update_propose '
@@ -114,6 +131,12 @@ MEMBERS_PERSON_ONLY = _refusal(
     'person_confirmation_required',
     "Only a person adds or removes a card's members, or accepts being added. Tell them, and give the "
     "card's link; do not retry it another way.")
+
+
+def field_locked(field, writers):
+    return _refusal('field_writer',
+                    f"A card's {field} is written by {', '.join(writers) or 'nobody'} only. Do not retry it "
+                    'another way.', field=field, writers=list(writers))
 
 
 def pending_full(n):
@@ -145,7 +168,9 @@ def parse_lifecycle(value):
 
 class PolicyText:
     """``_global/POLICIES.md`` as text, through the desk's policy door (``policies.Policies.fetch``),
-    kept 30 seconds; None when there is no door or it does not answer (the defaults then apply)."""
+    kept 30 seconds; None when there is no door or it has never answered (the defaults then apply). A
+    door that stops answering keeps the last policy it gave: the field writers are a lock, and a lock
+    does not open because a read failed."""
 
     def __init__(self, policies, ttl=30.0, now=time.monotonic):
         self.policies, self.ttl, self.now = policies, ttl, now
@@ -155,9 +180,11 @@ class PolicyText:
         with self._lock:
             if self._at is None or self.now() - self._at >= self.ttl:
                 try:
-                    self._text = self.policies.fetch() if self.policies is not None else None
-                except Exception:  # noqa: BLE001 — a policy we cannot read is the default
-                    self._text = None
+                    text = self.policies.fetch() if self.policies is not None else None
+                except Exception:  # noqa: BLE001 — a policy we cannot read keeps the last one read
+                    text = None
+                if text is not None:
+                    self._text = text
                 self._at = self.now()
             return self._text
 
@@ -288,6 +315,33 @@ class Cards:
                 out[key] = v
         return out
 
+    def field_writers(self, field):
+        """The writers ``_global/POLICIES.md`` names for a card field (``FIELD_WRITERS_KEY``), or None
+        when it names none: the field is then as the CRM policy has it."""
+        attrs = self._attrs()
+        line = attrs.get(FIELD_WRITERS_KEY + str(field).lower())
+        if line is None and field not in (*GATE_ONLY, *SENSOR_ONLY, *RULE_ONLY):
+            line = attrs.get(FIELD_WRITERS_KEY + '*')
+        if line is None:
+            return None
+        return tuple(w for w in (x.strip() for x in str(line).split(',')) if w)
+
+    def _check_writers(self, asked, prior, creating, writer, gate_write, rule_write, first_stage):
+        """Refuse a field the policy does not let this writer write (``FIELD_WRITERS_KEY``). A value the
+        card already holds is no write; neither is a new card's first stage."""
+        for field in sorted(asked):
+            writers = self.field_writers(field)
+            if writers is None or 'anyone' in writers:
+                continue
+            value = asked[field]
+            if (value == first_stage if field == 'State' and creating else
+                    not creating and value == prior.get(field)):
+                continue
+            if (rule_write and 'rule' in writers) or (gate_write and 'gate' in writers) \
+                    or (creating and 'create' in writers) or (writer is not None and str(writer) in writers):
+                continue
+            raise Refused(STAGE_BY_RULE if field == 'State' and 'rule' in writers else field_locked(field, writers))
+
     def _ttl(self, limits=None):
         return timedelta(days=(limits or self.limits())['card_proposal_ttl_days'])
 
@@ -301,12 +355,17 @@ class Cards:
     #: and of ``RULE_ONLY``.
     _rule = threading.local()
 
-    def normalise_fields(self, object_type, fields, before, actor=None):
+    def normalise_fields(self, object_type, fields, before, actor=None, writer=None):
         """A card's fields as every write path stores them. ``actor`` is the person whose write is
         being APPLIED (``store._edit``: an edit, or the reviewer accepting a proposal; ``store.create``:
         the person making the record); None while a proposal is only filed, which changes nothing until
-        a person accepts it, and on the paths of this class that set the requester themselves."""
+        a person accepts it, and on the paths of this class that set the requester themselves.
+        ``writer`` is whom the field writers (``FIELD_WRITERS_KEY``) are checked against when it is not
+        ``actor`` (a card made by ``_insert``); a change only being filed as a proposal is checked when a
+        person accepts it."""
         fields = dict(fields or {})
+        asked = set(fields)
+        writer = actor if writer is None else writer
         prior = (before or {}) if isinstance(before, dict) else {}
         gate_write = bool(getattr(self._gate, 'on', False))
         if 'Face' in fields:
@@ -351,7 +410,7 @@ class Cards:
         elif tpl.moved_by_rule(template) and prior.get('State') not in states:
             # a plain card becoming a software card starts at the first stage; the rule moves it on
             fields['State'] = life['stages'][0]
-        if rule_write and not tpl.moved_by_rule(template):
+        if rule_write and not tpl.moved_by_rule(template) and 'rule' not in (self.field_writers('State') or ()):
             raise CRMError('The stage rule moves software cards only')
         for key in ('NextActor', 'Requester'):
             if fields.get(key) is not None:
@@ -365,6 +424,10 @@ class Cards:
             chain = fields['Chain'] if isinstance(fields['Chain'], dict) else {}
             fields['Chain'] = {k: [str(x) for x in (chain.get(k) or []) if _ID.fullmatch(str(x))][:20]
                                for k in ('blocks', 'blocked_by')}
+        creating = before is None
+        if creating or writer is not None or gate_write or rule_write:
+            self._check_writers({k: fields[k] for k in asked if k in fields}, prior, creating, writer,
+                                gate_write, rule_write, life['stages'][0])
         if tpl.moved_by_rule(template):
             # no gates and no next actor: whose move it is follows from the facts, not from a field
             pass
@@ -843,7 +906,7 @@ class Cards:
     def _insert(self, c, org, owner, object_type, fields, narrative, reason, evidence, workspace, members):
         store = self.store
         definition = self._definition(c, org, object_type)
-        fields = self.normalise_fields(object_type, fields, None)
+        fields = self.normalise_fields(object_type, fields, None, writer=owner)
         store._validate(definition, fields)
         record_id = str(uuid4())
         row = dict(org_id=org, id=record_id, object_type=object_type, owner_id=owner, revision=1, fields=fields,
@@ -1336,11 +1399,14 @@ class Cards:
             raw = row['fields'] or {}
             template = self.template(raw.get('Kind'))
             if not tpl.moved_by_rule(template):
-                raise CRMError('Only a software card has a stage the rule sets')
+                if 'rule' not in (self.field_writers('State') or ()):
+                    raise CRMError('Only a software card has a stage the rule sets')
+                # the policy gives every card's State to the rule: its stages are its own lifecycle
+                template = self.lifecycle(row['object_type'], raw.get('Kind'))
             if stage is None:
                 return self._no_reading(c, org, row, raw, template, because, facts, mode)
             if stage not in template['stages'] + template['side']:
-                raise CRMError(f'"{_clip(stage, 60)}" is not a stage of a software card')
+                raise CRMError(f'"{_clip(stage, 60)}" is not a stage of this card')
             was = raw.get('State')
             base = {'record': row['id'], 'revision': row['revision'], 'stage': stage, 'was': was}
             if was == stage:
