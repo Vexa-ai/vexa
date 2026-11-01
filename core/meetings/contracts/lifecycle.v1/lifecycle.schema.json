@@ -39,7 +39,6 @@
         },
         "speaker_events": { "type": "array" },
         "timestamp": { "type": "string", "description": "ISO8601 emit time — the real bot sends it on every callback" },
-        "pod_started_at": { "type": "string", "description": "ISO8601 time the bot process started, before any join wait; the producer stamps it on every callback and meeting-api freezes it into service provenance as the start of billed bot time (ADR 0052)" },
         "error_details": { "type": "string", "description": "terminal: free-text error context from the bot" }
       }
     }

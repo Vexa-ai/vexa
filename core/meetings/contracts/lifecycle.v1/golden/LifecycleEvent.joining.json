@@ -2,6 +2,5 @@
   "connection_id": "sess-uid",
   "container_id": "mtg-abc123-bot",
   "status": "joining",
-  "timestamp": "2026-07-28T10:00:00.000Z",
-  "pod_started_at": "2026-07-28T09:59:40.000Z"
+  "timestamp": "2026-07-28T10:00:00.000Z"
 }

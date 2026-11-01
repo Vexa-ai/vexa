@@ -43,7 +43,8 @@ export interface LifecycleEvent {
   /** Time the producer observed this lifecycle transition. Callback receipt time is not an
    *  admission/departure clock: delivery may be delayed or retried. */
   timestamp?: string;
-  /** When this bot process started (ISO8601), before any join wait. Stamped on every event so the
+  /** When this bot process started (ISO8601), before any join wait. Additive on lifecycle.v1 (no
+   *  schema/seal bump), like `infra_fault`. Stamped on every event so the
    *  first one meeting-api receives carries it; meeting-api freezes it into service provenance as
    *  the start of billed bot time (ADR 0052 §10). Producer time, like `timestamp`. */
   pod_started_at?: string;
