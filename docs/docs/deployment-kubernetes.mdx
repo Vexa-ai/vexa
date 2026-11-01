@@ -87,8 +87,9 @@ a CNI that enforces NetworkPolicy; without one they have no effect.
 
 ### Flows database
 
-Flows is on by default (`flows.enabled: true`) and required: booked bots start from its clock. The
-chart generates its service key and operator key when you set none. Flows keeps its tables in the
+Flows is required (`flows.enabled: false` is refused at render): booked bots start from its clock.
+The chart generates its service key and operator key when you set none, and keeps them across
+upgrades. Flows keeps its tables in the
 main database (`database.name`), as Compose and Lite do, so a backup of that database covers it. Vexa never creates a database. To keep flows in a
 database of its own, have your DBA create it, owned by `database.user`, and set
 `flows.databaseName` to its name.
