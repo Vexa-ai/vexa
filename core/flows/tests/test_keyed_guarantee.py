@@ -94,6 +94,19 @@ def test_an_unchanged_re_upsert_does_not_extend_the_window():
     assert _status(db, "m1") == "missed"
 
 
+def test_a_same_time_redelivery_does_not_re_arm_a_missed_row():
+    db, clock, reg = _rig(trigger={k: v for k, v in TRIGGER.items() if k != "deadline"})
+    _book(db, reg, clock, "m1")
+    clock._t = T - LEAD + keyed.CATCHUP_S + 1
+    keyed.fire_due(db, reg, clock)
+    assert _status(db, "m1") == "missed"
+    _book(db, reg, clock, "m1")                              # the same meeting, the same time, again
+    assert _status(db, "m1") == "missed"
+    assert keyed.fire_due(db, reg, clock) == 0, "a redelivery never fires a missed row late"
+    _book(db, reg, clock, "m1", start=T + 3600)               # a real move re-arms it
+    assert _status(db, "m1") == "armed"
+
+
 def test_a_real_move_still_re_arms():
     db, clock, reg = _rig()
     _book(db, reg, clock, "m1")
@@ -229,15 +242,15 @@ def test_the_stored_seed_copy_is_removed_once():
     assert production.drop_former_seeds(db) == []
 
 
-def test_an_edited_seed_is_removed_and_said(caplog):
+def test_the_companys_own_versions_are_retired_never_deleted(caplog):
     db = SqliteDB()
     _seed_row(db, status="retired")
     _seed_row(db, version=2, by="operator")
     with caplog.at_level(logging.WARNING, logger="flows.production"):
         assert production.drop_former_seeds(db) == ["invite_join"]
-    assert db.execute("SELECT COUNT(*) FROM flow_version WHERE name = 'invite_join'")[0][0] == 0
-    msg = " ".join(r.getMessage() for r in caplog.records)
-    assert "v1 (retired, by seed)" in msg and "v2 (active, by operator)" in msg
+    assert db.execute("SELECT version, status, created_by FROM flow_version "
+                      "WHERE name = 'invite_join'") == [(2, "retired", "operator")]
+    assert "v2 (active, by operator)" in " ".join(r.getMessage() for r in caplog.records)
 
 
 def test_a_version_submitted_after_the_migration_is_never_touched():
