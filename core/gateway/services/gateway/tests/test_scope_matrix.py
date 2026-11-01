@@ -313,9 +313,10 @@ def test_matrix_covers_every_declared_route():
 
 
 def test_unscoped_routes_are_identity_only():
-    """The escape hatch stays small and deliberate: only /health (the LB probe) and /auth/me (who
-    am I) may carry no scope, and neither forwards anything downstream."""
-    assert UNSCOPED_ROUTES == frozenset({("GET", "/health"), ("GET", "/auth/me")})
+    """The escape hatch stays small and deliberate: only /health (the LB probe), /status (the
+    public maintenance read, #1964) and /auth/me (who am I) may carry no scope, and none of them
+    forwards anything downstream."""
+    assert UNSCOPED_ROUTES == frozenset({("GET", "/health"), ("GET", "/status"), ("GET", "/auth/me")})
 
 
 def test_scope_lookup_denies_when_the_matched_route_is_unknowable():

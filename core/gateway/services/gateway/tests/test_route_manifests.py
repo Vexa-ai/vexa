@@ -7,7 +7,7 @@ flows + identity).
 
 What these tests hold down, in the order they matter:
 
-  1. the FULL profile is byte-for-byte what shipped — 67 scoped rows and 2 unscoped, and every one
+  1. the FULL profile is byte-for-byte what shipped — 67 scoped rows and 3 unscoped, and every one
      of them still matched to a route that exists;
   2. without the agent domain the table lacks EXACTLY its seven rows and nothing else;
   3. an absent domain's routes are absent from the APP too, so a request 404s rather than 403s;
@@ -42,7 +42,7 @@ AGENT_ROWS = frozenset({
 #: What shipped. A count, not a copy of the table: a second copy of 67 rows is a second thing to
 #: keep in step, and `test_the_assembled_table_matches_the_app_exactly` is what proves the
 #: CONTENT — against the routes themselves, which is a stronger anchor than a literal.
-FULL_SCOPED, FULL_UNSCOPED = 68, 2
+FULL_SCOPED, FULL_UNSCOPED = 68, 3
 #: What THIS BUILD publishes — the full profile, less the agent rows when the build omits them.
 #: DERIVED, so the count stays exact in either build rather than softening to a range or a
 #: subset check. 67 on the line; 60 in a build with no agent manifest.
@@ -86,13 +86,14 @@ def test_the_assembled_table_matches_the_app_exactly():
 @needs_agent
 def test_every_domain_declares_its_own_and_only_its_own():
     a = routes_manifest.load({"gateway", "meetings", "identity", "mcp", "agent"})
-    # 7+2+12+12+37 = 70 rows, less the edge's own 2 unscoped = 68 = FULL_SCOPED above. The literal
+    # 7+3+12+12+37 = 71 rows, less the edge's own 3 unscoped = 68 = FULL_SCOPED above. The literal
     # read 38 for meetings, which is 69 scoped and contradicts FULL_SCOPED in this same file; the
     # arithmetic was never checked because this test is `needs_agent` and the agent manifest was
     # absent from the cut, so it SKIPPED. It stopped skipping when core/agent/routes.v1.json landed.
-    assert a.domains == {"agent": 7, "gateway": 2, "identity": 12, "mcp": 12, "meetings": 37}
+    assert a.domains == {"agent": 7, "gateway": 3, "identity": 12, "mcp": 12, "meetings": 37}
     assert {k for k, d in a.owner_of.items() if d == "agent"} == AGENT_ROWS
-    # The EDGE declares two routes and they are its own — /health and /auth/me forward nothing.
+    # The EDGE declares three routes and they are its own — /health, /status (#1964) and
+    # /auth/me forward nothing.
     assert {k for k, d in a.owner_of.items() if d == "gateway"} == set(UNSCOPED_ROUTES)
 
 
