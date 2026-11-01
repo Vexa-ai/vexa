@@ -6,6 +6,7 @@ An individual's personal CRM is the one exception, made at runtime through a fun
 migrations path owns (`ensure_personal_org`).
 Idempotent — an existing organisation, type or policy is left exactly as an administrator left it.
 """
+import re
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -149,6 +150,46 @@ def upgrade_card_definition(engine, org):
         c.execute(s.object_types.update().where(s.object_types.c.org_id == org, s.object_types.c.name == 'Card')
                   .values(definition={**row, 'properties': {**props, **missing}}))
         return True
+
+
+#: A field name an install may add: what a record's ``fields`` key already allows.
+_FIELD_NAME = re.compile(r'[A-Z][A-Za-z0-9_]{0,63}')
+
+
+def extend_definitions(engine, org, extensions):
+    """Add an install's OWN fields to an org's existing definitions (``CRM_DEFINITIONS_FILE``):
+    ``{object_type: {field: <JSON-schema property>}}``. Additive exactly as ``upgrade_card_definition``:
+    a field the definition already has is left as it is, nothing is removed, a type the org does not
+    have is refused rather than created. Every property must be a valid JSON-schema object. Run by the
+    migrations path with the admin credential (crm-api's own role may not write definitions). Returns
+    the ``Type.Field`` names it added."""
+    if not isinstance(extensions, dict):
+        raise ValueError('definition extensions must be an object of {object_type: {field: property}}')
+    from jsonschema import Draft202012Validator
+    added = []
+    with engine.begin() as c:
+        for kind, fields in extensions.items():
+            if not isinstance(fields, dict):
+                raise ValueError(f'{kind}: the fields must be an object of {{field: property}}')
+            row = c.execute(select(s.object_types.c.definition).where(
+                s.object_types.c.org_id == org, s.object_types.c.name == kind)).scalar_one_or_none()
+            if not isinstance(row, dict):
+                raise ValueError(f'{kind}: this org has no such object type; extensions add fields, never types')
+            props = dict(row.get('properties') or {})
+            missing = {}
+            for field, prop in fields.items():
+                if not isinstance(field, str) or not _FIELD_NAME.fullmatch(field):
+                    raise ValueError(f'{kind}.{field}: not a field name')
+                if not isinstance(prop, dict):
+                    raise ValueError(f'{kind}.{field}: the property must be a JSON-schema object')
+                Draft202012Validator.check_schema(prop)
+                if field not in props:
+                    missing[field] = prop
+            if missing:
+                c.execute(s.object_types.update().where(s.object_types.c.org_id == org, s.object_types.c.name == kind)
+                          .values(definition={**row, 'properties': {**props, **missing}}))
+                added += [f'{kind}.{f}' for f in missing]
+    return added
 
 
 def ensure_personal_org(engine, org, name):
