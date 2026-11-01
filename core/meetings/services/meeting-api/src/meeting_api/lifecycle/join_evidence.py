@@ -50,6 +50,8 @@ runtime-confirmed destroy, or a bot too old to send one). Either way the row get
 """
 from __future__ import annotations
 
+import re
+
 from enum import Enum
 from typing import Any, Dict, Mapping, Optional
 
@@ -404,6 +406,8 @@ def build_join_evidence(
     time_in_lobby_ms: Optional[int] = None,
     total_ms: Optional[int] = None,
     lobby_budget_ms: Optional[int] = None,
+    node: Optional[str] = None,
+    screenshot_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Assemble the ``meeting.data['join_evidence']`` block.
 
@@ -442,7 +446,19 @@ def build_join_evidence(
     budget = _positive_int(lobby_budget_ms)
     if budget is not None:
         evidence["lobby_budget_ms"] = budget
+    # Where the attempt ran and what its page last showed (the bot reports both on a failed join).
+    # Kept only in their exact shapes: a node name, and the key the screenshot route returned.
+    if isinstance(node, str) and _NODE_NAME.match(node):
+        evidence["node"] = node
+    if isinstance(screenshot_key, str) and _SCREENSHOT_KEY.match(screenshot_key):
+        evidence["screenshot_key"] = screenshot_key
     return evidence
+
+
+#: A Kubernetes node name (DNS-1123 subdomain).
+_NODE_NAME = re.compile(r"^(?=.{1,253}$)[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$")
+#: The key ``POST /internal/join-evidence/screenshot`` returns: join-evidence/<meeting id>/<session uid>.png.
+_SCREENSHOT_KEY = re.compile(r"^join-evidence/[0-9]+/[A-Za-z0-9_-]{1,128}\.png$")
 
 
 def normalize_evidence(raw: Any, *, default_stage: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -490,6 +506,8 @@ def normalize_evidence(raw: Any, *, default_stage: Optional[str] = None) -> Opti
             time_in_lobby_ms=timings.get("time_in_lobby_ms"),
             total_ms=timings.get("total_ms"),
             lobby_budget_ms=raw.get("lobby_budget_ms"),
+            node=raw.get("node"),
+            screenshot_key=raw.get("screenshot_key"),
         )
     except Exception:  # noqa: BLE001 — a malformed payload degrades the evidence, nothing else
         return None
