@@ -11,6 +11,19 @@ reads that source, and the CRM pack's step writes the reading here through
      "evidence": {"source": "<connection>/<reading>", "query": "<path?params>", "read_at": <epoch s>,
                   "cursor": "<the cursor the read started from>"}}
 
+DELIVERY FIELDS (1 Nov 2026, the software card's stage rule, ``flows_defs/card_stage.py``): the
+per-card delivery reading (``github/delivery``) adds what the stage is computed from —
+``draft`` and ``merge_commit_sha`` of a pull request, ``state_reason`` of an issue, ``pr`` (the pull
+request a card's issue is delivered by, or the card's own), ``issue``, ``checks`` (the check runs of
+the head commit: ``none|pending|success|failure`` with counts), ``prod`` (whether the commit the
+prod pin's chart was built from contains the card's commit) and ``release`` (the release tag that
+contains it, or null when none of the newest does). Each object is checked to its declared shape.
+
+ONE ENTRY PER SOURCE: ``Reading.sources[<connection>/<reading>]`` keeps each source's latest
+reading whole, with its evidence, so the delivery reading and the list sensors' readings never
+overwrite each other. ``Reading.fields`` is their merge (a later read wins per field) and
+``Reading.evidence`` the latest one's, so a card read by one source looks exactly as before.
+
 RULES
 * ``Reading`` is written by the reading route only. Every other write path (a person's edit, an
   agent's proposal, ``crm_change``, a gate) is refused on it (``card_ops.SENSOR_ONLY``). ``Source``
@@ -36,7 +49,12 @@ from .store import CRMError
 
 #: The fields a reading may carry, and nothing else.
 STATES = ('open', 'closed', 'merged')
-FIELDS = ('title', 'state', 'merged_at', 'head_sha', 'labels', 'url', 'updated_at')
+FIELDS = ('title', 'state', 'merged_at', 'head_sha', 'labels', 'url', 'updated_at',
+          'draft', 'merge_commit_sha', 'state_reason', 'pr', 'issue', 'checks', 'prod', 'release')
+STATE_REASONS = ('completed', 'not_planned', 'reopened', 'duplicate')
+CHECKS = ('none', 'pending', 'success', 'failure')
+#: At most this many sources kept on one card.
+SOURCES_MAX = 8
 SOURCE_MAX = 300
 _SOURCE_ID = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9_.\-]{0,63}/[A-Za-z0-9_][A-Za-z0-9_.\-]{0,63}$')
 _SHA = re.compile(r'^[0-9a-f]{7,64}$')
@@ -131,7 +149,97 @@ def normalise_fields(fields) -> dict:
         if state not in STATES:
             raise CRMError(f'reading field state is one of {", ".join(STATES)}')
         out['state'] = state
+    if 'draft' in fields:
+        out['draft'] = _bool('draft', fields['draft'])
+    if 'merge_commit_sha' in fields:
+        out['merge_commit_sha'] = _text('merge_commit_sha', fields['merge_commit_sha'], 64, _SHA)
+    if 'state_reason' in fields:
+        out['state_reason'] = _enum('state_reason', fields['state_reason'], STATE_REASONS)
+    if 'pr' in fields:
+        out['pr'] = _object('pr', fields['pr'], _pr)
+    if 'issue' in fields:
+        out['issue'] = _object('issue', fields['issue'], _issue)
+    if 'checks' in fields:
+        out['checks'] = _object('checks', fields['checks'], _checks)
+    if 'prod' in fields:
+        out['prod'] = _object('prod', fields['prod'], _prod)
+    if 'release' in fields:
+        out['release'] = _object('release', fields['release'], _release)
     return out
+
+
+def _bool(name, value):
+    if value is None or isinstance(value, bool):
+        return value
+    raise CRMError(f'reading field {name} is true or false')
+
+
+def _enum(name, value, allowed):
+    if value is None or value in allowed:
+        return value
+    raise CRMError(f'reading field {name} is one of {", ".join(allowed)}')
+
+
+def _int(name, value, low=0, high=10**9):
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+        raise CRMError(f'reading field {name} is a whole number')
+    return value
+
+
+def _object(name, value, shape):
+    """A delivery object in its declared shape (``shape`` names each key's check), or None."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise CRMError(f'reading field {name} is an object')
+    unknown = sorted(set(value) - set(shape))
+    if unknown:
+        raise CRMError(f'reading field {name} does not take ' + ', '.join(unknown[:5]))
+    return {k: check(f'{name}.{k}', value[k]) for k, check in shape.items() if k in value}
+
+
+def _url(name, value):
+    url = _text(name, value, SOURCE_MAX)
+    if url is not None and not url.startswith('https://'):
+        raise CRMError(f'reading field {name} is an https URL')
+    return url
+
+
+def _sha(name, value):
+    return _text(name, value, 64, _SHA)
+
+
+def _iso(name, value):
+    return _text(name, value, 40, _ISO)
+
+
+def _state(name, value):
+    return _enum(name, value, STATES)
+
+
+_pr = {'url': _url, 'number': _int, 'state': _state, 'draft': _bool, 'head_sha': _sha,
+       'merge_commit_sha': _sha, 'merged_at': _iso, 'updated_at': _iso}
+_issue = {'url': _url, 'state': _state, 'state_reason': lambda n, v: _enum(n, v, STATE_REASONS),
+          'closed_at': _iso}
+_checks = {'status': lambda n, v: _enum(n, v, CHECKS), 'sha': _sha, 'total': _int, 'running': _int,
+           'failed': _int, 'passed': _int}
+_prod = {'contains': _bool, 'chart': lambda n, v: _text(n, v, 100), 'entry_seq': _int, 'source_sha': _sha,
+         'via': lambda n, v: _enum(n, v, ('head', 'merge')), 'pin_ref': lambda n, v: _text(n, v, 300),
+         'commit': _sha}
+_release = {'tag': lambda n, v: _text(n, v, 100), 'checked': lambda n, v: _int(n, v, 0, 50), 'commit': _sha}
+
+
+def merged(sources) -> tuple:
+    """``(fields, evidence)`` of a card's readings: the per-source fields merged, the one read
+    later winning a field both carry; the evidence the latest reading's."""
+    entries = sorted((v for v in (sources or {}).values() if isinstance(v, dict)),
+                     key=lambda e: float((e.get('evidence') or {}).get('read_at') or 0))
+    fields = {}
+    for e in entries:
+        fields.update(e.get('fields') or {})
+    return fields, (entries[-1].get('evidence') if entries else {})
 
 
 def normalise_evidence(source, evidence) -> dict:

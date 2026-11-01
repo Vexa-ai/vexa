@@ -66,6 +66,12 @@ GATE_ONLY = ('Handoff', 'HandoffSince', 'Answer', 'Evidence', 'Receipt')
 #: Written only by a sensor reading (``write_reading``, ``/internal/records/reading``), never by an
 #: edit, a proposal or a gate: what the system read at the card's Source.
 SENSOR_ONLY = ('Reading',)
+#: Written only by the stage rule (``set_stage``, ``/internal/cards/stage``): the facts that set a
+#: software card's stage, and the correction a re-check made.
+RULE_ONLY = ('StageEvidence',)
+#: The actor every stage-rule revision is recorded under.
+STAGE_RULE_ACTOR = 'rule:card-stage'
+STAGE_MODES = ('event', 'recheck')
 #: How long a decision nonce lives (D13): long enough to read the card, short enough not to linger.
 NONCE_TTL = timedelta(minutes=15)
 #: An open card of a kind is checked again this long after its last move unless its due date is
@@ -89,6 +95,10 @@ def _refusal(reason, instruction, **extra):
     return {'status': 'refused', 'reason': reason, 'instruction': instruction, **extra}
 
 
+STAGE_FROM_FACTS = _refusal(
+    'stage_from_facts',
+    "A software card's stage is set from facts (its pull request, the prod pin, the release tag, a Flows "
+    'claim) by the stage rule only. Nobody moves it by hand. Change the facts instead; do not retry it.')
 PROPOSE_CARD = _refusal(
     'propose_instead',
     'You may not make or change a card yourself. Call card_propose (a new card) or card_update_propose '
@@ -284,6 +294,9 @@ class Cards:
     _gate = threading.local()
     #: Set while a sensor reading writes (``write_reading``): the only writer of ``SENSOR_ONLY``.
     _reading = threading.local()
+    #: Set while the stage rule writes (``set_stage``): the only writer of a software card's stage
+    #: and of ``RULE_ONLY``.
+    _rule = threading.local()
 
     def normalise_fields(self, object_type, fields, before, actor=None):
         """A card's fields as every write path stores them. ``actor`` is the person whose write is
@@ -304,6 +317,11 @@ class Cards:
             raise CRMError("A card's Reading is what the system read at its Source; only a sensor reading writes it")
         if reading_write and set(fields) - set(SENSOR_ONLY):
             raise CRMError('A sensor reading writes the Reading field only')
+        rule_write = bool(getattr(self._rule, 'on', False))
+        if set(fields) & set(RULE_ONLY) and not rule_write:
+            raise CRMError("A software card's stage evidence is written by the stage rule only")
+        if rule_write and set(fields) - {'State', *RULE_ONLY}:
+            raise CRMError('The stage rule writes State and StageEvidence only')
         if 'Source' in fields:
             fields['Source'] = rd.check_source(fields['Source'])
         kind = fields.get('Kind', prior.get('Kind'))
@@ -318,11 +336,20 @@ class Cards:
             if fields['State'] not in states:
                 raise CRMError(f'"{_clip(fields["State"], 60)}" is not a stage of this card type; '
                                f'its stages are {", ".join(states)}')
-            if template is not None and before is not None and not gate_write \
+            if tpl.moved_by_rule(template):
+                if not rule_write and fields['State'] != (prior.get('State') if before is not None
+                                                          else life['stages'][0]):
+                    raise Refused(STAGE_FROM_FACTS)
+            elif template is not None and before is not None and not gate_write \
                     and fields['State'] != prior.get('State'):
                 raise CRMError('A card of this kind moves only through its gates (decide), by the person whose move it is')
         elif before is None:
             fields['State'] = life['stages'][0]
+        elif tpl.moved_by_rule(template) and prior.get('State') not in states:
+            # a plain card becoming a software card starts at the first stage; the rule moves it on
+            fields['State'] = life['stages'][0]
+        if rule_write and not tpl.moved_by_rule(template):
+            raise CRMError('The stage rule moves software cards only')
         for key in ('NextActor', 'Requester'):
             if fields.get(key) is not None:
                 value = str(fields[key]).strip()
@@ -335,7 +362,10 @@ class Cards:
             chain = fields['Chain'] if isinstance(fields['Chain'], dict) else {}
             fields['Chain'] = {k: [str(x) for x in (chain.get(k) or []) if _ID.fullmatch(str(x))][:20]
                                for k in ('blocks', 'blocked_by')}
-        if template is not None:
+        if tpl.moved_by_rule(template):
+            # no gates and no next actor: whose move it is follows from the facts, not from a field
+            pass
+        elif template is not None:
             merged = {**prior, **fields}
             if before is None:
                 if not merged.get('NextActor'):
@@ -510,12 +540,15 @@ class Cards:
             # the typed link and what the system read there (readings.py § RENDERER CONTRACT)
             'source': f.get('Source') if ('*' in readable or 'Source' in readable) else None,
             'reading': f.get('Reading') if ('*' in readable or 'Reading' in readable) else None,
+            # a software card: the facts that set its stage, and a re-check's correction (set_stage)
+            'stage_evidence': f.get('StageEvidence') if ('*' in readable or 'StageEvidence' in readable) else None,
             'workspaces': bindings, 'parent': parent,
             'children': {'done': sum(1 for i in items if i['done']), 'total': len(items), 'items': items[:20]},
             'members': [] if cross_org else self._members(c, org, row['id']),
             'face': card_face.resolve(face_source, f, readable, formats),
             'movement': movement, 'stalled': stalled, 'new': new,
-            'can': {'edit': can_write, 'transition': can_write, 'review': can_write, 'members': can_write},
+            'can': {'edit': can_write, 'transition': can_write and not tpl.moved_by_rule(template),
+                    'review': can_write, 'members': can_write},
             'href': '/crm?' + urlencode({'record': row['id']}),
         }
         out.update(self._coordination(c, org, row, raw, kind, template, caller, cross_org, state))
@@ -1211,17 +1244,27 @@ class Cards:
         with self.store.begin() as c:
             row = self._card_row(c, org, record)
             raw = row['fields'] or {}
-            prior = raw.get('Reading') if isinstance(raw.get('Reading'), dict) else None
+            reading = raw.get('Reading') if isinstance(raw.get('Reading'), dict) else {}
+            sources = dict(reading.get('sources') or {})
+            if reading.get('fields') is not None and not sources:
+                # a reading written before readings were kept per source: it is its source's entry
+                old = reading.get('evidence') or {}
+                sources[str(old.get('source') or ev['source'])] = {'fields': reading['fields'], 'evidence': old}
+            prior = sources.get(ev['source'])
             prior_ev = (prior or {}).get('evidence') or {}
             base = {'record': row['id'], 'revision': row['revision'], 'source': ev['source'], 'read_at': ev['read_at']}
             if prior is not None:
-                if prior_ev.get('source') == ev['source'] and prior_ev.get('read_at') == ev['read_at']:
+                if prior_ev.get('read_at') == ev['read_at']:
                     return {**base, 'status': 'unchanged'}
                 if float(prior_ev.get('read_at') or 0) > ev['read_at']:
                     return {**base, 'status': 'stale'}
                 if prior.get('fields') == values:
                     return {**base, 'status': 'unchanged'}
-            patch = {'Reading': {'fields': values, 'evidence': ev}}
+            if prior is None and len(sources) >= rd.SOURCES_MAX:
+                raise CRMError(f'A card keeps the readings of at most {rd.SOURCES_MAX} sources')
+            sources[ev['source']] = {'fields': values, 'evidence': ev}
+            merged_fields, latest = rd.merged(sources)
+            patch = {'Reading': {'fields': merged_fields, 'evidence': latest, 'sources': sources}}
             self._reading.on = True
             try:
                 self._apply(c, org, 'reading:' + ev['source'], row, patch, f'Read at {ev["source"]}',
@@ -1229,6 +1272,81 @@ class Cards:
             finally:
                 self._reading.on = False
             return {**base, 'revision': row['revision'] + 1, 'status': 'applied'}
+
+    # ── the software card's stage (card_templates 'software'; flows' card_stage rule) ─────────────
+    def software_cards(self, org, record=None, limit=200):
+        """The software cards the stage rule computes: one (``record``) or every open one, each with
+        what the rule reads — its State, Source and Reading. Internal tier only; it acts for nobody."""
+        template = self.template('software')
+        with self.store.engine.connect() as c:
+            types = [n for n, d in c.execute(select(s.object_types.c.name, s.object_types.c.definition)
+                                             .where(s.object_types.c.org_id == org)).all()
+                     if isinstance(d, dict) and d.get('x-card')]
+            r = s.records
+            q = select(r.c.id, r.c.fields, r.c.revision).where(
+                r.c.org_id == org, r.c.object_type.in_(types), r.c.deleted.is_(False), r.c.merged_into.is_(None))
+            if record:
+                q = q.where(r.c.id == str(record))
+            rows = c.execute(q.order_by(r.c.id)).all()
+        out = []
+        for rid, fields, revision in rows:
+            fields = fields or {}
+            if fields.get('Kind') != 'software':
+                continue
+            if not record and not tpl.is_open(template, fields.get('State')):
+                continue
+            out.append({'id': rid, 'revision': revision, 'state': fields.get('State'),
+                        'source': fields.get('Source'), 'reading': fields.get('Reading'),
+                        'stage_evidence': fields.get('StageEvidence')})
+            if len(out) >= max(1, min(int(limit or 200), 500)):
+                break
+        return {'stages': template['stages'], 'side': template['side'], 'cards': out}
+
+    def set_stage(self, org, record, stage, because, facts=None, mode='event'):
+        """The stage rule's write (flows ``card_stage``): a software card's ``State`` and the facts that
+        set it (``StageEvidence``). Written only when the stage differs, as one revision by
+        ``rule:card-stage`` whose reason names the fact that moved it. A ``recheck`` that moves a card
+        is a CORRECTION: the card said one stage and the facts another, so the evidence keeps
+        ``correction: "was X, now Y, because …"``, readable on the card. Nothing else may set this
+        card's stage (``normalise_fields``)."""
+        if mode not in STAGE_MODES:
+            raise CRMError('mode is event or recheck')
+        because = _clip(because, 300)
+        if not because:
+            raise CRMError('A stage move names the fact that moved it')
+        facts = [f for f in (facts or []) if isinstance(f, dict)][:12]
+        try:
+            json.dumps(facts)
+        except (TypeError, ValueError):
+            raise CRMError('Stage facts are JSON') from None
+        if len(json.dumps(facts)) > 6000:
+            raise CRMError('Stage facts are at most 6000 characters')
+        with self.store.begin() as c:
+            row = self._card_row(c, org, record)
+            raw = row['fields'] or {}
+            template = self.template(raw.get('Kind'))
+            if not tpl.moved_by_rule(template):
+                raise CRMError('Only a software card has a stage the rule sets')
+            if stage not in template['stages'] + template['side']:
+                raise CRMError(f'"{_clip(stage, 60)}" is not a stage of a software card')
+            was = raw.get('State')
+            base = {'record': row['id'], 'revision': row['revision'], 'stage': stage, 'was': was}
+            if was == stage:
+                return {**base, 'status': 'unchanged'}
+            at = self.clock().isoformat()
+            evidence = {'stage': stage, 'because': because, 'facts': facts, 'at': at, 'by': STAGE_RULE_ACTOR,
+                        'mode': mode, 'was': was}
+            if mode == 'recheck':
+                evidence['correction'] = f'was {was}, now {stage}, because {because}'
+            reason = (f'Corrected: {evidence["correction"]}' if mode == 'recheck'
+                      else f'Moved to {stage}: {because}')
+            self._rule.on = True
+            try:
+                self._apply(c, org, STAGE_RULE_ACTOR, row, {'State': stage, 'StageEvidence': evidence},
+                            _clip(reason, REASON_MAX), [{'stage': evidence}], None)
+            finally:
+                self._rule.on = False
+            return {**base, 'revision': row['revision'] + 1, 'status': 'corrected' if mode == 'recheck' else 'moved'}
 
     def list(self, org, actor, workspace=None, about=None, state=None, mine=False, limit=LIST_MAX):
         caller = as_caller(actor)

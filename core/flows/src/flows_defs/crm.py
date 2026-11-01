@@ -21,7 +21,17 @@ flow ends ``not_present`` rather than knocking on a missing door.
   declared fields with its evidence onto each (``/internal/records/reading``) as the card's
   ``Reading`` — never a field a person or an agent writes. The CRM keeps it idempotent by (record,
   source, read_at), so a retry or a redelivery changes nothing.
+* ``crm_card_stage`` (``crm.record.changed``) and ``crm_card_stage_recheck`` (a schedule) keep a
+  SOFTWARE card's stage true to the facts (founder, 1 Nov 2026). The stage is computed by the pure
+  ``card_stage.stage(readings, flows_claim)`` from the card's readings and a live Flows claim, and
+  written through ``/internal/cards/stage`` (the only path that may set it) only when it differs,
+  with the fact that moved it. On a record change the rule reads the card's STORED readings; the
+  re-check, every ``RECHECK_CRON``, reads each open software card afresh (GET only, the connections
+  file's ``delivery`` block: the pull request, its check runs, the prod pin, the newest releases),
+  writes that as the card's ``github/delivery`` reading, and any move it makes is a CORRECTION the
+  card shows («was X, now Y, because …»).
 """
+import time
 import flows_config
 from flows import Done, EventType, NotPresent, StepError
 
@@ -33,6 +43,9 @@ BUSINESS_EVENTS = ("registered", "paid", "bot", "support", "stage")
 READING_EVENT = "business.reading"
 #: Refs of a reading event that are not reading fields: the link it is about, and the engine's own.
 NOT_FIELDS = ("subject", "uid")
+#: How often every open software card is read afresh and its stage checked (cron, UTC).
+RECHECK_CRON = "*/20 * * * *"
+STAGE_FLOW, RECHECK_FLOW = "crm_card_stage", "crm_card_stage_recheck"
 
 
 def build(reg, db):
@@ -104,6 +117,91 @@ def build(reg, db):
         return Done({'subject': answer.get('subject') or link, 'reading': ev['reading'],
                      'read_at': ev['read_at'], 'cards': written})
 
+    def _crm_post(base, path, body):
+        from flows_steps.common import door_headers, http
+        code, answer = http('POST', f'{base}{path}', door_headers(), body, timeout=20)
+        if code != 200 or not isinstance(answer, dict):
+            raise StepError(f'the CRM answered {code} to {path}', retryable=code >= 500 or code == 0)
+        return answer
+
+    def _put_stage(base, card, readings, mode):
+        """Compute one card's stage and write it when it differs. Answers what was done."""
+        from flows_defs import card_stage
+        now = time.time()
+        name, ev = card_stage.stage(readings, card_stage.claim_for(db, card['id'], now))
+        if name == card.get('state'):
+            return {'card': card['id'], 'stage': name, 'status': 'unchanged'}
+        out = _crm_post(base, '/internal/cards/stage', {'record': card['id'], 'stage': name, 'because': ev['because'],
+                                                        'facts': ev['facts'], 'mode': mode})
+        return {'card': card['id'], 'stage': name, 'was': card.get('state'), 'status': out.get('status'),
+                'because': ev['because']}
+
+    @reg.step
+    def card_stage_from_readings(ctx):
+        """A record changed: if it is a software card, set its stage from its stored readings and a
+        live Flows claim (``card_stage.stage``), only when it differs. Any other record: nothing."""
+        from flows_defs import card_stage
+        record = str(ctx.refs.get('record_id') or '').strip()
+        if not record:
+            raise StepError('crm.record.changed carries record_id', retryable=False)
+        base = flows_config.get(CRM_URL_ENV).rstrip('/')
+        if not base:
+            return NotPresent('crm')
+        cards = _crm_post(base, '/internal/cards/software', {'record': record}).get('cards') or []
+        if not cards:
+            return Done({'record': record, 'status': 'not_software'})
+        card = cards[0]
+        return Done(_put_stage(base, card, card_stage.readings_from_card(card), 'event'))
+
+    @reg.step
+    def recheck_card_stages(ctx):
+        """Every open software card: read its delivery facts afresh (GET only), write them as its
+        ``github/delivery`` reading, and correct its stage when the facts say another. A card that
+        cannot be read is checked against what it already has, and the reason is in the receipt."""
+        from flows_defs import card_stage
+        from flows_sensors import reading as rk
+        from flows_sensors.base import SensorFault
+        base = flows_config.get(CRM_URL_ENV).rstrip('/')
+        if not base:
+            return NotPresent('crm')
+        try:
+            cfg = rk.load_config()
+            spec = cfg.get('delivery') or {}
+            conn = (cfg.get('connections') or {}).get(spec.get('connection') or '')
+            if not conn or conn.get('transport') not in rk.TRANSPORTS:
+                raise SensorFault('no delivery connection is declared', retryable=False)
+        except SensorFault as e:
+            spec, conn, why = None, None, str(e)
+        else:
+            why = ''
+        cache = card_stage.PassCache()
+        done = []
+        for card in _crm_post(base, '/internal/cards/software', {}).get('cards') or []:
+            row = {'card': card['id']}
+            subject = card_stage.subject_of(card.get('source'))
+            if conn is not None and subject:
+                now = time.time()
+                try:
+                    fields = card_stage.read_delivery(rk.http_get, conn, spec, subject, card.get('source'), cache)
+                except (card_stage.ReadFault, SensorFault) as e:
+                    row['read'] = f'not read: {e}'
+                else:
+                    evidence = {'read_at': now, 'query': f'delivery {subject}'}
+                    _crm_post(base, '/internal/records/reading', {'record': card['id'], 'source': card_stage.DELIVERY_SOURCE,
+                                                                  'fields': fields, 'evidence': evidence})
+                    reading = dict(card.get('reading') or {})
+                    sources = dict(reading.get('sources') or {})
+                    sources[card_stage.DELIVERY_SOURCE] = {'fields': fields,
+                                                            'evidence': {'source': card_stage.DELIVERY_SOURCE, **evidence}}
+                    card = {**card, 'reading': {**reading, 'sources': sources}}
+                    row['read'] = 'read'
+            else:
+                row['read'] = f'not read: {why or "the card tracks no GitHub link"}'
+            row.update(_put_stage(base, card, card_stage.readings_from_card(card), 'recheck'))
+            done.append(row)
+        return Done({'cards': len(done), 'corrected': [r for r in done if r.get('status') == 'corrected'],
+                     'unread': sum(1 for r in done if r['read'] != 'read')})
+
     for kind in BUSINESS_EVENTS:
         reg.flow(name=f'business_{kind}', version=1, on=EventType(f'business.{kind}'),
                  steps=[reg.steps['record_business_event']])
@@ -111,5 +209,15 @@ def build(reg, db):
              steps=[reg.steps['write_reading_to_crm']])
     reg.flow(name='crm_change_log', version=1, on=EventType('crm.record.changed'),
              steps=[reg.steps['record_crm_change']])
+    reg.flow(name=STAGE_FLOW, version=1, on=EventType('crm.record.changed'),
+             steps=[reg.steps['card_stage_from_readings']])
+    # a SCHEDULE flow of the image (registry.Flow with a cron), filed the way flow_by_names files one,
+    # but not as a DB row: a refresh from the DB never retires it
+    from flows import Flow
+    from flows.registry import SCHEDULE_EVENT
+    recheck = Flow(name=RECHECK_FLOW, version=1, on=EventType(SCHEDULE_EVENT),
+                   steps=('recheck_card_stages',), cron=RECHECK_CRON)
+    reg.flows[(recheck.ident, recheck.version)] = recheck
+    reg.scheduled.setdefault(recheck.ident, []).append(recheck)
     reg.flow(name='crm_references', version=1, on=EventType('workspace.references.changed'),
              steps=[reg.steps['hand_references_to_crm']])

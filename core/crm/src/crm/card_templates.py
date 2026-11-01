@@ -14,6 +14,11 @@ The three templates the converged model fixes (§13), and the kinds that share t
 * **approval** (also ``invitation``, ``policy_change``) — opened → decided (by the signer) →
   executed (an effect receipt) → closed.
 * **question** (also ``ask``) — asked → answered → used (whoever asked acknowledges) → closed.
+* **software** — Idea → Design → Code → Review → On prod → In main → Released → Done, side Dropped (founder,
+  1 Nov 2026: a software card's status is its State, true to GitHub and the prod pin). It has NO
+  gates and no next actor: nobody moves it by hand, an agent least of all. Its stage is computed from
+  readings by the flows stage rule (``flows_defs/card_stage.py``) and written only through
+  ``Cards.set_stage`` (``/internal/cards/stage``), each move with the facts that made it.
 
 TAKEN IS NOT PASSED (D12): every handoff is two-phase. A gate names its next actor, who is
 ``offered`` the card; only that person's acknowledgement (or a gate action they take, which
@@ -28,12 +33,15 @@ KIND_TEMPLATE = {
     'commitment': 'commitment',
     'approval': 'approval', 'invitation': 'approval', 'policy_change': 'approval',
     'question': 'question', 'ask': 'question',
+    'software': 'software',
 }
 KINDS = tuple(KIND_TEMPLATE)
 
 #: Who a gate's next actor becomes after it passes: the same person, the requester (the person
 #: waiting), or nobody (the card is finished).
 SAME, REQUESTER, NOBODY = 'same', 'requester', 'nobody'
+#: Who moves a template's cards: a person through its gates, or the stage rule from facts.
+GATES, RULE = 'gates', 'rule'
 
 #: A gate: ``from`` the stages it may be taken in, ``to`` the stage it moves to, ``needs`` what the
 #: action must carry (``evidence`` refs, a ``receipt`` ref, an ``answer``), ``then`` who is offered
@@ -69,6 +77,12 @@ TEMPLATES: dict = {
             'decline': {'from': ['asked'], 'to': 'declined', 'then': NOBODY},
         },
     },
+    'software': {
+        'stages': ['Idea', 'Design', 'Code', 'Review', 'On prod', 'In main', 'Released', 'Done'],
+        'side': ['Dropped'],
+        'gates': {},
+        'mover': RULE,
+    },
 }
 
 #: The order actions are offered in a decision block (the primary first, decline last — R11).
@@ -89,7 +103,7 @@ def template_for(kind, override_stages=None):
         return None
     base = TEMPLATES[name]
     out = {'name': name, 'stages': list(base['stages']), 'side': list(base['side']),
-           'gates': {k: dict(v) for k, v in base['gates'].items()}}
+           'gates': {k: dict(v) for k, v in base['gates'].items()}, 'mover': base.get('mover', GATES)}
     if override_stages and len(override_stages.get('stages') or []) == len(base['stages']) \
             and len(override_stages.get('side') or []) == len(base['side']):
         rename = dict(zip(base['stages'] + base['side'], override_stages['stages'] + override_stages['side']))
@@ -102,6 +116,11 @@ def template_for(kind, override_stages=None):
             if g.get('passes'):
                 g['passes'] = rename[g['passes']]
     return out
+
+
+def moved_by_rule(template):
+    """Whether a template's stage is set from facts by the stage rule, never by a person or an agent."""
+    return bool(template) and template.get('mover') == RULE
 
 
 def is_open(template, state):

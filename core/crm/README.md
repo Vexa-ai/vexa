@@ -177,6 +177,8 @@ https on the network's own domain, stored as given; nothing is fetched or import
 | — | POST `/internal/references` | A workspace's references and roster at one commit (internal secret) |
 | — | POST `/internal/cards/by-source` | The ids of the cards that track a link: their typed `Source`, or a legacy «GitHub: owner/repo#N» in `Summary` on a card with none (internal secret; flows' `write_reading_to_crm`) |
 | — | POST `/internal/records/reading` | Write a sensor reading onto a card as its `Reading`: the declared fields with evidence, idempotent by (record, source, read_at), a later reading replacing an earlier one (internal secret; flows' `write_reading_to_crm`). See *Sensor readings on a card* |
+| — | POST `/internal/cards/software` | The software cards the stage rule computes (one, or every open one) with their State, Source and Reading (internal secret; flows' `card_stage` rule) |
+| — | POST `/internal/cards/stage` | The stage rule's write: a software card's State with the facts that set it, only when it differs; a `recheck` move is a correction. The only path that sets a software card's stage (internal secret). See *A software card's stage, from facts* |
 | — | POST `/internal/accounts` | Attach an account to its person (internal secret) |
 | — | POST `/person/profile` | The person's own profile: read, edit, claim, unclaim, publish, import (D35) |
 | — | POST `/internal/profiles` · `/internal/profiles/public` | Profile fields for agent-api's directory; a published public page (internal secret) |
@@ -222,6 +224,23 @@ shows the source's title (`reading.fields.title`) and state (`reading.fields.sta
 `reading.fields.url` (else `source`); the typed `Title` is shown only on a card with no reading.
 Nothing is shown from free text (`Summary`, `Next`) in their place, and no model is involved: the
 same card answer renders the same way every time.
+
+Readings are kept **per source** (`Reading.sources[<connection>/<reading>]`): the per-card delivery
+reading (`github/delivery`) and the list sensors' readings never overwrite each other;
+`Reading.fields` is their merge (a later read wins per field) and `Reading.evidence` the latest one's.
+
+## A software card's stage, from facts
+
+A card of kind **`software`** (`card_templates.py`) moves `Idea > Design > Code > Review > On prod >
+In main > Released > Done`, side `Dropped`. It has no gates and no next actor: nobody moves it by
+hand. Its `State` and `StageEvidence` are written only by `/internal/cards/stage`
+(`Cards.set_stage`, actor `rule:card-stage`); a person's edit, an agent's edit or proposal,
+`crm_change` and a born-later stage are all refused (`stage_from_facts`). Flows computes the stage
+with the pure `card_stage.stage(readings, flows_claim)` (`core/flows/src/flows_defs/card_stage.py`,
+where the rules are stated) on every record change from the stored readings, and every 20 minutes
+from a fresh GET-only read (the pull request, its check runs, the prod pin in vexa-stations, the
+newest releases). A move the re-check makes is a correction the card shows:
+`stage_evidence.correction` = «was X, now Y, because …».
 
 ## Import
 

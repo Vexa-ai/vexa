@@ -1723,6 +1723,7 @@
             "commitment",
             "invitation",
             "policy_change",
+            "software",
             null
           ],
           "description": "D11: what obligation the card is; picks its seeded lifecycle template (card_templates.py). Null for a plain board card."
@@ -1853,6 +1854,67 @@
                     "string",
                     "null"
                   ]
+                },
+                "draft": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "merge_commit_sha": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 64
+                },
+                "state_reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "completed",
+                    "not_planned",
+                    "reopened",
+                    "duplicate",
+                    null
+                  ]
+                },
+                "pr": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "description": "The pull request the card is delivered by (delivery reading): url, number, state, draft, head_sha, merge_commit_sha, merged_at, updated_at."
+                },
+                "issue": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "description": "The issue the card tracks (delivery reading): url, state, state_reason, closed_at."
+                },
+                "checks": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "description": "The head commit check runs: status none|pending|success|failure, sha, total, running, failed, passed."
+                },
+                "prod": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "description": "Whether the commit the prod pin chart was built from contains the card commit: contains, chart, entry_seq, source_sha, commit, via (head|merge), pin_ref."
+                },
+                "release": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "description": "The release tag that contains the merge commit (tag null when none of the newest does): tag, commit, checked."
                 }
               }
             },
@@ -1881,6 +1943,67 @@
                   "maxLength": 100
                 }
               }
+            },
+            "sources": {
+              "type": "object",
+              "description": "Each source latest reading whole, by <connection>/<reading>: {fields, evidence}. fields above is their merge (a later read wins per field), evidence the latest one.",
+              "additionalProperties": {
+                "type": "object",
+                "required": [
+                  "fields",
+                  "evidence"
+                ],
+                "properties": {
+                  "fields": {
+                    "type": "object"
+                  },
+                  "evidence": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "stage_evidence": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "A software card only: what set its stage (written by the stage rule only, flows card_stage). stage, because (the fact that moved it), facts (each {fact, value, source, read_at}), at, by (rule:card-stage), mode (event|recheck), was, and correction («was X, now Y, because …») when a scheduled re-check found the card disagreeing with the facts. RENDERER CONTRACT: a software card shows its state with because, and a correction as a flagged fact. Null on any other card, or when the viewer may not read it.",
+          "properties": {
+            "stage": {
+              "type": "string"
+            },
+            "because": {
+              "type": "string",
+              "maxLength": 300
+            },
+            "facts": {
+              "type": "array",
+              "maxItems": 12
+            },
+            "at": {
+              "type": "string"
+            },
+            "by": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "event",
+                "recheck"
+              ]
+            },
+            "was": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "correction": {
+              "type": "string"
             }
           }
         },

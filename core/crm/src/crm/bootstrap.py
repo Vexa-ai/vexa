@@ -71,7 +71,7 @@ DEFINITIONS = {
 _NULL_STR = lambda n, d: {'type': ['string', 'null'], 'maxLength': n, 'description': d}  # noqa: E731
 CARD_LIFECYCLE_PROPERTIES = {
     'Kind': {'type': ['string', 'null'], 'enum': ['ask', 'approval', 'question', 'commitment', 'invitation',
-                                                  'policy_change', None],
+                                                  'policy_change', 'software', None],
              'description': 'What obligation this card is: it picks the seeded lifecycle template'},
     'NextActor': _NULL_STR(128, 'The person id whose move it is (the one next actor of an open card)'),
     'Requester': _NULL_STR(128, 'The person id waiting on the card: who confirms a delivery or uses an answer'),
@@ -93,8 +93,25 @@ CARD_LIFECYCLE_PROPERTIES = {
     # agent's; ``Reading`` is written only by the reading route (``/internal/records/reading``).
     'Source': _NULL_STR(300, 'What the card tracks outside the CRM: an https URL, or owner/repo#N on GitHub'),
     'Reading': {'type': ['object', 'null'], 'additionalProperties': False, 'properties': {
-        'fields': {'type': 'object'}, 'evidence': {'type': 'object'}},
+        'fields': {'type': 'object'}, 'evidence': {'type': 'object'}, 'sources': {'type': 'object'}},
         'description': 'What a sensor last read at the Source (fields with evidence); written by the system only'},
+    # 1 Nov 2026: a software card's stage is set from facts by the stage rule (``Cards.set_stage``),
+    # and this is what set it: the stage, the fact that moved it, the facts read, and a re-check's
+    # correction («was X, now Y, because …»). Written by the rule only.
+    'StageEvidence': {'type': ['object', 'null'],
+                      'description': "The facts that set a software card's stage; written by the stage rule only"},
+}
+
+#: Platform definitions of a Card property as an earlier version seeded them. The upgrade replaces a
+#: property that is still exactly one of these (nobody changed it) with today's; a property an
+#: administrator changed is left as it is.
+PRIOR_CARD_PROPERTIES = {
+    'Kind': [{'type': ['string', 'null'], 'enum': ['ask', 'approval', 'question', 'commitment', 'invitation',
+                                                   'policy_change', None],
+              'description': 'What obligation this card is: it picks the seeded lifecycle template'}],
+    'Reading': [{'type': ['object', 'null'], 'additionalProperties': False, 'properties': {
+        'fields': {'type': 'object'}, 'evidence': {'type': 'object'}},
+        'description': 'What a sensor last read at the Source (fields with evidence); written by the system only'}],
 }
 DEFINITIONS['Card']['properties'].update(CARD_LIFECYCLE_PROPERTIES)
 
@@ -151,7 +168,8 @@ def upgrade_card_definition(engine, org):
         if not isinstance(row, dict):
             return False
         props = dict(row.get('properties') or {})
-        missing = {k: v for k, v in CARD_LIFECYCLE_PROPERTIES.items() if k not in props}
+        missing = {k: v for k, v in CARD_LIFECYCLE_PROPERTIES.items()
+                   if k not in props or props[k] in PRIOR_CARD_PROPERTIES.get(k, [])}
         if not missing:
             return False
         c.execute(s.object_types.update().where(s.object_types.c.org_id == org, s.object_types.c.name == 'Card')
