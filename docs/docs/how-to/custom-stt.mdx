@@ -126,6 +126,11 @@ Accept the endpoint only if it returns HTTP 2xx and a non-empty `text` field. A 
 base URL already included `/v1` or `/v1/audio/transcriptions`. A 401 or 403 means the token is missing
 or wrong. A `model_not_found` response means `TRANSCRIPTION_MODEL` does not match the served model id.
 
+meeting-api makes this same request itself: at boot and on `GET /health?force=1` it sends a ~1s clip
+with the `model` from `TRANSCRIPTION_MODEL` (or `whisper-1` when unset), and the Settings **Test**
+button does the same for the deployment's backend. A 404 there — a wrong path or an unserved model —
+marks the `stt` row misconfigured and bot requests are refused until the value is fixed.
+
 ## Keep provider errors attributable
 
 When adding or operating a custom STT backend:

@@ -217,6 +217,9 @@ def _http_probe(spec: dict, env: Mapping[str, str], timeout: float) -> dict:
     also makes the verdict independent of WHO the token belongs to: a billing-exempt account and a
     funded one both answer 200, and neither has to be named anywhere. It costs a fraction of a
     minute, so declare a long ``ttl_s`` — usability changes when an operator acts, not by the second.
+    The audio asks for the model the consumer will ask for: ``payload_model_key``'s value when set,
+    else ``payload_model``. A backend that validates model ids answers a model it does not serve
+    with 404, which would otherwise read as ``invalid_endpoint`` for a correctly configured one.
 
     A failure carries ``kind`` because the classes are NOT interchangeable to a consumer:
     ``unauthorized``/``invalid_endpoint``/``exhausted`` are CONFIGURATION faults, true until an
@@ -229,7 +232,9 @@ def _http_probe(spec: dict, env: Mapping[str, str], timeout: float) -> dict:
     body = b""
     content_type = None
     if (spec.get("payload") or "") == "audio":
-        content_type, body = audio_probe_body(spec.get("payload_model") or "whisper-1")
+        model_key = spec.get("payload_model_key")
+        model = (env.get(model_key) or "").strip() if model_key else ""
+        content_type, body = audio_probe_body(model or spec.get("payload_model") or "whisper-1")
     req = urllib.request.Request(url, data=body, method=(spec.get("method") or "POST"))
     if content_type:
         req.add_header("Content-Type", content_type)

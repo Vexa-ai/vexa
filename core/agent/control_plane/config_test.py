@@ -38,8 +38,8 @@ _STT_PROBE_TIMEOUT = 20.0
 # (status, body_text) — injectable for tests; None body on network failure.
 HttpPost = Callable[[str, dict, dict], tuple[int, str]]
 HttpGet = Callable[[str, dict], tuple[int, str]]
-# (endpoint, token) → (status, body_text) for the STT audio round-trip — injectable for tests.
-TranscribeProbe = Callable[[str, str], tuple[int, str]]
+# (endpoint, token, model) → (status, body_text) for the STT audio round-trip — injectable for tests.
+TranscribeProbe = Callable[[str, str, str], tuple[int, str]]
 
 
 def _post(url: str, payload: dict, headers: dict) -> tuple[int, str]:
@@ -157,11 +157,12 @@ def run_models_test(config: dict, env: Optional[dict] = None,
 # (deploy/contracts/config.v1/preflight.py:probe_url), the bot's client, and the dictation route.
 _STT_PATH = "/v1/audio/transcriptions"
 
-def _transcribe_probe(endpoint: str, token: str) -> tuple:
-    """POST the shared audio probe body — the same request the boot preflight makes."""
+def _transcribe_probe(endpoint: str, token: str, model: str) -> tuple:
+    """POST the shared audio probe body — the same request the boot preflight makes, asking for
+    the model a bot will ask for (a backend that validates model ids 404s any other)."""
     from control_plane.config_preflight import audio_probe_body
 
-    content_type, body = audio_probe_body()
+    content_type, body = audio_probe_body(model or "whisper-1")
     req = urllib.request.Request(
         endpoint, data=body, method="POST",
         headers={"Content-Type": content_type, "Authorization": f"Bearer {token}"})
@@ -173,7 +174,7 @@ def _transcribe_probe(endpoint: str, token: str) -> tuple:
 
 
 def _verify_transcribes(base: str, token: str, source: str, probe: TranscribeProbe,
-                        account: str = "") -> dict:
+                        account: str = "", model: str = "") -> dict:
     """Grade the backend by the ONE question the operator is actually asking: will a bot get a
     transcript out of this? Answered by sending real audio — the same request a bot's first chunk
     makes, and the same body the boot preflight sends.
@@ -187,7 +188,7 @@ def _verify_transcribes(base: str, token: str, source: str, probe: TranscribePro
     endpoint = base if base.endswith(_STT_PATH) else base + _STT_PATH
     who = f" ({account})" if account else ""
     try:
-        status, body = probe(endpoint, token)
+        status, body = probe(endpoint, token, model)
     except Exception as exc:
         return _result(False, f"Backend unreachable: {exc}", source=source)
     if status in (401, 403):
@@ -211,8 +212,8 @@ def _verify_transcribes(base: str, token: str, source: str, probe: TranscribePro
                    source=source, status=status, account=account or None)
 
 
-def run_transcription_test(url: str, token: str, source: str, get: HttpGet = _get,
-                           probe: TranscribeProbe = _transcribe_probe) -> dict:
+def run_transcription_test(url: str, token: str, source: str, model: str = "",
+                           get: HttpGet = _get, probe: TranscribeProbe = _transcribe_probe) -> dict:
     """A real round-trip test of the effective STT backend: transcribe a ~1s probe clip with the
     configured token — the same request (and the same probe body) a bot's first chunk and the boot
     preflight make, so the wizard can never green what the deployment refuses.
@@ -247,4 +248,4 @@ def run_transcription_test(url: str, token: str, source: str, get: HttpGet = _ge
                 account = ""
     except Exception:
         pass  # no /balance ⇒ not a Vexa gateway; the round-trip below is the oracle either way
-    return _verify_transcribes(base, token, source, probe, account)
+    return _verify_transcribes(base, token, source, probe, account, model)

@@ -474,3 +474,74 @@ def test_probe_declares_a_long_ttl_because_the_round_trip_is_metered():
     assert float(probe.get("ttl_s") or 0) >= 600, (
         "the audio probe COSTS a fraction of a minute per run — /health must not re-bill it "
         "every 60s")
+
+
+# ── #1730: the probe asks for the model the bot will ask for ─────────────────────────────────────
+
+
+class _ValidatingBackend:
+    """A model-validating OpenAI-compatible backend (DeepInfra, Groq, vLLM): 200 for the model it
+    serves, 404 model_not_found for any other — the status that reads as invalid_endpoint."""
+
+    def __init__(self, served: str):
+        self.served = served.encode()
+        self.models: list = []
+
+    def __enter__(self):
+        import http.server
+        import re
+        import threading
+
+        outer = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                m = re.search(rb'name="model"\r\n\r\n([^\r\n]*)\r\n', body)
+                model = m.group(1) if m else b""
+                outer.models.append(model.decode())
+                self.send_response(200 if model == outer.served else 404)
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+
+        self._server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+        self.base = f"http://127.0.0.1:{self._server.server_address[1]}"
+        return self
+
+    def __exit__(self, *exc):
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join(timeout=5)
+
+
+def test_stt_probe_reads_its_model_from_transcription_model():
+    http_spec = _stt_probe_spec()["http"]
+    assert http_spec.get("payload_model_key") == "TRANSCRIPTION_MODEL"
+    declared = {k["key"] for k in cp.load_declaration()["keys"]}
+    assert "TRANSCRIPTION_MODEL" in declared
+
+
+def test_probe_greens_a_validating_backend_when_the_model_is_configured():
+    """The bot sends TRANSCRIPTION_MODEL; so must the probe — or a backend on which every bot
+    transcribes probes invalid_endpoint and every spawn is refused."""
+    with _ValidatingBackend("openai/whisper-large-v3") as srv:
+        env = {"TRANSCRIPTION_SERVICE_URL": srv.base, "TRANSCRIPTION_SERVICE_TOKEN": "t",
+               "TRANSCRIPTION_MODEL": "openai/whisper-large-v3"}
+        result = cp._http_probe(_stt_probe_spec()["http"], env, timeout=5)
+    assert result == {"ok": True, "status": 200}
+    assert srv.models == ["openai/whisper-large-v3"]
+
+
+def test_probe_without_a_model_asks_for_whisper_1_and_reds_a_validating_backend():
+    """Negative control: unset TRANSCRIPTION_MODEL means the bot sends whisper-1 — a backend that
+    does not serve it cannot transcribe a single chunk, and the probe must still say so."""
+    with _ValidatingBackend("openai/whisper-large-v3") as srv:
+        env = {"TRANSCRIPTION_SERVICE_URL": srv.base, "TRANSCRIPTION_SERVICE_TOKEN": "t",
+               "TRANSCRIPTION_MODEL": ""}
+        result = cp._http_probe(_stt_probe_spec()["http"], env, timeout=5)
+    assert result["ok"] is False and result["kind"] == "invalid_endpoint"
+    assert srv.models == ["whisper-1"]

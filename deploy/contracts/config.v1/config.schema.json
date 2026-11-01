@@ -171,6 +171,11 @@
             "payload_model": {
               "type": "string",
               "description": "the `model` form field sent with `payload: \"audio\"` (default whisper-1); backends that validate model ids need their served name"
+            },
+            "payload_model_key": {
+              "type": "string",
+              "pattern": "^[A-Z][A-Z0-9_]*$",
+              "description": "the declared key holding the deployment's model id — when set, its value is the `model` form field (before `payload_model`), so the probe asks the backend for the same model the consumer will request; an unset value falls through to `payload_model`"
             }
           }
         },

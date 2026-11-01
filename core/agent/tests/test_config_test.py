@@ -98,7 +98,7 @@ def test_transcription_exhausted_token_fails_loud_despite_valid_auth():
     out = ct.run_transcription_test(
         "https://transcription.vexa.ai", "tok", "settings",
         get=lambda u, h: _balance("someone@gmail.com", 0.0),
-        probe=lambda e, t: (402, '{"detail":"Insufficient balance"}'))
+        probe=lambda e, t, m:(402, '{"detail":"Insufficient balance"}'))
     assert not out["ok"] and "402" in out["summary"] and out["source"] == "settings"
     assert "NO transcript" in out["summary"], "the verdict must name the consequence"
 
@@ -109,7 +109,7 @@ def test_transcription_zero_balance_but_transcribing_token_is_green():
     out = ct.run_transcription_test(
         "https://transcription.vexa.ai", "tok", "env",
         get=lambda u, h: _balance("svc-account@example.com", 0.0),
-        probe=lambda e, t: (200, '{"text":"probe"}'))
+        probe=lambda e, t, m:(200, '{"text":"probe"}'))
     assert out["ok"], "zero balance alone must never fail a token that transcribes"
     assert "svc-account@example.com" in out["summary"]
 
@@ -118,19 +118,19 @@ def test_transcription_funded_external_ok():
     out = ct.run_transcription_test(
         "https://transcription.vexa.ai", "tok", "env",
         get=lambda u, h: _balance("someone@gmail.com", 42.5),
-        probe=lambda e, t: (200, '{"text":"probe"}'))
+        probe=lambda e, t, m:(200, '{"text":"probe"}'))
     assert out["ok"] and "someone@gmail.com" in out["summary"]
 
 
 def test_transcription_rejected_token():
     out = ct.run_transcription_test("https://x", "bad", "env", get=lambda u, h: (403, ""),
-                                    probe=lambda e, t: (403, ""))
+                                    probe=lambda e, t, m:(403, ""))
     assert not out["ok"] and "REJECTED" in out["summary"]
 
 
 def test_transcription_backend_5xx_is_red():
     out = ct.run_transcription_test("https://t", "tok", "env", get=lambda u, h: (404, ""),
-                                    probe=lambda e, t: (503, ""))
+                                    probe=lambda e, t, m:(503, ""))
     assert not out["ok"] and "503" in out["summary"]
 
 
@@ -140,7 +140,7 @@ def test_transcription_strips_v1_path_for_balance_probe():
         seen.append(url)
         return _balance("someone@example.com", 5.0)
     ct.run_transcription_test("https://t.vexa.ai/v1/audio/transcriptions", "tok", "env", get=get,
-                              probe=lambda e, t: (200, "{}"))
+                              probe=lambda e, t, m:(200, "{}"))
     assert seen == ["https://t.vexa.ai/balance"]
 
 
@@ -152,7 +152,7 @@ def test_transcription_no_backend_and_no_token():
 
 
 def test_transcription_unreachable():
-    def boom(endpoint, token):
+    def boom(endpoint, token, model):
         raise OSError("timeout")
     out = ct.run_transcription_test("https://t", "tok", "env", get=lambda u, h: (404, ""),
                                     probe=boom)
@@ -165,7 +165,7 @@ def test_transcription_balance_failure_never_blocks_the_verdict():
     def boom(url, headers):
         raise OSError("no /balance here")
     out = ct.run_transcription_test("https://t", "tok", "env", get=boom,
-                                    probe=lambda e, t: (200, "{}"))
+                                    probe=lambda e, t, m:(200, "{}"))
     assert out["ok"]
 
 
@@ -181,7 +181,7 @@ def test_transcription_openai_wrong_key_is_red():
     """A1/A2: a rejected key on an OpenAI-compatible endpoint is RED at the click — it used to
     return green-unverified and fail mid-meeting."""
     out = ct.run_transcription_test("https://api.openai.com", "sk-wrong", "settings",
-                                    get=_NO_BALANCE, probe=lambda e, t: (401, ""))
+                                    get=_NO_BALANCE, probe=lambda e, t, m:(401, ""))
     assert not out["ok"], "a rejected key must never test green"
     assert "REJECTED" in out["summary"] and out["status"] == 401
     assert out.get("unverified") is None, "there is no longer an unverified green"
@@ -189,14 +189,14 @@ def test_transcription_openai_wrong_key_is_red():
 
 def test_transcription_openai_good_key_is_green_and_names_the_endpoint():
     out = ct.run_transcription_test("https://api.openai.com", "sk-good", "settings",
-                                    get=_NO_BALANCE, probe=lambda e, t: (200, '{"text":""}'))
+                                    get=_NO_BALANCE, probe=lambda e, t, m:(200, '{"text":""}'))
     assert out["ok"]
     assert "/v1/audio/transcriptions" in out["summary"]
 
 
 def test_transcription_openai_wrong_url_is_red():
     out = ct.run_transcription_test("https://api.openai.com/wrong", "sk-good", "env",
-                                    get=_NO_BALANCE, probe=lambda e, t: (404, ""))
+                                    get=_NO_BALANCE, probe=lambda e, t, m:(404, ""))
     assert not out["ok"] and "URL shape" in out["summary"]
 
 
@@ -205,7 +205,7 @@ def test_transcription_probe_hits_the_transcriptions_path_once():
     the configured token (the /balance lookup's X-API-Key is Vexa-gateway-only)."""
     for configured in ("https://api.openai.com", "https://api.openai.com/v1/audio/transcriptions"):
         seen = []
-        def probe(endpoint, token):
+        def probe(endpoint, token, model):
             seen.append((endpoint, token))
             return 200, "{}"
         out = ct.run_transcription_test(configured, "sk-good", "env", get=_NO_BALANCE, probe=probe)
@@ -213,3 +213,54 @@ def test_transcription_probe_hits_the_transcriptions_path_once():
         assert seen == [("https://api.openai.com/v1/audio/transcriptions", "sk-good")], (
             f"{configured} → {seen}"
         )
+
+
+# ── #1730: the round-trip asks for the model a bot will ask for ─────────────────────────────────
+# A backend that validates model ids (DeepInfra, Groq, vLLM) answers any model it does not serve
+# with 404 — so a probe pinned to whisper-1 reds a backend on which bots transcribe fine.
+
+def _validating_backend(served: str):
+    """A stand-in for a model-validating backend: 200 for `served`, 404 model_not_found otherwise."""
+    seen = []
+    def probe(endpoint, token, model):
+        seen.append(model)
+        return (200, '{"text":"probe"}') if model == served else (404, '{"code":"model_not_found"}')
+    return probe, seen
+
+
+def test_transcription_probe_asks_for_the_configured_model():
+    probe, seen = _validating_backend("openai/whisper-large-v3")
+    out = ct.run_transcription_test("https://api.deepinfra.com", "k", "env",
+                                    "openai/whisper-large-v3", get=_NO_BALANCE, probe=probe)
+    assert out["ok"], out["summary"]
+    assert seen == ["openai/whisper-large-v3"]
+
+
+def test_transcription_probe_without_a_model_still_reds_a_validating_backend():
+    """Negative control: with no model configured the probe asks for the bot's default — and a
+    backend that does not serve it is RED, exactly as every bot chunk would fail."""
+    probe, seen = _validating_backend("openai/whisper-large-v3")
+    out = ct.run_transcription_test("https://api.deepinfra.com", "k", "env",
+                                    get=_NO_BALANCE, probe=probe)
+    assert not out["ok"] and out["status"] == 404
+    assert seen == [""]
+
+
+def test_transcription_probe_body_carries_the_model_form_part(monkeypatch):
+    sent = []
+
+    class _Resp:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b"{}"
+
+    def fake_urlopen(req, timeout=None):
+        sent.append(req.data)
+        return _Resp()
+
+    monkeypatch.setattr(ct.urllib.request, "urlopen", fake_urlopen)
+    ct._transcribe_probe("http://stt/v1/audio/transcriptions", "k", "openai/whisper-large-v3")
+    ct._transcribe_probe("http://stt/v1/audio/transcriptions", "k", "")
+    assert b'name="model"\r\n\r\nopenai/whisper-large-v3\r\n' in sent[0]
+    assert b'name="model"\r\n\r\nwhisper-1\r\n' in sent[1], "unset model falls back to whisper-1"
