@@ -27,6 +27,7 @@ card_field_writers.summary: anyone
 card_field_writers.waiting: anyone
 card_field_writers.priority: {FOUNDER}
 card_field_writers.destination: {FOUNDER}
+card_field_writers.started: {FOUNDER}
 card_field_writers.*: create, {FOUNDER}
 ---
 """
@@ -348,3 +349,20 @@ def test_holder_is_written_by_the_claim_verbs_only(cards):
     card = plain(cards)
     with pytest.raises(CRMError):
         cards.update(ORG, THE_FOUNDER, card['id'], card['revision'], fields={'Holder': 'me'})
+
+
+
+# ── Started: the founder's Start of a destination (founder 1 Nov 2026, Q6 «A») ───────────────
+
+@pytest.mark.parametrize('agent', AGENTS, ids=lambda a: a.subject)
+def test_only_the_founder_starts_and_pauses_a_destination(cards, store, agent):
+    card = plain(cards)
+    with pytest.raises(Refused):
+        store.create(ORG, agent, 'Card', {'Title': 'x', 'Started': '2026-11-01T14:58:18+00:00'})
+    with pytest.raises(Refused):
+        store.change(ORG, agent, card['id'], card['revision'], {'Started': '2026-11-01T14:58:18+00:00'}, reason='start')
+    store.change(ORG, THE_FOUNDER, card['id'], card['revision'], {'Started': '2026-11-01T14:58:18+00:00'}, reason='start')
+    got = fields_of(store, card['id'])
+    assert got['Started'] == '2026-11-01T14:58:18+00:00' and got['State'] == card['state']   # State stays the rule's
+    store.change(ORG, THE_FOUNDER, card['id'], card['revision'] + 1, {'Started': None}, reason='pause')
+    assert fields_of(store, card['id']).get('Started') is None

@@ -103,6 +103,9 @@ CARD_LIFECYCLE_PROPERTIES = {
     # 1 Nov 2026 (founder «A»): who works on the card now, and until when; written by claim / release only
     'Holder': _NULL_STR(200, 'Who works on the card now (<role>@<host>:<dir>); written by claim and release only'),
     'HoldUntil': _NULL_STR(40, 'When the claim lapses (ISO-8601); a lapsed claim reads as none'),
+    # 1 Nov 2026 (founder Q6 «A»): when the founder started a destination; Pause clears it. Written by the founder
+    # only (card_field_writers.started in the install's policy); the State stays the rule's
+    'Started': _NULL_STR(40, "When the founder started this destination (ISO-8601); null when not started or paused"),
 }
 
 #: Platform definitions of a Card property as an earlier version seeded them. The upgrade replaces a
