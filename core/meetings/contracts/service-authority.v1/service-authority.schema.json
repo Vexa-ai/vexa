@@ -25,7 +25,7 @@
         "transcription_provider": {
           "enum": ["vexa", "customer", "none"]
         },
-        "lifecycle_contract_version": { "const": "2026-07-28" },
+        "lifecycle_contract_version": { "enum": ["2026-07-28", "2026-11-01"] },
         "active_concurrency": {
           "type": "integer",
           "minimum": 0

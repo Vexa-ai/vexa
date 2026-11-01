@@ -200,6 +200,21 @@ def _trim_bot_logs(lines: List[str]) -> tuple[List[str], bool]:
 _PRE_LOBBY_STAGES = frozenset({FailureStage.REQUESTED, FailureStage.JOINING})
 
 
+def _producer_iso(value: Any) -> Optional[str]:
+    """A producer-stamped, timezone-aware ISO8601 time, kept as sent; anything else is ``None``.
+
+    Used for ``pod_started_at``: a malformed value is not evidence and never reaches billing."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return value.strip()
+
+
 def _capture_join_evidence(
     rec: "MeetingRecord", event: Dict[str, Any], frm: Optional[BotStatus]
 ) -> Optional[Dict[str, Any]]:
@@ -299,6 +314,10 @@ class MeetingRecord:
     #: `join_evidence.JoinFailureReason` plus the stage, the stage timings, and the platform's own
     #: signal. Set on a `failed` terminal only; see `data` below for how it lands in the JSONB.
     join_evidence: Optional[Dict[str, Any]] = None
+    #: When the bot process started (producer time, ISO8601), from the event's ``pod_started_at``.
+    #: Billed bot time runs from here (ADR 0052 §10), not from the row's ``created_at``, which on a
+    #: booked meeting is the booking time. Persisted at ``meeting.data.pod_started_at``.
+    pod_started_at: Optional[str] = None
     # User intent (parent's `meeting.data.stop_requested`) — set by the DELETE/stop path, read
     # first by the exit classifier so a user stop is never mis-attributed as a failure.
     stop_requested: bool = False
@@ -340,6 +359,8 @@ class MeetingRecord:
             d["reason"] = self.reason
         if self.join_evidence is not None:
             d["join_evidence"] = dict(self.join_evidence)
+        if self.pod_started_at is not None:
+            d["pod_started_at"] = self.pod_started_at
         if self.error_details is not None:
             d["last_error"] = {
                 "exit_code": self.exit_code,
@@ -608,6 +629,10 @@ class LifecycleSink:
 
         if event.get("container_id"):
             rec.container_id = event["container_id"]
+        pod_started_at = _producer_iso(event.get("pod_started_at"))
+        if pod_started_at is not None and (to is BotStatus.JOINING or rec.pod_started_at is None):
+            # A new run (``joining``) carries its own pod start; otherwise keep the first one seen.
+            rec.pod_started_at = pod_started_at
         if event.get("reason") is not None:
             rec.reason = event["reason"]
         if event.get("exit_code") is not None:

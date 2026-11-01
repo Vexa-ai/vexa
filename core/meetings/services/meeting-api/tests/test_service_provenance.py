@@ -9,6 +9,7 @@ def meeting(
     segments=2,
     transitions=None,
     stt_fault=None,
+    version="2026-07-28",
 ):
     data = {
         "transcribe_enabled": provider != "none",
@@ -26,6 +27,10 @@ def meeting(
     }
     if stt_fault is not None:
         data["stt_fault"] = stt_fault
+    # The version a run settles under is the one frozen at its admit (ADR 0052 §10); these cases
+    # pin the 2026-07-28 rules. 2026-11-01 lives in test_service_provenance_pod_start.py.
+    if version is not None:
+        data["service_authority"] = {"lifecycle_contract_version": version}
     return {"status": transitions[-1]["to"] if transitions else "completed", "data": data}
 
 

@@ -153,6 +153,7 @@ def test_runtime_destroy_completes_stopping_after_active_e2e():
                             "connection_id": "sess-uid",
                             "status": st,
                             "timestamp": timestamp,
+                            "pod_started_at": "2026-07-30T16:25:30.000Z",
                         },
                     )
                 ).status_code == 200
@@ -177,7 +178,10 @@ def test_runtime_destroy_completes_stopping_after_active_e2e():
         "bot_outcome": "served",
         "transcription_provider": "none",
         "transcription_outcome": "disabled",
-        "lifecycle_contract_version": "2026-07-28",
+        "lifecycle_contract_version": "2026-11-01",
+        "pod_started_at": "2026-07-30T16:25:30.000Z",
+        "outcome_class": "unknown",  # no transcript evidence recorded: billed (ADR 0052 §10)
+        "outcome_reason": "completed_no_evidence:stopped",
     }
     assert repo.list_stale_stopping_sync() == []
     assert len([p for p in redis.streams.get(f"tc:meeting:{m['id']}", []) if p.get("type") == "session_end"]) == 1

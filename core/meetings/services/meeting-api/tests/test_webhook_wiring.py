@@ -171,7 +171,8 @@ def test_meeting_completed_exposes_frozen_privacy_safe_service_provenance():
     )
     for event in (
         {"connection_id": "sess-uid", "status": "joining",
-         "timestamp": "2026-07-28T10:00:00.000Z"},
+         "timestamp": "2026-07-28T10:00:00.000Z",
+         "pod_started_at": "2026-07-28T09:59:40.000Z"},
         {"connection_id": "sess-uid", "status": "active",
          "timestamp": "2026-07-28T10:05:00.000Z"},
         {"connection_id": "sess-uid", "status": "completed",
@@ -186,7 +187,10 @@ def test_meeting_completed_exposes_frozen_privacy_safe_service_provenance():
         "bot_outcome": "served",
         "transcription_provider": "customer",
         "transcription_outcome": "served",
-        "lifecycle_contract_version": "2026-07-28",
+        "lifecycle_contract_version": "2026-11-01",
+        "pod_started_at": "2026-07-28T09:59:40.000Z",
+        "outcome_class": "normal",
+        "outcome_reason": "delivered_stopped",
     }
     assert "transcription_provider" not in completed["data"]
     assert "transcription_service_url" not in repr(completed)
@@ -215,7 +219,8 @@ def test_finalization_failure_never_claims_vexa_transcription_was_served():
     )
     for event in (
         {"connection_id": "sess-uid", "status": "joining",
-         "timestamp": "2026-07-28T10:00:00.000Z"},
+         "timestamp": "2026-07-28T10:00:00.000Z",
+         "pod_started_at": "2026-07-28T09:59:40.000Z"},
         {"connection_id": "sess-uid", "status": "active",
          "timestamp": "2026-07-28T10:05:00.000Z"},
         {"connection_id": "sess-uid", "status": "completed",

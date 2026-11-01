@@ -126,6 +126,36 @@ async function main(): Promise<void> {
     );
   }
 
+  // ── pod start (ADR 0052 §10): every lifecycle event carries the process start time ──
+  {
+    const lc = recordingSink();
+    const podStartedAt = '2026-07-28T09:59:40.000Z';
+    let fireLeave: (a: { action: 'leave' }) => void = () => {};
+    const o = createOrchestrator(inv(), {
+      lifecycle: lc,
+      join: mockJoin('admitted'),
+      pipeline: noopPipeline(),
+      acts: noopActs((f) => { fireLeave = f; }),
+      aloneness: noopAloneness(),
+      podStartedAt,
+    });
+    const runP = o.run();
+    setTimeout(() => fireLeave({ action: 'leave' }), 5);
+    await runP;
+    check(
+      'pod-start: every lifecycle event carries pod_started_at, unchanged',
+      lc.events.length > 0 && lc.events.every((event) => event.pod_started_at === podStartedAt),
+      JSON.stringify(lc.events),
+    );
+    const plain = recordingSink();
+    await createOrchestrator(inv(), { lifecycle: plain, join: mockJoin('rejected'), pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness() }).run();
+    check(
+      'pod-start: absent when the composition root supplies none',
+      plain.events.every((event) => !('pod_started_at' in event)),
+      JSON.stringify(plain.events),
+    );
+  }
+
   // ── leave via the orchestrator.handle entrypoint (the acts adapter / test surface) ──
   {
     const lc = recordingSink();

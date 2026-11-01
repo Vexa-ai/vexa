@@ -151,6 +151,13 @@ async function pingRedis(redisUrl: string, timeoutMs = 3000): Promise<boolean> {
   }
 }
 
+/** When this bot process started — the pod-start fact billed bot time runs from (ADR 0052 §10).
+ *  `performance.timeOrigin` is the process start, before module loading and any join wait; a
+ *  booked meeting's row `created_at` is the booking time and must never stand in for it. */
+export function processStartedAt(): string {
+  return new Date(Math.round(performance.timeOrigin)).toISOString();
+}
+
 export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number> {
   // ── browser-session mode: a bot-account sign-in or check, not a meeting (browser-session.ts) ──
   if (env.VEXA_BROWSER_SESSION) return runBrowserSession(env);
@@ -440,6 +447,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     aloneness: noBrowser ? voiceAloneness : aloneness,
     recording: recording as RecordingSink | undefined,
     reachability,
+    podStartedAt: processStartedAt(),
     // What degraded the meeting, on the terminal event: the STT faults AND every stretch of audio a
     // lane will never transcribe (prod-cutover R4: a loss is a recorded gap, never silent).
     degraded: () => {

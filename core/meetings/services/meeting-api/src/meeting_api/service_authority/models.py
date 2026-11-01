@@ -8,11 +8,17 @@ from datetime import datetime, timezone
 from typing import Any, Literal, Mapping, Optional
 from urllib.parse import urlparse
 
+# One source of truth: the lifecycle contract a run is admitted under is the one its service
+# provenance is rated under (vexa-platform settlement requires the two to match).
+from ..lifecycle.provenance import (
+    LIFECYCLE_CONTRACT_VERSION,
+    SUPPORTED_LIFECYCLE_CONTRACT_VERSIONS,
+)
+
 
 _log = logging.getLogger("meeting_api.service_authority.models")
 
 AUTHORITY_VERSION = "service-authority.v1"
-LIFECYCLE_CONTRACT_VERSION = "2026-07-28"
 Action = Literal["admit", "continue"]
 TranscriptionProvider = Literal["vexa", "customer", "none"]
 
@@ -115,7 +121,7 @@ class ServiceAuthorityRequest:
             raise ValueError("unsupported service mode")
         if self.transcription_provider not in ("vexa", "customer", "none"):
             raise ValueError("unsupported transcription provider")
-        if self.lifecycle_contract_version != LIFECYCLE_CONTRACT_VERSION:
+        if self.lifecycle_contract_version not in SUPPORTED_LIFECYCLE_CONTRACT_VERSIONS:
             raise ValueError("unsupported lifecycle contract version")
         if (
             isinstance(self.active_concurrency, bool)
@@ -174,7 +180,11 @@ class ServiceAuthorityRequest:
         active_concurrency: int,
         admitted_at: datetime,
         boundary_at: datetime,
+        lifecycle_contract_version: str = LIFECYCLE_CONTRACT_VERSION,
     ) -> "ServiceAuthorityRequest":
+        # A continuation carries the version its run was ADMITTED under (frozen in
+        # meeting.data.service_authority), never the current one: the platform binds every accrual
+        # to the admit decision's version, so a run spanning an upgrade must not switch mid-run.
         return cls(
             user_id=user_id,
             action="continue",
@@ -182,7 +192,7 @@ class ServiceAuthorityRequest:
             service_identity=service_identity,
             service_mode="bot",
             transcription_provider=transcription_provider,
-            lifecycle_contract_version=LIFECYCLE_CONTRACT_VERSION,
+            lifecycle_contract_version=lifecycle_contract_version,
             active_concurrency=active_concurrency,
             admitted_at=admitted_at,
             boundary_at=boundary_at,
