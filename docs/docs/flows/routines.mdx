@@ -55,7 +55,8 @@ refused.
 **What you grant it.** Some acts need you present — putting a bot into a meeting among them. When you
 make a routine in chat to do one such act ("send a bot to this meeting at 12:13"), the agent names
 it in `params.grants` and tells you in words: *This routine may: send bots to meetings.* Only these
-can be granted: `bot.request` (send a bot), `bot.stop` (stop it), `flow.retire_self` (retire or
+can be granted: `bot.request` (send a bot, never a chat line: a `POST /bots` carrying
+`chat_on_join` is still refused), `bot.stop` (stop it), `flow.retire_self` (retire or
 pause itself). Company policy caps them (`routine_unattended_actions` in `_global/POLICIES.md`,
 default all three). The routine's strip shows the same sentence. To take a grant back, ask in chat
 or use `flow_lifecycle` with `revoke_grants`; the next run carries none.
@@ -150,7 +151,9 @@ them into that run's delegation token (`scope.grants` beside `scope.flow`) — o
 own unattended turn, never a turn you are watching, a shared chat or an event agent. Identity
 passes them on and the gateway signs them (`x-user-delegation-grants`). meeting-api's `POST /bots`
 and flows-api's retire/pause of that same routine let exactly the granted verb through and log each
-use (`routine_grant_used`); every other verb still refuses the run. `request_meeting_bot` checks the
+use (`routine_grant_used`); every other verb still refuses the run. A `POST /bots` that carries
+`chat_on_join` posts in the meeting chat, which no grant opens, so it answers `403
+human_session_required` even to a routine granted `bot.request`. `request_meeting_bot` checks the
 same grant in flows before it calls the gateway.
 
 **The run waits for its turn.** After posting the turn, `agent_run` asks agent-api
