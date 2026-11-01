@@ -44,6 +44,11 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
   waiting in the lobby until `max_wait_for_admission` ran out.
 - **Concurrency cap** — a user can run at most `max_concurrent_bots` bots at once (set when the user was
   created). Stop an existing bot or raise the cap.
+- **Ramp limit** — `POST /bots` answered `429` with `Bot ramp limit reached: …`: the account started
+  as many bots as its ramp allows in the current window (by default 5 at once, then each minute
+  `max(5, half of what was already running)` more). Retry after the `Retry-After` seconds. An
+  operator changes it per account (`PATCH /admin/users/{id}`, `bot_ramp_*`) or per deployment
+  (`BOT_RAMP_BURST`, `BOT_RAMP_SHARE`, `BOT_RAMP_WINDOW_S`; `BOT_RAMP_BURST=0` turns it off).
 
 ## Authenticated bot fails or joins signed-out
 
@@ -84,8 +89,9 @@ meeting's row in the Terminal — auto-join failures are stamped **onto the meet
   in the meeting's prep view.
 - **Auto-join is off** — the per-meeting toggle, or the source calendar's Auto-join switch
   (dashboard Calendar page on hosted; `PATCH /user/calendars/{calendar_id}` anywhere).
-- **Concurrency cap** — you were already running `max_concurrent_bots` bots at start time. The row
-  shows the cap error and retries after a backoff (default 5 min).
+- **Concurrency cap or ramp** — you were already running `max_concurrent_bots` bots at start time,
+  or the account had just started as many bots as its ramp allows. The row shows the error and
+  retries after a backoff (default 5 min).
 - **The start time is long past** — a meeting more than the grace window (default 10 min) past its
   start is skipped deliberately; the bot never joins hours late.
 - **STT not configured** — like a manual spawn, an auto-spawn refuses to launch a bot that could

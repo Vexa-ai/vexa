@@ -41,7 +41,8 @@ makes no voice note.
 A note can last up to 30 minutes of audio (`VOICE_NOTE_MAX_DURATION_SEC`). At the limit the note is
 saved and ended for you (*The note reached its maximum length and was saved.*). Paused time counts
 too: a note ends at most a minute after `VOICE_NOTE_MAX_DURATION_SEC` of wall-clock time, however much
-of it was paused. A voice note counts toward your number of concurrent bots.
+of it was paused. A voice note counts toward your number of concurrent bots, and its start counts
+toward your bot ramp (how many bots may start per window).
 
 | What you see | Why | What to do |
 |---|---|---|

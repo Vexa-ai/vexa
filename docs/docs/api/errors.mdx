@@ -25,7 +25,7 @@ failures (`422`).
 | `404` | resource not found — user, token, meeting, or workspace file | `User not found` · `not found` |
 | `413` | request body too large — a JSON, text or form body over 1 MiB is refused at the gateway (file uploads and bundle imports are bounded by their own routes) | `request body is larger than 1048576 bytes` |
 | `422` | semantic validation failed — bad field, invalid scope, event with no plan | `Invalid scope(s): ['foo']. Valid: ['bot', 'browser', 'tx']` |
-| `429` | rate-limited — per-IP edge throttle or per-user limiter; honor the `Retry-After` header (seconds) | — |
+| `429` | rate-limited — per-IP edge throttle or per-user limiter; or `POST /bots` past your concurrency limit or your bot ramp. Honor the `Retry-After` header (seconds) | `User has reached the maximum concurrent bot limit (N).` · `Bot ramp limit reached: …` |
 | `500` | unexpected server error | — |
 | `503` | a dependency is unavailable — for any route, the gateway could not check your key with admin-api (the key was not rejected; retry after `Retry-After`) | `Authentication temporarily unavailable, retry` (the body also carries `code: auth_unavailable`, `reason: vexa_sign_in_unavailable`, `source: vexa` and a `message`) |
 
@@ -48,7 +48,14 @@ failures (`422`).
   `VEXA_MEETING_DELETE_LIVE=stop`, asks the bot to leave and returns `202` (`deletion_scheduled`), and
   the deletion completes when the meeting ends.
 - `POST /bots` → `409` when a bot is already active on that link (a *planned* record on the link is
-  fine — the spawn claims it); `429` past your concurrency limit.
+  fine — the spawn claims it); `429` past either of your two bot limits, always with `Retry-After`:
+  - **concurrency** — `User has reached the maximum concurrent bot limit (N).`, `Retry-After: 60`
+    (a slot frees only when one of your bots ends, so poll);
+  - **bot ramp** — how many bots may *start* per window (default: 5 at once, then each minute
+    `max(5, half of what was already running)` more, up to your concurrency limit). The detail is
+    `Bot ramp limit reached: S bots started in the last W seconds; this account may start A now while running R. Retry in T seconds.` and `Retry-After` is the exact wait until the next start is admitted
+    (1–60 s by default). An account whose concurrency limit is at or below its burst (5 by default)
+    never meets it. A request past both limits is told about the concurrency limit.
 - `DELETE /bots/{platform}/{native_meeting_id}` → `200` with a body
   (`{"status":"stopping","meeting_id":…}`), not `204`.
 - A bot that fails to join surfaces in `GET /bots/status` rather than as an HTTP error on `POST /bots`
@@ -60,7 +67,8 @@ failures (`422`).
 (`{"code":"service_not_allowed","reason":"concurrency_limit_reached","decision_id":…}`), not the
 documented `429` with a string. A client that treats `403` as an auth failure will stop instead of
 backing off — until this is fixed, branch on the `reason` field.
-Tracked as [#1240](https://github.com/Vexa-ai/vexa/issues/1240).
+Tracked as [#1240](https://github.com/Vexa-ai/vexa/issues/1240). A bot-ramp refusal is always the
+documented `429` with a string `detail` and `Retry-After`.
 </Warning>
 
 **Calendar API** (`/user/calendar*`) — see [Calendar API → Error summary](/api/calendar#error-summary).
@@ -108,6 +116,10 @@ Two layers gate the gateway, in order:
    off only when `GATEWAY_RATE_LIMIT_DISABLED` is set. See [Configuration](/configuration).
 
 A throttled request returns `429` with a `Retry-After` header (seconds) — honor it before retrying.
-Beyond rate limits, throughput is bounded by your own infrastructure and per-user concurrency
-(`max_concurrent_bots`, set when the user is created). The hosted service additionally applies
+Beyond rate limits, throughput is bounded by your own infrastructure and two per-account bot
+limits on `POST /bots`: concurrency (`max_concurrent_bots`, set when the user is created) and the
+bot ramp, which paces how fast an account's bots start (burst 5, share 0.5, window 60 s by default;
+per account through `PATCH /admin/users/{id}`, per deployment through `BOT_RAMP_BURST`,
+`BOT_RAMP_SHARE` and `BOT_RAMP_WINDOW_S`; `BOT_RAMP_BURST=0` turns it off). Both refusals are `429`
+with `Retry-After` — see [By surface](#by-surface). The hosted service additionally applies
 plan-based limits.

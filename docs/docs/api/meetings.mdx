@@ -288,8 +288,8 @@ on the seal meaning "served, or explicitly listed as a gap", not merely "the sch
 
 A `scheduled` meeting **with a link** is joined automatically: a background sweep sends the bot
 ~60 s before `scheduled_at` (never more than 10 min after — a stale plan is skipped, not joined
-late). Opt out per meeting with `auto_join: false`. Failures are loud: a concurrency-cap or spawn
-failure stamps `auto_join_error` into the meeting's `data` and retries after a backoff. Timing is
+late). Opt out per meeting with `auto_join: false`. Failures are loud: a concurrency-cap, bot-ramp
+or spawn failure stamps `auto_join_error` into the meeting's `data` and retries after a backoff. Timing is
 tunable on a self-host — see [Configuration](/configuration).
 
 ## Calendar sync
@@ -364,7 +364,9 @@ curl -X POST "$API_BASE/bots" \
 If a **planned** meeting exists for the same link, the spawn **claims it**: the same record moves
 to `requested`, keeping its title, `scheduled_at`, and workspace binding. `409` when a bot is
 already active on that link; `429` past your concurrency limit — see the
-[concurrency-refusal divergence](/api/errors#by-surface), which answers `403` today.
+[concurrency-refusal divergence](/api/errors#by-surface), which answers `403` today — or past your
+bot ramp (how many bots may start per window), always with a `Retry-After` header: retry after that
+many seconds.
 
 With transcription requested (the default) and STT unconfigured, the spawn is **refused loud** —
 `503` naming `TRANSCRIPTION_SERVICE_URL` / `TRANSCRIPTION_SERVICE_TOKEN`. Two ways out: set the

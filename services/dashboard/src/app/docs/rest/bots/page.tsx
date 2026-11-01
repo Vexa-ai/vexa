@@ -60,12 +60,21 @@ export default function BotsPage() {
           },
           {
             status: 429,
-            body: { error: "Too many concurrent bots" },
-            description: "User has reached their maximum concurrent bot limit",
+            body: { detail: "User has reached the maximum concurrent bot limit (3)." },
+            description: "The account is running its maximum number of bots at once. The response carries Retry-After: 60; a slot frees when one of its bots ends",
+          },
+          {
+            status: 429,
+            body: {
+              detail:
+                "Bot ramp limit reached: 5 bots started in the last 60 seconds; this account may start 5 now while running 5. Retry in 41 seconds.",
+            },
+            description: "The account started as many bots as its ramp allows in the current window. Retry-After gives the exact wait in seconds",
           },
         ]}
         notes={[
           "The bot will transition through statuses: requested → joining → awaiting_admission → active",
+          "Two limits pace POST /bots: how many bots run at once, and the bot ramp, how many may start per window (by default 5 at once, then each minute max(5, half of what was already running) more). Both refusals are 429 with a Retry-After header; an account whose concurrency limit is 5 or less never meets the ramp",
           "For Google Meet, meeting IDs follow the format: abc-defg-hij",
           "For Microsoft Teams, meeting IDs are numeric and require a passcode. Always pass meeting_url for Teams to preserve the exact domain.",
           "The language parameter is optional. If not specified, the bot will auto-detect the language",
