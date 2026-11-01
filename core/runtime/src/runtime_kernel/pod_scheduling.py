@@ -16,6 +16,9 @@ A toleration with no key (it tolerates every taint) or for a control-plane or sy
 the operator sets ``RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS=true``; the runtime-wide settings are held to
 the same rules at boot (:func:`validate_runtime_wide`).
 
+``<prefix>SCHEDULER_NAME`` hands the class's Pods to another scheduler (``spec.schedulerName``), e.g.
+an operator's own bin-packing scheduler; unset keeps the cluster's ``default-scheduler``.
+
 Empty is the default for every field and means "nothing of this profile's own": the Pod carries
 the runtime-wide ``RUNTIME_K8S_NODE_SELECTOR`` / ``RUNTIME_K8S_TOLERATIONS`` exactly as before. A
 profile's own node selector or tolerations, when set, replace the runtime-wide value for that field.
@@ -36,7 +39,9 @@ PRIORITY_CLASS_NAME = "PRIORITY_CLASS_NAME"
 IMAGE_PULL_SECRETS = "IMAGE_PULL_SECRETS"
 CAPABILITIES = "CAPABILITIES"
 SECCOMP_PROFILE = "SECCOMP_PROFILE"
-SUFFIXES = (NODE_SELECTOR, TOLERATIONS, PRIORITY_CLASS_NAME, IMAGE_PULL_SECRETS, CAPABILITIES, SECCOMP_PROFILE)
+SCHEDULER_NAME = "SCHEDULER_NAME"
+SUFFIXES = (NODE_SELECTOR, TOLERATIONS, PRIORITY_CLASS_NAME, IMAGE_PULL_SECRETS, CAPABILITIES, SECCOMP_PROFILE,
+            SCHEDULER_NAME)
 #: The runtime-wide settings, validated at boot by the same rules as a profile's own.
 RUNTIME_WIDE_PREFIX = "RUNTIME_K8S_"
 #: The operator's explicit opt-in to tolerations that reach any node or the cluster's own nodes.
@@ -77,6 +82,9 @@ class PodScheduling:
     #: (a path relative to the kubelet's seccomp root, the file present on the node). The chart sets
     #: it for meeting bots: the profile that lets Chromium build its sandbox. Empty ⇒ RuntimeDefault.
     seccomp_profile: str = ""
+    #: The scheduler that places the class's Pods (``spec.schedulerName``), e.g. an operator's own
+    #: bin-packing scheduler. Empty ⇒ the cluster's ``default-scheduler``.
+    scheduler_name: str = ""
 
     def apply(self, pod_spec: dict) -> None:
         """Lay this profile's placement onto a Pod ``spec`` (in place). A set node selector or
@@ -90,6 +98,8 @@ class PodScheduling:
             pod_spec["priorityClassName"] = self.priority_class_name
         if self.image_pull_secrets:
             pod_spec["imagePullSecrets"] = [{"name": n} for n in self.image_pull_secrets]
+        if self.scheduler_name:
+            pod_spec["schedulerName"] = self.scheduler_name
 
 
 def _dns1123_subdomain(value: object) -> bool:
@@ -220,6 +230,13 @@ def _priority_class(env: Mapping[str, str], key: str) -> str:
     return value
 
 
+def _scheduler_name(env: Mapping[str, str], key: str) -> str:
+    value = (env.get(key) or "").strip()
+    if value and not _dns1123_subdomain(value):
+        raise ValueError(f"{key} is not a valid scheduler name")
+    return value
+
+
 def _pull_secrets(env: Mapping[str, str], key: str) -> tuple[str, ...]:
     names = []
     for i, item in enumerate(_json(env, key, list) or []):
@@ -243,6 +260,7 @@ def from_env(prefix: str, env: Mapping[str, str]) -> PodScheduling:
         image_pull_secrets=_pull_secrets(env, prefix + IMAGE_PULL_SECRETS),
         capabilities=_capabilities(env, prefix + CAPABILITIES),
         seccomp_profile=_seccomp_profile(env, prefix + SECCOMP_PROFILE),
+        scheduler_name=_scheduler_name(env, prefix + SCHEDULER_NAME),
     )
 
 

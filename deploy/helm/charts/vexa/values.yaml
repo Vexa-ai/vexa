@@ -793,6 +793,7 @@ runtime:
   #   imagePullSecrets — Secret names (or {name: …}) in this namespace. When set they replace the
   #     ServiceAccount's own pull secrets on these Pods (Kubernetes adds the ServiceAccount's only to
   #     a Pod that names none).
+  #   schedulerName — a scheduler you run (e.g. a bin-packing profile); "" ⇒ default-scheduler.
   # Empty everywhere (the default) renders nothing new on the Pods.
   workloadScheduling:
     # Tolerations with no key (they tolerate every taint) or for control-plane/system taints
@@ -804,6 +805,7 @@ runtime:
       tolerations: []
       priorityClassName: ""
       imagePullSecrets: []
+      schedulerName: ""
       # Linux capabilities the class's containers keep; every other one is dropped. null keeps the
       # profile's own (none for a bot); [] keeps none.
       capabilities: null
@@ -812,6 +814,7 @@ runtime:
       tolerations: []
       priorityClassName: ""
       imagePullSecrets: []
+      schedulerName: ""
       # null keeps the profile's own (CHOWN, DAC_OVERRIDE, FOWNER, FSETID, KILL, SETGID, SETUID: a
       # root worker gives the model's tools a user of their own). OpenShift restricted SCC: [].
       capabilities: null

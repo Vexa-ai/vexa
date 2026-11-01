@@ -195,6 +195,8 @@ spec:
               value: {{ $bot.priorityClassName | default "" | quote }}
             - name: RUNTIME_K8S_BOT_IMAGE_PULL_SECRETS
               value: {{ $bot.imagePullSecrets | default list | toJson | quote }}
+            - name: RUNTIME_K8S_BOT_SCHEDULER_NAME
+              value: {{ $bot.schedulerName | default "" | quote }}
             - name: RUNTIME_K8S_AGENT_WORKER_NODE_SELECTOR
               value: {{ $worker.nodeSelector | default dict | toJson | quote }}
             - name: RUNTIME_K8S_AGENT_WORKER_TOLERATIONS
@@ -203,6 +205,8 @@ spec:
               value: {{ $worker.priorityClassName | default "" | quote }}
             - name: RUNTIME_K8S_AGENT_WORKER_IMAGE_PULL_SECRETS
               value: {{ $worker.imagePullSecrets | default list | toJson | quote }}
+            - name: RUNTIME_K8S_AGENT_WORKER_SCHEDULER_NAME
+              value: {{ $worker.schedulerName | default "" | quote }}
             # The Linux capabilities each class's containers keep (all others are dropped, and none
             # can be gained). Unset (null) keeps the profile's own; [] keeps none.
             - name: RUNTIME_K8S_BOT_CAPABILITIES
