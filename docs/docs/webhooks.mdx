@@ -1,6 +1,6 @@
 ---
 title: "Webhooks"
-description: "Configure a signed webhook destination and choose the events — delivery is proven in production, and the delivery history reads the same ledger the sender writes."
+description: "Configure a signed webhook destination and choose the events — delivery is proven in production; the delivery history now reads the sender's own ledger, not yet proven on a deployed dashboard."
 ---
 
 Vexa posts signed JSON to a URL you own when a meeting's state changes. Configuration is
@@ -35,12 +35,14 @@ The secret is masked to its last four characters on read-back — enough to reco
 set, never enough to use it.
 
 <Note>
-**Delivery and its history both work.** A production walk on 2026-07-19 (v0.12.15) delivered
+**Delivery works; its history is new.** A production walk on 2026-07-19 (v0.12.15) delivered
 `meeting.status_change`, `meeting.completed` and `bot.failed` to an external `webhook.site`
 endpoint, matched one-for-one by meeting-api's delivery-outcome log at `code=200`. The user-facing
 **Delivery History** was blind to those rows until [#841](https://github.com/Vexa-ai/vexa/issues/841):
-the core now records every outcome in a per-user ledger (`GET /user/webhook/deliveries`, below),
-and the dashboard's Webhooks → Delivery History reads that ledger rather than a store of its own.
+the core now records the first attempt of each delivery in a per-user ledger
+(`GET /user/webhook/deliveries`, below), and the dashboard's Webhooks → Delivery History reads that
+ledger rather than a store of its own. Retry outcomes are not written to the ledger yet, and the
+history has not yet been checked on a deployed dashboard.
 </Note>
 
 <Warning>
@@ -112,10 +114,12 @@ required. Self-hosted: `make all` prints a key when the stack comes up.
 - **Live delivery — proven.** Owner-witnessed production walk, 2026-07-19: POSTs arrived at an
   external `webhook.site` inbox from production IPs, one per walk event, matched one-for-one by
   meeting-api's delivery-outcome log at `code=200`.
-- **Delivery History — fixed ([#841](https://github.com/Vexa-ai/vexa/issues/841)).** The core
-  records every delivery outcome in the per-user ledger served by `GET /user/webhook/deliveries`,
-  and the dashboard's Webhooks → Delivery History reads that ledger, so real deliveries (not only
-  the Test button's) are listed with their named outcome and status code.
+- **Delivery History — built, not yet proven on a deployment ([#841](https://github.com/Vexa-ai/vexa/issues/841)).**
+  The core records the first attempt of each delivery in the per-user ledger served by
+  `GET /user/webhook/deliveries`, and the dashboard's Webhooks → Delivery History reads that ledger,
+  so real deliveries (not only the Test button's) are listed with their named outcome and status
+  code. Module tests cover it; it has not been run on a deployed dashboard, and retry outcomes are
+  not recorded.
 - **CI does not exercise the network leg.** The module and eval tests drive the real `WebhookSink`
   against a fake in-memory receiver, so a regression in the transport itself would not be caught
   by tests — only by another live walk.
