@@ -908,8 +908,13 @@ def create_app() -> FastAPI:
         user = await db.get(User, user_id)
         if not user:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        # #1868: an expired token can no longer authenticate (validate.py refuses it), so it is not
+        # listed: hundreds of 15-minute keys an automation minted buried the person's own keys.
+        now = datetime.utcnow()
         rows = (await db.execute(
-            select(APIToken).where(APIToken.user_id == user_id).order_by(APIToken.id)
+            select(APIToken).where(APIToken.user_id == user_id)
+            .where((APIToken.expires_at.is_(None)) | (APIToken.expires_at > now))
+            .order_by(APIToken.id)
         )).scalars().all()
         return [TokenInfo.model_validate(t) for t in rows]
 
