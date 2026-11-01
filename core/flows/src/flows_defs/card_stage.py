@@ -10,7 +10,7 @@ THREE PARTS, the first one pure:
 
 * :func:`stage` — ``stage(readings, flows_claim) -> (stage, evidence)``. No I/O, no clock unless
   given. ``readings`` is what the card's readings say (:func:`readings_from_card` builds it from the
-  CRM's ``Reading``); ``flows_claim`` is a live Flows hold on the card, or None.
+  CRM's ``Reading``); ``flows_claim`` is the card's live claim (``claim_of``: the CRM's ``hold``), or None.
 * :func:`readings_from_card` — the stored per-source readings of a card, as :func:`stage` reads them.
 * :func:`read_delivery` — the scheduled re-check's fresh read of one card: GET-only calls declared in
   the connections file (``delivery``), the answer the ``github/delivery`` reading's fields.
@@ -111,7 +111,7 @@ def stage(readings: dict, flows_claim: Optional[dict] = None) -> tuple[Optional[
     if flows_claim:
         facts.append({'fact': 'claim', 'value': {k: flows_claim.get(k) for k in ('holder', 'host', 'since', 'lease_until')
                                                   if flows_claim.get(k) is not None},
-                      'source': 'flows/claim', 'read_at': flows_claim.get('read_at')})
+                      'source': 'card/claim', 'read_at': flows_claim.get('read_at')})
         activity.append({'kind': 'agent', 'holder': flows_claim.get('holder'), 'host': flows_claim.get('host'),
                          'since': flows_claim.get('since')})
     head = (pr or {}).get('head_sha')
@@ -172,7 +172,7 @@ def stage(readings: dict, flows_claim: Optional[dict] = None) -> tuple[Optional[
     if source and not pr_known:
         return unread('of a pull request for ')
     if flows_claim:
-        return out('Code', f"held by {flows_claim.get('holder') or 'a Flows claim'}"
+        return out('Code', f"held by {flows_claim.get('holder') or 'a claim'}"
                            + (f" since {flows_claim['since']}" if flows_claim.get('since') else '')
                            + ', no pull request yet')
     if pr_state == 'closed':
@@ -475,16 +475,16 @@ def summarise_checks(answer, sha: str) -> dict:
 OWN_FLOWS = ('crm_card_stage', 'crm_card_stage_recheck')
 
 
-def claim_for(db, card_id: str, now: float) -> Optional[dict]:
-    """A live Flows hold on the card: a ``running`` reaction under an unexpired lease whose refs name
-    it as ``card``. Its holder is the latest ``claim`` signal's actor (the claim verb), else the flow;
-    the host is what follows ``@`` in the holder (``s1-worker@bbb`` → ``bbb``)."""
-    import json
-    try:
-        rows = db.execute("SELECT reaction_id, flow, subject_refs, lease_until, updated_at FROM reaction "
-                          "WHERE status = 'running' AND lease_until > :now", {'now': now})
-    except Exception:  # noqa: BLE001 — no reaction table (a bare test db): nobody holds anything
+def claim_of(card: dict, now: float) -> Optional[dict]:
+    """The live claim on the card, as the CRM keeps it (founder 1 Nov 2026 «A»: a claim is a card fact,
+    ``Holder`` / ``HoldUntil``, written by ``/card/claim``; the CRM answers ``hold`` only while it is live).
+    The host is what follows ``@`` in the holder (``s1-worker@bbb`` → ``bbb``)."""
+    hold = (card or {}).get('hold')
+    if not isinstance(hold, dict) or not hold.get('holder'):
         return None
+    holder = str(hold['holder'])
+    return {'holder': holder, 'host': holder.split('@', 1)[1].split(':', 1)[0] if '@' in holder else None,
+            'lease_until': hold.get('until'), 'read_at': now}
     for rid, flow, refs, lease, updated in rows:
         if flow in OWN_FLOWS:
             continue

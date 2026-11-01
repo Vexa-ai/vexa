@@ -23,7 +23,7 @@ flow ends ``not_present`` rather than knocking on a missing door.
   source, read_at), so a retry or a redelivery changes nothing.
 * ``crm_card_stage`` (``crm.record.changed``) and ``crm_card_stage_recheck`` (a schedule) keep a
   SOFTWARE card's stage true to the facts (founder, 1 Nov 2026). The stage is computed by the pure
-  ``card_stage.stage(readings, flows_claim)`` from the card's readings and a live Flows claim, and
+  ``card_stage.stage(readings, flows_claim)`` from the card's readings and its live claim (the CRM's hold), and
   written through ``/internal/cards/stage`` (the only path that may set it) only when it differs,
   with the fact that moved it. On a record change the rule reads the card's STORED readings; the
   re-check, every ``RECHECK_CRON``, reads each open software card afresh (GET only, the connections
@@ -130,7 +130,7 @@ def build(reg, db):
         «no reading yet for <source>» once (``stage: null``); the same evidence again writes nothing."""
         from flows_defs import card_stage
         now = time.time()
-        name, ev = card_stage.stage(readings, card_stage.claim_for(db, card['id'], now))
+        name, ev = card_stage.stage(readings, card_stage.claim_of(card, now))
         if name is None:
             held = card.get('stage_evidence') or {}
             if held.get('no_reading') and held.get('because') == ev['because'] and held.get('stage') is None:

@@ -72,6 +72,11 @@ SENSOR_ONLY = ('Reading',)
 #: Written only by the stage rule (``set_stage``, ``/internal/cards/stage``): the facts that set a
 #: software card's stage, and the correction a re-check made.
 RULE_ONLY = ('StageEvidence',)
+#: Written only by the claim verbs (``claim`` / ``release``, founder 1 Nov 2026 «A»: a claim is a card fact,
+#: not a Flows row): who works on the card now, and until when. Expiry is checked on read.
+CLAIM_ONLY = ('Holder', 'HoldUntil')
+#: A claim's lease: default and longest.
+HOLD_DEFAULT_S, HOLD_MAX_S = 2 * 3600, 24 * 3600
 #: The actor every stage-rule revision is recorded under.
 STAGE_RULE_ACTOR = 'rule:card-stage'
 STAGE_MODES = ('event', 'recheck')
@@ -351,6 +356,8 @@ class Cards:
     _gate = threading.local()
     #: Set while a sensor reading writes (``write_reading``): the only writer of ``SENSOR_ONLY``.
     _reading = threading.local()
+    #: Set while a claim verb writes (``claim`` / ``release``): the only writer of ``CLAIM_ONLY``.
+    _claiming = threading.local()
     #: Set while the stage rule writes (``set_stage``): the only writer of a software card's stage
     #: and of ``RULE_ONLY``.
     _rule = threading.local()
@@ -379,6 +386,11 @@ class Cards:
             raise CRMError("A card's Reading is what the system read at its Source; only a sensor reading writes it")
         if reading_write and set(fields) - set(SENSOR_ONLY):
             raise CRMError('A sensor reading writes the Reading field only')
+        claim_write = bool(getattr(self._claiming, 'on', False))
+        if set(fields) & set(CLAIM_ONLY) and not claim_write:
+            raise CRMError("Who holds a card is written by claim and release only")
+        if claim_write and set(fields) - set(CLAIM_ONLY):
+            raise CRMError('A claim writes Holder and HoldUntil only')
         rule_write = bool(getattr(self._rule, 'on', False))
         if set(fields) & set(RULE_ONLY) and not rule_write:
             raise CRMError("A software card's stage evidence is written by the stage rule only")
@@ -641,6 +653,65 @@ class Cards:
             s.card_seen.c.org_id == org, s.card_seen.c.person == person,
             s.card_seen.c.record_id == record_id)).scalar_one_or_none()
 
+    def hold_of(self, raw):
+        """Who holds the card now: {holder, until} while ``HoldUntil`` is in the future, else None (a lapsed
+        claim reads as no claim; nothing has to clear it)."""
+        holder, until = (raw or {}).get('Holder'), (raw or {}).get('HoldUntil')
+        if not holder or not until:
+            return None
+        try:
+            if _at(until) <= self.clock():
+                return None
+        except (TypeError, ValueError):
+            return None
+        return {'holder': holder, 'until': until}
+
+    def claim(self, org, actor, card, holder, lease_s=HOLD_DEFAULT_S, reason=''):
+        """A worker takes a card: ``Holder`` = who (``<role>@<host>:<dir>``), ``HoldUntil`` = now + lease (at most
+        24 h). The same holder claiming again renews. Refused while someone else's claim is live. One revision,
+        recorded under the caller, with the reason."""
+        caller = as_caller(actor)
+        if caller.delegated or caller.internal or not caller.subject:
+            raise Refused(PROPOSE_CARD)
+        holder = ' '.join(str(holder or '').split())
+        if not holder or len(holder) > 200:
+            raise CRMError('A claim names its holder: <role>@<host>:<dir>, at most 200 characters')
+        lease = max(60, min(int(lease_s or HOLD_DEFAULT_S), HOLD_MAX_S))
+        with self.store.begin() as c:
+            row = self._card_row(c, org, card)
+            live = self.hold_of(row['fields'])
+            if live and live['holder'] != holder:
+                raise Conflict(f"Held by {live['holder']} until {live['until']}")
+            until = (self.clock() + timedelta(seconds=lease)).isoformat()
+            why = f'Claimed by {holder}' + (f': {" ".join(str(reason).split())[:200]}' if reason else '')
+            self._claiming.on = True
+            try:
+                self._apply(c, org, caller.subject, row, {'Holder': holder, 'HoldUntil': until}, why, [], None)
+            finally:
+                self._claiming.on = False
+            return {'claimed': True, 'card': row['id'], 'holder': holder, 'until': until, 'renewed': bool(live)}
+
+    def release(self, org, actor, card, receipt='', holder=None):
+        """The holder gives the card back with a receipt (what was done). Refused when nobody holds it, or when
+        ``holder`` is named and someone else holds it."""
+        caller = as_caller(actor)
+        if caller.delegated or caller.internal or not caller.subject:
+            raise Refused(PROPOSE_CARD)
+        with self.store.begin() as c:
+            row = self._card_row(c, org, card)
+            live = self.hold_of(row['fields'])
+            if not live:
+                raise Conflict('Nobody holds this card')
+            if holder and ' '.join(str(holder).split()) != live['holder']:
+                raise Conflict(f"Held by {live['holder']}, not {holder}")
+            why = ' '.join(str(receipt or '').split())[:300] or f"Released by {live['holder']}"
+            self._claiming.on = True
+            try:
+                self._apply(c, org, caller.subject, row, {'Holder': None, 'HoldUntil': None}, why, [], None)
+            finally:
+                self._claiming.on = False
+            return {'released': True, 'card': row['id'], 'holder': live['holder']}
+
     def _blocks(self, c, org, record_id):
         """The cards that wait on this one: computed from their ``Chain.blocked_by``, never stored."""
         out = []
@@ -671,6 +742,7 @@ class Cards:
             'kind': kind, 'next_actor': next_actor, 'requester': requester,
             'next_check_at': raw.get('NextCheckAt') or None,
             'chain': {'blocks': self._blocks(c, org, row['id']), 'blocked_by': list(chain.get('blocked_by') or [])},
+            'hold': self.hold_of(raw),
             'origin': raw.get('Origin') or None,
             'handoff': {'phase': raw.get('Handoff') or None, 'since': raw.get('HandoffSince') or None},
             'decisions': decisions,
@@ -1417,7 +1489,7 @@ class Cards:
                 continue
             out.append({'id': rid, 'revision': revision, 'state': fields.get('State'),
                         'source': fields.get('Source'), 'reading': fields.get('Reading'),
-                        'stage_evidence': fields.get('StageEvidence')})
+                        'stage_evidence': fields.get('StageEvidence'), 'hold': self.hold_of(fields)})
             if len(out) >= max(1, min(int(limit or 200), 500)):
                 break
         return {'stages': template['stages'], 'side': template['side'], 'cards': out}

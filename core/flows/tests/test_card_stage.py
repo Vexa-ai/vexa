@@ -305,24 +305,14 @@ def test_failed_checks_win_over_running_ones():
     assert cs.summarise_checks({'check_runs': [{'status': 'completed', 'conclusion': 'skipped'}]}, HEAD)['status'] == 'success'
 
 
-# ── the Flows claim ──────────────────────────────────────────────────────────────────────────────
-def _reaction(db, rid, flow, refs, status='running', lease=T + 3600):
-    db.execute("INSERT INTO reaction (reaction_id, source_event_id, event_type, subject_refs, flow, flow_version, "
-               "step, status, attempt, next_run_at, lease_until, created_at, updated_at) VALUES "
-               "(:r, :s, 'x', :refs, :f, 1, 'st', :st, 1, 0, :l, :c, :c)",
-               {'r': rid, 's': 'ev-' + rid, 'refs': json.dumps(refs), 'f': flow, 'st': status, 'l': lease, 'c': T - 60})
-
-
-def test_a_live_hold_on_the_card_is_its_claim():
-    db, reg, clock, _ = rig()
-    db.execute("SELECT 1")
-    _reaction(db, 'r1', 'work_card', {'card': 'c1'})
-    _reaction(db, 'r2', 'work_card', {'card': 'c2'}, lease=T - 1)                  # expired
-    _reaction(db, 'r3', 'work_card', {'card': 'c3'}, status='admitted')            # waiting, not held
-    _reaction(db, 'r4', STAGE_FLOW, {'card': 'c4', 'record_id': 'c4'})            # the rule itself
-    got = cs.claim_for(db, 'c1', T)
-    assert got['holder'] == 'flows:work_card' and got['host'] is None and got['reaction'] == 'r1'
-    assert all(cs.claim_for(db, c, T) is None for c in ('c2', 'c3', 'c4', 'nope'))
+# ── the claim: a card fact (founder 1 Nov 2026 «A») ─────────────────────────────────────────────
+def test_the_cards_live_hold_is_its_claim():
+    got = cs.claim_of({'id': 'c1', 'hold': {'holder': 's1-worker@bbb:~/ci/s1', 'until': '2026-11-01T12:00:00+00:00'}}, T)
+    assert got == {'holder': 's1-worker@bbb:~/ci/s1', 'host': 'bbb', 'lease_until': '2026-11-01T12:00:00+00:00', 'read_at': T}
+    assert cs.claim_of({'id': 'c2', 'hold': None}, T) is None          # nobody, or a lapsed claim (the CRM answers null)
+    assert cs.claim_of({'id': 'c3'}, T) is None
+    name, ev = cs.stage({}, got)
+    assert name == 'Code' and any(f['source'] == 'card/claim' for f in ev['facts'])
 
 
 # ── the steps ────────────────────────────────────────────────────────────────────────────────────

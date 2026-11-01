@@ -1463,6 +1463,16 @@
         "href"
       ],
       "properties": {
+        "hold": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["holder", "until"],
+          "properties": {
+            "holder": {"type": "string", "maxLength": 200},
+            "until": {"type": "string", "maxLength": 40}
+          },
+          "description": "Who works on the card now and until when (written by /card/claim and /card/release only); null when nobody does or the claim lapsed."
+        },
         "id": {
           "type": "string",
           "minLength": 1

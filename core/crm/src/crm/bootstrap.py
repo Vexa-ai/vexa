@@ -100,6 +100,9 @@ CARD_LIFECYCLE_PROPERTIES = {
     # correction («was X, now Y, because …»). Written by the rule only.
     'StageEvidence': {'type': ['object', 'null'],
                       'description': "The facts that set a software card's stage; written by the stage rule only"},
+    # 1 Nov 2026 (founder «A»): who works on the card now, and until when; written by claim / release only
+    'Holder': _NULL_STR(200, 'Who works on the card now (<role>@<host>:<dir>); written by claim and release only'),
+    'HoldUntil': _NULL_STR(40, 'When the claim lapses (ISO-8601); a lapsed claim reads as none'),
 }
 
 #: Platform definitions of a Card property as an earlier version seeded them. The upgrade replaces a

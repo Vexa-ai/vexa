@@ -224,6 +224,15 @@ class CardRead(Body):
     card: str = Field(min_length=1, max_length=128)
 class CardsPlan(Body):
     destination: str = Field(min_length=1, max_length=128)
+class CardClaim(Body):
+    card: str = Field(min_length=1, max_length=128)
+    holder: str = Field(min_length=1, max_length=200, description='<role>@<host>:<dir>, e.g. s2c-worker@bbb:~/ci/s2c')
+    lease_s: int = Field(default=7200, ge=60, le=86400)
+    reason: str = Field(default='', max_length=200)
+class CardRelease(Body):
+    card: str = Field(min_length=1, max_length=128)
+    receipt: str = Field(default='', max_length=300, description='What was done (e.g. «PR #1999 opened»)')
+    holder: str | None = Field(default=None, max_length=200)
 class CardCreate(Body):
     title: str = Field(min_length=1, max_length=200)
     workspace: str | None = Field(default=None, max_length=128)
@@ -618,6 +627,19 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
         privacy.hold(request, caller, surface='card_proposal')
         return audited('card.update.propose', caller, body.card, lambda: cards.update_propose(
             caller.org, caller, body.card, body.expected_revision, body.fields, body.face, body.transition, body.reason))
+
+    @app.post('/card/claim')
+    def card_claim(body: CardClaim, caller=Depends(person)):
+        """A worker takes a card (Holder, HoldUntil = now + lease, at most 24 h); the same holder renews. 409 while
+        someone else holds it. Every claim is a revision under the caller."""
+        return audited('card.claim', caller, body.card, lambda: cards.claim(caller.org, caller, body.card, body.holder,
+                                                                         body.lease_s, body.reason))
+
+    @app.post('/card/release')
+    def card_release(body: CardRelease, caller=Depends(person)):
+        """The holder gives the card back with a receipt. 409 when nobody, or someone else, holds it."""
+        return audited('card.release', caller, body.card, lambda: cards.release(caller.org, caller, body.card,
+                                                                             body.receipt, body.holder))
 
     @app.post('/cards/plan')
     def cards_plan(body: CardsPlan, caller=Depends(person)):

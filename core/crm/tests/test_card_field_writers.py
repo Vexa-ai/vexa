@@ -6,7 +6,7 @@ Summary and Waiting by anyone the CRM policy lets write the card. Checked on eve
 card verbs, ``crm_change``, a proposal's acceptance, the generic create), an administrator's too.
 Offline: SQLite.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine, event
@@ -314,3 +314,37 @@ def mark_destination(store, rid):
         row = store._row(c, ORG, rid)
         c.execute(s.records.update().where(s.records.c.org_id == ORG, s.records.c.id == rid)
                   .values(fields={**row['fields'], 'Destination': True}))
+
+
+
+# ── a claim is a card fact (founder 1 Nov 2026 «A»: no per-card Flows rows) ──────────────────
+
+def test_claim_renew_release_and_expiry_on_read(store):
+    now = {'t': datetime(2026, 11, 1, 9, 0, tzinfo=timezone.utc)}
+    cs = Cards(store, clock=lambda: now['t'], policy_text=lambda: POLICY)
+    card = plain(cs)
+    got = cs.claim(ORG, SOFTWARE, card['id'], 's2c-worker@bbb:~/ci/s2c', lease_s=600, reason='tests')
+    assert got['claimed'] and not got['renewed']
+    with store.engine.connect() as c:
+        v = cs.view(c, ORG, store._policy(c, ORG, CEO), cs._card_row(c, ORG, card['id']))
+    assert v['hold'] == {'holder': 's2c-worker@bbb:~/ci/s2c', 'until': got['until']}
+    with pytest.raises(CRMError):                                     # someone else, while it is live
+        cs.claim(ORG, CEO, card['id'], 'other@mac:~')
+    assert cs.claim(ORG, SOFTWARE, card['id'], 's2c-worker@bbb:~/ci/s2c')['renewed']
+    with pytest.raises(CRMError):
+        cs.release(ORG, CEO, card['id'], 'x', holder='other@mac:~')
+    assert cs.release(ORG, SOFTWARE, card['id'], 'PR #1998 opened')['released']
+    with pytest.raises(CRMError):
+        cs.release(ORG, SOFTWARE, card['id'], 'again')
+    cs.claim(ORG, SOFTWARE, card['id'], 'w@bbb', lease_s=60)
+    now['t'] = now['t'] + timedelta(seconds=61)                       # lapsed: reads as no claim
+    assert cs.hold_of(fields_of(store, card['id'])) is None
+    assert cs.claim(ORG, CEO, card['id'], 'other@mac:~')['claimed']   # and the next claimer takes it
+    revs = store.history(ORG, CEO, card['id'])['revisions']
+    assert revs[0]['actor_id'] == CEO.subject and revs[0]['reason'].startswith('Claimed by other@mac:~')
+
+
+def test_holder_is_written_by_the_claim_verbs_only(cards):
+    card = plain(cards)
+    with pytest.raises(CRMError):
+        cards.update(ORG, THE_FOUNDER, card['id'], card['revision'], fields={'Holder': 'me'})
