@@ -79,11 +79,44 @@ def build(reg, db):
 
     @reg.step
     def record_business_event(ctx):
-        """Keep a business event a sensor read, with where it came from. Needs its evidence."""
+        """Keep a business event a sensor read, with where it came from (needs its evidence). When the reading names
+        a ``subject`` (an email: a person, by the CRM's match identifiers), the reading also lands on that record
+        through the one reading route, exactly as a GitHub reading lands on a card (founder 1 Nov 2026, L2.7)."""
         ev = ctx.refs.get('_evidence')
         if not isinstance(ev, dict) or not ev.get('reading'):
             raise StepError('a business event carries _evidence with its reading', retryable=False)
-        return Done({'reading': ev['reading'], 'read_at': ev.get('read_at')})
+        out = {'reading': ev['reading'], 'read_at': ev.get('read_at')}
+        if str(ctx.refs.get('subject') or '').strip() and ev.get('read_at'):
+            landed = _land_reading(ctx)
+            if isinstance(landed, dict):
+                out['records'] = landed.get('cards') or []
+        return Done(out)
+
+    def _land_reading(ctx):
+        """The one reading route: the records that track the reading's subject (``/internal/cards/by-source``: a
+        card's Source, or a person by email), then the reading onto each (``/internal/records/reading``)."""
+        ev = ctx.refs.get('_evidence') or {}
+        link = str(ctx.refs.get('subject') or '').strip()
+        fields = {k: v for k, v in ctx.refs.items() if not k.startswith('_') and k not in NOT_FIELDS}
+        base = flows_config.get(CRM_URL_ENV).rstrip('/')
+        if not base:
+            return None
+        from flows_steps.common import door_headers, http
+        code, answer = http('POST', f'{base}/internal/cards/by-source', door_headers(), {'link': link}, timeout=20)
+        if code != 200 or not isinstance(answer, dict):
+            raise StepError(f'the CRM answered {code} to a by-source read', retryable=code >= 500 or code == 0)
+        evidence = {'read_at': ev['read_at'], 'query': ev.get('query') or ev.get('path'), 'cursor': ev.get('cursor')}
+        written = []
+        for card in [str(c) for c in answer.get('cards') or []]:
+            body = {'record': card, 'source': ev['reading'], 'fields': fields, 'evidence': evidence}
+            code, out = http('POST', f'{base}/internal/records/reading', door_headers(), body, timeout=20)
+            if code == 404:
+                continue                      # the record went between the two calls, or keeps no readings
+            if code != 200 or not isinstance(out, dict):
+                raise StepError(f'the CRM answered {code} to a reading write',
+                                retryable=code >= 500 or code == 0)
+            written.append({'card': card, 'status': out.get('status'), 'revision': out.get('revision')})
+        return {'subject': answer.get('subject') or link, 'cards': written}
 
     @reg.step
     def write_reading_to_crm(ctx):

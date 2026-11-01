@@ -120,6 +120,11 @@ PRIOR_CARD_PROPERTIES = {
         'description': 'What a sensor last read at the Source (fields with evidence); written by the system only'}],
 }
 DEFINITIONS['Card']['properties'].update(CARD_LIFECYCLE_PROPERTIES)
+#: What a sensor last read about a person or a company (founder 1 Nov 2026, L2.7: readings land on CRM records):
+#: the same shape as a card's, written only by the reading route.
+RECORD_READING = {'Reading': CARD_LIFECYCLE_PROPERTIES['Reading']}
+for _t in ('Person', 'Company'):
+    DEFINITIONS[_t]['properties'].update(RECORD_READING)
 
 #: A signed-in member's rights when no policy names them (decision 6, a default the founder may
 #: strike): they create entities and read and write the ones they own; everything else reaches them
@@ -181,6 +186,22 @@ def upgrade_card_definition(engine, org):
         c.execute(s.object_types.update().where(s.object_types.c.org_id == org, s.object_types.c.name == 'Card')
                   .values(definition={**row, 'properties': {**props, **missing}}))
         return True
+
+
+def upgrade_reading_property(engine, org):
+    """Add the sensor-only ``Reading`` to an org's existing Person and Company definitions, additively (a property
+    already defined is left as it is). Run by the migrations path. Answers the types changed."""
+    changed = []
+    with engine.begin() as c:
+        for name in ('Person', 'Company'):
+            row = c.execute(select(s.object_types.c.definition).where(
+                s.object_types.c.org_id == org, s.object_types.c.name == name)).scalar_one_or_none()
+            if not isinstance(row, dict) or 'Reading' in (row.get('properties') or {}):
+                continue
+            c.execute(s.object_types.update().where(s.object_types.c.org_id == org, s.object_types.c.name == name)
+                      .values(definition={**row, 'properties': {**(row.get('properties') or {}), **RECORD_READING}}))
+            changed.append(name)
+    return changed
 
 
 #: A field name an install may add: what a record's ``fields`` key already allows.

@@ -1404,6 +1404,14 @@ class Cards:
         """The cards that track ``link``: their typed ``Source`` names the same subject
         (``readings.subject``), or, for a card with no ``Source``, its ``Summary`` carries the legacy
         «GitHub: owner/repo#N». Internal tier only: it answers ids, never a field."""
+        mail = rd.email_of(link)
+        if mail:                       # a person (and their company's domain) by match identifier (L2.7)
+            with self.store.engine.connect() as c:
+                m = s.match_ids
+                ids = [rid for (rid,) in c.execute(select(m.c.record_id).where(
+                    m.c.org_id == org, m.c.identifier.in_([f'email:{mail}', f"domain:{mail.split('@', 1)[1]}"]))
+                    .order_by(m.c.record_id)).all()]
+            return {'subject': f'email:{mail}', 'cards': sorted(set(ids))[:limit]}
         want = rd.subject(link)
         if not want:
             raise CRMError('Not a link a reading can name')
@@ -1434,7 +1442,11 @@ class Cards:
         values = rd.normalise_fields(fields)
         ev = rd.normalise_evidence(source, evidence)
         with self.store.begin() as c:
-            row = self._card_row(c, org, record)
+            row = self.store._row(c, org, str(record or ''))
+            definition = self.store._definition(c, org, row['object_type'])
+            is_card = bool(definition.get('x-card'))
+            if not is_card and 'Reading' not in (definition.get('properties') or {}):
+                raise NotFound('This record keeps no readings')
             raw = row['fields'] or {}
             reading = raw.get('Reading') if isinstance(raw.get('Reading'), dict) else {}
             sources = dict(reading.get('sources') or {})
@@ -1458,10 +1470,22 @@ class Cards:
             merged_fields, latest = rd.merged(sources)
             patch = {'Reading': {'fields': merged_fields, 'evidence': latest, 'sources': sources}}
             self._reading.on = True
+            tok = rd.WRITING.set(True)
             try:
-                self._apply(c, org, 'reading:' + ev['source'], row, patch, f'Read at {ev["source"]}',
-                            [{'reading': ev}], None)
+                if is_card:
+                    self._apply(c, org, 'reading:' + ev['source'], row, patch, f'Read at {ev["source"]}',
+                                [{'reading': ev}], None)
+                else:                  # a person or a company (L2.7): the same write, no card lifecycle
+                    store = self.store
+                    after = {**row, 'fields': {**(row['fields'] or {}), **patch}, 'revision': row['revision'] + 1}
+                    store._validate(definition, after['fields'])
+                    if c.execute(update(s.records).where(s.records.c.org_id == org, s.records.c.id == row['id'],
+                                                         s.records.c.revision == row['revision']).values(**after)).rowcount != 1:
+                        raise Conflict('The record changed since it was read; read it again')
+                    store._revision(c, org, 'reading:' + ev['source'], row, after, f'Read at {ev["source"]}',
+                                    [{'reading': ev}])
             finally:
+                rd.WRITING.reset(tok)
                 self._reading.on = False
             return {**base, 'revision': row['revision'] + 1, 'status': 'applied'}
 

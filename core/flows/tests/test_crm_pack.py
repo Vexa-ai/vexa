@@ -144,3 +144,28 @@ def test_a_reading_needs_its_subject_evidence_and_a_crm(monkeypatch):
     with pytest.raises(StepError) as e:
         step(SimpleNamespace(refs=READING_REFS))
     assert e.value.retryable is False
+
+
+def test_a_business_event_with_a_subject_lands_on_the_matched_person(monkeypatch):
+    """L2.7 (founder 1 Nov 2026): a PostHog signup names its email as the subject; the CRM answers the matched
+    person, and the reading lands there through the same reading route a card reading uses."""
+    db, reg, clock, _ = rig()
+    build(reg, db)
+    refs = {"subject": "ann@globex.test", "event": "signup", "email": "ann@globex.test",
+            "_evidence": {"connection": "posthog", "reading": "posthog/signup", "path": "/api/projects/1/events",
+                          "query": "/api/projects/1/events?event=signup", "read_at": 1_793_560_000.0}}
+
+    def answers(url, body):
+        if url.endswith("/internal/cards/by-source"):
+            return 200, {"subject": "email:ann@globex.test", "cards": ["p1"]}
+        return 200, {"status": "applied", "revision": 2}
+    sent = _crm(monkeypatch, answers)
+    out = reg.steps["record_business_event"](SimpleNamespace(refs=refs))
+    assert out.result["records"] == [{"card": "p1", "status": "applied", "revision": 2}]
+    assert sent[0][2] == {"link": "ann@globex.test"}
+    assert sent[1][2]["record"] == "p1" and sent[1][2]["source"] == "posthog/signup"
+    assert sent[1][2]["fields"] == {"event": "signup", "email": "ann@globex.test"}
+    # no subject: kept as a business event only, nothing written to the CRM
+    sent.clear()
+    out = reg.steps["record_business_event"](SimpleNamespace(refs={k: v for k, v in refs.items() if k != "subject"}))
+    assert "records" not in out.result and sent == []

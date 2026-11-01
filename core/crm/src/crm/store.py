@@ -652,6 +652,10 @@ class Store:
         from . import founder_proof
         founder_proof.require(actor)
         self._about_exists(c, org, before, after)
+        from . import readings as _rd
+        if ((before or {}).get('fields') or {}).get('Reading') != ((after or {}).get('fields') or {}).get('Reading') \
+                and not _rd.WRITING.get():
+            raise CRMError("A record's Reading is what a sensor read; only the reading route writes it")
         record = {k: str((decision or {}).get(k) or '') for k in ('decision', 'credential_class', 'nonce', 'content_hash')}
         c.execute(s.revisions.insert().values(org_id=org, record_id=after['id'], revision=after['revision'],
             actor_id=actor, created_at=datetime.now(timezone.utc).isoformat(), reason=reason,

@@ -559,10 +559,12 @@ def main(argv):
         except Exception as exc:  # noqa: BLE001 — a refusal from Postgres, in its own words
             print(f'[crm-schema] STOP: Postgres refused: {_pg_message(exc)}. See {DOCS}', flush=True)
             return 1
-        from .bootstrap import bootstrap_org, extend_definitions, upgrade_card_definition
+        from .bootstrap import bootstrap_org, extend_definitions, upgrade_card_definition, upgrade_reading_property
         created = bootstrap_org(engine, org, os.environ.get('CRM_ORG_NAME', '') or org)
         if upgrade_card_definition(engine, org):
             created.append('Card lifecycle properties')
+        for name in upgrade_reading_property(engine, org):
+            created.append(f'{name}.Reading')
         extra = os.environ.get('CRM_DEFINITIONS_FILE', '').strip()
         if extra:
             # the install's own fields, declared as configuration and added additively

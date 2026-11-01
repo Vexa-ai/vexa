@@ -68,6 +68,19 @@ _GITHUB_SHORT = re.compile(r'^(?:github:)?([A-Za-z0-9_.\-]+)/([A-Za-z0-9_.\-]+)#
 SUMMARY_LINK = re.compile(r'GitHub:\s*([A-Za-z0-9_.\-]+)/([A-Za-z0-9_.\-]+)#(\d+)\b')
 
 
+#: Set while the reading route writes (``Cards.write_reading``): the only writer of ``Reading`` on ANY record.
+from contextvars import ContextVar  # noqa: E402
+WRITING: ContextVar = ContextVar("crm_reading_writing", default=False)
+_EMAIL = re.compile(r"^[^@\s/:]+@[^@\s/:]+\.[^@\s/:]+$")
+
+
+def email_of(link) -> str:
+    """A bare email (or ``email:<addr>``) a reading names as its subject, lower-cased; else ''."""
+    text = str(link or "").strip()
+    text = text[6:] if text.startswith("email:") else text
+    return text.lower() if _EMAIL.match(text) else ""
+
+
 def subject(link) -> str:
     """The one name of what a link points at, so a card's ``Source`` and a reading's item meet.
     A GitHub issue and pull request (URL either way, or ``owner/repo#N``) become

@@ -182,3 +182,37 @@ def test_the_routes_are_internal_tier_only(store, cards):
     bad = client.post('/internal/records/reading', json={**body, 'fields': {'Title': 'x'}}, headers=hdr)
     assert 400 <= bad.status_code < 500
     assert client.post('/internal/records/reading', json={**body, 'record': 'nope'}, headers=hdr).status_code == 404
+
+
+
+# ── readings land on people and companies (founder 1 Nov 2026, L2.7) ───────────────────────
+
+def test_a_reading_by_email_lands_on_the_matched_person_only_through_the_reading_route():
+    import json as _json
+    from crm import schema as _s
+    from crm.bootstrap import bootstrap_org
+    from crm.card_ops import Cards
+    from crm.store import CRMError as _E, Store
+    from sqlalchemy import create_engine
+    from sqlalchemy.pool import StaticPool
+    engine = create_engine('sqlite://', connect_args={'check_same_thread': False}, poolclass=StaticPool)
+    _s.metadata.create_all(engine)
+    bootstrap_org(engine, 'acme', 'Acme')
+    st = Store(engine)
+    cs = Cards(st)
+    from crm.caller import Caller
+    admin = Caller(subject='1', email='a@acme.test', workspaces=('sales',), writable=('sales',), is_admin=True)
+    pid = st.create('acme', admin, 'Person', {'Name': 'Ann', 'Email': 'ann@globex.test'},
+                    match=['email:ann@globex.test'], idempotency_key='p1')['record_id']
+    got = cs.by_source('acme', 'ann@globex.test')
+    assert got['cards'] == [pid] and got['subject'] == 'email:ann@globex.test'
+    out = cs.write_reading('acme', pid, 'posthog/signup', {'title': 'signup'},
+                           {'read_at': 1793560000.0, 'query': 'posthog signup'})
+    assert out['status'] == 'applied'
+    with engine.connect() as c:
+        rec = st._row(c, 'acme', pid)
+    assert rec['fields']['Reading']['fields']['title'] == 'signup'
+    rev = st.history('acme', admin, pid)['revisions'][0]
+    assert rev['actor_id'] == 'reading:posthog/signup'
+    with pytest.raises(_E):                                          # nobody writes Reading by hand
+        st.change('acme', admin, pid, rec['revision'], {'Reading': None}, reason='x')
