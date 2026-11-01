@@ -14,7 +14,7 @@
  * Run: npx tsx src/zoom/admission.test.ts
  */
 
-import { waitForZoomMeetingAdmission } from "./admission";
+import { waitForZoomMeetingAdmission, checkForZoomAdmissionSilent } from "./admission";
 import { AdmissionError } from "../shared/admission";
 import { resetEscalation } from "../shared/escalation";
 
@@ -25,8 +25,19 @@ function check(name: string, ok: boolean, detail?: string) {
   else { console.log(`  \x1b[31mFAIL\x1b[0m  ${name}${detail ? ` — ${detail}` : ""}`); failed++; }
 }
 
-/** A page whose DOM is just body text: evaluate() runs the probe in-node, locators see nothing. */
-function makePage(bodyText: () => string): any {
+/**
+ * A page whose DOM is body text plus a declared set of present selectors.
+ *
+ * `locator().isVisible()` always returns false — which is not a limitation but
+ * the single most important property of this harness: it reproduces Zoom's
+ * auto-hidden footer toolbar, the state in which every visibility probe lies
+ * about a bot that is genuinely in the meeting.
+ *
+ * `present` lists selectors for which `document.querySelector` returns an
+ * element. Exact-string matching is enough here because isAdmitted() queries
+ * the selector constants verbatim.
+ */
+function makePage(bodyText: () => string, present: string[] = []): any {
   const locator = (sel: string): any => ({
     first: () => locator(sel),
     isVisible: async () => false,
@@ -35,7 +46,11 @@ function makePage(bodyText: () => string): any {
   });
   return {
     evaluate: async (fn: any, arg?: any) => {
-      (globalThis as any).document = { body: { innerText: bodyText() } };
+      (globalThis as any).document = {
+        body: { innerText: bodyText() },
+        querySelector: (sel: string) => (present.includes(sel) ? ({} as any) : null),
+        querySelectorAll: (sel: string) => (present.includes(sel) ? [{} as any] : []),
+      };
       try { return fn(arg); } finally { delete (globalThis as any).document; }
     },
     locator,
@@ -85,6 +100,53 @@ async function main() {
     const got = await outcomeOf(waitForZoomMeetingAdmission(page, 30_000, cfg));
     check("host rejection → AdmissionError('denial') — a re-knock cannot succeed",
       got === "AdmissionError:denial", got);
+  }
+
+  // ---- checkForZoomAdmissionSilent: the post-ACTIVE verification ------------
+  //
+  // Its caller leaves the meeting when this returns false, so a wrong `false`
+  // costs the whole recording. All three cases run with every locator invisible
+  // (auto-hidden footer) — the state that made the old ordering fail.
+
+  console.log("\n=== admitted, footer auto-hidden, generic lobby substring on screen ===");
+  {
+    // The regression. Bot IS in the meeting: a footer control is in the DOM. The
+    // toolbar has auto-hidden so isVisible() is false everywhere, and an
+    // in-meeting toast contains 'Please wait' — a zoomWaitingRoomTexts entry.
+    // Old ordering: text probe ran first, returned false, caller left the call.
+    const page = makePage(
+      () => "Please wait while we connect your audio",
+      ["#wc-footer", ".meeting-app"],
+    );
+    const got = await checkForZoomAdmissionSilent(page);
+    check("footer marker present outranks a generic lobby substring — bot stays in the meeting",
+      got === true, `got ${got}`);
+  }
+
+  console.log("\n=== genuinely in the waiting room → still not admitted ===");
+  {
+    // No footer controls exist in the lobby. `.meeting-app` IS present, because
+    // Zoom renders the waiting room inside it — so the lobby text must still
+    // veto the weak fallback (meeting_id=36, 2026-04-26).
+    const page = makePage(
+      () => "Host has joined. We've let them know you're here",
+      [".meeting-app"],
+    );
+    const got = await checkForZoomAdmissionSilent(page);
+    check("lobby copy + .meeting-app but no footer → NOT admitted (no regression of #36)",
+      got === false, `got ${got}`);
+  }
+
+  console.log("\n=== pre-join form on screen → never admitted ===");
+  {
+    // Pre-join is the one case that outranks footer evidence (meeting_id=31).
+    const page = makePage(
+      () => "Enter Meeting Info",
+      ["#wc-footer", "#input-for-name"],
+    );
+    const got = await checkForZoomAdmissionSilent(page);
+    check("pre-join form vetoes footer markers → NOT admitted (no regression of #31)",
+      got === false, `got ${got}`);
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);
