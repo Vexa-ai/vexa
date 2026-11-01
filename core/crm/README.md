@@ -175,6 +175,7 @@ https on the network's own domain, stored as given; nothing is fetched or import
 | `card_update_propose` | POST `/card/update/propose` | Propose a change or a stage move — a member accepts it |
 | — | POST `/card/read` · `/card/create` · `/card/update` · `/card/members` · `/card/membership` | The person's own card verbs: read with activity, make, change or move, share, accept being added |
 | — | POST `/internal/references` | A workspace's references and roster at one commit (internal secret) |
+| — | POST `/internal/cards/blockers` | What a card still waits on: the ids in its `Chain.blocked_by` that are not finished, the finished ones, the dropped ones with their titles, and ids with no card (internal secret; flows' `card_blockers_done`). Reads `blocked_by` only: `Chain.blocks` on the other card is not kept in step with it |
 | — | POST `/internal/accounts` | Attach an account to its person (internal secret) |
 | — | POST `/person/profile` | The person's own profile: read, edit, claim, unclaim, publish, import (D35) |
 | — | POST `/internal/profiles` · `/internal/profiles/public` | Profile fields for agent-api's directory; a published public page (internal secret) |
