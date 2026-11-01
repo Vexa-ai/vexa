@@ -585,6 +585,26 @@ async function main(): Promise<void> {
     check('joinAt stop: never navigated or withdrew', !joinCalled && withdrawn === 0);
   }
 
+  // ── ADR-0052 s1: a `leave` on the command bus while waiting ends the bot (no teardown needed) ──
+  {
+    const lc = recordingSink();
+    let joinCalled = false;
+    let fireLeave: (a: { action: 'leave' }) => void = () => {};
+    let unsubscribed = 0;
+    const acts: ActsSource = { subscribe(h) { fireLeave = (a) => void h(a); return () => { unsubscribed++; }; } };
+    const join: JoinDriver = { ...mockJoin('admitted'), async join(report) { joinCalled = true; return mockJoin('admitted').join(report); } };
+    const o = createOrchestrator(inv({ joinAt: new Date(Date.now() + 60_000).toISOString() }), {
+      lifecycle: lc, join, pipeline: noopPipeline(), acts, aloneness: noopAloneness(),
+    });
+    const runP = o.run();
+    setTimeout(() => fireLeave({ action: 'leave' }), 20);
+    const res = await runP;
+    check('joinAt leave: subscribed before the wait, ends as failed(stopped)', res.status === 'failed' && res.completionReason === 'stopped', JSON.stringify(res));
+    check('joinAt leave: only the terminal event, stage requested', JSON.stringify(seq(lc.events)) === JSON.stringify(['failed']) && last(lc.events).failure_stage === 'requested', JSON.stringify(lc.events));
+    check('joinAt leave: never navigated', !joinCalled);
+    check('joinAt leave: unsubscribed on exit', unsubscribed === 1, `unsubscribed=${unsubscribed}`);
+  }
+
   // ── #865: missing required port fails loud with the port name (not a TypeError on .onAlone) ──
   {
     let threw: unknown;

@@ -260,6 +260,14 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     // page is opened, no `joining` is sent and the reachability gate does not run before `joinAt`,
     // so the row stays `requested` while it waits. A stop or SIGTERM during the wait ends the run
     // at stage `requested` with nothing to withdraw.
+    // Subscribe to the command bus FIRST — before the joinAt wait (ADR-0052) and the join race (#889). A user Stop is delivered as a `leave`
+    // command on the bot's channel; when it arrives while the bot waits for `joinAt` or is still knocking in the lobby, the
+    // orchestrator must ALREADY be listening (redis pub/sub has no backlog) — handle() then routes it
+    // through stop() → the pre-active abort (the wait ends; in the lobby, withdraw), so a Stop ends a waiting bot
+    // even if the workload teardown never lands. Subscribing only AFTER admission (the old
+    // placement) dropped every lobby-phase leave, so a Stop in the waiting room left the bot asking to
+    // join. `unsubscribe()` is called on every exit path (pre-active + active) below.
+    const unsubscribe = deps.acts.subscribe(handle);
     const waitMs = msUntilJoinAt(inv.joinAt, deps.nowMs?.() ?? Date.now());
     if (waitMs > 0) {
       console.log(`[bot] waiting ${Math.round(waitMs / 1000)}s until joinAt ${inv.joinAt} before opening the meeting`);
@@ -275,6 +283,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
           failure_stage: 'requested', completion_reason: 'stopped', reason: waitDetail, exit_code: 0,
           ...joinEvidenceFor('stopped', 'requested', { reachedLobby: false }, waitDetail),
         });
+        unsubscribe();
         return { exitCode: 0, status: 'failed', completionReason: 'stopped' };
       }
     }
@@ -315,6 +324,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
           // `navigation_failure` → `system_fault` and lands in the gate metric where it belongs.
           ...joinEvidenceFor('error', 'requested', { reachedLobby: false }, unreachableDetail),
         }).catch(() => { /* the channel that would carry this is the one that is down */ });
+        unsubscribe();
         return { exitCode: CONTROL_PLANE_UNREACHABLE_EXIT, status: 'failed', completionReason: 'join_failure' };
       }
     }
@@ -330,13 +340,6 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
       });
       return reportChain;
     };
-    // Subscribe to the command bus BEFORE the join race (#889). A user Stop is delivered as a `leave`
-    // command on the bot's channel; when it arrives while the bot is still knocking in the lobby, the
-    // orchestrator must ALREADY be listening (redis pub/sub has no backlog) — handle() then routes it
-    // through stop() → the pre-active abort race → withdraw. Subscribing only AFTER admission (the old
-    // placement) dropped every lobby-phase leave, so a Stop in the waiting room left the bot asking to
-    // join. `unsubscribe()` is called on every exit path (pre-active + active) below.
-    const unsubscribe = deps.acts.subscribe(handle);
     let outcome: JoinOutcome;
     let joinReason: string | undefined;
     let joinSignals: JoinSignals | undefined;
