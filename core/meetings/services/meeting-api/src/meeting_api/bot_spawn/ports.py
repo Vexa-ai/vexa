@@ -99,8 +99,15 @@ class MeetingRepo(Protocol):
         data: dict,
         max_concurrent: Optional[int] = None,
         exclude_meeting_id: Optional[int] = None,
+        ramp: Optional[Any] = None,
     ) -> dict:
         """ATOMIC dedup + cap-check + insert — the TOCTOU-safe spawn primitive (ROB1/ROB2).
+
+        ``ramp`` (``bot_spawn.ramp.RampDials``, #1962): right after the cap, under the same lock, the
+        per-account ramp — when it applies (``ramp_applies``) and the account has started its
+        allowance in the trailing window, raise ``RampExceeded`` (→ HTTP 429 with ``Retry-After``).
+        Both admitting paths (the planned-row claim and the insert) stamp
+        ``data.spawn_admitted_at`` with the admission time, ramp or no ramp.
 
         A ``max_concurrent <= 0`` means the user's quota is DEPLETED (0 = no bots, never
         "unlimited"): raise ``MaxBotsExceeded`` immediately, before any of the steps below.
@@ -122,11 +129,22 @@ class MeetingRepo(Protocol):
         ...
 
     async def reopen_meeting(
-        self, *, meeting_id: int, data_patch: Optional[dict] = None
+        self,
+        *,
+        meeting_id: int,
+        data_patch: Optional[dict] = None,
+        ramp: Optional[Any] = None,
+        user_id: Optional[int] = None,
+        max_concurrent: Optional[int] = None,
     ) -> dict:
         """Reset a TERMINAL meeting row back to ``requested`` for a continued run (``continue_meeting``):
         clear the prior terminal attribution, keep the row id (so transcripts/recordings keyed by it
-        survive), and freeze the new session's service-selection facts. Returns the updated row."""
+        survive), and freeze the new session's service-selection facts. Returns the updated row.
+
+        Always stamps ``data.spawn_admitted_at``. With ``ramp`` set (and ``user_id`` /
+        ``max_concurrent``), it first takes the per-user advisory lock ``create_meeting_guarded``
+        takes, before its row lock, and refuses with ``RampExceeded`` exactly as that method does —
+        count, check and stamp in one transaction."""
         ...
 
     async def create_session(self, *, meeting_id: int, session_uid: str) -> None:
@@ -301,12 +319,41 @@ class MaxBotsExceeded(Exception):
 
     Raised BEFORE the runtime call when the user already has ``max_concurrent`` ACTIVE bots
     (excluding infra ``browser_session``). Distinct from ``QuotaExceeded`` (the kernel's backstop),
-    but both map to 429 at the route."""
+    but both map to 429 at the route.
+
+    ``retry_after`` is the route's ``Retry-After``: a fixed 60 s polling hint for the ceiling (a slot
+    frees only when a bot ends), the exact wait for the ramp (``RampExceeded``)."""
+
+    retry_after: int = 60
 
     def __init__(self, user_id: int, cap: int):
         self.user_id = user_id
         self.cap = cap
         super().__init__(f"User has reached the maximum concurrent bot limit ({cap}).")
+
+
+class RampExceeded(MaxBotsExceeded):
+    """The per-account bot ramp (#1962, ``bot_spawn.ramp``) refused the spawn — HTTP 429.
+
+    A subclass of ``MaxBotsExceeded`` so every handler of the ceiling (the route's 429, the
+    auto-join sweep's error stamp and backoff) handles it with no new branch. Checked after the
+    ceiling, so a request past both dials is told about the ceiling."""
+
+    def __init__(self, user_id: int, *, started: int, window_s: int, allowance: int,
+                 running: int, retry_after: int):
+        self.user_id = user_id
+        self.cap = None
+        self.started = started
+        self.window_s = window_s
+        self.allowance = allowance
+        self.running = running
+        self.retry_after = retry_after
+        Exception.__init__(
+            self,
+            f"Bot ramp limit reached: {started} bots started in the last {window_s} seconds; "
+            f"this account may start {allowance} now while running {running}. "
+            f"Retry in {retry_after} seconds.",
+        )
 
 
 class AuthSessionNotConfigured(Exception):

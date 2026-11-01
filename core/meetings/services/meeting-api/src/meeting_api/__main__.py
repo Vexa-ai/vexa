@@ -141,6 +141,23 @@ def _meeting_host_allow_at_boot(env: "os._Environ | dict | None" = None):
         raise ConfigError(f"meeting-api refuses to boot: {e}") from None
 
 
+def _bot_ramp_at_boot(env: "os._Environ | dict | None" = None):
+    """``BOT_RAMP_BURST`` / ``BOT_RAMP_SHARE`` / ``BOT_RAMP_WINDOW_S`` (#1962), read once at boot. An
+    empty value is the default; a value out of range refuses the boot naming the variable, so a
+    typo never silently turns the ramp off or opens it wide."""
+    from .bot_spawn.ramp import RampConfigError, deployment_dials
+    from .config_preflight import ConfigError
+
+    env = os.environ if env is None else env
+    try:
+        return deployment_dials(env)
+    except RampConfigError as e:
+        raise ConfigError(
+            f"meeting-api refuses to boot: {e} — burst is an integer >= 0 (0 turns the ramp off), "
+            "share a number from 0 to 1, window an integer from 10 to 3600 seconds; leave a "
+            "value empty for its default (5, 0.5, 60)") from None
+
+
 def _auto_join_block_at_boot(env: "os._Environ | dict | None" = None):
     """``VEXA_AUTO_JOIN_BLOCK``, parsed once at boot. A bad entry refuses the boot naming it: a
     block list that silently matched nothing would send bots where the operator forbade them."""
@@ -224,6 +241,7 @@ def build_production_app():
     _calendar_feed_allow_at_boot()  # a malformed internal-feed allowance refuses the boot
     _auto_join_block_at_boot()  # a malformed auto-join block list refuses the boot
     _meeting_host_allow_at_boot()  # a malformed meeting-host allowance refuses the boot
+    _bot_ramp_at_boot()  # an out-of-range BOT_RAMP_* value refuses the boot (#1962)
     _transcription_language_at_boot()  # a refused default language stops the boot, not the first spawn
     from .removed_config import warn_at_boot
 

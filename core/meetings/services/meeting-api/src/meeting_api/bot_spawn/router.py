@@ -7,7 +7,8 @@ HTTP status the gateway forwards verbatim:
 
   * 201 + ``api.v1`` MeetingResponse on success,
   * 409 when the user already has an active meeting for (platform, native_id),
-  * 429 when the runtime kernel rejects the spawn for owner quota,
+  * 429 when the account is at its concurrency ceiling or its bot ramp (#1962), or the runtime
+    kernel rejects the spawn for owner quota — always with a ``Retry-After`` header,
   * 502 when the kernel could not start the workload.
 """
 from __future__ import annotations
@@ -33,6 +34,7 @@ from ..service_authority import (
 )
 from .env_flags import InvalidFlagValue, resolve_spawn_flag
 from .meeting_host import MeetingHostRefused, meeting_host_allowance
+from .ramp import CEILING_RETRY_AFTER_S, deployment_dials
 from .ports import (
     AuthSessionBusy,
     AuthSessionNotConfigured,
@@ -674,6 +676,9 @@ def build_router(
                     continue_meeting=bool(body.get("continue_meeting", False)),
                     workspace_id=workspace_id,
                     max_concurrent=max_concurrent,
+                    # The deployment's bot ramp (BOT_RAMP_*); request_bot layers the account's own
+                    # dials from the bot-context it already fetches (one hop; unreachable → these).
+                    ramp=deployment_dials(),
                     webhook_url=x_user_webhook_url,
                     webhook_secret=x_user_webhook_secret,
                     webhook_events=webhook_events,
@@ -746,7 +751,11 @@ def build_router(
         except DuplicateMeeting as e:
             raise HTTPException(status_code=409, detail=str(e))
         except (MaxBotsExceeded, QuotaExceeded) as e:
-            raise HTTPException(status_code=429, detail=str(e) or "Bot concurrency limit reached")
+            # Retry-After on every 429: the ramp's exact wait (RampExceeded), else a 60 s polling
+            # hint — a ceiling slot frees only when a bot ends. The body stays {"detail": str}.
+            retry_after = int(getattr(e, "retry_after", None) or CEILING_RETRY_AFTER_S)
+            raise HTTPException(status_code=429, detail=str(e) or "Bot concurrency limit reached",
+                                headers={"Retry-After": str(retry_after)})
         except SpawnFailed as e:
             raise HTTPException(status_code=502, detail=str(e) or "Failed to start bot workload")
 

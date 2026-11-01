@@ -16,6 +16,7 @@ fully in-process.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from ..lifecycle.machine import dominant_completion_reason
@@ -30,6 +31,7 @@ from .ports import (
     _stopped_reopen_detail,
     reconcile_grace_for_status,
 )
+from .ramp import STAMP_KEY, enforce, format_stamp, ramp_applies
 
 _ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active")
 _TERMINAL_STATUSES = ("completed", "failed")
@@ -43,6 +45,18 @@ class InMemoryMeetingRepo:
         self._next_id = 1
         self.sessions: list[dict] = []  # exposed for assertions (all sessions, all meetings)
         self.reopened: list[int] = []   # meeting ids continue_meeting reused
+        # The clock the ramp's admission stamp and window read (the SQL adapter reads the
+        # database's); a test sets it to drive time.
+        self.clock = lambda: datetime.now(timezone.utc)
+
+    def _ramp_rows(self, user_id) -> list:
+        """``(is_active, spawn_admitted_at)`` for every row the ramp may count (browser_session
+        excluded) — the in-memory twin of ``adapters._ramp_rows``."""
+        return [
+            (m["status"] in _ACTIVE_STATUSES, (m.get("data") or {}).get(STAMP_KEY))
+            for m in self._meetings.values()
+            if m["user_id"] == user_id and m["platform"] != "browser_session"
+        ]
 
     async def find_active(self, user_id, platform, native_meeting_id) -> Optional[dict]:
         for m in self._meetings.values():
@@ -129,7 +143,7 @@ class InMemoryMeetingRepo:
 
     async def create_meeting_guarded(
         self, *, user_id, platform, native_meeting_id, data, max_concurrent=None,
-        exclude_meeting_id=None,
+        exclude_meeting_id=None, ramp=None,
     ) -> dict:
         """ATOMIC dedup + cap + insert (ROB1/ROB2). The check and the insert run with NO ``await``
         between them, so even ``SlowRepo`` (which adds ``await asyncio.sleep(0)`` inside the SEPARATE
@@ -161,6 +175,10 @@ class InMemoryMeetingRepo:
             )
             if active >= max_concurrent:
                 raise MaxBotsExceeded(user_id, max_concurrent)
+            # 2a. ramp (#1962) — the same pure check the SQL adapter runs, no await before it.
+            enforce(ramp, max_concurrent, user_id=user_id, running=active,
+                    rows=self._ramp_rows(user_id), now=self.clock())
+        data = {**dict(data or {}), STAMP_KEY: format_stamp(self.clock())}
         # 2b. claim — a PLANNED row (intent status) for the same (user, platform, native) is
         #     UPGRADED in place, mirroring the real adapter: spawn keys merge OVER the planned
         #     data (title / scheduled_at / workspace_id / auto_join / calendar_uid survive).
@@ -241,7 +259,20 @@ class InMemoryMeetingRepo:
         # very race it exists to close).
         return dict(row) if row else None
 
-    async def reopen_meeting(self, *, meeting_id, data_patch=None) -> dict:
+    async def reopen_meeting(self, *, meeting_id, data_patch=None, ramp=None, user_id=None,
+                             max_concurrent=None) -> dict:
+        if user_id is not None and ramp_applies(ramp, max_concurrent):
+            # Inline, not ``count_active_bots``: a test's slow subclass may yield there, and the
+            # check and the stamp must run with no await between them.
+            running = sum(
+                1 for m in self._meetings.values()
+                if m["user_id"] == user_id and m["status"] in _ACTIVE_STATUSES
+                and m["platform"] != "browser_session" and m["id"] != meeting_id
+            )
+            if running >= max_concurrent:
+                raise MaxBotsExceeded(user_id, max_concurrent)
+            enforce(ramp, max_concurrent, user_id=user_id, running=running,
+                    rows=self._ramp_rows(user_id), now=self.clock())
         row = self._meetings[meeting_id]
         data = row.get("data") or {}
         if data.get("stop_requested"):
@@ -263,6 +294,7 @@ class InMemoryMeetingRepo:
                 row["data"].pop(key, None)
             else:
                 row["data"][key] = value
+        row["data"][STAMP_KEY] = format_stamp(self.clock())  # the ramp's admission stamp (#1962)
         self.reopened.append(meeting_id)
         return dict(row)
 

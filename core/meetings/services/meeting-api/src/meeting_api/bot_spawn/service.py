@@ -49,11 +49,13 @@ from .ports import (
     MeetingRepo,
     MeetingStopped,
     QuotaExceeded,
+    RampExceeded,
     RuntimeClient,
     SpawnFailed,
     TranscriptionNotConfigured,
     _stopped_reopen_detail,
 )
+from .ramp import RampDials, resolve_ramp
 
 # Re-exported here (defined in ports.py to avoid an adapters→service circular import) so callers that
 # already do ``from .service import DuplicateMeeting`` (the router) keep working.
@@ -438,6 +440,15 @@ def _voice_note_limits() -> tuple[int, int]:
     return max_duration_sec(), idle_timeout_sec()
 
 
+def _log_ramp_refusal(user_id: int, e: RampExceeded) -> None:
+    log_event(
+        "bot_spawn_ramp_exceeded", audience="user", level="warning",
+        span="bots.create", user_id=user_id,
+        fields={"started": e.started, "allowance": e.allowance, "running": e.running,
+                "window_s": e.window_s, "retry_after": e.retry_after},
+    )
+
+
 async def request_bot(
     repo: MeetingRepo,
     runtime: RuntimeClient,
@@ -459,6 +470,11 @@ async def request_bot(
     automatic_leave: Optional[dict] = None,
     continue_meeting: bool = False,
     max_concurrent: Optional[int] = None,
+    # THE BOT RAMP (#1962, ``bot_spawn.ramp``): the dials this caller runs under — the router and the
+    # auto-join sweep pass the deployment's (``BOT_RAMP_*``), and the account's own ``bot_ramp`` from
+    # the bot-context fetched below is layered over them. ``None`` means no ramp at all (every
+    # direct caller that predates it), so only the ceiling holds, exactly as before.
+    ramp: Optional[RampDials] = None,
     redis_url: Optional[str] = None,
     meeting_api_url: Optional[str] = None,
     token_secret: Optional[str] = None,
@@ -511,8 +527,8 @@ async def request_bot(
 ) -> dict:
     """Run the spawn flow and return a MeetingResponse-shaped dict.
 
-    Raises ``DuplicateMeeting`` (409), ``MaxBotsExceeded`` / ``QuotaExceeded`` (429), or
-    ``SpawnFailed`` (502/failed).
+    Raises ``DuplicateMeeting`` (409), ``MaxBotsExceeded`` / ``RampExceeded`` / ``QuotaExceeded``
+    (429), or ``SpawnFailed`` (502/failed).
 
     ``continue_meeting`` (P3c): if the prior meeting for (platform, native_id) is TERMINAL, reuse
     that row + add a new session instead of creating a fresh meeting. ``max_concurrent`` (P3e): the
@@ -568,6 +584,10 @@ async def request_bot(
     transcription_model = os.getenv("TRANSCRIPTION_MODEL") or None
     bot_context = await _fetch_bot_context(user_id)
     configured = _transcription_from_context(bot_context)
+    # THE ACCOUNT'S BOT RAMP — another reader of the same one hop. An unreachable identity is `{}`,
+    # so the caller's (deployment) dials apply: a lookup failure never blocks a spawn.
+    if ramp is not None:
+        ramp = resolve_ramp(bot_context.get("bot_ramp"), ramp)
     # O-TEL-1 fixture collection, resolved from the SAME best-effort lookup (one hop, two readers).
     # Default ON: only an explicit false from identity stops the tape.
     capture_signal_enabled = _capture_signal_from_context(bot_context)
@@ -802,6 +822,10 @@ async def request_bot(
                     fields={"active": active, "cap": max_concurrent},
                 )
                 raise MaxBotsExceeded(user_id, max_concurrent)
+        # The ramp (#1962) runs inside reopen_meeting, under the per-user lock, beside the stamp.
+        ramp_kwargs: dict[str, Any] = {}
+        if ramp is not None:
+            ramp_kwargs = {"ramp": ramp, "user_id": user_id, "max_concurrent": max_concurrent}
         reopen_patch: dict[str, Any] = {
             "transcription_language": transcription_language,
             "transcribe_enabled": transcribe_enabled,
@@ -819,7 +843,12 @@ async def request_bot(
         # The account this run joins as; None clears a prior run's, so a continued guest run is not
         # mistaken for an account's bot by the restore, the write-back or the signed-out hook.
         reopen_patch["bot_account_id"] = bot_account_id
-        row = await repo.reopen_meeting(meeting_id=reused_row["id"], data_patch=reopen_patch)
+        try:
+            row = await repo.reopen_meeting(meeting_id=reused_row["id"], data_patch=reopen_patch,
+                                            **ramp_kwargs)
+        except RampExceeded as e:
+            _log_ramp_refusal(user_id, e)
+            raise
     else:
         meeting_data: dict[str, Any] = {}
         if constructed_url:
@@ -868,7 +897,11 @@ async def request_bot(
                 native_meeting_id=native_meeting_id,
                 data=meeting_data,
                 max_concurrent=max_concurrent,
+                **({"ramp": ramp} if ramp is not None else {}),
             )
+        except RampExceeded as e:
+            _log_ramp_refusal(user_id, e)
+            raise
         except MaxBotsExceeded:
             log_event(
                 "bot_spawn_max_bots_exceeded", audience="user", level="warning",

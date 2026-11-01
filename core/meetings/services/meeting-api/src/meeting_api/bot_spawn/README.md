@@ -14,8 +14,10 @@ eager-creates the `MeetingSession` keyed by the bot's `connectionId`.
   `invocation.v1` / `runtime.v1` builders + the session-bound MeetingToken minter (re-exported from
   `meeting_api.meeting_token`). Both builders validate against the sealed schema **at the seam**
   before anything ships.
-- `MeetingRepo` / `RuntimeClient` ports + `QuotaExceeded` / `MaxBotsExceeded` / `SpawnFailed` /
-  `DuplicateMeeting`.
+- `MeetingRepo` / `RuntimeClient` ports + `QuotaExceeded` / `MaxBotsExceeded` / `RampExceeded` /
+  `SpawnFailed` / `DuplicateMeeting`.
+- `ramp` — the per-account bot ramp (#1962): `deployment_dials`, `resolve_ramp`, `ramp_state`,
+  `retry_after`, `project_curve`, and `enforce`, the check both repo adapters run.
 - `meeting_host` — the meeting host rule for a caller-supplied `meeting_url`: the host is the
   platform's (or, for Jitsi and Zoom front doors, the organisation's own) and every address it
   resolves to is public or listed in `VEXA_MEETING_HOST_ALLOW` (`MeetingHostRefused` → 422; the
@@ -25,7 +27,8 @@ eager-creates the `MeetingSession` keyed by the bot's `connectionId`.
 
 ## The flow (P2 core + P3 control-plane)
 check a caller-supplied meeting URL's host (422 off the platform or resolving inside) → construct
-the meeting URL → dedup (409 on a CONCURRENT active prior) → **max-bots pre-check (429)**
+the meeting URL → dedup (409 on a CONCURRENT active prior) → **max-bots pre-check (429)** →
+**bot ramp (429, #1962)**
 → mint a per-run service identity → **optional service-authority admission before any row/runtime
 effect (403 deny, 503 unavailable)**
 → **continue_meeting (reuse a TERMINAL prior row)** or insert a fresh `Meeting` row (status
@@ -57,6 +60,36 @@ parent `meetings.py:1091`) and reject the N+1th with `429` (`MaxBotsExceeded`). 
 the gateway's `X-User-Limits` header (resolved upstream from `/internal/validate`, identity.v1).
 The runtime kernel's own `owner_quota` → `QuotaExceeded` (→ 429) is the defense-in-depth BACKSTOP.
 Join-retry re-spawns and `continue_meeting` sessions count against the same cap.
+
+### The bot ramp (#1962)
+Beside the ceiling, a per-account ramp paces how fast bots START. Three dials: burst **B**, share
+**S**, window **W** — deployment defaults 5, 0.5, 60 s from `BOT_RAMP_BURST` / `BOT_RAMP_SHARE` /
+`BOT_RAMP_WINDOW_S` (empty = default; out of range refuses the boot; `BOT_RAMP_BURST=0` turns it
+off), overridden per account by `users.data.bot_ramp` (`PATCH /admin/users/{id}`, served in
+bot-context as `bot_ramp`).
+
+- **started** = the account's spawns admitted in the trailing W seconds; **base** = its running bots
+  admitted before the window; **allowance** = `max(B, floor(S × base))`.
+- It applies only when it is on, a ceiling is known and the ceiling is above B. Then a spawn needs
+  `running < ceiling` and `started < allowance`. From zero the default admits 5, 5, 5, 7, 11, 16, 24,
+  36, 54, 81, 122 per minute (totals 5 … 366 by minute 10).
+- Checked in `create_meeting_guarded` right after the ceiling, and in `reopen_meeting` (which then
+  takes the same per-user advisory lock first), in the same transaction: dedup 409 → ceiling 429 →
+  ramp 429 → claim/insert. Race-free across requests and replicas; the window runs on the database
+  clock.
+- Every admitting path (insert, planned-row claim, reopen) stamps `meetings.data.spawn_admitted_at`
+  (ISO-8601 UTC, ms, `Z`). The stamp is internal: `collector.projection.OPT_IN_KEYS` and
+  `webhooks.delivery._INTERNAL_DATA_KEYS` keep it off every response and webhook.
+- `request_bot(..., ramp=None)`: `None` is no ramp. The router passes `deployment_dials()` and
+  `request_bot` layers the account's `bot_ramp` from the bot-context it already fetches (an
+  unreachable identity leaves the deployment's dials); the auto-join sweep passes
+  `resolve_ramp(ctx["bot_ramp"], deployment)`.
+- A refusal is `RampExceeded`, a `MaxBotsExceeded`, so the route's 429 and the sweep's error stamp
+  handle it unchanged. Every 429 carries `Retry-After`: the ramp's exact wait (when the oldest start
+  that must leave the window leaves it, 1–W s), or 60 for the ceiling.
+
+Tests: `../../../tests/test_bot_ramp.py` (the stress gate, `make -C deploy/compose
+stack-test-stress`, runs with the ramp off).
 
 Tests: `../../../tests/test_bot_spawn.py` · `test_continue_meeting.py` · `test_max_bots.py`.
 Join-retry (P3d) lives in the `lifecycle` brick: `lifecycle/retry.py` + `test_join_retry.py`.
