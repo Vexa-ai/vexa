@@ -255,6 +255,16 @@ class ReadingWrite(Body):
     source: str = Field(min_length=3, max_length=129, description='<connection>/<reading> that read it.')
     fields: dict = Field(description='The declared reading fields only (readings.FIELDS).')
     evidence: dict = Field(description='read_at (epoch seconds), and the query and cursor the read used.')
+class SoftwareCards(Body):
+    record: str | None = Field(default=None, max_length=128, description='One card; omitted: every open software card.')
+class StageWrite(Body):
+    record: str = Field(min_length=1, max_length=128)
+    stage: str | None = Field(min_length=1, max_length=60, description=(
+        'A stage of the software lifecycle, or null: the rule has no stage because the card\'s Source was never '
+        'read (the State is kept, and one the rule set on that absence is reverted).'))
+    because: str = Field(min_length=1, max_length=300, description='The fact that moved it, in words.')
+    facts: list = Field(default_factory=list, max_length=12, description='The facts read: {fact, value, source, read_at}.')
+    mode: Literal['event', 'recheck'] = 'event'
 class CardDecide(Body):
     card: str = Field(min_length=1, max_length=128)
     action: Literal['acknowledge', 'decline', 'deliver', 'confirm', 'decide', 'execute', 'answer', 'use']
@@ -701,6 +711,20 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
         holds the secret); it acts for nobody."""
         return audited('card.reading', caller, body.record, lambda: cards.write_reading(
             org_id, body.record, body.source, body.fields, body.evidence))
+
+    @app.post('/internal/cards/software', include_in_schema=False)
+    def internal_cards_software(body: SoftwareCards, caller=Depends(internal)):
+        """The software cards the stage rule computes (one, or every open one) with their State,
+        Source and Reading. Internal tier only (flows' ``card_stage`` rule); it acts for nobody."""
+        return audited('card.software', caller, body.record or '', lambda: cards.software_cards(org_id, body.record))
+
+    @app.post('/internal/cards/stage', include_in_schema=False)
+    def internal_cards_stage(body: StageWrite, caller=Depends(internal)):
+        """The stage rule's write: a software card's State with the facts that set it, only when it
+        differs; a ``recheck`` move is recorded as a correction («was X, now Y, because …»). The only
+        path that sets a software card's stage. Internal tier only (flows holds the secret)."""
+        return audited('card.stage', caller, body.record, lambda: cards.set_stage(
+            org_id, body.record, body.stage, body.because, body.facts, body.mode))
 
     @app.post('/internal/orgs/{org}/erase', include_in_schema=False)
     def erase_org(org: str, caller=Depends(internal)):

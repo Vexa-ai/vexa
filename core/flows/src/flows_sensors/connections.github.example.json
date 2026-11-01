@@ -33,5 +33,21 @@
                "merged_at": "merged_at", "head_sha": "head.sha", "labels": "labels", "updated_at": "updated_at"},
       "event_type": "business.reading"
     }
+  },
+  "delivery": {
+    "connection": "github",
+    "issue": "/repos/{owner}/{repo}/issues/{number}",
+    "timeline": "/repos/{owner}/{repo}/issues/{number}/timeline",
+    "pull": "/repos/{owner}/{repo}/pulls/{number}",
+    "files": "/repos/{owner}/{repo}/pulls/{number}/files",
+    "check_runs": "/repos/{owner}/{repo}/commits/{sha}/check-runs",
+    "compare": "/repos/{owner}/{repo}/compare/{base}...{head}",
+    "releases": "/repos/{owner}/{repo}/releases",
+    "prod_pin": {
+      "repo": "Vexa-ai/vexa",
+      "app": "/repos/DmitriyG228/vexa-stations/contents/channels/vexa-internal/apps/vexa-prod.yaml",
+      "channel": "/repos/DmitriyG228/vexa-stations/contents/channels/vexa-internal/channel.yaml",
+      "ref": "main"
+    }
   }
 }

@@ -161,7 +161,7 @@ CARD_KEYS = {'id', 'ref', 'type', 'revision', 'title', 'about', 'state', 'states
              'kind', 'next_actor', 'requester', 'next_check_at', 'chain', 'origin', 'open', 'handoff', 'gates',
              'decisions', 'last_decision', 'viewer',
              # the typed link and what the system read there (readings.py): none for a cross-org room
-             'source', 'reading'}
+             'source', 'reading', 'stage_evidence'}
 
 
 def _card(store):
