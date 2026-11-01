@@ -103,7 +103,7 @@ security model has to cover (nothing more):
 | **Meetings** (you must own the meeting) | `GET·POST /bots`, `…/bots/{platform}/{native}` (delete · config · speak), `GET /transcripts/{platform}/{native}`, `GET /recordings…`, `GET /meetings…` | owner = `meetings.user_id` | `bot` · `tx`; `browser` reaches none |
 | **Your agent space** (yours by construction) | `POST /agent/chat`, `GET /agent/meeting/stream`, and `/agent/*` → `chat`, `workspace/{tree,file,init,swap,git,upload}`, `sessions`, `routines`, `models`, `meeting/{start,process,stream}` | owner = you, **by partition** (you can only name your own workspace/session) | none today |
 
-While maintenance is announced, every gateway HTTP reply also carries the output-only
+While maintenance is announced, the HTTP replies the gateway builds also carry the output-only
 `X-Vexa-Maintenance: <id>` header ([Status](/api/status)); it takes no input and protects nothing,
 so it adds no attack surface.
 

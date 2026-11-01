@@ -1,6 +1,6 @@
 ---
 title: "Status"
-description: "GET /status — is an update or incident on right now — and the X-Vexa-Maintenance header every reply carries while one is."
+description: "GET /status — is an update or incident on right now — and the X-Vexa-Maintenance header the gateway's replies carry while one is."
 ---
 
 Integrators can tell when Vexa is being updated or has an incident in two ways: **poll `/status`**,
@@ -41,9 +41,11 @@ The body exposes no versions, hosts, counts or internal names.
 
 ## The `X-Vexa-Maintenance` header
 
-While a record is active, **every** HTTP reply from the gateway carries
-`X-Vexa-Maintenance: <id>` — every route and every status code, including `401`, `404` and `429`.
-With no record there is no header. The header is output only; it takes no input and protects
+While a record is active, every HTTP reply the gateway builds carries
+`X-Vexa-Maintenance: <id>`, whatever the route and status code, including `401`, `404`, `429` and the
+`502`/`504` it returns when a service behind it fails. One reply does not: a bare `500` from an
+unhandled exception inside the gateway is built outside the code that adds the header, so it
+arrives without it. With no record there is no header. The header is output only; it takes no input and protects
 nothing. The `/ws` handshake is not decorated: WebSocket clients should poll `/status`.
 
 ```http
@@ -51,4 +53,4 @@ HTTP/1.1 200 OK
 X-Vexa-Maintenance: m-2026-11-01
 ```
 
-A change shows on every reply within about 5 s of the operator setting or clearing the record.
+A change shows on the gateway's replies within about 5 s of the operator setting or clearing the record.
