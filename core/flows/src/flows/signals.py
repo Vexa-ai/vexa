@@ -137,6 +137,8 @@ def _restore(db: DB, reaction_id: str, hold: dict, clock: Clock, *, lapsed_only:
             RETURNING reaction_id""",
         {"st": status, "nra": prev.get("next_run_at", clock.now()),
          "bdl": prev.get("blocked_deadline"), "now": clock.now(), "rid": reaction_id})
+    if rows:
+        _wake_waiters(db, reaction_id, clock)
     return bool(rows)
 
 
@@ -223,5 +225,79 @@ def expire_holds(db: DB, clock: Clock) -> int:
         hold = hold_of(db, rid)
         if hold is not None and _restore(db, rid, hold, clock, lapsed_only=True):
             _record(db, rid, "release", "lease", "lease expired", clock)
+            n += 1
+    return n
+
+
+# ── a hold is never undone by the engine's own transitions ───────────────────────────────────────
+#
+# A flow that supersedes an older reaction of the same subject (a newer fact replaces it: the
+# factory's obligation flow moves a card's check this way) used `cancel`, the PERSON's verb. On a
+# held row that ended the hold: the obligation was cancelled under its holder, the newer reaction
+# went on to `blocked`, and the holder's `release` answered «not held» (1 Nov 2026, card 58bb9b68,
+# held by a review session, woken by a GitHub sensor fact). A hold means «a person is on this»:
+# while its lease is live the engine leaves the row in `running`, and its own transition applies
+# after the release, or after the lease lapses.
+#
+# `supersede` is that transition: it ends only a WAITING row. A row that is `running` (held, or in
+# the worker's hands this instant) is left alone and the answer says until when, so the newer
+# reaction waits behind it with `wait_for_hold`. Releasing the hold (or the lease lapsing) wakes
+# every reaction waiting on it, which then runs again and supersedes the restored row: the change
+# is re-evaluated on release, not lost and not applied early. The person's `cancel` (a Drop) still
+# ends a held row.
+
+WAITS_ON_HOLD = "_waits_on_hold"     # the scratch key a waiting reaction names the held row by
+HOLD_POLL_S = 5.0                    # a lapsed lease not yet restored: look again this soon
+
+
+def supersede(db: DB, reaction_id: str, actor: str, clock: Clock,
+              reason: str | None = None) -> dict:
+    """A flow's own cancel of an older reaction. Ends it only while it waits (`admitted`,
+    `retrying`, `blocked`); a `running` row is never touched. Returns
+    ``{"superseded": True}``, or ``{"superseded": False, "running": True, "until": t,
+    "holder": h | None}`` for a row someone holds (or the worker runs) until `t`, or
+    ``{"superseded": False}`` for a row already closed or missing."""
+    rows = db.execute(
+        """UPDATE reaction SET status = 'cancelled', reason = :why, updated_at = :now
+           WHERE reaction_id = :rid AND status IN ('admitted','retrying','blocked')
+           RETURNING reaction_id""",
+        {"why": reason or "superseded", "now": clock.now(), "rid": reaction_id})
+    if rows:
+        _record(db, reaction_id, "cancel", actor, reason, clock)
+        return {"superseded": True}
+    row = db.execute("SELECT status, lease_until FROM reaction WHERE reaction_id = :rid",
+                     {"rid": reaction_id})
+    if not row or row[0][0] != "running":
+        return {"superseded": False}
+    hold = hold_of(db, reaction_id)
+    now = clock.now()
+    lease = float(row[0][1]) if row[0][1] is not None else now
+    return {"superseded": False, "running": True,
+            "until": lease if lease > now else now + HOLD_POLL_S,
+            "holder": (hold or {}).get("holder")}
+
+
+def wait_for_hold(ctx, reaction_id: str, until: float):
+    """The step's answer when `supersede` found the row running: sleep until `until` and name the
+    row in scratch, so its release (or lapse) wakes this reaction at once. The step pops the key
+    when it runs again and the row is free."""
+    from .model import Wait
+    ctx.scratch[WAITS_ON_HOLD] = reaction_id
+    return Wait(until=until)
+
+
+def _wake_waiters(db: DB, reaction_id: str, clock: Clock) -> int:
+    """Wake every reaction that waits on `reaction_id`'s hold (`wait_for_hold`)."""
+    import json
+    n = 0
+    for (rid, scratch) in db.execute(
+            "SELECT reaction_id, scratch FROM reaction WHERE status IN ('admitted','retrying') "
+            "AND scratch LIKE :pat", {"pat": f"%{reaction_id}%"}):
+        try:
+            waits = json.loads(scratch or "{}").get(WAITS_ON_HOLD)
+        except ValueError:
+            continue
+        if waits == reaction_id and wake(db, rid, f"release:{reaction_id}", clock,
+                                         reason="the hold it waited on ended"):
             n += 1
     return n

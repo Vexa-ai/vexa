@@ -160,6 +160,99 @@ def test_cancel_still_ends_a_held_row():
     assert release_hold(db, "r1", "w", clock)["refused"] == "not_held"
 
 
+# ── a hold survives the flow's own transitions; they apply on release ────────────────────────────
+#
+# 1 Nov 2026, card 58bb9b68: a review session held the card's obligation row; a GitHub sensor fact
+# for the same card started a newer reaction whose step superseded the older one with `cancel`, so
+# the hold vanished, the newer row went to `blocked`, and the holder's release answered «not held».
+# The flow below is the factory obligation step's shape: the newest fact for a ref replaces older
+# open reactions of that ref, then waits on a person.
+
+def _card_flow():
+    from flows import Block, EventType, Registry, admit, supersede, tick, wait_for_hold
+    from flows.signals import WAITS_ON_HOLD
+    db, clock, reg = SqliteDB(), FakeClock(T0), Registry()
+
+    @reg.step
+    def hold_card(ctx):
+        me, ref = ctx.reaction.reaction_id, ctx.refs["ref"]
+        if not ctx.scratch.get("superseded"):
+            ctx.scratch.pop(WAITS_ON_HOLD, None)
+            mine = db.execute("SELECT created_at FROM reaction WHERE reaction_id = :r", {"r": me})[0][0]
+            for rid, refs, created in db.execute(
+                    "SELECT reaction_id, subject_refs, created_at FROM reaction WHERE flow = 'card_hold' "
+                    "AND status IN ('admitted','retrying','running','blocked') AND reaction_id <> :me",
+                    {"me": me}):
+                if json.loads(refs).get("ref") != ref or created > mine:
+                    continue
+                out = supersede(db, rid, f"card_hold:{me}", clock, reason="superseded")
+                if out.get("running"):
+                    return wait_for_hold(ctx, rid, out["until"])
+            ctx.scratch["superseded"] = True
+        return Block(f"software: {ctx.refs['what']} [{ref}]")
+
+    reg.flow(name="card_hold", version=1, on=EventType("card.item"), steps=[hold_card])
+
+    def post(sid, what):
+        admit(db, reg, clock, source_event_id=sid, event_type="card.item",
+              subject_refs={"ref": "card:58bb", "what": what})
+        while tick(db, reg, clock):
+            pass
+        return db.execute("SELECT reaction_id FROM reaction WHERE source_event_id LIKE :s",
+                          {"s": f"{sid}%"})[0][0]
+    return db, clock, reg, post, tick
+
+
+def test_a_held_row_stays_running_with_its_holder_when_a_newer_fact_arrives():
+    db, clock, reg, post, tick = _card_flow()
+    old = post("e1", "s3 Cluster")
+    assert _state(db, old)[0] == "blocked"
+    assert claim_hold(db, old, "s3-review", clock, lease_s=7200)["claimed"]
+
+    clock.advance(30)
+    new = post("e2", "PR #1992 checks red")                  # the card changed under the hold
+
+    assert _state(db, old)[0] == "running" and _state(db, old)[3] == T0 + 7200
+    assert hold_of(db, old)["holder"] == "s3-review"
+    assert ("cancel", f"card_hold:{new}") not in _signals(db, old)
+    assert _state(db, new)[:2] == ("retrying", T0 + 7200)     # it waits behind the hold
+
+    clock.advance(600)                                        # the holder is done
+    assert release_hold(db, old, "s3-review", clock, holder="s3-review",
+                        reason="PR #1992 fixed") == {"released": True, "to": "blocked"}
+    assert _state(db, new)[1] == T0 + 630                     # the release woke it: re-evaluate now
+    while tick(db, reg, clock):
+        pass
+    assert _state(db, old)[0] == "cancelled"                  # superseded only now
+    assert _state(db, new)[0] == "blocked"
+    assert db.execute("SELECT reason FROM reaction WHERE reaction_id = :r",
+                      {"r": new})[0][0] == "software: PR #1992 checks red [card:58bb]"
+
+
+def test_a_lapsed_hold_lets_the_waiting_fact_apply():
+    db, clock, reg, post, tick = _card_flow()
+    old = post("e1", "s3 Cluster")
+    claim_hold(db, old, "s3-review", clock, lease_s=60)
+    clock.advance(10)
+    new = post("e2", "PR #567 updated")
+    assert _state(db, old)[0] == "running"
+    clock.advance(55)                                         # the holder died; the lease lapses
+    reclaim(db, clock)                                        # the reconciler restores and wakes
+    while tick(db, reg, clock):
+        pass
+    assert _state(db, old)[0] == "cancelled" and _state(db, new)[0] == "blocked"
+
+
+def test_supersede_never_touches_a_row_the_worker_runs():
+    from flows import supersede
+    db, clock = SqliteDB(), FakeClock(T0)
+    _row(db, "r1", next_run_at=T0 - 1)
+    assert claim(db, clock, lease_s=90).reaction_id == "r1"
+    out = supersede(db, "r1", "flow:x", clock)
+    assert out == {"superseded": False, "running": True, "until": T0 + 90, "holder": None}
+    assert _state(db, "r1")[0] == "running"
+
+
 # ── the route: same auth as the other verbs ──────────────────────────────────────────────────────
 
 def test_claim_and_release_over_http_by_the_owner(client, identity):  # noqa: F811
