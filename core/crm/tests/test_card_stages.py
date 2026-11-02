@@ -219,6 +219,20 @@ def test_another_roles_card_is_not_superseded_by_someone_else(cards):
         cards.create(ORG, other, title='Mine', workspace='sales', fields={'Waiting': 'ceo', 'Supersedes': [theirs['id']]})
 
 
+def test_the_same_stage_on_new_facts_rewrites_the_evidence(cards):
+    """2 Nov truth check: a Review card kept «no reading yet» after its PR was read, since an unchanged stage wrote nothing."""
+    card = software(cards)
+    pr = [{'fact': 'pr', 'value': {'url': PR, 'state': 'open', 'head_sha': 'abc1234'}, 'source': 'github/delivery'}]
+    cards.set_stage(ORG, card['id'], 'Review', '#1962 is open for review', facts=pr)
+    cards.set_stage(ORG, card['id'], None, 'no reading yet for x')                # the stage kept on no reading
+    got = cards.set_stage(ORG, card['id'], 'Review', '#1962 is open for review', facts=pr)
+    ev = cards.software_cards(ORG, record=card['id'])['cards'][0]['stage_evidence']
+    assert got['status'] == 'evidence' and ev['facts'] == pr and not ev.get('no_reading')
+    assert cards.set_stage(ORG, card['id'], 'Review', '#1962 is open for review', facts=pr)['status'] == 'unchanged'
+    moved = [{'fact': 'pr', 'value': {'url': PR, 'state': 'open', 'head_sha': 'def5678'}, 'source': 'github/delivery'}]
+    assert cards.set_stage(ORG, card['id'], 'Review', '#1962 is open at def5678', facts=moved)['status'] == 'evidence'
+
+
 def test_readings_are_kept_per_source_and_merged(cards):
     card = software(cards)
     t0 = 1_793_500_000.0

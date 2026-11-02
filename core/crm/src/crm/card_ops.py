@@ -1827,6 +1827,20 @@ class Cards:
             was = raw.get('State')
             base = {'record': row['id'], 'revision': row['revision'], 'stage': stage, 'was': was}
             if was == stage:
+                cur = raw.get('StageEvidence') if isinstance(raw.get('StageEvidence'), dict) else {}
+                # the same stage on new facts: the evidence follows the facts (2 Nov: 19 Review cards kept «no reading
+                # yet» after their pull requests were read, because an unchanged stage wrote nothing)
+                if (cur.get('no_reading') or cur.get('by') != STAGE_RULE_ACTOR
+                        or self._read_facts(cur.get('facts')) != self._read_facts(facts)) and facts:
+                    evidence = {'stage': stage, 'because': because, 'facts': facts, 'at': self.clock().isoformat(),
+                                'by': STAGE_RULE_ACTOR, 'mode': mode, 'was': was}
+                    self._rule.on = True
+                    try:
+                        self._apply(c, org, STAGE_RULE_ACTOR, row, {'StageEvidence': evidence},
+                                    _clip(f'Still {stage}: {because}', REASON_MAX), [{'stage': evidence}], None)
+                    finally:
+                        self._rule.on = False
+                    return {**base, 'revision': row['revision'] + 1, 'status': 'evidence'}
                 return {**base, 'status': 'unchanged'}
             if was == 'Dropped' and _superseded_by(raw):      # a replaced card stays Dropped: its successor carries the work
                 return {**base, 'status': 'unchanged', 'superseded_by': _superseded_by(raw)}
