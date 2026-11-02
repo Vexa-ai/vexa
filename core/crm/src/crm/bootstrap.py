@@ -106,6 +106,10 @@ CARD_LIFECYCLE_PROPERTIES = {
     # 1 Nov 2026 (founder Q6 «A»): when the founder started a destination; Pause clears it. Written by the founder
     # only (card_field_writers.started in the install's policy); the State stays the rule's
     'Started': _NULL_STR(40, "When the founder started this destination (ISO-8601); null when not started or paused"),
+    # 2 Nov 2026 (CEO class fix): the cards this card replaces, set when it is made and never after; the stage rule drops
+    # each of them that is still open, with the receipt «superseded by <this card>»
+    'Supersedes': {'type': ['array', 'null'], 'items': {'type': 'string', 'maxLength': 64}, 'maxItems': 20,
+                   'description': 'The cards this card replaces (ids); set at creation only, the rule drops them'},
 }
 
 #: Platform definitions of a Card property as an earlier version seeded them. The upgrade replaces a

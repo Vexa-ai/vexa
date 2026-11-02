@@ -223,6 +223,13 @@ def test_the_rule_moves_every_card_and_writes_nothing_else(cards, store):
         cards._rule.on = False
 
 
+def test_a_replaced_plain_card_is_dropped_by_the_rule(cards, store):
+    old = plain(cards)
+    new = cards.create(ORG, CEO, title='Again', workspace='sales', fields={'Supersedes': [old['id']]})
+    assert new['superseded'] == [{'card': old['id'], 'status': 'moved'}]
+    assert fields_of(store, old['id'])['State'] == 'Dropped'
+
+
 def test_without_the_policy_line_the_rule_moves_software_cards_only(store):
     cards = Cards(store, policy_text=lambda: None)
     card = cards.create(ORG, CEO, title='plain', workspace='sales')['card']

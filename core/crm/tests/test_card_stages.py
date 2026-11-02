@@ -18,7 +18,7 @@ from crm.api import Identity, create_app
 from crm.bootstrap import CARD_LIFECYCLE_PROPERTIES, PRIOR_CARD_PROPERTIES, bootstrap_org, upgrade_card_definition
 from crm.caller import Caller
 from crm.card_ops import STAGE_RULE_ACTOR, Cards
-from crm.store import CRMError, Refused, Store
+from crm.store import CRMError, Forbidden, Refused, Store
 
 ORG = 'acme'
 ANA = Caller(subject='7', email='u7@acme.test', workspaces=('sales',), writable=('sales',))
@@ -188,6 +188,35 @@ def test_a_pull_request_that_names_a_card_finds_it(cards):
     assert cards.by_source(ORG, 'https://github.com/Vexa-ai/vexa-platform/pull/570')['cards'] == []
     with pytest.raises(CRMError):
         cards.write_reading(ORG, card['id'], 'github/card-link', {'prs': ['not a link']}, {'read_at': 1_793_500_001.0})
+
+
+def test_a_new_card_supersedes_open_cards_and_the_rule_drops_them(cards):
+    """2 Nov: re-created cards replace the old ones; Supersedes is set at creation, the rule drops each open one."""
+    old = cards.create(ORG, ANA, title='Call Marvin', workspace='sales', fields={'Waiting': 'ceo'})['card']
+    soft = software(cards, 'Balance', Waiting='ceo')
+    done = software(cards, 'Shipped', Waiting='ceo')
+    cards.set_stage(ORG, done['id'], 'Done', '#9 was merged')
+    with pytest.raises(CRMError):
+        cards.create(ORG, ANA, title='New', workspace='sales', fields={'Waiting': 'ceo', 'Supersedes': [done['id']]})
+    new = cards.create(ORG, ANA, title='Call Marvin', workspace='sales',
+                       fields={'Waiting': 'ceo', 'Supersedes': [old['id'], soft['id']]})
+    # a plain card is the rule's only where the policy gives it every State (test_card_field_writers covers that)
+    assert [x['status'] for x in new['superseded']] == ['refused', 'moved']
+    assert cards.software_cards(ORG, record=soft['id'])['cards'][0]['state'] == 'Dropped'
+    ev = cards.software_cards(ORG, record=soft['id'])['cards'][0]['stage_evidence']
+    assert ev['because'] == f"superseded by {new['card']['id']}"
+    # the rule's later read of its facts does not bring it back
+    assert cards.set_stage(ORG, soft['id'], 'Idea', 'no pull request')['status'] == 'unchanged'
+    # set at creation only
+    with pytest.raises(CRMError):
+        cards.update(ORG, ANA, new['card']['id'], new['card']['revision'], fields={'Supersedes': [old['id']]})
+
+
+def test_another_roles_card_is_not_superseded_by_someone_else(cards):
+    theirs = cards.create(ORG, ANA, title='Theirs', workspace='sales', fields={'Waiting': 'business'})['card']
+    other = Caller(subject='8', email='u8@acme.test', workspaces=('sales',), writable=('sales',))
+    with pytest.raises(Forbidden):
+        cards.create(ORG, other, title='Mine', workspace='sales', fields={'Waiting': 'ceo', 'Supersedes': [theirs['id']]})
 
 
 def test_readings_are_kept_per_source_and_merged(cards):

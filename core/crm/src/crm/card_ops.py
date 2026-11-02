@@ -75,6 +75,9 @@ RULE_ONLY = ('StageEvidence',)
 #: Written only by the claim verbs (``claim`` / ``release``, founder 1 Nov 2026 «A»: a claim is a card fact,
 #: not a Flows row): who works on the card now, and until when. Expiry is checked on read.
 CLAIM_ONLY = ('Holder', 'HoldUntil')
+#: Set when the card is made, never after (2 Nov 2026): the cards it replaces; the stage rule drops each open one.
+CREATE_ONLY = ('Supersedes',)
+SUPERSEDES_MAX = 20
 #: A claim's lease: default and longest.
 HOLD_DEFAULT_S, HOLD_MAX_S = 2 * 3600, 24 * 3600
 #: The actor every stage-rule revision is recorded under.
@@ -169,6 +172,15 @@ def parse_lifecycle(value):
             or not all(_STATE.fullmatch(n) for n in names) or len(names) > 12:
         return {k: list(v) for k, v in DEFAULT_LIFECYCLE.items()}
     return {'stages': stages, 'side': side}
+
+
+def _superseded_by(fields) -> str | None:
+    """The card that replaced this one, when its stage evidence is the rule's «superseded by» move."""
+    ev = fields.get('StageEvidence')
+    for f in (ev.get('facts') or []) if isinstance(ev, dict) else []:
+        if isinstance(f, dict) and f.get('fact') == 'supersedes':
+            return (f.get('value') or {}).get('by')
+    return None
 
 
 def _declared_prs(fields) -> list:
@@ -1089,6 +1101,8 @@ class Cards:
         caller = as_caller(actor)
         if caller.delegated or caller.internal or not caller.subject:
             raise Refused(PROPOSE_CARD)
+        fields = dict(fields or {})
+        supersedes = fields.pop('Supersedes', None)
         with self.store.begin() as c:
             policy = self.store._policy(c, org, caller)
             if workspace:
@@ -1097,12 +1111,56 @@ class Cards:
                     raise Forbidden('A card goes on the board of a workspace you can write')
             self._check_parent(c, org, policy, parent)
             data = self._new_fields(title, about, parent, fields, face)
+            if supersedes is not None:
+                data['Supersedes'] = self._check_supersedes(c, org, caller.subject, data.get('Waiting'), supersedes)
             if data.get('Kind'):
                 data.setdefault('Requester', caller.subject)
             record_id = self._insert(c, org, caller.subject, type or DEFAULT_TYPE, data, narrative,
                                      'Made the card', [], workspace, [caller.subject])
+        dropped = self.supersede(org, record_id) if data.get('Supersedes') else []
+        with self.store.engine.connect() as c:
             policy = self.store._policy(c, org, caller)
-            return {'status': 'saved', 'card': self.view(c, org, policy, self._card_row(c, org, record_id))}
+            out = {'status': 'saved', 'card': self.view(c, org, policy, self._card_row(c, org, record_id))}
+        return {**out, 'superseded': dropped} if dropped else out
+
+    def _check_supersedes(self, c, org, subject, waiting, ids):
+        """The cards a new card may replace: cards of this org, none Done (its work happened), each owned by the same
+        role as the new card (its Waiting) or made by the same subject."""
+        if not isinstance(ids, list) or not ids or len(ids) > SUPERSEDES_MAX:
+            raise CRMError(f'Supersedes is a list of 1 to {SUPERSEDES_MAX} card ids')
+        out = []
+        for raw in ids:
+            row = self._card_row(c, org, str(raw or ''))
+            f = row['fields'] or {}
+            if f.get('State') == 'Done':
+                raise CRMError(f'Card {row["id"]} is Done: a card that is done is not superseded')
+            creator = c.execute(select(s.records.c.owner_id).where(s.records.c.org_id == org,
+                                                                     s.records.c.id == row['id'])).scalar()
+            if (f.get('Waiting') or '') != (waiting or '') and creator != subject:
+                raise Forbidden(f'Card {row["id"]} is another role\'s card: only its owner or its maker supersedes it')
+            if row['id'] not in out:
+                out.append(row['id'])
+        return out
+
+    def supersede(self, org, record):
+        """The stage rule's move for a card's ``Supersedes``: each replaced card still open goes to Dropped, recorded as
+        the rule with the receipt «superseded by <record>»; a Done or already Dropped one is left as it is."""
+        with self.store.engine.connect() as c:
+            row = self._card_row(c, org, record)
+        out = []
+        for old in (row['fields'] or {}).get('Supersedes') or []:
+            with self.store.engine.connect() as c:
+                state = ((self._card_row(c, org, old)['fields'] or {}).get('State'))
+            if state in ('Done', 'Dropped'):
+                out.append({'card': old, 'status': 'kept', 'state': state})
+                continue
+            try:
+                got = self.set_stage(org, old, 'Dropped', f'superseded by {row["id"]}',
+                                     facts=[{'fact': 'supersedes', 'value': {'by': row['id']}, 'source': 'card/Supersedes'}])
+                out.append({'card': old, 'status': got.get('status')})
+            except (CRMError, NotFound) as e:
+                out.append({'card': old, 'status': 'refused', 'note': str(e)[:200]})
+        return out
 
     def update(self, org, actor, card, expected_revision, fields=None, face=None, transition=None):
         caller = as_caller(actor)
@@ -1770,6 +1828,8 @@ class Cards:
             base = {'record': row['id'], 'revision': row['revision'], 'stage': stage, 'was': was}
             if was == stage:
                 return {**base, 'status': 'unchanged'}
+            if was == 'Dropped' and _superseded_by(raw):      # a replaced card stays Dropped: its successor carries the work
+                return {**base, 'status': 'unchanged', 'superseded_by': _superseded_by(raw)}
             at = self.clock().isoformat()
             evidence = {'stage': stage, 'because': because, 'facts': facts, 'at': at, 'by': STAGE_RULE_ACTOR,
                         'mode': mode, 'was': was}
