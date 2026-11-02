@@ -25,7 +25,7 @@ ANA = Caller(subject='7', email='u7@acme.test', workspaces=('sales',), writable=
 AGENT = Caller(subject='7', workspaces=('sales',), writable=('sales',), delegated=True, regime='autonomous',
                session='s1', credential_class='delegation')
 PR = 'https://github.com/Vexa-ai/vexa/pull/1962'
-STAGES = ['Idea', 'Design', 'Code', 'Review', 'On prod', 'Done']
+STAGES = ['Idea', 'Design', 'Code', 'Review', 'On prod', 'In main']
 FACT = {'fact': 'pr', 'value': {'state': 'open', 'head_sha': 'abc1234'}, 'source': 'github/delivery',
         'read_at': 1_793_500_000.0}
 
@@ -75,21 +75,21 @@ def test_nobody_moves_a_software_card_by_hand(cards, store):
         cards.update(ORG, ANA, rid, rev, transition='Review')
     assert e.value.body['reason'] == 'stage_from_facts'
     with pytest.raises(Refused):                              # a person, by crm_change
-        store.change(ORG, ANA, rid, rev, {'State': 'Done'})
+        store.change(ORG, ANA, rid, rev, {'State': 'In main'})
     with pytest.raises(Refused):                              # an agent, editing
         cards.update(ORG, AGENT, rid, rev, transition='Review')
     with pytest.raises(Refused) as e:                         # an agent, proposing a move
-        cards.update_propose(ORG, AGENT, rid, rev, transition='Done', reason='it shipped')
+        cards.update_propose(ORG, AGENT, rid, rev, transition='In main', reason='it shipped')
     assert e.value.body['reason'] == 'stage_from_facts'
     with pytest.raises(CRMError):                             # an agent, by crm_change proposal
-        store.change(ORG, AGENT, rid, rev, {'State': 'Done'}, reason='r', propose=True)
+        store.change(ORG, AGENT, rid, rev, {'State': 'In main'}, reason='r', propose=True)
     with pytest.raises(CRMError):                             # born past its first stage
-        cards.create(ORG, ANA, title='Born done', workspace='sales', fields={'Kind': 'software', 'State': 'Done'})
+        cards.create(ORG, ANA, title='Born done', workspace='sales', fields={'Kind': 'software', 'State': 'In main'})
     with pytest.raises(Refused):                              # the write-path hook itself, for a new record
-        cards.normalise_fields('Card', {'Title': 'Born done', 'Kind': 'software', 'State': 'Done'}, None)
+        cards.normalise_fields('Card', {'Title': 'Born done', 'Kind': 'software', 'State': 'In main'}, None)
     for who, kw in ((ANA, {}), (AGENT, {'reason': 'r', 'propose': True})):
         with pytest.raises(CRMError):                         # the evidence is the rule's
-            store.change(ORG, who, rid, rev, {'StageEvidence': {'stage': 'Done'}}, **kw)
+            store.change(ORG, who, rid, rev, {'StageEvidence': {'stage': 'In main'}}, **kw)
     with pytest.raises(Exception):                            # no gate moves it either
         cards.decide(ORG, ANA, rid, 'deliver', 'n' * 20, '0' * 64)
     got = cards.read(ORG, ANA, rid)
@@ -133,9 +133,9 @@ def test_a_recheck_that_moves_a_card_marks_a_readable_correction(cards, store):
 def test_the_rule_writes_only_software_cards_and_only_their_stages(cards):
     plain = cards.create(ORG, ANA, title='Plain', workspace='sales')['card']
     with pytest.raises(CRMError):
-        cards.set_stage(ORG, plain['id'], 'Done', 'x')
+        cards.set_stage(ORG, plain['id'], 'In main', 'x')
     card = software(cards)
-    for stage, because, mode in (('Doing', 'x', 'event'), ('Done', '', 'event'), ('Done', 'x', 'later')):
+    for stage, because, mode in (('Doing', 'x', 'event'), ('In main', '', 'event'), ('In main', 'x', 'later')):
         with pytest.raises(CRMError):
             cards.set_stage(ORG, card['id'], stage, because, mode=mode)
     assert cards.set_stage(ORG, card['id'], 'Dropped', 'the issue was closed as not planned')['status'] == 'moved'
@@ -153,7 +153,7 @@ def test_software_cards_lists_the_open_ones_with_their_readings(cards):
     a, b = software(cards, 'A'), software(cards, 'B')
     software(cards, 'C')
     cards.create(ORG, ANA, title='Plain', workspace='sales')
-    cards.set_stage(ORG, b['id'], 'Done', 'released in v0.13.4')
+    cards.set_stage(ORG, b['id'], 'In main', 'released in v0.13.4')
     cards.write_reading(ORG, a['id'], 'github/vexa-pulls', {'state': 'open', 'head_sha': 'abc1234'},
                         {'read_at': 1_793_500_000.0})
     out = cards.software_cards(ORG)
@@ -162,7 +162,7 @@ def test_software_cards_lists_the_open_ones_with_their_readings(cards):
     assert a['id'] in got and b['id'] not in got and len(got) == 2        # Done is not open; plain is not software
     assert got[a['id']]['source'] == PR and got[a['id']]['reading']['fields']['state'] == 'open'
     one = cards.software_cards(ORG, record=b['id'])['cards']
-    assert [c['state'] for c in one] == ['Done']                          # one card, open or not
+    assert [c['state'] for c in one] == ['In main']                          # one card, open or not
 
 
 def test_a_done_card_merged_outside_main_is_read_again(cards):
@@ -170,10 +170,10 @@ def test_a_done_card_merged_outside_main_is_read_again(cards):
     main, or Done for another reason, does not."""
     a, b, c, d = (software(cards, t) for t in ('A', 'B', 'C', 'D'))
     pr = lambda **k: [{'fact': 'pr', 'value': {'url': PR, 'state': 'merged', **k}}]       # noqa: E731
-    cards.set_stage(ORG, a['id'], 'Done', '#1 was merged', facts=pr(base='codex/v0.13.4', default_branch='main'))
-    cards.set_stage(ORG, b['id'], 'Done', '#2 was merged', facts=pr(base='main', default_branch='main'))
-    cards.set_stage(ORG, c['id'], 'Done', '#3 was merged', facts=pr())                      # read before base was
-    cards.set_stage(ORG, d['id'], 'Done', 'the issue was closed as completed')
+    cards.set_stage(ORG, a['id'], 'In main', '#1 was merged', facts=pr(base='codex/v0.13.4', default_branch='main'))
+    cards.set_stage(ORG, b['id'], 'In main', '#2 was merged', facts=pr(base='main', default_branch='main'))
+    cards.set_stage(ORG, c['id'], 'In main', '#3 was merged', facts=pr())                      # read before base was
+    cards.set_stage(ORG, d['id'], 'In main', 'the issue was closed as completed')
     got = {x['id'] for x in cards.software_cards(ORG)['cards']}
     assert a['id'] in got and c['id'] in got and b['id'] not in got and d['id'] not in got
 
@@ -195,7 +195,7 @@ def test_a_new_card_supersedes_open_cards_and_the_rule_drops_them(cards):
     old = cards.create(ORG, ANA, title='Call Marvin', workspace='sales', fields={'Waiting': 'ceo'})['card']
     soft = software(cards, 'Balance', Waiting='ceo')
     done = software(cards, 'Shipped', Waiting='ceo')
-    cards.set_stage(ORG, done['id'], 'Done', '#9 was merged')
+    cards.set_stage(ORG, done['id'], 'In main', '#9 was merged')
     with pytest.raises(CRMError):
         cards.create(ORG, ANA, title='New', workspace='sales', fields={'Waiting': 'ceo', 'Supersedes': [done['id']]})
     new = cards.create(ORG, ANA, title='Call Marvin', workspace='sales',
@@ -231,6 +231,22 @@ def test_the_same_stage_on_new_facts_rewrites_the_evidence(cards):
     assert cards.set_stage(ORG, card['id'], 'Review', '#1962 is open for review', facts=pr)['status'] == 'unchanged'
     moved = [{'fact': 'pr', 'value': {'url': PR, 'state': 'open', 'head_sha': 'def5678'}, 'source': 'github/delivery'}]
     assert cards.set_stage(ORG, card['id'], 'Review', '#1962 is open at def5678', facts=moved)['status'] == 'evidence'
+
+
+def test_a_legacy_done_software_card_is_read_again_and_moved_to_in_main(cards, store):
+    """Founder 2 Nov 12:5xZ: the software end stage is «In main». A card left at «Done» is outside the lifecycle, so the
+    recheck reads it again and the rule moves it, with a receipt."""
+    card = software(cards, 'Legacy')
+    with store.begin() as c:                                              # a card written before the rename
+        row = store._row(c, ORG, card['id'])
+        c.execute(s.records.update().where(s.records.c.id == card['id'])
+                  .values(fields={**row['fields'], 'State': 'Done'}))
+    assert card['id'] in {x['id'] for x in cards.software_cards(ORG)['cards']}
+    got = cards.set_stage(ORG, card['id'], 'In main', '#1962 was merged at 2026-11-01T10:00:00Z',
+                          facts=[{'fact': 'pr', 'value': {'url': PR, 'state': 'merged', 'base': 'main',
+                                                          'default_branch': 'main'}}], mode='recheck')
+    assert (got['was'], got['stage'], got['status']) == ('Done', 'In main', 'moved')
+    assert card['id'] not in {x['id'] for x in cards.software_cards(ORG)['cards']}
 
 
 def test_readings_are_kept_per_source_and_merged(cards):
@@ -307,13 +323,13 @@ def test_the_stage_routes_are_internal_tier_only(store, cards):
     assert r.status_code == 200 and r.json()['status'] == 'moved', r.text
     assert client.post('/internal/cards/stage', json=stage, headers=hdr).json()['status'] == 'unchanged'
     merged = {**FACT, 'value': {'state': 'merged', 'head_sha': 'abc1234'}}
-    r = client.post('/internal/cards/stage', json={**stage, 'stage': 'Done', 'mode': 'recheck', 'facts': [merged]},
+    r = client.post('/internal/cards/stage', json={**stage, 'stage': 'In main', 'mode': 'recheck', 'facts': [merged]},
                     headers=hdr)
     assert r.json()['status'] == 'corrected'
     assert 400 <= client.post('/internal/cards/stage', json={**stage, 'stage': 'Doing'}, headers=hdr).status_code < 500
     # null: the rule has no stage (no reading); the route keeps the State and says so
     r = client.post('/internal/cards/stage', json={**stage, 'stage': None, 'because': 'no reading yet for x'}, headers=hdr)
-    assert r.status_code == 200 and r.json()['status'] == 'kept' and r.json()['stage'] == 'Done', r.text
+    assert r.status_code == 200 and r.json()['status'] == 'kept' and r.json()['stage'] == 'In main', r.text
 
 
 # ── no reading: the State is kept; a stage set on that absence is reverted ───────────────────────

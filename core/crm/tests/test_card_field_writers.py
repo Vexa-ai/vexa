@@ -137,8 +137,7 @@ def test_an_agent_may_not_set_priority_or_destination_even_when_making_the_card(
 
 @pytest.mark.parametrize('agent', AGENTS, ids=lambda a: a.subject)
 def test_an_agent_moves_no_card_plain_or_software(cards, store, agent):
-    for card in (plain(cards), software(cards)):
-        to = 'Done'
+    for card, to in ((plain(cards), 'Done'), (software(cards), 'In main')):   # each lifecycle's own end
         with pytest.raises(Refused) as e:
             cards.update(ORG, agent, card['id'], card['revision'], transition=to)
         assert e.value.body['reason'] == 'stage_from_facts'
@@ -174,12 +173,12 @@ def test_the_founder_writes_kind_source_chain_priority_destination(cards, store)
 
 
 def test_the_founder_moves_no_stage_either(cards, store):
-    for card in (plain(cards), software(cards)):
+    for card, end in ((plain(cards), 'Done'), (software(cards), 'In main')):
         with pytest.raises(Refused) as e:
             store.change(ORG, THE_FOUNDER, card['id'], card['revision'], {'State': 'Dropped'})
         assert e.value.body['reason'] == 'stage_from_facts'
         with pytest.raises(Refused):
-            cards.update(ORG, THE_FOUNDER, card['id'], card['revision'], transition='Done')
+            cards.update(ORG, THE_FOUNDER, card['id'], card['revision'], transition=end)
 
 
 def test_a_proposal_is_checked_against_whoever_accepts_it(cards, store):

@@ -2,7 +2,7 @@
 
 «A card's status is its CRM State, fully deterministic and true to GitHub and other facts;
 deterministic checks keep it from lying.» A software card (the CRM's ``software`` kind,
-``card_templates.py``) moves through ``Idea > Design > Code > Review > On prod > Done``,
+``card_templates.py``) moves through ``Idea > Design > Code > Review > On prod > In main``,
 side ``Dropped`` — from idea to merged into main (founder 1 Nov 2026: «релиз нам здесь не нужен»: a release is a
 tag, and a version is its own destination card, not a card stage). Nobody sets that by hand: this module computes it, and the crm pack's steps write
 it through the CRM's ``/internal/cards/stage`` (the only path that may).
@@ -19,8 +19,8 @@ THREE PARTS, the first one pure:
 THE RULES (first match wins; each names the fact that decided it):
 
 1. The card's issue is closed as ``not_planned`` (or ``duplicate``) and no pull request on it is merged → **Dropped**.
-2. Its pull request is merged → **Done** (merged into main; prod came first by the delivery order). Merged into another
-   branch (its ``base`` is not the repository's ``default_branch``, e.g. ``codex/v0.13.4``) is not Done: **On prod** when
+2. Its pull request is merged → **In main** (founder 2 Nov: the end stage is named for what it is; merged into main; prod came first by the delivery order). Merged into another
+   branch (its ``base`` is not the repository's ``default_branch``, e.g. ``codex/v0.13.4``) is not In main: **On prod** when
    the prod pin contains it, otherwise **Review** (2 Nov: seq61 showed Done while its code was only in codex).
 3. Its pull request is open:
    a. it is a design document (every file it changes is under ``docs/adr/`` or ``docs/design/``,
@@ -30,7 +30,7 @@ THE RULES (first match wins; each names the fact that decided it):
    c. the pull request is a draft → **Code** (code exists, not yet offered for review);
    d. otherwise → **Review**.
 4. No pull request, or it was closed without a merge:
-   a. the card's issue is closed as completed → **Done**;
+   a. the card's issue is closed as completed → **In main**;
    b. a live Flows claim holds the card → **Code** (a worker is writing code and running tests;
       founder, 1 Nov 2026: Design is only a design document under review, never «someone holds it»);
    c. otherwise → **Idea**.
@@ -65,7 +65,7 @@ from typing import Callable, Optional
 
 from flows_sensors.base import SensorFault
 
-STAGES = ('Idea', 'Design', 'Code', 'Review', 'On prod', 'Done')
+STAGES = ('Idea', 'Design', 'Code', 'Review', 'On prod', 'In main')
 SIDE = ('Dropped',)
 #: The reading the re-check writes (``<connection>/<reading>``).
 DELIVERY_SOURCE = 'github/delivery'
@@ -160,7 +160,7 @@ def stage(readings: dict, flows_claim: Optional[dict] = None) -> tuple[Optional[
                 return out('On prod', f"{num} was merged into {base}, not {main}; the prod pin {prod.get('chart')} "
                                       f"contains {_short(prod.get('commit') or merge)}")
             return out('Review', f"{num} was merged into {base}, not {main}")
-        return out('Done', f"{num} was merged at {pr.get('merged_at') or 'an unknown time'}"
+        return out('In main', f"{num} was merged at {pr.get('merged_at') or 'an unknown time'}"
                    + (f" as {_short(merge)}" if merge else ''))
     if pr_state == 'open':
         if pr.get('design_doc') is True:
@@ -173,7 +173,7 @@ def stage(readings: dict, flows_claim: Optional[dict] = None) -> tuple[Optional[
         return out('Review', f"{num} is open for review at {_short(head)}"
                    + (' (not in the prod pin)' if prod_ok else ''))
     if issue_closed and issue.get('state_reason') in (None, 'completed'):
-        return out('Done', 'the issue was closed as completed, with no pull request on the card')
+        return out('In main', 'the issue was closed as completed, with no pull request on the card')
     if source and not pr_known:
         return unread('of a pull request for ')
     if flows_claim:

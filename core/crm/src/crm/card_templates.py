@@ -79,7 +79,7 @@ TEMPLATES: dict = {
         },
     },
     'software': {
-        'stages': ['Idea', 'Design', 'Code', 'Review', 'On prod', 'Done'],
+        'stages': ['Idea', 'Design', 'Code', 'Review', 'On prod', 'In main'],   # founder 2 Nov 12:5xZ: «in main» is the end
         'side': ['Dropped'],
         'gates': {},
         'mover': RULE,

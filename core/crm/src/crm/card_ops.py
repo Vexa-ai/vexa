@@ -192,7 +192,7 @@ def _declared_prs(fields) -> list:
 
 def _merge_unproven(fields) -> bool:
     """A Done software card whose stage fact is a merged pull request not shown to be merged into the default branch."""
-    if fields.get('State') != 'Done':
+    if fields.get('State') not in ('Done', 'In main'):
         return False
     ev = fields.get('StageEvidence')
     if isinstance(ev, str):
@@ -1132,7 +1132,7 @@ class Cards:
         for raw in ids:
             row = self._card_row(c, org, str(raw or ''))
             f = row['fields'] or {}
-            if f.get('State') == 'Done':
+            if f.get('State') in ('Done', 'In main'):
                 raise CRMError(f'Card {row["id"]} is Done: a card that is done is not superseded')
             creator = c.execute(select(s.records.c.owner_id).where(s.records.c.org_id == org,
                                                                      s.records.c.id == row['id'])).scalar()
@@ -1151,7 +1151,7 @@ class Cards:
         for old in (row['fields'] or {}).get('Supersedes') or []:
             with self.store.engine.connect() as c:
                 state = ((self._card_row(c, org, old)['fields'] or {}).get('State'))
-            if state in ('Done', 'Dropped'):
+            if state in ('Done', 'In main', 'Dropped'):
                 out.append({'card': old, 'status': 'kept', 'state': state})
                 continue
             try:

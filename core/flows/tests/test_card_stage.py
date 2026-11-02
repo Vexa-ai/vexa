@@ -58,20 +58,20 @@ MERGED = pr('merged', merge=MERGE, merged_at='2026-11-01T10:00:00Z')
     ({'pr': {**pr(), 'design_doc': True}}, None, 'Design', 'is an open design document'),
     ({'pr': {**pr(draft=True), 'design_doc': True}}, CLAIM, 'Design', 'design document'),
     ({'pr': {**pr(), 'design_doc': False}}, CLAIM, 'Review', 'open for review'),
-    ({'pr': {**MERGED, 'design_doc': True}}, None, 'Done', 'was merged'),
+    ({'pr': {**MERGED, 'design_doc': True}}, None, 'In main', 'was merged'),
     ({'pr': pr(draft=True)}, None, 'Code', '#1962 is a draft'),
     ({'pr': pr()}, None, 'Review', '#1962 is open for review at abc1234a'),
     ({'pr': pr(), 'prod': prod(False)}, None, 'Review', 'not in the prod pin'),
     ({'pr': pr(), 'prod': prod(True)}, None, 'On prod', 'contains head abc1234a'),
     ({'pr': pr(draft=True), 'prod': prod(True)}, None, 'On prod', 'the prod pin'),
-    ({'pr': MERGED}, None, 'Done', '#1962 was merged at 2026-11-01T10:00:00Z as 99999999'),
+    ({'pr': MERGED}, None, 'In main', '#1962 was merged at 2026-11-01T10:00:00Z as 99999999'),
     # a release is a tag, not a stage (founder 1 Nov 2026): merged is Done, released or not, issue open or not
-    ({'pr': MERGED, 'release': release(None)}, None, 'Done', 'was merged'),
-    ({'pr': MERGED, 'issue': issue(), 'release': release('v0.13.4')}, None, 'Done', 'was merged'),
-    ({'pr': MERGED, 'release': release('v0.13.4')}, None, 'Done', 'was merged'),
+    ({'pr': MERGED, 'release': release(None)}, None, 'In main', 'was merged'),
+    ({'pr': MERGED, 'issue': issue(), 'release': release('v0.13.4')}, None, 'In main', 'was merged'),
+    ({'pr': MERGED, 'release': release('v0.13.4')}, None, 'In main', 'was merged'),
     ({'issue': issue('closed', 'not_planned')}, None, 'Dropped', 'the issue was closed as not planned'),
     ({'issue': issue('closed', 'duplicate')}, CLAIM, 'Dropped', 'closed as duplicate'),
-    ({'issue': issue('closed', 'completed')}, None, 'Done', 'closed as completed, with no pull request'),
+    ({'issue': issue('closed', 'completed')}, None, 'In main', 'closed as completed, with no pull request'),
 ])
 def test_every_transition(readings, claim, want, because):
     got, evidence = cs.stage(readings, claim)
@@ -109,7 +109,7 @@ def test_a_commit_dropped_from_the_pin_goes_back_to_review():
 
 
 def test_a_merge_is_never_undone_by_the_pin():
-    assert cs.stage({'pr': MERGED, 'prod': prod(False, commit=MERGE)}, None)[0] == 'Done'
+    assert cs.stage({'pr': MERGED, 'prod': prod(False, commit=MERGE)}, None)[0] == 'In main'
 
 
 def test_merged_into_another_branch_is_not_done():
@@ -118,12 +118,12 @@ def test_merged_into_another_branch_is_not_done():
     got, ev_ = cs.stage({'pr': codex}, None)
     assert (got, ev_['because']) == ('Review', '#1962 was merged into codex/v0.13.4, not main')
     assert cs.stage({'pr': codex, 'prod': prod(True, commit=MERGE)}, None)[0] == 'On prod'
-    assert cs.stage({'pr': {**MERGED, 'base': 'main', 'default_branch': 'main'}}, None)[0] == 'Done'
-    assert cs.stage({'pr': MERGED}, None)[0] == 'Done'          # a reading from before base was read: unchanged
+    assert cs.stage({'pr': {**MERGED, 'base': 'main', 'default_branch': 'main'}}, None)[0] == 'In main'
+    assert cs.stage({'pr': MERGED}, None)[0] == 'In main'          # a reading from before base was read: unchanged
 
 
 def test_a_release_fact_about_another_commit_does_not_count():
-    assert cs.stage({'pr': MERGED, 'release': release('v0.13.4', commit=HEAD2)}, None)[0] == 'Done'
+    assert cs.stage({'pr': MERGED, 'release': release('v0.13.4', commit=HEAD2)}, None)[0] == 'In main'
 
 
 # ── the card's stored readings ───────────────────────────────────────────────────────────────────
@@ -137,7 +137,7 @@ def test_readings_from_a_card_take_each_fact_from_its_latest_source():
     r = cs.readings_from_card(card)
     assert r['pr']['state'] == 'merged' and r['pr']['evidence']['source'] == 'github/vexa-pulls'
     assert r['prod']['contains'] is True and r['issue'] is None
-    assert cs.stage(r, None)[0] == 'Done'
+    assert cs.stage(r, None)[0] == 'In main'
 
 
 def test_a_single_legacy_reading_and_an_issue_card():
@@ -254,7 +254,7 @@ def test_a_merged_pull_request_the_newest_release_contains_reads_done():
     fields = cs.read_delivery(get, {}, SPEC, 'github.com/vexa-ai/vexa#1962', PR_URL, cache)
     assert fields['release'] == {'tag': 'v0.13.5', 'commit': MERGE, 'checked': 2}
     assert fields['prod']['contains'] is True
-    assert cs.stage({k: {**v, 'evidence': ev()} for k, v in fields.items()}, None)[0] == 'Done'
+    assert cs.stage({k: {**v, 'evidence': ev()} for k, v in fields.items()}, None)[0] == 'In main'
     # the pin and the release list are read once per pass
     get2, calls2 = github(base_answers(pull, compare))
     cs.read_delivery(get2, {}, SPEC, 'github.com/vexa-ai/vexa#1962', PR_URL, cache)
