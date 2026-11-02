@@ -658,6 +658,19 @@ def test_a_pull_request_that_names_its_card_is_tracked_and_declared():
     assert cs.declared_pr({}) == ''
 
 
+def test_a_pull_request_naming_a_cards_issue_in_its_title_or_another_repo_is_tracked():
+    """The judge's links (truth_check.link): #N, owner/repo#N and issue or pull URLs, in the title or the body."""
+    spec = {**SPEC, 'repos': ['Vexa-ai/vexa'], 'unlinked': {'open_after_h': 0}}
+    base = {'state': 'open', 'created_at': _iso(T - 60), 'merged_at': None, 'body': ''}
+    title = {**base, 'html_url': 'https://github.com/Vexa-ai/vexa/pull/2201', 'number': 2201, 'title': 'Fix join (#1990)'}
+    cross = {**base, 'html_url': 'https://github.com/Vexa-ai/vexa/pull/2202', 'number': 2202,
+             'body': 'For Vexa-ai/vexa-platform#571'}
+    fresh = {**base, 'html_url': 'https://github.com/Vexa-ai/vexa/pull/2203', 'number': 2203, 'title': 'New'}
+    cards = {'https://github.com/Vexa-ai/vexa/issues/1990': ['c1'], 'https://github.com/Vexa-ai/vexa-platform/issues/571': ['c2']}
+    out = cs.unlinked_prs(_pulls([title, cross, fresh], []), {}, spec, cs.PassCache(), lambda link: cards.get(link, []), T)
+    assert [r['number'] for r in out] == [2203]                          # a fresh open PR with no card is a fact at once
+
+
 def test_an_unreadable_pin_leaves_prod_unknown_and_the_card_read():
     """2 Nov: a stations pin past the channel's last entry left 49 of 50 cards unread; now only prod is unknown."""
     pull = {'html_url': PR_URL, 'number': 1962, 'state': 'open', 'draft': False, 'head': {'sha': HEAD},

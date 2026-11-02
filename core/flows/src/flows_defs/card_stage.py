@@ -452,7 +452,8 @@ def read_delivery(get: Callable, conn: dict, spec: dict, subject: str, source: s
 #: a bound on the result, not a filter: 50 hid every open PR past the 50th (Vexa-ai/vexa-platform#572 on 2 Nov, behind 38
 #: open Vexa-ai/vexa ones), so a repository late in the list was never flagged
 UNLINKED_MAX = 300
-_ISSUE_REF = re.compile(r'(?:(?<![\w/])#|github\.com/([A-Za-z0-9_.\-]+)/([A-Za-z0-9_.\-]+)/issues/)(\d+)\b')
+_ISSUE_REF = re.compile(r'(?:(?<![\w/])#|github\.com/([A-Za-z0-9_.\-]+)/([A-Za-z0-9_.\-]+)/(?:issues|pull)/)(\d+)\b')
+_REPO_REF = re.compile(r'\b([A-Za-z0-9_.\-]+)/([A-Za-z0-9_.\-]+)#(\d+)\b')
 
 
 #: the reading that links a card to the pull requests naming it (``card: <id>`` in the body, or the id in the branch)
@@ -518,10 +519,14 @@ def unlinked_prs(get: Callable, conn: dict, spec: dict, cache: PassCache, cards_
             elif merged is None or now - merged > merged_within:
                 continue
             link = p.get('html_url') or ''
-            refs = {int(m.group(3)) for m in _ISSUE_REF.finditer(str(p.get('body') or ''))
-                    if not m.group(1) or (m.group(1).lower(), m.group(2).lower()) == (owner.lower(), repo.lower())}
-            refs.discard(int(p.get('number') or 0))
-            if cards_for(link) or any(cards_for(f'https://github.com/{owner}/{repo}/issues/{n}') for n in sorted(refs)):
+            # what the PR names, in its title and body (the judge's links, truth_check.link): #N in its own repo,
+            # owner/repo#N and github.com/<owner>/<repo>/(issues|pull)/N in any repo
+            text = f"{p.get('title') or ''}\n{p.get('body') or ''}"
+            refs = {(owner, repo, int(m.group(3))) if not m.group(1) else (m.group(1), m.group(2), int(m.group(3)))
+                    for m in _ISSUE_REF.finditer(text)}
+            refs |= {(m.group(1), m.group(2), int(m.group(3))) for m in _REPO_REF.finditer(text)}
+            refs.discard((owner, repo, int(p.get('number') or 0)))
+            if cards_for(link) or any(cards_for(f'https://github.com/{o}/{r}/issues/{n}') for o, r, n in sorted(refs)):
                 continue
             row = {'pr': link, 'repo': f'{owner}/{repo}'.lower(), 'number': p.get('number'),
                    'author': (p.get('user') or {}).get('login'),
