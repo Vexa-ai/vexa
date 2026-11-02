@@ -438,6 +438,12 @@ def _voice_note_limits() -> tuple[int, int]:
     return max_duration_sec(), idle_timeout_sec()
 
 
+def _chat_on_join_data(text: Optional[str]) -> Optional[dict]:
+    """``data.chat_on_join`` for one bot request: the text and a fresh request_id (no status: it is
+    written on admission). None when the request carried none."""
+    return {"text": text, "request_id": uuid.uuid4().hex} if text else None
+
+
 async def request_bot(
     repo: MeetingRepo,
     runtime: RuntimeClient,
@@ -514,6 +520,10 @@ async def request_bot(
     respawn_of: Optional[dict] = None,
     # Nodes the refused attempts ran on; the runtime prefers others (WorkloadSpec.avoidNodes).
     avoid_nodes: Optional[list] = None,
+    # The line the bot posts once in the meeting chat when it is admitted (#1961), already
+    # validated and stripped by the router. Stored as ``data.chat_on_join = {text, request_id}``;
+    # the request_id is minted here, one per bot request, so a re-sent bot posts again.
+    chat_on_join: Optional[str] = None,
 ) -> dict:
     """Run the spawn flow and return a MeetingResponse-shaped dict.
 
@@ -844,6 +854,8 @@ async def request_bot(
         reopen_patch["bot_account_id"] = bot_account_id
         # A continued run starts its own respawn budget; None clears a prior run's.
         reopen_patch[meet_respawn.KEY] = respawn_block
+        # A fresh line (and request_id) for this run, or None: the reopen pops a prior run's.
+        reopen_patch["chat_on_join"] = _chat_on_join_data(chat_on_join)
         row = await repo.reopen_meeting(meeting_id=reused_row["id"], data_patch=reopen_patch)
     else:
         meeting_data: dict[str, Any] = {}
@@ -876,6 +888,8 @@ async def request_bot(
             meeting_data["bot_account_id"] = bot_account_id
         if respawn_block is not None:
             meeting_data[meet_respawn.KEY] = respawn_block
+        if chat_on_join:
+            meeting_data["chat_on_join"] = _chat_on_join_data(chat_on_join)
         # Per-user webhook config carried on the meeting (delivered by the lifecycle callback).
         # Stripped from any outbound meeting projection (webhooks.delivery._INTERNAL_DATA_KEYS). At
         # the API response edge the treatment splits (collector.projection): `webhook_secret` is

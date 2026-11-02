@@ -25,7 +25,7 @@ from fastapi.responses import JSONResponse
 from ..collector.meeting_link import parse_meeting_url
 from ..meeting_url_redaction import redact_url, strip_host_tokens
 from .. import identity_token
-from ..regime import require_person_or_granted, shared_bot_workspace
+from ..regime import SHARED_REFUSAL, live_bot_guard, require_person_or_granted, shared_bot_workspace
 from ..workspace_write import require_writable, writable_workspaces
 from ..service_authority import (
     ServiceAuthorityDenied,
@@ -66,6 +66,13 @@ NATIVE_MEETING_ID_MAX_LEN = 255
 #: with a 502 and left a created container behind; a 5,000-char one spawned a bot).
 BOT_NAME_MAX_LEN = 100
 
+#: Max length of a ``chat_on_join`` line (api.v1 ``maxLength``): a notice, not a document.
+MAX_CHAT_ON_JOIN_CHARS = 500
+
+#: The live-bot verb a ``chat_on_join`` defers to admission (`regime.LIVE_BOT_VERBS`): typing into
+#: the meeting chat. It is open to exactly the callers that route is open to.
+_CHAT_VERB = ("POST", "/bots/{platform}/{native_meeting_id}/chat")
+
 #: The words that keep a bot's meeting private to the caller, whatever workspace their chat works in.
 PRIVATE_WORKSPACE_WORDS = frozenset({"personal", "desk"})
 
@@ -100,6 +107,40 @@ PASSCODE_ALIASES = (
     "pwd",
 )
 
+
+def _resolve_chat_on_join(request: Request, body: dict, user_id) -> Optional[str]:
+    """``chat_on_join`` (#1961): the line the bot posts once in the meeting chat when it is admitted.
+
+    Absent or ``null`` is today's request. Otherwise it is the chat verb deferred to admission, so
+    the callers ``POST /bots/{p}/{n}/chat`` refuses are refused here, before any DB, runtime or
+    network work: an unattended turn (a routine granted ``bot.request`` included; that grant sends
+    the bot, never the line) gets ``human_session_required``, and a shared turn or a workspace
+    principal gets ``shared_conversation``. Then the value must be a non-blank string of at most
+    ``MAX_CHAT_ON_JOIN_CHARS`` on a platform that has a meeting chat. Logs never carry the text."""
+    value = body.get("chat_on_join")
+    if value is None:
+        return None
+    try:
+        live_bot_guard(*_CHAT_VERB)(request)
+        if identity_token.is_shared(request.headers) or identity_token.is_workspace_principal(request.headers):
+            raise HTTPException(status_code=403, detail=SHARED_REFUSAL)
+    except HTTPException as e:
+        reason = e.detail.get("reason") if isinstance(e.detail, dict) else str(e.detail)
+        logging.getLogger(__name__).info("chat_on_join_refused reason=%s user_id=%s", reason, user_id)
+        raise
+    if not isinstance(value, str) or not value.strip():
+        raise HTTPException(status_code=422, detail="'chat_on_join' must be a non-empty string")
+    text = value.strip()
+    if len(text) > MAX_CHAT_ON_JOIN_CHARS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"'chat_on_join' is {len(text)} characters; the maximum is {MAX_CHAT_ON_JOIN_CHARS}",
+        )
+    platform = str(body.get("platform", "")).strip()
+    if platform in (VOICE_NOTE_PLATFORM, CALL_PLATFORM):
+        raise HTTPException(
+            status_code=422, detail=f"'chat_on_join' needs a meeting chat, and a {platform} has none")
+    return text
 
 
 def _resolve_recording_enabled(value: Optional[object]) -> bool:
@@ -345,6 +386,7 @@ def build_router(
             raise HTTPException(status_code=422, detail="invalid JSON body")
         if not isinstance(body, dict):
             raise HTTPException(status_code=422, detail="body must be an object")
+        chat_on_join = _resolve_chat_on_join(request, body, user_id)
 
         # A passcode sent under a name we do not read is a credential DROPPED — refuse before any
         # DB, runtime or network work, and name the field that works. Only a NON-EMPTY alias is
@@ -684,6 +726,7 @@ def build_router(
                     call_data=prepared_call.data if prepared_call else None,
                     bot_account=bot_account,
                     room_principal=room_principal,
+                    chat_on_join=chat_on_join,
                 )
             except Exception:
                 # The room exists before the meeting does; a spawn refused or failed takes it away.

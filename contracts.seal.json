@@ -15,7 +15,7 @@
   "core/crm/contracts/crm.v1": "a3d67e058a859670028fed97c353bd1aecae076f4834b8257e220f2ee11fad55",
   "core/flows/contracts/event.v2": "4feac78c1ce8a1905e69eb20a04d0d2e839686a0a477f8fa05ae8a9efbd97c70",
   "core/flows/contracts/flows.v1": "2bdc4a8443c6f6f0195043e6d6a53268afacd253dd96ebcf6e8ba5418ddf901a",
-  "core/gateway/contracts/api.v1": "5e6fed733263be076ab81d40e7d75d83bf92e70cbc8c4853c223ae0d326bdfc2",
+  "core/gateway/contracts/api.v1": "21cfd189e316ceef9e2c446ae274c946242d714173fe3f87a0ec854f575b954d",
   "core/gateway/contracts/gateway-identity.v1": "4af0b688991dc99c6dfd3e29df4fadd4665de66097946404cf5bc4cacc6cfb16",
   "core/gateway/contracts/logevent.v1": "b7f3d22d2879a81834813dff4b6b06a402ac4878382beb1147e8c67b1482e0fb",
   "core/gateway/contracts/mcp.tools.v1": "fa2d75321cf8f059f18c4e55f928ef1acadcf2b299036743281797b539eb8af5",
