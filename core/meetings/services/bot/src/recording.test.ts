@@ -12,7 +12,9 @@
  *   • close() with no prior final sends EXACTLY ONE empty is_final fallback (the live Stop race),
  *     and fires at most once; a never-fed session's close is a no-op;
  *   • over the real RecordingService HTTP wire, session_uid == inv.connectionId on every chunk,
- *     seq monotone, only the last is_final (the split/404-guard contract).
+ *     seq monotone, only the last is_final (the split/404-guard contract);
+ *   • a chunk produced while meeting-api restarts (connection refused for 2.5 s) still lands, in
+ *     seq order, with the default retry policy (claude-rc meeting 277: a 30 s hole otherwise).
  * Run: npx tsx src/recording.test.ts
  */
 import http from 'node:http';
@@ -167,8 +169,53 @@ async function main(): Promise<void> {
       wire.map((w) => w.is_final).join(','));
   }
 
+  // ── 8) meeting-api restarts mid-call: the chunk produced while it is down still lands, in order ──
+  // claude-rc meeting 277 (2026-11-02): meeting-api was recreated mid-call; chunks 114 (EAI_AGAIN)
+  // and 115 (ECONNREFUSED) were given up after 3 attempts in 1.5 s → a 30 s hole in the master.
+  // Default uploader, default retry policy, the real HTTP wire; the receiver is down for 2.5 s.
+  {
+    const got: number[] = [];
+    const sockets = new Set<import('node:net').Socket>();
+    const server = http.createServer((req, res) => {
+      const parts: Buffer[] = [];
+      req.on('data', (d: Buffer) => parts.push(d));
+      req.on('end', () => {
+        const m = Buffer.concat(parts).toString('latin1').match(/name="chunk_seq"\r\n\r\n(\d+)\r\n/);
+        if (m) got.push(Number(m[1]));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok' }));
+      });
+    });
+    server.on('connection', (s) => { sockets.add(s); s.on('close', () => sockets.delete(s)); });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const port = (server.address() as AddressInfo).port;
+    const url = `http://127.0.0.1:${port}/internal/recordings/upload`;
+    const waitFor = async (n: number, ms: number): Promise<void> => {
+      for (let t = 0; t < ms && got.length < n; t += 20) await new Promise((r) => setTimeout(r, 20));
+    };
+
+    const sink = createBotRecordingSink({
+      inv: inv({ connectionId: 'conn-restart', meeting_id: 277, recordingUploadUrl: url, internalSecret: 's' }),
+    });
+    sink.chunk('google_meet/r', 113, false, 'webm', new Uint8Array([1, 1]));
+    await waitFor(1, 2000);
+    // meeting-api goes away (container recreated) …
+    await new Promise<void>((r) => { server.close(() => r()); for (const s of sockets) s.destroy(); });
+    sink.chunk('google_meet/r', 114, false, 'webm', new Uint8Array([2, 2]));   // produced while it is down
+    await new Promise((r) => setTimeout(r, 2500));
+    // … and is back on the same address.
+    await new Promise<void>((r) => server.listen(port, '127.0.0.1', () => r()));
+    sink.chunk('google_meet/r', 115, false, 'webm', new Uint8Array([3, 3]));
+    await waitFor(3, 10_000);
+    await new Promise<void>((r) => { server.close(() => r()); for (const s of sockets) s.destroy(); });
+
+    check('restart: the chunk produced while meeting-api was down is stored once it is back',
+      got.includes(114), got.join(','));
+    check('restart: no hole, seq order kept (113,114,115)', got.join(',') === '113,114,115', got.join(','));
+  }
+
   if (failed) { console.error(`\n❌ recording (L3): ${failed} check(s) FAILED.`); process.exit(1); }
-  console.log('\n✅ recording (L3): each recording.v1 timeslice uploads immediately (seq-ordered, session_uid==connectionId); a mid-meeting kill leaves every finished part durable; the empty is_final signal is forwarded; close() synthesizes the final signal at most once (injected uploader + real RecordingService HTTP wire · no whole-recording buffering).');
+  console.log('\n✅ recording (L3): each recording.v1 timeslice uploads immediately (seq-ordered, session_uid==connectionId); a mid-meeting kill leaves every finished part durable; the empty is_final signal is forwarded; close() synthesizes the final signal at most once; a chunk produced while meeting-api restarts still lands, in order (injected uploader + real RecordingService HTTP wire · no whole-recording buffering).');
 }
 
 void main();
