@@ -36,6 +36,7 @@ flow ends ``not_present`` rather than knocking on a missing door.
   it, a cleared Due or a closed card cancels it) and ``card_due_recheck`` (hourly). Both read the cards
   through ``/internal/cards/due``; the refs are the card id, the due date and the owner.
 """
+import json
 import time
 import flows_config
 from flows import Done, EventType, NotPresent, StepError
@@ -57,6 +58,14 @@ STAGE_FLOW, RECHECK_FLOW = "crm_card_stage", "crm_card_stage_recheck"
 #: alarm the worker was down for fires late instead of never, and one whose card went is cancelled.
 DUE_FLOW, DUE_ARM_FLOW, DUE_RECHECK_FLOW = "card_due_alarms", "card_due_arm", "card_due_recheck"
 DUE_RECHECK_CRON = "7 * * * *"
+#: a card change its owner acts on (``card_change_to_owner``), into the owner's stream
+CHANGE_FLOW = "card_change_to_owner"
+CHANGE_EVENT = "card.changed"
+#: who owns the sources (the Data tab's connections): their failures go to its stream (``source.failing``)
+SOURCES_OWNER = "factory"
+SOURCE_FAULTS_FLOW = "source_faults_to_owner"
+SOURCE_FAULTS_CRON = "*/10 * * * *"
+SOURCE_EVENT = "source.failing"
 DUE_EVENT, DUE_SOON_EVENT = "card.due", "card.due_soon"
 
 
@@ -301,6 +310,13 @@ def build(reg, db):
         pin_name = ((spec or {}).get('prod_pin') or {}).get('connection') or name
         failed = {f'{name}/delivery': sum(1 for r in done if r.get('failed') or (conn is None and r['read'] != 'read')),
                   f'{pin_name}/prod-pin': 1 if cache.pin_fault is not None else 0}
+        import hashlib
+        for rid, n, why in ((f'{name}/delivery', failed[f'{name}/delivery'], why or 'card reads failed'),
+                            (f'{pin_name}/prod-pin', failed[f'{pin_name}/prod-pin'], cache.pin_fault or '')):
+            if n:
+                key = f"reading:{rid}:{hashlib.sha256(str(why).encode()).hexdigest()[:12]}"
+                _to_stream(ctx, SOURCES_OWNER, key, SOURCE_EVENT,
+                           {'reading': rid, 'status': 'failing', 'failures': n, 'reason': str(why)[:300]})
         return Done({'cards': len(done), 'corrected': [r for r in done if r.get('status') in ('corrected', 'restored')],
                      'unread': sum(1 for r in done if r['read'] != 'read'), 'failed': failed,
                      'refused': [{'card': r['card'], 'status': r['refused']} for r in done if r.get('refused')][:50],
@@ -363,6 +379,70 @@ def build(reg, db):
                     done.append(_arm_due(flow, {'id': key.rsplit(':', 1)[0], 'open': False}, clock))
         return Done({'cards': len(cards), 'armed': [d for d in done if d.get('status') != 'none']})
 
+    def _role_uids():
+        """``VEXA_FLOWS_STREAM_OWNERS``: a role → the subject whose credential reads its stream."""
+        try:
+            raw = json.loads(flows_config.get('VEXA_FLOWS_STREAM_OWNERS') or '{}')
+        except ValueError:
+            return {}
+        return {str(k): str(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
+
+    def _to_stream(ctx, recipient, source_event_id, event_type, refs):
+        from flows import stream
+        try:
+            return stream.append(db, getattr(ctx, 'clock_now', None) or time.time(), recipient=recipient,
+                                 source_event_id=source_event_id, event_type=event_type, refs=refs,
+                                 reaction_id=getattr(ctx, 'reaction_id', '') or '')
+        except stream.StreamError as e:
+            return {'recipient': recipient, 'status': 'refused', 'note': str(e)}
+
+    @reg.step
+    def card_change_to_owner(ctx):
+        """A card change its owner acts on, into the owner's stream (its ``Waiting``; a card waiting on the
+        founder goes to the ceo, the one way to him): its stage, its claim, its Due, Started, a new card, or a
+        new owner (both owners are told). A change the owner itself wrote is not echoed back; a revision that
+        changed none of these (a reading) appends nothing. Reads: refs.record_id, refs.revision · CRM
+        ``/internal/cards/change`` · Effect: one ``card.changed`` item per owner, once per change."""
+        base = flows_config.get(CRM_URL_ENV).rstrip('/')
+        if not base:
+            return NotPresent('crm')
+        record, rev = str(ctx.refs.get('record_id') or ''), ctx.refs.get('revision')
+        if not record or not str(rev or '').isdigit():
+            raise StepError('crm.record.changed carries record_id and revision', retryable=False)
+        ch = _crm_post(base, '/internal/cards/change', {'record': record, 'revision': int(rev)})
+        if not ch.get('card') or not ch.get('changed'):
+            return Done({'status': 'none'})
+        uids = _role_uids()
+        owners = [ch.get('owner')] + ([ch.get('was_owner')] if 'Waiting' in ch['changed'] else [])
+        refs = {'card': ch['card'], 'revision': ch.get('revision'), 'changed': ch['changed'], 'state': ch.get('state'),
+                'owner': ch.get('owner'), 'by': ch.get('actor'), **({'created': True} if ch.get('created') else {})}
+        out = []
+        for who in dict.fromkeys(str(o) for o in owners if o):
+            to = 'ceo' if who == 'founder' else who
+            if uids.get(to) and uids[to] == str(ch.get('actor') or ''):
+                out.append({'recipient': to, 'status': 'own_write'})
+                continue
+            out.append(_to_stream(ctx, to, ctx.reaction.source_event_id, CHANGE_EVENT, refs))
+        return Done({'card': ch['card'], 'appended': out})
+
+    @reg.step
+    def source_faults_to_owner(ctx):
+        """Every source reading that is failing, into the sources' owner's stream (``SOURCES_OWNER``): a sensor
+        degraded or stopped, or with failures. Once per sensor and failure (its status and reason), so a fault
+        that stays is told once and a new reason is told again. Reads: the sensor table · Effect: one
+        ``source.failing`` item per new fault."""
+        import hashlib
+        rows = db.execute("SELECT scope, name, connection_id, status, failures, reason FROM sensor "
+                          "WHERE status IN ('degraded', 'stopped') OR (status = 'active' AND failures > 0)")
+        out = []
+        for scope, name, conn, status, failures, reason in rows:
+            why = str(reason or '')[:300]
+            key = f"sensor:{scope}:{name}:{status}:{hashlib.sha256(why.encode()).hexdigest()[:12]}"
+            out.append(_to_stream(ctx, SOURCES_OWNER, key, SOURCE_EVENT,
+                                  {'reading': conn or name, 'sensor': name, 'status': status,
+                                   'failures': int(failures or 0), 'reason': why}))
+        return Done({'failing': len(rows), 'appended': [o for o in out if o.get('status') == 'appended']})
+
     for kind in BUSINESS_EVENTS:
         reg.flow(name=f'business_{kind}', version=1, on=EventType(f'business.{kind}'),
                  steps=[reg.steps['record_business_event']])
@@ -390,5 +470,10 @@ def build(reg, db):
                        steps=('arm_card_due',), cron=DUE_RECHECK_CRON)
     reg.flows[(due_recheck.ident, due_recheck.version)] = due_recheck
     reg.scheduled.setdefault(due_recheck.ident, []).append(due_recheck)
+    reg.flow(name=CHANGE_FLOW, version=1, on=EventType('crm.record.changed'), steps=[reg.steps['card_change_to_owner']])
+    faults = Flow(name=SOURCE_FAULTS_FLOW, version=1, on=EventType(SCHEDULE_EVENT),
+                  steps=('source_faults_to_owner',), cron=SOURCE_FAULTS_CRON)
+    reg.flows[(faults.ident, faults.version)] = faults
+    reg.scheduled.setdefault(faults.ident, []).append(faults)
     reg.flow(name='crm_references', version=1, on=EventType('workspace.references.changed'),
              steps=[reg.steps['hand_references_to_crm']])

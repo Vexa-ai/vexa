@@ -115,6 +115,7 @@ FLOWS_OUTBOUND: Dict[str, Tuple[Tuple[str, str], ...]] = {
         ("POST", "/internal/cards/software"),           # the crm pack: the software cards the stage rule computes
         ("POST", "/internal/cards/stage"),              # the crm pack: a software card's stage from facts
         ("POST", "/internal/cards/due"),                # the crm pack: card_due_alarms, each open card's Due and owner
+        ("POST", "/internal/cards/change"),             # the crm pack: card_change_to_owner, what a revision changed
     ),
 }
 T = subject_ticket

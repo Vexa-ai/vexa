@@ -43,3 +43,17 @@ def test_the_due_route_is_internal_tier_only(store, cards):  # noqa: F811
                        headers={'Authorization': 'Bearer a-person-token'}).status_code in (401, 403)
     r = client.post('/internal/cards/due', json={}, headers={'X-Internal-Secret': 'internal-s'})
     assert r.status_code == 200 and [c['owner'] for c in r.json()['cards']] == ['ceo']
+
+
+
+def test_a_card_change_names_the_watched_fields_its_state_and_both_owners(store, cards):  # noqa: F811
+    card = _card(cards, 'Send the deck', Waiting='software')
+    new = cards.card_change(ORG, card['id'], card['revision'])
+    assert new['created'] is True and 'Waiting' in new['changed'] and new['owner'] == 'software'
+    after = cards.update(ORG, ANA, card['id'], card['revision'], fields={'Due': '2026-11-09', 'Waiting': 'ceo'})
+    rev = after['card']['revision'] if 'card' in after else after['revision']
+    ch = cards.card_change(ORG, card['id'], rev)
+    assert ch['changed'] == ['Due', 'Waiting'] and (ch['owner'], ch['was_owner']) == ('ceo', 'software')
+    assert ch['actor'] == ANA.subject and ch['open'] is True and ch['created'] is False
+    assert cards.card_change(ORG, card['id'], 999) == {'card': None}
+    assert cards.card_change(ORG, 'no-such-card', 1) == {'card': None}

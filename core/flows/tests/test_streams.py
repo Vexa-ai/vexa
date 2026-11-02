@@ -325,3 +325,84 @@ def test_the_due_flows_are_registered():
     assert crm_pack.DUE_ARM_FLOW in {f.name for f in reg.match("crm.record.changed")}
     assert {f.name: f.cron for f in reg.schedules()}[crm_pack.DUE_RECHECK_FLOW] == crm_pack.DUE_RECHECK_CRON
     assert reg.newest("instance", crm_pack.DUE_FLOW).steps == ("to_stream",)
+
+
+
+# ── subscription by default: a card's change reaches its owner's stream, a source's failure the factory's ──
+def _change_crm(monkeypatch, answers):
+    import flows_steps.common as common
+    monkeypatch.setenv("VEXA_FLOWS_CRM_API_URL", "http://crm-api:8300")
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "flows-service-key-crm")
+    monkeypatch.setenv("VEXA_FLOWS_STREAM_OWNERS", json.dumps({"ceo": "900001", "software": "900002"}))
+
+    def http(method, url, headers, body, timeout=20):
+        path = url.replace("http://crm-api:8300", "")
+        if path == "/internal/cards/change":
+            return 200, answers[(body["record"], body["revision"])]
+        if path == "/internal/cards/due":
+            return 200, {"cards": []}
+        return 404, {}
+    monkeypatch.setattr(common, "http", http)
+
+
+def test_a_card_change_reaches_its_owner_once_no_one_else_and_not_again_after_ack(monkeypatch):
+    base = {"card": "c1", "created": False, "state": "Review", "owner": "software", "was_owner": "software",
+            "open": True}
+    _change_crm(monkeypatch, {
+        ("c1", 2): {**base, "revision": 2, "changed": ["State"], "actor": "crm:stage"},
+        ("c1", 3): {**base, "revision": 3, "changed": [], "actor": "reading:github/delivery"},
+        ("c1", 4): {**base, "revision": 4, "changed": ["Holder", "HoldUntil"], "actor": "900002"},
+        ("c2", 2): {**base, "card": "c2", "revision": 2, "changed": ["Started"], "owner": "founder",
+                    "was_owner": "founder", "actor": "900004"},
+    })
+    db, clock, reg = _due_rig(_utc(2026, 11, 2))
+    for card, rev in (("c1", 2), ("c1", 3), ("c1", 4), ("c2", 2)):
+        _changed(db, reg, clock, card, rev)
+    _run(db, reg, clock)
+    _changed(db, reg, clock, "c1", 2)                                      # the same event again
+    _run(db, reg, clock)
+    (item,) = stream.unacked(db, "software")                               # once; no reading, no own claim
+    assert item["event_type"] == "card.changed"
+    assert item["refs"] == {"card": "c1", "revision": 2, "changed": ["State"], "state": "Review",
+                            "owner": "software", "by": "crm:stage"}
+    (press,) = stream.unacked(db, "ceo")                                   # the founder's card: to the ceo
+    assert press["refs"]["card"] == "c2" and press["refs"]["changed"] == ["Started"]
+    assert stream.ack(db, clock.now(), "software", [item["item_id"]], actor="900002")["acked"] == [item["item_id"]]
+    assert stream.unacked(db, "software") == []
+    _changed(db, reg, clock, "c1", 2)
+    _run(db, reg, clock)
+    assert stream.unacked(db, "software") == [], "an acked change is not delivered again"
+
+
+def test_a_new_owner_and_the_old_one_are_both_told(monkeypatch):
+    _change_crm(monkeypatch, {("c1", 5): {"card": "c1", "revision": 5, "created": False, "changed": ["Waiting"],
+                                          "state": "Doing", "owner": "business", "was_owner": "software",
+                                          "actor": "900001", "open": True}})
+    db, clock, reg = _due_rig(_utc(2026, 11, 2))
+    _changed(db, reg, clock, "c1", 5)
+    _run(db, reg, clock)
+    assert [len(stream.unacked(db, r)) for r in ("business", "software", "ceo")] == [1, 1, 0]
+
+
+def test_a_failing_source_reaches_the_factory_once_per_fault():
+    db, clock, reg = _due_rig(_utc(2026, 11, 2))
+    now = clock.now()
+    for name, status, failures, reason in (("gmail-info", "degraded", 3, "read failed (401)"),
+                                           ("discord", "active", 0, None), ("ga4", "active", 1, "read failed (500)")):
+        db.execute("INSERT INTO sensor (scope, name, kind, connection_id, interval_s, version, status, mode, next_due_at, "
+                   "failures, reason, created_at) VALUES ('instance', :n, 'reading', :c, 60, 1, :s, 'live', :t, :f, :r, :t)",
+                   {"n": name, "c": f"{name}/x", "s": status, "t": now, "f": failures, "r": reason})
+    step = reg.steps["source_faults_to_owner"]
+    from flows import StepCtx
+    from flows.model import Reaction
+    ctx = StepCtx(reaction=Reaction("r", "s", "schedule.due", {}, crm_pack.SOURCE_FAULTS_FLOW, 1,
+                                    "source_faults_to_owner", "running", 1, 0, None, None, None), effect_key="k",
+                  prior={}, clock_now=now)
+    step(ctx)
+    step(ctx)                                                              # the next run: the same faults
+    got = stream.unacked(db, "factory")
+    assert sorted(i["refs"]["sensor"] for i in got) == ["ga4", "gmail-info"]
+    assert all(i["event_type"] == "source.failing" for i in got)
+    db.execute("UPDATE sensor SET reason = 'read failed (403)' WHERE name = 'gmail-info'")
+    step(ctx)
+    assert len(stream.unacked(db, "factory")) == 3, "a new reason is a new fault"

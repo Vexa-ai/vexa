@@ -270,6 +270,9 @@ class SoftwareCards(Body):
     record: str | None = Field(default=None, max_length=128, description='One card; omitted: every open software card.')
 class DueCards(Body):
     record: str | None = Field(default=None, max_length=128, description='One card; omitted: every open card with a Due.')
+class CardChange(Body):
+    record: str = Field(min_length=1, max_length=128)
+    revision: int = Field(ge=1)
 class StageWrite(Body):
     record: str = Field(min_length=1, max_length=128)
     stage: str | None = Field(min_length=1, max_length=60, description=(
@@ -759,6 +762,13 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
         """The cards a due alarm reads (one, or every open card with a Due): id, Due, owner (Waiting),
         open. Internal tier only (flows' ``card_due_alarms``); it acts for nobody."""
         return audited('card.due', caller, body.record or '', lambda: cards.due_cards(org_id, body.record))
+
+    @app.post('/internal/cards/change', include_in_schema=False)
+    def internal_cards_change(body: CardChange, caller=Depends(internal)):
+        """What one revision of a card changed that its owner acts on (field names, State, owner before and
+        after, who wrote it). Flows' ``card_change_to_owner`` reads it to put the change in the owner's stream.
+        Internal tier only; it acts for nobody."""
+        return audited('card.change', caller, body.record, lambda: cards.card_change(org_id, body.record, body.revision))
 
     @app.post('/internal/cards/stage', include_in_schema=False)
     def internal_cards_stage(body: StageWrite, caller=Depends(internal)):

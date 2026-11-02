@@ -1548,6 +1548,32 @@ class Cards:
                 break
         return {'cards': out}
 
+    #: the fields whose change a card's owner acts on: its stage, its claim, its Due, Started, its owner
+    CHANGE_WATCHED = ('State', 'Holder', 'HoldUntil', 'Due', 'Started', 'Waiting')
+
+    def card_change(self, org, record, revision):
+        """What one revision of a card changed that its owner acts on: the names of the watched fields that
+        differ (``CHANGE_WATCHED``; all that are set on a new card), its State, its owner after and before
+        (``Waiting``), who wrote it and whether the card is open. Field names only: no value but State and the
+        owners. Not a card, or no such revision: ``{'card': None}``. Internal tier only; it acts for nobody."""
+        rv = s.revisions
+        with self.store.engine.connect() as c:
+            row = c.execute(select(rv.c.actor_id, rv.c.before, rv.c.after).where(
+                rv.c.org_id == org, rv.c.record_id == str(record or ''), rv.c.revision == int(revision))).first()
+            if row is None or not isinstance(row.after, dict):
+                return {'card': None}
+            after, before = row.after, row.before if isinstance(row.before, dict) else None
+            if not self.store._definition(c, org, after.get('object_type')).get('x-card'):
+                return {'card': None}
+        fa, fb = after.get('fields') or {}, (before or {}).get('fields') or {}
+        life = self.lifecycle(after.get('object_type'), fa.get('Kind')) or {}
+        stages, side = list(life.get('stages') or []), list(life.get('side') or [])
+        state = fa.get('State')
+        return {'card': after.get('id'), 'revision': after.get('revision'), 'created': before is None,
+                'changed': [k for k in self.CHANGE_WATCHED if fa.get(k) != fb.get(k)], 'state': state,
+                'owner': fa.get('Waiting') or None, 'was_owner': fb.get('Waiting') or None,
+                'actor': row.actor_id, 'open': not (state in side or (stages and state == stages[-1]))}
+
     def set_stage(self, org, record, stage, because, facts=None, mode='event'):
         """The stage rule's write (flows ``card_stage``): a software card's ``State`` and the facts that
         set it (``StageEvidence``). Written only when the stage differs, as one revision by
