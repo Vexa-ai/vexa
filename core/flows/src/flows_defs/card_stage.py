@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import base64
 import re
+from datetime import datetime
 from typing import Callable, Optional
 
 from flows_sensors.base import SensorFault
@@ -432,6 +433,66 @@ def read_delivery(get: Callable, conn: dict, spec: dict, subject: str, source: s
             tag = name
         fields['release'] = {'tag': tag, 'commit': merge, 'checked': checked}
     return fields
+
+
+UNLINKED_MAX = 50
+_ISSUE_REF = re.compile(r'(?:(?<![\w/])#|github\.com/([A-Za-z0-9_.\-]+)/([A-Za-z0-9_.\-]+)/issues/)(\d+)\b')
+
+
+def _iso_ts(value) -> Optional[float]:
+    try:
+        return datetime.fromisoformat(str(value).replace('Z', '+00:00')).timestamp()
+    except ValueError:
+        return None
+
+
+def unlinked_prs(get: Callable, conn: dict, spec: dict, cache: PassCache, cards_for: Callable, now: float,
+                 pin_conn: Optional[dict] = None) -> list:
+    """Pull requests in the declared repos that no card tracks, as facts: every open one opened more than
+    ``unlinked.open_after_h`` (24) hours ago, and every one merged in the last ``unlinked.merged_within_h`` (72),
+    with ``in_prod`` (the prod pin contains its merge commit; None when the pin is unread or names another repo).
+    A pull request is tracked when ``cards_for(link)`` answers a card for it or for an issue of its own repo
+    its body names: the links the stage rule reads (a card's Source, an issue's linked pull request)."""
+    opts = spec.get('unlinked') or {}
+    open_after = float(opts.get('open_after_h', 24)) * 3600
+    merged_within = float(opts.get('merged_within_h', 72)) * 3600
+    pulls = spec.get('pulls') or '/repos/{owner}/{repo}/pulls'
+    out = []
+    for full in spec.get('repos') or []:
+        owner, _, repo = str(full).partition('/')
+        rows = []
+        for params in ({'state': 'open', 'per_page': '100'},
+                       {'state': 'closed', 'sort': 'updated', 'direction': 'desc', 'per_page': '50'}):
+            got = get(conn, _path(pulls, owner=owner, repo=repo), params)
+            rows += [p for p in (got if isinstance(got, list) else []) if isinstance(p, dict)]
+        for p in rows:
+            opened, merged = _iso_ts(p.get('created_at')), _iso_ts(p.get('merged_at'))
+            if p.get('state') == 'open':
+                if opened is None or now - opened < open_after:
+                    continue
+            elif merged is None or now - merged > merged_within:
+                continue
+            link = p.get('html_url') or ''
+            refs = {int(m.group(3)) for m in _ISSUE_REF.finditer(str(p.get('body') or ''))
+                    if not m.group(1) or (m.group(1).lower(), m.group(2).lower()) == (owner.lower(), repo.lower())}
+            refs.discard(int(p.get('number') or 0))
+            if cards_for(link) or any(cards_for(f'https://github.com/{owner}/{repo}/issues/{n}') for n in sorted(refs)):
+                continue
+            row = {'pr': link, 'repo': f'{owner}/{repo}'.lower(), 'number': p.get('number'),
+                   'state': 'merged' if merged else 'open', 'opened_at': p.get('created_at'),
+                   'merged_at': p.get('merged_at'), 'in_prod': None}
+            if merged and spec.get('prod_pin'):
+                try:
+                    pin = read_pin(get, pin_conn or conn, spec, cache)
+                except PinFault:
+                    pin = None
+                if pin and pin['repo'] == row['repo'] and p.get('merge_commit_sha'):
+                    row['in_prod'] = bool(_contains(get, conn, spec, owner, repo, p['merge_commit_sha'],
+                                                    pin['source_sha']))
+            out.append(row)
+            if len(out) >= UNLINKED_MAX:
+                return out
+    return out
 
 
 def _contains_tag(get, conn, spec, owner, repo, commit, tag) -> bool:

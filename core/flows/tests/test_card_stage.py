@@ -568,3 +568,71 @@ def test_no_link_and_a_repo_outside_the_declared_ones_are_no_failure_and_a_refus
     assert out.result['failed']['github/delivery'] == 1                 # only the real refusal
     assert out.result['refused'] == [{'card': 'c6', 'status': 404}]
     assert not any('DmitriyG228/biz' in c for c in calls)               # outside the declared repos: never asked
+
+
+
+def _pulls(rows_open, rows_closed):
+    def get(conn, path, params):
+        if path == '/repos/Vexa-ai/vexa/pulls':
+            return rows_open if params['state'] == 'open' else rows_closed
+        if path.endswith('vexa-prod.yaml'):
+            return b64('spec:\n  source:\n    targetRevision: 0.1.0-x\n')
+        if path.endswith('channel.yaml'):
+            return b64(f'entries:\n- entry_seq: 59\n  source_sha: {PIN_SHA}\n  version: 0.1.0-x\n')
+        if '/compare/' in path:
+            return {'status': 'ahead' if path.split('/compare/')[1].startswith(MERGE) else 'diverged'}
+        raise AssertionError(path)
+    return get
+
+
+def _iso(t):
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(t, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def test_a_pull_request_merged_and_pinned_to_prod_with_no_card_is_a_fact():
+    spec = {**SPEC, 'repos': ['Vexa-ai/vexa']}
+    merged = {'html_url': 'https://github.com/Vexa-ai/vexa/pull/2003', 'number': 2003, 'state': 'closed',
+              'created_at': _iso(T - 5 * 3600), 'merged_at': _iso(T - 3600), 'merge_commit_sha': MERGE, 'body': ''}
+    tracked = {**merged, 'html_url': 'https://github.com/Vexa-ai/vexa/pull/2004', 'number': 2004, 'body': 'Closes #1990'}
+    old = {**merged, 'html_url': 'https://github.com/Vexa-ai/vexa/pull/1500', 'number': 1500, 'merged_at': _iso(T - 9 * 86400)}
+    unmerged = {**merged, 'html_url': 'https://github.com/Vexa-ai/vexa/pull/2005', 'number': 2005, 'merged_at': None}
+    cards = {'https://github.com/Vexa-ai/vexa/issues/1990': ['c9']}
+    out = cs.unlinked_prs(_pulls([], [merged, tracked, old, unmerged]), {}, spec, cs.PassCache(),
+                          lambda link: cards.get(link, []), T)
+    assert out == [{'pr': 'https://github.com/Vexa-ai/vexa/pull/2003', 'repo': 'vexa-ai/vexa', 'number': 2003,
+                    'state': 'merged', 'opened_at': merged['created_at'], 'merged_at': merged['merged_at'],
+                    'in_prod': True}]
+
+
+def test_an_open_pull_request_older_than_the_limit_with_no_card_is_a_fact():
+    spec = {**SPEC, 'repos': ['Vexa-ai/vexa'], 'unlinked': {'open_after_h': 24}}
+    stale = {'html_url': 'https://github.com/Vexa-ai/vexa/pull/2002', 'number': 2002, 'state': 'open',
+             'created_at': _iso(T - 30 * 3600), 'merged_at': None, 'body': 'see #2002'}
+    fresh = {**stale, 'html_url': 'https://github.com/Vexa-ai/vexa/pull/2007', 'number': 2007, 'created_at': _iso(T - 3600)}
+    carded = {**stale, 'html_url': 'https://github.com/Vexa-ai/vexa/pull/1962', 'number': 1962}
+    other_repo_ref = {**stale, 'html_url': 'https://github.com/Vexa-ai/vexa/pull/1963', 'number': 1963,
+                      'body': 'github.com/DmitriyG228/biz/issues/7'}
+    cards = {'https://github.com/Vexa-ai/vexa/pull/1962': ['c1'], 'https://github.com/Vexa-ai/vexa/issues/7': ['c2']}
+    out = cs.unlinked_prs(_pulls([stale, fresh, carded, other_repo_ref], []), {}, spec, cs.PassCache(),
+                          lambda link: cards.get(link, []), T)
+    assert [(r['number'], r['state'], r['in_prod']) for r in out] == [(2002, 'open', None), (1963, 'open', None)]
+
+
+def test_the_recheck_names_the_pull_requests_no_card_tracks(monkeypatch):
+    from flows_sensors import reading as rk
+    db, reg, clock, _ = rig()
+    build(reg, db)
+    _crm(monkeypatch, lambda url, body: (200, {'cards': []}) if url in ('/internal/cards/software', '/internal/cards/by-source')
+         else (200, {'status': 'kept'}))
+    cfg = json.load(open(cs.__file__.replace('flows_defs/card_stage.py', 'flows_sensors/connections.github.example.json')))
+    cfg['delivery']['repos'] = ['Vexa-ai/vexa']
+    monkeypatch.setattr(rk, 'load_config', lambda path='': cfg)
+    import time as _t
+    now = _t.time()
+    merged = {'html_url': 'https://github.com/Vexa-ai/vexa/pull/2003', 'number': 2003, 'state': 'closed',
+              'created_at': _iso(now - 7200), 'merged_at': _iso(now - 3600), 'merge_commit_sha': MERGE, 'body': ''}
+    monkeypatch.setattr(rk, 'http_get', _pulls([], [merged]))
+    out = reg.steps['recheck_card_stages'](SimpleNamespace(refs={'slot': T}))
+    assert [(r['number'], r['in_prod']) for r in out.result['unlinked']] == [(2003, True)]
+    assert out.result['failed'] == {'github/delivery': 0, 'github/prod-pin': 0}     # a fact, never a failure

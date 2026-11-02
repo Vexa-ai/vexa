@@ -286,6 +286,15 @@ def build(reg, db):
                 readings['unread'] = row['read']
             row.update(_put_stage(base, card, readings, 'recheck'))
             done.append(row)
+        # pull requests no card tracks (the stage rule can attach no fact to them): facts, never a failure
+        unlinked, unlinked_fault = [], None
+        if conn is not None and spec.get('repos'):
+            def cards_for(link):
+                return _crm_post(base, '/internal/cards/by-source', {'link': link}).get('cards') or []
+            try:
+                unlinked = card_stage.unlinked_prs(rk.http_get, conn, spec, cache, cards_for, time.time(), pin_conn)
+            except (card_stage.ReadFault, SensorFault) as e:
+                unlinked_fault = str(e)
         # each reading's own failures (founder 1 Nov: a source's state comes from its own latest reads): the card's
         # GitHub reads that failed, and the pin's one read this pass; a card with no GitHub link is no failure
         name = (spec or {}).get('connection') or 'github'
@@ -295,7 +304,8 @@ def build(reg, db):
         return Done({'cards': len(done), 'corrected': [r for r in done if r.get('status') in ('corrected', 'restored')],
                      'unread': sum(1 for r in done if r['read'] != 'read'), 'failed': failed,
                      'refused': [{'card': r['card'], 'status': r['refused']} for r in done if r.get('refused')][:50],
-                     'pin_read': cache.pin is not None or cache.pin_fault is not None})
+                     'pin_read': cache.pin is not None or cache.pin_fault is not None,
+                     'unlinked': unlinked, **({'unlinked_fault': unlinked_fault} if unlinked_fault else {})})
 
     class _At:
         def __init__(self, t):
