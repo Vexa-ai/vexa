@@ -440,6 +440,26 @@ def test_a_sense_finding_reaches_the_role_once_and_a_bad_one_is_refused():
     assert stream.unacked(db, "anyone") == [] and stream.unacked(db, "ceo") == []
 
 
+def test_a_truth_check_run_reaches_each_role_once_with_its_own_lies():
+    db, clock, reg = _due_rig(_utc(2026, 11, 2))
+    lie = {"class": "review_without_open_pr", "view": "software", "row": "card c1", "claim": "Review",
+           "truth": "no open PR", "source": "gh pr list Vexa-ai/vexa"}
+    for role, lies in (("software", [lie]), ("ceo", [lie, {**lie, "row": "card c2"}])):
+        for _ in range(2):
+            admit(db, reg, clock, source_event_id=f"validate:2026-11-02T12:30:00Z:{role}", event_type="factory.validate",
+                  subject_refs={"role": role, "at": "2026-11-02T12:30:00Z", "total_lies": "2",
+                                "by_class": {"review_without_open_pr": 2}, "lies": lies})
+            _run(db, reg, clock)
+    (sw,) = stream.unacked(db, "software")
+    assert sw["event_type"] == "validate.result"
+    assert (sw["refs"]["total_lies"], sw["refs"]["mine"], sw["refs"]["lies"][0]["row"]) == (2, 1, "card c1")
+    assert len(stream.unacked(db, "ceo")) == 1 and stream.unacked(db, "ceo")[0]["refs"]["mine"] == 2
+    admit(db, reg, clock, source_event_id="validate:x", event_type="factory.validate",
+          subject_refs={"role": "anyone", "total_lies": "1", "by_class": {}})
+    _run(db, reg, clock)
+    assert stream.unacked(db, "anyone") == []
+
+
 
 # ── support cards: a support message makes its thread's one card with the SLA's Due and alarms ─────────────────────
 SUPPORT = {"readings": {"discord/bug-reports": "discord", "gmail-dmitry/inbox": "email_customers",

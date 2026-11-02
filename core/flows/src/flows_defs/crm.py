@@ -72,6 +72,10 @@ SOURCE_EVENT = "source.failing"
 #: does not make sense as one ``factory.sense`` fact; it reaches that role's stream as ``sense.finding``, once per finding
 SENSE_FLOW, SENSE_FACT, SENSE_EVENT = "sense_to_owner", "factory.sense", "sense.finding"
 SENSE_ROLES = ("ceo", "software", "factory", "business", "support")
+#: the views' truth check (founder 2 Nov ~12:3xZ «валидация через подписку»): one ``factory.validate`` fact per role per
+#: run, carrying the run's lie counts and the lies on that role's rows; it reaches the role's stream as ``validate.result``
+VALIDATE_FLOW, VALIDATE_FACT, VALIDATE_EVENT = "validate_to_owner", "factory.validate", "validate.result"
+VALIDATE_LIES_MAX = 50
 SENSE_REASONS = ("done_not_in_main", "stage_vs_facts", "duplicate", "superseded_open", "unlinked_pr", "running_empty",
                  "stale_due", "lapsed_hold", "unlinked", "owner_not_role")
 #: the card heartbeat (founder 2 Nov ~09:30Z): each open card's keyed next check; a check that finds no new fact,
@@ -473,6 +477,22 @@ def build(reg, db):
         return Done({'appended': [_to_stream(ctx, role, ctx.reaction.source_event_id, SENSE_EVENT, refs)]})
 
     @reg.step
+    def validate_to_owner(ctx):
+        """One truth-check run as one role sees it (``factory.validate``: the role, the run time, the lie count of each
+        class, the total, and the lies on the role's rows), into that role's stream as ``validate.result``. Once per run
+        and role (the fact's id). Reads: refs · Effect: one ``validate.result`` item."""
+        r = ctx.refs
+        role = str(r.get('role') or '')
+        if role not in SENSE_ROLES or not isinstance(r.get('by_class'), dict) or not str(r.get('total_lies', '')).isdigit():
+            raise StepError(f'factory.validate carries role in {SENSE_ROLES}, by_class and total_lies', retryable=False)
+        lies = [{k: str(x.get(k) or '')[:300] for k in ('class', 'view', 'row', 'claim', 'truth', 'source')}
+                for x in (r.get('lies') or [])[:VALIDATE_LIES_MAX] if isinstance(x, dict)]
+        refs = {'at': str(r.get('at') or '')[:40], 'total_lies': int(r['total_lies']),
+                'by_class': {str(k)[:60]: int(v) for k, v in r['by_class'].items() if str(v).isdigit()},
+                'mine': len(r.get('lies') or []), 'lies': lies}
+        return Done({'appended': [_to_stream(ctx, role, ctx.reaction.source_event_id, VALIDATE_EVENT, refs)]})
+
+    @reg.step
     def source_faults_to_owner(ctx):
         """Every source reading that is failing, into the sources' owner's stream (``SOURCES_OWNER``): a sensor
         degraded or stopped, or with failures. Once per sensor and failure (its status and reason), so a fault
@@ -717,6 +737,7 @@ def build(reg, db):
         reg.flow(name=name, version=1, on=EventType(event), steps=[reg.steps['support_card']])
     reg.flow(name=CHANGE_FLOW, version=1, on=EventType('crm.record.changed'), steps=[reg.steps['card_change_to_owner']])
     reg.flow(name=SENSE_FLOW, version=1, on=EventType(SENSE_FACT), steps=[reg.steps['sense_to_owner']])
+    reg.flow(name=VALIDATE_FLOW, version=1, on=EventType(VALIDATE_FACT), steps=[reg.steps['validate_to_owner']])
     faults = Flow(name=SOURCE_FAULTS_FLOW, version=1, on=EventType(SCHEDULE_EVENT),
                   steps=('source_faults_to_owner',), cron=SOURCE_FAULTS_CRON)
     reg.flows[(faults.ident, faults.version)] = faults
