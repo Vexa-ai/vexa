@@ -698,6 +698,25 @@ def test_a_card_whose_source_was_cleared_reads_nothing_old():
     assert cs.stage(cs.readings_from_card(card), None)[0] == 'Idea'
 
 
+def test_a_repository_the_connection_cannot_read_is_a_fault_of_its_own_and_the_rest_are_read():
+    spec = {**SPEC, 'repos': ['Vexa-ai/vexa', 'DmitriyG228/vexa-stations', 'Vexa-ai/vexa-platform'],
+            'unlinked': {'open_after_h': 0}}
+    pr_ = {'state': 'open', 'created_at': _iso(T - 60), 'merged_at': None, 'body': ''}
+    from flows_sensors.base import SensorFault
+
+    def get(conn, path, params):
+        if 'vexa-stations' in path and conn.get('name') != 'pin':
+            raise SensorFault('read failed (404)', retryable=False, status=404)
+        if 'vexa-platform' in path:
+            raise SensorFault('read failed (404)', retryable=False, status=404)
+        n = 3001 if 'vexa-stations' in path else 3000
+        return [{**pr_, 'html_url': f'https://github.com/x/y/pull/{n}', 'number': n}] if params['state'] == 'open' else []
+    faults = []
+    out = cs.unlinked_prs(get, {'name': 'main'}, spec, cs.PassCache(), lambda link: [], T, {'name': 'pin'}, faults=faults)
+    assert sorted(r['number'] for r in out) == [3000, 3001]                 # stations through the pin's connection
+    assert len(faults) == 1 and faults[0].startswith('Vexa-ai/vexa-platform')
+
+
 def test_an_unreadable_pin_leaves_prod_unknown_and_the_card_read():
     """2 Nov: a stations pin past the channel's last entry left 49 of 50 cards unread; now only prod is unknown."""
     pull = {'html_url': PR_URL, 'number': 1962, 'state': 'open', 'draft': False, 'head': {'sha': HEAD},

@@ -487,7 +487,8 @@ def _iso_ts(value) -> Optional[float]:
 
 
 def unlinked_prs(get: Callable, conn: dict, spec: dict, cache: PassCache, cards_for: Callable, now: float,
-                 pin_conn: Optional[dict] = None, declared: Optional[dict] = None) -> list:
+                 pin_conn: Optional[dict] = None, declared: Optional[dict] = None,
+                 faults: Optional[list] = None) -> list:
     """Pull requests in the declared repos that no card tracks, as facts: every open one opened more than
     ``unlinked.open_after_h`` (24) hours ago, and every one merged in the last ``unlinked.merged_within_h`` (72),
     with ``in_prod`` (the prod pin contains its merge commit; None when the pin is unread or names another repo).
@@ -503,10 +504,24 @@ def unlinked_prs(get: Callable, conn: dict, spec: dict, cache: PassCache, cards_
     for full in spec.get('repos') or []:
         owner, _, repo = str(full).partition('/')
         rows = []
-        for params in ({'state': 'open', 'per_page': '100'},
-                       {'state': 'closed', 'sort': 'updated', 'direction': 'desc', 'per_page': '50'}):
-            got = get(conn, _path(pulls, owner=owner, repo=repo), params)
-            rows += [p for p in (got if isinstance(got, list) else []) if isinstance(p, dict)]
+        # each repository on its own (2 Nov: vexa-stations answered 404 to the github connection and emptied the whole
+        # feed): the main connection, then the pin's (it reads the stations repo); a repository neither reads is a fault
+        # for that repository, named in `faults`, and the others are still read
+        for c_ in [x for x in (conn, pin_conn) if x is not None]:
+            try:
+                rows = []
+                for params in ({'state': 'open', 'per_page': '100'},
+                               {'state': 'closed', 'sort': 'updated', 'direction': 'desc', 'per_page': '50'}):
+                    got = get(c_, _path(pulls, owner=owner, repo=repo), params)
+                    rows += [p for p in (got if isinstance(got, list) else []) if isinstance(p, dict)]
+                break
+            except Exception as e:  # noqa: BLE001  (ReadFault / SensorFault: this repository through this connection)
+                rows = None
+                why = f'{owner}/{repo}: {e}'[:200]
+        if rows is None:
+            if faults is not None:
+                faults.append(why)
+            continue
         for p in rows:
             named = declared_cards(p)
             if declared is not None and p.get('html_url'):

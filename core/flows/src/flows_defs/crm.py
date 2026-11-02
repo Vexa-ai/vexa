@@ -340,8 +340,10 @@ def build(reg, db):
                 return _crm_post(base, '/internal/cards/by-source', {'link': link}).get('cards') or []
             declared: dict = {}
             try:
+                faults: list = []
                 unlinked = card_stage.unlinked_prs(rk.http_get, conn, spec, cache, cards_for, time.time(), pin_conn,
-                                                   declared)
+                                                   declared, faults)
+                unlinked_fault = '; '.join(faults) or None
             except (card_stage.ReadFault, SensorFault) as e:
                 unlinked_fault = str(e)
             # a PR that names its card (``card: <id>``): the link, written onto the card as its sensor reading
