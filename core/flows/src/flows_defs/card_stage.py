@@ -212,6 +212,8 @@ def readings_from_card(card: dict) -> dict:
     """``{pr, issue, checks, prod, release}`` from a card's ``Reading`` (``sources`` per source,
     or a single reading written before readings were kept per source). Each fact is the latest any
     source read, with that source's evidence."""
+    if 'source' in (card or {}) and not card['source'] and not declared_pr(card):
+        return {}          # no Source and no PR naming it: readings kept from a Source since cleared speak of nothing
     reading = (card or {}).get('reading') or {}
     sources = dict(reading.get('sources') or {})
     if not sources and reading.get('fields') is not None:

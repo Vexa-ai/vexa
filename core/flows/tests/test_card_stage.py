@@ -690,6 +690,14 @@ def test_the_same_stage_on_read_facts_reaches_the_crm_when_it_held_no_reading(mo
     assert [b['stage'] for u, b in sent if u == '/internal/cards/stage'] == ['Review']
 
 
+def test_a_card_whose_source_was_cleared_reads_nothing_old():
+    """2 Nov: f48e132b kept reading #1971 (and Review) after its wrong Source was cleared."""
+    card = {'source': None, 'reading': {'sources': {cs.DELIVERY_SOURCE: {'fields': {'pr': {'url': PR_URL, 'state': 'merged'}},
+                                                                     'evidence': ev()}}}}
+    assert cs.readings_from_card(card) == {}
+    assert cs.stage(cs.readings_from_card(card), None)[0] == 'Idea'
+
+
 def test_an_unreadable_pin_leaves_prod_unknown_and_the_card_read():
     """2 Nov: a stations pin past the channel's last entry left 49 of 50 cards unread; now only prod is unknown."""
     pull = {'html_url': PR_URL, 'number': 1962, 'state': 'open', 'draft': False, 'head': {'sha': HEAD},
