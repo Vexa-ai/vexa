@@ -213,6 +213,20 @@ start; flows verifies under its public half and cannot sign. The outbox does not
 either. On Kubernetes the chart runs it when flows is on too. To rebuild every backlink from
 git: `docker compose exec agent-api python -m control_plane.crm_references rebuild`.
 
+**Your own fields.** An install can add fields of its own (a size tier, a source) to the
+organisation's existing types. Write them as a JSON file, `{object_type: {field: <JSON-schema property>}}`,
+mount it into the `crm-init` container and set `CRM_DEFINITIONS_FILE` there to its path; compose and
+the chart do not set it for you. Each start adds the fields the stored definition lacks and leaves
+every other field as it is: nothing is removed, a field the product defines or a type the
+organisation lacks is refused, and a stored field whose property differs from the file is reported
+in the `crm-init` log, not changed. A field name starts with a capital letter (`SizeTier`). A
+property may declare `x-class: private` or `org`, never a workspace share and never `org` on contact
+history or email-derived data. A bad file stops `crm-init` with one message, and nothing is added.
+
+```json
+{"Company": {"SizeTier": {"type": ["string", "null"], "maxLength": 40}}}
+```
+
 ## How it works
 
 - **One service, one store.** `crm-api` (`core/crm`) owns the `crm_*` tables in the instance's
