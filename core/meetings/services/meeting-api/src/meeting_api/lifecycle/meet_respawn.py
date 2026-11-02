@@ -332,4 +332,14 @@ async def respawn_due(
 
 
 #: The completion reason a meeting lands on when Meet refused every pod.
-REFUSED_COMPLETION_REASON = "awaiting_admission_rejected"
+REFUSED_COMPLETION_REASON = "platform_join_refused"
+
+
+def as_final_refusal(body: Mapping[str, Any]) -> dict:
+    """The terminal a Meet refusal lands as: ``platform_join_refused``, graded ``system_fault`` —
+    whether or not new pods were tried, and whatever reason an older bot stamped on it."""
+    out = {**body, "completion_reason": REFUSED_COMPLETION_REASON}
+    ev = body.get("join_evidence")
+    if isinstance(ev, Mapping):
+        out["join_evidence"] = {**ev, "reason": REFUSED_COMPLETION_REASON, "attribution": "system_fault"}
+    return out

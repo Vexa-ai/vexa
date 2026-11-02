@@ -167,6 +167,9 @@ def test_the_last_pod_applies_the_refusal(world):
     assert r.status_code == 200 and "respawn" not in r.json(), r.text
     row = repo._meetings[mid]
     assert row["status"] == "failed"
+    assert row["data"]["completion_reason"] == "platform_join_refused"
+    assert row["data"]["join_evidence"]["reason"] == "platform_join_refused"
+    assert row["data"]["join_evidence"]["attribution"] == "system_fault"
     assert row["data"]["meet_respawn"]["state"] == "exhausted"
     assert len(row["data"]["meet_respawn"]["attempts"]) == 3
     assert len(runtime.specs) == 3, "three pods, no fourth"
@@ -291,3 +294,25 @@ def test_a_meeting_between_pods_holds_one_slot(world):
     assert _due(repo, runtime) == 1, "the respawn is not refused by the ceiling it already holds"
     assert _run(repo.count_active_bots(user_id=USER)) == 1
     assert len([s for s in repo.sessions if s["meeting_id"] == m["id"]]) == 2
+
+
+def test_a_refusal_with_no_respawn_is_still_typed_ours(world, monkeypatch):
+    """A refusal that is not retried (respawn off) lands typed, graded ours — not a host decision."""
+    monkeypatch.setenv("VEXA_MEET_RESPAWN_PODS", "1")
+    repo, runtime, client = world
+    mid, sid = _joining(world)
+    r = client.post(LIFECYCLE, json=_refused(sid))
+    assert "respawn" not in r.json()
+    data = repo._meetings[mid]["data"]
+    assert data["completion_reason"] == "platform_join_refused"
+    assert data["join_evidence"]["attribution"] == "system_fault"
+
+
+def test_a_host_rejection_keeps_its_reason(world):
+    repo, runtime, client = world
+    mid, sid = _joining(world)
+    client.post(LIFECYCLE, json=_event(sid, "awaiting_admission"))
+    client.post(LIFECYCLE, json=_event(sid, "failed", failure_stage="awaiting_admission",
+                                       completion_reason="awaiting_admission_rejected",
+                                       reason="the host denied the request to join"))
+    assert repo._meetings[mid]["data"]["completion_reason"] == "awaiting_admission_rejected"

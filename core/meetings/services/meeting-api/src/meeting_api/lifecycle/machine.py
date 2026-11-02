@@ -43,6 +43,10 @@ class CompletionReason(str, Enum):
     EVICTED = "evicted"
     AWAITING_ADMISSION_TIMEOUT = "awaiting_admission_timeout"
     AWAITING_ADMISSION_REJECTED = "awaiting_admission_rejected"
+    # The platform refused the bot before any host saw a request (Google Meet: CreateMeetingDevice
+    # 403, "You can't join this video call"), on every bot pod tried. Ours to absorb (founder, 1 Nov
+    # 2026): graded system_fault, never a host decision.
+    PLATFORM_JOIN_REFUSED = "platform_join_refused"
     JOIN_FAILURE = "join_failure"
     AUTH_SESSION_MISSING = "auth_session_missing"
     VALIDATION_ERROR = "validation_error"
