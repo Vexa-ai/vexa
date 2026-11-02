@@ -514,6 +514,12 @@ async def request_bot(
     # so no personal credential of the payer's is its owner. A continued meeting is reopened only
     # when it is the same principal's (or, with none, nobody's room meeting).
     room_principal: Optional[dict] = None,
+    # A GOOGLE MEET RESPAWN (lifecycle/meet_respawn.py): the row of a meeting whose last bot Meet
+    # refused. The next bot starts on THAT row — a new session and workload, no dedup, no insert,
+    # no cap (the meeting is already one of the person's bots) — and the row stays `joining`.
+    respawn_of: Optional[dict] = None,
+    # Nodes the refused attempts ran on; the runtime prefers others (WorkloadSpec.avoidNodes).
+    avoid_nodes: Optional[list] = None,
     # The line the bot posts once in the meeting chat when it is admitted (#1961), already
     # validated and stripped by the router. Stored as ``data.chat_on_join = {text, request_id}``;
     # the request_id is minted here, one per bot request, so a re-sent bot posts again.
@@ -531,6 +537,7 @@ async def request_bot(
     means no cap was provided, so no pre-check.
     """
     authority = authority or AllowAllServiceAuthority()
+    from ..lifecycle import meet_respawn
     # 0. The meeting tier of the transcription language (transcription-language.v1), checked before
     #    anything else: a refused value raises ``LanguageRefused`` (the router's 422) with no lookup,
     #    row or workload behind it.
@@ -676,6 +683,8 @@ async def request_bot(
     auth_userdata_path: Optional[str] = (
         f"bot-account:{bot_account_id}" if bot_account_id else (auth_cfg.userdata_path if auth_cfg else None)
     )
+    if respawn_of is not None and authenticated:
+        raise ValueError("a Meet respawn is for an anonymous bot")
     auth_s3: dict[str, Optional[str]] = {}
     if auth_cfg is not None:
         auth_s3 = {
@@ -690,7 +699,7 @@ async def request_bot(
     #     stays a plain query — the reused-row path reopens an existing terminal row (no NEW active row
     #     is inserted), so it is not part of the dedup/cap TOCTOU window.
     reused_row: Optional[dict] = None
-    if continue_meeting:
+    if continue_meeting and respawn_of is None:
         latest = await repo.find_latest(user_id, platform, native_meeting_id)
         latest_data = (latest or {}).get("data") or {}
         if ((latest_data.get("room_principal") or {}).get("principal")
@@ -756,7 +765,8 @@ async def request_bot(
     active_concurrency = await repo.count_active_bots(
         user_id=user_id,
         exclude_meeting_id=(
-            reused_row["id"] if reused_row is not None else None
+            reused_row["id"] if reused_row is not None
+            else respawn_of["id"] if respawn_of is not None else None
         ),
     )
     if transcription_provider is None and authority.configured:
@@ -793,7 +803,20 @@ async def request_bot(
         "teardown_confirmed": False,
     }
 
-    if reused_row is not None:
+    # The Meet respawn block a qualifying first spawn starts with (lifecycle/meet_respawn.py).
+    respawn_block = (
+        meet_respawn.initial_block({
+            "bot_name": bot_name, "language": language, "allowed_languages": allowed_languages,
+            "task": task, "transcription_tier": transcription_tier, "automatic_leave": automatic_leave,
+        })
+        if respawn_of is None and not no_page and meet_respawn.qualifies(platform, authenticated)
+        else None
+    )
+    if respawn_of is not None:
+        # The meeting already exists and is already counted: only this run's admission is new.
+        await repo.merge_meeting_data(respawn_of["id"], {"service_authority": authority_record})
+        row = respawn_of
+    elif reused_row is not None:
         # continue_meeting reopens an EXISTING terminal row (no new active row inserted), so it is not
         # part of the fresh-insert TOCTOU window — but the per-user cap still applies (a continued run
         # is an active bot). Keep the original pre-check here, excluding the row being reopened from the
@@ -829,6 +852,8 @@ async def request_bot(
         # The account this run joins as; None clears a prior run's, so a continued guest run is not
         # mistaken for an account's bot by the restore, the write-back or the signed-out hook.
         reopen_patch["bot_account_id"] = bot_account_id
+        # A continued run starts its own respawn budget; None clears a prior run's.
+        reopen_patch[meet_respawn.KEY] = respawn_block
         # A fresh line (and request_id) for this run, or None: the reopen pops a prior run's.
         reopen_patch["chat_on_join"] = _chat_on_join_data(chat_on_join)
         row = await repo.reopen_meeting(meeting_id=reused_row["id"], data_patch=reopen_patch)
@@ -861,6 +886,8 @@ async def request_bot(
             meeting_data["auth_userdata_path"] = auth_userdata_path
         if bot_account_id:
             meeting_data["bot_account_id"] = bot_account_id
+        if respawn_block is not None:
+            meeting_data[meet_respawn.KEY] = respawn_block
         if chat_on_join:
             meeting_data["chat_on_join"] = _chat_on_join_data(chat_on_join)
         # Per-user webhook config carried on the meeting (delivered by the lifecycle callback).
@@ -899,7 +926,7 @@ async def request_bot(
     # "Meeting ended" before the first word. Purge on the FRESH insert only (reused_row is None);
     # continue_meeting KEEPS the reused row's stream for continuity. Best-effort — a purge failure must
     # never block the spawn (the collector is the stream's writer and appends after this).
-    if reused_row is None and transcript_stream_purge is not None:
+    if reused_row is None and respawn_of is None and transcript_stream_purge is not None:
         try:
             await transcript_stream_purge(meeting_id)
         except Exception as _e:  # noqa: BLE001 — best-effort; never fail the spawn on a purge error
@@ -1023,6 +1050,7 @@ async def request_bot(
         workload_id=f"mtg-{meeting_id}-{connection_id[:8]}",
         invocation=invocation,
         callback_url=f"{meeting_api_url}/runtime/callback",
+        avoid_nodes=avoid_nodes,
     )
     try:
         result = await runtime.create_workload(spec)
@@ -1142,6 +1170,7 @@ async def request_bot(
         fields={
             "platform": platform, "status": row.get("status", "requested"),
             "continued": reused_row is not None, "session_count": len(sessions),
+            "respawn": respawn_of is not None,
         },
     )
     return _meeting_response(row, sessions=sessions)

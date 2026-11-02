@@ -13,6 +13,8 @@ them drive:
 """
 from __future__ import annotations
 
+from . import meet_respawn
+
 from collections import deque
 from typing import TYPE_CHECKING, Optional
 
@@ -777,6 +779,19 @@ def mount_lifecycle(
                       span="lifecycle.callback", fields={"reason": refusal})
             return JSONResponse(status_code=401,
                                 content={"status": "error", "detail": "bot session credential required"})
+        # GOOGLE MEET REFUSED THIS BOT and the meeting has pods left (lifecycle/meet_respawn.py): the
+        # meeting stays `joining` and the next bot is due. The terminal is acknowledged, not applied.
+        if meeting_repo is not None and isinstance(body, dict) and meet_respawn.is_meet_refusal(body):
+            try:
+                conforms(body, "LifecycleEvent")
+                scheduled = await meet_respawn.on_bot_terminal(meeting_repo, body)
+            except jsonschema.ValidationError:
+                scheduled = None   # the normal path answers the schema violation
+            if scheduled is not None:
+                return JSONResponse(status_code=200, content={
+                    "status": "accepted", "respawn": "scheduled",
+                    "next_at": scheduled.get("next_at"),
+                })
         status_code, content = await _apply_lifecycle_event(
             body, transition_source=TransitionSource.BOT_CALLBACK
         )
