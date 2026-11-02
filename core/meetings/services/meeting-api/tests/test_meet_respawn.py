@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from meeting_api import create_app
-from meeting_api.bot_spawn import request_bot
+from meeting_api.bot_spawn import MaxBotsExceeded, request_bot
 from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
 from meeting_api.lifecycle import meet_respawn
 from meeting_api.lifecycle.stop_router import InMemoryCommandPublisher
@@ -247,3 +247,47 @@ def test_a_next_pod_that_cannot_start_fails_the_meeting(world):
     runtime._fail = True
     assert _due(repo, runtime) == 0
     assert repo._meetings[mid]["status"] == "failed"
+
+
+# ── what the person sees and pays for between pods ──────────────────────────────────────────────
+
+def _failed_envelopes(client):
+    return [e for e in client.app.state.status_change_webhooks
+            if e["data"]["status_change"]["new_status"] == "failed"]
+
+
+def test_between_pods_no_failed_event_and_no_billable_time(world):
+    """No meeting.status_change to `failed` until the last pod; the meeting never reaches `active`,
+    so it never gets a start_time or an admission transition (the billable clock's start)."""
+    repo, runtime, client = world
+    mid, sid = _joining(world)
+    for _ in range(2):
+        client.post(LIFECYCLE, json=_refused(sid))
+        assert _failed_envelopes(client) == [], "nobody is told the meeting failed between pods"
+        assert repo._meetings[mid]["status"] == "joining"
+        _due(repo, runtime)
+        sid = _session(repo, mid)
+        client.post(LIFECYCLE, json=_event(sid, "joining"))
+    client.post(LIFECYCLE, json=_refused(sid))
+    assert len(_failed_envelopes(client)) == 1, "exactly one failed event, at the end"
+    row = repo._meetings[mid]
+    assert row.get("start_time") is None
+    trail = row["data"].get("status_transition") or []
+    assert not [t for t in trail if t.get("to") == "active"], "no admission, so nothing billable"
+
+
+def test_a_meeting_between_pods_holds_one_slot(world):
+    """The respawn reuses the meeting's own slot (no cap check, one row); the slot stays taken, so a
+    second meeting at a 1-bot ceiling is refused while pods come and go."""
+    repo, runtime, client = world
+    m = _spawn(repo, runtime, max_concurrent=1)
+    sid = _session(repo, m["id"])
+    client.post(LIFECYCLE, json=_event(sid, "joining"))
+    client.post(LIFECYCLE, json=_refused(sid))
+    assert _run(repo.count_active_bots(user_id=USER)) == 1
+    with pytest.raises(MaxBotsExceeded):
+        _run(request_bot(repo, runtime, user_id=USER, platform="google_meet",
+                         native_meeting_id="other-room-xyz", max_concurrent=1, **KW))
+    assert _due(repo, runtime) == 1, "the respawn is not refused by the ceiling it already holds"
+    assert _run(repo.count_active_bots(user_id=USER)) == 1
+    assert len([s for s in repo.sessions if s["meeting_id"] == m["id"]]) == 2
