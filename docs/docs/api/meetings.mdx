@@ -382,20 +382,29 @@ The signed `meeting.completed` webhook includes
 
 ```json
 {
-  "bot_admitted_at": "2026-07-28T10:05:00.000Z",
-  "bot_departed_at": "2026-07-28T10:30:00.000Z",
+  "pod_started_at": "2026-11-01T09:50:00.000Z",
+  "bot_admitted_at": "2026-11-01T10:05:00.000Z",
+  "bot_departed_at": "2026-11-01T10:30:00.000Z",
   "bot_outcome": "served",
+  "outcome_class": "normal",
+  "outcome_reason": "delivered_stopped",
   "transcription_provider": "customer",
   "transcription_outcome": "served",
-  "lifecycle_contract_version": "2026-07-28"
+  "lifecycle_contract_version": "2026-11-01"
 }
 ```
 
 `transcription_provider` is frozen when that bot is created: `vexa`, `customer`, or `none`.
-`bot_admitted_at` and `bot_departed_at` are the bot-observed lifecycle transitions, not meeting
-wall-clock time or delayed webhook receipt time. A bot that never reached `active` reports
-`bot_outcome: "never_admitted"` with both timestamps absent. The block never contains an endpoint
-URL, hostname, token, credential, meeting title, or transcript.
+`pod_started_at`, `bot_admitted_at` and `bot_departed_at` are bot-observed times, not meeting
+wall-clock time or delayed webhook receipt time: `pod_started_at` is when the bot process started,
+before it opened the meeting. A bot that never reached `active` reports
+`bot_outcome: "never_admitted"`, no `bot_admitted_at`, and the time it left. `outcome_class` is
+the run's grade: `ours`, `host_or_platform`, `user`, `normal` or `unknown`, with a short
+`outcome_reason`. The block never contains an endpoint URL, hostname, token, credential, meeting
+title, or transcript.
+
+Runs that began under contract `2026-07-28` keep its shape: no `pod_started_at` or outcome
+fields, and both timestamps absent for a never-admitted bot.
 
 If a legacy or mixed-version run lacks provider ownership or producer timestamps, the block is
 `null` or absent. Consumers must treat that as unresolved provenance; do not reconstruct it from

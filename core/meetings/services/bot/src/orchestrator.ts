@@ -63,6 +63,9 @@ export interface OrchestratorDeps {
   /** Producer clock for lifecycle facts. Injected by tests; each logical event is stamped once
    *  before the lifecycle adapter performs any HTTP retry. */
   now?: () => string;
+  /** When this bot process started (ISO8601). Stamped as `pod_started_at` on every lifecycle event
+   *  (ADR 0052 §10: bot minutes are billed from pod start). Absent ⇒ the field is omitted. */
+  podStartedAt?: string;
 }
 
 /** The dedicated non-zero exit code for a pre-join control-plane-unreachable abort (#530). On
@@ -175,9 +178,10 @@ export function redactEvent<E extends LifecycleEvent>(ev: E): E {
 
 export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
   assertRequiredPorts(deps);
-  const base: { connection_id: string; container_id?: string } = {
+  const base: { connection_id: string; container_id?: string; pod_started_at?: string } = {
     connection_id: inv.connectionId ?? '',
     ...(inv.container_name ? { container_id: inv.container_name } : {}),
+    ...(deps.podStartedAt ? { pod_started_at: deps.podStartedAt } : {}),
   };
   const recordingKey = `${inv.platform}/${inv.nativeMeetingId ?? inv.connectionId ?? 'session'}`;
 

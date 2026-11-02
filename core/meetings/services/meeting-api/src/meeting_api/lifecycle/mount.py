@@ -93,6 +93,7 @@ def mount_lifecycle(
     import jsonschema
 
     from .machine import IllegalTransition, TransitionSource
+    from .outcome import grade_terminal_meeting
     from .provenance import build_service_provenance
     from .receiver import conforms
     from .webhook import build_status_change_envelope, build_typed_envelope
@@ -353,9 +354,22 @@ def mount_lifecycle(
                           span="lifecycle.callback", fields={"error": type(e).__name__})
         if terminal_advanced and isinstance(meeting_row, dict):
             data = dict(meeting_row.get("data") or {})
+            # THE PRODUCT'S GRADE (ADR 0052 §10): every terminal run is graded once, here, by the
+            # product-owned table (lifecycle/outcome.py) — ours · host_or_platform · user · normal ·
+            # unknown. A run graded `ours` is never billed. Grading is a report about a run that has
+            # already ended: a fault in it never alters the terminal being recorded.
+            try:
+                outcome = grade_terminal_meeting({**meeting_row, "data": data})
+                data["outcome_class"] = outcome.cls
+                data["outcome_reason"] = outcome.reason
+            except Exception as e:  # noqa: BLE001 — fail-open; provenance then stays unresolved
+                log_event("bot_outcome_grading_failed", audience="system", level="warning",
+                          span="lifecycle.callback",
+                          fields={"meeting_id": meeting_row.get("id"), "error": type(e).__name__})
             provenance = build_service_provenance({**meeting_row, "data": data})
-            if provenance is not None:
-                data["service_provenance"] = provenance
+            if provenance is not None or "outcome_class" in data:
+                if provenance is not None:
+                    data["service_provenance"] = provenance
                 # The event projection can truthfully carry the producer facts even if this
                 # best-effort persistence attempt fails, matching the callback's established
                 # availability contract. The next reconciliation pass owns that exception.

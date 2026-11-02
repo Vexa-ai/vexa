@@ -8,6 +8,7 @@ from typing import Any, Optional
 from uuid import uuid4
 
 from ..bot_spawn.ports import WorkloadUnknown
+from ..lifecycle.provenance import SUPPORTED_LIFECYCLE_CONTRACT_VERSIONS
 from .models import (
     AUTHORITY_VERSION,
     ServiceAuthorityDecision,
@@ -101,6 +102,10 @@ async def run_service_authority_sweep(
         if admitted_at is None:
             faults += 1
             continue
+        frozen_version = metadata.get("lifecycle_contract_version")
+        if frozen_version not in SUPPORTED_LIFECYCLE_CONTRACT_VERSIONS:
+            faults += 1
+            continue
         last_raw = metadata.get("last_boundary_at")
         try:
             last_boundary = (
@@ -136,6 +141,7 @@ async def run_service_authority_sweep(
                 active_concurrency=active,
                 admitted_at=admitted_at,
                 boundary_at=boundary,
+                lifecycle_contract_version=frozen_version,
             )
             try:
                 decision = await authority.decide(request)
