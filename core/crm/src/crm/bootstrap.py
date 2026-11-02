@@ -36,6 +36,15 @@ DEFINITIONS = {
         'Name': {'type': 'string', 'minLength': 1}, 'Stage': {'type': 'string'},
         'Amount': {'type': 'number'}, 'Currency': {'type': 'string', 'pattern': '^[A-Z]{3}$'},
         'Company': _ref('Company', 'The company the deal is with'), 'CloseDate': {'type': 'string', 'format': 'date'}}},
+    # 2 Nov 2026 (founder «Individual plan… нода в CRM»): what we sell or run, a node cards and records attach to
+    'Product': {'type': 'object', 'additionalProperties': False, 'required': ['Name', 'Kind', 'Status'], 'properties': {
+        'Name': {'type': 'string', 'minLength': 1, 'maxLength': 120},
+        'Kind': {'type': 'string', 'enum': ['pricing_plan', 'product', 'service']},
+        'Status': {'type': 'string', 'enum': ['live', 'planned', 'retired']},
+        'Url': {'type': 'string', 'maxLength': 300},
+        'StripePrice': {'type': 'array', 'maxItems': 10, 'items': {'type': 'string', 'pattern': '^price_[A-Za-z0-9]+$'},
+                        'description': 'Stripe price ids only'},
+        'Summary': {'type': 'string', 'maxLength': 500}}},
     'Project': {'type': 'object', 'additionalProperties': False, 'required': ['Name'], 'properties': {
         'Name': {'type': 'string', 'minLength': 1}, 'Status': {'type': 'string'},
         'Company': _ref('Company', 'The company the project is for')}},
@@ -108,6 +117,9 @@ CARD_LIFECYCLE_PROPERTIES = {
     'Started': _NULL_STR(40, "When the founder started this destination (ISO-8601); null when not started or paused"),
     # 2 Nov 2026 (CEO class fix): the cards this card replaces, set when it is made and never after; the stage rule drops
     # each of them that is still open, with the receipt «superseded by <this card>»
+    # 2 Nov 2026 (founder «Individual plan… нода в CRM»): the products a card is about besides its About
+    'Products': {'type': ['array', 'null'], 'maxItems': 10, 'items': {'type': 'string', 'maxLength': 80},
+                 'description': 'Product records (crm:<id>) this card is about'},
     # 2 Nov 2026 (founder «параметр CRM … Customer Request»): the card exists because a customer asked for it
     'CustomerRequest': {'type': ['object', 'null'], 'additionalProperties': False, 'required': ['by', 'at', 'source', 'words'],
                         'properties': {'by': {'type': 'string', 'maxLength': 80}, 'at': {'type': 'string', 'maxLength': 10},

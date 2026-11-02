@@ -29,6 +29,7 @@ card_field_writers.priority: {FOUNDER}
 card_field_writers.destination: {FOUNDER}
 card_field_writers.started: {FOUNDER}
 card_field_writers.customerrequest: create, {FOUNDER}, 900001, 900003
+card_field_writers.products: create, {FOUNDER}, 900001
 card_field_writers.*: create, {FOUNDER}
 ---
 """
@@ -245,6 +246,24 @@ def test_a_customer_request_names_who_asked_when_where_and_their_words(cards, st
                 {**ask, 'words': 'x' * 501}, {'by': ask['by']}):
         with pytest.raises(CRMError):
             cards.create(ORG, CEO, title='Bad', workspace='sales', fields={'CustomerRequest': bad})
+
+
+def test_a_card_is_about_a_product_and_lists_the_products_it_serves(cards, store):
+    """Founder 2 Nov 14:1xZ: Product is a CRM node; a card is About one (or a customer) and lists Products."""
+    plan = store.create(ORG, CEO, 'Product', {'Name': 'Individual', 'Kind': 'pricing_plan', 'Status': 'live',
+                                              'StripePrice': ['price_1AbC']})['record_id']
+    who = store.create(ORG, CEO, 'Person', {'Name': 'Rahul'})['record_id']
+    card = cards.create(ORG, CEO, title='Individual: balance = gate', workspace='sales', about=f'crm:{plan}')['card']
+    assert fields_of(store, card['id'])['About'] == f'crm:{plan}'
+    both = cards.create(ORG, CEO, title='Rahul on Individual', workspace='sales', about=f'crm:{who}',
+                        fields={'Products': [f'crm:{plan}']})['card']
+    assert fields_of(store, both['id'])['Products'] == [f'crm:{plan}']
+    with pytest.raises(CRMError):
+        cards.create(ORG, CEO, title='x', workspace='sales', fields={'Products': [f'crm:{who}']})   # a Person is no Product
+    with pytest.raises(Refused):
+        cards.update(ORG, SOFTWARE, both['id'], fields_of_rev(store, both['id']), fields={'Products': []})
+    with pytest.raises(Exception):
+        store.create(ORG, CEO, 'Product', {'Name': 'x', 'Kind': 'gadget', 'Status': 'live'})
 
 
 def test_without_the_policy_line_the_rule_moves_software_cards_only(store):

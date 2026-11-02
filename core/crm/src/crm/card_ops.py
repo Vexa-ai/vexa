@@ -65,7 +65,9 @@ EDITABLE = ('Title', 'About', 'Next', 'Waiting', 'Summary', 'Due', 'Progress', '
             # 1 Nov 2026: the typed link to what the card tracks (readings.py).
             'Source',
             # 2 Nov 2026: the customer whose ask the card answers (check_customer_request)
-            'CustomerRequest')
+            'CustomerRequest',
+            # 2 Nov 2026: the products the card is about besides its About (crm:<Product id>)
+            'Products')
 #: Written only by a gate decision (D12), never by an edit or a proposal.
 GATE_ONLY = ('Handoff', 'HandoffSince', 'Answer', 'Evidence', 'Receipt')
 #: Written only by a sensor reading (``write_reading``, ``/internal/records/reading``), never by an
@@ -234,6 +236,16 @@ class PolicyText:
 
 # ── refs ──────────────────────────────────────────────────────────────────────────────────────
 _DAY = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+
+
+def check_products(value):
+    """A list of crm:<Product id>, at most 10, or None."""
+    if value is None:
+        return None
+    if not isinstance(value, list) or len(value) > 10 or not all(
+            isinstance(v, str) and v.startswith('crm:') and _ID.fullmatch(v[4:]) for v in value):
+        raise CRMError('Products is a list of at most 10 crm:<Product id>')
+    return list(dict.fromkeys(value))
 
 
 def check_customer_request(value):
@@ -440,6 +452,8 @@ class Cards:
             check_about(fields['About'])
         if 'CustomerRequest' in fields:
             fields['CustomerRequest'] = check_customer_request(fields['CustomerRequest'])
+        if 'Products' in fields:
+            fields['Products'] = check_products(fields['Products'])
         if not gate_write and set(fields) & set(GATE_ONLY):
             raise CRMError('A card\'s handoff, answer, evidence and receipt change only through its gates (decide)')
         reading_write = bool(getattr(self._reading, 'on', False))
@@ -1139,6 +1153,7 @@ class Cards:
             if supersedes is not None:
                 data['Supersedes'] = self._check_supersedes(c, org, caller.subject, data.get('Waiting'), supersedes)
             self._check_requester(c, org, data.get('CustomerRequest'))
+            self._check_products(c, org, data.get('Products'))
             if data.get('Kind'):
                 data.setdefault('Requester', caller.subject)
             record_id = self._insert(c, org, caller.subject, type or DEFAULT_TYPE, data, narrative,
@@ -1158,6 +1173,14 @@ class Cards:
                                                             s.records.c.deleted.is_(False))).scalar()
         if t not in ('Person', 'Company'):
             raise CRMError(f'CustomerRequest.by names no Person or Company: {rid}')
+
+    def _check_products(self, c, org, products):
+        """Every Products entry names a Product record that exists."""
+        for ref in check_products(products) or []:
+            t = c.execute(select(s.records.c.object_type).where(s.records.c.org_id == org, s.records.c.id == ref[4:],
+                                                                s.records.c.deleted.is_(False))).scalar()
+            if t != 'Product':
+                raise CRMError(f'Products names no Product: {ref[4:]}')
 
     def _check_supersedes(self, c, org, subject, waiting, ids):
         """The cards a new card may replace: cards of this org, none Done (its work happened), each owned by the same
@@ -1209,6 +1232,7 @@ class Cards:
             if 'Parent' in patch:
                 self._check_parent(c, org, policy, patch['Parent'])
             self._check_requester(c, org, patch.get('CustomerRequest'))
+            self._check_products(c, org, patch.get('Products'))
             reason = f'Moved to {transition}' if transition else 'Updated the card'
             self.store._edit(c, org, caller.subject, policy, row['id'], expected_revision, patch, None, reason, [])
             return {'status': 'saved', 'card': self.view(c, org, policy, self._card_row(c, org, row['id']))}
