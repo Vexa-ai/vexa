@@ -216,6 +216,15 @@ def build(reg, db):
             raise StepError(f'the CRM answered {code} to {path}', retryable=code >= 500 or code == 0)
         return answer
 
+    def _evidence_moved(held, facts):
+        """The same stage on other read facts, or on a «no reading» held from before: the CRM rewrites the evidence (2 Nov:
+        19 Review cards kept «no reading yet» after their PRs were read)."""
+        def read(fs):
+            return sorted((f.get('fact'), json.dumps(f.get('value'), sort_keys=True, default=str))
+                          for f in fs or [] if isinstance(f, dict) and f.get('fact') in ('pr', 'issue', 'prod', 'release', 'checks'))
+        return bool(facts) and (held.get('no_reading') or held.get('by') != 'rule:card-stage'
+                                or read(held.get('facts')) != read(facts))
+
     def _put_stage(base, card, readings, mode):
         """Compute one card's stage and write it when it differs. Answers what was done. When the
         rule gives no stage (the card's Source was never read), the State is kept and the CRM records
@@ -231,7 +240,7 @@ def build(reg, db):
                                                             'facts': ev['facts'], 'mode': mode})
             return {'card': card['id'], 'stage': None, 'kept': out.get('stage'), 'was': card.get('state'),
                     'status': out.get('status'), 'because': ev['because']}
-        if name == card.get('state'):
+        if name == card.get('state') and not _evidence_moved(card.get('stage_evidence') or {}, ev['facts']):
             return {'card': card['id'], 'stage': name, 'status': 'unchanged'}
         out = _crm_post(base, '/internal/cards/stage', {'record': card['id'], 'stage': name, 'because': ev['because'],
                                                         'facts': ev['facts'], 'mode': mode})

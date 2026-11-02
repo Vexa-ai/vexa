@@ -370,7 +370,8 @@ def test_a_record_change_moves_a_software_card_once(monkeypatch):
     assert body['because'].startswith('the pull request is open for review')
     assert body['facts'][0]['fact'] == 'pr' and body['facts'][0]['source'] == 'github/vexa-pulls'
     # already there: nothing is written
-    sent = _crm(monkeypatch, lambda url, body: (200, {'cards': [{**SOFT, 'state': 'Review'}]}))
+    held = {'by': 'rule:card-stage', 'stage': 'Review', 'facts': body['facts']}     # the evidence it already holds
+    sent = _crm(monkeypatch, lambda url, body: (200, {'cards': [{**SOFT, 'state': 'Review', 'stage_evidence': held}]}))
     assert step(SimpleNamespace(refs={'record_id': 'c1'})).result['status'] == 'unchanged' and len(sent) == 1
     # not a software card: nothing is written
     sent = _crm(monkeypatch, lambda url, body: (200, {'cards': []}))
@@ -669,6 +670,24 @@ def test_a_pull_request_naming_a_cards_issue_in_its_title_or_another_repo_is_tra
     cards = {'https://github.com/Vexa-ai/vexa/issues/1990': ['c1'], 'https://github.com/Vexa-ai/vexa-platform/issues/571': ['c2']}
     out = cs.unlinked_prs(_pulls([title, cross, fresh], []), {}, spec, cs.PassCache(), lambda link: cards.get(link, []), T)
     assert [r['number'] for r in out] == [2203]                          # a fresh open PR with no card is a fact at once
+
+
+def test_the_same_stage_on_read_facts_reaches_the_crm_when_it_held_no_reading(monkeypatch):
+    db, reg, clock, _ = rig()
+    build(reg, db)
+    sent = []
+    held = {**SOFT, 'state': 'Review', 'stage_evidence': {'by': 'rule:card-stage', 'no_reading': True, 'stage': None,
+                                                          'because': 'no reading yet for x', 'facts': []},
+            'reading': {'sources': {cs.DELIVERY_SOURCE: {'fields': {'pr': {k: v for k, v in pr().items() if k != 'evidence'}},
+                                                          'evidence': ev()}}}}
+
+    def answer(url, body):
+        sent.append((url, body))
+        return (200, {'cards': [held]}) if url == '/internal/cards/software' else (200, {'status': 'evidence'})
+    _crm(monkeypatch, answer)
+    monkeypatch.setattr('flows_sensors.reading.load_config', lambda path='': {})
+    reg.steps['recheck_card_stages'](SimpleNamespace(refs={'slot': T}))
+    assert [b['stage'] for u, b in sent if u == '/internal/cards/stage'] == ['Review']
 
 
 def test_an_unreadable_pin_leaves_prod_unknown_and_the_card_read():
