@@ -68,6 +68,12 @@ SOURCES_OWNER = "factory"
 SOURCE_FAULTS_FLOW = "source_faults_to_owner"
 SOURCE_FAULTS_CRON = "*/10 * * * *"
 SOURCE_EVENT = "source.failing"
+#: the board sense check (founder 2 Nov ~11:10Z): a role reads its views of the board (/api/view) and posts each row that
+#: does not make sense as one ``factory.sense`` fact; it reaches that role's stream as ``sense.finding``, once per finding
+SENSE_FLOW, SENSE_FACT, SENSE_EVENT = "sense_to_owner", "factory.sense", "sense.finding"
+SENSE_ROLES = ("ceo", "software", "factory", "business", "support")
+SENSE_REASONS = ("done_not_in_main", "stage_vs_facts", "duplicate", "superseded_open", "unlinked_pr", "running_empty",
+                 "stale_due", "lapsed_hold")
 #: the card heartbeat (founder 2 Nov ~09:30Z): each open card's keyed next check; a check that finds no new fact,
 #: Next or State is a missed beat — the 1st to its owner, the 2nd to the manager, the 3rd and on to the ceo
 BEAT_FLOW, BEAT_ARM_FLOW, BEAT_RECHECK_FLOW = "card_heartbeat", "card_heartbeat_arm", "card_heartbeat_recheck"
@@ -440,6 +446,21 @@ def build(reg, db):
         return Done({'card': ch['card'], 'appended': out})
 
     @reg.step
+    def sense_to_owner(ctx):
+        """A board row that does not make sense (``factory.sense``: the role whose view it is in, the row id, the reason
+        code, the view), into that role's stream as ``sense.finding``. Once per fact (its source_event_id names the role,
+        the row, the reason and the day). Reads: refs · Effect: one ``sense.finding`` item."""
+        r = ctx.refs
+        role, row, reason = str(r.get('role') or ''), str(r.get('row') or ''), str(r.get('reason') or '')
+        if role not in SENSE_ROLES or reason not in SENSE_REASONS or not row:
+            raise StepError(f"factory.sense carries role in {SENSE_ROLES}, reason in {SENSE_REASONS} and a row",
+                            retryable=False)
+        refs = {'row': row[:120], 'reason': reason, 'view': str(r.get('view') or '')[:40],
+                **({'with': str(r['with'])[:120]} if r.get('with') else {}),
+                **({'fact': str(r['fact'])[:300]} if r.get('fact') else {})}
+        return Done({'appended': [_to_stream(ctx, role, ctx.reaction.source_event_id, SENSE_EVENT, refs)]})
+
+    @reg.step
     def source_faults_to_owner(ctx):
         """Every source reading that is failing, into the sources' owner's stream (``SOURCES_OWNER``): a sensor
         degraded or stopped, or with failures. Once per sensor and failure (its status and reason), so a fault
@@ -683,6 +704,7 @@ def build(reg, db):
     for name, event in SUPPORT_FLOWS.items():
         reg.flow(name=name, version=1, on=EventType(event), steps=[reg.steps['support_card']])
     reg.flow(name=CHANGE_FLOW, version=1, on=EventType('crm.record.changed'), steps=[reg.steps['card_change_to_owner']])
+    reg.flow(name=SENSE_FLOW, version=1, on=EventType(SENSE_FACT), steps=[reg.steps['sense_to_owner']])
     faults = Flow(name=SOURCE_FAULTS_FLOW, version=1, on=EventType(SCHEDULE_EVENT),
                   steps=('source_faults_to_owner',), cron=SOURCE_FAULTS_CRON)
     reg.flows[(faults.ident, faults.version)] = faults

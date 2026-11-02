@@ -408,6 +408,26 @@ def test_a_failing_source_reaches_the_factory_once_per_fault():
     assert len(stream.unacked(db, "factory")) == 3, "a new reason is a new fault"
 
 
+def test_a_sense_finding_reaches_the_role_once_and_a_bad_one_is_refused():
+    db, clock, reg = _due_rig(_utc(2026, 11, 2))
+    refs = {"role": "software", "row": "card f4bd75e1", "reason": "done_not_in_main", "view": "software",
+            "fact": "merged into codex/v0.13.4, default main"}
+    for _ in range(2):
+        admit(db, reg, clock, source_event_id="sense:software:card f4bd75e1:done_not_in_main:2026-11-02",
+              event_type="factory.sense", subject_refs=refs)
+        _run(db, reg, clock)
+    (item,) = stream.unacked(db, "software")
+    assert item["event_type"] == "sense.finding"
+    assert item["refs"] == {"row": "card f4bd75e1", "reason": "done_not_in_main", "view": "software",
+                            "fact": "merged into codex/v0.13.4, default main"}
+    admit(db, reg, clock, source_event_id="sense:x", event_type="factory.sense",
+          subject_refs={"role": "anyone", "row": "card 1", "reason": "done_not_in_main"})
+    admit(db, reg, clock, source_event_id="sense:y", event_type="factory.sense",
+          subject_refs={"role": "ceo", "row": "card 1", "reason": "free text"})
+    _run(db, reg, clock)
+    assert stream.unacked(db, "anyone") == [] and stream.unacked(db, "ceo") == []
+
+
 
 # ── support cards: a support message makes its thread's one card with the SLA's Due and alarms ─────────────────────
 SUPPORT = {"readings": {"discord/bug-reports": "discord", "gmail-dmitry/inbox": "email_customers",

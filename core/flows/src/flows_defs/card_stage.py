@@ -106,7 +106,8 @@ def stage(readings: dict, flows_claim: Optional[dict] = None) -> tuple[Optional[
     facts, activity = [], []
     if pr:
         facts.append(_fact('pr', {k: pr.get(k) for k in ('url', 'state', 'draft', 'design_doc', 'head_sha',
-                                                         'merge_commit_sha', 'merged_at') if pr.get(k) is not None}, pr))
+                                                         'merge_commit_sha', 'merged_at', 'base', 'default_branch')
+                                   if pr.get(k) is not None}, pr))
     if issue:
         facts.append(_fact('issue', {k: issue.get(k) for k in ('url', 'state', 'state_reason') if issue.get(k)}, issue))
     if flows_claim:
@@ -394,7 +395,9 @@ def read_delivery(get: Callable, conn: dict, spec: dict, subject: str, source: s
     merge = pull.get('merge_commit_sha') if pull.get('merged_at') else None
     fields['pr'] = {'url': pull.get('html_url'), 'number': pull.get('number'), 'state': state,
                     'draft': bool(pull.get('draft')), 'head_sha': head, 'merge_commit_sha': merge,
-                    'merged_at': pull.get('merged_at'), 'updated_at': pull.get('updated_at')}
+                    'merged_at': pull.get('merged_at'), 'updated_at': pull.get('updated_at'),
+                    'base': (pull.get('base') or {}).get('ref'),
+                    'default_branch': ((pull.get('base') or {}).get('repo') or {}).get('default_branch')}
     if state == 'open' and spec.get('files'):
         files = get(conn, _path(spec['files'], owner=owner, repo=repo, number=pr_number), {'per_page': '100'})
         if isinstance(files, list):            # anything else answers nothing about the files
@@ -435,7 +438,9 @@ def read_delivery(get: Callable, conn: dict, spec: dict, subject: str, source: s
     return fields
 
 
-UNLINKED_MAX = 50
+#: a bound on the result, not a filter: 50 hid every open PR past the 50th (Vexa-ai/vexa-platform#572 on 2 Nov, behind 38
+#: open Vexa-ai/vexa ones), so a repository late in the list was never flagged
+UNLINKED_MAX = 300
 _ISSUE_REF = re.compile(r'(?:(?<![\w/])#|github\.com/([A-Za-z0-9_.\-]+)/([A-Za-z0-9_.\-]+)/issues/)(\d+)\b')
 
 
