@@ -76,6 +76,12 @@ SENSE_ROLES = ("ceo", "software", "factory", "business", "support")
 #: run, carrying the run's lie counts and the lies on that role's rows; it reaches the role's stream as ``validate.result``
 VALIDATE_FLOW, VALIDATE_FACT, VALIDATE_EVENT = "validate_to_owner", "factory.validate", "validate.result"
 VALIDATE_LIES_MAX = 50
+#: the wake (founder 2 Nov 13:2xZ «сама factory должна дергать агента… через flows, через MCP»): every 15 minutes
+#: ``validate.due`` {role, at} into each role's stream; flows runs no check, it wakes the agent, whose MCP ``validate``
+#: posts the result (``factory.validate`` → ``validate.result``). A due with no result 30 minutes on is
+#: ``validate.missed`` in the ceo's stream, once.
+VALIDATE_DUE_FLOW, VALIDATE_DUE_CRON = "validate_due", "*/15 * * * *"
+VALIDATE_DUE_EVENT, VALIDATE_MISSED_EVENT, VALIDATE_MISSED_AFTER_S = "validate.due", "validate.missed", 1800
 SENSE_REASONS = ("done_not_in_main", "stage_vs_facts", "duplicate", "superseded_open", "unlinked_pr", "running_empty",
                  "stale_due", "lapsed_hold", "unlinked", "owner_not_role", "customer_request_unanswered")
 #: the card heartbeat (founder 2 Nov ~09:30Z): each open card's keyed next check; a check that finds no new fact,
@@ -502,6 +508,30 @@ def build(reg, db):
         return Done({'appended': [_to_stream(ctx, role, ctx.reaction.source_event_id, VALIDATE_EVENT, refs)]})
 
     @reg.step
+    def validate_due(ctx):
+        """Wake every role to check its views (``validate.due``), and tell the ceo of each earlier wake that no
+        ``validate.result`` followed within 30 minutes (``validate.missed``, once per wake). Reads: the stream items ·
+        Effect: one ``validate.due`` per role per 15-minute slot, and the misses."""
+        now = getattr(ctx, 'clock_now', None) or time.time()
+        missed = []
+        rows = db.execute("SELECT recipient, source_event_id, created_at FROM stream_item WHERE event_type = :d "
+                          "AND created_at <= :late AND created_at > :old",
+                          {"d": VALIDATE_DUE_EVENT, "late": now - VALIDATE_MISSED_AFTER_S, "old": now - 4 * 3600})
+        for role, sid, at in rows:
+            got = db.execute("SELECT 1 FROM stream_item WHERE recipient = :r AND event_type = :e AND created_at >= :at",
+                             {"r": role, "e": VALIDATE_EVENT, "at": at})
+            if not got:
+                out = _to_stream(ctx, 'ceo', f'validate.missed:{sid}', VALIDATE_MISSED_EVENT,
+                                 {'role': role, 'due_at': datetime.fromtimestamp(float(at), timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')})
+                if out.get('status') == 'appended':
+                    missed.append(role)
+        slot = int(now // 900) * 900
+        at = datetime.fromtimestamp(slot, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        woke = [_to_stream(ctx, role, f'validate.due:{slot}:{role}', VALIDATE_DUE_EVENT, {'role': role, 'at': at})
+                for role in SENSE_ROLES]
+        return Done({'woke': [w.get('status') for w in woke], 'missed': missed})
+
+    @reg.step
     def source_faults_to_owner(ctx):
         """Every source reading that is failing, into the sources' owner's stream (``SOURCES_OWNER``): a sensor
         degraded or stopped, or with failures. Once per sensor and failure (its status and reason), so a fault
@@ -747,6 +777,10 @@ def build(reg, db):
     reg.flow(name=CHANGE_FLOW, version=1, on=EventType('crm.record.changed'), steps=[reg.steps['card_change_to_owner']])
     reg.flow(name=SENSE_FLOW, version=1, on=EventType(SENSE_FACT), steps=[reg.steps['sense_to_owner']])
     reg.flow(name=VALIDATE_FLOW, version=1, on=EventType(VALIDATE_FACT), steps=[reg.steps['validate_to_owner']])
+    vdue = Flow(name=VALIDATE_DUE_FLOW, version=1, on=EventType(SCHEDULE_EVENT), steps=('validate_due',),
+                cron=VALIDATE_DUE_CRON)
+    reg.flows[(vdue.ident, vdue.version)] = vdue
+    reg.scheduled.setdefault(vdue.ident, []).append(vdue)
     faults = Flow(name=SOURCE_FAULTS_FLOW, version=1, on=EventType(SCHEDULE_EVENT),
                   steps=('source_faults_to_owner',), cron=SOURCE_FAULTS_CRON)
     reg.flows[(faults.ident, faults.version)] = faults

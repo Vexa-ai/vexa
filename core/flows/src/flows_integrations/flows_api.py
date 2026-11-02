@@ -480,6 +480,7 @@ DELEGATED_REACH = {
     # ADR-0050: a person's sensors. Reading their health is a read of their own rows; making,
     # changing, testing (a read of their connection), enabling and connecting one is the person's.
     ("GET", "/sensors"): OPEN,
+    ("GET", "/sensors/health"): OPEN,         # read-only: names, status, last run, failures
     ("POST", "/sensors"): PERSON_ONLY,
     ("POST", "/sensors/{name}/test"): PERSON_ONLY,
     ("POST", "/sensors/{name}/connect"): PERSON_ONLY,
@@ -1954,6 +1955,19 @@ def sensor_list(scope: str = "", caller: Caller = Depends(subject_or_operator)):
     return {"scope": sc, "sensors": pool.health(db, sc),
             "kinds": [{"kind": k.kind, "event_types": list(k.event_types), "connection": k.connection,
                        "min_interval_s": k.min_interval_s} for k in _sensor_kinds().values()]}
+
+
+@app.get("/sensors/health")
+def sensor_health(caller: Caller = Depends(subject_or_operator)):
+    """THE INSTANCE'S SENSORS, READ-ONLY, FOR A ROLE (2 Nov: the views' judge checks the Data tab with a role token):
+    each sensor's name, connection, status, last run, last clean run and failures; no filter, version or config.
+    The operator, or a credential that owns a declared role stream (`VEXA_FLOWS_STREAM_OWNERS`)."""
+    from flows_sensors import pool
+    if caller.kind != "admin" and not (set(v.lower() for v in _stream_owners().values()) & set(caller.names)):
+        raise HTTPException(status_code=403, detail={"refused": "not_a_role", "you_are": caller.uid})
+    return {"sensors": [{"name": s["name"], "connection": s["connection"], "status": s["status"],
+                         "last_run": s["last_tick_at"], "last_ok": s["last_tick_at"] if not s["failures"] else None,
+                         "failures": s["failures"]} for s in pool.health(db, "instance")]}
 
 
 @app.get("/connections", dependencies=[Depends(auth)])

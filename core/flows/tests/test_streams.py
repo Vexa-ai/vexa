@@ -179,6 +179,19 @@ def test_a_role_stream_is_its_declared_owners_and_otherwise_the_operators(client
     assert client.get("/streams/ceo", headers=bearer("anna-key")).status_code == 403
 
 
+def test_a_role_reads_the_sensors_health_and_nothing_else(client, identity, streams, monkeypatch):  # noqa: F811
+    from flows_sensors import pool
+    monkeypatch.setattr(pool, "health", lambda db, sc: [{"name": "gmail-info", "connection": "gmail-info/inbox",
+                                                         "status": "degraded", "last_tick_at": 5.0, "failures": 2,
+                                                         "filter": {"secret": "x"}, "version": 3}])
+    monkeypatch.setenv("VEXA_FLOWS_STREAM_OWNERS", json.dumps({"factory": "126"}))
+    r = client.get("/sensors/health", headers=bearer("anna-key"))
+    assert r.status_code == 200, r.text
+    assert r.json() == {"sensors": [{"name": "gmail-info", "connection": "gmail-info/inbox", "status": "degraded",
+                                     "last_run": 5.0, "last_ok": None, "failures": 2}]}
+    assert client.get("/sensors/health", headers=bearer("ben-key")).status_code == 403
+
+
 def test_no_credential_and_a_bad_recipient_are_refused(client, streams):  # noqa: F811
     assert client.get("/streams/ceo").status_code == 401
     assert client.post("/streams/ceo/ack", json={"ids": ["x"]}).status_code == 401
@@ -458,6 +471,29 @@ def test_a_truth_check_run_reaches_each_role_once_with_its_own_lies():
           subject_refs={"role": "anyone", "total_lies": "1", "by_class": {}})
     _run(db, reg, clock)
     assert stream.unacked(db, "anyone") == []
+
+
+def test_the_factory_wakes_every_role_to_validate_and_tells_the_ceo_of_a_wake_with_no_result():
+    db, clock, reg = _due_rig(_utc(2026, 11, 2))
+    step = reg.steps["validate_due"]
+    from flows import StepCtx
+    from flows.model import Reaction
+
+    def tick(now):
+        ctx = StepCtx(reaction=Reaction("r", "s", "schedule.due", {}, crm_pack.VALIDATE_DUE_FLOW, 1, "validate_due",
+                                        "running", 1, 0, None, None, None), effect_key="k", prior={}, clock_now=now)
+        return step(ctx).result
+    t0 = clock.now()
+    assert tick(t0)["woke"] == ["appended"] * 5 and tick(t0 + 60)["woke"] == ["duplicate"] * 5     # once per slot
+    (due,) = stream.unacked(db, "software")
+    assert due["event_type"] == "validate.due" and due["refs"]["role"] == "software"
+    stream.append(db, t0 + 600, recipient="software", source_event_id="validate:r1:software",
+                  event_type="validate.result", refs={"total_lies": 0})            # software answered, the others did not
+    out = tick(t0 + 1801)
+    assert sorted(out["missed"]) == ["business", "ceo", "factory", "support"]
+    assert tick(t0 + 1900)["missed"] == []                                         # each miss told once
+    assert {i["refs"]["role"] for i in stream.unacked(db, "ceo") if i["event_type"] == "validate.missed"} == \
+        {"business", "ceo", "factory", "support"}
 
 
 
