@@ -29,6 +29,8 @@ injects the real ``redis_client.publish``.
 """
 from __future__ import annotations
 
+from . import meet_respawn
+
 import asyncio
 import json
 from typing import Any, Optional, Protocol, runtime_checkable
@@ -197,6 +199,11 @@ def build_stop_router(repo: MeetingRepo, publisher: CommandPublisher, runtime=No
         # and ``bot_spawn.service``'s post-spawn check).
         for row in live:
             await _mark_stop_requested(repo, row)
+        # A Meet meeting BETWEEN BOT PODS (lifecycle/meet_respawn.py) has no bot to ask: the last one
+        # was refused and the next has not started. It ends here, as the user's stop.
+        for row in live:
+            if meet_respawn.waiting_on_respawn(row.get("data")):
+                await _end_between_pods(repo, row)
 
         # Publish the leave command — an ACTIVE (listening) bot honours it, leaves, emits its terminal
         # event. One command per row: each bot listens on its OWN meeting-scoped channel, so evicting a
@@ -366,6 +373,22 @@ async def _cancel_planned(repo, row: dict) -> None:
         )
     except Exception:  # noqa: BLE001 — logging never fails a stop
         pass
+
+
+async def _end_between_pods(repo, row: dict) -> None:
+    """Terminalize a Meet meeting stopped while it waited for its next bot pod: ``failed`` /
+    ``stopped`` at ``joining`` (no bot was ever admitted), its respawn block ``cancelled``. A next
+    pod already starting is fenced by the spawn interlock, which reads the stop flag."""
+    block = dict(((row.get("data") or {}).get(meet_respawn.KEY)) or {})
+    block["state"] = meet_respawn.CANCELLED
+    block.pop("next_at", None)
+    await repo.fail_meeting(
+        meeting_id=row["id"],
+        reason="stopped by the user while the next bot was due (Google Meet refused the last one)",
+        failure_stage="joining",
+        completion_reason="stopped",
+        data={"stop_requested": True, meet_respawn.KEY: block},
+    )
 
 
 async def _mark_stop_requested(repo, row: dict) -> None:

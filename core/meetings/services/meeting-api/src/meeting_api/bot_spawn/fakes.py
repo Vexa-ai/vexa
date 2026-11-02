@@ -35,6 +35,12 @@ _ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active")
 _TERMINAL_STATUSES = ("completed", "failed")
 
 
+def _respawn_retired(data, workload_id) -> bool:
+    from ..lifecycle.meet_respawn import retired_workload
+
+    return retired_workload(data if isinstance(data, dict) else {}, workload_id)
+
+
 class InMemoryMeetingRepo:
     """A dict-backed ``MeetingRepo`` keyed by the synthetic meeting id."""
 
@@ -224,6 +230,26 @@ class InMemoryMeetingRepo:
             and m["platform"] not in (None, "", "unknown")
         ]
 
+    async def get_meeting_by_session(self, *, session_uid) -> Optional[dict]:
+        sess = next((s for s in self.sessions if s["session_uid"] == session_uid), None)
+        if sess is None:
+            return None
+        row = self._meetings.get(sess["meeting_id"])
+        if row is None:
+            return None
+        latest = next(
+            (s["session_uid"] for s in reversed(self.sessions) if s["meeting_id"] == row["id"]), None
+        )
+        return {**dict(row), "data": dict(row.get("data") or {}), "latest_session_uid": latest}
+
+    async def list_meet_respawns(self) -> list:
+        return [
+            {"id": m["id"], "block": dict(m["data"]["meet_respawn"])}
+            for m in self._meetings.values()
+            if m.get("platform") == "google_meet" and m["status"] in ("requested", "joining")
+            and isinstance((m.get("data") or {}).get("meet_respawn"), dict)
+        ]
+
     async def merge_meeting_data(self, meeting_id, patch) -> None:
         m = self._meetings.get(meeting_id)
         if m is None:
@@ -327,6 +353,7 @@ class InMemoryMeetingRepo:
             "status": row["status"],
             "session_uid": sid,
             "stop_requested": bool((row.get("data") or {}).get("stop_requested")),
+            "respawn_retired": _respawn_retired(row.get("data"), bot_container_id),
         }
 
     async def update_meeting_status(

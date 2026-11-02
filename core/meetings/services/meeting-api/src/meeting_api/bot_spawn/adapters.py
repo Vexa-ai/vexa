@@ -73,6 +73,12 @@ def _row_to_dict(m) -> dict:
     }
 
 
+def _respawn_retired(data, workload_id) -> bool:
+    from ..lifecycle.meet_respawn import retired_workload
+
+    return retired_workload(data if isinstance(data, dict) else {}, workload_id)
+
+
 class SqlAlchemyMeetingRepo:
     """``MeetingRepo`` over a SQLAlchemy-async ``session_factory`` (``meetings`` /
     ``meeting_sessions`` tables). Carve of the parent ``meetings.request_bot`` DB ops."""
@@ -349,6 +355,7 @@ class SqlAlchemyMeetingRepo:
                 "status": status,
                 "session_uid": sid,
                 "stop_requested": bool((data or {}).get("stop_requested")),
+                "respawn_retired": _respawn_retired(data, bot_container_id),
             }
 
     async def update_meeting_status(
@@ -675,6 +682,52 @@ class SqlAlchemyMeetingRepo:
                 )
             )).scalars().all()
             return [_row_to_dict(m) for m in rows]
+
+    async def get_meeting_by_session(self, *, session_uid) -> Optional[dict]:
+        """The meeting a session belongs to, plus its LATEST session uid (``latest_session_uid``) — the
+        Meet respawn decision (lifecycle/meet_respawn.py) acts only on the newest bot's report."""
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting, MeetingSession
+
+        async with self._session_factory() as db:
+            m = (
+                await db.execute(
+                    select(Meeting)
+                    .join(MeetingSession, MeetingSession.meeting_id == Meeting.id)
+                    .where(MeetingSession.session_uid == session_uid)
+                )
+            ).scalars().first()
+            if m is None:
+                return None
+            latest = (
+                await db.execute(
+                    select(MeetingSession.session_uid)
+                    .where(MeetingSession.meeting_id == m.id)
+                    .order_by(MeetingSession.id.desc())
+                )
+            ).scalars().first()
+            return {**_row_to_dict(m), "latest_session_uid": latest}
+
+    async def list_meet_respawns(self) -> list:
+        """Meet meetings still on their way in that carry a respawn block: ``[{id, block}]``. Reads the
+        block only (never the whole ``data``), over the pre-lobby Google Meet rows."""
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(Meeting.id, Meeting.data["meet_respawn"])
+                    .where(
+                        Meeting.platform == "google_meet",
+                        Meeting.status.in_(("requested", "joining")),
+                        Meeting.data.has_key("meet_respawn"),
+                    )
+                )
+            ).all()
+        return [{"id": mid, "block": block} for mid, block in rows if isinstance(block, dict)]
 
     async def merge_meeting_data(self, meeting_id, patch: dict) -> None:
         """Merge ``patch`` into ``meeting.data`` (a ``None`` value REMOVES the key) — the sweep's
