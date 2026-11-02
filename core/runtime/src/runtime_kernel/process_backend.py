@@ -148,8 +148,9 @@ class ProcessBackend:
         runnable: Runnable,
         env: dict[str, str],
         resources: Optional[Resources] = None,
+        avoid_nodes: tuple[str, ...] = (),
     ) -> WorkloadHandle:
-        """``resources`` is accepted and NOT enforced: a child process has no admission gate to
+        """``avoid_nodes`` is accepted and ignored: this substrate is one host. ``resources`` is accepted and NOT enforced: a child process has no admission gate to
         satisfy, and cgroup limits are the host's concern on this substrate. The enforcement
         boundary is k8s-only and no parity is claimed."""
         if not runnable.command:
