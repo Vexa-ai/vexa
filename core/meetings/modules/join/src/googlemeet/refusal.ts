@@ -30,7 +30,7 @@ export const GOOGLE_JOIN_REFUSED = "google_meet_join_refused";
 
 /** Knocks per join, the first included. Meet's refusal is flaky; a meeting that refuses every one of
  *  these is reported as refused rather than knocked on until the lobby budget runs out. */
-export const GOOGLE_JOIN_MAX_KNOCKS = 3;
+export const GOOGLE_JOIN_MAX_KNOCKS = 10;
 
 // The two calls whose 403 is Meet refusing this join. Group 1 names the call in the evidence.
 const REFUSING_RPC = /(MeetingSpaceService\/ResolveMeetingSpace|MeetingDeviceService\/CreateMeetingDevice)/;
