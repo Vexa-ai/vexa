@@ -12,10 +12,11 @@ entry — the recovery mechanism itself dropped envelopes. This drain uses the c
 **reliable-queue** pattern: each entry is atomically moved from the queue into a **processing list**
 with ``RPOPLPUSH`` (never held only in process memory), delivered, then removed from the processing
 list on ack / re-queued with a bumped attempt+next_retry_at on reschedule / moved to the
-dead-letter list on exhaustion. A crash leaves the in-flight entry in the processing list; the next
-tick's reclaim pass moves any processing entry older than a **lease** back to the queue, where it is
-re-delivered. Re-delivery is at-least-once and safe to dedupe: #519 made ``event_id`` deterministic,
-so a receiver dedupes a lease-reclaim redelivery on its stored ``event_id``.
+dead-letter list on exhaustion or on a non-retryable status. A crash leaves the in-flight entry in
+the processing list; the next tick's reclaim pass moves any processing entry older than a **lease**
+back to the queue, where it is re-delivered. Re-delivery is at-least-once and safe to dedupe: #519
+made ``event_id`` deterministic, so a receiver dedupes a lease-reclaim redelivery on its stored
+``event_id``.
 
 Scope (stated plainly): this closes the crash-mid-sweep loss. It does NOT make the ledger survive a
 full Redis restart / storage outage — the ledger is still in Redis, which the hosted platform runs
@@ -47,8 +48,9 @@ PROCESSING_KEY = "webhook:retry_processing"
 # margin, so a slow-but-live delivery is never reclaimed and double-sent out from under itself.
 DEFAULT_LEASE_SECONDS = 60.0
 
-# A dead-letter list for envelopes that exhaust the schedule or age out — so a
-# permanently-failed delivery (e.g. a meeting.completed) is observable, not silently dropped.
+# A dead-letter list for envelopes that exhaust the schedule, age out, or get a non-retryable status
+# (a non-429 4xx / 3xx) on a retry — so a permanently-failed delivery (e.g. a meeting.completed) is
+# observable, not silently dropped.
 DEAD_LETTER_KEY = "webhook:dead_letter"
 DEAD_LETTER_MAX = 1000  # cap the DLQ length (keep the most recent N entries)
 
@@ -61,6 +63,11 @@ MAX_AGE_SECONDS = 86400  # 24h — drop entries older than this
 # (the lease clock + a unique token so LREM matches exactly). Stripped before re-queue / delivery.
 _CLAIM_AT = "_claimed_at"
 _CLAIM_TOKEN = "_claim"
+
+# ``_deliver_one`` outcomes: what the drain does with an entry after one delivery attempt.
+_DELIVERED = "delivered"  # 2xx — ack
+_RETRY = "retry"          # 5xx / 429 / transport error — next backoff (dead-letter when exhausted)
+_PERMANENT = "permanent"  # any other status — dead-letter now (a retry would get the same answer)
 
 Transport = Callable[[str, bytes, Dict[str, str]], Awaitable[Any]]
 
@@ -109,12 +116,17 @@ class RetryQueue:
         return await self.redis.llen(self.key)
 
 
-async def _deliver_one(entry: dict, transport: Transport) -> tuple[bool, Optional[int], Optional[str]]:
+async def _deliver_one(entry: dict, transport: Transport) -> tuple[str, Optional[int], Optional[str]]:
     """Attempt one queued delivery.
 
-    Returns ``(success, status_code, error_category)``. ``success`` is True on a
-    2xx (or a permanent 4xx → stop retrying); status/error category are surfaced
-    so a permanently failed entry can be dead-lettered without exception text.
+    Returns ``(outcome, status_code, error_category)`` where ``outcome`` is one of:
+
+    * ``_DELIVERED`` — a 2xx; the receiver accepted the envelope.
+    * ``_RETRY``     — a 5xx / 429 / transport error; transient, schedule the next attempt.
+    * ``_PERMANENT`` — any other status (a non-429 4xx, a 3xx); retrying cannot help, so the
+      entry is dead-lettered rather than re-queued.
+
+    Status/error category are surfaced so a failed entry is dead-lettered without exception text.
     """
     url = entry["url"]
     envelope = entry["payload"]
@@ -126,12 +138,12 @@ async def _deliver_one(entry: dict, transport: Transport) -> tuple[bool, Optiona
         resp = await transport(url, payload_bytes, headers)
         code = getattr(resp, "status_code", 0)
         if code < 300:
-            return True, code, None
+            return _DELIVERED, code, None
         if code >= 500 or code == 429:
-            return False, code, f"HTTP {code}"  # transient — re-enqueue
-        return True, code, f"HTTP {code}"  # 4xx (non-429) — permanent, drop (don't re-enqueue)
+            return _RETRY, code, f"HTTP {code}"  # transient — re-enqueue
+        return _PERMANENT, code, f"HTTP {code}"  # 4xx (non-429) / 3xx — permanent, dead-letter
     except Exception as e:  # noqa: BLE001 — transport error is transient
-        return False, None, _transport_error_category(e)
+        return _RETRY, None, _transport_error_category(e)
 
 
 async def _dead_letter(
@@ -239,10 +251,10 @@ async def drain_retry_queue(
     First reclaims any orphaned in-flight entries (a crashed prior sweep). Then, for each queued
     entry, atomically claims it into the processing list (``RPOPLPUSH``), and — WITHOUT ever holding
     it only in memory — resolves it individually: entries not yet due (`next_retry_at > now`) are
-    returned to the queue untouched; entries past MAX_AGE or that exhaust the schedule are
-    dead-lettered; a delivered (2xx / permanent 4xx) entry is dropped from processing; a
-    failed-but-retryable entry gets a bumped `attempt` + the next backoff and is re-queued. Pass
-    `now` to drive the clock forward deterministically in the eval.
+    returned to the queue untouched; entries past MAX_AGE, that exhaust the schedule, or that the
+    receiver answers with a non-retryable status (non-429 4xx / 3xx) are dead-lettered; a delivered
+    (2xx) entry is dropped from processing; a failed-but-retryable entry gets a bumped `attempt` + the
+    next backoff and is re-queued. Pass `now` to drive the clock forward deterministically in the eval.
 
     Backoff is indexed by `attempt + 1`: `enqueue` already set the first wait to BACKOFF_SCHEDULE[0]
     (60s), so the drain schedules the *next* wait. The effective wait sequence a target experiences
@@ -302,11 +314,21 @@ async def drain_retry_queue(
             await redis.lrem(processing_key, 1, stamped)
             continue
 
-        success, status_code, error = await _deliver_one(entry, transport)
+        outcome, status_code, error = await _deliver_one(entry, transport)
         processed += 1
 
-        if success:
+        if outcome == _DELIVERED:
             await redis.lrem(processing_key, 1, stamped)  # ack — drop from processing
+            continue
+
+        if outcome == _PERMANENT:
+            # the receiver refused the envelope (e.g. a 404/410 after the endpoint was removed): a
+            # retry would be refused the same way, so it is dead-lettered and logged, not re-queued
+            await _dead_letter(
+                redis, entry, reason="non_retryable_status",
+                status_code=status_code, error=error, now=clock, key=dead_letter_key,
+            )
+            await redis.lrem(processing_key, 1, stamped)
             continue
 
         # The first wait (BACKOFF[0]) was already applied at enqueue, so the next wait is

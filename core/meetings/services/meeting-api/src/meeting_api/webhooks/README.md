@@ -21,7 +21,10 @@ webhooks.py}`, reimplemented clean. The wire shape is sealed in `meetings/contra
   operator opt-in. It never consumes a user URL, and customer delivery retains the SSRF guard.
 - **Retry** (`retry.py`) — a `RetryQueue` over a Redis list (`webhook:retry_queue`); a 5xx/429/
   transport-error enqueues; `drain_retry_queue` is one worker sweep (exponential `BACKOFF_SCHEDULE`
-  = 1m·5m·30m·2h, 24h max-age). The eval drives the clock forward — no real sleeps.
+  = 1m·5m·30m·2h, 24h max-age). An entry that exhausts the schedule, ages out, or gets a
+  non-retryable status on a retry (a non-429 4xx / 3xx) is dead-lettered (`webhook:dead_letter` +
+  a `webhook_dead_lettered` log), never silently dropped. The eval drives the clock forward — no
+  real sleeps.
 - **Delivery ledger** (`ledger.py`, #841) — the per-user, queryable record of delivery outcomes.
   The lifecycle callback records each attempt's outcome (`build_delivery_record`: `event_type`,
   `event_id`, target **host only**, `outcome` ∈ #817 taxonomy `delivered|queued|suppressed|blocked|
