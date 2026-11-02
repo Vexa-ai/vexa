@@ -60,6 +60,24 @@ describe("parseMeetingInput", () => {
     });
   });
 
+  it("parses a Teams thread id from a link whose query carries a malformed percent-escape", () => {
+    // A deep link cut off mid-query (copied from a wrapped invite) ends in a truncated escape; a
+    // query can also carry a stray "%". The thread id in the path is intact, and the server parser
+    // (urllib.parse.unquote) accepts these links, so the client must too, never throw.
+    const thread = { platform: "teams", native_meeting_id: "19:meeting_NzQ1ZjM0YjQtYzA4@thread.v2" };
+    const deepLink = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_NzQ1ZjM0YjQtYzA4%40thread.v2/0";
+    expect(parseMeetingInput(`${deepLink}?context=%7b%22Tid%22%3a%2272f988bf%22%2c%22Oid%22%3a%2`)).toEqual(thread);
+    expect(parseMeetingInput(`${deepLink}?context=100%`)).toEqual(thread);
+    // A truncated multi-byte UTF-8 sequence in the same escape run as the thread id's separators
+    // still lets the ASCII escapes (%3a, %40) decode.
+    expect(parseMeetingInput("https://teams.microsoft.com/l/meetup-join/19%3ameeting_NzQ1%40thread.v2%E2%82")).toEqual({
+      platform: "teams",
+      native_meeting_id: "19:meeting_NzQ1@thread.v2",
+    });
+    // Malformed AND no thread id: still a clean null, not a throw.
+    expect(parseMeetingInput("https://teams.microsoft.com/l/meetup-join/%E2%82%2")).toBeNull();
+  });
+
   it("parses the new short Teams meeting link (teams.microsoft.com/meet/<id>?p=…)", () => {
     expect(parseMeetingInput("https://teams.microsoft.com/meet/33832851446746?p=Y16HhbYoEs9At3lGtb")).toEqual({
       platform: "teams",
