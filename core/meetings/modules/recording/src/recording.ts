@@ -6,6 +6,52 @@ import http from 'http';
 import https from 'https';
 
 /**
+ * How long uploadChunk() keeps trying ONE chunk before it gives the chunk up.
+ *
+ * Every failure gets at least `minAttempts` tries (the old fixed schedule: 500 ms, then 1 s).
+ * A TRANSIENT failure keeps being retried, with backoff capped at `maxDelayMs`, until `budgetMs`
+ * has passed since the first attempt. Transient = no HTTP answer at all (DNS EAI_AGAIN/ENOTFOUND
+ * while meeting-api's container is recreated, ECONNREFUSED before it listens again, a reset, our
+ * own request timeout) or a 5xx / 408 / 429. Any other non-2xx is permanent: retrying a 4xx does
+ * not change it.
+ *
+ * Why the budget is in time, not attempts: a meeting-api restart takes tens of seconds (compose
+ * recreate ≈ 30 s), while the old three attempts gave up after 1.5 s. A chunk produced inside that
+ * window was dropped and the master got a silent hole (claude-rc meeting 277, chunks 114–115).
+ * Uploads are serialized by the caller, so while one chunk waits the next ones queue in memory
+ * (~240 KB per 15 s of audio) and land in order once meeting-api is back.
+ */
+export interface ChunkRetryPolicy {
+  /** Attempts made for ANY failure before giving up (the pre-budget behaviour). */
+  minAttempts: number;
+  /** Keep retrying a transient failure until this many ms after the first attempt. */
+  budgetMs: number;
+  /** First backoff delay; doubles per attempt. */
+  baseDelayMs: number;
+  /** Backoff ceiling. */
+  maxDelayMs: number;
+}
+
+export const DEFAULT_CHUNK_RETRY: ChunkRetryPolicy = {
+  minAttempts: 3,
+  budgetMs: 120_000,
+  baseDelayMs: 500,
+  maxDelayMs: 5_000,
+};
+
+export interface RecordingServiceOptions {
+  /** Override parts of DEFAULT_CHUNK_RETRY (tests shorten the delays). */
+  chunkRetry?: Partial<ChunkRetryPolicy>;
+}
+
+/** True when retrying the upload can succeed: no HTTP answer at all, or a 5xx / 408 / 429. */
+export function isTransientUploadError(err: unknown): boolean {
+  const status = (err as { httpStatus?: unknown } | null | undefined)?.httpStatus;
+  if (typeof status !== 'number') return true;
+  return status >= 500 || status === 408 || status === 429;
+}
+
+/**
  * RecordingService handles accumulating audio data and producing a WAV file.
  * Works in Node.js context — used directly for Zoom (native audio callback),
  * and receives finalized blobs from browser-based bots (Google Meet, Teams).
@@ -18,16 +64,19 @@ export class RecordingService {
   private channels: number;
   private isFinalized: boolean = false;
   private startTime: number = 0;
+  private chunkRetry: ChunkRetryPolicy;
 
   constructor(
     private meetingId: number,
     private sessionUid: string,
     sampleRate: number = 16000,
-    channels: number = 1
+    channels: number = 1,
+    options: RecordingServiceOptions = {},
   ) {
     this.sampleRate = sampleRate;
     this.channels = channels;
     this.filePath = path.join('/tmp', `recording_${meetingId}_${sessionUid}.wav`);
+    this.chunkRetry = { ...DEFAULT_CHUNK_RETRY, ...(options.chunkRetry ?? {}) };
   }
 
   /**
@@ -255,8 +304,11 @@ export class RecordingService {
 
     const body = Buffer.concat(parts);
 
-    const maxRetries = 2;
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // Retry per this.chunkRetry (see ChunkRetryPolicy): a transient failure is retried until the
+    // time budget is spent, so a chunk produced while meeting-api restarts still lands.
+    const policy = this.chunkRetry;
+    const firstAttemptAt = Date.now();
+    for (let attempt = 1; ; attempt++) {
       try {
         await this._sendUpload(callbackUrl, token, boundary, body, uploadTimeoutMs);
         logJSON({
@@ -265,12 +317,17 @@ export class RecordingService {
           chunk_seq: chunkSeq,
           is_final: isFinal,
           chunk_size_bytes: chunkData.length,
+          attempts: attempt,
           recording_meeting_id: this.meetingId,
           recording_session_uid: this.sessionUid,
         });
         return;
       } catch (err: any) {
-        if (attempt === maxRetries) {
+        const elapsedMs = Date.now() - firstAttemptAt;
+        const delay = Math.min(policy.maxDelayMs, policy.baseDelayMs * Math.pow(2, attempt - 1));
+        const transient = isTransientUploadError(err);
+        const retry = attempt < policy.minAttempts || (transient && elapsedMs + delay <= policy.budgetMs);
+        if (!retry) {
           // v0.10.5 Pack G.1 — chunk-loss diagnostic. Whether is_final
           // or not is load-bearing here: a lost final chunk leaves the
           // meeting Recording row stuck IN_PROGRESS forever (Pack E.1's
@@ -282,7 +339,10 @@ export class RecordingService {
             chunk_seq: chunkSeq,
             is_final: isFinal,
             chunk_size_bytes: chunkData.length,
-            attempts: maxRetries + 1,
+            attempts: attempt,
+            elapsed_ms: elapsedMs,
+            transient,
+            http_status: err?.httpStatus,
             error_message: err?.message,
             error_name: err?.name,
             recording_meeting_id: this.meetingId,
@@ -290,15 +350,18 @@ export class RecordingService {
           });
           throw err;
         }
-        const delay = 500 * Math.pow(2, attempt);
         logJSON({
           level: "warn",
           msg: "[Recording] Chunk upload attempt failed; will retry",
           chunk_seq: chunkSeq,
           is_final: isFinal,
-          attempt: attempt + 1,
-          attempts_max: maxRetries + 1,
+          attempt,
+          attempts_min: policy.minAttempts,
+          retry_budget_ms: policy.budgetMs,
+          elapsed_ms: elapsedMs,
           retry_delay_ms: delay,
+          transient,
+          http_status: err?.httpStatus,
           error_message: err?.message,
           recording_meeting_id: this.meetingId,
           recording_session_uid: this.sessionUid,
@@ -352,7 +415,11 @@ export class RecordingService {
                 recording_meeting_id: this.meetingId,
                 recording_session_uid: this.sessionUid,
               });
-              reject(new Error(`Upload failed with status ${res.statusCode}: ${responseData}`));
+              // httpStatus lets uploadChunk tell a retryable 5xx from a permanent 4xx.
+              reject(Object.assign(
+                new Error(`Upload failed with status ${res.statusCode}: ${responseData}`),
+                { httpStatus: res.statusCode },
+              ));
             }
           });
         }

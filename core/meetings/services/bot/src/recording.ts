@@ -20,8 +20,10 @@
  *   • close(key) is the final-signal FALLBACK: the live Stop race routinely drops the trailing
  *     is_final MediaRecorder chunk (the WS closes before it flushes), so on close we POST one empty
  *     is_final upload IF none was sent — the server then flips the recording to COMPLETED. Fires once.
- *   • uploads are serialized on an internal promise queue so parts land in seq order; a chunk that
- *     fails permanently is logged-and-skipped — the master assembles from the parts that DID arrive.
+ *   • uploads are serialized on an internal promise queue so parts land in seq order. A transient
+ *     failure (meeting-api restarting: DNS/refused/5xx) is retried for up to 2 min
+ *     (RecordingService DEFAULT_CHUNK_RETRY) while later chunks wait in the queue; only a chunk that
+ *     still fails after that is logged-and-skipped — the master assembles from the parts that DID arrive.
  *
  * L4-gated: the full page→Node→HTTP loss path is proven only by a live compose run. The SINK half
  * (per-chunk upload, correct seq/isFinal/session_uid, the close fallback) is offline-provable
