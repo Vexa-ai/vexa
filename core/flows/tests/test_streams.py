@@ -296,7 +296,7 @@ def test_an_overdue_card_alarms_now_and_the_hourly_run_finds_cards_and_drops_gon
     out = run(ctx)
     assert ("/internal/cards/due", {}) in sent and out.result["cards"] == 3
     _run(db, reg, clock)
-    (late,) = stream.unacked(db, "founder")
+    (late,) = stream.unacked(db, "ceo")   # a card waiting on the founder: to the ceo
     assert late["event_type"] == "card.due" and late["refs"]["card"] == "late"
     assert db.execute("SELECT status FROM keyed_schedule WHERE key = 'late:soon'") == [], "no soon for a passed date"
     assert db.execute("SELECT count(*) FROM keyed_schedule WHERE key LIKE 'nobody:%'") == [(0,)], "no owner, no alarm"
@@ -531,3 +531,68 @@ def test_an_outsiders_issue_opens_a_card_and_a_members_later_comment_closes_it(m
     ev(2)
     _run(db, reg, clock)
     assert [p for p, _ in sent if p.startswith('/internal/cards/support/')][-1].endswith('/reply')
+
+
+
+# ── the card heartbeat: a check that finds nothing new is a missed beat, escalated owner → manager → ceo ──────────
+def test_a_new_card_beats_and_missed_beats_go_to_its_owner_then_the_manager_then_the_ceo(monkeypatch):
+    import flows_steps.common as common
+    t0 = _utc(2026, 11, 2)
+    card = {"id": "c1", "owner": "software", "open": True, "state": "Doing", "every_s": 3600,
+            "next_check_at": "2026-11-02T01:00:00+00:00", "mark": "m1"}
+    monkeypatch.setenv("VEXA_FLOWS_CRM_API_URL", "http://crm-api:8300")
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "flows-service-key-crm")
+
+    def http(method, url, headers, body, timeout=20):
+        path = url.replace("http://crm-api:8300", "")
+        if path == "/internal/cards/beat":
+            return 200, {"cards": [dict(card)]}
+        if path == "/internal/cards/change":
+            return 200, {"card": None}
+        return 200, {"cards": []}
+    monkeypatch.setattr(common, "http", http)
+    db, clock, reg = _due_rig(t0)
+    _changed(db, reg, clock, "c1", 1)                                          # the card is made: its first beat
+    _run(db, reg, clock)
+    assert dict(db.execute("SELECT key, fire_at FROM keyed_schedule WHERE flow = 'card_heartbeat'")) == {"c1:beat": t0 + 3600}
+
+    def beat():
+        clock.advance(3600 + 1)
+        _run(db, reg, clock)
+    beat()                                                                     # nothing new: 1st miss → owner
+    (one,) = stream.unacked(db, "software")
+    assert one["event_type"] == "card.beat_missed" and one["refs"] == {"card": "c1", "owner": "software", "misses": 1,
+                                                                       "state": "Doing"}
+    beat()                                                                     # 2nd → the manager
+    assert [i["refs"]["misses"] for i in stream.unacked(db, "factory")] == [2]
+    beat()                                                                     # 3rd → the ceo
+    assert [i["refs"]["misses"] for i in stream.unacked(db, "ceo")] == [3]
+    card["mark"] = "m2"                                                        # a new fact: the count resets
+    beat()
+    beat()
+    assert [i["refs"]["misses"] for i in stream.unacked(db, "software")] == [1, 1]
+    card["open"] = False                                                       # closed: it stops beating
+    beat()
+    assert db.execute("SELECT status FROM keyed_schedule WHERE key = 'c1:beat'") == [("fired",)]
+    beat()
+    assert len(stream.unacked(db, "software")) == 2
+
+
+def test_the_hourly_run_arms_open_cards_without_a_beat_and_drops_gone_ones(monkeypatch):
+    import flows_steps.common as common
+    from flows import StepCtx
+    from flows.model import Reaction
+    cards = [{"id": "a", "owner": "ceo", "open": True, "every_s": 86400, "next_check_at": None, "mark": "x"}]
+    monkeypatch.setenv("VEXA_FLOWS_CRM_API_URL", "http://crm-api:8300")
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "flows-service-key-crm")
+    monkeypatch.setattr(common, "http", lambda m, url, h, body, timeout=20: (200, {"cards": [c for c in cards
+                        if not (body or {}).get("record") or c["id"] == body["record"]]}))
+    db, clock, reg = _due_rig(_utc(2026, 11, 2))
+    run = reg.steps["arm_card_beat"]
+    ctx = StepCtx(reaction=Reaction("r", "s", "schedule.due", {}, crm_pack.BEAT_RECHECK_FLOW, 1, "arm_card_beat",
+                                    "running", 1, 0, None, None, None), effect_key="k", prior={}, clock_now=clock.now())
+    run(ctx)
+    assert [k for (k,) in db.execute("SELECT key FROM keyed_schedule WHERE status = 'armed'")] == ["a:beat"]
+    cards.clear()
+    run(ctx)
+    assert db.execute("SELECT status FROM keyed_schedule WHERE key = 'a:beat'") == [("cancelled",)]

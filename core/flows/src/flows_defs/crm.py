@@ -68,6 +68,12 @@ SOURCES_OWNER = "factory"
 SOURCE_FAULTS_FLOW = "source_faults_to_owner"
 SOURCE_FAULTS_CRON = "*/10 * * * *"
 SOURCE_EVENT = "source.failing"
+#: the card heartbeat (founder 2 Nov ~09:30Z): each open card's keyed next check; a check that finds no new fact,
+#: Next or State is a missed beat — the 1st to its owner, the 2nd to the manager, the 3rd and on to the ceo
+BEAT_FLOW, BEAT_ARM_FLOW, BEAT_RECHECK_FLOW = "card_heartbeat", "card_heartbeat_arm", "card_heartbeat_recheck"
+BEAT_RECHECK_CRON = "17 * * * *"
+BEAT_EVENT = "card.beat_missed"
+BEAT_MANAGER = "factory"
 #: support cards (founder 2 Nov ~09:00Z): the rule over the support readings, and its SLA alarms (keyed, into the
 #: support stream through card_due_alarms' to_stream)
 SUPPORT_FLOWS = {"support_card": "business.support", "support_card_issue": "business.reading"}
@@ -343,6 +349,7 @@ def build(reg, db):
         cid = str(card.get('id') or '')
         times = due_times(card.get('due')) if card.get('open') else None
         owner = str(card.get('owner') or '').strip()
+        owner = 'ceo' if owner == 'founder' else owner        # only the ceo brings anything to the founder
         if times is None or not stream.RECIPIENT.match(owner):
             gone = [k for k in (f'{cid}:soon', f'{cid}:due') if keyed.cancel(db, clock, flow, key=k)]
             return {'card': cid, 'status': 'cancelled' if gone else 'none'}
@@ -516,6 +523,78 @@ def build(reg, db):
         return {'source': issue.get('html_url'), 'title': str(issue.get('title') or '')[:200],
                 'sender': '', 'at': last_us if ours else last_out, 'ours': ours, 'sla': 'github'}
 
+    def _beat_to(misses, owner):
+        owner = 'ceo' if owner in (None, '', 'founder') else owner
+        return owner if misses == 1 else (BEAT_MANAGER if misses == 2 else 'ceo')
+
+    def _arm_beat(flow, card, clock, payload=None, at=None):
+        from flows import keyed
+        key = f"{card['id']}:beat"
+        if not card.get('open'):
+            return {'card': card['id'], 'status': 'cancelled' if keyed.cancel(db, clock, flow, key=key) else 'none'}
+        when = at if at is not None else _iso_epoch(card.get('next_check_at'))
+        if when is None or when <= clock.now():
+            when = clock.now() + float(card.get('every_s') or 86400)
+        body = payload or {'card': card['id'], 'mark': card.get('mark'), 'misses': 0}
+        return {'card': card['id'], 'status': keyed.upsert(db, clock, flow, key=key, fire_at=when, event_type=BEAT_EVENT,
+                                                           payload=body, per_user=-1)}
+
+    @reg.step
+    def arm_card_beat(ctx):
+        """Keep each open card's heartbeat armed: a card change arms a card that has no beat yet (a new card gets
+        its first beat at creation) and cancels a closed card's; the hourly run arms every open card that has none
+        (or whose beat was missed while the worker was down) and cancels the beats of cards that are gone. An
+        armed beat is never moved by a change: the beat itself compares what changed. Reads: refs.record_id
+        (absent hourly) · CRM ``/internal/cards/beat`` · Effect: the keyed schedule of ``card_heartbeat``."""
+        base = flows_config.get(CRM_URL_ENV).rstrip('/')
+        if not base:
+            return NotPresent('crm')
+        flow = reg.newest('instance', BEAT_FLOW)
+        if flow is None:
+            return Done({'status': 'no_flow'})
+        clock = _At(ctx.clock_now)
+        record = str(ctx.refs.get('record_id') or '').strip()
+        cards = _crm_post(base, '/internal/cards/beat', {'record': record} if record else {}).get('cards') or []
+        if record and not cards:
+            cards = [{'id': record, 'open': False}]
+        armed = {k for (k,) in db.execute("SELECT key FROM keyed_schedule WHERE scope = 'instance' AND flow = :f "
+                                          "AND status = 'armed'", {'f': BEAT_FLOW})}
+        done = [_arm_beat(flow, c, clock) for c in cards if not c.get('open') or f"{c['id']}:beat" not in armed]
+        if not record:
+            live = {f"{c['id']}:beat" for c in cards}
+            done += [_arm_beat(flow, {'id': k.rsplit(':', 1)[0], 'open': False}, clock) for k in armed - live]
+        return Done({'cards': len(cards), 'armed': [d for d in done if d.get('status') not in ('none', 'unchanged')]})
+
+    @reg.step
+    def card_beat(ctx):
+        """One card's heartbeat: read it again; a new fact, Next or State since the last beat resets the count;
+        none is a missed beat, told to the owner (1st), the manager (2nd), then the ceo (3rd and on), as
+        ``card.beat_missed`` with the card, its owner and the count. Re-arms the next beat one check interval on
+        (or at its Due when sooner); a closed or gone card stops beating. Reads: refs.card, refs.mark,
+        refs.misses · Effect: at most one stream item; the next beat."""
+        base = flows_config.get(CRM_URL_ENV).rstrip('/')
+        if not base:
+            return NotPresent('crm')
+        flow, clock = reg.newest('instance', BEAT_FLOW), _At(ctx.clock_now)
+        cid = str(ctx.refs.get('card') or '')
+        cards = _crm_post(base, '/internal/cards/beat', {'record': cid}).get('cards') or []
+        card = cards[0] if cards else {'id': cid, 'open': False}
+        if not card.get('open'):
+            return Done({'card': cid, 'status': 'closed'})
+        misses = 0 if card.get('mark') != ctx.refs.get('mark') else int(ctx.refs.get('misses') or 0) + 1
+        out = {'card': cid, 'misses': misses}
+        if misses:
+            to = _beat_to(misses, card.get('owner'))
+            out['told'] = _to_stream(ctx, to, ctx.reaction.source_event_id, BEAT_EVENT,
+                                     {'card': cid, 'owner': card.get('owner'), 'misses': misses, 'state': card.get('state')})
+        nxt = ctx.clock_now + float(card.get('every_s') or 86400)
+        due = _iso_epoch(card.get('next_check_at'))
+        if due is not None and ctx.clock_now < due < nxt:
+            nxt = due
+        if flow is not None:
+            out['next'] = _arm_beat(flow, card, clock, {'card': cid, 'mark': card.get('mark'), 'misses': misses}, nxt)
+        return Done(out)
+
     @reg.step
     def support_card(ctx):
         """An inbound support message → the ONE card of its thread (CRM ``/internal/cards/support/inbound``: no
@@ -595,6 +674,12 @@ def build(reg, db):
                        steps=('arm_card_due',), cron=DUE_RECHECK_CRON)
     reg.flows[(due_recheck.ident, due_recheck.version)] = due_recheck
     reg.scheduled.setdefault(due_recheck.ident, []).append(due_recheck)
+    reg.flow(name=BEAT_FLOW, version=1, on=EventType(KEYED_EVENT), steps=[reg.steps['card_beat']])
+    reg.flow(name=BEAT_ARM_FLOW, version=1, on=EventType('crm.record.changed'), steps=[reg.steps['arm_card_beat']])
+    beat_recheck = Flow(name=BEAT_RECHECK_FLOW, version=1, on=EventType(SCHEDULE_EVENT),
+                        steps=('arm_card_beat',), cron=BEAT_RECHECK_CRON)
+    reg.flows[(beat_recheck.ident, beat_recheck.version)] = beat_recheck
+    reg.scheduled.setdefault(beat_recheck.ident, []).append(beat_recheck)
     for name, event in SUPPORT_FLOWS.items():
         reg.flow(name=name, version=1, on=EventType(event), steps=[reg.steps['support_card']])
     reg.flow(name=CHANGE_FLOW, version=1, on=EventType('crm.record.changed'), steps=[reg.steps['card_change_to_owner']])

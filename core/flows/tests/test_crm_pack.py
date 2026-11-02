@@ -10,9 +10,9 @@ def test_record_event_admission_is_idempotent_and_receipt_contains_only_referenc
     assert not reg.match('crm.record.changed')
     build(reg,db)
     refs={'org_id':'t','record_id':'r','revision':2,'uid':'7'}
-    # four flows react: the change log, the software card's stage rule (test_card_stage.py), its due
-    # alarms and its owner's stream (test_streams.py)
-    assert admit(db,reg,clock,source_event_id='crm-event',event_type='crm.record.changed',subject_refs=refs)==4
+    # five flows react: the change log, the software card's stage rule (test_card_stage.py), its due
+    # alarms, its owner's stream and its heartbeat (test_streams.py)
+    assert admit(db,reg,clock,source_event_id='crm-event',event_type='crm.record.changed',subject_refs=refs)==5
     assert admit(db,reg,clock,source_event_id='crm-event',event_type='crm.record.changed',subject_refs=refs)==0
     receipt=reg.steps['record_crm_change'](SimpleNamespace(refs={**refs,'fields':{'secret':'not copied'}}))
     assert receipt.result=={'org_id':'t','record_id':'r','revision':2}

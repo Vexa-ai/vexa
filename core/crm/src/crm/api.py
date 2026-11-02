@@ -280,6 +280,8 @@ class SupportInbound(Body):
 class SupportReply(Body):
     source: str = Field(min_length=1, max_length=300)
     at: str = Field(min_length=1, max_length=40)
+class BeatCards(Body):
+    record: str | None = Field(default=None, max_length=128, description='One card; omitted: every open card.')
 class CardChange(Body):
     record: str = Field(min_length=1, max_length=128)
     revision: int = Field(ge=1)
@@ -784,6 +786,12 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
     def internal_support_reply(body: SupportReply, caller=Depends(internal)):
         """Our reply seen in a support thread: its card moves to Done. Internal tier only."""
         return audited('card.support', caller, body.source[:128], lambda: cards.support_reply(org_id, body.source, body.at))
+
+    @app.post('/internal/cards/beat', include_in_schema=False)
+    def internal_cards_beat(body: BeatCards, caller=Depends(internal)):
+        """What the card heartbeat reads: each open card's owner, next check, interval and the mark of its newest
+        fact, Next and State. Flows' ``card_heartbeat`` only. Internal tier only; it acts for nobody."""
+        return audited('card.beat', caller, body.record or '', lambda: cards.beat_cards(org_id, body.record))
 
     @app.post('/internal/cards/change', include_in_schema=False)
     def internal_cards_change(body: CardChange, caller=Depends(internal)):

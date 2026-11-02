@@ -337,13 +337,13 @@ def test_both_stage_flows_are_registered():
     db, reg, clock, _ = rig()
     build(reg, db)
     assert {f.name for f in reg.match('crm.record.changed')} == {'crm_change_log', STAGE_FLOW, DUE_ARM_FLOW,
-                                                                 'card_change_to_owner'}
+                                                                 'card_change_to_owner', 'card_heartbeat_arm'}
     sched = {f.name: f for f in reg.schedules()}
     assert sched[RECHECK_FLOW].cron == RECHECK_CRON
     reg.refresh_from_db(db)                                                  # a DB refresh never retires it
     assert RECHECK_FLOW in {f.name for f in reg.schedules()}
     refs = {'org_id': 't', 'record_id': 'c1', 'revision': 2, 'uid': '7'}
-    assert admit(db, reg, clock, source_event_id='crm-c1-2', event_type='crm.record.changed', subject_refs=refs) == 4
+    assert admit(db, reg, clock, source_event_id='crm-c1-2', event_type='crm.record.changed', subject_refs=refs) == 5
 
 
 def test_a_record_change_moves_a_software_card_once(monkeypatch):

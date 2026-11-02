@@ -1548,6 +1548,41 @@ class Cards:
                 break
         return {'cards': out}
 
+    def beat_cards(self, org, record=None, limit=2000):
+        """What the card heartbeat reads (founder 2 Nov ~09:30Z): one card (``record``, whatever it holds) or every
+        open card, each with its owner (``Waiting``), whether it is open, when it is next checked (``NextCheckAt``,
+        else the check interval or its Due when sooner), the check interval, and ``mark``: a digest of its newest
+        fact (the latest reading's time), its ``Next`` and its State — a beat with the same mark saw nothing new.
+        Internal tier only; it acts for nobody."""
+        import hashlib
+        with self.store.engine.connect() as c:
+            types = [n for n, d in c.execute(select(s.object_types.c.name, s.object_types.c.definition)
+                                             .where(s.object_types.c.org_id == org)).all()
+                     if isinstance(d, dict) and d.get('x-card')]
+            r = s.records
+            q = select(r.c.id, r.c.object_type, r.c.fields).where(
+                r.c.org_id == org, r.c.object_type.in_(types), r.c.deleted.is_(False), r.c.merged_into.is_(None))
+            if record:
+                q = q.where(r.c.id == str(record))
+            rows = c.execute(q.order_by(r.c.id)).all()
+        out, every = [], int(self.check_after().total_seconds())
+        for rid, object_type, fields in rows:
+            f = fields or {}
+            life = self.lifecycle(object_type, f.get('Kind')) or {}
+            stages, side = list(life.get('stages') or []), list(life.get('side') or [])
+            state = f.get('State')
+            is_open = not (state in side or (stages and state == stages[-1]))
+            if not record and not is_open:
+                continue
+            ev = ((f.get('Reading') or {}).get('evidence') or {}) if isinstance(f.get('Reading'), dict) else {}
+            mark = hashlib.sha256(json.dumps([ev.get('read_at'), f.get('Next'), state], default=str).encode()).hexdigest()[:16]
+            out.append({'id': rid, 'owner': f.get('Waiting') or None, 'open': is_open, 'state': state,
+                        'next_check_at': f.get('NextCheckAt') or self.next_check(f.get('Due')), 'every_s': every,
+                        'mark': mark})
+            if len(out) >= limit:
+                break
+        return {'cards': out}
+
     # ── support cards (founder 2 Nov ~09:00Z «суппорт тикеты должны автоматически создавать карточки с SLA») ──
     #: the one actor a support card is made and moved under; the one owner it waits on
     SUPPORT_ACTOR, SUPPORT_WAITING = 'flows:support', 'support'

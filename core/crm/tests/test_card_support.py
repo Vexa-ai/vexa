@@ -78,3 +78,16 @@ def test_the_route_is_internal_only_and_takes_no_other_field(st):
         assert client.post('/internal/cards/support/inbound', json={**body, **extra}, headers=h).status_code == 422
     r = client.post('/internal/cards/support/inbound', json=body, headers=h)
     assert r.status_code == 200 and r.json()['status'] == 'created'
+
+
+
+def test_the_heartbeat_reads_open_cards_with_a_mark_that_moves_with_a_new_fact_next_or_state(st):
+    cs = Cards(st)
+    one = cs.support_inbound(ORG, THREAD, 'q', '', '2026-11-02T09:00:00Z', '2026-11-02')
+    (a,) = cs.beat_cards(ORG, one['card'])['cards']
+    assert a['owner'] == 'support' and a['open'] is True and a['every_s'] == 86400 and a['next_check_at']
+    assert cs.beat_cards(ORG, one['card'])['cards'][0]['mark'] == a['mark']             # nothing new: the same mark
+    cs.support_reply(ORG, THREAD, '2026-11-02T10:00:00Z')
+    (b,) = cs.beat_cards(ORG, one['card'])['cards']
+    assert b['open'] is False and b['mark'] != a['mark']
+    assert one['card'] not in [c['id'] for c in cs.beat_cards(ORG)['cards']]            # closed: not among the open
