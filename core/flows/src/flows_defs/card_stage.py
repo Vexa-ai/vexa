@@ -452,12 +452,13 @@ def unlinked_prs(get: Callable, conn: dict, spec: dict, cache: PassCache, cards_
     ``unlinked.open_after_h`` (24) hours ago, and every one merged in the last ``unlinked.merged_within_h`` (72),
     with ``in_prod`` (the prod pin contains its merge commit; None when the pin is unread or names another repo).
     A pull request is tracked when ``cards_for(link)`` answers a card for it or for an issue of its own repo
-    its body names: the links the stage rule reads (a card's Source, an issue's linked pull request)."""
+    its body names: the links the stage rule reads (a card's Source, an issue's linked pull request). The merged
+    ones come first (at most ``UNLINKED_MAX`` in all), each with its author."""
     opts = spec.get('unlinked') or {}
     open_after = float(opts.get('open_after_h', 24)) * 3600
     merged_within = float(opts.get('merged_within_h', 72)) * 3600
     pulls = spec.get('pulls') or '/repos/{owner}/{repo}/pulls'
-    out = []
+    merged_rows, open_rows = [], []
     for full in spec.get('repos') or []:
         owner, _, repo = str(full).partition('/')
         rows = []
@@ -479,6 +480,7 @@ def unlinked_prs(get: Callable, conn: dict, spec: dict, cache: PassCache, cards_
             if cards_for(link) or any(cards_for(f'https://github.com/{owner}/{repo}/issues/{n}') for n in sorted(refs)):
                 continue
             row = {'pr': link, 'repo': f'{owner}/{repo}'.lower(), 'number': p.get('number'),
+                   'author': (p.get('user') or {}).get('login'),
                    'state': 'merged' if merged else 'open', 'opened_at': p.get('created_at'),
                    'merged_at': p.get('merged_at'), 'in_prod': None}
             if merged and spec.get('prod_pin'):
@@ -489,10 +491,8 @@ def unlinked_prs(get: Callable, conn: dict, spec: dict, cache: PassCache, cards_
                 if pin and pin['repo'] == row['repo'] and p.get('merge_commit_sha'):
                     row['in_prod'] = bool(_contains(get, conn, spec, owner, repo, p['merge_commit_sha'],
                                                     pin['source_sha']))
-            out.append(row)
-            if len(out) >= UNLINKED_MAX:
-                return out
-    return out
+            (merged_rows if merged else open_rows).append(row)
+    return (merged_rows + open_rows)[:UNLINKED_MAX]
 
 
 def _contains_tag(get, conn, spec, owner, repo, commit, tag) -> bool:

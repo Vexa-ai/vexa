@@ -593,7 +593,8 @@ def _iso(t):
 def test_a_pull_request_merged_and_pinned_to_prod_with_no_card_is_a_fact():
     spec = {**SPEC, 'repos': ['Vexa-ai/vexa']}
     merged = {'html_url': 'https://github.com/Vexa-ai/vexa/pull/2003', 'number': 2003, 'state': 'closed',
-              'created_at': _iso(T - 5 * 3600), 'merged_at': _iso(T - 3600), 'merge_commit_sha': MERGE, 'body': ''}
+              'created_at': _iso(T - 5 * 3600), 'merged_at': _iso(T - 3600), 'merge_commit_sha': MERGE, 'body': '',
+              'user': {'login': 'DmitriyG228'}}
     tracked = {**merged, 'html_url': 'https://github.com/Vexa-ai/vexa/pull/2004', 'number': 2004, 'body': 'Closes #1990'}
     old = {**merged, 'html_url': 'https://github.com/Vexa-ai/vexa/pull/1500', 'number': 1500, 'merged_at': _iso(T - 9 * 86400)}
     unmerged = {**merged, 'html_url': 'https://github.com/Vexa-ai/vexa/pull/2005', 'number': 2005, 'merged_at': None}
@@ -601,7 +602,7 @@ def test_a_pull_request_merged_and_pinned_to_prod_with_no_card_is_a_fact():
     out = cs.unlinked_prs(_pulls([], [merged, tracked, old, unmerged]), {}, spec, cs.PassCache(),
                           lambda link: cards.get(link, []), T)
     assert out == [{'pr': 'https://github.com/Vexa-ai/vexa/pull/2003', 'repo': 'vexa-ai/vexa', 'number': 2003,
-                    'state': 'merged', 'opened_at': merged['created_at'], 'merged_at': merged['merged_at'],
+                    'author': 'DmitriyG228', 'state': 'merged', 'opened_at': merged['created_at'], 'merged_at': merged['merged_at'],
                     'in_prod': True}]
 
 
@@ -614,9 +615,12 @@ def test_an_open_pull_request_older_than_the_limit_with_no_card_is_a_fact():
     other_repo_ref = {**stale, 'html_url': 'https://github.com/Vexa-ai/vexa/pull/1963', 'number': 1963,
                       'body': 'github.com/DmitriyG228/biz/issues/7'}
     cards = {'https://github.com/Vexa-ai/vexa/pull/1962': ['c1'], 'https://github.com/Vexa-ai/vexa/issues/7': ['c2']}
-    out = cs.unlinked_prs(_pulls([stale, fresh, carded, other_repo_ref], []), {}, spec, cs.PassCache(),
+    merged = {**stale, 'html_url': 'https://github.com/Vexa-ai/vexa/pull/2006', 'number': 2006, 'state': 'closed',
+              'merged_at': _iso(T - 3600), 'merge_commit_sha': HEAD}
+    out = cs.unlinked_prs(_pulls([stale, fresh, carded, other_repo_ref], [merged]), {}, spec, cs.PassCache(),
                           lambda link: cards.get(link, []), T)
-    assert [(r['number'], r['state'], r['in_prod']) for r in out] == [(2002, 'open', None), (1963, 'open', None)]
+    assert [(r['number'], r['state'], r['in_prod']) for r in out] == [(2006, 'merged', False), (2002, 'open', None),
+                                                                       (1963, 'open', None)]   # merged first
 
 
 def test_the_recheck_names_the_pull_requests_no_card_tracks(monkeypatch):
