@@ -19,7 +19,9 @@ THREE PARTS, the first one pure:
 THE RULES (first match wins; each names the fact that decided it):
 
 1. The card's issue is closed as ``not_planned`` (or ``duplicate``) and no pull request on it is merged → **Dropped**.
-2. Its pull request is merged → **Done** (merged into main; prod came first by the delivery order).
+2. Its pull request is merged → **Done** (merged into main; prod came first by the delivery order). Merged into another
+   branch (its ``base`` is not the repository's ``default_branch``, e.g. ``codex/v0.13.4``) is not Done: **On prod** when
+   the prod pin contains it, otherwise **Review** (2 Nov: seq61 showed Done while its code was only in codex).
 3. Its pull request is open:
    a. it is a design document (every file it changes is under ``docs/adr/`` or ``docs/design/``,
       the delivery reading's ``design_doc``) → **Design**;
@@ -152,6 +154,12 @@ def stage(readings: dict, flows_claim: Optional[dict] = None) -> tuple[Optional[
     if issue_closed and issue.get('state_reason') in ('not_planned', 'duplicate') and pr_state != 'merged':
         return out('Dropped', f"the issue was closed as {issue['state_reason'].replace('_', ' ')}")
     if pr_state == 'merged':
+        base, main = pr.get('base'), pr.get('default_branch')
+        if base and main and base != main:      # merged, but not into main: Done is «merged into main» (founder Q3 «A»)
+            if prod_ok and prod.get('contains'):
+                return out('On prod', f"{num} was merged into {base}, not {main}; the prod pin {prod.get('chart')} "
+                                      f"contains {_short(prod.get('commit') or merge)}")
+            return out('Review', f"{num} was merged into {base}, not {main}")
         return out('Done', f"{num} was merged at {pr.get('merged_at') or 'an unknown time'}"
                    + (f" as {_short(merge)}" if merge else ''))
     if pr_state == 'open':

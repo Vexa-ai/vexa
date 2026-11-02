@@ -171,6 +171,23 @@ def parse_lifecycle(value):
     return {'stages': stages, 'side': side}
 
 
+def _merge_unproven(fields) -> bool:
+    """A Done software card whose stage fact is a merged pull request not shown to be merged into the default branch."""
+    if fields.get('State') != 'Done':
+        return False
+    ev = fields.get('StageEvidence')
+    if isinstance(ev, str):
+        try:
+            ev = json.loads(ev)
+        except ValueError:
+            return False
+    for f in (ev or {}).get('facts') or [] if isinstance(ev, dict) else []:
+        v = f.get('value') if isinstance(f, dict) else None
+        if f.get('fact') == 'pr' and isinstance(v, dict) and v.get('state') == 'merged':
+            return not v.get('default_branch') or v.get('base') != v.get('default_branch')
+    return False
+
+
 class PolicyText:
     """``_global/POLICIES.md`` as text, through the desk's policy door (``policies.Policies.fetch``),
     kept 30 seconds; None when there is no door or it has never answered (the defaults then apply). A
@@ -1492,7 +1509,9 @@ class Cards:
     # ── the software card's stage (card_templates 'software'; flows' card_stage rule) ─────────────
     def software_cards(self, org, record=None, limit=200):
         """The software cards the stage rule computes: one (``record``) or every open one, each with
-        what the rule reads — its State, Source and Reading. Internal tier only; it acts for nobody."""
+        what the rule reads — its State, Source and Reading. Internal tier only; it acts for nobody.
+        A Done card whose stage fact is a merge not shown to be into main (no ``default_branch`` read, or another
+        ``base``) is read again too: Done is merged into main (founder Q3 «A»; seq61 on 2 Nov read Done from codex)."""
         template = self.template('software')
         with self.store.engine.connect() as c:
             types = [n for n, d in c.execute(select(s.object_types.c.name, s.object_types.c.definition)
@@ -1509,7 +1528,7 @@ class Cards:
             fields = fields or {}
             if fields.get('Kind') != 'software':
                 continue
-            if not record and not tpl.is_open(template, fields.get('State')):
+            if not record and not tpl.is_open(template, fields.get('State')) and not _merge_unproven(fields):
                 continue
             out.append({'id': rid, 'revision': revision, 'state': fields.get('State'),
                         'source': fields.get('Source'), 'reading': fields.get('Reading'),

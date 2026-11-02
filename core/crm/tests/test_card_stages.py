@@ -165,6 +165,19 @@ def test_software_cards_lists_the_open_ones_with_their_readings(cards):
     assert [c['state'] for c in one] == ['Done']                          # one card, open or not
 
 
+def test_a_done_card_merged_outside_main_is_read_again(cards):
+    """seq61 (2 Nov): a card Done from a merge into codex/v0.13.4 must reach the stage rule again; one merged into
+    main, or Done for another reason, does not."""
+    a, b, c, d = (software(cards, t) for t in ('A', 'B', 'C', 'D'))
+    pr = lambda **k: [{'fact': 'pr', 'value': {'url': PR, 'state': 'merged', **k}}]       # noqa: E731
+    cards.set_stage(ORG, a['id'], 'Done', '#1 was merged', facts=pr(base='codex/v0.13.4', default_branch='main'))
+    cards.set_stage(ORG, b['id'], 'Done', '#2 was merged', facts=pr(base='main', default_branch='main'))
+    cards.set_stage(ORG, c['id'], 'Done', '#3 was merged', facts=pr())                      # read before base was
+    cards.set_stage(ORG, d['id'], 'Done', 'the issue was closed as completed')
+    got = {x['id'] for x in cards.software_cards(ORG)['cards']}
+    assert a['id'] in got and c['id'] in got and b['id'] not in got and d['id'] not in got
+
+
 def test_readings_are_kept_per_source_and_merged(cards):
     card = software(cards)
     t0 = 1_793_500_000.0

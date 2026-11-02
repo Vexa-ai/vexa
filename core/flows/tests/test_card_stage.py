@@ -112,6 +112,16 @@ def test_a_merge_is_never_undone_by_the_pin():
     assert cs.stage({'pr': MERGED, 'prod': prod(False, commit=MERGE)}, None)[0] == 'Done'
 
 
+def test_merged_into_another_branch_is_not_done():
+    """seq61 (2 Nov): Vexa-ai/vexa#2006 merged into codex/v0.13.4 read Done; Done is merged into main (founder Q3 «A»)."""
+    codex = {**MERGED, 'base': 'codex/v0.13.4', 'default_branch': 'main'}
+    got, ev_ = cs.stage({'pr': codex}, None)
+    assert (got, ev_['because']) == ('Review', '#1962 was merged into codex/v0.13.4, not main')
+    assert cs.stage({'pr': codex, 'prod': prod(True, commit=MERGE)}, None)[0] == 'On prod'
+    assert cs.stage({'pr': {**MERGED, 'base': 'main', 'default_branch': 'main'}}, None)[0] == 'Done'
+    assert cs.stage({'pr': MERGED}, None)[0] == 'Done'          # a reading from before base was read: unchanged
+
+
 def test_a_release_fact_about_another_commit_does_not_count():
     assert cs.stage({'pr': MERGED, 'release': release('v0.13.4', commit=HEAD2)}, None)[0] == 'Done'
 
