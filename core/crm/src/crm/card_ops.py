@@ -1544,9 +1544,9 @@ class Cards:
 
     # ── sensor readings (readings.py; flows' ``write_reading_to_crm``) ─────────────────────────────
     def by_source(self, org, link, limit=50):
-        """The cards that track ``link``: their typed ``Source`` names the same subject
-        (``readings.subject``), or, for a card with no ``Source``, its ``Summary`` carries the legacy
-        «GitHub: owner/repo#N». Internal tier only: it answers ids, never a field."""
+        """The cards that track ``link``: their typed ``Source`` names the same subject (``readings.subject``),
+        or a pull request that names the card (``card: <id>``, its ``github/card-link`` reading). A Summary's free text
+        links nothing (CEO 2 Nov: facts only). Internal tier only: it answers ids, never a field."""
         mail = rd.email_of(link)
         if mail:                       # a person (and their company's domain) by match identifier (L2.7)
             with self.store.engine.connect() as c:
@@ -1569,7 +1569,8 @@ class Cards:
         ids = []
         for rid, fields in rows:
             fields = fields or {}
-            have = rd.subject(fields.get('Source')) if fields.get('Source') else rd.summary_subject(fields.get('Summary'))
+            # facts only (CEO 2 Nov): the typed Source, never a «GitHub: owner/repo#N» line in the free-text Summary
+            have = rd.subject(fields.get('Source')) if fields.get('Source') else None
             declared = {rd.subject(u) for u in _declared_prs(fields)}   # PRs that name this card (``card: <id>``)
             if have == want or want in declared:
                 ids.append(rid)

@@ -144,7 +144,7 @@ def test_source_is_a_typed_link(cards):
     assert {'Source', 'Reading'} <= set(DEFINITIONS['Card']['properties'])
 
 
-def test_by_source_finds_the_typed_link_and_the_legacy_summary(cards):
+def test_by_source_finds_the_typed_link_and_never_the_summarys_text(cards):
     typed = make(cards, 'Typed', Source=PR)
     legacy = make(cards, 'Legacy', Summary='GitHub: Vexa-ai/vexa#1962 · the merge card')
     other = make(cards, 'Other', Source='https://github.com/Vexa-ai/vexa/pull/1987')
@@ -152,7 +152,7 @@ def test_by_source_finds_the_typed_link_and_the_legacy_summary(cards):
     make(cards, 'Typed elsewhere', Source='Vexa-ai/vexa#1987', Summary='GitHub: Vexa-ai/vexa#1962')
     out = cards.by_source(ORG, 'https://github.com/Vexa-ai/vexa/issues/1962')
     assert out['subject'] == 'github.com/vexa-ai/vexa#1962'
-    assert sorted(out['cards']) == sorted([typed['id'], legacy['id']])
+    assert out['cards'] == [typed['id']] and legacy['id'] not in out['cards']   # free text links nothing
     assert other['id'] in cards.by_source(ORG, 'Vexa-ai/vexa#1987')['cards']
     assert cards.by_source(ORG, 'Vexa-ai/vexa#1')['cards'] == []
     with pytest.raises(CRMError):
