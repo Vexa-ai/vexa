@@ -209,8 +209,11 @@ class Runtime:
             # none. The spec's own sizing wins; otherwise the profile's deployment default (the
             # chart's per-class sizing) applies; neither ⇒ None, today's unsized spawn.
             effective_resources = spec.resources or profile.resources
+            # A join retry's placement hint rides the port only when the spec sets it, so a backend
+            # that predates it (and every test double) is called exactly as before.
+            placement = {"avoid_nodes": tuple(spec.avoidNodes)} if spec.avoidNodes else {}
             self._handles[spec.workloadId] = self.backend.start(
-                spec.workloadId, runnable, effective_env, effective_resources,
+                spec.workloadId, runnable, effective_env, effective_resources, **placement,
             )
         except Exception as exc:
             # Record the honest terminal state (persist + emit) FIRST — GET /workloads and the

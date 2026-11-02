@@ -98,6 +98,13 @@ spec:
               value: {{ .Values.runtime.speakerStream.confidenceFilter | default "" | quote }}
             - name: BOT_TRANSCRIPT_RECONFIRM_SEC
               value: {{ .Values.runtime.speakerStream.reconfirmSec | default "" | quote }}
+            # Google Meet knock policy, forwarded into each new meeting-bot Pod (values: runtime.googleMeetKnock).
+            - name: VEXA_GOOGLE_JOIN_MAX_KNOCKS
+              value: {{ .Values.runtime.googleMeetKnock.maxKnocks | default "" | quote }}
+            - name: VEXA_GOOGLE_REKNOCK_BACKOFF_MS
+              value: {{ .Values.runtime.googleMeetKnock.reknockBackoffMs | default "" | quote }}
+            - name: VEXA_GOOGLE_REKNOCK_WIPE
+              value: {{ .Values.runtime.googleMeetKnock.reknockWipe | default "" | quote }}
             # The runtime caller credential: every route but /health requires it as a bearer. The
             # runtime refuses to boot without it.
             - name: RUNTIME_API_TOKEN

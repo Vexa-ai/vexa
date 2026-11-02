@@ -56,6 +56,9 @@ export type JoinFailureReason =
   | 'ui_locale_mismatch'
   /** The USER stopped the run while the bot was still knocking. Not a failure. */
   | 'stopped_while_joining'
+  /** The platform refused every bot pod before a host saw a request (Google Meet's 403). Typed by
+   *  meeting-api on the meeting's final refusal (lifecycle/meet_respawn.py); the bot does not emit it. */
+  | 'platform_join_refused'
   /** The signals do not support a verdict. `detail` carries what was observed. */
   | 'unknown';
 
@@ -83,6 +86,11 @@ export interface JoinEvidence {
   detail?: string;
   timings?: { time_to_lobby_ms?: number; time_in_lobby_ms?: number; total_ms?: number };
   lobby_budget_ms?: number;
+  /** The cluster node this attempt ran on (the pod's `spec.nodeName`, from VEXA_NODE_NAME). The
+   *  platform retry places the next attempt elsewhere; absent when the runtime does not say. */
+  node?: string;
+  /** Where the join-failure screenshot was stored (meeting-api's answer); absent when none was. */
+  screenshot_key?: string;
 }
 
 /** Cap the free-text platform signal so a stack trace can never bloat `meeting.data`. Mirrors the
@@ -156,6 +164,7 @@ const ATTRIBUTION_BY_REASON: Record<JoinFailureReason, JoinFailureAttribution> =
   navigation_failure: 'system_fault',
   ui_locale_mismatch: 'system_fault',
   stopped_while_joining: 'user_action',
+  platform_join_refused: 'system_fault',
   unknown: 'unknown',
 };
 
