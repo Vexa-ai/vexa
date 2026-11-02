@@ -367,12 +367,12 @@ def build(reg, db):
         cid = str(card.get('id') or '')
         times = due_times(card.get('due')) if card.get('open') else None
         owner = str(card.get('owner') or '').strip()
-        owner = 'ceo' if owner == 'founder' else owner        # only the ceo brings anything to the founder
-        if times is None or not stream.RECIPIENT.match(owner):
+        to = 'ceo' if owner == 'founder' else owner           # only the ceo brings anything to the founder
+        if times is None or not stream.RECIPIENT.match(to):
             gone = [k for k in (f'{cid}:soon', f'{cid}:due') if keyed.cancel(db, clock, flow, key=k)]
             return {'card': cid, 'status': 'cancelled' if gone else 'none'}
         soon_at, due_at = times
-        payload = {'card': cid, 'due': str(card['due'])[:10], 'owner': owner}
+        payload = {'card': cid, 'due': str(card['due'])[:10], 'owner': owner, **({'to': to} if to != owner else {})}
         # one row per alarm per card, bounded by the cards themselves: no per-person cap applies
         out = {'card': cid, 'due': keyed.upsert(db, clock, flow, key=f'{cid}:due', fire_at=due_at,
                                                 event_type=DUE_EVENT, payload=payload, per_user=-1)}

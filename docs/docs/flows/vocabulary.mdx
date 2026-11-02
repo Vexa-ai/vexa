@@ -159,7 +159,7 @@ RETIRED BY DECISION 29 (2026-09-02). Kept as a no-op, for the reason above. It e
 
 ### `to_stream`
 
-Append the event that started this run to ONE recipient's stream, where it stays until the recipient acknowledges it (`POST /streams/{recipient}/ack`). The recipient is the flow's `recipient` param, else refs.owner. A keyed fire appends as the event that armed it. Reads: params.recipient · refs.owner · Effect: one stream item, once per (recipient, source event) · Result: \{recipient, item_id, status\}.
+Append the event that started this run to ONE recipient's stream, where it stays until the recipient acknowledges it (`POST /streams/{recipient}/ack`). The recipient is the flow's `recipient` param, else refs.to (who brings it to the owner: the ceo for the founder's cards), else refs.owner. A keyed fire appends as the event that armed it. Reads: params.recipient · refs.to · refs.owner · Effect: one stream item, once per (recipient, source event) · Result: \{recipient, item_id, status\}.
 
 ### `wake_meeting_chat`
 

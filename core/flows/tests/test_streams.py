@@ -260,6 +260,18 @@ def test_a_card_with_a_due_puts_due_soon_then_due_into_its_owners_stream(monkeyp
     assert len(stream.unacked(db, "ceo")) == 2, "each alarm once"
 
 
+def test_the_founders_due_reaches_the_ceo_and_still_names_the_founder(monkeypatch):
+    """2 Nov truth check: card.due for a founder card (d6bbdf24, Waiting founder) said owner «ceo»."""
+    card = {"id": "c7", "due": "2026-11-09", "owner": "founder", "state": "To do", "open": True}
+    _crm(monkeypatch, [card])
+    db, clock, reg = _due_rig(_utc(2026, 11, 9) + 1)
+    _changed(db, reg, clock, "c7", 2)
+    _run(db, reg, clock)
+    (due,) = stream.unacked(db, "ceo")
+    assert (due["event_type"], due["refs"]["owner"], due["refs"]["to"]) == ("card.due", "founder", "ceo")
+    assert stream.unacked(db, "founder") == []
+
+
 def test_a_moved_due_moves_the_alarm_and_a_closed_card_cancels_it(monkeypatch):
     card = {"id": "c1", "due": "2026-11-09", "owner": "ceo", "state": "Doing", "open": True}
     _crm(monkeypatch, [card])

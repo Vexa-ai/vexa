@@ -14,12 +14,12 @@ def register(reg, db):
     def to_stream(ctx: StepCtx):
         """Append the event that started this run to ONE recipient's stream, where it stays until the
         recipient acknowledges it (`POST /streams/{recipient}/ack`). The recipient is the flow's
-        `recipient` param, else refs.owner. A keyed fire appends as the event that armed it.
-        Reads: params.recipient · refs.owner · Effect: one stream item, once per (recipient, source
+        `recipient` param, else refs.to (who brings it to the owner: the ceo for the founder's cards), else refs.owner.
+        A keyed fire appends as the event that armed it. Reads: params.recipient · refs.to · refs.owner · Effect: one stream item, once per (recipient, source
         event) · Result: {recipient, item_id, status}."""
         from flows import keyed, stream
         recipient = str(ctx.flow.param("recipient", "") if ctx.flow is not None else "").strip() \
-            or str(ctx.refs.get("owner") or "").strip()
+            or str(ctx.refs.get("to") or "").strip() or str(ctx.refs.get("owner") or "").strip()
         if not recipient:
             raise StepError("to_stream needs a recipient: the flow's `recipient` param or refs.owner",
                             retryable=False)
