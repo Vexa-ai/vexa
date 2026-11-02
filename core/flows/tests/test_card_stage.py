@@ -532,7 +532,7 @@ def test_the_pin_reads_through_its_own_connection_and_a_refused_check_read_is_no
 
 
 
-def test_a_pin_that_cannot_be_read_fails_the_pin_reading_once_not_each_card_read(monkeypatch):
+def test_a_pin_that_cannot_be_read_fails_the_pin_reading_once_and_every_card_is_still_read(monkeypatch):
     from flows_sensors import reading as rk
     db, reg, clock, _ = rig()
     build(reg, db)
@@ -549,7 +549,7 @@ def test_a_pin_that_cannot_be_read_fails_the_pin_reading_once_not_each_card_read
     get, calls = github(answers)
     monkeypatch.setattr(rk, 'http_get', get)
     out = reg.steps['recheck_card_stages'](SimpleNamespace(refs={'slot': T}))
-    assert out.result['unread'] == 2                                  # both cards keep what they had …
+    assert out.result['unread'] == 0                                  # both cards are read; only prod is unknown …
     assert out.result['failed'] == {'github/delivery': 0, 'github-stations/prod-pin': 1}   # … the pin failed, once
     assert sum(1 for c in calls if c.endswith('channel.yaml')) == 1   # read once per pass, not per card
 
@@ -632,6 +632,42 @@ def test_an_open_pull_request_older_than_the_limit_with_no_card_is_a_fact():
                           lambda link: cards.get(link, []), T)
     assert [(r['number'], r['state'], r['in_prod']) for r in out] == [(2006, 'merged', False), (2002, 'open', None),
                                                                        (1963, 'open', None)]   # merged first
+
+
+CARD = '0218468b-8959-4cc7-909f-5b3f8d1ac93c'
+
+
+def test_a_pull_request_that_names_its_card_is_tracked_and_declared():
+    """card: <id> in the body, or the id in the branch, links the PR to its card (2 Nov: PRs carry card: <id>)."""
+    spec = {**SPEC, 'repos': ['Vexa-ai/vexa']}
+    base = {'state': 'open', 'created_at': _iso(T - 30 * 3600), 'merged_at': None, 'body': ''}
+    body = {**base, 'html_url': 'https://github.com/Vexa-ai/vexa/pull/2101', 'number': 2101,
+            'body': f'Fixes the balance.\n\ncard: {CARD.upper()}'}
+    branch = {**base, 'html_url': 'https://github.com/Vexa-ai/vexa/pull/2102', 'number': 2102,
+              'head': {'ref': f'fix/{CARD}-balance'}}
+    fresh = {**body, 'html_url': 'https://github.com/Vexa-ai/vexa/pull/2103', 'number': 2103, 'created_at': _iso(T - 60)}
+    plain = {**base, 'html_url': 'https://github.com/Vexa-ai/vexa/pull/2104', 'number': 2104, 'body': 'a card: maybe'}
+    declared = {}
+    out = cs.unlinked_prs(_pulls([body, branch, fresh, plain], []), {}, spec, cs.PassCache(), lambda link: [], T,
+                          declared=declared)
+    assert [r['number'] for r in out] == [2104]                                  # the three that name a card are tracked
+    assert declared == {CARD: {'https://github.com/Vexa-ai/vexa/pull/2101', 'https://github.com/Vexa-ai/vexa/pull/2102',
+                               'https://github.com/Vexa-ai/vexa/pull/2103'}}
+    card = {'reading': {'sources': {cs.CARD_LINK_SOURCE: {'fields': {'prs': sorted(declared[CARD])}}}}}
+    assert cs.declared_pr(card) == 'https://github.com/Vexa-ai/vexa/pull/2101'
+    assert cs.declared_pr({}) == ''
+
+
+def test_an_unreadable_pin_leaves_prod_unknown_and_the_card_read():
+    """2 Nov: a stations pin past the channel's last entry left 49 of 50 cards unread; now only prod is unknown."""
+    pull = {'html_url': PR_URL, 'number': 1962, 'state': 'open', 'draft': False, 'head': {'sha': HEAD},
+            'merge_commit_sha': None, 'merged_at': None, 'base': {'ref': 'main', 'repo': {'default_branch': 'main'}}}
+    answers = base_answers(pull, lambda p: {'status': 'ahead'})
+    answers['/repos/DmitriyG228/vexa-stations/contents/channels/vexa-internal/channel.yaml'] = b64('channel: x\npublishes: []\n')
+    get, _ = github(answers)
+    fields = cs.read_delivery(get, {}, SPEC, 'github.com/vexa-ai/vexa#1962', PR_URL, cs.PassCache())
+    assert 'prod' not in fields and fields['pr']['base'] == 'main' and fields['pr']['default_branch'] == 'main'
+    assert cs.stage({k: {**v, 'evidence': ev()} for k, v in fields.items()}, None)[0] == 'Review'
 
 
 def test_the_recheck_names_the_pull_requests_no_card_tracks(monkeypatch):

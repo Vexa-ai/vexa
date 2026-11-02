@@ -171,6 +171,13 @@ def parse_lifecycle(value):
     return {'stages': stages, 'side': side}
 
 
+def _declared_prs(fields) -> list:
+    """The pull requests that declare this card (``card: <id>`` in their body or branch), as its sensor read them."""
+    reading = fields.get('Reading') if isinstance(fields.get('Reading'), dict) else {}
+    src = ((reading.get('sources') or {}).get('github/card-link') or {}).get('fields') or {}
+    return [u for u in src.get('prs') or [] if isinstance(u, str)]
+
+
 def _merge_unproven(fields) -> bool:
     """A Done software card whose stage fact is a merged pull request not shown to be merged into the default branch."""
     if fields.get('State') != 'Done':
@@ -1444,7 +1451,8 @@ class Cards:
         for rid, fields in rows:
             fields = fields or {}
             have = rd.subject(fields.get('Source')) if fields.get('Source') else rd.summary_subject(fields.get('Summary'))
-            if have == want:
+            declared = {rd.subject(u) for u in _declared_prs(fields)}   # PRs that name this card (``card: <id>``)
+            if have == want or want in declared:
                 ids.append(rid)
                 if len(ids) >= limit:
                     break

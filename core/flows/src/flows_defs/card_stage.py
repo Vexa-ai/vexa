@@ -419,7 +419,10 @@ def read_delivery(get: Callable, conn: dict, spec: dict, subject: str, source: s
         else:
             fields['checks'] = summarise_checks(runs, head)
     commits = [(c, via) for c, via in ((head, 'head'), (merge, 'merge')) if c]
-    pin = read_pin(get, pin_conn or conn, spec, cache) if spec.get('prod_pin') else None
+    try:          # an unreadable pin leaves this card's prod fact unknown; it never stops the card's own read
+        pin = read_pin(get, pin_conn or conn, spec, cache) if spec.get('prod_pin') else None
+    except PinFault:  # (2 Nov: a stations pin past the channel's last entry left 49 of 50 cards unread for hours)
+        pin = None
     if pin and pin['repo'] == f'{owner}/{repo}'.lower():
         found = None
         for commit, via in commits:
@@ -452,6 +455,27 @@ UNLINKED_MAX = 300
 _ISSUE_REF = re.compile(r'(?:(?<![\w/])#|github\.com/([A-Za-z0-9_.\-]+)/([A-Za-z0-9_.\-]+)/issues/)(\d+)\b')
 
 
+#: the reading that links a card to the pull requests naming it (``card: <id>`` in the body, or the id in the branch)
+CARD_LINK_SOURCE = 'github/card-link'
+_UUID = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+_CARD_DECL = re.compile(r'(?i)\bcard:\s*(' + _UUID + r')\b')
+_BRANCH_CARD = re.compile(r'(?i)(' + _UUID + r')')
+
+
+def declared_cards(pull: dict) -> set:
+    """The cards a pull request names: ``card: <uuid>`` anywhere in its body, or a uuid in its branch name."""
+    ids = {m.group(1).lower() for m in _CARD_DECL.finditer(str(pull.get('body') or ''))}
+    ids |= {m.group(1).lower() for m in _BRANCH_CARD.finditer(str((pull.get('head') or {}).get('ref') or ''))}
+    return ids
+
+
+def declared_pr(card: dict) -> str:
+    """A card's first declared pull request (its ``github/card-link`` reading), or ''."""
+    src = (((card.get('reading') or {}).get('sources') or {}).get(CARD_LINK_SOURCE) or {}).get('fields') or {}
+    prs = [u for u in src.get('prs') or [] if subject_of(u)]
+    return sorted(prs)[0] if prs else ''
+
+
 def _iso_ts(value) -> Optional[float]:
     try:
         return datetime.fromisoformat(str(value).replace('Z', '+00:00')).timestamp()
@@ -460,13 +484,14 @@ def _iso_ts(value) -> Optional[float]:
 
 
 def unlinked_prs(get: Callable, conn: dict, spec: dict, cache: PassCache, cards_for: Callable, now: float,
-                 pin_conn: Optional[dict] = None) -> list:
+                 pin_conn: Optional[dict] = None, declared: Optional[dict] = None) -> list:
     """Pull requests in the declared repos that no card tracks, as facts: every open one opened more than
     ``unlinked.open_after_h`` (24) hours ago, and every one merged in the last ``unlinked.merged_within_h`` (72),
     with ``in_prod`` (the prod pin contains its merge commit; None when the pin is unread or names another repo).
     A pull request is tracked when ``cards_for(link)`` answers a card for it or for an issue of its own repo
     its body names: the links the stage rule reads (a card's Source, an issue's linked pull request). The merged
-    ones come first (at most ``UNLINKED_MAX`` in all), each with its author."""
+    ones come first (at most ``UNLINKED_MAX`` in all), each with its author. Every pull request read that names a
+    card (:func:`declared_cards`) goes into ``declared`` (card id → its PR links), whatever its age, and is tracked."""
     opts = spec.get('unlinked') or {}
     open_after = float(opts.get('open_after_h', 24)) * 3600
     merged_within = float(opts.get('merged_within_h', 72)) * 3600
@@ -480,6 +505,12 @@ def unlinked_prs(get: Callable, conn: dict, spec: dict, cache: PassCache, cards_
             got = get(conn, _path(pulls, owner=owner, repo=repo), params)
             rows += [p for p in (got if isinstance(got, list) else []) if isinstance(p, dict)]
         for p in rows:
+            named = declared_cards(p)
+            if declared is not None and p.get('html_url'):
+                for cid in named:
+                    declared.setdefault(cid, set()).add(p['html_url'])
+            if named:
+                continue                       # it names its card: tracked
             opened, merged = _iso_ts(p.get('created_at')), _iso_ts(p.get('merged_at'))
             if p.get('state') == 'open':
                 if opened is None or now - opened < open_after:

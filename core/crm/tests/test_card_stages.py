@@ -178,6 +178,18 @@ def test_a_done_card_merged_outside_main_is_read_again(cards):
     assert a['id'] in got and c['id'] in got and b['id'] not in got and d['id'] not in got
 
 
+def test_a_pull_request_that_names_a_card_finds_it(cards):
+    """The sensor writes the PRs naming a card (card: <id>) as its github/card-link reading; by-source then finds it."""
+    card = software(cards, 'Balance')
+    pr2 = 'https://github.com/Vexa-ai/vexa-platform/pull/572'
+    cards.write_reading(ORG, card['id'], 'github/card-link', {'prs': [pr2]}, {'read_at': 1_793_500_000.0})
+    assert card['id'] in cards.by_source(ORG, pr2)['cards']
+    assert card['id'] in cards.by_source(ORG, 'Vexa-ai/vexa-platform#572')['cards']
+    assert cards.by_source(ORG, 'https://github.com/Vexa-ai/vexa-platform/pull/570')['cards'] == []
+    with pytest.raises(CRMError):
+        cards.write_reading(ORG, card['id'], 'github/card-link', {'prs': ['not a link']}, {'read_at': 1_793_500_001.0})
+
+
 def test_readings_are_kept_per_source_and_merged(cards):
     card = software(cards)
     t0 = 1_793_500_000.0

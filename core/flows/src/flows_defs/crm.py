@@ -280,7 +280,8 @@ def build(reg, db):
         done = []
         for card in _crm_post(base, '/internal/cards/software', {}).get('cards') or []:
             row = {'card': card['id']}
-            subject = card_stage.subject_of(card.get('source'))
+            link = card.get('source') or card_stage.declared_pr(card)       # no Source: the PR that names the card
+            subject = card_stage.subject_of(link)
             repos = {str(x).lower() for x in (spec or {}).get('repos') or []}
             repo = subject.split('#', 1)[0].split('/', 1)[-1] if subject else ''
             if conn is not None and subject and repos and repo not in repos:
@@ -288,8 +289,7 @@ def build(reg, db):
             elif conn is not None and subject:
                 now = time.time()
                 try:
-                    fields = card_stage.read_delivery(rk.http_get, conn, spec, subject, card.get('source'), cache,
-                                                      pin_conn)
+                    fields = card_stage.read_delivery(rk.http_get, conn, spec, subject, link, cache, pin_conn)
                 except card_stage.PinFault as e:
                     row['read'] = f'not read: prod pin: {e}'
                 except (card_stage.ReadFault, SensorFault) as e:
@@ -315,14 +315,25 @@ def build(reg, db):
             row.update(_put_stage(base, card, readings, 'recheck'))
             done.append(row)
         # pull requests no card tracks (the stage rule can attach no fact to them): facts, never a failure
-        unlinked, unlinked_fault = [], None
+        unlinked, unlinked_fault, links = [], None, []
         if conn is not None and spec.get('repos'):
             def cards_for(link):
                 return _crm_post(base, '/internal/cards/by-source', {'link': link}).get('cards') or []
+            declared: dict = {}
             try:
-                unlinked = card_stage.unlinked_prs(rk.http_get, conn, spec, cache, cards_for, time.time(), pin_conn)
+                unlinked = card_stage.unlinked_prs(rk.http_get, conn, spec, cache, cards_for, time.time(), pin_conn,
+                                                   declared)
             except (card_stage.ReadFault, SensorFault) as e:
                 unlinked_fault = str(e)
+            # a PR that names its card (``card: <id>``): the link, written onto the card as its sensor reading
+            for cid, prs in sorted(declared.items()):
+                try:
+                    got = _crm_post(base, '/internal/records/reading', {
+                        'record': cid, 'source': card_stage.CARD_LINK_SOURCE, 'fields': {'prs': sorted(prs)[:20]},
+                        'evidence': {'read_at': time.time(), 'query': 'pull requests that name the card'}})
+                    links.append({'card': cid, 'prs': sorted(prs), 'status': got.get('status')})
+                except StepError as e:
+                    links.append({'card': cid, 'prs': sorted(prs), 'status': 'refused', 'note': str(e)[:200]})
         # each reading's own failures (founder 1 Nov: a source's state comes from its own latest reads): the card's
         # GitHub reads that failed, and the pin's one read this pass; a card with no GitHub link is no failure
         name = (spec or {}).get('connection') or 'github'
@@ -340,7 +351,8 @@ def build(reg, db):
                      'unread': sum(1 for r in done if r['read'] != 'read'), 'failed': failed,
                      'refused': [{'card': r['card'], 'status': r['refused']} for r in done if r.get('refused')][:50],
                      'pin_read': cache.pin is not None or cache.pin_fault is not None,
-                     'unlinked': unlinked, **({'unlinked_fault': unlinked_fault} if unlinked_fault else {})})
+                     'unlinked': unlinked, 'links': links,
+                     **({'unlinked_fault': unlinked_fault} if unlinked_fault else {})})
 
     class _At:
         def __init__(self, t):

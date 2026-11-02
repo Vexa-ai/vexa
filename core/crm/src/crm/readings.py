@@ -50,7 +50,9 @@ from .store import CRMError
 #: The fields a reading may carry, and nothing else.
 STATES = ('open', 'closed', 'merged')
 FIELDS = ('title', 'state', 'merged_at', 'head_sha', 'labels', 'url', 'updated_at',
-          'draft', 'merge_commit_sha', 'state_reason', 'pr', 'issue', 'checks', 'prod', 'release')
+          'draft', 'merge_commit_sha', 'state_reason', 'pr', 'issue', 'checks', 'prod', 'release', 'prs')
+#: at most this many pull requests in a ``prs`` reading (the PRs that declare a card with ``card: <id>``)
+PRS_MAX = 20
 STATE_REASONS = ('completed', 'not_planned', 'reopened', 'duplicate')
 CHECKS = ('none', 'pending', 'success', 'failure')
 #: At most this many sources kept on one card.
@@ -181,6 +183,11 @@ def normalise_fields(fields) -> dict:
         out['prod'] = _object('prod', fields['prod'], _prod)
     if 'release' in fields:
         out['release'] = _object('release', fields['release'], _release)
+    if 'prs' in fields:
+        raw = fields['prs']
+        if not isinstance(raw, list) or len(raw) > PRS_MAX or not all(subject(u) for u in raw):
+            raise CRMError(f'reading field prs is a list of at most {PRS_MAX} GitHub pull request links')
+        out['prs'] = sorted({_url('prs', u) for u in raw})
     return out
 
 
@@ -236,7 +243,8 @@ def _state(name, value):
 
 
 _pr = {'url': _url, 'number': _int, 'state': _state, 'draft': _bool, 'design_doc': _bool, 'head_sha': _sha,
-       'merge_commit_sha': _sha, 'merged_at': _iso, 'updated_at': _iso}
+       'merge_commit_sha': _sha, 'merged_at': _iso, 'updated_at': _iso,
+       'base': lambda n, v: _text(n, v, 255), 'default_branch': lambda n, v: _text(n, v, 255)}
 _issue = {'url': _url, 'state': _state, 'state_reason': lambda n, v: _enum(n, v, STATE_REASONS),
           'closed_at': _iso}
 _checks = {'status': lambda n, v: _enum(n, v, CHECKS), 'sha': _sha, 'total': _int, 'running': _int,
