@@ -77,7 +77,7 @@ SENSE_ROLES = ("ceo", "software", "factory", "business", "support")
 VALIDATE_FLOW, VALIDATE_FACT, VALIDATE_EVENT = "validate_to_owner", "factory.validate", "validate.result"
 VALIDATE_LIES_MAX = 50
 SENSE_REASONS = ("done_not_in_main", "stage_vs_facts", "duplicate", "superseded_open", "unlinked_pr", "running_empty",
-                 "stale_due", "lapsed_hold", "unlinked", "owner_not_role")
+                 "stale_due", "lapsed_hold", "unlinked", "owner_not_role", "customer_request_unanswered")
 #: the card heartbeat (founder 2 Nov ~09:30Z): each open card's keyed next check; a check that finds no new fact,
 #: Next or State is a missed beat — the 1st to its owner, the 2nd to the manager, the 3rd and on to the ceo
 BEAT_FLOW, BEAT_ARM_FLOW, BEAT_RECHECK_FLOW = "card_heartbeat", "card_heartbeat_arm", "card_heartbeat_recheck"

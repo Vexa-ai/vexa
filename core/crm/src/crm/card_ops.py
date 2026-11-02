@@ -63,7 +63,9 @@ EDITABLE = ('Title', 'About', 'Next', 'Waiting', 'Summary', 'Due', 'Progress', '
             # an answer, evidence and a receipt are written only by a gate (``decide``).
             'Kind', 'NextActor', 'Requester', 'NextCheckAt', 'Chain', 'Origin',
             # 1 Nov 2026: the typed link to what the card tracks (readings.py).
-            'Source')
+            'Source',
+            # 2 Nov 2026: the customer whose ask the card answers (check_customer_request)
+            'CustomerRequest')
 #: Written only by a gate decision (D12), never by an edit or a proposal.
 GATE_ONLY = ('Handoff', 'HandoffSince', 'Answer', 'Evidence', 'Receipt')
 #: Written only by a sensor reading (``write_reading``, ``/internal/records/reading``), never by an
@@ -231,6 +233,27 @@ class PolicyText:
 
 
 # ── refs ──────────────────────────────────────────────────────────────────────────────────────
+_DAY = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+
+
+def check_customer_request(value):
+    """{by: crm:<record id>, at: YYYY-MM-DD, source: an https URL of their message, words: their ask, ≤500}, or None."""
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {'by', 'at', 'source', 'words'}:
+        raise CRMError('CustomerRequest is {by, at, source, words}')
+    by, at, src, words = (value.get(k) for k in ('by', 'at', 'source', 'words'))
+    if not isinstance(by, str) or not by.startswith('crm:') or not _ID.fullmatch(by[4:]):
+        raise CRMError('CustomerRequest.by is crm:<Person or Company id>')
+    if not isinstance(at, str) or not _DAY.fullmatch(at):
+        raise CRMError('CustomerRequest.at is the day they asked, YYYY-MM-DD')
+    if not isinstance(src, str) or not src.startswith('https://') or len(src) > 600 or _CONTROL.search(src):
+        raise CRMError('CustomerRequest.source is the https URL of their message')
+    if not isinstance(words, str) or not words.strip() or len(words) > 500:
+        raise CRMError('CustomerRequest.words is their ask, verbatim, at most 500 characters')
+    return {'by': by, 'at': at, 'source': src, 'words': words}
+
+
 def check_about(ref):
     """``page:<workspace>/<path>`` · ``chat:<id>`` · ``workspace:<slug>`` · ``meeting:<id>`` · ``crm:<id>``."""
     if not isinstance(ref, str) or ':' not in ref or len(ref) > 600:
@@ -415,6 +438,8 @@ class Cards:
             fields['Face'] = card_face.sanitize(fields['Face'])
         if fields.get('About'):
             check_about(fields['About'])
+        if 'CustomerRequest' in fields:
+            fields['CustomerRequest'] = check_customer_request(fields['CustomerRequest'])
         if not gate_write and set(fields) & set(GATE_ONLY):
             raise CRMError('A card\'s handoff, answer, evidence and receipt change only through its gates (decide)')
         reading_write = bool(getattr(self._reading, 'on', False))
@@ -1113,6 +1138,7 @@ class Cards:
             data = self._new_fields(title, about, parent, fields, face)
             if supersedes is not None:
                 data['Supersedes'] = self._check_supersedes(c, org, caller.subject, data.get('Waiting'), supersedes)
+            self._check_requester(c, org, data.get('CustomerRequest'))
             if data.get('Kind'):
                 data.setdefault('Requester', caller.subject)
             record_id = self._insert(c, org, caller.subject, type or DEFAULT_TYPE, data, narrative,
@@ -1122,6 +1148,16 @@ class Cards:
             policy = self.store._policy(c, org, caller)
             out = {'status': 'saved', 'card': self.view(c, org, policy, self._card_row(c, org, record_id))}
         return {**out, 'superseded': dropped} if dropped else out
+
+    def _check_requester(self, c, org, cr):
+        """A customer request names a Person or Company that exists."""
+        if not cr:
+            return
+        rid = check_customer_request(cr)['by'][4:]
+        t = c.execute(select(s.records.c.object_type).where(s.records.c.org_id == org, s.records.c.id == rid,
+                                                            s.records.c.deleted.is_(False))).scalar()
+        if t not in ('Person', 'Company'):
+            raise CRMError(f'CustomerRequest.by names no Person or Company: {rid}')
 
     def _check_supersedes(self, c, org, subject, waiting, ids):
         """The cards a new card may replace: cards of this org, none Done (its work happened), each owned by the same
@@ -1172,6 +1208,7 @@ class Cards:
             row = self._card_row(c, org, card)
             if 'Parent' in patch:
                 self._check_parent(c, org, policy, patch['Parent'])
+            self._check_requester(c, org, patch.get('CustomerRequest'))
             reason = f'Moved to {transition}' if transition else 'Updated the card'
             self.store._edit(c, org, caller.subject, policy, row['id'], expected_revision, patch, None, reason, [])
             return {'status': 'saved', 'card': self.view(c, org, policy, self._card_row(c, org, row['id']))}

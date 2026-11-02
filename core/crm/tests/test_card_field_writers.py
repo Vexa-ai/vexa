@@ -28,6 +28,7 @@ card_field_writers.waiting: anyone
 card_field_writers.priority: {FOUNDER}
 card_field_writers.destination: {FOUNDER}
 card_field_writers.started: {FOUNDER}
+card_field_writers.customerrequest: create, {FOUNDER}, 900001, 900003
 card_field_writers.*: create, {FOUNDER}
 ---
 """
@@ -227,6 +228,23 @@ def test_a_replaced_plain_card_is_dropped_by_the_rule(cards, store):
     new = cards.create(ORG, CEO, title='Again', workspace='sales', fields={'Supersedes': [old['id']]})
     assert new['superseded'] == [{'card': old['id'], 'status': 'moved'}]
     assert fields_of(store, old['id'])['State'] == 'Dropped'
+
+
+def test_a_customer_request_names_who_asked_when_where_and_their_words(cards, store):
+    """Founder 2 Nov 13:3xZ: CustomerRequest {by, at, source, words}; ceo, business and the founder write it."""
+    who = store.create(ORG, CEO, 'Person', {'Name': 'Bailey Lau'})['record_id']
+    ask = {'by': f'crm:{who}', 'at': '2026-10-30', 'source': 'https://mail.google.com/mail/u/0/#inbox/abc',
+           'words': 'We need 100 concurrent bots per account.'}
+    card = cards.create(ORG, BUSINESS, title='Impel: 100 bots', workspace='sales', fields={'CustomerRequest': ask})['card']
+    assert fields_of(store, card['id'])['CustomerRequest'] == ask
+    sw = plain(cards)
+    cards.update(ORG, CEO, sw['id'], sw['revision'], fields={'CustomerRequest': ask})
+    with pytest.raises(Refused):
+        cards.update(ORG, SOFTWARE, sw['id'], fields_of_rev(store, sw['id']), fields={'CustomerRequest': None})
+    for bad in ({**ask, 'by': 'crm:nobody'}, {**ask, 'at': '30 Oct'}, {**ask, 'source': 'gmail'},
+                {**ask, 'words': 'x' * 501}, {'by': ask['by']}):
+        with pytest.raises(CRMError):
+            cards.create(ORG, CEO, title='Bad', workspace='sales', fields={'CustomerRequest': bad})
 
 
 def test_without_the_policy_line_the_rule_moves_software_cards_only(store):

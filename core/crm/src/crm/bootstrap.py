@@ -108,6 +108,12 @@ CARD_LIFECYCLE_PROPERTIES = {
     'Started': _NULL_STR(40, "When the founder started this destination (ISO-8601); null when not started or paused"),
     # 2 Nov 2026 (CEO class fix): the cards this card replaces, set when it is made and never after; the stage rule drops
     # each of them that is still open, with the receipt «superseded by <this card>»
+    # 2 Nov 2026 (founder «параметр CRM … Customer Request»): the card exists because a customer asked for it
+    'CustomerRequest': {'type': ['object', 'null'], 'additionalProperties': False, 'required': ['by', 'at', 'source', 'words'],
+                        'properties': {'by': {'type': 'string', 'maxLength': 80}, 'at': {'type': 'string', 'maxLength': 10},
+                                       'source': {'type': 'string', 'maxLength': 600},
+                                       'words': {'type': 'string', 'maxLength': 500}},
+                        'description': 'Who asked (crm:<Person|Company>), when, where (a URL of their message), their words'},
     'Supersedes': {'type': ['array', 'null'], 'items': {'type': 'string', 'maxLength': 64}, 'maxItems': 20,
                    'description': 'The cards this card replaces (ids); set at creation only, the rule drops them'},
 }
