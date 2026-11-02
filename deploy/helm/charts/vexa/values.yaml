@@ -755,6 +755,15 @@ runtime:
     reconfirmSec: ""
   # Active-phase remote-audio silence window. Empty uses the bot's 10-minute default.
   aloneSilenceWindowMs: ""
+  # Google Meet refuses some anonymous knocks at random; the bot knocks again on the same page.
+  # Empty = the bot's default. Applies to bots spawned after the runtime restarts with the change.
+  googleMeetKnock:
+    # VEXA_GOOGLE_JOIN_MAX_KNOCKS: knocks per join, 1..20 (default 10).
+    maxKnocks: ""
+    # VEXA_GOOGLE_REKNOCK_BACKOFF_MS: extra wait in ms before knocks 2..n, comma-separated (default none).
+    reknockBackoffMs: ""
+    # VEXA_GOOGLE_REKNOCK_WIPE: "1" wipes the guest's Google cookies and storage before a re-knock (default off).
+    reknockWipe: ""
   resources:
     requests: { cpu: 50m, memory: 256Mi }
     limits:   { cpu: 500m, memory: 768Mi }
