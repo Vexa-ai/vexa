@@ -223,6 +223,8 @@ def test_stop_between_pods_ends_the_meeting_and_starts_nothing(world):
     assert row["status"] == "failed"
     assert row["data"]["completion_reason"] == "stopped"
     assert row["data"]["meet_respawn"]["state"] == "cancelled"
+    assert row["data"]["join_evidence"]["reason"] == "stopped_while_joining"
+    assert row["data"]["join_evidence"]["attribution"] == "user_action"
     assert _due(repo, runtime) == 0
     assert len(runtime.specs) == 1
 
