@@ -382,12 +382,21 @@ async def _end_between_pods(repo, row: dict) -> None:
     block = dict(((row.get("data") or {}).get(meet_respawn.KEY)) or {})
     block["state"] = meet_respawn.CANCELLED
     block.pop("next_at", None)
+    reason = "stopped by the user while the next bot was due (Google Meet refused the last one)"
+    data = {"stop_requested": True, meet_respawn.KEY: block}
+    # The same typed axes every pre-active terminal carries: the user ended it (user_action).
+    from .reconcile import _reconcile_join_evidence
+
+    evidence = _reconcile_join_evidence(status="joining", completion_reason="stopped",
+                                        detail=reason, source="user_stop")
+    if evidence is not None:
+        data["join_evidence"] = evidence
     await repo.fail_meeting(
         meeting_id=row["id"],
-        reason="stopped by the user while the next bot was due (Google Meet refused the last one)",
+        reason=reason,
         failure_stage="joining",
         completion_reason="stopped",
-        data={"stop_requested": True, meet_respawn.KEY: block},
+        data=data,
     )
 
 
