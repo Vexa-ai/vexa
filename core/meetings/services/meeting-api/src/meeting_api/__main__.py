@@ -802,6 +802,34 @@ def _attach_background_loops(
                 log.exception("auto-join tick failed")
             await asyncio.sleep(auto_join_interval)
 
+    # Google Meet respawn (lifecycle/meet_respawn.py): start the next bot pod for every meeting whose
+    # last bot Meet refused, once its wait is over. The row's `next_at` is the schedule; this sweep,
+    # single-flighted across replicas, is the only thing that acts on it.
+    meet_respawn_interval = float(os.getenv("MEET_RESPAWN_INTERVAL_S", "5"))
+
+    async def _meet_respawn_loop() -> None:
+        if meeting_repo is None or runtime is None or not hasattr(meeting_repo, "list_meet_respawns"):
+            return
+        from .lifecycle.meet_respawn import respawn_due
+
+        async def _tick():
+            await respawn_due(
+                meeting_repo, runtime,
+                authority=service_authority,
+                token_secret=os.getenv("ADMIN_TOKEN") or None,
+                redis_url=os.getenv("REDIS_URL"),
+                redis_grant=bot_redis.grant if bot_redis is not None else None,
+            )
+
+        while True:
+            try:
+                await _guarded("meet-respawn", _tick)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("meet-respawn tick failed")
+            await asyncio.sleep(meet_respawn_interval)
+
     # Planned meetings reach Flows (ADR-0052 §4): every create/move/cancel/toggle of a planned row
     # wrote a `meeting.planned.changed` fact into `meeting_planned_outbox` in its own transaction;
     # this drains it to Flows in revision order, at least once, single-flight across replicas. A
@@ -981,6 +1009,7 @@ def _attach_background_loops(
                 name="service-authority",
             ),
             asyncio.create_task(_auto_join_loop(), name="auto-join"),
+            asyncio.create_task(_meet_respawn_loop(), name="meet-respawn"),
             asyncio.create_task(_calendar_sync_loop(), name="calendar-sync"),
             asyncio.create_task(_planned_outbox_loop(), name="planned-outbox"),
             asyncio.create_task(_signal_tape_janitor_loop(), name="signal-tape-janitor"),

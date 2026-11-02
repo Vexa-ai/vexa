@@ -269,15 +269,20 @@ class SqlAlchemyRecordingRepo:
         """Index-backed like the meetings list's access union (#800): the viewer branch is the
         ``transcript_viewers`` GIN containment, the workspace branch the bound-workspace column; the
         permission (``share_settings.recording``) is then decided per row by ``shared_access``."""
-        from sqlalchemy import cast, func, or_, select
+        from sqlalchemy import String, func, literal_column, or_, select
         from sqlalchemy.dialects.postgresql import JSONB
 
         from ..sessions.models import Meeting
         from .shared_access import may_read_shared_recording
 
-        access = [cast(Meeting.data["transcript_viewers"], JSONB).op("@>")(func.to_jsonb(user_id))]
+        # Literal-key `->` / `->>`: the exact expressions of ix_meeting_transcript_viewers_gin and the
+        # workspace indexes, so the OR plans as a BitmapOr (#1968). `data["k"]` renders the PG14
+        # subscript `data['k']` on SQLAlchemy 2.0.54, which no index matches (a seq scan per call).
+        viewers = Meeting.data.op("->", return_type=JSONB)(literal_column("'transcript_viewers'"))
+        access = [viewers.op("@>")(func.to_jsonb(user_id))]
         if member_workspaces:
-            access.append(Meeting.data["workspace_id"].astext.in_(list(member_workspaces)))
+            workspace = Meeting.data.op("->>", return_type=String)(literal_column("'workspace_id'"))
+            access.append(workspace.in_(list(member_workspaces)))
         stmt = select(Meeting).where(or_(*access), Meeting.user_id != user_id)
         if meeting_id is not None:
             stmt = stmt.where(Meeting.id == int(meeting_id))

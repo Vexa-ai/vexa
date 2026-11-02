@@ -441,7 +441,10 @@ def create_app(
 
     async def _delete_meeting_fixtures(user_id: int, meeting_id: int) -> list[str]:
         from .recordings.deletion import delete_meeting_fixtures
+        from .join_screenshots import delete_meeting_screenshots
         deleted = await delete_meeting_fixtures(storage, user_id=user_id, meeting_id=meeting_id)
+        # The join-failure screenshots of every attempt go with the meeting.
+        deleted += await delete_meeting_screenshots(storage, meeting_id=meeting_id)
         # Erasing a meeting's artifacts also drops a voice note's audio stream, if one is left.
         await _drop_voice_note_stream(meeting_id)
         return deleted
@@ -462,6 +465,10 @@ def create_app(
     if recording_repo is None:
         recording_repo = _recordings_fakes().InMemoryRecordingRepo()
     app.include_router(_recordings.build_router(recording_repo, storage, token_secret=token_secret))
+    # One join-failure PNG per attempt, beside the recordings (join_screenshots/): same edge, same
+    # credential, its own keyspace.
+    from .join_screenshots import build_router as _build_join_screenshot_router
+    app.include_router(_build_join_screenshot_router(recording_repo, storage, token_secret=token_secret))
 
     # meeting-bundle.v1: export a meeting the caller owns as one portable file, import one as a new
     # meeting. Composed over the same three ports as the routes above — the transcript store, the

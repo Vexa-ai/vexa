@@ -109,6 +109,12 @@ Defined in [`runtime.schema.json`](runtime.schema.json) (`$defs`): **WorkloadSpe
 definitions and the `SignedEventVector` shape. Conforming examples live in [`golden/`](golden/) and are validated by
 [`validate.mjs`](validate.mjs) (run by `gate:schema`).
 
+`WorkloadSpec.avoidNodes` (optional, added 1 Nov 2026) is the one placement hint a caller may give: the
+nodes a meeting's earlier join attempts ran on, rendered by the k8s backend as a PREFERRED anti-affinity
+on `kubernetes.io/hostname` (never required, so a fully tried cluster still schedules and the autoscaler
+is not asked for a node). docker and process ignore it. Meeting bots get `VEXA_NODE_NAME` (the Pod's
+node, downward API) on k8s, so a failed attempt can report where it ran.
+
 ## Status
 **Sealed** in `contracts.seal.json` (gate:contract-version). An additive change re-seals with
 `pnpm seal:contracts` in a `lane:contract` PR; a breaking one is `runtime.v2`.

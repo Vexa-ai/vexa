@@ -440,6 +440,7 @@ def build_pod(
     overlay_env: Optional[dict[str, str]] = None,
     instance: str = "",
     secret_env: Optional[tuple[str, tuple[str, ...]]] = None,
+    avoid_nodes: tuple[str, ...] = (),
 ) -> dict:
     """The COMPLETE Pod object a spawn submits — every field the workload needs, in one manifest.
 
@@ -522,6 +523,15 @@ def build_pod(
     # and tolerations, when set, replace the runtime-wide ones above; its priority class and pull
     # secrets have no runtime-wide counterpart. Nothing here comes from the workload's env.
     runnable.scheduling.apply(pod["spec"])
+    # The one caller placement hint: a join retry's preferred anti-affinity to the nodes the
+    # meeting's earlier attempts ran on (pod_scheduling.apply_avoid_nodes). Merged, never replacing.
+    pod_scheduling.apply_avoid_nodes(pod["spec"], avoid_nodes)
+    # The node this Pod lands on, for the workload to report (downward API). The runtime's value,
+    # never the caller's: a literal of the same name in the spec env is dropped.
+    if runnable.node_name_env:
+        container["env"] = [e for e in container.get("env", []) if e.get("name") != runnable.node_name_env]
+        container["env"].append({"name": runnable.node_name_env,
+                                 "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}})
     # Hardening, last so no overlay replaces it: every capability dropped but the ones the profile
     # keeps (the operator may narrow them per class, e.g. to none under OpenShift's restricted SCC),
     # no privilege escalation, the runtime's default seccomp profile unless the operator names the
@@ -575,8 +585,10 @@ class K8sBackend:
         runnable: Runnable,
         env: dict[str, str],
         resources: Optional[Resources] = None,
+        avoid_nodes: tuple[str, ...] = (),
     ) -> WorkloadHandle:
-        """Submit the workload's complete Pod manifest. ``resources`` (the kernel's effective sizing:
+        """Submit the workload's complete Pod manifest. ``avoid_nodes`` becomes a preferred
+        anti-affinity to those nodes (a join retry placed away from the earlier attempts). ``resources`` (the kernel's effective sizing:
         the spec's own, else the profile's chart-configured default) becomes the container's
         requests+limits, which is what a namespace ResourceQuota admits on."""
         if not runnable.image:
@@ -609,6 +621,7 @@ class K8sBackend:
             overlay_env={**full, **_runtime_scheduling_env()},
             instance=self._instance,
             secret_env=(secret_name, tuple(sorted(hidden))) if hidden else None,
+            avoid_nodes=tuple(avoid_nodes),
         )
         manifest = json.dumps(pod)
         self._exited.pop(name, None)

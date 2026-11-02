@@ -794,6 +794,34 @@
    "targets": []
   },
   {
+   "key": "VEXA_MEET_RESPAWN_PODS",
+   "class": "defaulted",
+   "default": "3",
+   "description": "Google Meet refusal: bot pods per meeting, the first included (1..5; 1 turns the respawn off). When Meet refuses an anonymous bot's join (google_meet_join_refused) the meeting stays joining and a new pod is started on the same row (lifecycle/meet_respawn.py)",
+   "targets": []
+  },
+  {
+   "key": "VEXA_MEET_RESPAWN_DELAYS_S",
+   "class": "defaulted",
+   "default": "30,60",
+   "description": "Google Meet refusal: comma-separated wait (s) before pod 2, pod 3, …; the last value repeats (each 0..300; invalid → default)",
+   "targets": []
+  },
+  {
+   "key": "VEXA_MEET_RESPAWN_WINDOW_S",
+   "class": "defaulted",
+   "default": "900",
+   "description": "Google Meet refusal: no new pod starts later than this (s) after the meeting's first spawn (60..1800); past it the refusal is the meeting's terminal",
+   "targets": []
+  },
+  {
+   "key": "MEET_RESPAWN_INTERVAL_S",
+   "class": "defaulted",
+   "default": "5",
+   "description": "Google Meet refusal: cadence (s) of the single-flight sweep that starts a meeting's next pod once its wait is over",
+   "targets": []
+  },
+  {
    "key": "AUTO_JOIN_LEAD_S",
    "class": "defaulted",
    "default": "120",

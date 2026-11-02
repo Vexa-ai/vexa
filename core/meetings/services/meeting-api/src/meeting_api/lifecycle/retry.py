@@ -43,6 +43,7 @@ _TRANSIENT: frozenset[CompletionReason] = frozenset(
 _PERMANENT: frozenset[CompletionReason] = frozenset(
     {
         CompletionReason.AWAITING_ADMISSION_REJECTED,
+        CompletionReason.PLATFORM_JOIN_REFUSED,  # already retried on new pods (meet_respawn.py)
         CompletionReason.EVICTED,
         CompletionReason.VALIDATION_ERROR,
         CompletionReason.MAX_BOT_TIME_EXCEEDED,
