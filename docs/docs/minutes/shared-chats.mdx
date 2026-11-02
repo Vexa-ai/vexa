@@ -388,7 +388,8 @@ read, the write is held.
   Three requests pass that app-wide rule and are decided again by their route: `GET
   /transcripts/by-id/{id}` and `GET /transcripts/{platform}/{native_meeting_id}` answer only for a
   meeting bound to a workspace inside the turn's ceiling (the workspaces every participant reads),
-  and `POST /bots` only for a bot bound to such a workspace. Transcript search and meeting lists stay
+  and `POST /bots` only for a bot bound to such a workspace, and without `chat_on_join` (with it,
+  `403 shared_conversation`: a shared turn does not type into the meeting chat). Transcript search and meeting lists stay
   refused. The ceiling arrives on the gateway-signed delegation headers.
 - **A member reads a meeting by its link.** When the caller owns no meeting on that link,
   `GET /transcripts/{platform}/{native_meeting_id}` takes the newest one bound to a workspace the
