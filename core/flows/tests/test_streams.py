@@ -406,3 +406,128 @@ def test_a_failing_source_reaches_the_factory_once_per_fault():
     db.execute("UPDATE sensor SET reason = 'read failed (403)' WHERE name = 'gmail-info'")
     step(ctx)
     assert len(stream.unacked(db, "factory")) == 3, "a new reason is a new fault"
+
+
+
+# ── support cards: a support message makes its thread's one card with the SLA's Due and alarms ─────────────────────
+SUPPORT = {"readings": {"discord/bug-reports": "discord", "gmail-dmitry/inbox": "email_customers",
+                        "gmail-info/inbox": "email"},
+           "discord_guild": "9", "ours": {"discord": [".dima__"], "email_domains": ["vexa.ai"]},
+           "sla": {"discord": {"remind_h": 4, "due_h": 8}, "email": {"due_bd": 1},
+                   "email_customer": {"remind_h": 4, "due_h": 24}}}
+
+
+def _support_rig(monkeypatch, now, answers):
+    import flows_steps.common as common
+    from flows_sensors import reading as rk
+    sent = []
+    monkeypatch.setenv("VEXA_FLOWS_CRM_API_URL", "http://crm-api:8300")
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "flows-service-key-crm")
+    monkeypatch.setattr(rk, "load_config", lambda path="": {"support": SUPPORT})
+
+    def http(method, url, headers, body, timeout=20):
+        path = url.replace("http://crm-api:8300", "")
+        sent.append((path, body))
+        if path.startswith("/internal/cards/support/"):
+            return 200, answers(path, body)
+        return 200, {"cards": []}
+    monkeypatch.setattr(common, "http", http)
+    db, clock, reg = _due_rig(now)
+    return db, clock, reg, sent
+
+
+def _discord(db, reg, clock, msg, frm, reply_to=None, at=None):
+    refs = {"message": msg, "channel": "2", "from": frm, "at": at,
+            "_evidence": {"reading": "discord/bug-reports", "read_at": clock.now()}}
+    if reply_to:
+        refs["reply_to"] = reply_to
+    return admit(db, reg, clock, source_event_id=f"discord-{msg}", event_type="business.support", subject_refs=refs)
+
+
+def test_a_discord_question_makes_one_card_with_its_sla_and_alarms_into_support(monkeypatch):
+    t0 = _utc(2026, 11, 2) + 9 * 3600                                     # Monday 09:00Z
+    cards = {}
+
+    def answers(path, body):
+        if path.endswith("/inbound"):
+            new = body["source"] not in cards
+            cards.setdefault(body["source"], "card-1")
+            return {"card": cards[body["source"]], "status": "created" if new else "open", "customer": False}
+        return {"card": cards.get(body["source"]), "status": "done"}
+    db, clock, reg, sent = _support_rig(monkeypatch, t0, answers)
+    _discord(db, reg, clock, "300", "anurag2069", at="2026-11-02T09:00:00Z")
+    _run(db, reg, clock)
+    (path, body), = [x for x in sent if x[0].startswith("/internal/cards/support/")]
+    assert path.endswith("/inbound") and body["source"] == "https://discord.com/channels/9/2/300"
+    assert body["due"] == "2026-11-02" and body["customers_only"] is False   # L179: due 8 h after
+    armed = dict(db.execute("SELECT key, fire_at FROM keyed_schedule WHERE status = 'armed'"))
+    assert armed == {"card-1:sla_remind": t0 + 4 * 3600, "card-1:sla_due": t0 + 8 * 3600}
+
+    _discord(db, reg, clock, "301", "anurag2069", reply_to="300", at="2026-11-02T09:10:00Z")   # same thread
+    _run(db, reg, clock)
+    inbound = [b for p, b in sent if p.endswith("/inbound")]
+    assert [b["source"] for b in inbound] == ["https://discord.com/channels/9/2/300"] * 2      # the same card
+
+    clock.advance(4 * 3600 + 1)
+    _run(db, reg, clock)
+    assert [i["event_type"] for i in stream.unacked(db, "support")] == ["support.remind"]
+    assert stream.unacked(db, "support")[0]["refs"]["card"] == "card-1"
+
+    _discord(db, reg, clock, "302", ".dima__", reply_to="300")                                  # our reply
+    _run(db, reg, clock)
+    assert [p for p, _ in sent][-1] == "/internal/cards/support/reply"
+    assert db.execute("SELECT DISTINCT status FROM keyed_schedule WHERE key LIKE 'card-1:sla_%' "
+                      "AND status = 'armed'") == [], "our reply cancels the alarms"
+    clock.advance(5 * 3600)
+    _run(db, reg, clock)
+    assert [i["event_type"] for i in stream.unacked(db, "support")] == ["support.remind"], "no deadline after the reply"
+
+
+def test_a_mail_from_a_non_customer_in_the_founders_mailbox_makes_no_card(monkeypatch):
+    db, clock, reg, sent = _support_rig(monkeypatch, _utc(2026, 11, 2) + 9 * 3600,
+                                        lambda path, body: {"card": None, "status": "not_a_customer"})
+    admit(db, reg, clock, source_event_id="g-1", event_type="business.support",
+          subject_refs={"message": "m1", "thread": "t1", "from": "Pat <pat@prospect.test>",
+                        "_evidence": {"reading": "gmail-dmitry/inbox", "read_at": clock.now()}})
+    _run(db, reg, clock)
+    (body,) = [b for p, b in sent if p.endswith("/inbound")]
+    assert body["customers_only"] is True and body["source"] == "https://mail.google.com/mail/u/0/#all/t1"
+    assert db.execute("SELECT count(*) FROM keyed_schedule WHERE key LIKE '%sla%'") == [(0,)]
+    assert stream.unacked(db, "support") == []
+
+
+def test_a_reading_outside_the_support_list_and_our_own_new_post_are_no_ticket(monkeypatch):
+    db, clock, reg, sent = _support_rig(monkeypatch, _utc(2026, 11, 2), lambda p, b: {})
+    admit(db, reg, clock, source_event_id="a-1", event_type="business.support",
+          subject_refs={"message": "5", "channel": "2", "from": "x", "_evidence": {"reading": "discord/announcements",
+                                                                                 "read_at": clock.now()}})
+    _discord(db, reg, clock, "6", ".dima__")
+    _run(db, reg, clock)
+    assert not [p for p, _ in sent if p.startswith("/internal/cards/support/")]
+
+
+def test_an_outsiders_issue_opens_a_card_and_a_members_later_comment_closes_it(monkeypatch):
+    from flows_sensors import reading as rk
+    t0 = _utc(2026, 11, 2) + 9 * 3600
+    db, clock, reg, sent = _support_rig(monkeypatch, t0, lambda p, b: {'card': 'card-7', 'status': 'created'
+                                                                        if p.endswith('/inbound') else 'done'})
+    cfg = {'support': {**SUPPORT, 'readings': {'github/vexa-issues': 'github'}, 'sla': {'github': {'due_h': 24}}},
+           'delivery': {'connection': 'github'}, 'connections': {'github': {'transport': 'http_json'}}}
+    monkeypatch.setattr(rk, 'load_config', lambda path='': cfg)
+    comments = []
+    issue = {'html_url': 'https://github.com/Vexa-ai/vexa/issues/5', 'title': 'Bot stuck', 'state': 'open',
+             'author_association': 'NONE', 'created_at': '2026-11-02T09:00:00Z'}
+    monkeypatch.setattr(rk, 'http_get', lambda conn, path, params: comments if path.endswith('/comments') else issue)
+
+    def ev(n):
+        return admit(db, reg, clock, source_event_id=f'gh-{n}', event_type='business.reading',
+                     subject_refs={'subject': issue['html_url'], 'url': issue['html_url'],
+                                   '_evidence': {'reading': 'github/vexa-issues', 'read_at': clock.now()}})
+    ev(1)
+    _run(db, reg, clock)
+    (body,) = [b for p, b in sent if p.endswith('/inbound')]
+    assert body['due'] == '2026-11-03' and body['title'] == 'Bot stuck'                 # L178: 24 h
+    comments.append({'author_association': 'MEMBER', 'created_at': '2026-11-02T11:00:00Z'})
+    ev(2)
+    _run(db, reg, clock)
+    assert [p for p, _ in sent if p.startswith('/internal/cards/support/')][-1].endswith('/reply')

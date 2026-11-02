@@ -51,7 +51,7 @@ def test_business_events_are_kept_once_with_their_evidence():
     db, reg, clock, _ = rig()
     build(reg, db)
     for kind in ('registered', 'paid', 'bot', 'support', 'stage'):
-        assert [f.name for f in reg.match(f'business.{kind}')] == [f'business_{kind}']
+        assert [f.name for f in reg.match(f'business.{kind}')] == [f'business_{kind}'] + (['support_card'] if kind == 'support' else [])
     ev = {'reading': 'stripe/charges', 'connection': 'stripe', 'path': '/v1/charges', 'read_at': 1.0}
     refs = {'email': 'a@x.io', '_evidence': ev}
     assert admit(db, reg, clock, source_event_id='sensor:instance/s:ch_1', event_type='business.paid', subject_refs=refs) == 1
@@ -87,9 +87,9 @@ def test_a_reading_is_written_onto_every_card_that_tracks_it(monkeypatch):
     from flows import Done
     db, reg, clock, _ = rig()
     build(reg, db)
-    assert [f.name for f in reg.match('business.reading')] == ['crm_reading']
+    assert [f.name for f in reg.match('business.reading')] == ['crm_reading', 'support_card_issue']   # + the support rule
     assert admit(db, reg, clock, source_event_id='sensor:instance/g:x@1', event_type='business.reading',
-                 subject_refs=READING_REFS) == 1
+                 subject_refs=READING_REFS) == 2       # the card reading and the support rule (not_support)
 
     def answers(url, body):
         if url.endswith('/internal/cards/by-source'):

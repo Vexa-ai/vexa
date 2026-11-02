@@ -270,6 +270,16 @@ class SoftwareCards(Body):
     record: str | None = Field(default=None, max_length=128, description='One card; omitted: every open software card.')
 class DueCards(Body):
     record: str | None = Field(default=None, max_length=128, description='One card; omitted: every open card with a Due.')
+class SupportInbound(Body):
+    source: str = Field(min_length=1, max_length=300, description="The thread's root link (what the card tracks).")
+    title: str = Field(default='', max_length=200)
+    sender: str = Field(default='', max_length=300, description='The sender (an email or a mail header), to match a Person.')
+    at: str = Field(min_length=1, max_length=40, description='When the message was sent (ISO).')
+    due: str | None = Field(default=None, pattern=r'^\d{4}-\d{2}-\d{2}$')
+    customers_only: bool = False
+class SupportReply(Body):
+    source: str = Field(min_length=1, max_length=300)
+    at: str = Field(min_length=1, max_length=40)
 class CardChange(Body):
     record: str = Field(min_length=1, max_length=128)
     revision: int = Field(ge=1)
@@ -762,6 +772,18 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
         """The cards a due alarm reads (one, or every open card with a Due): id, Due, owner (Waiting),
         open. Internal tier only (flows' ``card_due_alarms``); it acts for nobody."""
         return audited('card.due', caller, body.record or '', lambda: cards.due_cards(org_id, body.record))
+
+    @app.post('/internal/cards/support/inbound', include_in_schema=False)
+    def internal_support_inbound(body: SupportInbound, caller=Depends(internal)):
+        """An inbound support message: the one card of its thread, made or reopened (no Kind, Waiting=support,
+        the SLA's Due). Flows' ``support_card`` rule only (founder 2 Nov). Internal tier only."""
+        return audited('card.support', caller, body.source[:128], lambda: cards.support_inbound(
+            org_id, body.source, body.title, body.sender, body.at, body.due, body.customers_only))
+
+    @app.post('/internal/cards/support/reply', include_in_schema=False)
+    def internal_support_reply(body: SupportReply, caller=Depends(internal)):
+        """Our reply seen in a support thread: its card moves to Done. Internal tier only."""
+        return audited('card.support', caller, body.source[:128], lambda: cards.support_reply(org_id, body.source, body.at))
 
     @app.post('/internal/cards/change', include_in_schema=False)
     def internal_cards_change(body: CardChange, caller=Depends(internal)):

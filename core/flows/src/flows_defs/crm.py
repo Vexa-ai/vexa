@@ -37,6 +37,8 @@ flow ends ``not_present`` rather than knocking on a missing door.
   through ``/internal/cards/due``; the refs are the card id, the due date and the owner.
 """
 import json
+import re
+from datetime import datetime, timedelta, timezone
 import time
 import flows_config
 from flows import Done, EventType, NotPresent, StepError
@@ -66,6 +68,11 @@ SOURCES_OWNER = "factory"
 SOURCE_FAULTS_FLOW = "source_faults_to_owner"
 SOURCE_FAULTS_CRON = "*/10 * * * *"
 SOURCE_EVENT = "source.failing"
+#: support cards (founder 2 Nov ~09:00Z): the rule over the support readings, and its SLA alarms (keyed, into the
+#: support stream through card_due_alarms' to_stream)
+SUPPORT_FLOWS = {"support_card": "business.support", "support_card_issue": "business.reading"}
+SUPPORT_REMIND_EVENT, SUPPORT_DUE_EVENT = "support.remind", "support.due"
+OUTSIDE = ("NONE", "CONTRIBUTOR", "FIRST_TIMER", "FIRST_TIME_CONTRIBUTOR", "MANNEQUIN")
 DUE_EVENT, DUE_SOON_EVENT = "card.due", "card.due_soon"
 
 
@@ -443,6 +450,124 @@ def build(reg, db):
                                    'failures': int(failures or 0), 'reason': why}))
         return Done({'failing': len(rows), 'appended': [o for o in out if o.get('status') == 'appended']})
 
+    def _add_hours_or_days(t, sla):
+        """``t`` (epoch) plus the SLA: hours, or working days (Mon–Fri) for ``*_bd``."""
+        if sla.get('due_bd'):
+            n, d = int(sla['due_bd']), datetime.fromtimestamp(t, timezone.utc)
+            while n:
+                d += timedelta(days=1)
+                if d.weekday() < 5:
+                    n -= 1
+            return d.timestamp()
+        return t + float(sla.get('due_h') or 0) * 3600
+
+    def _support_message(ctx, cfg, kind):
+        """What one support reading's event says: {source, title, sender, at, ours, customers_only} or None."""
+        ev = ctx.refs.get('_evidence') or {}
+        reading, r = str(ev.get('reading') or ''), ctx.refs
+        read_at = float(ev.get('read_at') or ctx.clock_now)
+        if kind == 'discord':
+            root = str(r.get('reply_to') or r.get('message') or '')
+            if not root.isdigit() or not str(r.get('channel') or '').isdigit():
+                return None
+            at = _iso_epoch(r.get('at')) or read_at
+            ours = str(r.get('from') or '') in ((cfg.get('ours') or {}).get('discord') or [])
+            if ours and not r.get('reply_to'):
+                return None                                   # our own new post is no ticket
+            return {'source': f"https://discord.com/channels/{cfg.get('discord_guild')}/{r['channel']}/{root}",
+                    'title': f"{reading} · {r.get('from') or '—'}", 'sender': '', 'at': at, 'ours': ours, 'sla': 'discord'}
+        if kind in ('email', 'email_customers'):
+            thread, sender = str(r.get('thread') or ''), str(r.get('from') or '')
+            if not thread.isalnum():
+                return None
+            mail = sender.rsplit('<', 1)[-1].rstrip('>').strip().lower()
+            ours = mail.rsplit('@', 1)[-1] in ((cfg.get('ours') or {}).get('email_domains') or [])
+            return {'source': f'https://mail.google.com/mail/u/0/#all/{thread}', 'title': f'{reading} · {sender[:120]}',
+                    'sender': sender, 'at': read_at, 'ours': ours, 'customers_only': kind == 'email_customers',
+                    'sla': 'email'}
+        return None
+
+    def _iso_epoch(v):
+        try:
+            return datetime.fromisoformat(str(v).replace('Z', '+00:00')).timestamp()
+        except ValueError:
+            return None
+
+    def _github_message(ctx, cfg):
+        """A GitHub issue opened by someone outside the org: its last word decides (a member's comment after the
+        outsider's last one, or the issue closed, is our reply). GET only, through the delivery connection."""
+        from flows_sensors import reading as rk
+        r = ctx.refs
+        m = re.match(r'^https://github\.com/([\w.\-]+)/([\w.\-]+)/issues/(\d+)$', str(r.get('url') or r.get('subject') or ''))
+        if not m:
+            return None
+        rcfg = rk.load_config()
+        conn = (rcfg.get('connections') or {}).get((rcfg.get('delivery') or {}).get('connection') or 'github')
+        issue = rk.http_get(conn, f'/repos/{m.group(1)}/{m.group(2)}/issues/{m.group(3)}', {})
+        if not isinstance(issue, dict) or str(issue.get('author_association')) not in OUTSIDE:
+            return None
+        comments = rk.http_get(conn, f'/repos/{m.group(1)}/{m.group(2)}/issues/{m.group(3)}/comments', {'per_page': '100'})
+        comments = [c for c in comments if isinstance(c, dict)] if isinstance(comments, list) else []
+        last_out = max([_iso_epoch(issue.get('created_at')) or 0] + [_iso_epoch(c.get('created_at')) or 0 for c in comments
+                                                                     if str(c.get('author_association')) in OUTSIDE])
+        last_us = max([0] + [_iso_epoch(c.get('created_at')) or 0 for c in comments
+                             if str(c.get('author_association')) not in OUTSIDE])
+        ours = issue.get('state') == 'closed' or last_us > last_out
+        return {'source': issue.get('html_url'), 'title': str(issue.get('title') or '')[:200],
+                'sender': '', 'at': last_us if ours else last_out, 'ours': ours, 'sla': 'github'}
+
+    @reg.step
+    def support_card(ctx):
+        """An inbound support message → the ONE card of its thread (CRM ``/internal/cards/support/inbound``: no
+        Kind, Waiting=support, About = the sender's Person, Due = the channel SLA's date) and its SLA alarms into
+        the support stream (a reminder, then the deadline, at the exact times); our reply seen in the thread →
+        Done (``…/reply``) and its alarms cancelled. Which readings count, what is ours and the SLAs (with their
+        doctrine lines) are the ``support`` block of the connections file. Reads: the reading's refs · Effect: a
+        support card made, reopened or closed; two keyed alarms."""
+        from flows_sensors import reading as rk
+        from flows import keyed
+        base = flows_config.get(CRM_URL_ENV).rstrip('/')
+        if not base:
+            return NotPresent('crm')
+        cfg = rk.load_config().get('support') or {}
+        reading = str((ctx.refs.get('_evidence') or {}).get('reading') or '')
+        kind = (cfg.get('readings') or {}).get(reading)
+        if not kind:
+            return Done({'status': 'not_support', 'reading': reading})
+        msg = _github_message(ctx, cfg) if kind == 'github' else _support_message(ctx, cfg, kind)
+        if not msg:
+            return Done({'status': 'not_a_ticket', 'reading': reading})
+        at_iso = datetime.fromtimestamp(msg['at'], timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        flow, clock = reg.newest('instance', DUE_FLOW), _At(ctx.clock_now)
+        if msg['ours']:
+            out = _crm_post(base, '/internal/cards/support/reply', {'source': msg['source'], 'at': at_iso})
+            if out.get('card') and flow is not None:
+                for k in ('sla_remind', 'sla_due'):
+                    keyed.cancel(db, clock, flow, key=f"{out['card']}:{k}")
+            return Done({'reading': reading, **out})
+        sla = dict((cfg.get('sla') or {}).get(msg['sla']) or {})
+        body = {'source': msg['source'], 'title': msg['title'] or msg['source'], 'sender': msg['sender'], 'at': at_iso,
+                'customers_only': bool(msg.get('customers_only'))}
+        due_at = _add_hours_or_days(msg['at'], sla) if sla else None
+        if due_at:
+            body['due'] = datetime.fromtimestamp(due_at, timezone.utc).strftime('%Y-%m-%d')
+        out = _crm_post(base, '/internal/cards/support/inbound', body)
+        if out.get('status') in ('created', 'reopened') and out.get('card') and due_at and flow is not None:
+            if msg['sla'] == 'email' and out.get('customer'):
+                # a customer's email keeps the customer SLA's alarms (the CRM said who it is); the card's Due date
+                # was the email SLA's, which is the same day or later only across a weekend
+                sla = dict((cfg.get('sla') or {}).get('email_customer') or sla)
+                due_at = _add_hours_or_days(msg['at'], sla)
+            payload = {'card': out['card'], 'owner': 'support', 'due_at': datetime.fromtimestamp(due_at, timezone.utc)
+                       .strftime('%Y-%m-%dT%H:%M:%SZ')}
+            keyed.upsert(db, clock, flow, key=f"{out['card']}:sla_due", fire_at=due_at, event_type=SUPPORT_DUE_EVENT,
+                         payload=payload, per_user=-1)
+            if sla.get('remind_h'):
+                keyed.upsert(db, clock, flow, key=f"{out['card']}:sla_remind",
+                             fire_at=msg['at'] + float(sla['remind_h']) * 3600, event_type=SUPPORT_REMIND_EVENT,
+                             payload=payload, per_user=-1)
+        return Done({'reading': reading, **out})
+
     for kind in BUSINESS_EVENTS:
         reg.flow(name=f'business_{kind}', version=1, on=EventType(f'business.{kind}'),
                  steps=[reg.steps['record_business_event']])
@@ -470,6 +595,8 @@ def build(reg, db):
                        steps=('arm_card_due',), cron=DUE_RECHECK_CRON)
     reg.flows[(due_recheck.ident, due_recheck.version)] = due_recheck
     reg.scheduled.setdefault(due_recheck.ident, []).append(due_recheck)
+    for name, event in SUPPORT_FLOWS.items():
+        reg.flow(name=name, version=1, on=EventType(event), steps=[reg.steps['support_card']])
     reg.flow(name=CHANGE_FLOW, version=1, on=EventType('crm.record.changed'), steps=[reg.steps['card_change_to_owner']])
     faults = Flow(name=SOURCE_FAULTS_FLOW, version=1, on=EventType(SCHEDULE_EVENT),
                   steps=('source_faults_to_owner',), cron=SOURCE_FAULTS_CRON)

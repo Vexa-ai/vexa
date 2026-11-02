@@ -1548,6 +1548,97 @@ class Cards:
                 break
         return {'cards': out}
 
+    # ── support cards (founder 2 Nov ~09:00Z «суппорт тикеты должны автоматически создавать карточки с SLA») ──
+    #: the one actor a support card is made and moved under; the one owner it waits on
+    SUPPORT_ACTOR, SUPPORT_WAITING = 'flows:support', 'support'
+
+    def _support_card(self, c, org, source):
+        """The support card that tracks ``source`` (its thread's root link): no Kind, Waiting=support."""
+        want = rd.subject(source)
+        r = s.records
+        rows = c.execute(select(r.c.id, r.c.fields, r.c.revision, r.c.object_type, r.c.owner_id).where(
+            r.c.org_id == org, r.c.object_type == DEFAULT_TYPE, r.c.deleted.is_(False),
+            r.c.merged_into.is_(None))).all()
+        for row in rows:
+            f = row.fields or {}
+            if f.get('Source') and rd.subject(f['Source']) == want and not f.get('Kind') \
+                    and f.get('Waiting') == self.SUPPORT_WAITING:
+                return {'id': row.id, 'fields': f, 'revision': row.revision, 'object_type': row.object_type,
+                        'owner_id': row.owner_id}
+        return None
+
+    def _support_sender(self, c, org, sender):
+        """The CRM Person a sender's email names, and whether their Company is a customer (Stage «Customer»)."""
+        mail = rd.email_of(sender)
+        if not mail:
+            return None, False
+        m, r = s.match_ids, s.records
+        ids = [rid for (rid,) in c.execute(select(m.c.record_id).where(m.c.org_id == org,
+                                                                     m.c.identifier == f'email:{mail}')).all()]
+        for rid in ids:
+            row = c.execute(select(r.c.object_type, r.c.fields).where(r.c.org_id == org, r.c.id == rid,
+                                                                      r.c.deleted.is_(False))).first()
+            if row is None or row.object_type != 'Person':
+                continue
+            company = (row.fields or {}).get('Company')
+            stage = c.execute(select(r.c.fields).where(r.c.org_id == org, r.c.id == str(company))).scalar_one_or_none() \
+                if company else None
+            return rid, ((stage or {}).get('Stage') == 'Customer')
+        return None, False
+
+    def support_inbound(self, org, source, title, sender, at, due, customers_only=False):
+        """An inbound support message: the ONE card of its thread (``source``, its root link), made if there is
+        none (no Kind, Waiting=support, Due=``due``, About = the sender's Person when the CRM knows them),
+        reopened to the first stage with the new Due when it was Done and the message is newer than that, else
+        left as it is. ``customers_only``: a sender who is not a Person on a customer Company makes no card.
+        The actor is ``flows:support``; nothing else is written. Internal tier only."""
+        check = rd.check_source(source)
+        if not check:
+            raise CRMError('A support card tracks a link')
+        with self.store.begin() as c:
+            person, customer = self._support_sender(c, org, sender)
+            if customers_only and not customer:
+                return {'card': None, 'status': 'not_a_customer'}
+            life = self.lifecycle(DEFAULT_TYPE, None)
+            first, last = life['stages'][0], life['stages'][-1]
+            card = self._support_card(c, org, check)
+            if card is None:
+                fields = {'Title': _clip(title or check, TITLE_MAX), 'Source': check, 'Waiting': self.SUPPORT_WAITING,
+                          'State': first, **({'Due': due} if due else {}),
+                          **({'About': 'crm:' + person} if person else {})}
+                rid = self._insert(c, org, self.SUPPORT_ACTOR, DEFAULT_TYPE, fields, '', 'A support message', [], None,
+                                   [self.SUPPORT_ACTOR])
+                return {'card': rid, 'status': 'created', 'customer': customer, 'revision': 1}
+            state = card['fields'].get('State')
+            if state == last and str(at or '') > self._support_closed_at(c, org, card['id']):
+                row = self._card_row(c, org, card['id'])
+                self._apply(c, org, self.SUPPORT_ACTOR, row, {'State': first, **({'Due': due} if due else {})},
+                            'A new support message', [], None)
+                return {'card': card['id'], 'status': 'reopened', 'customer': customer, 'revision': row['revision'] + 1}
+            return {'card': card['id'], 'status': 'open' if state != last else 'unchanged', 'customer': customer,
+                    'revision': card['revision']}
+
+    def _support_closed_at(self, c, org, record):
+        rv = s.revisions
+        at = c.execute(select(rv.c.created_at).where(rv.c.org_id == org, rv.c.record_id == record)
+                       .order_by(rv.c.revision.desc()).limit(1)).scalar_one_or_none()
+        return str(at or '')
+
+    def support_reply(self, org, source, at):
+        """Our reply seen in a support thread: its card moves to the last stage (Done). A card already Done, or
+        no card, is left as it is. The actor is ``flows:support``. Internal tier only."""
+        check = rd.check_source(source)
+        with self.store.begin() as c:
+            card = self._support_card(c, org, check) if check else None
+            if card is None:
+                return {'card': None, 'status': 'none'}
+            last = self.lifecycle(DEFAULT_TYPE, None)['stages'][-1]
+            if card['fields'].get('State') == last:
+                return {'card': card['id'], 'status': 'unchanged'}
+            row = self._card_row(c, org, card['id'])
+            self._apply(c, org, self.SUPPORT_ACTOR, row, {'State': last}, 'We replied', [], None)
+            return {'card': card['id'], 'status': 'done', 'revision': row['revision'] + 1}
+
     #: the fields whose change a card's owner acts on: its stage, its claim, its Due, Started, its owner
     CHANGE_WATCHED = ('State', 'Holder', 'HoldUntil', 'Due', 'Started', 'Waiting')
 
