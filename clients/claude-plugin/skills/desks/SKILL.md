@@ -5,12 +5,34 @@ description: Wake the person's desks from their Vexa brain. /vexa starts it by i
 
 # Desks: the CEO and every desk, woken from the brain
 
-The brain on the person's Vexa is the only source. Read it only through Vexa's `brain_*` tools, in this
-same Vexa connection; never from local files, chat history or another server. If `brain_object` is not
-in this chat, Vexa is not connected here: say so in one line and point at `/vexa signin`.
+The brain on the person's Vexa is the only source, and Vexa is the only way to work it. Read and write
+it only through Vexa's `brain_*` tools, in this same Vexa connection. Never use local files, chat
+history, another server, SSH, a loopback, an admin API or an admin key, not even to read.
+
+When Vexa can't do a step, stop. Say in one line what is missing, file it with `report_friction`, and
+don't route around it. A missing step must show up at once, not be hidden behind a workaround.
+
+## 0. Vexa signed in first
+- Before anything else, check this chat's Vexa connection. In the Claude app, use
+  `session_connectors_status` and look at the `vexa` row.
+- If it needs a sign-in, your first and only words are one prompt: sign in to Vexa in this chat (in the
+  Claude app: **Reconnect vexa**, or `/mcp` → vexa) with the same Google account the Vexa panel uses.
+  Then wait.
+- Once it is connected, call `whats_waiting` and check that `connected_as` is the panel's account.
+  If it is another account, stop and say so in one line: the chat and the panel would act as two
+  different people.
+- Then the line from Vexa and the panel. `/vexa` starts both. If this skill started some other way,
+  start them here:
+  - the line: `listen_token`, then `vexa-link` in the background, never showing the key;
+  - the panel: `panel_link`, opened in the side pane.
+- **Start the desks only after this sign-in.** A session started before the sign-in keeps a signed-out
+  Vexa, and no agent can re-dial it.
+- Each desk still checks its own connection first and reports a missing sign-in in one line.
+- If Vexa drops later in the run, that is a stop, not a detour: a tool that answers with a sign-in
+  error means you say so in one line and ask for the sign-in again.
 
 ## 1. Account
-- Call `whats_waiting`. Note `connected_as`: the account and the address.
+- Note `connected_as` from `whats_waiting`: the account and the address.
 - Say in one line which account this chat runs as.
 
 ## 2. The registry and the CEO desk
@@ -19,14 +41,14 @@ in this chat, Vexa is not connected here: say so in one line and point at `/vexa
 - `brain_object` on the `ceo` row's doc, and the objects it links: rulings, what waits on the person,
   state, the desks, lessons. That is this chat's whole context.
 - The newest plan it links (`plans:<date>`): the plan cards each desk is delivering.
-- This chat is now the **CEO desk**. When no call is live, open the `ceo` row's page in the panel:
-  `panel_link(next="/panel/o/<page>")`.
+- This chat is now the **CEO desk**. Open the `ceo` row's page in the side pane:
+  `panel_link(next="/panel/o/<page>")`. In the Claude app, open that link with `preview_start`.
+- This chat's own session id: in the Claude app, `get_window_layout` → `this_session.session_id`.
 
 ## 3. Start the desks
 1. Every desk starts as a **fresh** session that wakes from the brain.
    - Never reuse a desk session from before this /vexa: it carries old context and may belong to
-     another Claude account. If the app lists old desk sessions still open, name them in one line and
-     offer to archive them.
+     another Claude account.
    - Start each desk once per /vexa.
 2. For every registry row except `ceo`, start a session (in the Claude app: `start_session`) with:
    - title `<Name> desk`, name `desk-<role>`, a fresh context, no worktree, the row's `cwd` if it has
@@ -36,20 +58,39 @@ in this chat, Vexa is not connected here: say so in one line and point at `/vexa
    - prompt:
      > You are the <Name> desk of Vexa for <connected_as>.
      >
+     > First, before anything else: check that Vexa is connected in this chat. If it needs a sign-in,
+     > say so in one line to the CEO desk and stop.
+     >
+     > Then open your desk page in your side pane: `panel_link(next="/panel/o/<page>")`, and keep it open.
+     >
      > Wake ONLY from the brain: `brain_object("<doc>")` and the objects it links. That is your whole
      > context: scope, rulings, state, in flight, what waits on the person, next moves, lessons.
      >
-     > Open your desk page with `panel_link(next="/panel/o/<page>")`.
+     > Work only through Vexa. When Vexa can't do a step, stop, say what is missing in one line, and
+     > file it with `report_friction`. Pass `as_role: "<role>"` on every brain write.
      >
-     > Carry on with your next moves. Keep `<doc>` current on every change of state.
+     > Carry on with your next moves. Keep `<doc>` current on every change of state
+     > (`brain_document_upsert`).
      >
      > Questions for the person go through the CEO desk, one at a time, never to them directly.
      > Nothing goes out in their name: drafts only, until they say it goes.
      >
      > Report to the CEO desk in 3 lines once you are awake.
    - Where the app cannot start sessions, list each desk with its prompt in one table and stop there.
-3. Record each new session id on the `ceo` doc: `brain_fact` with kind `session`, body
-   `{role, session_id}`, source_uri `claude-session:<session id>`.
+3. Record the sessions on every run:
+   - each new session id on the `ceo` doc: `brain_fact` with kind `session`, body `{role, session_id}`,
+     source_uri `claude-session:<session id>`;
+   - the whole map, CEO included, in `source:factory/desk-sessions`: `brain_document_upsert`, body
+     JSON `{role: session id}`, so any desk can find any other.
+4. In the Claude app, file the desks in the sidebar on every run, without asking:
+   - rename this chat `CEO desk`;
+   - move this chat and every new desk into the sidebar group **Desks** (create it only if it is
+     missing);
+   - pin each of them after the move (a move into a group unpins);
+   - sort the pinned section by name;
+   - unpin desk sessions left from an earlier run.
+5. Once a desk's replacement has reported awake, archive the session it replaces. Name in one line
+   any other old desk session still open.
 
 ## 4. Then work as the CEO
 - Desk reports arrive as messages in this chat.
