@@ -160,6 +160,8 @@ export VEXA_SYSTEM_WEBHOOK_URL="${VEXA_SYSTEM_WEBHOOK_URL:-}"
 export VEXA_SYSTEM_WEBHOOK_SECRET="${VEXA_SYSTEM_WEBHOOK_SECRET:-}"
 export VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP="${VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP:-false}"
 export VEXA_SYSTEM_WEBHOOK_TIMEOUT_S="${VEXA_SYSTEM_WEBHOOK_TIMEOUT_S:-10}"
+# The booking cap (ADR-0052 §8): an account's future meetings booked with a bot, for the deployment.
+export BOOKED_MAX_PER_ACCOUNT="${BOOKED_MAX_PER_ACCOUNT:-500}"
 
 # A company IdP the bot-account sign-in browser may also reach (comma-separated exact hosts; no wildcards).
 export VEXA_BOT_SIGNIN_EXTRA_HOSTS="${VEXA_BOT_SIGNIN_EXTRA_HOSTS:-}"

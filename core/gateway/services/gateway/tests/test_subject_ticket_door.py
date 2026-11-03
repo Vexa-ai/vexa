@@ -36,6 +36,7 @@ class Upstream:
         self.seen: list[httpx.Request] = []
         self.status = 200
         self.validate = {"user_id": 7, "email": "ann@acme.test", "credential_class": "session"}
+        self.email = None          # set: answers the address lookup instead (request -> response)
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.seen.append(request)
@@ -47,6 +48,8 @@ class Upstream:
                                                  "max_concurrent": 1})
             return httpx.Response(404, json={})
         if path.startswith("/internal/users/") and path.endswith("/email"):
+            if self.email is not None:
+                return self.email(request)
             uid = path.split("/")[3]
             return (httpx.Response(200, json={"email": PEOPLE[uid]}) if uid in PEOPLE
                     else httpx.Response(404, json={}))
@@ -255,6 +258,46 @@ def test_a_mail_ticket_names_an_address_and_its_attendees_only_for_their_desks(d
     assert c.post("/agent/api/chat", json={}, headers=hdr("8", tok)).status_code == 403
     assert c.put("/agent/api/workspace/file", json={}, headers=hdr("8", tok)).status_code == 200
     assert c.put("/agent/api/workspace/file", json={}, headers=hdr("9", tok)).status_code == 403
+
+
+# ADR-0052 decided item 6, on the address a ticket names: no answer from identity is a 503 to retry;
+# a 404 or another refusal is an answer, and the ticket stays refused.
+def _raises(exc):
+    def answer(request):
+        raise exc("identity", request=request)
+    return answer
+
+
+@pytest.mark.parametrize("answer", [_raises(httpx.ConnectError), _raises(httpx.ReadTimeout),
+                                    lambda r: httpx.Response(500),
+                                    lambda r: httpx.Response(503)],
+                         ids=["network_error", "read_timeout", "http_500", "http_503"])
+def test_an_address_lookup_that_got_no_answer_is_a_503_to_retry(door, answer):
+    c, up = door
+    up.email = answer
+    tok = ticket(T.MAIL, sub="", addr="ann@acme.test", cls=[T.CHAT_AUTONOMOUS])
+    r = c.post("/agent/api/chat", json={}, headers=hdr("7", tok))
+    assert r.status_code == 503 and r.json()["reason"] == "identity_unavailable"
+    assert not r.json()["detail"].startswith("service door:")
+    assert up.forwarded() == []
+
+
+@pytest.mark.parametrize("status", [404, 401])
+def test_an_address_identity_will_not_give_keeps_the_ticket_refused(door, status):
+    c, up = door
+    up.email = lambda r: httpx.Response(status, json={})
+    tok = ticket(T.MAIL, sub="", addr="ann@acme.test", cls=[T.CHAT_AUTONOMOUS])
+    r = c.post("/agent/api/chat", json={}, headers=hdr("7", tok))
+    assert r.status_code == 403 and r.json()["reason"] == "subject_ticket_refused"
+    assert r.json()["why"] == ["other_subject"] and up.forwarded() == []
+
+
+def test_a_ticket_naming_the_subject_still_opens_while_the_address_lookup_is_down(door):
+    c, up = door
+    up.email = _raises(httpx.ConnectError)
+    by_addr = ticket(T.MAIL, sub="", addr="ann@acme.test", cls=[T.CHAT_AUTONOMOUS])
+    by_sub = ticket(T.MEETINGS, cls=[T.CHAT_AUTONOMOUS])
+    assert c.post("/agent/api/chat", json={}, headers=hdr("7", by_addr, by_sub)).status_code == 200
 
 
 def test_without_producer_keys_every_bound_call_is_refused(tmp_path):

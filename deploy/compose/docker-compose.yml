@@ -974,6 +974,9 @@ services:
       - VEXA_SYSTEM_WEBHOOK_SECRET=${VEXA_SYSTEM_WEBHOOK_SECRET:-}
       - VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP=${VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP:-false}
       - VEXA_SYSTEM_WEBHOOK_TIMEOUT_S=${VEXA_SYSTEM_WEBHOOK_TIMEOUT_S:-10}
+      # The booking cap (ADR-0052 §8): an account's future meetings booked with a bot, one value for
+      # the whole deployment. Over it POST /meetings answers 429 with the cap.
+      - BOOKED_MAX_PER_ACCOUNT=${BOOKED_MAX_PER_ACCOUNT:-500}
       # Voice notes (/minutes/voice-notes): the longest note in seconds of audio, and the idle wait.
       - VOICE_NOTE_MAX_DURATION_SEC=${VOICE_NOTE_MAX_DURATION_SEC:-1800}
       - VOICE_NOTE_IDLE_TIMEOUT_SEC=${VOICE_NOTE_IDLE_TIMEOUT_SEC:-120}

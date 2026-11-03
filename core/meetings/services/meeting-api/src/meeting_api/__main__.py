@@ -141,6 +141,18 @@ def _meeting_host_allow_at_boot(env: "os._Environ | dict | None" = None):
         raise ConfigError(f"meeting-api refuses to boot: {e}") from None
 
 
+def _booking_cap_at_boot(env: "os._Environ | dict | None" = None) -> int:
+    """``BOOKED_MAX_PER_ACCOUNT``, read once at boot. A value that is not a whole number of 0 or more
+    refuses the boot naming it, where it used to become 500 silently (Factory review of #1998)."""
+    from .collector.booking import booked_max_per_account
+    from .config_preflight import ConfigError
+
+    try:
+        return booked_max_per_account(env)
+    except ValueError as e:
+        raise ConfigError(f"meeting-api refuses to boot: {e}") from None
+
+
 def _auto_join_block_at_boot(env: "os._Environ | dict | None" = None):
     """``VEXA_AUTO_JOIN_BLOCK``, parsed once at boot. A bad entry refuses the boot naming it: a
     block list that silently matched nothing would send bots where the operator forbade them."""
@@ -224,6 +236,7 @@ def build_production_app():
     _calendar_feed_allow_at_boot()  # a malformed internal-feed allowance refuses the boot
     _auto_join_block_at_boot()  # a malformed auto-join block list refuses the boot
     _meeting_host_allow_at_boot()  # a malformed meeting-host allowance refuses the boot
+    _booking_cap_at_boot()  # a booking cap that is not a whole number refuses the boot
     _transcription_language_at_boot()  # a refused default language stops the boot, not the first spawn
     from .removed_config import warn_at_boot
 

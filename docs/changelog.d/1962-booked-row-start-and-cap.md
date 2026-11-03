@@ -7,4 +7,5 @@
   cap, with no bot and the reason on the meeting (`auto_join_error`). A bot that asked for help
   (`needs_help`) now counts against the concurrency limit. Internally, every change to a planned
   meeting is now handed to Flows durably, and Flows can start the bot for that exact meeting; the
-  existing 2-minute auto-join stays on until the next step.
+  existing 2-minute auto-join stays on until the next step. The cap is one setting for the whole
+  deployment: `BOOKED_MAX_PER_ACCOUNT` in Compose and Lite, `meetingApi.bookedMaxPerAccount` in Helm.
