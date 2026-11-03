@@ -131,12 +131,22 @@ Under the per-user advisory lock and a row lock it:
 - Its fire calls the route in §5. 409 `not_scheduled` → done, nothing to do. 429 / 503 → `Wait` for
   `Retry-After` (default 15 s) and call again, until `deadline`. Past `deadline` → done, with the
   row's stamped error as the reason.
+- A refusal by the gateway's service door itself (wrong key, route not allowed, unknown person,
+  meetings not deployed) ends the run at once with the door's reason, loudly: it is always wrong and
+  waiting does not fix it. The door answers 503, not 403, when the person lookup itself fails (a
+  network error or a non-200 answer from identity), so that one flaky cause is retried here like any
+  503 (decided item 6).
 - The flow is instance-scoped. Its fires are not subject to a person's daily run cap
   (`VEXA_FLOWS_USER_RUNS_PER_DAY`); the account ceiling is the bound.
 - `invite_join` stops spawning bots and arming its own alarm. It creates the planned row with
   `POST /meetings` and moves it with `PATCH` when the invite is rescheduled, so invites run through
   the same clock. It is registered in code like `booked_bot`, no longer a seed; a one-off migration
   in the same release removes the stored seed copy (logged when the stored copy had been edited).
+- The planned row's id, returned by `POST /meetings`, is kept in Flows against the invite's calendar
+  UID: a reschedule `PATCH`es that row and a cancel `DELETE`s it. The invitees `post_meeting` needs
+  are read from Flows' own invite record by meeting id. No public contract changes (decided item 5).
+- Every bot start goes through this clock: there is no parallel start path, and a gate fails the
+  build if any code path starts a bot outside it (s2d).
 
 ### 7. Keyed-schedule fixes in Flows (needed before anything is guaranteed on top of it)
 
@@ -243,8 +253,8 @@ The 31 Oct ramp curve; fair-share admission for ad-hoc bots; separate booked/ad-
 | **s1 bot join time** | vexa | `contracts/invocation.v1` (+`joinAt`); `bot/src/index.ts` wait before first `joining` and the reachability gate; `bot_spawn/service.py` passes `join_at` and refuses one past `now + pod lead + 60 s`; `lifecycle/reconcile.py` grace from `join_at` | bot unit: no navigation before `joinAt`, immediate join when past; invocation schema fixture; reconciler does not reap a waiting `requested` row; spawn refuses a far `join_at` |
 | **s2a keyed fixes** | vexa (flows) | `keyed.py`: `deadline` column and missed-from-deadline, re-upsert leaves `updated_at`, paging past skipped rows, retired rows marked, `held()` per flow, per-account share without the company total for `booked_bot`, `refused` returned to the caller | Flows down from fire time to deadline → still fires; unchanged re-upsert does not extend the window; 201 retired-flow rows do not stop a due fire; rows of one flow do not use another flow's share; 41 accounts at their share do not refuse a 42nd |
 | **s2b Flows in every profile** | vexa (deploy) | lite supervisord programs for Flows; Helm `flows.enabled: true`; bank profile; `meeting_api/events.py` wording | lite boots with Flows; Helm default renders Flows; bank profile renders Flows |
-| **s2c outbox + start route** (sweep still on) | vexa (meeting-api, gateway) | outbox table + drain on the CRM outbox pattern; `POST /internal/meetings/{id}/start` with the sweep's safeguards; planned-row creation path with ISO check and booking cap (API and calendar sync); ceiling counts `needs_help` / `needs_human_help`; gateway service-door allow-list | cancel-before-fire and cancel-during-fire → 409, no bot; recurring link starts the right row; block lists, bot name, last-attempt stamp applied; outbox survives a Flows outage and delivers in revision order; cap refuses `POST /meetings` with 429 and calendar sync rows over the cap get no alarm |
-| **s2d switch the clock** | vexa (meeting-api, flows) | `booked_bot` flow; one-time backfill of facts for future `scheduled` rows; `_auto_join_loop` / `auto_join_tick` removed, keys to `removed_config.py`; `invite_join` registered in code, rewritten to `POST/PATCH /meetings`, stored seed removed by a one-off migration | a row booked before the upgrade is armed by the backfill and gets its bot; booked < 10 min and after `join_at`; ceiling full → starts when a slot frees; rescheduled invite moves the bot; no meeting-api clock left (grep gate) |
+| **s2c outbox + start route** (sweep still on) | vexa (meeting-api, gateway) | outbox table + drain on the CRM outbox pattern; `POST /internal/meetings/{id}/start` with the sweep's safeguards; planned-row creation path with ISO check and booking cap (API and calendar sync); ceiling counts `needs_help` / `needs_human_help`; gateway service-door allow-list | cancel-before-fire and cancel-during-fire → 409, no bot; door: identity lookup network error → 503, retried by Flows; wrong key → the run fails loudly; recurring link starts the right row; block lists, bot name, last-attempt stamp applied; outbox survives a Flows outage and delivers in revision order; cap refuses `POST /meetings` with 429 and calendar sync rows over the cap get no alarm |
+| **s2d switch the clock** | vexa (meeting-api, flows) | `booked_bot` flow; one-time backfill of facts for future `scheduled` rows; `_auto_join_loop` / `auto_join_tick` removed, keys to `removed_config.py`; `invite_join` registered in code, rewritten to `POST/PATCH /meetings`, stored seed removed by a one-off migration | a row booked before the upgrade is armed by the backfill and gets its bot; booked < 10 min and after `join_at`; ceiling full → starts when a slot frees; rescheduled invite moves the bot; cancelled invite deletes the row; invitees reach post_meeting; no meeting-api clock left and no bot start outside Flows' booked clock (gate) |
 | **s3 cluster** | vexa-platform (+ vexa runtime knob) | main-pool autoscaler max 20 → 50 (`infra/main.tf`, lands or supersedes vexa-platform#561); controller replacing `deployment-capacity-reserve.yaml` + `cronjob-capacity-resize.yaml`; second scheduler Deployment, RBAC, config; bot PriorityClass at 0; `RUNTIME_K8S_BOT_SCHEDULER_NAME` in vexa runtime and chart | render tests for the chart; controller unit tests (placeholders not counted, draining nodes skipped, no bot moved); runtime test that the scheduler name reaches the pod spec; staging rehearsal: burst at :58 with booked pods started at :50 |
 | **s5 billing** | vexa + vexa-platform | platform rating dual acceptance, pod-start minutes, `ours` not billed, transcription split, account page and `/pricing` text, `bot_never_joined` reason retired for v2 rows; bot emits `pod_started_at`; meeting-api grading table + `outcome_class` at terminal transition + provenance fields + version bump; service-authority boundaries from pod start | rating fixtures for both versions; never-admitted v2 run billed from pod start; `ours` run not billed, `unknown` billed; transcription minutes unchanged by wait; after s1 + s2c: a waiting bot's minutes counted from pod start, and a zero-balance account's waiting bot is stopped |
 | **s4 docs** | vexa (`docs/docs/`) | `api/meetings.mdx` (auto-join section, `scheduled_at`, booking cap, PATCH 409 from start − 10 min, 429 counts waiting bots, the promise verbatim); `core/meetings.mdx:76-87`; `how-to/calendar-sync.mdx:102-103`; `configuration.mdx:314-332`; `deployment-kubernetes.mdx:366, 690-694` and lite/Helm pages (Flows required); `concepts.mdx:36`; troubleshooting "a scheduled meeting didn't auto-join"; ADR-0050 lead values; `quickstart.mdx:19` bot time defined from pod start; changelog entry (earlier pod start, wait and lobby billing, PATCH window) | `docs-current` gate; link check; the "~60 s" claim gone everywhere |
@@ -280,6 +290,13 @@ Order:
 4. **Two auto-join keys stay** (3 Nov 2026). Asked whether `AUTO_JOIN_RETRY_BACKOFF_S` and
    `AUTO_JOIN_ALLOW_UNCAPPED` are renamed, removed or kept: «оставить ("a")». Both keep their names;
    §3 removes only the three sweep keys.
+5. **Invites through Flows** (3 Nov 2026). «Там у нас может главное проверку пройти, чтобы у нас не
+   было параллельных каких-то путей. Чтобы у нас все шло как положено. Через flows.» Every bot
+   start, emailed invites included, goes through the booked clock in Flows (§6), with no public
+   contract change and a gate against any other start path.
+6. **Door refusals** (3 Nov 2026, decided by the CEO under the founder's rulings «fallbacks ONLY for
+   FLAKY stuff», 27 Oct, and item 5). A failed person lookup at the service door answers 503 and
+   Flows retries it; every other door refusal fails loudly (§6).
 
 ## Open questions
 
