@@ -9,7 +9,8 @@ import {
   jitsiGuestEntryTexts,
 } from "./selectors";
 import { checkUiLocale } from "../shared/ui-locale";
-import { redactMeetingUrl, redactUrlsIn, rethrowRedacted } from "../shared/url-redaction";
+import { redactMeetingUrl, redactUrlsIn } from "../shared/url-redaction";
+import { gotoMeetingPage } from "../shared/navigation";
 
 // NOTE vs the other platforms: Jitsi Meet is SELF-HOSTABLE — meet.jit.si is just
 // the canonical public deployment. The join layer therefore never rewrites the
@@ -145,7 +146,7 @@ export async function joinJitsiMeeting(
 
   const navUrl = buildJitsiMeetingUrl(meetingUrl, { botName });
   log(`[Jitsi] Navigating to: ${redactMeetingUrl(navUrl)}`);
-  await page.goto(navUrl, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(rethrowRedacted);
+  await gotoMeetingPage(page, navUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
   await page.waitForTimeout(2000);
 
   // Notify the host: joining
