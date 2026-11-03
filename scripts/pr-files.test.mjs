@@ -274,12 +274,12 @@ test("merge-card: a list that cannot be read whole fails the Value row, says why
   assert.match(renderMergeCard(c), /\| \*\*Value\*\* \| ❌ \| could not read every file this PR changes/);
 });
 
-test("merge-card: a failed read puts only its first line on the card, with no table-breaking pipe", async () => {
+test("merge-card: a failed read puts only its first line on the card, with pipes and backslashes escaped", async () => {
   const inner = fakeApi(signedPr(250), names(250, "docs"), cardReads);
-  const api = (path) => { if (/\/files\?.*page=2$/.test(path)) throw new Error("Command failed: gh api x | y\nstderr detail"); return inner(path); };
+  const api = (path) => { if (/\/files\?.*page=2$/.test(path)) throw new Error("Command failed: gh api x | y \\\nstderr detail"); return inner(path); };
   const c = await mergeCard(2008, { api, git: gitOf([]), readClosing: () => [] });
   assert.equal(c.valueOk, false);
-  assert.match(c.valueWhy, /\(Command failed: gh api x \\\| y\)$/);
+  assert.ok(c.valueWhy.endsWith("(Command failed: gh api x \\| y \\\\)"), c.valueWhy);
   assert.doesNotMatch(c.valueWhy, /stderr detail/);
 });
 

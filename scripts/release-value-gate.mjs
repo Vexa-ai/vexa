@@ -143,7 +143,7 @@ for (const num of batch.prs) {
   const sha = pr.head?.sha;
   let runtime, vf;
   try { runtime = prTouchesRuntime(pr); }
-  catch (e) { rows.push({ num, verdict: "UNVERIFIABLE", why: `could not read every changed file, so runtime or not is unknown — ${String(e?.message || e).split("\n")[0].trim().replace(/\|/g, "\\|")}` }); couldNotEvaluate++; continue; }
+  catch (e) { rows.push({ num, verdict: "UNVERIFIABLE", why: `could not read every changed file, so runtime or not is unknown — ${String(e?.message || e).split("\n")[0].trim().replace(/\\/g, "\\\\").replace(/\|/g, "\\|")}` }); couldNotEvaluate++; continue; }
   try { vf = sha ? valueFsmVerdict(sha) : "absent"; }
   catch { rows.push({ num, verdict: "UNVERIFIABLE", why: "check-runs fetch failed after retries" }); couldNotEvaluate++; continue; }
 

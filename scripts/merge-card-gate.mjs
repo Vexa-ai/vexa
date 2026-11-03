@@ -472,7 +472,7 @@ export async function card(num, { api = ghj, expectedHead = "", readClosing = re
   // Only the error's first line reaches the card (a public comment); the log keeps the run's.
   let runtime = null, unread = "";
   try { runtime = touchesRuntime(pr, { api, git }); }
-  catch (e) { unread = String(e?.message || e).split("\n")[0].trim().slice(0, 300).replace(/\|/g, "\\|"); }
+  catch (e) { unread = String(e?.message || e).split("\n")[0].trim().slice(0, 300).replace(/\\/g, "\\\\").replace(/\|/g, "\\|"); }
   // Only a runtime PR has a value-fsm leg, and only then do we pay the wait. A non-terminal
   // value-fsm is waited out to its real verdict rather than sampled once mid-run (the #655 race).
   const vf = runtime && head ? await waitForTerminalValueFsm(head, { read: (sha) => readValueFsmRuns(sha, api) }) : "absent";
