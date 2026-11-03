@@ -982,12 +982,10 @@ services:
       - VOICE_NOTE_IDLE_TIMEOUT_SEC=${VOICE_NOTE_IDLE_TIMEOUT_SEC:-120}
       # F168/F181: meetings→flows publish edge (config.v1 publish-edge, meeting_api/events.py) —
       # meeting-api telling flows a bot it dispatched went active / completed, best-effort and
-      # swallowed on failure, the same as admin-api's onboarding.completed edge just below it in
-      # spirit (this file has no admin-api block above to point at, so: deploy/compose/
-      # docker-compose.yml's admin-api service, VEXA_FLOWS_API_URL line). Empty here is the no-flows
-      # profile — a deployment with no flows domain still runs meetings exactly as one with a
-      # flows domain does, and the fact stays out of `whats_waiting` rather than the boot refusing.
-      - VEXA_FLOWS_API_URL=${VEXA_FLOWS_API_URL:-}
+      # swallowed on failure. AND (ADR-0052 §3, §4) the planned-row outbox: every booking reaches
+      # flows' booked_bot through it, and nothing else starts a booked meeting's bot, so the edge
+      # defaults to this stack's own flows-api, as the mcp service's flows address does.
+      - VEXA_FLOWS_API_URL=${VEXA_FLOWS_API_URL:-http://flows-api:8200}
       - VEXA_FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}
       # Self-hosted Jitsi hostnames (comma-separated) recognized in pasted + calendar links.
       - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
