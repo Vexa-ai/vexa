@@ -237,3 +237,25 @@ def test_a_fact_without_its_owner_is_refused_for_good(monkeypatch):
     with pytest.raises(StepError) as e:
         mt.start_booked_bot(_ctx(T - POD, fact={**_fact(), "uid": ""}))
     assert e.value.retryable is False
+
+
+def test_booked_less_than_ten_minutes_ahead_fires_on_the_next_pass():
+    """ADR-0052 §2: pod_at already past → the pod starts at once (and waits for join_at)."""
+    db, clock, reg = _rig()
+    clock._t = T - 300                                   # booked 5 minutes before the start
+    _deliver(db, reg, clock, _fact())
+    assert _row(db)[0] == "armed" and _row(db)[1] == T - POD < clock.now()
+    assert worker.keyed_pass(db, reg, clock, LIMITS) == 1
+
+
+def test_a_full_ceiling_starts_the_bot_when_a_slot_frees(monkeypatch):
+    """ADR-0052 §2/§6: at the ceiling the start is refused 429; Flows comes back after Retry-After
+    and the bot starts once a slot is free — arrival order, no priority."""
+    scratch: dict = {}
+    _wire(monkeypatch, 429, {"code": "max_bots", "detail": "bot concurrency limit reached"},
+          {"retry-after": "15"})
+    first = mt.start_booked_bot(_ctx(T - POD, scratch=scratch))
+    assert isinstance(first, Wait) and first.until == T - POD + 15
+    _wire(monkeypatch, 201, {"code": "started", "join_at": _z(T - JOIN)})
+    second = mt.start_booked_bot(_ctx(first.until, scratch=scratch))
+    assert isinstance(second, Done) and second.result["code"] == "started"
