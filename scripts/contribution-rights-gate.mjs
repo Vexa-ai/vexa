@@ -415,17 +415,49 @@ async function publishRightsCheck(event, headSha, results, apiBase, token) {
 // request's own workflow file.)
 const DCO_INCOMPLETE_LIST = "The DCO check could not be evaluated because the complete pull request commit list could not be retrieved.";
 
+// A merge-queue commit is not listed against its pull request (check_run.pull_requests is empty), so the
+// pull request and the queue's base come from the queue branch GitHub names for it:
+// gh-readonly-queue/<base branch>/pr-<number>-<base sha>.
+const QUEUE_BRANCH = /^gh-readonly-queue\/.+\/pr-(\d+)-([0-9a-f]{40})$/;
+
+export function dcoPullRequest(dco) {
+  const listed = dco?.pull_requests?.[0];
+  if (listed?.number && listed?.base?.sha) return listed;
+  const queued = QUEUE_BRANCH.exec(dco?.check_suite?.head_branch ?? "");
+  if (queued) return { number: Number(queued[1]), base: { sha: queued[2] }, queue: true };
+  return null;
+}
+
+// The range is the commits the pull request adds on top of its base: reachable from its head, not from
+// the base, and not from the default branch checked out here. On a merge-queue commit (a squash GitHub
+// writes), the pull request's own commits are certified, as dco-range does on merge_group, and the base
+// is the queue commit's first parent, the previous head of the target branch; a commit already on it is
+// not judged again, so a long line merging into main is judged on what it adds, with no ceiling.
 export function rangeVerdict(pr, headSha, cwd = process.cwd()) {
   const git = (args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-  git(["fetch", "--no-tags", "--quiet", "origin", `+refs/pull/${pr.number}/head:refs/dco-range/pr-${pr.number}`, pr.base.sha]);
-  git(["cat-file", "-e", `${headSha}^{commit}`]);
-  return evaluateCommits(readRange({ head: headSha, exclude: [pr.base.sha, "HEAD"], cwd }));
+  const prRef = `refs/dco-range/pr-${pr.number}`;
+  git(["fetch", "--no-tags", "--quiet", "origin", `+refs/pull/${pr.number}/head:${prRef}`, pr.base.sha]);
+  let head = headSha;
+  if (pr.queue) {
+    try {
+      git(["cat-file", "-e", `${headSha}^{commit}`]);
+    } catch {
+      git(["fetch", "--no-tags", "--quiet", "origin", headSha]);
+    }
+    const parent = git(["rev-parse", `${headSha}^1`]).trim();
+    if (parent !== pr.base.sha) {
+      throw new Error(`queue commit ${headSha.slice(0, 12)} sits on ${parent.slice(0, 12)}, not on the queue base ${pr.base.sha.slice(0, 12)}`);
+    }
+    head = git(["rev-parse", `${prRef}^{commit}`]).trim();
+  }
+  git(["cat-file", "-e", `${head}^{commit}`]);
+  return evaluateCommits(readRange({ head, exclude: [pr.base.sha, "HEAD"], cwd }));
 }
 
 async function publishDcoPolicyCheck(event, apiBase, token, recheck) {
   const dco = event.check_run;
   const ordinarySuccess = dco.conclusion === "success" && dco.output?.summary?.trim() === "All commits are signed off!";
-  const pr = dco.pull_requests?.[0];
+  const pr = dcoPullRequest(dco);
   const incomplete = !ordinarySuccess && dco.conclusion === "failure" && pr?.number && pr?.base?.sha &&
     (dco.output?.summary ?? "").startsWith(DCO_INCOMPLETE_LIST);
   let range = null;
