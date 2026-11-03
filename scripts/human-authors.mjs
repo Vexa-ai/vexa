@@ -7,21 +7,49 @@
 //   node scripts/human-authors.mjs BASE HEAD [--event PATH]
 //
 // PATH is the GitHub event payload (GITHUB_EVENT_PATH); its pull_request title and body are
-// checked too. Exit 0 when clean, 1 on any finding. Needs no secrets.
+// checked too, outside closed code fences (a quoted example is not a mark). Exit 0 when clean,
+// 1 on any finding. Needs no secrets.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const TRAILER = /^\s*co-authored-by:.*\b(claude|anthropic)\b/i;
-const FOOTER = /generated with \[?claude code|\u{1F916}\s*generated with/iu;
+// git reads "Co-authored-by : x" as a trailer too, so any spacing before the colon counts.
+const TRAILER = /^\s*co-authored-by\s*:(.*)$/i;
+// The footer starts its line; the same words inside a sentence are prose about it.
+const FOOTER = /^[\s*_]*(?:\u{1F916}\s*generated with|generated with \[?claude code)/iu;
 const EMAIL = /(@|\.)anthropic\.com\s*$/i;
-const NAME = /^\s*claude(\s*code|\s*\[bot\])?\s*$/i;
+const ANTHROPIC_ADDRESS = /[@.]anthropic\.com\b/i;
+// A machine name: Claude alone, Claude Code, claude[bot], Claude plus a model ("Claude Opus 4.5",
+// "Claude 3.5 Sonnet"), or Anthropic. A person named Claude Monet or Jean-Claude passes.
+const NAME = new RegExp("^\\s*(?:claude(?:\\s*\\[bot\\]"
+  + "|[\\s-]+(?:\\d[\\d.]*\\s+)?(?:code|opus|sonnet|haiku|fable|instant|ai|bot|agent)\\b.*"
+  + "|[\\s-]+\\d[\\d.]*\\b.*)?|.*\\banthropic\\b.*)\\s*$", "i");
+const FENCE = /^\s*(```|~~~)/;
+
+/** True when a Co-authored-by value is Claude or Anthropic, not a person. */
+const machine = (value) => ANTHROPIC_ADDRESS.test(value) || NAME.test(value.split("<")[0]);
+
+/** The lines of text outside closed code fences. An unclosed fence hides nothing. */
+export function unfenced(text) {
+  const lines = String(text ?? "").split(/\r?\n/);
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = FENCE.exec(lines[i]);
+    if (m) {
+      const end = lines.findIndex((l, j) => j > i && l.trimStart().startsWith(m[1]));
+      if (end >= 0) { i = end; continue; }
+    }
+    out.push(lines[i]);
+  }
+  return out;
+}
 
 /** [{pattern, line}] for each offending line of a message. */
-export function scanText(text) {
+export function scanText(text, { skipFences = false } = {}) {
   const out = [];
-  for (const raw of String(text ?? "").split(/\r?\n/)) {
-    if (TRAILER.test(raw)) out.push({ pattern: "co-authored-by-claude", line: raw.trim() });
+  for (const raw of skipFences ? unfenced(text) : String(text ?? "").split(/\r?\n/)) {
+    const trailer = TRAILER.exec(raw);
+    if (trailer && machine(trailer[1])) out.push({ pattern: "co-authored-by-claude", line: raw.trim() });
     else if (FOOTER.test(raw)) out.push({ pattern: "generated-with", line: raw.trim() });
   }
   return out;
@@ -41,7 +69,9 @@ export function scanCommit(c) {
 export function scanPr(event) {
   const pr = event?.pull_request ?? {};
   const out = [];
-  for (const field of ["title", "body"]) for (const f of scanText(pr[field])) out.push({ where: `pr-${field}`, ...f });
+  for (const field of ["title", "body"]) {
+    for (const f of scanText(pr[field], { skipFences: true })) out.push({ where: `pr-${field}`, ...f });
+  }
   return out;
 }
 
