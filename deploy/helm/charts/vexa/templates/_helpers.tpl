@@ -811,6 +811,28 @@ boot on it.
 {{- end -}}
 
 {{/*
+meetingApi.bookedMaxPerAccount, the booking cap (ADR-0052 §8): a whole number of 0 or more, 500 when
+the key is absent. A number from a values file reaches the template as a float64, and `toString`
+wrote 1000000 as "1e+06", which meeting-api cannot read; so a whole float is rendered through int64,
+and anything that is not a whole number of 0 or more refuses the render, naming the value.
+*/}}
+{{- define "vexa.bookedMaxPerAccount" -}}
+{{- if not (hasKey .Values.meetingApi "bookedMaxPerAccount") -}}
+500
+{{- else -}}
+{{- $raw := .Values.meetingApi.bookedMaxPerAccount -}}
+{{- $v := toString $raw -}}
+{{- if and (kindIs "float64" $raw) (eq $raw (float64 (int64 $raw))) -}}
+{{- $v = toString (int64 $raw) -}}
+{{- end -}}
+{{- if not (regexMatch "^[0-9]+$" $v) -}}
+{{- fail (printf "meetingApi.bookedMaxPerAccount must be a whole number of 0 or more (got %q)" (toString $raw)) -}}
+{{- end -}}
+{{- $v -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 The session store (ADR-0048). vexa.agentSessions resolves agentApi.sessions with defaults, nil-safe
 for --reuse-values from a chart without the block; `active` is true only when the store's own scoped
 key is named (the chart creates no bucket). The role's password Secret is generated once and kept.

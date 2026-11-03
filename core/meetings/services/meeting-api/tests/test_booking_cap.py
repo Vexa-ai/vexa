@@ -87,6 +87,25 @@ async def test_the_deployment_setting_raises_and_lowers_the_cap(monkeypatch, cap
     assert await _book(store, cap) == {"error": "booking_cap", "cap": cap}
 
 
+@pytest.mark.parametrize("bad", ["abc", "-1", "1e+06", "2.5", "12x"])
+def test_a_cap_that_is_not_a_whole_number_refuses_the_boot(bad):
+    """It used to become 500 with no word: a cap nobody chose (Factory review of #1998 at 4ef91713)."""
+    from meeting_api.__main__ import _booking_cap_at_boot
+    from meeting_api.config_preflight import ConfigError
+
+    with pytest.raises(ConfigError, match="refuses to boot: BOOKED_MAX_PER_ACCOUNT must be a whole"):
+        _booking_cap_at_boot({"BOOKED_MAX_PER_ACCOUNT": bad})
+
+
+@pytest.mark.parametrize("env,cap", [({}, 500), ({"BOOKED_MAX_PER_ACCOUNT": ""}, 500),
+                                     ({"BOOKED_MAX_PER_ACCOUNT": "0"}, 0),
+                                     ({"BOOKED_MAX_PER_ACCOUNT": " 1000000 "}, 1000000)])
+def test_a_whole_number_or_nothing_boots(env, cap):
+    from meeting_api.__main__ import _booking_cap_at_boot
+
+    assert _booking_cap_at_boot(env) == cap
+
+
 @pytest.mark.parametrize("bad", ["tomorrow", "2026-13-01T10:00:00Z", "10:00"])
 async def test_a_non_iso_time_is_refused(bad):
     store = InMemoryTranscriptStore()
