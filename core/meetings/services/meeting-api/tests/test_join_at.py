@@ -127,6 +127,40 @@ async def test_a_continued_run_without_join_at_drops_the_prior_one():
     assert "joinAt" not in _invocation(runtime)
 
 
+# ── POST /bots: a refused join time is a 422 with its reason, never a 500 ───────────────────────
+
+@pytest.mark.parametrize("join_at,reason", [
+    (lambda: datetime.now(timezone.utc) + timedelta(hours=1), "join_at is too far ahead"),
+    (lambda: datetime.now() + timedelta(seconds=60), "join_at must carry a time zone"),
+])
+def test_post_bots_answers_a_refused_join_at_with_422(monkeypatch, join_at, reason):
+    # POST /bots takes no join_at of its own (the planned-row start route sets it), so the router's
+    # request_bot is wrapped to pass one: the refusal travels the real spawn path to the HTTP edge.
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import meeting_api.bot_spawn.router as router_mod
+    from meeting_api.bot_spawn import build_router
+
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    real = router_mod.request_bot
+
+    async def with_join_at(*args, **kw):
+        return await real(*args, join_at=join_at(), **kw)
+
+    monkeypatch.setattr(router_mod, "request_bot", with_join_at)
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    app = FastAPI()
+    app.include_router(build_router(repo, runtime))
+    r = TestClient(app, raise_server_exceptions=False).post(
+        "/bots", headers={"x-user-id": str(USER)},
+        json={"platform": "google_meet", "native_meeting_id": "abc-defg-hij"},
+    )
+    assert r.status_code == 422, r.text
+    assert reason in r.json()["detail"]
+    assert repo._meetings == {} and runtime.specs == [], "refused before any row or workload"
+
+
 # ── reconciler: a waiting `requested` row is measured from its join time ─────────────────────────
 
 def _age(repo, meeting_id, seconds):

@@ -76,11 +76,14 @@ export interface OrchestratorDeps {
 }
 
 /** How long (ms) the bot waits before it opens the meeting: until invocation.v1 `joinAt`, or 0 when
- *  the field is absent or already past (ADR-0052). The schema has already checked the format. */
+ *  the field is absent or already past (ADR-0052). Throws on a joinAt that does not read as a time:
+ *  the schema's date-time admits one Date.parse cannot read (a leap second, 23:59:60), and a bad
+ *  invocation is refused, never joined at once. */
 export function msUntilJoinAt(joinAt: string | undefined, nowMs: number): number {
   if (!joinAt) return 0;
   const at = Date.parse(joinAt);
-  return Number.isFinite(at) ? Math.max(0, at - nowMs) : 0;
+  if (!Number.isFinite(at)) throw new Error(`invocation.v1: joinAt '${joinAt}' is not a readable date-time`);
+  return Math.max(0, at - nowMs);
 }
 
 /** The dedicated non-zero exit code for a pre-join control-plane-unreachable abort (#530). On
@@ -287,6 +290,19 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     // page is opened, no `joining` is sent and the reachability gate does not run before `joinAt`,
     // so the row stays `requested` while it waits. A stop or SIGTERM during the wait ends the run
     // at stage `requested` with nothing to withdraw.
+    // A joinAt the bot cannot read is a bad invocation: refused here, before the meeting is opened,
+    // with the terminal a malformed VEXA_BOT_CONFIG gets (failed / validation_error at `requested`).
+    let waitMs: number;
+    try {
+      waitMs = msUntilJoinAt(inv.joinAt, deps.nowMs?.() ?? Date.now());
+    } catch (e) {
+      const refusal = e instanceof Error ? e.message : String(e);
+      console.error(`[bot] FATAL ${refusal}`);
+      await emit('failed', {
+        failure_stage: 'requested', completion_reason: 'validation_error', reason: refusal, exit_code: 1,
+      });
+      return { exitCode: 1, status: 'failed', completionReason: 'validation_error' };
+    }
     // Subscribe to the command bus FIRST — before the joinAt wait (ADR-0052) and the join race (#889). A user Stop is delivered as a `leave`
     // command on the bot's channel; when it arrives while the bot waits for `joinAt` or is still knocking in the lobby, the
     // orchestrator must ALREADY be listening (redis pub/sub has no backlog) — handle() then routes it
@@ -295,7 +311,6 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     // placement) dropped every lobby-phase leave, so a Stop in the waiting room left the bot asking to
     // join. `unsubscribe()` is called on every exit path (pre-active + active) below.
     const unsubscribe = deps.acts.subscribe(handle);
-    const waitMs = msUntilJoinAt(inv.joinAt, deps.nowMs?.() ?? Date.now());
     if (waitMs > 0) {
       console.log(`[bot] waiting ${Math.round(waitMs / 1000)}s until joinAt ${inv.joinAt} before opening the meeting`);
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -306,11 +321,14 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
       clearTimeout(timer);
       if (stoppedWhileWaiting) {
         const waitDetail = `stopped while waiting for joinAt ${inv.joinAt} (the meeting was never opened)`;
-        await emit('failed', {
-          failure_stage: 'requested', completion_reason: 'stopped', reason: waitDetail, exit_code: 0,
-          ...joinEvidenceFor('stopped', 'requested', { reachedLobby: false }, waitDetail),
-        });
-        unsubscribe();
+        try {
+          await emit('failed', {
+            failure_stage: 'requested', completion_reason: 'stopped', reason: waitDetail, exit_code: 0,
+            ...withAttempt(joinEvidenceFor('stopped', 'requested', { reachedLobby: false }, waitDetail), deps.nodeName),
+          });
+        } finally {
+          unsubscribe();   // an emit that throws must not leave the bot listening on its channel
+        }
         return { exitCode: 0, status: 'failed', completionReason: 'stopped' };
       }
     }

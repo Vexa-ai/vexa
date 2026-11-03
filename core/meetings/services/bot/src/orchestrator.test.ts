@@ -16,7 +16,7 @@ import addFormats from 'ajv-formats';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createOrchestrator, CONTROL_PLANE_UNREACHABLE, CONTROL_PLANE_UNREACHABLE_EXIT, type MeetingResult } from './orchestrator.js';
+import { createOrchestrator, msUntilJoinAt, CONTROL_PLANE_UNREACHABLE, CONTROL_PLANE_UNREACHABLE_EXIT, type MeetingResult } from './orchestrator.js';
 import { createLivePipeline } from './pipeline.js';
 import { canTransition, type Act, type BotStatus, type LifecycleEvent, type TranscriptSegment } from './contracts.js';
 import type { ActsSource, JoinDriver, JoinOutcome, LifecycleSink, TranscriptSink, PrimaryReachability } from './ports.js';
@@ -603,6 +603,63 @@ async function main(): Promise<void> {
     check('joinAt leave: only the terminal event, stage requested', JSON.stringify(seq(lc.events)) === JSON.stringify(['failed']) && last(lc.events).failure_stage === 'requested', JSON.stringify(lc.events));
     check('joinAt leave: never navigated', !joinCalled);
     check('joinAt leave: unsubscribed on exit', unsubscribed === 1, `unsubscribed=${unsubscribed}`);
+  }
+
+  // ── ADR-0052 s1: the wait-stop terminal carries the attempt's node, like the other pre-active terminals ──
+  {
+    const lc = recordingSink();
+    const o = createOrchestrator(inv({ joinAt: new Date(Date.now() + 60_000).toISOString() }), {
+      lifecycle: lc, join: mockJoin('admitted'), pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness(),
+      nodeName: 'lke-pool-b7',
+    });
+    const runP = o.run();
+    setTimeout(() => o.stop('stopped'), 20);
+    await runP;
+    const ev = last(lc.events);
+    check('joinAt stop: join_evidence carries the node', ev?.join_evidence?.node === 'lke-pool-b7', JSON.stringify(ev?.join_evidence));
+    check('joinAt stop: still stopped_while_joining / user_action', ev?.join_evidence?.reason === 'stopped_while_joining' && ev?.join_evidence?.attribution === 'user_action', JSON.stringify(ev?.join_evidence));
+    check('joinAt stop (node): conforms to lifecycle.v1', allConform(lc.events), ajv.errorsText(validateLifecycle.errors));
+  }
+
+  // ── ADR-0052 s1: a wait-stop whose terminal emit throws still unsubscribes ──
+  {
+    let unsubscribed = 0;
+    const acts: ActsSource = { subscribe() { return () => { unsubscribed++; }; } };
+    const throwing: LifecycleSink = { async emit() { throw new Error('lifecycle sink down'); } };
+    const o = createOrchestrator(inv({ joinAt: new Date(Date.now() + 60_000).toISOString() }), {
+      lifecycle: throwing, join: mockJoin('admitted'), pipeline: noopPipeline(), acts, aloneness: noopAloneness(),
+    });
+    const runP = o.run();
+    setTimeout(() => o.stop('stopped'), 20);
+    let threw: unknown;
+    try { await runP; } catch (e) { threw = e; }
+    check('joinAt stop, emit throws: the failure surfaces', threw instanceof Error && /lifecycle sink down/.test(threw.message), String(threw));
+    check('joinAt stop, emit throws: unsubscribed anyway', unsubscribed === 1, `unsubscribed=${unsubscribed}`);
+  }
+
+  // ── ADR-0052 s1: a joinAt that does not read as a time is refused, never joined at once ──
+  {
+    check('msUntilJoinAt: absent ⇒ 0', msUntilJoinAt(undefined, Date.now()) === 0);
+    check('msUntilJoinAt: past ⇒ 0', msUntilJoinAt('2026-11-03T09:58:00Z', Date.parse('2026-11-03T10:00:00Z')) === 0);
+    check('msUntilJoinAt: future ⇒ the gap', msUntilJoinAt('2026-11-03T10:00:00Z', Date.parse('2026-11-03T09:58:00Z')) === 120_000);
+    let threw: unknown;
+    try { msUntilJoinAt('tomorrow at ten', Date.now()); } catch (e) { threw = e; }
+    check('msUntilJoinAt: unreadable ⇒ throws, naming joinAt', threw instanceof Error && /joinAt/.test(threw.message), String(threw));
+  }
+  {
+    // The invocation schema's date-time admits a leap second; Date.parse cannot read one.
+    const lc = recordingSink();
+    let joinCalled = false;
+    const join: JoinDriver = { ...mockJoin('rejected'), async join(report) { joinCalled = true; return mockJoin('rejected').join(report); } };
+    const o = createOrchestrator(inv({ joinAt: '2016-12-31T23:59:60Z' }), {
+      lifecycle: lc, join, pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness(),
+    });
+    const res = await o.run();
+    check('joinAt unreadable: refused as failed(validation_error), exit 1', res.status === 'failed' && res.completionReason === 'validation_error' && res.exitCode === 1, JSON.stringify(res));
+    check('joinAt unreadable: one terminal event at stage requested', JSON.stringify(seq(lc.events)) === JSON.stringify(['failed']) && last(lc.events).failure_stage === 'requested' && last(lc.events).completion_reason === 'validation_error', JSON.stringify(lc.events));
+    check('joinAt unreadable: the reason names joinAt', /joinAt/.test(String(last(lc.events)?.reason)), String(last(lc.events)?.reason));
+    check('joinAt unreadable: conforms to lifecycle.v1', allConform(lc.events), ajv.errorsText(validateLifecycle.errors));
+    check('joinAt unreadable: never navigated', !joinCalled);
   }
 
   // ── #865: missing required port fails loud with the port name (not a TypeError on .onAlone) ──

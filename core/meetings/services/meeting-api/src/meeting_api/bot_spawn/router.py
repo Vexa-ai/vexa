@@ -36,6 +36,7 @@ from .meeting_host import MeetingHostRefused, meeting_host_allowance
 from .ports import (
     AuthSessionBusy,
     AuthSessionNotConfigured,
+    JoinAtRefused,
     MaxBotsExceeded,
     MeetingRepo,
     MeetingStopped,
@@ -742,7 +743,9 @@ def build_router(
                     "room bot: meeting=%s keyed to payer=%s for principal=%s workspace=%s",
                     meeting.get("id"), user_id, room_principal["principal"],
                     room_principal["principal_workspace"])
-        except (LanguageRefused, MeetingHostRefused) as e:
+        except (LanguageRefused, MeetingHostRefused, JoinAtRefused) as e:
+            # JoinAtRefused (ADR-0052 §8): a join time too far ahead, without a zone, or on a bot with
+            # no meeting page. Refused before any row or workload, so nothing needs undoing.
             raise HTTPException(status_code=422, detail=str(e))
         except TranscriptionNotConfigured as e:
             raise HTTPException(status_code=503, detail=str(e))
