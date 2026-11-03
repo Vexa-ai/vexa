@@ -370,10 +370,11 @@ def _previous_image(db):
     [],                                                      # the seed only
     [(2, "active")],                                         # the company changed it
     [(2, "retired"), (3, "active")],                         # …twice, and retired the first change
-], ids=["seed-only", "one-company-version", "two-company-versions"])
+    [(2, "retired")],                                        # …and went back to the seed
+], ids=["seed-only", "one-company-version", "two-company-versions", "company-versions-retired"])
 @pytest.mark.parametrize("seed_status", ["active", "retired"])
 def test_a_rollback_to_the_image_that_seeds_it_still_runs_invite_join(company, seed_status):
-    if not company and seed_status == "retired":
+    if seed_status == "retired" and not any(st == "active" for _, st in company):
         pytest.skip("the company turned the flow off: nothing ran before either")
     db = SqliteDB()
     _seed_row(db, status=seed_status)
@@ -390,6 +391,64 @@ def test_a_rollback_to_the_image_that_seeds_it_still_runs_invite_join(company, s
     after = _previous_image(db)                               # rolled back
     assert after is not None, "a rollback finds a version of invite_join to run"
     assert after.version == before.version, "the one it ran before the upgrade"
+
+
+def test_removing_the_only_version_a_rollback_could_run_is_refused_by_name(caplog):
+    """The seed copy is the active version and every company version is retired: removing the copy
+    would leave the image before this one nothing to run and no room to seed (CEO, 2026-11-03: fail
+    loudly). Refused, named, with how to restore; asked again until the company re-activates one."""
+    db = SqliteDB()
+    _seed_row(db)
+    _seed_row(db, version=2, status="retired", by="operator")
+    _seed_row(db, version=3, status="retired", by="operator")
+    refused: list = []
+    with caplog.at_level(logging.ERROR, logger="flows.production"):
+        assert production.drop_former_seeds(db, refusals=refused) == []
+    assert [(r["refused"], r["flow"]) for r in refused] == [
+        (production.FORMER_SEED_UNRUNNABLE, "invite_join")]
+    assert "POST /flows/invite_join/3/activate" in refused[0]["restore"]
+    assert any(r.levelno == logging.ERROR and "REFUSED former_seed_unrunnable" in r.getMessage()
+               for r in caplog.records)
+    assert _previous_image(db).version == 1, "the copy is kept: a rollback still runs it"
+    assert production.drop_former_seeds(db, refusals=(again := [])) == [] and again, "every boot"
+    db.execute("UPDATE flow_version SET status = 'active' WHERE name = 'invite_join' AND version = 3")
+    assert production.drop_former_seeds(db, refusals=(after := [])) == ["invite_join"] and not after
+    assert _previous_image(db).version == 3
+
+
+def test_the_operator_cannot_retire_the_only_version_a_rollback_runs():
+    """The same refusal at the lifecycle door: after the migration, retiring the company's last
+    active `invite_join` would leave a rollback nothing to run. Activating another one is the way."""
+    import os
+    env = {"VEXA_FLOWS_API_KEY": "test-flows-key",
+           "VEXA_FLOWS_SERVICE_KEY": "test-flows-service-key-not-a-placeholder",
+           "VEXA_FLOWS_DB_URL": "postgresql+pg8000://keyed:unreachable@127.0.0.1:1/flows"}
+    saved = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    try:
+        from flows_integrations import flows_api as fa
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    from fastapi.testclient import TestClient
+    saved_db, fa.db = fa.db, SqliteDB()
+    try:
+        _seed_row(fa.db, version=2, by="operator")
+        client, op = TestClient(fa.app, raise_server_exceptions=False), {
+            "X-Flows-Operator-Key": fa.API_KEY}
+        r = client.post("/flows/invite_join/2/retire", params={"scope": "instance"}, headers=op)
+        assert r.status_code == 409 and r.json()["detail"]["refused"] == "former_seed_unrunnable"
+        assert fa.db.execute("SELECT status FROM flow_version WHERE version = 2") == [("active",)]
+        _seed_row(fa.db, version=3, status="retired", by="operator")
+        r = client.post("/flows/invite_join/3/activate", params={"scope": "instance"}, headers=op)
+        assert r.status_code == 200, r.text
+        assert fa.db.execute("SELECT version, status FROM flow_version ORDER BY version") == [
+            (2, "retired"), (3, "active")]
+    finally:
+        fa.db = saved_db
 
 
 def test_this_image_never_chooses_a_stored_version_of_a_flow_the_code_owns(caplog):

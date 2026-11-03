@@ -166,6 +166,7 @@ share. The tables admin-api and meeting-api own (`users`, `api_tokens`, `platfor
 | `keyed_schedule` gains `deadline`, and its status check gains `retired` (swapped once, while the check lacks it, added `NOT VALID`) | flows | the same moment |
 | The `retired` check is validated, and `keyed_schedule`'s primary key changes from `(scope, flow, key)` to `(scope, flow, key, person)` on an index built `CONCURRENTLY` | flows | right after, outside that transaction, one statement at a time under an advisory lock; reads and writes go on |
 | The stored company flow `invite_join` (`created_by: seed`) is removed, once: the flow is registered in the code, and no stored version of it runs. Versions the company submitted on top of it are kept: the newest active one stays active, so an earlier image rolled back to still runs it, and older active ones are retired | flows-worker | its first start; a warning names the versions |
+| If the stored copy is the active `invite_join` and every version the company submitted is retired, flows-worker refuses to remove it (`REFUSED former_seed_unrunnable` at every start, naming the version to re-activate with `POST /flows/invite_join/<version>/activate`), because a rollback would otherwise find no `invite_join` to run; retiring the last active version is refused the same way | flows-worker, flows-api | every start until a company version is active again |
 
 There is no separate migration command for the schema: every step is idempotent and runs on each
 start.

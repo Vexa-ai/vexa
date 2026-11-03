@@ -92,7 +92,7 @@ def test_first_read_keeps_only_future_invitations_and_anchors(monkeypatch):
         "event_key": "evt-1", "sequence": 0, "title": "Collab kickoff"}
     assert refs["start"] > NOW and "anna@partner.com" in refs["participants"]
     assert refs["workspace_invite_token"] == "Tok3n_abc-9"
-    assert tick.changes[0].dedupe_key == "evt-1:0"
+    assert tick.changes[0].dedupe_key == "host@vexa.ai/evt-1:0"
 
 
 def test_incremental_reads_replies_cancellations_and_reschedules():
@@ -106,9 +106,20 @@ def test_incremental_reads_replies_cancellations_and_reschedules():
             _msg(9, frm="customer@shop.com")]
     tick = _kind(msgs, db).tick(_row(), "4")
     kinds = [(c.event_type, c.dedupe_key) for c in tick.changes]
-    assert kinds == [("mail.reply", "mail-<in-5@mail>"), ("invite.received", "evt-1:1"),
+    assert kinds == [("mail.reply", "mail-<in-5@mail>"), ("invite.received", "host@vexa.ai/evt-1:1"),
                      ("invite.cancelled", "evt-1:cancel:2")]
     assert tick.changes[0].refs["uid"] == "8" and tick.cursor == "9"
+
+
+def test_two_organizers_invites_with_one_uid_are_two_changes():
+    """One UID is the meeting's in every invitee's calendar (Vexa-ai/vexa#1996 review): the change
+    id names whose invite it is, so the second is not deduped into the first one's intake run."""
+    db = SqliteDB()
+    msgs = [_msg(7, ics=_ics(seq=1)),
+            _msg(8, frm="dima@vexa.ai", ics=_ics(seq=1, organizer="dima@vexa.ai")),
+            _msg(9, ics=_ics(seq=1))]                       # the first one again
+    keys = [c.dedupe_key for c in _kind(msgs, db).tick(_row(), "4").changes]
+    assert keys == ["host@vexa.ai/evt-1:1", "dima@vexa.ai/evt-1:1", "host@vexa.ai/evt-1:1"]
 
 
 def test_an_organizer_nobody_can_place_emits_nothing_and_only_a_live_sensor_records_it():

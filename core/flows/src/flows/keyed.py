@@ -94,13 +94,26 @@ def held_by(db: DB, scope: str, person: str) -> int:
     return int(rows[0][0] or 0) if rows else 0
 
 
+def person_named(payload: dict) -> str:
+    """The person an event names: its `uid` (the Vexa user), else its `organizer` (how a mailed
+    invite names its person, authenticated by the mailbox, before the invite's own steps resolve an
+    account). The one rule for whose a key is — a keyed row here, an invite's dedup id in the
+    mailbox (`flows_integrations.mailbox.invite_source_id`)."""
+    return str((payload or {}).get("uid") or (payload or {}).get("organizer") or "")[:200]
+
+
+def segment(person: str) -> str:
+    """`person` as one segment of a key: `/` and `%` escaped, so no two (person, rest) pairs spell
+    the same key."""
+    return str(person or "").replace("%", "%25").replace("/", "%2F")
+
+
 def person_of(flow: Flow, payload: dict) -> str:
     """Whom a pending fire is for: the flow's owner, or for a company flow the person the event names
-    (its `uid`, the Vexa user; else its `organizer`, how a mailed invite names its person before the
-    invite's own steps resolve an account). Part of the row's identity: see the module docstring."""
+    (`person_named`). Part of the row's identity: see the module docstring."""
     if flow.owner:
         return flow.owner
-    return str((payload or {}).get("uid") or (payload or {}).get("organizer") or "")[:200]
+    return person_named(payload)
 
 
 def upsert(db: DB, clock: Clock, flow: Flow, *, key: str, fire_at: float, event_type: str,
@@ -189,12 +202,11 @@ def upcoming(db: DB, scope: str, flow_name: str, *, limit: int = 3) -> list[dict
 
 def slot_key(flow: Flow, key: str, fire_at: float, person: str = "") -> str:
     """The reaction key a slot fires under. A company flow's slot names its person too, so two
-    people's rows of one key and one time are two runs, not one the reaction table dedups away;
-    `/` and `%` in the person are escaped, so no two (person, key) pairs spell the same slot."""
+    people's rows of one key and one time are two runs, not one the reaction table dedups away
+    (the person is a `segment`, so no two (person, key) pairs spell the same slot)."""
     if flow.owner:
         return f"at:{flow.scope}/{flow.name}/{key}:{int(fire_at)}"
-    who = str(person or "").replace("%", "%25").replace("/", "%2F")
-    return f"at:{flow.scope}/{flow.name}/{who}/{key}:{int(fire_at)}"
+    return f"at:{flow.scope}/{flow.name}/{segment(person)}/{key}:{int(fire_at)}"
 
 
 def _keyed_flows(registry: Registry) -> dict:

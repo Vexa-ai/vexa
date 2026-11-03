@@ -40,7 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import flows_config as cfg
 import flows_obs
-from flows import Registry, SystemClock, admit, postgres_db
+from flows import Registry, SystemClock, admit, keyed, postgres_db
 from flows_defs import production
 from flows_integrations import mail_policy, outlook
 from flows_integrations import mailbox_status
@@ -516,15 +516,55 @@ def invite_native(url: str) -> tuple[str, str]:
 
 
 def invite_source_id(ev: dict) -> str:
-    """The dedup key for one INVITE — the occurrence, never the series (R-B02).
+    """The dedup key for one INVITE — its owner's, and the occurrence, never the series (R-B02).
 
     `ics-<UID>` recorded a recurring meeting exactly once and then swallowed every later
     occurrence in silence. RFC 5545 repeats the `UID` for the whole series, so the key needs the
     occurrence too: `RECURRENCE-ID` when the sender sent one, else the occurrence's own `DTSTART`
     — which is what two per-occurrence invites actually differ by. An event with neither keeps the
-    old key exactly, so nothing that used to dedup stops deduping."""
+    old key exactly, so nothing that used to dedup stops deduping.
+
+    THE OWNER IS IN IT TOO (Vexa-ai/vexa#1996 review), named the way a keyed row's person is
+    (`flows.keyed.person_named`: the uid, else the authenticated organizer). A UID belongs to the
+    meeting, not to one person: two people invited to one meeting, or a stranger who copied its UID,
+    sent invites with one id, so the second was deduplicated into the first one's run (no RSVP, ack
+    or prep of its own) and its refs were merged into that run. A redelivery of the same invite has
+    the same owner and still dedups; an event that names nobody keeps the key it had."""
+    owner = keyed.person_named(ev)
+    return f"ics-{keyed.segment(owner)}/{_occurrence_of(ev)}" if owner else _invite_base_id(ev)
+
+
+def _occurrence_of(ev: dict) -> str:
+    """`<UID>[-<occurrence>]`: the meeting and the one occurrence of it an invite is for."""
     occ = str(ev.get("occurrence") or "").strip()
-    return f"ics-{ev['ics_uid']}-{occ}" if occ else f"ics-{ev['ics_uid']}"
+    return f"{ev['ics_uid']}-{occ}" if occ else f"{ev['ics_uid']}"
+
+
+def _invite_base_id(ev: dict) -> str:
+    """`ics-<UID>[-<occurrence>]`: an invite's id before the owner was in it."""
+    return f"ics-{_occurrence_of(ev)}"
+
+
+def _admitted_id(db, reg, ev: dict, sid: str) -> str:
+    """`sid`, or the id the invite had before the owner was in it, when THIS organizer's invite was
+    already admitted under that one (a release before the owner was in the id): a resend after the
+    upgrade dedups into the run it already had instead of running the intake twice. A run under the
+    old id that is another person's is not theirs to dedup into; they keep `sid`."""
+    import json as _j
+    old = _invite_base_id(ev)
+    if old == sid:
+        return sid
+    keys = [f"{old}::{f.ident}" for f in reg.match("invite.received")]
+    if not keys:
+        return sid
+    rows = db.execute("SELECT subject_refs FROM reaction WHERE source_event_id IN ("
+                      + ", ".join(f":k{i}" for i in range(len(keys))) + ")",
+                      {f"k{i}": k for i, k in enumerate(keys)})
+    me = keyed.person_named(ev).lower()
+    for (refs,) in rows:
+        if keyed.person_named(_j.loads(refs or "{}")).lower() == me:
+            return old
+    return sid
 
 
 #: WHAT THE ELISION LOOKS LIKE when a body is longer than the cap. It is part of the text a reader
@@ -708,7 +748,7 @@ def handle(db, reg, clock, self_addr: str, msg, known_uid, is_scaffolded,
     if kind == "invite":
         # THE MAIL ISSUER VOUCHES FOR THE INVITE (subject-ticket.v1) — after route() authenticated
         # its organizer and placed them; the ticket is what lets flows act for them at the door.
-        sid = invite_source_id(payload)
+        sid = _admitted_id(db, reg, payload, invite_source_id(payload))
         ticket = mail_tickets.invite_ticket(payload, evt=sid, sub=_uid_or_blank(known_uid,
                                                                                 payload["organizer"]),
                                             now=now)

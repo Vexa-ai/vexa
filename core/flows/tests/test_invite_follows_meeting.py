@@ -188,6 +188,48 @@ def test_one_persons_cancel_touches_only_their_own_row():
         (ALICE, START - 60), (MALLORY, START + 3600 - 60)], "nor does their move"
 
 
+def _intakes(db):
+    return sorted(json.loads(r)["organizer"] for (r,) in db.execute(
+        "SELECT subject_refs FROM reaction WHERE flow = 'invite_intake'"))
+
+
+def test_two_owners_with_one_uid_and_occurrence_get_two_intake_runs():
+    """The intake's dedup id names its owner too: the second invite is not deduped into the first
+    one's run (no RSVP, ack or prep of its own), and its refs are not merged into that run."""
+    db, clock, reg = _rig()
+    _send_as(db, reg, clock, ALICE, _invite(ALICE), "a1")
+    _send_as(db, reg, clock, MALLORY, _invite(MALLORY, url="https://meet.google.com/zzz-zzzz-zzz"),
+             "m1")
+    assert _intakes(db) == [ALICE, MALLORY]
+    urls = {json.loads(r)["organizer"]: json.loads(r)["url"] for (r,) in db.execute(
+        "SELECT subject_refs FROM reaction WHERE flow = 'invite_intake'")}
+    assert urls[ALICE] == "https://meet.google.com/abc-defg-hij", "nothing of Mallory's in Alice's"
+
+
+def test_a_redelivery_of_the_same_invite_is_still_one_intake_run():
+    db, clock, reg = _rig()
+    _send_as(db, reg, clock, ALICE, _invite(ALICE), "a1")
+    _send_as(db, reg, clock, ALICE, _invite(ALICE, seq=1), "a2")      # the same occurrence again
+    assert _intakes(db) == [ALICE]
+
+
+def test_an_invite_admitted_before_the_owner_was_in_its_id_still_dedups_for_its_organizer():
+    """A run admitted under `ics-<UID>-<occurrence>` (a release before the owner was in the id):
+    its own organizer's resend dedups into it; another person's invite is not theirs to join."""
+    from flows import admit
+    db, clock, reg = _rig()
+    payload = {"organizer": ALICE, "url": "https://meet.google.com/abc-defg-hij", "start": START,
+               "ics_uid": "meet-0001@google.com", "occurrence": "20300823T153000Z",
+               "event_key": "meet-0001@google.com", "title": "Sync", "participants": []}
+    admit(db, reg, clock, source_event_id="ics-meet-0001@google.com-20300823T153000Z",
+          event_type="invite.received", subject_refs=payload)
+    assert _intakes(db) == [ALICE]
+    _send_as(db, reg, clock, ALICE, _invite(ALICE, seq=1), "a2")
+    assert _intakes(db) == [ALICE], "the resend after the upgrade is the same run"
+    _send_as(db, reg, clock, MALLORY, _invite(MALLORY), "m1")
+    assert _intakes(db) == [ALICE, MALLORY]
+
+
 def test_two_instances_of_one_recurring_uid_are_two_rows_each_moved_and_cancelled_alone():
     db, clock, reg = _rig()
     week = 7 * 86400

@@ -3335,7 +3335,12 @@ SEEDS = (
 FORMER_SEEDS = ("invite_join",)
 
 
-def drop_former_seeds(db) -> list:
+#: The refusal `drop_former_seeds` answers when removing a seed copy would leave a rollback with
+#: no version of the flow to run (CEO, 2026-11-03: fail loudly, ADR-0052 §6 unchanged).
+FORMER_SEED_UNRUNNABLE = "former_seed_unrunnable"
+
+
+def drop_former_seeds(db, refusals: "list | None" = None) -> list:
     """THE ONE-OFF MIGRATION (ADR-0052 §6): for each flow in `FORMER_SEEDS` whose seed row is still
     stored (`created_by = 'seed'`), delete that seed row (the copy Vexa wrote). Versions the company
     account authored on top are kept, with their history, never deleted, and this image runs none of
@@ -3346,9 +3351,17 @@ def drop_former_seeds(db) -> list:
     table holds no version of it at all. So the company's newest active version — the one that image
     ran — stays active, and only the company's older active versions, which no image runs, are
     retired. With no company version the table is left empty and that image seeds it again at its
-    boot. Said at warning level when company versions existed, and loudly when they were all retired
-    already: then that image would find nothing to run. Once the seed row is gone this does nothing,
-    so a version submitted later is never touched.
+    boot. Said at warning level when company versions existed.
+
+    ONE STATE IS REFUSED, BY NAME (`FORMER_SEED_UNRUNNABLE`). The seed copy is the active version and
+    every version the company submitted is retired: removing the copy would leave that image no
+    version to run and no room to seed one, so a rollback would send no bot to any invite, silently,
+    in code we cannot change any more. The copy is then NOT removed (this image does not run it
+    either way), the refusal is logged at error level and appended to `refusals` with how to restore
+    a version that image can run, and it is asked again on every boot until the company re-activates
+    one of its own. A flow whose seed copy is retired too was turned off by the company; it stays off.
+
+    Once the seed row is gone this does nothing, so a version submitted later is never touched.
     Returns the names whose seed copy was removed."""
     removed = []
     for name in FORMER_SEEDS:
@@ -3359,11 +3372,26 @@ def drop_former_seeds(db) -> list:
             return removed
         if not any(by == "seed" for _, _, by in rows):
             continue
-        db.execute("DELETE FROM flow_version WHERE scope = 'instance' AND name = :n "
-                   "AND created_by = 'seed'", {"n": name})
         mine = [(int(v), st, by) for v, st, by in rows if by != "seed"]
         authored = [f"v{v} ({st}, by {by or 'unknown'})" for v, st, by in mine]
         kept = max((v for v, st, _ in mine if st == "active"), default=None)
+        if kept is None and mine and any(by == "seed" and st == "active" for _, st, by in rows):
+            newest = max(v for v, _, _ in mine)
+            why = (f"removing the seed copy of {name} would leave an image that still loads it from "
+                   f"the table (a rollback) no version to run: the company's own versions "
+                   f"{', '.join(authored)} are all retired, so the seed copy is kept until one is "
+                   f"active again (this image runs {name} from the code either way).")
+            restore = (f"re-activate one of the company's versions, e.g. the newest: "
+                       f"POST /flows/{name}/{newest}/activate with the operator key (or "
+                       f"flow_lifecycle, action activate, in the global account's chat), then "
+                       f"restart flows-worker.")
+            logger.error("REFUSED %s: %s To restore: %s", FORMER_SEED_UNRUNNABLE, why, restore)
+            if refusals is not None:
+                refusals.append({"refused": FORMER_SEED_UNRUNNABLE, "flow": name, "why": why,
+                                 "restore": restore})
+            continue
+        db.execute("DELETE FROM flow_version WHERE scope = 'instance' AND name = :n "
+                   "AND created_by = 'seed'", {"n": name})
         if kept is not None:
             # the one a rollback runs stays active; this image never chooses it (`code_only`)
             gone = db.execute("UPDATE flow_version SET status = 'retired' WHERE scope = 'instance' "
@@ -3376,9 +3404,9 @@ def drop_former_seeds(db) -> list:
                            ", ".join(f"v{v}" for (v,) in sorted(gone or [])) or "none", kept)
         elif mine:
             logger.warning("former seed %s: seed copy removed; the company's own versions %s are "
-                           "kept, all retired by the company already — this image runs it from the "
-                           "code (ADR-0052), and an image that still loads the flow (a rollback) "
-                           "finds no active version of it to run", name, ", ".join(authored))
+                           "kept, all retired, as the seed copy was: the company turned the flow "
+                           "off, and an image that still loads it from the table finds it off "
+                           "(this image runs it from the code, ADR-0052)", name, ", ".join(authored))
         else:
             logger.info("former seed %s: seed copy removed; the flow now runs from the code", name)
         removed.append(name)

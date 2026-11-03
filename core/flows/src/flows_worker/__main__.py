@@ -106,10 +106,16 @@ def main() -> int:
     clock = SystemClock()
     reg = Registry()
     production.build(reg, db)
-    # A FLOW THAT WAS A SEED AND IS NOW CODE (ADR-0052 §6): its stored copy goes, once.
-    dropped = production.drop_former_seeds(db)
+    # A FLOW THAT WAS A SEED AND IS NOW CODE (ADR-0052 §6): its stored copy goes, once — unless
+    # removing it would leave a rollback nothing to run, which is refused by name on every boot
+    # until the company re-activates a version of its own.
+    refused: list = []
+    dropped = production.drop_former_seeds(db, refusals=refused)
     if dropped:
         print(f"former seed(s) now registered in code, stored copy removed: {', '.join(dropped)}",
+              flush=True)
+    for r in refused:
+        print(f"REFUSED {r['refused']} ({r['flow']}): {r['why']} To restore: {r['restore']}",
               flush=True)
     # COMPANY FLOWS ARE THE GLOBAL ACCOUNT'S (seeds, written once, never overwritten).
     seeded = production.seed(db)

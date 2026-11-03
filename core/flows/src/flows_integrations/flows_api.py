@@ -1650,12 +1650,36 @@ def set_flow_status(name: str, version: int, action: str, scope: str = "",
                 db.execute("UPDATE flow_version SET subject_grant=:g WHERE scope=:sc AND name=:n "
                            "AND version=:v", {"g": grant, "sc": target, "n": name, "v": version})
     else:
+        _refuse_unrunnable_rollback(target, name, version)
         rows = db.execute("UPDATE flow_version SET status=:s WHERE scope=:sc AND name=:n "
                           "AND version=:v RETURNING name", {"s": st, "sc": target, "n": name,
                                                             "v": version})
     if not rows:
         raise HTTPException(status_code=404, detail="flow version not found")
     return {"name": name, "scope": target, "version": version, "status": st}
+
+
+def _refuse_unrunnable_rollback(scope: str, name: str, version: int) -> None:
+    """THE LAST VERSION A ROLLBACK RUNS IS NOT RETIRED (Vexa-ai/vexa#1996 review, CEO 2026-11-03).
+    A flow the code owns (`Registry.code_only`, e.g. `invite_join`) never runs a stored version here,
+    but an image that still loads it from the table (a rollback) runs its newest active one, and
+    cannot seed one where rows exist. Retiring the only active one would leave that image no version
+    to run, silently; it is refused by name (`production.FORMER_SEED_UNRUNNABLE`), the same refusal
+    `drop_former_seeds` answers at the worker's boot."""
+    if scope != "instance" or name not in vocab.code_only:
+        return
+    active = [int(v) for v, st in db.execute(
+        "SELECT version, status FROM flow_version WHERE scope = 'instance' AND name = :n",
+        {"n": name}) if st == "active"]
+    if active != [int(version)]:
+        return
+    raise HTTPException(status_code=409, detail={
+        "refused": production.FORMER_SEED_UNRUNNABLE, "flow": name,
+        "why": (f"{name} v{version} is the only active stored version: this image runs {name} from "
+                f"the code and never runs it, but an image that still loads {name} from the table "
+                f"(a rollback) does, and with it retired that image has no version to run"),
+        "restore": (f"keep it active; to change what a rollback runs, activate another version of "
+                    f"{name} instead, which retires this one")})
 
 
 def _clear_pause(scope: str, name: str, version: int) -> None:

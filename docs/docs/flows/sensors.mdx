@@ -75,8 +75,10 @@ that stored copy (see below).
   stored copy of the company flow `invite_join` that earlier releases wrote (`created_by: seed`),
   once, and no stored version of it runs any more. Versions the company account submitted on top of
   it are kept: the newest active one stays active, so an earlier image you roll back to still runs
-  it, and older active ones are retired. A warning names them. A version submitted after the upgrade
-  is not touched.
+  it, and older active ones are retired. A warning names them. When the stored copy is the active
+  version and the company retired all of its own, the worker refuses to remove it
+  (`former_seed_unrunnable`, at every start) and names the version to re-activate. A version
+  submitted after the upgrade is not touched.
 - **Two tables are added at startup**, `sensor` and `keyed_schedule` (`CREATE TABLE IF NOT EXISTS`).
   A stack that ran the first cut of `keyed_schedule` gains its `person` column; every stack gains
   `deadline`, the `retired` status and a key that includes `person` (`flows/migrations.py`). The
