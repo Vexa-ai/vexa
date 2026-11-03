@@ -361,6 +361,13 @@ def db_url() -> str:
     return flows_config.require("VEXA_FLOWS_DB_URL")
 
 
+def db_options() -> dict:
+    """What every process opens the engine's database with beside its URL: how long its first use
+    waits for another process's schema migration before it fails, named
+    (`VEXA_FLOWS_MIGRATION_WAIT_S`, `flows.migrations.migrate`)."""
+    return {"migration_wait_s": float(flows_config.get_int("VEXA_FLOWS_MIGRATION_WAIT_S"))}
+
+
 def swallowed(source: str, kind: str, exc: BaseException | None = None, **facts) -> None:
     """SAY THAT SOMETHING WAS SWALLOWED. One line, at warning, naming who swallowed it and why.
 

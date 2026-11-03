@@ -33,7 +33,8 @@ recorder in the offline suite."""
 from __future__ import annotations
 
 import logging
-from typing import Callable
+import time
+from typing import Callable, Optional
 
 _log = logging.getLogger(__name__)
 
@@ -91,8 +92,34 @@ SWAP_KEYED_KEY = (
 #: The session advisory lock the whole migration runs under (`migrate`), so two processes booting
 #: together migrate one at a time (any fixed number; this one spells "flow").
 MIGRATION_LOCK = 0x666C6F77
-#: How long `migrate` waits between two tries for that lock.
+#: How long `migrate` waits between two tries for that lock, and how often a waiting process says
+#: who holds it.
 LOCK_POLL_S = 0.25
+LOCK_SAY_EVERY_S = 30.0
+#: How long a booting process waits for another one's migration before it fails, named
+#: (`MigrationLockTimeout`). The composition passes `VEXA_FLOWS_MIGRATION_WAIT_S`; this is its
+#: default: an hour, many times a CONCURRENTLY build on a large table.
+MIGRATION_WAIT_S = 3600.0
+
+#: Who holds `MIGRATION_LOCK`, and what the oldest open snapshot is: the one a CONCURRENTLY build
+#: under that lock waits for (an idle transaction, a backup). Read only while waiting.
+LOCK_HOLDER = f"""SELECT a.pid, a.application_name, a.state,
+                         COALESCE(EXTRACT(EPOCH FROM now() - a.xact_start), 0),
+                         COALESCE(a.wait_event_type || '/' || a.wait_event, '')
+                  FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+                  WHERE l.locktype = 'advisory' AND l.granted AND l.classid = 0
+                    AND l.objid = {MIGRATION_LOCK} AND l.objsubid = 1"""
+OLDEST_SNAPSHOT = """SELECT pid, application_name, state,
+                            COALESCE(EXTRACT(EPOCH FROM now() - xact_start), 0)
+                     FROM pg_stat_activity
+                     WHERE backend_xmin IS NOT NULL AND pid <> pg_backend_pid()
+                     ORDER BY xact_start NULLS LAST LIMIT 1"""
+
+
+class MigrationLockTimeout(RuntimeError):
+    """`migration_lock_timeout`: another process held the migration lock longer than the wait this
+    one was given. The message names the holder and the oldest open snapshot, and what to do."""
+    code = "migration_lock_timeout"
 
 KEY_HAS_SCOPE = """SELECT COUNT(*) FROM information_schema.key_column_usage k
                    JOIN information_schema.table_constraints t
@@ -143,11 +170,14 @@ def after(execute: Callable) -> dict:
     return did
 
 
-def migrate(held: Callable, script: Callable, transaction: Callable, wait: Callable) -> dict:
+def migrate(held: Callable, script: Callable, transaction: Callable, wait: Callable, *,
+            now: Optional[Callable] = None, limit_s: float = MIGRATION_WAIT_S,
+            state: Optional[Callable] = None) -> dict:
     """THE WHOLE MIGRATION, ONE PROCESS AT A TIME. `held` executes on ONE autocommit session, which
     holds `MIGRATION_LOCK` from before the schema to the end; `script()` applies `schema.sql`;
     `transaction(fn)` runs `fn(execute)` in one transaction and returns its answer (`apply`); `after`
     runs on `held`. The lock is released whatever happens. Returns what `apply` and `after` changed.
+    `state(word)` hears `waiting`, then `migrating` (the readiness a process reports meanwhile).
 
     THE LOCK IS TRIED, NEVER WAITED FOR (Vexa-ai/vexa#1996 review). A session blocked in
     `pg_advisory_lock` is a statement holding a snapshot, and `CREATE INDEX CONCURRENTLY` waits for
@@ -155,13 +185,38 @@ def migrate(held: Callable, script: Callable, transaction: Callable, wait: Calla
     waited on each other: "deadlock detected" (PG 16: 2 processes booting together in 5 boots of 6,
     3 in 3 of 4). A process that does not get the lock waits `wait(LOCK_POLL_S)` with no statement
     open and tries again, so it holds nothing the index build waits on; and it touches the schema
-    only once it has the lock, so its own `apply` never holds the table under a build either."""
+    only once it has the lock, so its own `apply` never holds the table under a build either.
+
+    THE WAIT IS SAID AND BOUNDED (second re-review, CEO 2026-11-03). An old snapshot open elsewhere
+    (an idle transaction, a backup) stalls the build under the lock, and every other process would
+    wait for it in silence. Every `LOCK_SAY_EVERY_S` a waiting process logs who holds the lock and
+    the oldest open snapshot; past `limit_s` it fails with `MigrationLockTimeout`, naming both and
+    what to do, instead of waiting forever."""
+    clock = now or time.monotonic
+    started = clock()
+    said = started
     tries = 0
     while not _granted(held(f"SELECT pg_try_advisory_lock({MIGRATION_LOCK})")):
         if tries == 0:
             _log.info("schema migration: another process holds it; waiting for it to finish")
+            if state:
+                state("waiting")
         tries += 1
+        waited = clock() - started
+        if waited > limit_s:
+            who = _holder(held)
+            raise MigrationLockTimeout(
+                f"{MigrationLockTimeout.code}: waited {waited:.0f}s (VEXA_FLOWS_MIGRATION_WAIT_S="
+                f"{limit_s:.0f}) for the schema migration another process is running. {who} It is "
+                "most often a CONCURRENTLY index build waiting for that old snapshot: end it (or "
+                "let it finish), or raise VEXA_FLOWS_MIGRATION_WAIT_S, then start this process "
+                "again.")
+        if clock() - said >= LOCK_SAY_EVERY_S:
+            said = clock()
+            _log.warning("schema migration: waited %.0fs so far. %s", waited, _holder(held))
         wait(LOCK_POLL_S)
+    if state:
+        state("migrating")
     try:
         script()
         did = dict(transaction(apply))
@@ -169,6 +224,22 @@ def migrate(held: Callable, script: Callable, transaction: Callable, wait: Calla
         return did
     finally:
         held(f"SELECT pg_advisory_unlock({MIGRATION_LOCK})")
+
+
+def _holder(held: Callable) -> str:
+    """One sentence: who holds the migration lock, and the oldest open snapshot."""
+    def one(rows, what):
+        if not rows:
+            return f"{what}: none seen"
+        pid, app, st, age = rows[0][:4]
+        extra = f", waiting on {rows[0][4]}" if len(rows[0]) > 4 and rows[0][4] else ""
+        return (f"{what}: pid {pid} ({app or 'no application_name'}, {st or 'no state'}, "
+                f"transaction open {float(age or 0):.0f}s{extra})")
+    try:
+        return (one(held(LOCK_HOLDER), "Lock held by") + "; "
+                + one(held(OLDEST_SNAPSHOT), "oldest open snapshot") + ".")
+    except Exception as e:  # noqa: BLE001 — a catalogue we may not read must not hide the wait itself
+        return f"Who holds it could not be read ({type(e).__name__})."
 
 
 def _granted(rows) -> bool:

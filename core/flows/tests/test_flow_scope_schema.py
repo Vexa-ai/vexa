@@ -199,3 +199,54 @@ def test_a_failing_step_still_releases_the_lock():
     with pytest.raises(RuntimeError):
         migrations.migrate(boot.held, broken, boot.transaction, boot.wait)
     assert boot.log[-1] == ("held", f"SELECT pg_advisory_unlock({migrations.MIGRATION_LOCK})")
+
+
+class _Stuck:
+    """The lock never comes: another process holds it, stalled behind an old snapshot. The clock
+    moves only when the waiting process sleeps."""
+
+    def __init__(self):
+        self.t, self.sql, self.states = 0.0, [], []
+
+    def held(self, sql, params=None):
+        self.sql.append(" ".join(sql.split()))
+        if "pg_try_advisory_lock" in sql:
+            return [(False,)]
+        if "pg_locks" in sql:
+            return [(4242, "flows-worker", "active", 95.0, "Lock/virtualxid")]
+        if "backend_xmin" in sql:
+            return [(77, "pg_dump", "idle in transaction", 3600.0)]
+        return []
+
+    def wait(self, s):
+        self.t += s
+
+
+def test_a_process_waiting_for_the_migration_says_who_holds_it_and_gives_up_named(caplog):
+    """Second re-review, CEO 2026-11-03: while waiting, every LOCK_SAY_EVERY_S it logs the holder and
+    the oldest open snapshot; past the limit it fails with `migration_lock_timeout`, naming both and
+    what to do, instead of polling forever. It never touched the schema."""
+    import logging
+    stuck = _Stuck()
+    ran = []
+    with caplog.at_level(logging.WARNING, logger="flows.migrations"):
+        with pytest.raises(migrations.MigrationLockTimeout) as e:
+            migrations.migrate(stuck.held, lambda: ran.append("schema"), lambda fn: ran.append("tx"),
+                               stuck.wait, now=lambda: stuck.t, limit_s=100.0,
+                               state=stuck.states.append)
+    said = [r.getMessage() for r in caplog.records if "waited" in r.getMessage()]
+    assert len(said) == 3, said                               # at 30, 60 and 90 seconds
+    assert all("pid 4242 (flows-worker, active" in m and "pid 77 (pg_dump, idle in transaction"
+               in m for m in said)
+    msg = str(e.value)
+    assert msg.startswith("migration_lock_timeout:") and "pid 4242" in msg and "pid 77" in msg
+    assert "VEXA_FLOWS_MIGRATION_WAIT_S" in msg and 100.0 < stuck.t < 101.0
+    assert ran == [] and stuck.states == ["waiting"]
+    assert not any("pg_advisory_unlock" in q for q in stuck.sql), "nothing to release: never held"
+
+
+def test_the_state_says_waiting_then_migrating():
+    boot = _Boot(grant_after=1)
+    states = []
+    migrations.migrate(boot.held, boot.script, boot.transaction, boot.wait, state=states.append)
+    assert states == ["waiting", "migrating"]

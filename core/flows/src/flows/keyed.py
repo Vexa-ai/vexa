@@ -67,6 +67,10 @@ PASS_BUDGET_S = 5.0
 #: without this bound a row the daily cap refuses could sit in front of everyone else's for days.
 #: The booked bot's own window (`start - 600 s` → `start + 600 s`, ADR-0052 §2) is a third of it.
 DEADLINE_MAX_S = 3600.0
+#: The first key of the transaction-scoped advisory lock `upsert` takes per (scope, person); the
+#: second is a hash of them. Two-key advisory locks are a space of their own (any fixed number;
+#: this one spells "keye").
+SHARE_LOCK = 0x6B657965
 #: `share` values a trigger may carry. `person` (the default): the per-person share, and for a
 #: company flow the company total too. `account`: the per-person share only (ADR-0052 §7, the
 #: booked-bot flow, where the account ceiling is the bound). Set only by a flow registered in code:
@@ -146,9 +150,39 @@ def upsert(db: DB, clock: Clock, flow: Flow, *, key: str, fire_at: float, event_
     most `DEADLINE_MAX_S` after `fire_at`. An unchanged upsert (same time) refreshes the payload and
     the deadline but NOT `updated_at`, so a duplicate delivery never extends the window a row may
     still fire in. A row that is not armed (fired, missed, cancelled, retired) is re-armed only past
-    the same checks a new row meets: it is a new pending fire as far as every ceiling is concerned."""
-    now = clock.now()
+    the same checks a new row meets: it is a new pending fire as far as every ceiling is concerned.
+
+    ONE PERSON'S UPSERTS ONE AT A TIME (second re-review). The ceilings are counts, and a count and
+    the write it allows were two statements, so concurrent upserts for one person all passed one
+    count (share 2, 12 concurrent re-arms: 5 armed, once 12). On a DB that offers `atomic()` (the
+    Postgres adapter) the whole upsert is one transaction that first takes a transaction-scoped
+    advisory lock on (scope, person), so every statement after it reads what the previous holder
+    committed. Different people never wait on each other. The company total is not under it: it
+    may be passed by as many people's upserts as run at once, never by one person's."""
     person = person_of(flow, payload)
+    atomic = getattr(db, "atomic", None)
+    if atomic is None:                    # the sqlite test double: one statement at a time anyway
+        return _upsert(db, clock, flow, person, key=key, fire_at=fire_at, event_type=event_type,
+                       payload=payload, per_user=per_user, deadline=deadline, share=share)
+    with atomic() as tx:
+        tx("SELECT pg_advisory_xact_lock(CAST(:ns AS integer), hashtext(CAST(:who AS text)))",
+           {"ns": SHARE_LOCK, "who": f"{flow.scope}/{segment(person)}"})
+        return _upsert(_Within(tx, db.dialect), clock, flow, person, key=key, fire_at=fire_at,
+                       event_type=event_type, payload=payload, per_user=per_user,
+                       deadline=deadline, share=share)
+
+
+class _Within:
+    """One transaction's `execute`, seen as a DB."""
+
+    def __init__(self, execute, dialect: str) -> None:
+        self.execute, self.dialect = execute, dialect
+
+
+def _upsert(db: DB, clock: Clock, flow: Flow, person: str, *, key: str, fire_at: float,
+            event_type: str, payload: dict, per_user: int, deadline: "float | None",
+            share: str) -> str:
+    now = clock.now()
     dl = None if deadline is None else min(float(deadline), float(fire_at) + DEADLINE_MAX_S)
     rows = db.execute("SELECT fire_at, status, version, fired_for FROM keyed_schedule "
                       "WHERE scope = :sc AND flow = :f AND key = :k AND person = :who",

@@ -92,7 +92,8 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request  # noqa: E402
+from fastapi import (Body, Depends, FastAPI, Header, HTTPException, Query, Request,  # noqa: E402
+                     Response)
 from pydantic import BaseModel, Field  # noqa: E402
 
 from flows import Registry, SystemClock, admit, cancel, db_from_url, resume, retry, wake  # noqa: E402
@@ -105,7 +106,7 @@ import flows_config  # noqa: E402
 import flows_obs  # noqa: E402
 import flows_pages  # noqa: E402 — the page renderer `GET /flows/pages` serves (Vexa-ai/vexa#1639)
 from flows_defs import production  # noqa: E402
-from flows_steps.common import (db_url, require_service_key,  # noqa: E402
+from flows_steps.common import (db_options, db_url, require_service_key,  # noqa: E402
                                 service_key, setting)
 from flows_integrations import friction_dedup  # noqa: E402 — the repeat counter POST /friction keeps
 from flows_integrations.subject_auth import (REFUSAL, SHARED_REFUSAL, Caller,  # noqa: E402
@@ -282,7 +283,7 @@ logger = logging.getLogger(__name__)
 #: could be imported against a Postgres that is not up yet), so composing at import costs nothing
 #: and keeps ONE adapter object: `production.build` below closes over this value, so `boot()` must
 #: not quietly swap it for a second one. `None` is never served from — `boot()` refuses first.
-db = db_from_url(db_url()) if flows_config.get("VEXA_FLOWS_DB_URL") else None
+db = db_from_url(db_url(), **db_options()) if flows_config.get("VEXA_FLOWS_DB_URL") else None
 clock = SystemClock()
 vocab = Registry()
 production.build(vocab, db)
@@ -321,7 +322,7 @@ def boot() -> dict:
         # above refuses when it is still absent. Safe to compose here and nowhere else: the steps
         # `production.build` closed over run in the WORKER's process, never in this one (this
         # surface admits facts and steers reactions; it never ticks).
-        db = db_from_url(db_url())
+        db = db_from_url(db_url(), **db_options())
     return {"service": "flows-api", "steps": len(vocab.steps), "flows": len(vocab.flows)}
 
 
@@ -698,6 +699,24 @@ def health():
     """
     return {"status": "ok", "service": "flows-api",
             "flows": len(vocab.flows), "steps": len(vocab.steps)}
+
+
+#: Where this process's schema may be while it still serves: no migration waited for or running.
+_NOT_READY = ("waiting", "migrating")
+
+
+@app.get("/ready")
+def ready(response: Response):
+    """READINESS, beside liveness: 503 while this process is waiting for another process's schema
+    migration or running its own, or when its last one failed; 200 otherwise (second re-review:
+    a migration stalled behind an old snapshot must not read green). It reads the adapter's own
+    word for it (`postgres_db`'s `schema`) and dials nothing; a process that has not used the
+    database yet has nothing waiting and is ready. No credential, like `/health`."""
+    state = str(getattr(db, "schema", "") or "")
+    if state in _NOT_READY or state.startswith("failed"):
+        response.status_code = 503
+        return {"ready": False, "service": "flows-api", "schema": state}
+    return {"ready": True, "service": "flows-api", **({"schema": state} if state else {})}
 
 
 class FlowSubmission(BaseModel):

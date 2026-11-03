@@ -16,6 +16,7 @@ exported from the product package (`flows.SqliteDB`) was importable by anything 
 `flows` at all. Tests construct it directly from the test tree; this module never sees it."""
 from __future__ import annotations
 
+import contextlib
 import json
 import threading
 from pathlib import Path
@@ -122,7 +123,8 @@ def pg_engine(url: str, **engine_kwargs):  # pragma: no cover — exercised agai
     return engine
 
 
-def postgres_db(url: str):  # pragma: no cover — production composition; lazy import by design
+def postgres_db(url: str, *,  # pragma: no cover — production composition; lazy import by design
+                migration_wait_s: "float | None" = None):
     """The Postgres adapter. `create_engine` itself is already lazy (no connection until first
     query); what this function adds is making SCHEMA APPLICATION lazy too, behind a one-shot
     guard on first `execute`/`executescript` — it used to run at construction, which meant
@@ -130,7 +132,12 @@ def postgres_db(url: str):  # pragma: no cover — production composition; lazy 
     Postgres that was not reachable yet, and `/health` is answered by the in-memory step registry
     and never calls either method — so a flows-api that cannot reach Postgres still answers
     liveness. The first caller that actually touches the DB (a real request, the worker's first
-    claim) pays for the schema application once; every caller after it is free."""
+    claim) pays for the schema application once; every caller after it is free.
+
+    `migration_wait_s`: how long that first use waits for another process's migration
+    (`VEXA_FLOWS_MIGRATION_WAIT_S`, passed by the composition; `migrations.MIGRATION_WAIT_S` when
+    not). `schema` says where this process is: `unapplied`, `waiting` (for another process's
+    migration), `migrating`, `ready`, or `failed: <reason>`, and the next use tries again."""
     from sqlalchemy import text
 
     engine = pg_engine(url, pool_pre_ping=True)
@@ -141,6 +148,7 @@ def postgres_db(url: str):  # pragma: no cover — production composition; lazy 
         def __init__(self) -> None:
             self._schema_applied = False
             self._schema_lock = threading.Lock()
+            self.schema = "unapplied"
 
         def _ensure_schema(self) -> None:
             if self._schema_applied:
@@ -148,9 +156,25 @@ def postgres_db(url: str):  # pragma: no cover — production composition; lazy 
             with self._schema_lock:
                 if self._schema_applied:
                     return
-                self._migrate()
+                try:
+                    self._migrate()
+                except Exception as e:
+                    self.schema = f"failed: {getattr(e, 'code', type(e).__name__)}"
+                    raise
                 # only once it worked: a boot that failed half way tries again on the next use
                 self._schema_applied = True
+                self.schema = "ready"
+
+        @contextlib.contextmanager
+        def atomic(self):
+            """SEVERAL STATEMENTS, ONE TRANSACTION: yields an `execute` bound to it, committed when
+            the block ends (rolled back if it raises). For a check and the write it guards, which
+            must not interleave with another process's (`flows.keyed.upsert`)."""
+            self._ensure_schema()
+            with engine.begin() as c:
+                yield lambda sql, params=None: (
+                    lambda res: [tuple(r) for r in res] if res.returns_rows else [])(
+                        c.execute(text(sql), params or {}))
 
         def _migrate(self) -> None:
             """`schema.sql`, then the in-place changes (`migrations.migrate`), one process at a time.
@@ -175,8 +199,11 @@ def postgres_db(url: str):  # pragma: no cover — production composition; lazy 
             once = pg_engine(url, isolation_level="AUTOCOMMIT", poolclass=NullPool)
             try:
                 with once.connect() as held:
-                    migrations.migrate(rows_of(held), lambda: self._run_script(SCHEMA), transaction,
-                                       _time.sleep)
+                    migrations.migrate(
+                        rows_of(held), lambda: self._run_script(SCHEMA), transaction, _time.sleep,
+                        limit_s=(migrations.MIGRATION_WAIT_S if migration_wait_s is None
+                                 else float(migration_wait_s)),
+                        state=lambda word: setattr(self, "schema", word))
             finally:
                 once.dispose()
 
@@ -202,7 +229,7 @@ def postgres_db(url: str):  # pragma: no cover — production composition; lazy 
     return _Pg()
 
 
-def db_from_url(url: str):
+def db_from_url(url: str, **options):
     """The Postgres adapter the URL names — the ONE seam every composition site calls
     (`db_from_url(db_url())`), kept as a function rather than each site calling `postgres_db`
     directly so the choice of adapter stays a property of the CONFIGURATION, not the caller.
@@ -214,7 +241,7 @@ def db_from_url(url: str):
     rather than routing a `sqlite://` URL through here."""
     scheme = url.split("://", 1)[0] if "://" in url else url
     if scheme == "postgres" or scheme.startswith("postgresql"):
-        return postgres_db(url)
+        return postgres_db(url, **options)
     raise UnsupportedDialect(
         f"VEXA_FLOWS_DB_URL names the {scheme!r} scheme — this engine runs on Postgres only "
         "('postgres://' or 'postgresql[+driver]://'). The offline/storm dialect (SqliteDB) is "

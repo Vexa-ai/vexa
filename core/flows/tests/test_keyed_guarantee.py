@@ -253,6 +253,56 @@ def test_a_row_still_armed_moves_whatever_the_share():
                         payload={"uid": "7"}, per_user=2) == "moved"
 
 
+class _Atomic:
+    """A Postgres-shaped DB over the sqlite double: `atomic()` hands out one transaction's
+    `execute`, and every statement is logged with whether it ran inside that transaction."""
+    dialect = "postgres"
+
+    def __init__(self):
+        self.inner, self.log, self.inside = SqliteDB(), [], False
+
+    def execute(self, sql, params=None):
+        self.log.append((self.inside, " ".join(sql.split()), dict(params or {})))
+        if "pg_advisory_xact_lock" in sql:
+            return [("",)]
+        return self.inner.execute(sql, params)
+
+    def atomic(self):
+        import contextlib
+
+        @contextlib.contextmanager
+        def tx():
+            self.inside = True
+            try:
+                yield self.execute
+            finally:
+                self.inside = False
+        return tx()
+
+
+@pytest.mark.parametrize("path", ["insert", "re-arm"])
+def test_one_persons_upsert_takes_its_lock_before_it_counts(path):
+    """Second re-review: the count and the write it allows were two statements, so concurrent
+    upserts for one person all passed one count. On a DB with transactions the whole upsert is one,
+    and its first statement is the person's advisory lock: every count runs after it, inside it."""
+    _, clock, reg = _rig()
+    flow = reg.newest("instance", "booked")
+    db = _Atomic()
+    if path == "re-arm":
+        keyed.upsert(db.inner, clock, flow, key="a", fire_at=T, event_type="x", payload={"uid": "7"})
+        db.inner.execute("UPDATE keyed_schedule SET status = 'cancelled'")
+    keyed.upsert(db, clock, flow, key="a", fire_at=T + 60, event_type="x", payload={"uid": "7"},
+                 per_user=2)
+    inside, first, params = db.log[0]
+    assert inside and first.startswith("SELECT pg_advisory_xact_lock(")
+    assert params["who"] == "instance/7" and params["ns"] == keyed.SHARE_LOCK
+    counts = [i for i, (_, q, _) in enumerate(db.log) if "COUNT(*)" in q]
+    assert counts and all(db.log[i][0] for i in counts), "every count inside the transaction"
+    assert all(i > 0 for i in counts), "after the lock"
+    assert all(ins for ins, _, _ in db.log), "nothing of the upsert outside it"
+    assert db.inner.execute("SELECT status FROM keyed_schedule") == [("armed",)]
+
+
 def _own_flows(reg, n, uid="7"):
     return [reg.flow_by_names(name=f"mine{i}", version=1, on_event=f"mine{i}.changed",
                               step_names=["note"], params={"_trigger": TRIGGER}, scope=f"user:{uid}")

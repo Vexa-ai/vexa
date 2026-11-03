@@ -50,8 +50,8 @@ _UID = re.compile(r"^UID:(.+)$", re.M)
 
 def _flows_db():
     from flows import postgres_db
-    from flows_steps.common import db_url
-    return postgres_db(db_url())
+    from flows_steps.common import db_options, db_url
+    return postgres_db(db_url(), **db_options())
 
 
 def _event_key(ics: str, ev: dict | None = None) -> str:

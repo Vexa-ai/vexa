@@ -180,3 +180,77 @@ def test_processes_booting_together_all_boot_and_the_table_is_migrated_once(old_
         assert _one(old_table, "SELECT convalidated FROM pg_constraint WHERE conrelid = "
                                "'keyed_schedule'::regclass AND conname = 'keyed_status'") == [(True,)]
         assert _one(old_table, "SELECT COUNT(*) FROM keyed_schedule") == [(50,)]
+
+
+@pytest.mark.parametrize("path", ["insert", "re-arm"])
+def test_concurrent_upserts_for_one_person_never_pass_the_share_on_postgres(path):
+    """Second re-review: share 2, 12 concurrent upserts for one person, each on its own connection.
+    The count and the write were two statements, so all 12 could pass one count (5 armed, once 12).
+    Under the person's transaction-scoped lock exactly 2 are armed, every trial."""
+    import threading
+    import uuid
+
+    from flows import Done, FakeClock, Registry, keyed
+    from flows.db import postgres_db
+    from flows.registry import EventType
+    db, clock, reg = postgres_db(PG_URL), FakeClock(1_000_000.0), Registry()
+
+    @reg.step
+    def note(ctx):  # noqa: ARG001
+        return Done({})
+    flow = reg.flow(name="booked", version=1, on=EventType("planned.changed"), steps=[note],
+                    params={"_trigger": {"kind": "relative", "at": "payload.start - 600s",
+                                         "key": "payload.meeting_id"}})
+    for trial in range(5):
+        who, keys = f"p-{uuid.uuid4().hex}", [f"k{i}" for i in range(12)]
+        if path == "re-arm":
+            for k in keys:
+                db.execute("INSERT INTO keyed_schedule (scope, flow, key, fire_at, status, version, "
+                           "event_type, person, payload, updated_at) VALUES ('instance', 'booked', "
+                           ":k, 1000600.0, 'cancelled', 1, 'x', :p, '{}', 1.0)", {"k": k, "p": who})
+        gate, out = threading.Barrier(len(keys)), []
+
+        def one(k):
+            gate.wait()
+            out.append(keyed.upsert(db, clock, flow, key=k, fire_at=1_000_660.0, event_type="x",
+                                    payload={"uid": who}, per_user=2))
+        threads = [threading.Thread(target=one, args=(k,)) for k in keys]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=60)
+        (armed,), = db.execute("SELECT COUNT(*) FROM keyed_schedule WHERE person = :p "
+                               "AND status = 'armed'", {"p": who})
+        assert armed == 2, f"trial {trial + 1}: {armed} armed of a share of 2 ({sorted(out)})"
+        assert out.count("refused") == len(keys) - 2
+
+
+def test_a_boot_that_waits_past_its_limit_fails_named_with_the_holder_on_postgres(monkeypatch,
+                                                                                  caplog):
+    """Another session holds the migration lock (a process stalled in its migration): the boot
+    says who holds it while it waits, then fails with `migration_lock_timeout` naming that
+    session, and its adapter reads `failed: migration_lock_timeout` (so `/ready` is 503)."""
+    import logging
+
+    from sqlalchemy import text
+    from sqlalchemy.pool import NullPool
+
+    from flows import migrations
+    from flows.db import pg_engine, postgres_db
+    monkeypatch.setattr(migrations, "LOCK_SAY_EVERY_S", 0.5)
+    other = pg_engine(PG_URL, isolation_level="AUTOCOMMIT", poolclass=NullPool)
+    with other.connect() as c:
+        c.execute(text("SET application_name = 'stalled-migration'"))
+        holder = c.execute(text("SELECT pg_backend_pid()")).scalar()
+        c.execute(text(f"SELECT pg_advisory_lock({migrations.MIGRATION_LOCK})"))
+        db = postgres_db(PG_URL, migration_wait_s=1.5)
+        with caplog.at_level(logging.WARNING, logger="flows.migrations"):
+            with pytest.raises(migrations.MigrationLockTimeout) as e:
+                db.execute("SELECT 1")
+        c.execute(text(f"SELECT pg_advisory_unlock({migrations.MIGRATION_LOCK})"))
+    other.dispose()
+    assert f"pid {holder} (stalled-migration" in str(e.value)
+    assert any(f"pid {holder} (stalled-migration" in r.getMessage() for r in caplog.records)
+    assert db.schema == "failed: migration_lock_timeout"
+    db.execute("SELECT 1")                                   # the lock is free: the next use migrates
+    assert db.schema == "ready"

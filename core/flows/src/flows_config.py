@@ -299,6 +299,9 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "defaulted", "120",
         "mail-triggered agent turns the whole deployment may run per window — the ceiling on what "
         "one inbox can cost, whoever sends it."),
+    "VEXA_FLOWS_MIGRATION_WAIT_S": (
+        "defaulted", "3600",
+        "How many seconds a flows process's first use of the database waits for another process's schema migration before it fails with migration_lock_timeout, naming who holds the migration and the oldest open snapshot. Many times a CONCURRENTLY index build on a large table."),
     "VEXA_FLOWS_SCHEDULE_CATCHUP_S": (
         "defaulted", "3600",
         "After downtime the worker fires a schedule flow's most recent missed slot once, if it is younger than this many seconds; older slots are skipped and counted (ADR-0046 decision 3)."),

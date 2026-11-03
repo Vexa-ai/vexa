@@ -46,7 +46,7 @@ from flows_integrations import mail_policy, outlook
 from flows_integrations import mailbox_status
 from flows_integrations import mail_tickets
 from flows_integrations.inbox import get_inbox
-from flows_steps.common import db_url
+from flows_steps.common import db_options, db_url
 from flows_steps.mail_transport import MailTransportError
 
 
@@ -823,7 +823,7 @@ def process(db, reg, clock, self_addr: str, msg, known_uid, is_scaffolded,
 
 def main() -> int:
     flows_obs.set_service(SERVICE)
-    db = postgres_db(db_url())
+    db = postgres_db(db_url(), **db_options())
     clock = SystemClock()
     reg = Registry()
     production.build(reg, db)     # the matcher needs the flow triggers; steps unused here

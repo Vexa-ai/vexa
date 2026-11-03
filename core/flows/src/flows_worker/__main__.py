@@ -20,7 +20,7 @@ from flows_steps import policies
 import flows_obs
 from flows_steps import common
 from flows_worker.unit import SERVICE, instrument, run_unit
-from flows_steps.common import db_url, require_service_key
+from flows_steps.common import db_options, db_url, require_service_key
 
 POLL_S = 1.0
 SLOW_STEP_S = 8.0
@@ -102,7 +102,7 @@ def main() -> int:
     # of four placeholders in `flows_api.py` came to stand in for the declaration's seven.
     from config_preflight import preflight as contract_preflight
     contract_preflight()
-    db = postgres_db(db_url())
+    db = postgres_db(db_url(), **db_options())
     clock = SystemClock()
     reg = Registry()
     production.build(reg, db)

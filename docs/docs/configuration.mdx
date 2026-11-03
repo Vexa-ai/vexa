@@ -368,6 +368,7 @@ route for them yet**: the flows templates carry no `extraEnv`, so on Kubernetes 
 | `VEXA_FLOWS_USER_MESSAGES_PER_DAY` | `100` | flows-api, flows-worker | Messages one person's agents may send other agents (`message_agent`) in 24 hours — a cap of its own, not counted against runs. |
 | `VEXA_FLOWS_LOOP_LIMIT` | `1` | flows-api, flows-worker | Times an event may start a flow already in the chain that produced it. |
 | `VEXA_FLOWS_MAX_HOPS` | `8` | flows-api, flows-worker | Longest chain of flows an event may carry. |
+| `VEXA_FLOWS_MIGRATION_WAIT_S` | `3600` | flows-worker, flows-api, flows-mailbox | How long a flows process's first use of the database waits for another process's schema migration. While it waits it logs, every 30 s, the session holding the migration and the oldest open snapshot, and flows-api's `/ready` answers 503; past the limit it fails with `migration_lock_timeout`, naming both. |
 | `VEXA_FLOWS_SCHEDULE_CATCHUP_S` | `3600` | flows-worker | After downtime, a schedule flow's most recent missed slot fires once if younger than this; older slots are skipped and counted. |
 
 See [Routines](/flows/routines) for what each refusal looks like to the person.
