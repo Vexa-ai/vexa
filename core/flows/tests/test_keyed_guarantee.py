@@ -224,6 +224,35 @@ def test_a_full_personal_share_is_answered_to_the_caller():
     assert refusals == ["keyed_share_full"]
 
 
+@pytest.mark.parametrize("gone", ["cancelled", "missed", "fired", "retired"])
+def test_re_arming_a_row_that_stopped_counting_meets_the_share_again(gone):
+    """Review of e0b68efd: share 2 — arm 2, end both, arm 2 more, move the first 2 back in. The
+    two that ended no longer count, so moving them back is arming them: refused at the share."""
+    db, clock, reg = _rig()
+    flow = reg.newest("instance", "booked")
+
+    def up(k, at):
+        return keyed.upsert(db, clock, flow, key=k, fire_at=at, event_type="x",
+                            payload={"uid": "7"}, per_user=2)
+    assert [up("a", T), up("b", T)] == ["armed", "armed"]
+    db.execute("UPDATE keyed_schedule SET status = :g WHERE key IN ('a', 'b')", {"g": gone})
+    assert [up("c", T), up("d", T)] == ["armed", "armed"]
+    assert [up("a", T + 60), up("b", T + 60)] == ["refused", "refused"]
+    assert keyed.held(db, "instance", "booked", "7") == 2
+    assert {k: st for k, st in db.execute("SELECT key, status FROM keyed_schedule")} == {
+        "a": gone, "b": gone, "c": "armed", "d": "armed"}, "a refused re-arm leaves the row as it was"
+
+
+def test_a_row_still_armed_moves_whatever_the_share():
+    db, clock, reg = _rig()
+    flow = reg.newest("instance", "booked")
+    for k in ("a", "b"):
+        keyed.upsert(db, clock, flow, key=k, fire_at=T, event_type="x", payload={"uid": "7"},
+                     per_user=2)
+    assert keyed.upsert(db, clock, flow, key="a", fire_at=T + 60, event_type="x",
+                        payload={"uid": "7"}, per_user=2) == "moved"
+
+
 def _own_flows(reg, n, uid="7"):
     return [reg.flow_by_names(name=f"mine{i}", version=1, on_event=f"mine{i}.changed",
                               step_names=["note"], params={"_trigger": TRIGGER}, scope=f"user:{uid}")
@@ -302,6 +331,21 @@ def test_one_accounts_cancel_touches_only_its_own_row():
           subject_refs={"meeting_id": "m1", "start": T, "uid": "8", "status": "cancelled"})
     assert db.execute("SELECT person, status FROM keyed_schedule ORDER BY person") == [
         ("7", "armed"), ("8", "cancelled")]
+
+
+def test_rows_of_one_key_and_one_time_for_several_people_page_through_one_at_a_time():
+    """Offline twin of the Postgres test: three people, one key, one fire time, one row per page.
+    The page cursor carries the person, so the rows that tie on (fire_at, scope, flow, key) are each
+    read once, none skipped; the cancelled one is the canceller's own."""
+    db, clock, reg = _rig()
+    for uid in ("7", "8", "9"):
+        _book(db, reg, clock, "m1", uid=uid)
+    admit(db, reg, clock, source_event_id="c9", event_type="planned.changed",
+          subject_refs={"meeting_id": "m1", "start": T, "uid": "9", "status": "cancelled"})
+    clock._t = T - LEAD + 1
+    assert keyed.fire_due(db, reg, clock, page=1) == 2
+    assert db.execute("SELECT person, status FROM keyed_schedule ORDER BY person") == [
+        ("7", "fired"), ("8", "fired"), ("9", "cancelled")]
 
 
 def test_two_accounts_firing_in_one_second_are_two_runs():

@@ -24,13 +24,18 @@ a CHECK added in one step holds the whole table while it scans):
 * `keyed_schedule`'s key gains `person` (a row is its person's, see `flows.keyed`): the unique index
   is built `CONCURRENTLY` in `after`, then becomes the primary key in one short statement.
 
-`after` holds a session advisory lock while it works, so two processes booting at once do it once.
+ONE PROCESS AT A TIME (`migrate`): a session advisory lock is held from before `schema.sql` to the
+end of `after`, so processes that boot together migrate one after the other. It is TRIED, never
+waited for, and the waiting process holds nothing between tries (see `migrate`).
 
 `execute` is any `(sql, params) -> rows` callable: the Postgres adapter's in production, a
 recorder in the offline suite."""
 from __future__ import annotations
 
+import logging
 from typing import Callable
+
+_log = logging.getLogger(__name__)
 
 ADD_COLUMNS = (
     "ALTER TABLE flow_version ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'instance'",
@@ -83,9 +88,11 @@ SWAP_KEYED_KEY = (
     "ADD CONSTRAINT keyed_schedule_pkey PRIMARY KEY USING INDEX keyed_identity",
 )
 
-#: The session advisory lock `after` holds, so two processes booting together do its work once
-#: (any fixed number; this one spells "flow").
-AFTER_LOCK = 0x666C6F77
+#: The session advisory lock the whole migration runs under (`migrate`), so two processes booting
+#: together migrate one at a time (any fixed number; this one spells "flow").
+MIGRATION_LOCK = 0x666C6F77
+#: How long `migrate` waits between two tries for that lock.
+LOCK_POLL_S = 0.25
 
 KEY_HAS_SCOPE = """SELECT COUNT(*) FROM information_schema.key_column_usage k
                    JOIN information_schema.table_constraints t
@@ -120,20 +127,49 @@ def apply(execute: Callable) -> dict:
 
 def after(execute: Callable) -> dict:
     """The changes that read the table: run AFTER `apply`'s transaction committed, with an `execute`
-    that commits each statement on its own (CONCURRENTLY refuses a transaction block). Idempotent:
-    each one runs only while the catalogue says it is still needed. Returns what it changed."""
+    that commits each statement on its own (CONCURRENTLY refuses a transaction block), by a caller
+    holding `MIGRATION_LOCK` (`migrate`). Idempotent: each one runs only while the catalogue says it
+    is still needed. Returns what it changed."""
     did = {"keyed_key_swapped": False, "keyed_status_validated": False}
-    execute(f"SELECT pg_advisory_lock({AFTER_LOCK})")
-    try:
-        rows = execute(KEYED_KEY_HAS_PERSON)
-        if not (rows and int(rows[0][0] or 0) > 0):
-            for stmt in SWAP_KEYED_KEY:
-                execute(stmt)
-            did["keyed_key_swapped"] = True
-        rows = execute(KEYED_STATUS_UNVALIDATED)
-        if rows and int(rows[0][0] or 0) > 0:
-            execute(VALIDATE_KEYED_STATUS)
-            did["keyed_status_validated"] = True
-    finally:
-        execute(f"SELECT pg_advisory_unlock({AFTER_LOCK})")
+    rows = execute(KEYED_KEY_HAS_PERSON)
+    if not (rows and int(rows[0][0] or 0) > 0):
+        for stmt in SWAP_KEYED_KEY:
+            execute(stmt)
+        did["keyed_key_swapped"] = True
+    rows = execute(KEYED_STATUS_UNVALIDATED)
+    if rows and int(rows[0][0] or 0) > 0:
+        execute(VALIDATE_KEYED_STATUS)
+        did["keyed_status_validated"] = True
     return did
+
+
+def migrate(held: Callable, script: Callable, transaction: Callable, wait: Callable) -> dict:
+    """THE WHOLE MIGRATION, ONE PROCESS AT A TIME. `held` executes on ONE autocommit session, which
+    holds `MIGRATION_LOCK` from before the schema to the end; `script()` applies `schema.sql`;
+    `transaction(fn)` runs `fn(execute)` in one transaction and returns its answer (`apply`); `after`
+    runs on `held`. The lock is released whatever happens. Returns what `apply` and `after` changed.
+
+    THE LOCK IS TRIED, NEVER WAITED FOR (Vexa-ai/vexa#1996 review). A session blocked in
+    `pg_advisory_lock` is a statement holding a snapshot, and `CREATE INDEX CONCURRENTLY` waits for
+    every older snapshot, so a process queued on the lock and the one building the index under it
+    waited on each other: "deadlock detected" (PG 16: 2 processes booting together in 5 boots of 6,
+    3 in 3 of 4). A process that does not get the lock waits `wait(LOCK_POLL_S)` with no statement
+    open and tries again, so it holds nothing the index build waits on; and it touches the schema
+    only once it has the lock, so its own `apply` never holds the table under a build either."""
+    tries = 0
+    while not _granted(held(f"SELECT pg_try_advisory_lock({MIGRATION_LOCK})")):
+        if tries == 0:
+            _log.info("schema migration: another process holds it; waiting for it to finish")
+        tries += 1
+        wait(LOCK_POLL_S)
+    try:
+        script()
+        did = dict(transaction(apply))
+        did.update(after(held))
+        return did
+    finally:
+        held(f"SELECT pg_advisory_unlock({MIGRATION_LOCK})")
+
+
+def _granted(rows) -> bool:
+    return bool(rows and rows[0][0] in (True, 1, "t", "true"))

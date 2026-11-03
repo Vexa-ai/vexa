@@ -131,9 +131,9 @@ def main() -> int:
     # says what it heard, instead of running its first steps under rules nobody wrote.
     policies.read_at_boot()
 
-    def emit(event_type: str, source_id: str, refs: dict) -> int:
+    def emit(event_type: str, source_id: str, refs: dict, earlier: tuple = ()) -> int:
         n = admit(db, reg, clock, source_event_id=source_id,
-                  event_type=event_type, subject_refs=refs, **admission_limits())
+                  event_type=event_type, subject_refs=refs, earlier=earlier, **admission_limits())
         # A ROOM'S PLANNED CALL FOLLOWS ITS CREATOR'S CALENDAR (PLAN-8H 8.4): a moved or cancelled
         # event is handed to agent-api's room door as its owner. Never stops the pass.
         if event_type.startswith("calendar.event.") and common.domain_present("agent"):

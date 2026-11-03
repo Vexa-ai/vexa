@@ -35,18 +35,26 @@ ROW = ("INSERT INTO keyed_schedule (scope, flow, key, fire_at, status, version, 
        "updated_at) VALUES ('instance', 'invite_join', :k, 1.0, :st, 1, 'invite.received', :p, 1.0)")
 
 
-@pytest.fixture()
-def old_table():
+def _reset(engine, indexes: bool = False):
+    """keyed_schedule as the release before the review left it, with 50 rows (and, with `indexes`,
+    the two indexes an upgraded stack already has, so `schema.sql` changes nothing)."""
     from sqlalchemy import text
-
-    from flows.db import pg_engine
-    engine = pg_engine(PG_URL)
     with engine.begin() as c:
         c.execute(text("DROP TABLE IF EXISTS keyed_schedule"))
         c.execute(text(OLD_TABLE))
+        if indexes:
+            c.execute(text("CREATE INDEX keyed_due ON keyed_schedule (fire_at)"))
+            c.execute(text("CREATE INDEX keyed_person ON keyed_schedule (scope, person)"))
         for i in range(50):
             c.execute(text(ROW), {"k": f"uid-{i}", "st": "armed" if i % 2 else "fired",
                                   "p": "alice@vexa.test"})
+
+
+@pytest.fixture()
+def old_table():
+    from flows.db import pg_engine
+    engine = pg_engine(PG_URL)
+    _reset(engine)
     yield engine
     engine.dispose()
 
@@ -127,3 +135,48 @@ def test_a_second_boot_changes_nothing(old_table):
     once.dispose()
     assert did == {"keyed_key_swapped": False, "keyed_status_validated": False}
     assert _key_columns(old_table) == ["scope", "flow", "key", "person"]
+
+
+#: One process booting: it waits for a shared start moment, then its first use of the database runs
+#: the whole migration (`postgres_db` → `migrations.migrate`).
+BOOT = """import sys, time
+sys.path.insert(0, sys.argv[2])
+from flows.db import postgres_db
+start = float(sys.argv[3])
+while time.time() < start:
+    time.sleep(0.002)
+postgres_db(sys.argv[1]).execute("SELECT 1")
+print("booted")
+"""
+
+
+@pytest.mark.parametrize("indexes", [True, False], ids=["upgraded-stack", "indexes-missing"])
+@pytest.mark.parametrize("processes,trials", [(2, 6), (3, 4)])
+def test_processes_booting_together_all_boot_and_the_table_is_migrated_once(old_table, processes,
+                                                                          trials, indexes):
+    """The re-review's measurement, as a test: processes booting at the same moment against the old
+    table. With a blocking advisory lock, a waiter's snapshot and the CONCURRENTLY build waited on
+    each other ("deadlock detected" in 5 of 6 trials with 2, 3 of 4 with 3); where the indexes were
+    missing, two unlocked `schema.sql` runs raced on creating them (a duplicate-key error). The
+    whole migration now runs under the lock, and every process boots."""
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+    src = str(Path(__file__).resolve().parents[1] / "src")
+    for trial in range(trials):
+        _reset(old_table, indexes)
+        start = time.time() + 2.0
+        procs = [subprocess.Popen([sys.executable, "-c", BOOT, PG_URL, src, str(start)],
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                 for _ in range(processes)]
+        outs = [p.communicate(timeout=180) for p in procs]
+        failed = [next((ln for ln in reversed(err.splitlines()) if "Error" in ln
+                        and "Background" not in ln), err[-300:]) for p, (_, err) in zip(procs, outs)
+                  if p.returncode != 0]
+        assert not failed, f"trial {trial + 1}: {failed}"
+        assert all(out.strip().endswith("booted") for out, _ in outs)
+        assert _key_columns(old_table) == ["scope", "flow", "key", "person"]
+        assert _one(old_table, "SELECT convalidated FROM pg_constraint WHERE conrelid = "
+                               "'keyed_schedule'::regclass AND conname = 'keyed_status'") == [(True,)]
+        assert _one(old_table, "SELECT COUNT(*) FROM keyed_schedule") == [(50,)]

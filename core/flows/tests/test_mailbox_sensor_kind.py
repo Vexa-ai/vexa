@@ -122,6 +122,32 @@ def test_two_organizers_invites_with_one_uid_are_two_changes():
     assert keys == ["host@vexa.ai/evt-1:1", "dima@vexa.ai/evt-1:1", "host@vexa.ai/evt-1:1"]
 
 
+def test_a_resync_after_the_upgrade_dedups_into_the_intake_admitted_under_the_old_key():
+    """A run admitted under the key before the owner was in it (`<event_key>:<sequence>`) is its
+    organizer's: the first read after the upgrade dedups into it (no second RSVP, ack or prep),
+    and another organizer's invite with that UID still gets its own run."""
+    import json
+
+    from flows import FakeClock, Registry, admit
+    from flows_defs import production
+    db, reg, clock = SqliteDB(), Registry(), FakeClock(NOW)
+    production.build(reg, db)
+    reg.refresh_from_db(db)
+    admit(db, reg, clock, source_event_id="sensor:instance/info-invites:evt-1:0",
+          event_type="invite.received",
+          subject_refs={"organizer": "host@vexa.ai", "url": "https://meet.google.com/abc-defg-hij",
+                        "start": NOW + 86400, "event_key": "evt-1", "sequence": 0})
+
+    def emit(event_type, source_id, refs, earlier=()):
+        return admit(db, reg, clock, source_event_id=source_id, event_type=event_type,
+                     subject_refs=refs, earlier=earlier)
+    msgs = [_msg(1, ics=_ics()), _msg(2, frm="dima@vexa.ai", ics=_ics(organizer="dima@vexa.ai"))]
+    pool.tick_one(db, _kind(msgs, db), _row(), emit, NOW)
+    intakes = sorted(json.loads(r)["organizer"] for (r,) in db.execute(
+        "SELECT subject_refs FROM reaction WHERE flow = 'invite_intake'"))
+    assert intakes == ["dima@vexa.ai", "host@vexa.ai"], "one run each; the old one not repeated"
+
+
 def test_an_organizer_nobody_can_place_emits_nothing_and_only_a_live_sensor_records_it():
     db = SqliteDB()
     msgs = [_msg(1, frm="x@stranger.com", ics=_ics(organizer="x@stranger.com"))]

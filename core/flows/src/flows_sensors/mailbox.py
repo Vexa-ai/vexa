@@ -179,15 +179,18 @@ class MailboxSensor(SensorKind):
             # THE CHANGE IS ITS OWNER'S (Vexa-ai/vexa#1996 review): one UID is the meeting's in every
             # invitee's calendar, so the dedup key names whose invite this is (the authenticated
             # organizer, `flows.keyed.person_named`), or a second person's invite would be deduped
-            # into the first one's intake run and its refs merged into it.
+            # into the first one's intake run and its refs merged into it. A run admitted under the
+            # key before the owner was in it (`<event_key>:<sequence>`) is still its organizer's:
+            # `earlier` lets a resync after the upgrade dedup into it, not repeat RSVP, ack and prep.
             from flows import keyed
             change = f"{keyed.segment(keyed.person_named(refs))}/{key}:{seq}"
+            before = f"{key}:{seq}"
             if live:
                 # THE MAIL ISSUER VOUCHES FOR THE INVITE route() authenticated (subject-ticket.v1).
                 refs = mail_tickets.carrying(refs, mail_tickets.invite_ticket(
                     payload, evt=change, sub=_uid_or_blank(self._who, payload["organizer"]),
                     now=self._clock()))
-            return Change("invite.received", change, refs)
+            return Change("invite.received", change, refs, earlier=(before,))
         if kind == "invite_quarantine":
             if live:
                 mail_policy.quarantine(db, ext_id=ext, frm=msg.frm, kind=mail_policy.UNVERIFIED_INVITE,

@@ -35,7 +35,9 @@ LAST_EVENTS = 5
 #: How many would-be events and drops a test answers at most.
 TEST_MAX = 50
 
-Emit = Callable[[str, str, dict], int]
+#: `(event_type, source_id, refs) -> reactions created`, given `earlier=` (the change's earlier
+#: source ids, `Change.earlier`) only when a change has some.
+Emit = Callable[..., int]
 
 COLS = ("scope, name, kind, connection_id, filter, interval_s, version, tested_version, cursor, "
         "status, mode, failures, reason, last_tick_at, last_change_at, next_due_at")
@@ -83,7 +85,7 @@ def sort_changes(kind: SensorKind, s: SensorRow, changes: Iterable) -> tuple[lis
             dropped.append({"event_type": ch.event_type, "key": ch.dedupe_key, "reason": "filter",
                             **_label(refs)})
             continue
-        kept.append(Change(ch.event_type, ch.dedupe_key, refs))
+        kept.append(Change(ch.event_type, ch.dedupe_key, refs, ch.earlier))
     return kept, dropped
 
 
@@ -109,7 +111,9 @@ def tick_one(db, kind: SensorKind, s: SensorRow, emit: Emit, now: float) -> dict
     emitted = 0
     for ch in kept:
         refs = {**ch.refs, "_sensor": s.sensor_id}
-        emitted += int(emit(ch.event_type, f"sensor:{s.sensor_id}:{ch.dedupe_key}", refs) or 0)
+        earlier = tuple(f"sensor:{s.sensor_id}:{k}" for k in ch.earlier)
+        emitted += int(emit(ch.event_type, f"sensor:{s.sensor_id}:{ch.dedupe_key}", refs,
+                            **({"earlier": earlier} if earlier else {})) or 0)
     sets = ["lease_until = NULL", "next_due_at = :due", "last_tick_at = :now", "failures = 0"]
     params = {"due": now + _jitter(_interval(kind, s)), "now": now, "sc": s.scope, "n": s.name}
     if s.status == "degraded" or s.failures:

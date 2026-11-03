@@ -17,6 +17,7 @@ exported from the product package (`flows.SqliteDB`) was importable by anything 
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
@@ -139,31 +140,43 @@ def postgres_db(url: str):  # pragma: no cover — production composition; lazy 
 
         def __init__(self) -> None:
             self._schema_applied = False
+            self._schema_lock = threading.Lock()
 
         def _ensure_schema(self) -> None:
             if self._schema_applied:
                 return
-            self._schema_applied = True
-            self._run_script(SCHEMA)
-            # Columns added since a table was created (`migrations`): one transaction, so a
-            # half-swapped key is never what the next boot finds.
-            from . import migrations
-            with engine.begin() as c:
-                migrations.apply(lambda sql, params=None: (
-                    lambda res: [tuple(r) for r in res] if res.returns_rows else [])(
-                        c.execute(text(sql), params or {})))
-            # …then what has to READ the table (a constraint check, an index build): outside that
-            # transaction, each statement committing on its own, so none of them holds the table.
-            # On a connection of its own, autocommit from the moment it opens: a POOLED connection's
-            # liveness ping runs in a transaction pg8000 leaves open, which CONCURRENTLY refuses. It
-            # is closed after, and the advisory lock `after` holds goes with it whatever happened.
+            with self._schema_lock:
+                if self._schema_applied:
+                    return
+                self._migrate()
+                # only once it worked: a boot that failed half way tries again on the next use
+                self._schema_applied = True
+
+        def _migrate(self) -> None:
+            """`schema.sql`, then the in-place changes (`migrations.migrate`), one process at a time.
+            The lock is held on a connection of its own, autocommit from the moment it opens: `after`
+            runs on it too, and CONCURRENTLY refuses a transaction, which a POOLED connection's
+            liveness ping leaves open under pg8000. It is closed after, and the lock goes with it
+            whatever happened. `apply` runs in one transaction of the pool, so a half-swapped key is
+            never what the next boot finds."""
+            import time as _time
             from sqlalchemy.pool import NullPool
+            from . import migrations
+
+            def rows_of(c):
+                return lambda sql, params=None: (
+                    lambda res: [tuple(r) for r in res] if res.returns_rows else [])(
+                        c.execute(text(sql), params or {}))
+
+            def transaction(fn):
+                with engine.begin() as c:
+                    return fn(rows_of(c))
+
             once = pg_engine(url, isolation_level="AUTOCOMMIT", poolclass=NullPool)
             try:
-                with once.connect() as c:
-                    migrations.after(lambda sql, params=None: (
-                        lambda res: [tuple(r) for r in res] if res.returns_rows else [])(
-                            c.execute(text(sql), params or {})))
+                with once.connect() as held:
+                    migrations.migrate(rows_of(held), lambda: self._run_script(SCHEMA), transaction,
+                                       _time.sleep)
             finally:
                 once.dispose()
 

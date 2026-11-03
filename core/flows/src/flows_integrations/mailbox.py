@@ -545,28 +545,6 @@ def _invite_base_id(ev: dict) -> str:
     return f"ics-{_occurrence_of(ev)}"
 
 
-def _admitted_id(db, reg, ev: dict, sid: str) -> str:
-    """`sid`, or the id the invite had before the owner was in it, when THIS organizer's invite was
-    already admitted under that one (a release before the owner was in the id): a resend after the
-    upgrade dedups into the run it already had instead of running the intake twice. A run under the
-    old id that is another person's is not theirs to dedup into; they keep `sid`."""
-    import json as _j
-    old = _invite_base_id(ev)
-    if old == sid:
-        return sid
-    keys = [f"{old}::{f.ident}" for f in reg.match("invite.received")]
-    if not keys:
-        return sid
-    rows = db.execute("SELECT subject_refs FROM reaction WHERE source_event_id IN ("
-                      + ", ".join(f":k{i}" for i in range(len(keys))) + ")",
-                      {f"k{i}": k for i, k in enumerate(keys)})
-    me = keyed.person_named(ev).lower()
-    for (refs,) in rows:
-        if keyed.person_named(_j.loads(refs or "{}")).lower() == me:
-            return old
-    return sid
-
-
 #: WHAT THE ELISION LOOKS LIKE when a body is longer than the cap. It is part of the text a reader
 #: — a person, or an agent reading the untrusted block — actually sees, on purpose: a body that was
 #: silently cut ends mid-sentence and reads as a message that ends mid-sentence, which is a
@@ -748,13 +726,18 @@ def handle(db, reg, clock, self_addr: str, msg, known_uid, is_scaffolded,
     if kind == "invite":
         # THE MAIL ISSUER VOUCHES FOR THE INVITE (subject-ticket.v1) — after route() authenticated
         # its organizer and placed them; the ticket is what lets flows act for them at the door.
-        sid = _admitted_id(db, reg, payload, invite_source_id(payload))
+        sid = invite_source_id(payload)
         ticket = mail_tickets.invite_ticket(payload, evt=sid, sub=_uid_or_blank(known_uid,
                                                                                 payload["organizer"]),
                                             now=now)
+        # AN INVITE ADMITTED BEFORE THE OWNER WAS IN ITS ID (`ics-<UID>[-<occurrence>]`, 0.12
+        # included): its own organizer's resend dedups into the run it already had (`admit`'s
+        # `earlier`), never into another person's.
+        old = _invite_base_id(payload)
         n = admit(db, reg, clock, source_event_id=sid,
                   event_type="invite.received",
-                  subject_refs=mail_tickets.carrying(payload, ticket))
+                  subject_refs=mail_tickets.carrying(payload, ticket),
+                  earlier=(old,) if old != sid else ())
         return ("invite", n)
     if kind == "invite_cancel":
         n = admit(db, reg, clock,

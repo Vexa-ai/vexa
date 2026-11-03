@@ -118,27 +118,84 @@ def test_the_keyed_status_check_is_added_without_a_scan_and_validated_apart():
 def test_the_keyed_key_gains_person_on_an_index_built_concurrently():
     cat = _Catalogue(key_has_person=False, unvalidated=False)
     assert migrations.after(cat)["keyed_key_swapped"] is True
-    body = [s for s in cat.sql if "advisory" not in s]
-    assert body[1:] == [
+    assert cat.sql[1:] == [
         "DROP INDEX CONCURRENTLY IF EXISTS keyed_identity",
         "CREATE UNIQUE INDEX CONCURRENTLY keyed_identity ON keyed_schedule (scope, flow, key, person)",
         "ALTER TABLE keyed_schedule DROP CONSTRAINT IF EXISTS keyed_schedule_pkey, ADD CONSTRAINT "
         "keyed_schedule_pkey PRIMARY KEY USING INDEX keyed_identity",
-        body[-1]]                                            # then the validation question
-    assert cat.sql[0].startswith("SELECT pg_advisory_lock(") and \
-        cat.sql[-1].startswith("SELECT pg_advisory_unlock("), "two booting processes do it once"
+        cat.sql[-1]]                                         # then the validation question
     cat = _Catalogue(key_has_person=True, unvalidated=False)
     assert migrations.after(cat) == {"keyed_key_swapped": False, "keyed_status_validated": False}
     assert not any("INDEX" in s for s in cat.sql)
 
 
+# ── one process at a time, and a waiter holds nothing (Vexa-ai/vexa#1996 re-review) ──────────────
+
+class _Boot:
+    """One booting process, offline: `held` is its autocommit session, `script` applies schema.sql,
+    `transaction` runs `apply` in one transaction. Every call is written to one shared `log`, tagged
+    with where it ran, so the order of the whole boot can be read back."""
+
+    def __init__(self, grant_after: int, key_has_person=False, unvalidated=True):
+        self.grant_after, self.tries, self.log = grant_after, 0, []
+        self.cat = _Catalogue(key_has_person=key_has_person, unvalidated=unvalidated)
+
+    def held(self, sql, params=None):
+        self.log.append(("held", " ".join(sql.split())))
+        if "pg_try_advisory_lock" in sql:
+            self.tries += 1
+            return [(self.tries > self.grant_after,)]
+        return self.cat(sql, params)
+
+    def script(self):
+        self.log.append(("script", "schema.sql"))
+
+    def transaction(self, fn):
+        self.log.append(("transaction", "begin"))
+        rec = _Recorder(key_has_scope=True)
+        did = fn(rec)
+        self.log.extend(("transaction", q) for q in rec.sql)
+        self.log.append(("transaction", "commit"))
+        return did
+
+    def wait(self, s):
+        self.log.append(("wait", s))
+
+
+def test_a_booting_process_tries_the_lock_and_holds_nothing_while_it_waits():
+    """A session blocked in pg_advisory_lock holds a snapshot that CREATE INDEX CONCURRENTLY waits
+    for: the deadlock the re-review measured on PG 16. So the lock is only ever TRIED; between two
+    tries the process sleeps with no statement open, and touches the schema only once it has it."""
+    boot = _Boot(grant_after=2)
+    migrations.migrate(boot.held, boot.script, boot.transaction, boot.wait)
+    assert not any("pg_advisory_lock(" in str(q) for _, q in boot.log), "never a blocking lock"
+    first = [where for where, _ in boot.log[:5]]
+    assert first == ["held", "wait", "held", "wait", "held"], "try, sleep, try, sleep, granted"
+    assert boot.log[5] == ("script", "schema.sql"), "the schema only after the lock"
+    assert boot.log[-1] == ("held", f"SELECT pg_advisory_unlock({migrations.MIGRATION_LOCK})")
+
+
+def test_the_index_build_and_the_validation_run_on_the_locked_session_outside_the_transaction():
+    """Offline twin of what the Postgres test proves: `apply` runs inside the one transaction, and
+    what reads the table (CONCURRENTLY, VALIDATE) on the autocommit session that holds the lock."""
+    boot = _Boot(grant_after=0)
+    did = migrations.migrate(boot.held, boot.script, boot.transaction, boot.wait)
+    assert did["keyed_key_swapped"] and did["keyed_status_validated"]
+    build = ("held", "CREATE UNIQUE INDEX CONCURRENTLY keyed_identity ON keyed_schedule "
+                     "(scope, flow, key, person)")
+    assert build in boot.log
+    assert ("held", "ALTER TABLE keyed_schedule VALIDATE CONSTRAINT keyed_status") in boot.log
+    inside = [q for w, q in boot.log if w == "transaction"]
+    assert any("ADD COLUMN IF NOT EXISTS deadline" in q for q in inside)
+    assert not any("CONCURRENTLY" in q or "VALIDATE" in q for q in inside)
+    assert boot.log.index(("transaction", "commit")) < boot.log.index(build), "after the commit"
+
+
 def test_a_failing_step_still_releases_the_lock():
-    def boom(sql, params=None):
-        boom.sql.append(sql)
-        if "CREATE UNIQUE INDEX" in sql:
-            raise RuntimeError("cancelled")
-        return [(0,)] if "information_schema" in sql else []
-    boom.sql = []
+    boot = _Boot(grant_after=0)
+
+    def broken():
+        raise RuntimeError("schema.sql failed")
     with pytest.raises(RuntimeError):
-        migrations.after(boom)
-    assert boom.sql[-1].startswith("SELECT pg_advisory_unlock(")
+        migrations.migrate(boot.held, broken, boot.transaction, boot.wait)
+    assert boot.log[-1] == ("held", f"SELECT pg_advisory_unlock({migrations.MIGRATION_LOCK})")

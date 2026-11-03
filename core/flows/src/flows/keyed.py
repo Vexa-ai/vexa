@@ -116,6 +116,25 @@ def person_of(flow: Flow, payload: dict) -> str:
     return person_named(payload)
 
 
+def _full(db: DB, flow: Flow, person: str, per_user: int, share: str) -> bool:
+    """Would one more armed row of `person`'s in `flow` pass a ceiling? Logged when it would."""
+    if per_user >= 0 and held(db, flow.scope, flow.name, person) >= per_user:
+        _log.warning("keyed schedule refused for %s: the person's share of %d is full",
+                     flow.ident, per_user)
+        return True
+    # A PERSON'S OWN FLOWS SHARE ONE TOTAL: per flow alone, a person with N flows would hold
+    # N × `per_user` rows, and every pass reads the due ones.
+    if per_user >= 0 and flow.owner and held_by(db, flow.scope, person) >= per_user:
+        _log.warning("keyed schedule refused for %s: the person's total of %d across their "
+                     "own flows is full", flow.ident, per_user)
+        return True
+    if not flow.owner and share != "account" and held(db, flow.scope, flow.name) >= COMPANY_MAX:
+        _log.warning("keyed schedule refused for %s: company ceiling %d reached", flow.ident,
+                     COMPANY_MAX)
+        return True
+    return False
+
+
 def upsert(db: DB, clock: Clock, flow: Flow, *, key: str, fire_at: float, event_type: str,
            payload: dict, per_user: int = PER_USER, deadline: "float | None" = None,
            share: str = "person") -> str:
@@ -126,7 +145,8 @@ def upsert(db: DB, clock: Clock, flow: Flow, *, key: str, fire_at: float, event_
     `deadline`: the last moment the fire is still wanted (None: the `CATCHUP_S` rule), held to at
     most `DEADLINE_MAX_S` after `fire_at`. An unchanged upsert (same time) refreshes the payload and
     the deadline but NOT `updated_at`, so a duplicate delivery never extends the window a row may
-    still fire in."""
+    still fire in. A row that is not armed (fired, missed, cancelled, retired) is re-armed only past
+    the same checks a new row meets: it is a new pending fire as far as every ceiling is concerned."""
     now = clock.now()
     person = person_of(flow, payload)
     dl = None if deadline is None else min(float(deadline), float(fire_at) + DEADLINE_MAX_S)
@@ -134,20 +154,7 @@ def upsert(db: DB, clock: Clock, flow: Flow, *, key: str, fire_at: float, event_
                       "WHERE scope = :sc AND flow = :f AND key = :k AND person = :who",
                       {"sc": flow.scope, "f": flow.name, "k": key, "who": person})
     if not rows:
-        if per_user >= 0 and held(db, flow.scope, flow.name, person) >= per_user:
-            _log.warning("keyed schedule refused for %s: the person's share of %d is full",
-                         flow.ident, per_user)
-            return "refused"
-        # A PERSON'S OWN FLOWS SHARE ONE TOTAL: per flow alone, a person with N flows would hold
-        # N × `per_user` rows, and every pass reads the due ones.
-        if per_user >= 0 and flow.owner and held_by(db, flow.scope, person) >= per_user:
-            _log.warning("keyed schedule refused for %s: the person's total of %d across their "
-                         "own flows is full", flow.ident, per_user)
-            return "refused"
-        if (not flow.owner and share != "account"
-                and held(db, flow.scope, flow.name) >= COMPANY_MAX):
-            _log.warning("keyed schedule refused for %s: company ceiling %d reached", flow.ident,
-                         COMPANY_MAX)
+        if _full(db, flow, person, per_user, share):
             return "refused"
         db.execute("INSERT INTO keyed_schedule (scope, flow, key, fire_at, status, version, "
                    "event_type, person, payload, fired_for, updated_at, deadline) VALUES (:sc, :f, "
@@ -167,6 +174,10 @@ def upsert(db: DB, clock: Clock, flow: Flow, *, key: str, fire_at: float, event_
                    {"p": dumps(payload), "et": event_type, "dl": dl, "sc": flow.scope,
                     "f": flow.name, "k": key, "who": person})
         return "unchanged"
+    # RE-ARMING IS ARMING: a cancelled, missed, fired or retired row no longer counts against any
+    # ceiling, so moving it back in meets them again (else cancel-and-move holds past the share).
+    if status != "armed" and _full(db, flow, person, per_user, share):
+        return "refused"
     db.execute("UPDATE keyed_schedule SET fire_at = :at, status = 'armed', version = :v, "
                "payload = :p, event_type = :et, updated_at = :now, deadline = :dl "
                "WHERE scope = :sc AND flow = :f AND key = :k AND person = :who",

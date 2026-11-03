@@ -230,7 +230,8 @@ def admit(db: DB, registry: Registry, clock: Clock, *, source_event_id: str,
           max_hops: int = MAX_HOPS, runs_per_day: int = RUNS_PER_DAY,
           messages_per_day: int = MESSAGES_PER_DAY, refusals: "list | None" = None,
           light_runs_per_day: int = LIGHT_RUNS_PER_DAY,
-          keyed_per_user: "int | None" = None, sealed: "dict | None" = None) -> int:
+          keyed_per_user: "int | None" = None, sealed: "dict | None" = None,
+          earlier: "tuple[str, ...]" = ()) -> int:
     """Returns how many reactions were newly created (0 = duplicate, no matching flow, or every
     matching flow refused — see the module docstring). A flow whose trigger has a FILTER starts only
     for events that pass it; a RELATIVE trigger starts nothing here — it arms, moves or cancels its
@@ -238,7 +239,12 @@ def admit(db: DB, registry: Registry, clock: Clock, *, source_event_id: str,
 
     `sealed` is a VERIFIED event.v2 envelope (`fact_envelope.verify`'s answer). Only through it do
     `_audience`/`_owner`/`_visibility`/`_lifecycle` reach the refs; the same keys in
-    `subject_refs` are dropped first, whoever sent them (D8)."""
+    `subject_refs` are dropped first, whoever sent them (D8).
+
+    `earlier`: ids the same fact had under an earlier release (a producer that changed its id
+    scheme). A flow that already admitted it under one of them FOR THE SAME PERSON
+    (`keyed.person_named`) dedups into that run, so the change of scheme never runs it twice; a run
+    under that id that is another person's is not theirs, and the fact is admitted under its own."""
     from . import keyed, triggers
     subject_refs = strip_sealed(subject_refs)
     if sealed:
@@ -266,7 +272,7 @@ def admit(db: DB, registry: Registry, clock: Clock, *, source_event_id: str,
         # on the same event admits independently while a redelivery of the same fact stays a no-op.
         # The instance's flows keep their bare name here, so every key written before scope
         # existed still deduplicates against its redelivery.
-        key = f"{source_event_id}::{flow.ident}"
+        key = _earlier_key(db, flow, earlier, subject_refs) or f"{source_event_id}::{flow.ident}"
         rows = insert(db, clock, flow, key=key, event_type=event_type, subject_refs=subject_refs)
         if rows:
             created += len(rows)
@@ -274,6 +280,19 @@ def admit(db: DB, registry: Registry, clock: Clock, *, source_event_id: str,
         _merge_into_admitted(db, clock, key=key, source_event_id=source_event_id,
                               incoming_refs=subject_refs)
     return created
+
+
+def _earlier_key(db: DB, flow: Flow, earlier, refs: dict) -> str:
+    """The reaction key `flow` already admitted this fact under, by an id from `earlier`, when that
+    run is the same person's; else "" (see `admit`)."""
+    from . import keyed
+    me = keyed.person_named(refs).lower()
+    for sid in earlier or ():
+        key = f"{sid}::{flow.ident}"
+        rows = db.execute("SELECT subject_refs FROM reaction WHERE source_event_id = :k", {"k": key})
+        if rows and keyed.person_named(loads(rows[0][0]) if rows[0][0] else {}).lower() == me:
+            return key
+    return ""
 
 
 def _keyed(db: DB, clock: Clock, flow: Flow, spec: dict, event_type: str, refs: dict, *,

@@ -15,10 +15,13 @@ class Change:
     """One thing that changed in the world, as a typed event. `dedupe_key` names the change itself
     (an event id plus its etag, a message id), so the same change read twice is admitted once.
     A per-person sensor's pool stamps `uid` (the owner) on `refs`; an instance sensor's change must
-    name the person it is about as `refs["uid"]` itself, or it reaches only instance flows."""
+    name the person it is about as `refs["uid"]` itself, or it reaches only instance flows.
+    `earlier`: the keys the same change had under an earlier release of the kind, when its key
+    scheme changed, so a run admitted under one is not repeated (`flows.admission.admit`)."""
     event_type: str
     dedupe_key: str
     refs: dict = field(default_factory=dict)
+    earlier: tuple = ()
 
 
 @dataclass
