@@ -86,6 +86,10 @@ export function msUntilJoinAt(joinAt: string | undefined, nowMs: number): number
   return Math.max(0, at - nowMs);
 }
 
+/** setTimeout's longest delay, 2^31 − 1 ms (~24.8 days). Node clamps a longer one to 1 ms, so it would
+ *  fire at once; the joinAt wait re-arms in chunks of at most this. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
 /** The dedicated non-zero exit code for a pre-join control-plane-unreachable abort (#530). On
  *  k8s each bot is a bare Pod (`--restart=Never`, `k8s_backend.py`) — the terminal exit code IS
  *  the attributable signal an operator reads in one `kubectl describe`, distinct from a real
@@ -315,7 +319,13 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
       console.log(`[bot] waiting ${Math.round(waitMs / 1000)}s until joinAt ${inv.joinAt} before opening the meeting`);
       let timer: ReturnType<typeof setTimeout> | undefined;
       const stoppedWhileWaiting = await Promise.race([
-        new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), waitMs); }),
+        new Promise<false>((resolve) => {
+          const arm = (left: number): void => {
+            const step = Math.min(left, MAX_TIMER_MS);
+            timer = setTimeout(() => (left > step ? arm(left - step) : resolve(false)), step);
+          };
+          arm(waitMs);
+        }),
         aborted.then(() => true as const),
       ]);
       clearTimeout(timer);

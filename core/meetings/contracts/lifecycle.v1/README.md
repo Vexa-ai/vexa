@@ -5,6 +5,7 @@ control-plane callback. The kernel never interprets it (ADR-0001: separate chann
 
 ## States & legal transitions (the machine)
 ```
+(first event)      → joining · failed (only at failure_stage requested)
 joining            → awaiting_admission · active · failed
 awaiting_admission → active · needs_help · failed
 needs_help   → active · failed
@@ -12,7 +13,10 @@ active             → completed · failed
 completed          ∅   (terminal)
 failed             ∅   (terminal)
 ```
-`completed` carries a `completion_reason`; `failed` carries a `failure_stage`. Pre-active teardown
+`completed` carries a `completion_reason`; `failed` carries a `failure_stage`. A bot that ends before
+it opens the meeting (a booked bot stopped while it waits for its `joinAt`, or refused for a `joinAt`
+it cannot read, ADR-0052) sends no `joining`: its first event is `failed` at `failure_stage:
+requested`. Pre-active teardown
 attribution (the control plane's reconcile path, when the workload dies before the bot reports
 `active`): `awaiting_admission` → `awaiting_admission_timeout` (reaped while waiting in the lobby —
 the room never admitted the bot), `requested`/`joining` → `join_failure` (died before it could

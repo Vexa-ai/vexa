@@ -11,7 +11,7 @@ server-side `requested`/`stopping` states.
 
 ## The machine
 ```
-<new>              → joining
+<new>              → joining · failed (only at failure_stage requested)
 joining            → awaiting_admission · active · failed
 awaiting_admission → active · needs_help · failed
 needs_help         → active · failed
@@ -22,6 +22,9 @@ failed             ∅   (terminal)
 `completed` records the bot-reported `completion_reason`; `failed` records a `failure_stage`
 **derived server-side from the state we were in** — never trusted from the bot's payload (the
 parent's FM-003 discipline). `active → joining` (and any re-open of a terminal record) is rejected.
+A first `failed` is accepted only when it says `failure_stage: requested`: the bot ended before it
+opened the meeting (a booked bot stopped while it waits for its join time, or refused for a joinAt
+it cannot read, ADR-0052), so it never sent `joining`.
 
 ## Surface
 - `machine.py` — `BotStatus`/`CompletionReason`/`FailureStage` (the lifecycle.v1 enums),

@@ -161,6 +161,89 @@ def test_post_bots_answers_a_refused_join_at_with_422(monkeypatch, join_at, reas
     assert repo._meetings == {} and runtime.specs == [], "refused before any row or workload"
 
 
+# ── lifecycle seam: a waiting bot's terminal is the row's FIRST event ───────────────────────────
+# The two events below are what the bot emits, captured from the orchestrator (createOrchestrator
+# with connectionId sess-uid, container mtg-abc123-bot, nodeName lke-pool-b7, a fixed clock): a stop
+# while it waits for joinAt, and the refusal of a joinAt Date.parse cannot read. Neither follows a
+# `joining`, because the bot never opened the meeting.
+
+_STOPPED_WHILE_WAITING = {
+    "connection_id": "sess-uid", "container_id": "mtg-abc123-bot", "status": "failed",
+    "timestamp": "2026-11-03T09:50:00.000Z", "failure_stage": "requested", "completion_reason": "stopped",
+    "reason": "stopped while waiting for joinAt 2026-11-03T09:58:00Z (the meeting was never opened)",
+    "exit_code": 0,
+    "join_evidence": {
+        "reason": "stopped_while_joining", "attribution": "user_action", "source": "bot",
+        "stage": "requested",
+        "detail": "stopped while waiting for joinAt 2026-11-03T09:58:00Z (the meeting was never opened)",
+        "node": "lke-pool-b7",
+    },
+}
+_UNREADABLE_JOIN_AT = {
+    "connection_id": "sess-uid", "container_id": "mtg-abc123-bot", "status": "failed",
+    "timestamp": "2026-11-03T09:50:00.000Z", "failure_stage": "requested",
+    "completion_reason": "validation_error",
+    "reason": "invocation.v1: joinAt '2016-12-31T23:59:60Z' is not a readable date-time", "exit_code": 1,
+}
+LIFECYCLE_CALLBACK = "/bots/internal/callback/lifecycle"
+
+
+def _waiting_row(repo):
+    """A booked bot's row while its pod waits: `requested`, with its join time, no event yet."""
+    import asyncio
+
+    m = asyncio.run(repo.create_meeting(
+        user_id=USER, platform="google_meet", native_meeting_id="abc-defg-hij",
+        data={"join_at": "2026-11-03T09:58:00Z"},
+    ))
+    asyncio.run(repo.create_session(meeting_id=m["id"], session_uid="sess-uid"))
+    return m
+
+
+@pytest.mark.parametrize("event", [_STOPPED_WHILE_WAITING, _UNREADABLE_JOIN_AT],
+                         ids=["stopped_while_waiting", "unreadable_join_at"])
+def test_a_waiting_bots_terminal_is_accepted_as_the_rows_first_event(event):
+    from fastapi.testclient import TestClient
+
+    from meeting_api import create_app
+
+    repo = InMemoryMeetingRepo()
+    m = _waiting_row(repo)
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
+    r = client.post(LIFECYCLE_CALLBACK, json=event)
+    assert r.status_code == 200, r.text
+    row = repo._meetings[m["id"]]
+    assert row["status"] == "failed", "the row closes on the bot's own terminal"
+    data = row["data"]
+    assert data["failure_stage"] == "requested"
+    assert data["completion_reason"] == event["completion_reason"]
+    assert data["reason"] == event["reason"], "the bot's reason is kept"
+    assert data["join_evidence"]["stage"] == "requested"
+    assert data["status_transition"][-1]["from"] is None and data["status_transition"][-1]["to"] == "failed"
+    if "join_evidence" in event:
+        assert data["join_evidence"]["node"] == "lke-pool-b7", "the attempt's node is kept"
+        assert data["join_evidence"]["reason"] == "stopped_while_joining"
+        assert data["join_evidence"]["attribution"] == "user_action"
+
+
+@pytest.mark.parametrize("first", [
+    {"status": "failed", "completion_reason": "join_failure", "exit_code": 1},
+    {"status": "failed", "failure_stage": "joining", "completion_reason": "join_failure", "exit_code": 1},
+    {"status": "active"},
+], ids=["failed_without_stage", "failed_at_joining", "active"])
+def test_every_other_first_event_is_still_refused(first):
+    from fastapi.testclient import TestClient
+
+    from meeting_api import create_app
+
+    repo = InMemoryMeetingRepo()
+    m = _waiting_row(repo)
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
+    r = client.post(LIFECYCLE_CALLBACK, json={"connection_id": "sess-uid", **first})
+    assert r.status_code == 409, r.text
+    assert repo._meetings[m["id"]]["status"] == "requested"
+
+
 # ── reconciler: a waiting `requested` row is measured from its join time ─────────────────────────
 
 def _age(repo, meeting_id, seconds):

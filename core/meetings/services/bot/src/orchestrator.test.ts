@@ -15,6 +15,7 @@ import Ajv2020, { type ValidateFunction } from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { mock } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createOrchestrator, msUntilJoinAt, CONTROL_PLANE_UNREACHABLE, CONTROL_PLANE_UNREACHABLE_EXIT, type MeetingResult } from './orchestrator.js';
 import { createLivePipeline } from './pipeline.js';
@@ -674,6 +675,33 @@ async function main(): Promise<void> {
     try { await o.run(); } catch (e) { threw = e; }
     check('gate both-down, emit throws: the failure surfaces', threw instanceof Error && /raw sink threw/.test(threw.message), String(threw));
     check('gate both-down, emit throws: unsubscribed anyway', unsubscribed === 1, `unsubscribed=${unsubscribed}`);
+  }
+
+  // ── ADR-0052 s1: a joinAt past setTimeout's ~24.8-day ceiling still waits (fake timers) ──
+  {
+    const DAY = 24 * 3600 * 1000;
+    const MAX_TIMER = 2 ** 31 - 1;
+    const T0 = Date.parse('2026-11-03T09:50:00Z');
+    const lc = recordingSink();
+    let joinCalled = false;
+    const join: JoinDriver = { ...mockJoin('rejected'), async join(report) { joinCalled = true; return mockJoin('rejected').join(report); } };
+    const flush = () => new Promise<void>((r) => setImmediate(r));
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      const o = createOrchestrator(inv({ joinAt: new Date(T0 + 25 * DAY).toISOString() }), {
+        lifecycle: lc, join, pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness(), nowMs: () => T0,
+      });
+      const runP = o.run();
+      mock.timers.tick(5); await flush();
+      check('joinAt +25 days: not joined after 5 ms', !joinCalled && lc.events.length === 0, JSON.stringify(seq(lc.events)));
+      mock.timers.tick(MAX_TIMER); await flush();
+      check('joinAt +25 days: still waiting after one full timer (~24.8 days)', !joinCalled && lc.events.length === 0, JSON.stringify(seq(lc.events)));
+      mock.timers.tick(25 * DAY - MAX_TIMER); await flush();
+      await runP;
+      check('joinAt +25 days: joins at joinAt', joinCalled && seq(lc.events)[0] === 'joining', JSON.stringify(seq(lc.events)));
+    } finally {
+      mock.timers.reset();
+    }
   }
 
   // ── ADR-0052 s1: a joinAt that does not read as a time is refused, never joined at once ──

@@ -114,7 +114,9 @@ class TransitionSource(str, Enum):
 # The machine. Reduced from the parent's `get_valid_status_transitions` to the bot's
 # domain lifecycle: drop `requested`/`stopping` (server-side, not bot-emitted), keep the
 # escalation path (`needs_help`, parent's `needs_human_help`). The bot's first emitted
-# status is `joining`, so that is the machine's de-facto entry.
+# status is `joining`, so that is the machine's de-facto entry. The one other first event is a
+# `failed` at stage `requested` (``requested_stage_failure`` below), checked on the event because
+# the edge depends on its stage.
 LEGAL_TRANSITIONS: Dict[Optional[BotStatus], frozenset[BotStatus]] = {
     None: frozenset({BotStatus.JOINING}),  # initial: a record's first event must be `joining`
     BotStatus.JOINING: frozenset(
@@ -179,6 +181,21 @@ _STATUS_TO_FAILURE_STAGE: Dict[Optional[BotStatus], FailureStage] = {
 def can_transition(frm: Optional[BotStatus], to: BotStatus) -> bool:
     """Is `frm → to` a legal transition of the meeting FSM?"""
     return to in LEGAL_TRANSITIONS.get(frm, frozenset())
+
+
+def requested_stage_failure(frm: Optional[BotStatus], to: BotStatus, event: Dict[str, Any]) -> bool:
+    """Is this a bot's FIRST event, a `failed` at stage `requested`?
+
+    A bot that ends before it opens the meeting never sends `joining`: a booked bot stopped while it
+    waits for its join time, or refused for a joinAt it cannot read (ADR-0052). Its terminal is the
+    record's first event and carries ``failure_stage: requested``. That one first edge is legal;
+    every other first event must still be `joining`. The stage recorded is still derived server-side
+    (``None`` → ``requested``), so the payload's stage only gates the edge."""
+    return (
+        frm is None
+        and to is BotStatus.FAILED
+        and event.get("failure_stage") == FailureStage.REQUESTED.value
+    )
 
 
 def _trim_bot_logs(lines: List[str]) -> tuple[List[str], bool]:
@@ -605,7 +622,7 @@ class LifecycleSink:
         # loop). Guarded: ONLY a terminal target, ONLY this source — never loosens bot-driven edges.
         if force_terminal_on_destroy and to in _TERMINAL:
             pass  # legal by teardown evidence; fall through to the advance
-        elif not can_transition(rec.status, to):
+        elif not (can_transition(rec.status, to) or requested_stage_failure(rec.status, to, event)):
             raise IllegalTransition(connection_id, rec.status, to)
 
         frm = rec.status
