@@ -513,6 +513,93 @@ def dispatch_bot(ctx: StepCtx):
                 provider_ref=str(body["id"]))
 
 
+#: How long `start_booked_bot` waits before calling again when meeting-api asked it to come back
+#: (a full ceiling, a transient refusal) without saying when (ADR-0052 §6: `Retry-After`, default 15 s).
+BOOKED_RETRY_S = 15.0
+#: The start route's answers that mean "nothing to do, ever" (ADR-0052 §5/§6): the booking was
+#: cancelled, deleted, toggled off or moved past its window, or another row's bot owns the room.
+BOOKED_DONE = frozenset({"not_scheduled", "past_deadline", "already_live", "not_found"})
+#: …and the ones that end the attempt because they will not change by asking again: a block list,
+#: a link whose host is refused.
+BOOKED_FINAL = frozenset({"blocked", "meeting_host_refused"})
+
+
+def _retry_after(headers: dict, body) -> float:
+    raw = (headers or {}).get("retry-after")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = None
+    if value is None and isinstance(body, dict):
+        try:
+            value = float(body.get("retry_after"))
+        except (TypeError, ValueError):
+            value = None
+    return max(1.0, value) if value is not None else BOOKED_RETRY_S
+
+
+def start_booked_bot(ctx: StepCtx):
+    """THE BOOKED BOT (ADR-0052 §5, §6). At `pod_at` the keyed schedule fires this with the
+    `meeting.planned.changed` fact's refs; it asks meeting-api to start the bot for THAT planned row
+    — `POST /internal/meetings/{meeting_id}/start` through the service door, as the row's owner —
+    never by URL. meeting-api re-checks the row under its lock, so a cancel that landed first wins
+    whatever is still armed here.
+
+    * 201 `started` → done (the pod waits in the meeting-api row's `requested` until `join_at`);
+    * 409 `not_scheduled` / `past_deadline` / `already_live`, 404 → done, nothing to do;
+    * 409 `too_early`, 429, 503, 402, a transport error → wait `Retry-After` (default 15 s) and call
+      again, until the fact's `deadline` (start + `BOOKED_GRACE_S`); past it → done, with the last
+      reason meeting-api gave (it is also stamped on the row, `auto_join_error`);
+    * 403 `blocked`, 422 `meeting_host_refused` → done with that reason (asking again changes nothing).
+
+    Reads: refs.meeting_id, refs.uid, refs.deadline. Result: {meeting_id, code, http, join_at?}."""
+    from flows import triggers
+
+    refs = ctx.refs
+    mid, uid = refs.get("meeting_id"), str(refs.get("uid") or "").strip()
+    if not isinstance(mid, int) and not str(mid or "").isdigit() or not uid.isdigit():
+        raise StepError("start_booked_bot needs the fact's meeting_id and uid", retryable=False)
+    mid = int(mid)
+    deadline = triggers.as_epoch(refs.get("deadline"))
+    last = ctx.scratch.get("last") or {}
+    if deadline is not None and ctx.clock_now > deadline:
+        return Done({"meeting_id": mid, "code": "past_deadline", "http": last.get("http"),
+                     "reason": last.get("detail") or "the meeting's start window passed"})
+    got: dict = {}
+    try:
+        st, body = http("POST", f"{meetings_door()}/internal/meetings/{mid}/start",
+                        door_headers(uid), None, response_headers=got)
+    except StepError as e:
+        if not e.retryable:
+            raise
+        ctx.scratch["last"] = {"http": None, "detail": str(e)[:300]}
+        return _booked_wait(ctx, deadline, BOOKED_RETRY_S)
+    st = int(st or 0)
+    code = str(body.get("code") or "") if isinstance(body, dict) else ""
+    detail = str(body.get("detail") or "")[:300] if isinstance(body, dict) else str(body)[:300]
+    ctx.scratch["last"] = {"http": st, "code": code, "detail": detail}
+    if st == 201:
+        return Done({"meeting_id": mid, "code": "started", "http": st,
+                     "join_at": body.get("join_at") if isinstance(body, dict) else None},
+                    provider_ref=str(mid))
+    if code in BOOKED_DONE or st == 404:
+        return Done({"meeting_id": mid, "code": code or f"http-{st}", "http": st,
+                     "reason": detail})
+    if code in BOOKED_FINAL or st in (401, 403, 422):
+        return Done({"meeting_id": mid, "code": code or f"http-{st}", "http": st,
+                     "reason": detail})
+    # too_early, a full ceiling, no credit yet, an unavailable identity/authority/STT/runtime, any
+    # other answer: come back when meeting-api says, until the deadline.
+    return _booked_wait(ctx, deadline, _retry_after(got, body))
+
+
+def _booked_wait(ctx: StepCtx, deadline, seconds: float):
+    until = ctx.clock_now + float(seconds)
+    if deadline is not None and until > deadline:
+        until = deadline + 1.0          # one last look just past it answers `past_deadline`
+    return Wait(until=until)
+
+
 #: HOW LONG THE TEARDOWN MAY TAKE before it stops being a slow stop and starts being a bot that
 #: will not leave (P22). It is generous — a bot in a call that is winding down legitimately takes
 #: tens of seconds — and it is finite, which is the whole point: the poll below used to have no

@@ -294,15 +294,26 @@ def _keyed(db: DB, clock: Clock, flow: Flow, spec: dict, event_type: str, refs: 
     at = triggers.fire_at(spec.get("at") or "", event_type, refs)
     gone = event_type.endswith(".cancelled") or str(refs.get("status") or "") == "cancelled"
     passes = not spec.get("filter") or triggers.passes(spec["filter"], event_type, refs)
+    payload = {k: v for k, v in refs.items() if k != ORIGIN}
+    # ADR-0052 §4: a code-registered trigger may name the producer's revision; an OLDER fact than
+    # the one the row last saw changes nothing (a redelivery after a newer fact was admitted).
+    rev_path = str(spec.get("revision") or "")
+    if rev_path:
+        incoming = triggers.as_epoch(triggers.resolve(triggers.envelope(event_type, refs), rev_path))
+        stored = keyed.stored_revision(db, flow, key=key, path=rev_path.split(".", 1)[-1])
+        if incoming is not None and stored is not None and incoming < stored:
+            REFUSED["keyed_stale_revision"] += 1
+            return "stale"
     if gone or not passes or at is None:
         keyed.cancel(db, clock, flow, key=key)
+        if rev_path:
+            keyed.note_payload(db, flow, key=key, payload=payload)
         return "cancelled"
     # the last moment the fire is still wanted (ADR-0052 §7), when the trigger names one
     deadline = triggers.fire_at(spec["deadline"], event_type, refs) if spec.get("deadline") else None
     share = spec.get("share") if spec.get("share") in keyed.SHARES else "person"
     return keyed.upsert(db, clock, flow, key=key, fire_at=at, event_type=event_type,
-                        payload={k: v for k, v in refs.items() if k != ORIGIN}, per_user=per_user,
-                        deadline=deadline, share=share)
+                        payload=payload, per_user=per_user, deadline=deadline, share=share)
 
 
 def _merge_into_admitted(db: DB, clock: Clock, *, key: str, source_event_id: str,
