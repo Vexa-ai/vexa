@@ -14,6 +14,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { prFiles, gitDiffFiles, API_FILE_CAP } from "./pr-files.mjs";
 import { card as docsCard } from "./docs-current-gate.mjs";
+import * as mergeCard from "./merge-card-gate.mjs";
+import { guardTree } from "./test-tree.mjs";
+
+guardTree();
 
 const BASE = "b".repeat(40), HEAD = "h".repeat(40), MB = "m".repeat(40);
 const names = (n, at) => Array.from({ length: n }, (_, i) => `${at}/f${i}.py`);
@@ -119,6 +123,24 @@ test("docs-current run through a symlink still runs the gate (usage error, not a
 test("a copy's source is not listed as removed (only a rename moves a file)", () => {
   const api = (path) => (/\/files\?/.test(path) && path.endsWith("page=1") ? [{ filename: "docs/b.md", previous_filename: "docs/a.md", status: "copied" }] : []);
   assert.deepEqual(prFiles(pr(1), { repo: "o/r", api, git: gitOf([]) }).map((f) => f.filename), ["docs/b.md"]);
+});
+
+test("merge-card: a runtime file past the 1,000th still makes the value-fsm leg required", async () => {
+  const all = [...names(1200, "docs"), "core/meetings/x.py"];
+  const fsm = (conclusion) => (path) => {
+    if (/\/check-runs/.test(path)) return { check_runs: [{ name: "value-fsm", status: "completed", conclusion, started_at: "2026-11-03T00:00:00Z" }] };
+    if (/\/collaborators\/maint\/permission$/.test(path)) return { permission: "write" };
+    if (/\/issues\/\d+\/comments/.test(path)) return [];
+    if (/\/reviews/.test(path)) return [];
+    return undefined;
+  };
+  const signed = pr(1201, { labels: [{ name: "state: value-signed" }] });
+  const red = await mergeCard.card(2008, { api: fakeApi(signed, all, fsm("failure")), git: gitOf(all), readClosing: () => [] });
+  assert.equal(red.valueOk, false);
+  assert.match(red.valueWhy, /value-fsm is failure/);
+  const green = await mergeCard.card(2008, { api: fakeApi(signed, all, fsm("success")), git: gitOf(all), readClosing: () => [] });
+  assert.equal(green.valueOk, true);
+  assert.match(green.valueWhy, /value-fsm green/);
 });
 
 // A stand-in for git that records every call, for what reaches argv and the environment.
