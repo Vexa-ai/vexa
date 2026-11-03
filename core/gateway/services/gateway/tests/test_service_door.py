@@ -217,6 +217,18 @@ def test_an_unknown_person_is_a_loud_403_not_a_503(door):
     assert [q.url.path for q in up.seen] == ["/internal/users/8/identity"]
 
 
+@pytest.mark.parametrize("status", [400, 401, 403])
+def test_identity_refusing_the_door_s_own_lookup_is_a_loud_403_naming_its_status(status):
+    """Only a 404 means an unknown person; a 401 is a wrong internal secret, a 400 a bad call."""
+    app, seen = _door_whose_identity(lambda r: httpx.Response(status, json={"detail": "no"}))
+    with TestClient(app) as c:
+        r = c.post(START, headers=_flows(**{"X-User-Id": "7"}))
+    assert r.status_code == 403 and r.json()["reason"] == "identity_refused"
+    assert r.json()["detail"] == f"service door: identity_refused: identity answered {status}"
+    assert r.json()["identity_status"] == status
+    assert [q.url.path for q in seen] == ["/internal/users/7/identity"]
+
+
 def test_every_other_refusal_stays_loud_while_identity_is_down():
     app, seen = _door_whose_identity(_raises(httpx.ConnectError))
     with TestClient(app) as c:
