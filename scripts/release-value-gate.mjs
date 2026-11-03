@@ -21,6 +21,7 @@
 // Inputs (env): RELEASE_VERSION (vX.Y.Z), GITHUB_REPOSITORY (owner/name). Uses `gh` (GH_TOKEN).
 
 import { execSync } from "node:child_process";
+import { prFiles } from "./pr-files.mjs";
 
 // A release compare carries every file patch, so the payload scales with the batch, not with
 // what these scripts read from it. v0.12.18...v0.12.22 returned 1.51 MB and blew execSync's 1 MB
@@ -93,16 +94,12 @@ function enumerate(prevTag) {
   return { prs: [...prs].sort((a, b) => a - b), unaccounted, commitCount };
 }
 
-function prTouchesRuntime(num) {
-  for (let page = 1; page <= 10; page++) {
-    const files = ghj(`repos/${REPO}/pulls/${num}/files?per_page=100&page=${page}`);
-    for (const f of files) {
-      const p = f.filename;
-      if (RUNTIME_FILES.includes(p) || RUNTIME_PREFIXES.some((pre) => p.startsWith(pre))) return true;
-    }
-    if (files.length < 100) break;
-  }
-  return false;
+// Judged on every file the PR (the pulls/{n} object) changes, however many: pr-files pages the API
+// list to its 3,000-file cap and reads the rest from git. It throws when it cannot account for
+// every file, and the caller counts that PR as not verifiable (exit 3), never as non-runtime.
+function prTouchesRuntime(pr) {
+  const isRuntime = (p) => RUNTIME_FILES.includes(p) || RUNTIME_PREFIXES.some((pre) => p.startsWith(pre));
+  return prFiles(pr, { repo: REPO, api: ghj }).some((f) => isRuntime(f.filename));
 }
 
 // "success" | "failure" | "absent" — exact value-fsm name only; latest run wins (a re-run to
@@ -145,8 +142,10 @@ for (const num of batch.prs) {
   const signed = labels.includes("state: value-signed");
   const sha = pr.head?.sha;
   let runtime, vf;
-  try { runtime = prTouchesRuntime(num); vf = sha ? valueFsmVerdict(sha) : "absent"; }
-  catch { rows.push({ num, verdict: "UNVERIFIABLE", why: "check-runs/files fetch failed after retries" }); couldNotEvaluate++; continue; }
+  try { runtime = prTouchesRuntime(pr); }
+  catch (e) { rows.push({ num, verdict: "UNVERIFIABLE", why: `could not read every changed file, so runtime or not is unknown — ${String(e?.message || e).split("\n")[0].trim().replace(/\|/g, "\\|")}` }); couldNotEvaluate++; continue; }
+  try { vf = sha ? valueFsmVerdict(sha) : "absent"; }
+  catch { rows.push({ num, verdict: "UNVERIFIABLE", why: "check-runs fetch failed after retries" }); couldNotEvaluate++; continue; }
 
   let verdict, why;
   if (vf === "success") { verdict = "ACCEPTED"; why = "value-fsm green on head"; }

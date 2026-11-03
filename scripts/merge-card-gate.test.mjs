@@ -511,13 +511,14 @@ test("S2: a revocation past the first 1,000 comments is read, and a pass cut off
 
 // ── S6: the verdict is bound to the head its check is posted for ────────────────────────────────
 
-// A stand-in for the GitHub API: one PR, its comments, reviews and the maintainer set.
-function fakeApi({ head, author = "maint", comments = [], reviews = [], labels = ["state: value-signed"] }) {
+// A stand-in for the GitHub API: one PR, its comments, reviews and the maintainer set. The PR's
+// base is `main` unless named; `base: null` gives a PR object with no base at all.
+function fakeApi({ head, author = "maint", comments = [], reviews = [], labels = ["state: value-signed"], base = "main" }) {
   const api = (path) => {
     api.calls.push(path);
     let m;
     if (/\/pulls\/\d+$/.test(path))
-      return { number: 4242, draft: false, user: { login: author }, head: { sha: head }, labels: labels.map((name) => ({ name })), comments: comments.length };
+      return { number: 4242, draft: false, user: { login: author }, head: { sha: head }, ...(base === null ? {} : { base: { ref: base } }), labels: labels.map((name) => ({ name })), comments: comments.length };
     if ((m = path.match(/\/pulls\/\d+\/files\?per_page=100&page=(\d+)$/))) return m[1] === "1" ? [{ filename: "docs/x.md" }] : [];
     if ((m = path.match(/\/collaborators\/([^/]+)\/permission$/))) return { permission: MAINTAINERS.has(m[1]) ? "write" : "read" };
     if (/\/pulls\/\d+\/reviews/.test(path)) return reviews;
@@ -527,7 +528,12 @@ function fakeApi({ head, author = "maint", comments = [], reviews = [], labels =
   api.calls = [];
   return api;
 }
-const passes = (sha) => comment("maint", [marker("architecture", sha, "pass"), marker("security", sha, "pass")].join("\n"));
+// A review id, as a pass into main cites it.
+const REVIEW = "0b6f1c9e-3d2a-4f7b-9c1e-5a8d2e4f6b70";
+const passes = (sha, review = REVIEW) => {
+  const cite = review ? `review=${review}` : "";
+  return comment("maint", [marker("architecture", sha, "pass", cite), marker("security", sha, "pass", cite)].join("\n"));
+};
 
 test("S6: a run judges the head its check is posted for; if the PR moved on, it fails and leaves the sticky card alone", async () => {
   const same = await gate.card(4242, { api: fakeApi({ head: HEAD, comments: [passes(HEAD)] }), expectedHead: HEAD, readClosing: () => [] });
@@ -747,4 +753,107 @@ test("R2-A1, R2-A2: the comment workflow and the enforcement map say what GitHub
   const map = readFileSync(new URL("../docs/docs/governance/delivery.mdx", import.meta.url), "utf8");
   const row = map.split("\n").find((l) => l.startsWith("| Merge bar — value + diff accepted"));
   assert.match(row, /commit bit/);
+});
+
+// ── a pass into main cites its review ───────────────────────────────────────────────────────────
+//
+// A pass marker could be posted with no review behind it. Into main, a `verdict=pass` marker
+// carries `review=<review id>` (a uuid). The card checks that the field is there and well-formed;
+// it cannot reach where reviews are recorded, so it does not check that the review exists.
+
+const intoMain = { ...opts, citeReview: true };
+
+test("into main, a pass without review= fails the row and says what to add", () => {
+  for (const kind of ["architecture", "security"]) {
+    const row = passRow(kind, [comment("maint", marker(kind, HEAD, "pass"))], intoMain);
+    assert.equal(row.ok, false);
+    assert.equal(row.state, "invalid");
+    assert.match(row.why, new RegExp(`^@maint's ${kind} pass on head 1111111 cites no review`));
+    assert.ok(row.why.includes(`<!-- vexa-pass:${kind} sha=<full head sha> verdict=pass review=<review id> -->`), row.why);
+  }
+});
+
+test("into main, a review= that is not a uuid fails the row, and its value is not copied onto the card", () => {
+  const bad = [
+    "abc", "123", "",
+    "0b6f1c9e3d2a4f7b9c1e5a8d2e4f6b70", //       no hyphens
+    "{0b6f1c9e-3d2a-4f7b-9c1e-5a8d2e4f6b70}", //  braces
+    "0b6f1c9e-3d2a-4f7b-9c1e-5a8d2e4f6b7", //     one digit short
+    "0b6f1c9e-3d2a-4f7b-9c1e-5a8d2e4f6b70x", //   one character long
+    "zb6f1c9e-3d2a-4f7b-9c1e-5a8d2e4f6b70", //    not hex
+    "00000000-0000-0000-0000-000000000000", //    the nil uuid names no review
+  ];
+  for (const id of bad) {
+    const row = passRow("security", [comment("maint", marker("security", HEAD, "pass", `review=${id}`))], intoMain);
+    assert.equal(row.ok, false, id);
+    assert.equal(row.state, "invalid", id);
+    if (id.length > 8) assert.ok(!row.why.includes(id), `not echoed: ${id}`);
+  }
+  const malformed = passRow("security", [comment("maint", marker("security", HEAD, "pass", "review=abc"))], intoMain);
+  assert.match(malformed.why, /carries a `review=` that is not a review id \(a uuid\)/);
+});
+
+test("into main, a pass citing a uuid passes, and the row names the review", () => {
+  const row = passRow("architecture", [comment("maint", marker("architecture", HEAD, "pass", `review=${REVIEW}`))], intoMain);
+  assert.equal(row.ok, true);
+  assert.equal(row.state, "pass");
+  assert.equal(row.why, `pass on head 1111111 by @maint, review ${REVIEW}`);
+  // an upper-case uuid is the same id; the finding count still shows
+  const up = passRow("security", [comment("maint", marker("security", HEAD, "pass", `findings=0 review=${REVIEW.toUpperCase()}`))], intoMain);
+  assert.equal(up.ok, true);
+  assert.equal(up.why, `pass on head 1111111 by @maint (0 findings), review ${REVIEW}`);
+});
+
+test("review= counts only inside its own marker: not from a sibling marker, not from the comment's text", () => {
+  const body = [marker("architecture", HEAD, "pass", `review=${REVIEW}`), marker("security", HEAD, "pass"), `review=${REVIEW}`].join("\n");
+  assert.equal(passRow("architecture", [comment("maint", body)], intoMain).ok, true);
+  assert.equal(passRow("security", [comment("maint", body)], intoMain).ok, false);
+});
+
+test("into main, the newest verdict still wins: an uncited pass after a cited one takes it away; a fail still supersedes", () => {
+  const cited = comment("maint", marker("security", HEAD, "pass", `review=${REVIEW}`));
+  const uncited = comment("admin-person", marker("security", HEAD, "pass"));
+  assert.equal(passRow("security", [cited, uncited], intoMain).ok, false);
+  assert.equal(passRow("security", [uncited, cited], intoMain).ok, true);
+  const failed = passRow("security", [cited, comment("maint", marker("security", HEAD, "fail", `review=${REVIEW}`))], intoMain);
+  assert.equal(failed.ok, false);
+  assert.match(failed.why, /verdict=fail/);
+});
+
+test("into main, a waiver needs no review=: it records that no review was done and names who waived", () => {
+  const row = passRow("security", [comment("maint", marker("security", HEAD, "waived", "waived-by=@admin-person"))], intoMain);
+  assert.equal(row.ok, true);
+  assert.equal(row.state, "waived");
+});
+
+test("into main, every how-to-pass hint names review=", () => {
+  const hint = "verdict=pass review=<review id> -->";
+  assert.ok(passRow("security", [], intoMain).why.includes(hint));
+  assert.ok(passRow("security", [comment("maint", marker("security", OLD, "pass"))], intoMain).why.includes(hint));
+  assert.ok(passRow("security", [], { ...intoMain, truncated: true }).why.includes(hint));
+});
+
+test("on every other base the format is unchanged: review= is optional and the hint does not ask for it", () => {
+  assert.equal(passRow("architecture", [comment("maint", marker("architecture", HEAD, "pass"))], opts).ok, true);
+  assert.equal(passRow("architecture", [comment("maint", marker("architecture", HEAD, "pass", "review=not-a-uuid"))], opts).ok, true);
+  assert.ok(passRow("architecture", [], opts).why.endsWith("verdict=pass -->`"));
+});
+
+test("the card holds a PR into main to the rule, a PR into another base to the old format, and a PR with no base to main's", async () => {
+  const judge = (base, comments) => gate.card(4242, { api: fakeApi({ head: HEAD, base, comments }), expectedHead: HEAD, readClosing: () => [] });
+  assert.equal((await judge("main", [passes(HEAD)])).ok, true);
+  const uncited = await judge("main", [passes(HEAD, null)]);
+  assert.equal(uncited.ok, false);
+  assert.match(uncited.architecture.why, /cites no review/);
+  assert.match(uncited.security.why, /cites no review/);
+  assert.equal((await judge("codex/v0.13.4", [passes(HEAD, null)])).ok, true);
+  assert.equal((await judge(null, [passes(HEAD, null)])).ok, false);
+});
+
+test("the marker format's documentation names review= for PRs into main", () => {
+  const doc = readFileSync(new URL("../docs/docs/governance/delivery.mdx", import.meta.url), "utf8");
+  assert.ok(doc.includes("<!-- vexa-pass:architecture sha=<full head sha> verdict=pass review=<review id> -->"));
+  const adr = readFileSync(new URL("../docs/adr/0030-merge-card-value-and-diff-gate.md", import.meta.url), "utf8");
+  assert.ok(adr.includes("review=<review id>"));
+  assert.ok(readFileSync(new URL("./merge-card-gate.mjs", import.meta.url), "utf8").includes("verdict=pass review=<review id> -->"));
 });

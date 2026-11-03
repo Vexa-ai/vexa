@@ -47,6 +47,17 @@
 //     not count and must be re-posted. The card's own sticky comment, a bot's, never counts; it is
 //     skipped by its author, so a maintainer's verdict that mentions the card marker still counts.
 //
+//     A PASS INTO MAIN CITES ITS REVIEW. On a PR whose base is `main`, a `verdict=pass` marker
+//     also carries `review=<review id>`, the id of the recorded review the pass rests on (a uuid):
+//
+//       <!-- vexa-pass:architecture sha=<full head sha> verdict=pass review=<review id> -->
+//
+//     If the newest maintainer marker for the head is a pass with no `review=`, or with one that is
+//     not a uuid, the row fails and says so. The card cannot reach where reviews are recorded, so it
+//     checks only that the field is there and well-formed, not that the review exists. A waiver
+//     records that no review was done and names who waived it, so `verdict=waived` needs no
+//     `review=`. On every other base the field is optional and the marker format is unchanged.
+//
 //     SECURITY FINDINGS STAY PRIVATE. The marker and its comment carry only the verdict, a finding
 //     count (`findings=<n>`, optional) and the sha — never a finding, a path, a payload or an
 //     exploit. The findings themselves stay in the private channel SECURITY.md describes until
@@ -77,6 +88,7 @@
 
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { prFiles } from "./pr-files.mjs";
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const IS_MAIN = import.meta.url === pathToFileURL(process.argv[1] || "").href;
@@ -89,7 +101,8 @@ const RUNTIME_FILES = ["package.json", "pnpm-lock.yaml"];
 function gh(args) {
   let last;
   for (let i = 0; i < 3; i++) {
-    try { return execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
+    // A page of pulls/{n}/files carries every file's patch: well past execFileSync's 1 MB default.
+    try { return execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 * 1024 * 1024 }); }
     catch (e) { last = e; }
   }
   throw last;
@@ -105,16 +118,13 @@ function prNumbers() {
   return [...new Set([...ref.matchAll(/pr-(\d+)-/g)].map((m) => +m[1]))];
 }
 
-function touchesRuntime(num, api = ghj) {
-  for (let page = 1; page <= 10; page++) {
-    const files = api(`repos/${REPO}/pulls/${num}/files?per_page=100&page=${page}`);
-    for (const f of files) {
-      const p = f.filename;
-      if (RUNTIME_FILES.includes(p) || RUNTIME_PREFIXES.some((pre) => p.startsWith(pre))) return true;
-    }
-    if (files.length < 100) break;
-  }
-  return false;
+// Does the PR (the pulls/{n} object) change a runtime surface? Judged on every file it changes,
+// however many: pr-files pages the API list to its 3,000-file cap and reads the rest from git.
+// When the whole list cannot be read, this throws; card() then fails the Value row and says why,
+// so a runtime file the gate never saw cannot make a runtime PR look non-runtime.
+export function touchesRuntime(pr, { api = ghj, git } = {}) {
+  const isRuntime = (p) => RUNTIME_FILES.includes(p) || RUNTIME_PREFIXES.some((pre) => p.startsWith(pre));
+  return prFiles(pr, { repo: REPO, api, ...(git ? { git } : {}) }).some((f) => isRuntime(f.filename));
 }
 
 // value-fsm is a live sibling check: `labeled` (which triggers merge-card) also re-triggers
@@ -330,14 +340,28 @@ function waiverLogin(fields) {
   return LOGIN.test(who) ? who : null;
 }
 
-const howToPass = (kind) =>
-  `a maintainer (write or admin on the repo) posts a PR comment whose first line is \`<!-- vexa-pass:${kind} sha=<full head sha> verdict=pass -->\``;
+// The base branch whose passes cite their review (A PASS INTO MAIN CITES ITS REVIEW, above).
+export const CITED_REVIEW_BASE = "main";
+// A review id is a uuid (8-4-4-4-12 hex digits, any version); the all-zero uuid names no review.
+const REVIEW_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const NIL_UUID = "00000000-0000-0000-0000-000000000000";
+
+// The `review=<review id>` field of one marker, lower-cased, or null when it is absent or not a
+// uuid. Like `waived-by=`, it is read only from the marker it sits in.
+function reviewId(fields) {
+  const id = String(fields.review || "").toLowerCase();
+  return REVIEW_ID.test(id) && id !== NIL_UUID ? id : null;
+}
+
+const howToPass = (kind, citeReview = false) =>
+  `a maintainer (write or admin on the repo) posts a PR comment whose first line is \`<!-- vexa-pass:${kind} sha=<full head sha> verdict=pass${citeReview ? " review=<review id>" : ""} -->\``;
 
 // One pass row, pure over the PR's issue comments (the `repos/:repo/issues/:n/comments` shape, in
 // API order = oldest first) and an injected maintainer predicate, so it has no network in its unit
-// path. `truncated` says the comments are only the newest window of a longer thread. Returns
+// path. `truncated` says the comments are only the newest window of a longer thread. `citeReview`
+// says the PR's base is CITED_REVIEW_BASE, so a pass must carry `review=`. Returns
 // { ok, state, why } where state is pass | waived | stale | invalid | missing.
-export function passRow(kind, comments, { head, isMaintainer, truncated = false }) {
+export function passRow(kind, comments, { head, isMaintainer, truncated = false, citeReview = false }) {
   const headSha = String(head || "").toLowerCase();
   const seen = []; // { by, sha, verdict, fields, placed } in thread order; placed=false: a marker for the head below the leading lines
   for (const c of comments || []) {
@@ -363,8 +387,17 @@ export function passRow(kind, comments, { head, isMaintainer, truncated = false 
     if (!s.placed) // misplaced and newest: it is no verdict, but it takes away any earlier pass
       return { ok: false, state: "invalid", why: `@${s.by}'s newest ${kind} marker for head ${short(head)} is not at the top of its comment, so it does not count — a marker must be the first line of the comment (markers may fill the first lines; nothing else may come before them)` };
     const count = /^\d+$/.test(s.fields.findings || "") ? ` (${s.fields.findings} finding${s.fields.findings === "1" ? "" : "s"})` : "";
-    if (s.verdict === "pass")
-      return { ok: true, state: "pass", why: `pass on head ${short(head)} by @${s.by}${count}` };
+    if (s.verdict === "pass") {
+      const review = reviewId(s.fields);
+      if (citeReview && !review)
+        return {
+          ok: false, state: "invalid",
+          why: s.fields.review
+            ? `@${s.by}'s ${kind} pass on head ${short(head)} carries a \`review=\` that is not a review id (a uuid) — on a PR into ${CITED_REVIEW_BASE} a pass names the review it rests on; ${howToPass(kind, true)}`
+            : `@${s.by}'s ${kind} pass on head ${short(head)} cites no review — on a PR into ${CITED_REVIEW_BASE} a pass carries \`review=<review id>\`, the id of the review it rests on; ${howToPass(kind, true)}`,
+        };
+      return { ok: true, state: "pass", why: `pass on head ${short(head)} by @${s.by}${count}${review ? `, review ${review}` : ""}` };
+    }
     if (s.verdict === "waived") {
       const named = s.fields["waived-by"];
       if (!named)
@@ -374,24 +407,24 @@ export function passRow(kind, comments, { head, isMaintainer, truncated = false 
         return { ok: false, state: "invalid", why: `@${s.by}'s waiver on head ${short(head)} names \`${named}\`, which is not an account with write or admin on the repo — \`waived-by=\` must name one` };
       return { ok: true, state: "waived", why: `waived on head ${short(head)}: waiver recorded by @${s.by}, names @${who}${count}` };
     }
-    return { ok: false, state: "invalid", why: `the newest ${kind} pass on head ${short(head)} (by @${s.by}) is \`verdict=${s.verdict}\`${count} — only \`verdict=pass\`, or \`verdict=waived\` with \`waived-by=\`, clears this row` };
+    return { ok: false, state: "invalid", why: `the newest ${kind} pass on head ${short(head)} (by @${s.by}) is \`verdict=${s.verdict}\`${count} — only \`verdict=pass\`${citeReview ? " with `review=`" : ""}, or \`verdict=waived\` with \`waived-by=\`, clears this row` };
   }
 
   // Only the newest window of a long thread was read: an older pass may exist but cannot be
   // verified, so the row fails closed. A re-posted pass lands in the window.
   if (truncated)
-    return { ok: false, state: "missing", why: `comment history too long to verify — re-post the pass (no ${kind} pass for head ${short(head)} among the newest ${COMMENT_PAGES * 100} comments); ${howToPass(kind)}` };
+    return { ok: false, state: "missing", why: `comment history too long to verify — re-post the pass (no ${kind} pass for head ${short(head)} among the newest ${COMMENT_PAGES * 100} comments); ${howToPass(kind, citeReview)}` };
 
   if (counted.length) {
     const s = counted[counted.length - 1];
     if (!FULL_SHA.test(s.sha) && headSha.startsWith(s.sha.toLowerCase()))
       return { ok: false, state: "invalid", why: `@${s.by}'s ${kind} marker carries \`sha=${s.sha}\` — it must carry the full 40-character head sha (${head})` };
-    return { ok: false, state: "stale", why: `${kind} pass on record is for ${short(s.sha)}, head is ${short(head)} — re-run the ${kind} pass on the current head; ${howToPass(kind)}` };
+    return { ok: false, state: "stale", why: `${kind} pass on record is for ${short(s.sha)}, head is ${short(head)} — re-run the ${kind} pass on the current head; ${howToPass(kind, citeReview)}` };
   }
 
   const strangers = [...new Set(seen.filter((s) => s.placed).map((s) => "@" + s.by))];
   const ignored = strangers.length ? ` (${strangers.join(", ")} posted a marker, which does not count — no write or admin on the repo)` : "";
-  return { ok: false, state: "missing", why: `no ${kind} pass on head ${short(head)}${ignored} — ${howToPass(kind)}` };
+  return { ok: false, state: "missing", why: `no ${kind} pass on head ${short(head)}${ignored} — ${howToPass(kind, citeReview)}` };
 }
 
 // The PR's newest comments, oldest first, as { comments, truncated }. Reads newest first, because
@@ -424,8 +457,9 @@ export function cardOk({ valueOk, diffOk, acceptance, architecture, security }) 
 
 // One PR's card. `expectedHead` is the sha the check is posted for (the event's head); when the
 // PR's head has moved past it, nothing is judged. Without it (merge_group) the PR's head as queued
-// is the binding. Every read goes through the injected `api`, so the card is testable offline.
-export async function card(num, { api = ghj, expectedHead = "", readClosing = readClosingIssues } = {}) {
+// is the binding. Every read goes through the injected `api` (and `git`, for a file list past the
+// API's cap), so the card is testable offline.
+export async function card(num, { api = ghj, expectedHead = "", readClosing = readClosingIssues, git } = {}) {
   const pr = api(`repos/${REPO}/pulls/${num}`);
   if (pr.draft) return { num, ok: true, skip: "draft" };
   const live = pr.head?.sha;
@@ -434,14 +468,20 @@ export async function card(num, { api = ghj, expectedHead = "", readClosing = re
   const head = live;
   const labels = (pr.labels || []).map((l) => l.name);
   const signed = labels.includes("state: value-signed");
-  const runtime = touchesRuntime(num, api);
+  // null = unknown: the whole file list could not be read, and the Value row fails closed below.
+  // Only the error's first line reaches the card (a public comment); the log keeps the run's.
+  let runtime = null, unread = "";
+  try { runtime = touchesRuntime(pr, { api, git }); }
+  catch (e) { unread = String(e?.message || e).split("\n")[0].trim().slice(0, 300).replace(/\|/g, "\\|"); }
   // Only a runtime PR has a value-fsm leg, and only then do we pay the wait. A non-terminal
   // value-fsm is waited out to its real verdict rather than sampled once mid-run (the #655 race).
   const vf = runtime && head ? await waitForTerminalValueFsm(head, { read: (sha) => readValueFsmRuns(sha, api) }) : "absent";
 
   // VALUE
   let valueOk = false, valueWhy;
-  if (!signed) valueWhy = "missing `state: value-signed` (the value sign-off)";
+  if (runtime === null)
+    valueWhy = `could not read every file this PR changes, so whether it touches a runtime surface is unknown — the row fails closed until the whole list reads (${unread})`;
+  else if (!signed) valueWhy = "missing `state: value-signed` (the value sign-off)";
   else if (runtime && vf === "success") { valueOk = true; valueWhy = "value-fsm green + value-signed"; }
   else if (runtime && (vf === "pending" || vf === "absent"))
     valueWhy = `value-signed but value-fsm did not reach a terminal verdict on head within the wait budget (still ${vf}) — value-fsm must be green (a label cannot waive it)`;
@@ -460,7 +500,9 @@ export async function card(num, { api = ghj, expectedHead = "", readClosing = re
   const acceptance = acceptanceFromIssues(readClosing(num));
 
   // ARCHITECTURE + SECURITY — a maintainer's pass marker for THIS head sha, every PR. One comments
-  // read and one permission lookup per distinct login serve both rows.
+  // read and one permission lookup per distinct login serve both rows. Into main a pass cites its
+  // review; a PR whose base cannot be read is held to main's rule.
+  const citeReview = String(pr.base?.ref ?? CITED_REVIEW_BASE) === CITED_REVIEW_BASE;
   const { comments, truncated } = readComments(num, pr.comments, {
     fetchPage: (page) => api(`repos/${REPO}/issues/${num}/comments?per_page=100&page=${page}`),
   });
@@ -469,8 +511,8 @@ export async function card(num, { api = ghj, expectedHead = "", readClosing = re
     if (!perms.has(login)) perms.set(login, authorIsMaintainer(login, api));
     return perms.get(login);
   };
-  const architecture = passRow("architecture", comments, { head, isMaintainer, truncated });
-  const security = passRow("security", comments, { head, isMaintainer, truncated });
+  const architecture = passRow("architecture", comments, { head, isMaintainer, truncated, citeReview });
+  const security = passRow("security", comments, { head, isMaintainer, truncated, citeReview });
 
   const rows = { valueOk, diffOk: d.ok, acceptance, architecture, security };
   return { num, ok: cardOk(rows), valueOk, valueWhy, diffOk: d.ok, diffWhy, acceptance, architecture, security };
