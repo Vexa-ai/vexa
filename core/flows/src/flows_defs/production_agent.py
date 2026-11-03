@@ -57,7 +57,8 @@ import json
 import logging
 import re
 
-from flows import Block, Done, Registry, StepCtx, StepError, Unavailable, Wait
+from flows import (UNAVAILABLE_SINCE, Block, Done, Registry, StepCtx, StepError,
+                   Unavailable, Wait)
 
 #: THE SAME CHANNEL AS THE OTHER HALF, deliberately: `production.py` logs to `flows.production`,
 #: and these five flows are one production definition that happens to live in two files. An
@@ -112,6 +113,13 @@ def build(reg: Registry, db, home=None) -> None:
 
         Reads: refs.{organizer|person, title, start, uid?, meeting_id?, url?}
         Effect: one notification · Result: {message_id, meeting_ref}."""
+        start = ctx.refs.get("start")
+        started = bool(start) and ctx.clock_now >= float(start)
+        # The wait on a meetings door that had a moment ends at the start even when the door is
+        # back by then: the attempt that finds it up must not mail a meeting already running.
+        if started and UNAVAILABLE_SINCE + "prepare_meeting" in (ctx.scratch or {}):
+            return Done({"skipped": "the meeting started while the meetings door was "
+                                    "unavailable; a prepare mail after the start prepares nobody"})
         to = ctx.refs.get("person") or ctx.refs["organizer"]
         # `person` is set when this fires for somebody other than the organiser. Only mail them if
         # they ALREADY have an account: ensure_platform_user would create one, and a prepare mail
@@ -139,8 +147,7 @@ def build(reg: Registry, db, home=None) -> None:
         def _too_late(e: Unavailable):
             """A meetings door that had a moment is waited on, but not past the meeting's start: a
             prepare mail that lands after the meeting began prepares nobody."""
-            start = ctx.refs.get("start")
-            if start and ctx.clock_now >= float(start):
+            if started:
                 return Done({"skipped": f"the meeting started while the meetings door was "
                                         f"unavailable ({e}); a prepare mail after the start "
                                         f"prepares nobody"})

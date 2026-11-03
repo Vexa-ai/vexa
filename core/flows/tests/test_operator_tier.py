@@ -280,8 +280,11 @@ def test_a_meetings_door_that_had_a_moment_is_a_503_not_a_day_with_no_meetings(a
     assert "meetings" in r.json()["detail"]
     (line,) = [m for m in caplog.messages if "meetings door" in m]
     assert "status=503" in line and "path=/meetings" in line
-    tag = hmac.new(flows_api.DOOR_KEY.encode(), b"126", hashlib.sha256).hexdigest()[:16]
-    assert f"subject={tag}" in line, "an HMAC under the flows key"
+    key = flows_api.DOOR_KEY.encode()
+    tag = hmac.new(key, b"vexa-flows/log-subject-tag/v1\x00126", hashlib.sha256).hexdigest()[:16]
+    assert f"subject={tag}" in line, "an HMAC under the flows key, under its own domain label"
+    bare = hmac.new(key, b"126", hashlib.sha256).hexdigest()[:16]
+    assert bare not in line, "not a MAC over the bare subject: the same key signs grants and tokens"
     assert hashlib.sha256(b"126").hexdigest()[:10] not in line, "not an unkeyed, reversible hash"
     assert "subject=126" not in line and "restarting" not in line
     r = client.get("/timeline", params={"subject": "126", "meetings": "false"},

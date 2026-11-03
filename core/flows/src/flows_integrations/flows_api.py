@@ -2145,6 +2145,11 @@ def signal_reaction(reaction_id: str, verb: str, subject: str = "",
     return {verb: True}
 
 
+#: What `_subject_tag` MACs ahead of the subject. The flows key also signs grants and tokens, so a
+#: log tag must never be a MAC over a message one of those could be.
+SUBJECT_TAG_DOMAIN = b"vexa-flows/log-subject-tag/v1\x00"
+
+
 def _subject_tag(subject: str) -> str:
     """A subject as a log line may carry it: an HMAC under the flows key, so the same person reads
     as the same tag across lines and nobody holding the user list can reverse it (an unkeyed hash
@@ -2152,7 +2157,7 @@ def _subject_tag(subject: str) -> str:
     key = (DOOR_KEY or "").encode()
     if not key:
         return "-"
-    return hmac.new(key, str(subject).encode(), hashlib.sha256).hexdigest()[:16]
+    return hmac.new(key, SUBJECT_TAG_DOMAIN + str(subject).encode(), hashlib.sha256).hexdigest()[:16]
 
 
 @app.get("/timeline")

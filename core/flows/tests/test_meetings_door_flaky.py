@@ -13,6 +13,7 @@ No network: `http` is replaced where each read looks it up, the seam `test_bot_t
 """
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -157,11 +158,29 @@ def test_a_scaffold_with_no_meetings_domain_is_still_minted_without_a_path(monke
 
 
 # ── through the engine: how long a flaky door is waited on ───────────────────────────────────────
+class _Between:
+    """The test DB, with one statement followed at once by `then()`: what another worker or an
+    operator does between two writes of the same verb."""
+
+    def __init__(self, db):
+        self._db, self.dialect, self.after, self.then = db, db.dialect, None, None
+
+    def execute(self, sql, params=None):
+        out = self._db.execute(sql, params)
+        if self.after and " ".join(sql.split()).startswith(self.after):
+            self.after = None
+            self.then()
+        return out
+
+    def executescript(self, sql):
+        self._db.executescript(sql)
+
+
 def _loop(monkeypatch, read, answer):
     """One step doing `read()` under the real loop; `answer(elapsed)` is the door at that moment.
     Returns `drive()`, which runs the loop to rest and answers (status, scratch, elapsed)."""
     from sqlite_double import SqliteDB
-    db, clock, reg = SqliteDB(), FakeClock(1_000_000.0), Registry()
+    db, clock, reg = _Between(SqliteDB()), FakeClock(1_000_000.0), Registry()
     t0 = clock.now()
 
     @reg.step
@@ -183,6 +202,8 @@ def _loop(monkeypatch, read, answer):
         scratch = db.execute("SELECT scratch FROM reaction WHERE reaction_id = :r", {"r": rid})[0][0]
         return status(db, rid), scratch or "", clock.now() - t0
     drive.retry = lambda: retry(db, rid, "operator", clock)
+    drive.tick = lambda: tick(db, reg, clock)
+    drive.db = db
     return drive
 
 
@@ -243,6 +264,35 @@ def test_a_retry_with_the_door_still_down_waits_again_from_zero(monkeypatch):
     st, scratch, _ = drive(ticks=1)
     assert st["status"] == "retrying" and "waiting, 0s so far" in st["reason"]
     assert "_unavailable_since" in scratch
+
+
+def test_a_worker_claiming_a_retry_at_once_starts_a_new_outage_clock(monkeypatch):
+    """A row that failed with its clock still on it (an older build, or a crash between two writes)
+    was made due first and cleaned second: a worker claiming it in between read the six hours
+    already spent and failed it on its first read (Factory re-review at 082164fe, A1)."""
+    drive = _loop(monkeypatch, lambda: mt.meeting_row("7", 41, NATIVE), lambda t: _503())
+    assert drive()[0]["status"] == "failed"
+    drive.db.execute("UPDATE reaction SET scratch = :s",
+                     {"s": json.dumps({"_unavailable_since:door_read": 1_000_000.0})})
+    drive.db.after = "UPDATE reaction SET status = 'retrying', attempt = 0"
+    drive.db.then = drive.tick
+    assert drive.retry()
+    st, _, _ = drive(ticks=0)
+    assert st["status"] == "retrying" and "waiting, 0s so far" in st["reason"], st["reason"]
+
+
+def test_a_give_up_does_not_wipe_the_clock_a_retry_right_after_it_started(monkeypatch):
+    """The give-up flipped the row to failed and cleaned it in a second write: a retry and a claim
+    in between started a new clock, and the clean wiped it (Factory re-review at 082164fe, A1)."""
+    fired: list = []
+    drive = _loop(monkeypatch, lambda: mt.meeting_row("7", 41, NATIVE), lambda t: _503())
+    drive.db.after = "UPDATE reaction SET status = 'failed'"
+    drive.db.then = lambda: fired.append((drive.retry(), drive.tick()))
+    while not fired:
+        drive(ticks=1)
+    st, scratch, _ = drive(ticks=0)
+    assert fired == [(True, True)]
+    assert st["status"] == "retrying" and "_unavailable_since:door_read" in scratch, scratch
 
 
 def test_a_parked_fleet_comes_back_spread_out(monkeypatch):
@@ -315,6 +365,25 @@ def test_prepare_waits_on_the_door_before_the_meeting_starts(monkeypatch):
     with pytest.raises(Unavailable):
         step(ctx)
     assert sent == []
+
+
+def test_prepare_still_waits_before_the_start_with_an_outage_clock(monkeypatch):
+    step, ctx, sent = _prepare(monkeypatch, now=1_700_003_600.0 - 60)
+    ctx.scratch["_unavailable_since:prepare_meeting"] = 1_700_003_600.0 - 1800
+    with pytest.raises(Unavailable):
+        step(ctx)
+    assert sent == []
+
+
+def test_prepare_does_not_mail_after_the_start_when_the_door_came_back(monkeypatch):
+    """The skip lived only on the read that failed, so the attempt that found the door up after the
+    start mailed a meeting already running (Factory re-review at 082164fe, A2)."""
+    step, ctx, sent = _prepare(monkeypatch, now=1_700_003_600.0 + 1)
+    calls = _wire(monkeypatch, _row)
+    ctx.scratch["_unavailable_since:prepare_meeting"] = 1_700_003_600.0 - 1800
+    out = step(ctx)
+    assert isinstance(out, Done) and "the meeting started" in out.result["skipped"]
+    assert calls == [] and sent == []
 
 
 def test_prepare_skips_the_mail_once_the_meeting_has_started(monkeypatch):
