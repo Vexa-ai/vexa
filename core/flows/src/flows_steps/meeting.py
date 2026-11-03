@@ -22,20 +22,39 @@ from meeting_url_redaction import redact_url, redact_urls_in
 # the words, and reaches flows the same way a real one does: through the gateway.
 
 
+def raise_if_unavailable(method: str, url: str, st, body) -> None:
+    """RAISE a retryable `StepError` when the door answered as the platform having a moment: a
+    5xx or a 429 (brain:card/4310908cf3b3).
+
+    The reads below took any answer without rows as *there is nothing there*. A 503 while
+    meeting-api restarted came back as no row, no start, nobody speaking, and the step went on to
+    write the wrong thing: a prepare link on a Zoom number, a note stamped today, a room in invite
+    order. A flaky door is retried on the engine's own backoff, and an outage that outlasts it fails
+    the reaction with this line as its reason. A transport failure already raises out of `http`. A
+    404, and every other answer, is an answer and comes back as one."""
+    try:
+        code = int(st)
+    except (TypeError, ValueError):
+        code = 0
+    if code == 429 or code >= 500:
+        from urllib.parse import urlsplit
+        raise StepError(f"the meetings door had a moment: {method} {urlsplit(url).path} answered "
+                        f"HTTP {st} — {_http_detail(body)}", retryable=True)
+
+
 def meeting_ref(uid: str, url: str) -> str:
     """What a terminal deeplink calls this meeting.
 
     The platform ROW id when the row exists; the NATIVE id when it does not yet — the row is
     minted at bot dispatch (start − 2 min) and a prepare link is sent long before that. The
     terminal resolves either against the person's own meeting list, so the earlier link is not a
-    worse link once the row lands. A lookup that fails degrades to the native id rather than
-    raising: a mail with a slightly weaker link beats no mail.
+    worse link once the row lands. A lookup that could not be made RAISES and is retried
+    (`raise_if_unavailable`): a native id read off a 503 is not "no row yet", it is a guess.
     """
     native = url.rstrip("/").rsplit("/", 1)[-1].split("?")[0]
-    try:
-        _st, body = http("GET", f"{meetings_door()}/meetings", door_headers(uid))
-    except StepError:
-        return native
+    door = f"{meetings_door()}/meetings"
+    st, body = http("GET", door, door_headers(uid))
+    raise_if_unavailable("GET", door, st, body)
     rows = body.get("meetings", []) if isinstance(body, dict) else (body if isinstance(body, list) else [])
     ids = [int(m["id"]) for m in rows
            if isinstance(m, dict) and m.get("native_meeting_id") == native and m.get("id") is not None]
@@ -61,7 +80,10 @@ def ensure_meeting_row(uid: str, url: str, title: str | None = None,
     otherwise dispatch its own bot on that time — a second dispatcher for a meeting this flow
     already dispatches. One loop, one write surface.
 
-    Never raises: a link to a native id is weaker than a link to a row, and both beat no mail.
+    A refusal degrades to the native id: a link to it is weaker than a link to a row, and both beat
+    no mail. A door that had a moment RAISES and is retried (`raise_if_unavailable`): left as a
+    native id, the prepare mail went out with no planned row behind it. The retry is safe:
+    `meeting_ref`, first, finds a row an earlier attempt did write.
     """
     import datetime
 
@@ -75,21 +97,20 @@ def ensure_meeting_row(uid: str, url: str, title: str | None = None,
     if start_epoch:
         body["scheduled_at"] = datetime.datetime.fromtimestamp(
             float(start_epoch), datetime.timezone.utc).isoformat().replace("+00:00", "Z")
-    try:
-        st, row = http("POST", f"{meetings_door()}/meetings", door_headers(uid), body)
-    except StepError:
-        return native
+    door = f"{meetings_door()}/meetings"
+    st, row = http("POST", door, door_headers(uid), body)
+    raise_if_unavailable("POST", door, st, row)
     if st in (200, 201) and isinstance(row, dict) and row.get("id") is not None:
         return str(row["id"])
     return meeting_ref(uid, url)             # 409 = someone minted it in the gap; read it back
 
 
 def meeting_row(uid: str, meeting_id, native: str | None = None):
-    """This user's meeting row from the gateway, or None. One read, several callers."""
-    try:
-        _st, body = http("GET", f"{meetings_door()}/meetings", door_headers(str(uid)))
-    except StepError:
-        return None
+    """This user's meeting row from the gateway, or None when there is no such row. One read,
+    several callers. A door that had a moment RAISES (`raise_if_unavailable`): None is an answer."""
+    door = f"{meetings_door()}/meetings"
+    st, body = http("GET", door, door_headers(str(uid)))
+    raise_if_unavailable("GET", door, st, body)
     rows = body.get("meetings", []) if isinstance(body, dict) else (body if isinstance(body, list) else [])
     found = None
     for m in rows:
@@ -195,14 +216,15 @@ def meeting_start(uid: str, meeting_id, native: str | None = None):
     `created_at` (when the row appeared). `scheduled_at` was the missing rung and it is the one a
     seeded meeting has: `meeting_seed` sets it from the fixture's own occurrence while
     `start_time` stays NULL, so without this the stamp fell through to `created_at` — today — and
-    several occurrences of one recurring series collapsed into a single note file. Never raises:
-    a date we cannot resolve degrades to today, which is the behaviour this replaces.
+    several occurrences of one recurring series collapsed into a single note file. A row with no
+    date we can resolve is None, and the caller stamps today. A door that had a moment RAISES
+    (`raise_if_unavailable`): a 503 is not a meeting with no date, and `_meeting_stamp` caches
+    whatever it is handed for the rest of the reaction.
     """
     import datetime
-    try:
-        _st, body = http("GET", f"{meetings_door()}/meetings", door_headers(str(uid)))
-    except StepError:
-        return None
+    door = f"{meetings_door()}/meetings"
+    st, body = http("GET", door, door_headers(str(uid)))
+    raise_if_unavailable("GET", door, st, body)
     rows = body.get("meetings", []) if isinstance(body, dict) else (body if isinstance(body, list) else [])
     row = None
     for m in rows:
@@ -323,13 +345,12 @@ def speaking_seconds(uid: str, meeting_id) -> dict:
     CHARACTERS spoken — a proxy for the same thing, which keeps the ORDER honest even when the
     seconds are not available.
 
-    Never raises: an unreadable transcript is `{}`, which means nobody is prioritised and the
-    invite's own order stands. It is not a reason to fail a meeting."""
-    try:
-        _st, body = http("GET", f"{meetings_door()}/transcripts/by-id/{meeting_id}",
-                         door_headers(str(uid)))
-    except StepError:
-        return {}
+    A transcript with no segments, or none at all (a 404), is `{}`, which means nobody is
+    prioritised and the invite's own order stands. A door that had a moment RAISES
+    (`raise_if_unavailable`): a 503 is not a meeting where nobody spoke."""
+    door = f"{meetings_door()}/transcripts/by-id/{meeting_id}"
+    st, body = http("GET", door, door_headers(str(uid)))
+    raise_if_unavailable("GET", door, st, body)
     segs = (body or {}).get("segments") or [] if isinstance(body, dict) else []
     seconds, chars = {}, {}
     for g in segs:
@@ -375,7 +396,9 @@ def room_order(uid: str, meeting_id, participants: list, names: dict,
     **A failed match degrades to invite order, NEVER to an empty room.** No transcript, no
     timings, no `CN=` names, nothing matching anything — the answer is still the first `cap`
     addresses on the invite. An empty room from a matcher that could not do its job is a silent
-    loss of the whole feature, and it would look exactly like a meeting where nobody spoke.
+    loss of the whole feature, and it would look exactly like a meeting where nobody spoke. A
+    transcript the door could not read is not a failed match: `speaking_seconds` raises, and so
+    does this.
 
     Addresses, not subject ids: agent-api resolves identity and mounts only the people who already
     have a desk, so a stranger on the invite is skipped THERE and no account is minted anywhere."""

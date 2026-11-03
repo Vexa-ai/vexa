@@ -40,6 +40,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from test_link_loop import FakeScaffolds, _StubDB  # noqa: E402
 
+pytestmark = pytest.mark.usefixtures("meetings_hold_no_row")
+
 
 class _Sent(list):
     """Every notification a production step made, intercepted at `production.notify`.

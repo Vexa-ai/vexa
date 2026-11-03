@@ -908,6 +908,8 @@ def _recorded_note_path(ctx, uid, meeting_id=None) -> str:
     if mid or native:
         try:
             row = mt.meeting_row(uid, mid, native)
+        except StepError:
+            raise           # the door had a moment: retried, never cached as "no recorded path"
         except Exception:  # noqa: BLE001 — a lookup we cannot make is not a recorded path
             row = None
         if isinstance(row, dict):
@@ -945,6 +947,8 @@ def _call_session(ctx) -> str:
     uid = ctx.refs.get("uid")
     try:
         row = mt.meeting_row(str(uid), ctx.refs.get("meeting_id"), ctx.refs.get("native"))
+    except StepError:
+        raise               # the door had a moment: retried, never cached as "not a call"
     except Exception:  # noqa: BLE001 — an unreadable row is a meeting with no session
         row = None
     data = (row or {}).get("data") if isinstance(row, dict) else None
@@ -1056,7 +1060,8 @@ def _mail_title(ctx) -> str:
          when platform is missing or the literal placeholder `"unknown"` (row 97's shape, R-B06's
          own comment above) — a title that says nothing beats one that says the wrong thing.
       4. `"Meeting on <date>"` — the honest last resort, from the same start-time chain
-         `_meeting_stamp` already owns. Never raises and never returns empty.
+         `_meeting_stamp` already owns. Never returns empty. A meetings door that had a moment
+         raises out of tiers 2 and 4 and the step is retried (brain:card/4310908cf3b3).
 
     Never "your meeting": that string was every OTHER step's own no-organizer-either guess, not a
     resolved title, and folding it in here would make a title-shaped mail sentence
@@ -1086,6 +1091,8 @@ def _mail_title(ctx) -> str:
     try:
         row = mt.meeting_row(uid, ctx.refs.get("meeting_id"), ctx.refs.get("native")) if uid \
             else None
+    except StepError:
+        raise               # the door had a moment: retried, never cached as a guessed title
     except Exception:  # noqa: BLE001 — a title lookup is never worth failing the mail over
         row = None
     if isinstance(row, dict):

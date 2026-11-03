@@ -119,13 +119,16 @@ def test_the_operator_key_with_no_subject_is_refused_on_every_subject_scoped_rea
 
 
 @pytest.mark.parametrize("path", SUBJECT_SCOPED_READS)
-def test_the_operator_key_naming_a_subject_still_opens_all_of_them(api, path):
+def test_the_operator_key_naming_a_subject_still_opens_all_of_them(api, path, monkeypatch):
     """The operator has not lost a capability, only an ambiguity: it says whose rows it wants.
 
     `/friction` is named through `X-User-Id` rather than `?subject=` — that route never published a
     subject argument and this change does not add one; what matters is that it has a way to name a
     person and no way to name none."""
     flows_api, client = api
+    # The suite's meetings door refuses every connection, and the timeline answers that as a 503
+    # now (brain:card/4310908cf3b3). This test is about naming a subject: the door holds no rows.
+    monkeypatch.setattr(flows_api, "fetch_meetings", lambda uid: [])
     headers = operator(flows_api)
     params = {}
     if path == "/friction":
@@ -254,6 +257,24 @@ def test_the_operator_key_does_still_take_the_meetings_hop(api, monkeypatch):
                    headers=operator(flows_api))
     assert r.status_code == 200, r.text
     assert reached == ["126"]
+
+
+def test_a_meetings_door_that_had_a_moment_is_a_503_not_a_day_with_no_meetings(api, monkeypatch):
+    """brain:card/4310908cf3b3. The REAL `fetch_meetings` over a door answering 503: the route says
+    the meetings half could not be read, where it used to answer a day with no meetings in it.
+    `meetings=false` never takes the hop and still answers."""
+    from flows_steps import common
+    flows_api, client = api
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "timeline-door-flows-key")
+    monkeypatch.setattr(common, "MEETINGS_API", "http://gateway.test", raising=False)
+    monkeypatch.setattr(common, "http", lambda *a, **k: (503, {"detail": "meeting-api restarting"}))
+    r = client.get("/timeline", params={"subject": "126", "meetings": "true"},
+                   headers=operator(flows_api))
+    assert r.status_code == 503, r.text
+    assert "meetings" in r.json()["detail"]
+    r = client.get("/timeline", params={"subject": "126", "meetings": "false"},
+                   headers=operator(flows_api))
+    assert r.status_code == 200, r.text
 
 
 def test_the_timeline_key_is_its_own_caller_kind_not_an_admin(api):
