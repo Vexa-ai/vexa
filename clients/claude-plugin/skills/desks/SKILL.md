@@ -63,7 +63,10 @@ don't route around it. A missing step must show up at once, not be hidden behind
      > **Gate. You do nothing until all three hold:**
      > 1. Vexa is connected in this chat (`whats_waiting` answers, as <connected_as>);
      > 2. your desk page is open in your side pane: `panel_link(next="/panel/o/<page>")`, kept open;
-     > 3. you have read the same page through Vexa: `brain_page_view("<page>")`.
+     > 3. you have read the same page through Vexa: `brain_page_view("<page>")`, and for every widget
+     >    the rows you see in your pane are the rows it returned. A widget whose rows differ (the agent
+     >    sees something the person doesn't, or the other way round) is a stop: say which one, and file it
+     >    with `report_friction`.
      >
      > If any of the three is missing, stop. Say in one line which one, here and to the CEO desk, and
      > wait. Check the gate again before each decision, and at once when a Vexa tool answers with a
@@ -89,6 +92,16 @@ don't route around it. A missing step must show up at once, not be hidden behind
      > `brain_page_view(<key>)`. Its `measures.over` must be empty; shorten and re-read until it is. Then
      > look at it in your side pane at ~1500 px: at most two screens, and the first screen holds what the
      > reader needs.
+     >
+     > The budget measures form, not use. At wake and after each change to your page, also answer the
+     > person's four questions about it, each with what on the page shows it:
+     > 1. Can they tell in 5 seconds what is happening and what needs them?
+     > 2. Is the most useful thing at the top, and open?
+     > 3. Is there no wall of repeated text?
+     > 4. Is nothing cut off or unreadable?
+     >
+     > Record the answers with `brain_fact` on `<doc>`, kind `usefulness`. A «no» is fixed before
+     > anything else on the page. Every number on it is current, or shows that it is not.
      >
      > Questions for the person go through the CEO desk, one at a time, never to them directly.
      > Nothing goes out in their name: drafts only, until they say it goes.
