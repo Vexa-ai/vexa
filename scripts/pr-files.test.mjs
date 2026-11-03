@@ -8,7 +8,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { prFiles, gitDiffFiles, API_FILE_CAP } from "./pr-files.mjs";
@@ -87,8 +88,36 @@ test("docs-current: an evaluation error surfaces (git short of the count) rather
   assert.throws(() => docsCard(2008, { repo: "o/r", api: fakeApi(pr(5143), all), git: gitOf(all.slice(0, 3000)) }));
 });
 
+test("a rename counts under both names on the API path too, as on the git path", () => {
+  const api = (path) => (/\/files\?/.test(path) && path.endsWith("page=1") ? [{ filename: "other/guide.md", previous_filename: "docs/guide.md", status: "renamed" }, { filename: "core/x.py", status: "modified" }] : []);
+  const got = prFiles(pr(2), { repo: "o/r", api, git: gitOf([]) });
+  assert.deepEqual(got.map((f) => f.filename).sort(), ["core/x.py", "docs/guide.md", "other/guide.md"]);
+  assert.equal(got.find((f) => f.filename === "docs/guide.md").status, "removed");
+});
+
+test("with no changed_files count, a list at the API cap is refused, not taken as whole", () => {
+  const all = names(3000, "core");
+  assert.throws(() => prFiles(pr(undefined), { repo: "o/r", api: fakeApi(pr(undefined), all), git: gitOf(all) }), /no changed_files count/);
+  assert.equal(prFiles(pr(undefined), { repo: "o/r", api: fakeApi(pr(undefined), names(250, "core")), git: gitOf([]) }).length, 250);
+});
+
+test("docs-current run through a symlink still runs the gate (usage error, not a silent exit 0)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "docs-gate-link-"));
+  try {
+    const link = join(dir, "gate.mjs");
+    symlinkSync(fileURLToPath(new URL("./docs-current-gate.mjs", import.meta.url)), link);
+    const env = { ...process.env };
+    delete env.GITHUB_REPOSITORY;
+    let code = 0;
+    try { execFileSync(process.execPath, [link], { env, stdio: "pipe" }); } catch (e) { code = e.status; }
+    assert.equal(code, 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // The git path itself, against a real repository: shallow, blob-less, renames as remove + add.
-test("gitDiffFiles reads names and statuses from a blob-less shallow fetch", () => {
+test("gitDiffFiles reads names and statuses from a blob-less shallow fetch, outside the caller's clone", () => {
   const dir = mkdtempSync(join(tmpdir(), "pr-files-"));
   try {
     const env = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1", HOME: dir };
@@ -113,8 +142,13 @@ test("gitDiffFiles reads names and statuses from a blob-less shallow fetch", () 
     const head = git(origin, "rev-parse", "HEAD");
 
     const clone = join(dir, "clone");
-    execFileSync("git", ["clone", "-q", "--depth=1", `file://${origin}`, clone], { env });
+    execFileSync("git", ["clone", "-q", `file://${origin}`, clone], { env });
+    const before = { commits: git(clone, "rev-list", "--count", "HEAD"), config: readFileSync(join(clone, ".git/config"), "utf8") };
     const got = gitDiffFiles(base, head, { cwd: clone }).sort((a, b) => a.filename.localeCompare(b.filename));
+    // the caller's full clone is left as it was: not shallow, not a partial clone, same config
+    assert.equal(git(clone, "rev-list", "--count", "HEAD"), before.commits);
+    assert.equal(git(clone, "rev-parse", "--is-shallow-repository"), "false");
+    assert.equal(readFileSync(join(clone, ".git/config"), "utf8"), before.config);
     assert.deepEqual(got, [
       { filename: "core/mv.py", status: "removed" },
       { filename: "docs/a.md", status: "removed" },

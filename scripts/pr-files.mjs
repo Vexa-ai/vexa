@@ -10,26 +10,44 @@
 // When even that cannot account for every changed file, this throws: a gate must fail, never
 // judge part of a PR.
 //
-// git lists a rename as a deletion plus an addition (--no-renames: exact rename detection would
-// need the blobs). A gate then sees both paths, so a file moved out of a surface still counts as
-// touching it.
+// A rename counts under both names on either path: the old one as removed, the new one as added
+// (git: --no-renames, since exact rename detection would need the blobs). So a file moved out of
+// a surface counts as touching it, whether the PR has 2 files or 5,000.
 
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 export const API_FILE_CAP = 3000;   // GitHub's documented maximum for pulls/{n}/files
 const PER_PAGE = 100;
 
-// Names and statuses of every file changed between two commits, read from git in `cwd` (the
-// workflow's checkout). Fetches both commits from `remote` without blobs, so a 5,000-file diff
-// costs trees only.
+// Names and statuses of every file changed between two commits. The fetch goes into a throwaway
+// bare repository, never into the caller's clone (a shallow fetch there would cut its history and
+// turn it into a partial clone). Only the remote's URL and any http extraheader (the Actions
+// checkout token) are copied from `cwd`, into the throwaway's own config, never onto argv.
 export function gitDiffFiles(base, head, { cwd = process.cwd(), remote = "origin", run = execFileSync } = {}) {
-  const git = (args) => run("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 * 1024 * 1024 });
-  git(["fetch", "--no-tags", "--quiet", "--depth=1", "--filter=blob:none", remote, base, head]);
-  const out = git(["diff", "--no-renames", "--name-status", "-z", base, head]);
-  const parts = out.split("\0").filter(Boolean);
-  const files = [];
-  for (let i = 0; i + 1 < parts.length; i += 2) files.push({ filename: parts[i + 1], status: STATUS[parts[i][0]] || parts[i] });
-  return files;
+  const opts = { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 * 1024 * 1024 };
+  const url = run("git", ["remote", "get-url", remote], { cwd, ...opts }).trim();
+  let headers = "";
+  try { headers = run("git", ["config", "--get-regexp", "^http\\..*extraheader$"], { cwd, ...opts }); } catch { /* none set */ }
+  const dir = mkdtempSync(join(tmpdir(), "pr-files-"));
+  try {
+    const git = (args) => run("git", ["--git-dir", dir, ...args], opts);
+    git(["init", "--quiet", "--bare"]);
+    for (const line of headers.split("\n").filter(Boolean)) {
+      const sp = line.indexOf(" ");
+      git(["config", "--add", line.slice(0, sp), line.slice(sp + 1)]);
+    }
+    git(["fetch", "--no-tags", "--quiet", "--depth=1", "--filter=blob:none", url, base, head]);
+    const out = git(["diff", "--no-renames", "--name-status", "-z", base, head]);
+    const parts = out.split("\0").filter(Boolean);
+    const files = [];
+    for (let i = 0; i + 1 < parts.length; i += 2) files.push({ filename: parts[i + 1], status: STATUS[parts[i][0]] || parts[i] });
+    return files;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 const STATUS = { A: "added", D: "removed", M: "modified", T: "changed" };
 
@@ -39,18 +57,27 @@ const STATUS = { A: "added", D: "removed", M: "modified", T: "changed" };
 export function prFiles(pr, { repo, api, git = gitDiffFiles } = {}) {
   const num = pr.number;
   const listed = [];
+  let rows = 0;   // API rows; GitHub's changed_files counts a rename once
   for (let page = 1; page <= API_FILE_CAP / PER_PAGE; page++) {
     const batch = api(`repos/${repo}/pulls/${num}/files?per_page=${PER_PAGE}&page=${page}`);
-    listed.push(...batch.map((f) => ({ filename: f.filename, status: f.status })));
+    rows += batch.length;
+    for (const f of batch) {
+      listed.push({ filename: f.filename, status: f.status });
+      if (f.previous_filename) listed.push({ filename: f.previous_filename, status: "removed" });
+    }
     if (batch.length < PER_PAGE) break;
   }
   const expected = pr.changed_files;
-  if (typeof expected !== "number" || listed.length >= expected) return listed;
+  if (typeof expected !== "number") {
+    if (rows >= API_FILE_CAP) throw new Error(`#${num}: the API list stopped at its ${API_FILE_CAP}-file cap and the PR gives no changed_files count to check it against`);
+    return listed;
+  }
+  if (rows >= expected) return listed;
 
   const base = pr.base?.sha, head = pr.head?.sha;
-  if (!base || !head) throw new Error(`#${num}: the API listed ${listed.length} of ${expected} changed files and the PR names no base/head sha to read the rest from`);
+  if (!base || !head) throw new Error(`#${num}: the API listed ${rows} of ${expected} changed files and the PR names no base/head sha to read the rest from`);
   const mergeBase = api(`repos/${repo}/compare/${base}...${head}?per_page=1`).merge_base_commit?.sha;
-  if (!mergeBase) throw new Error(`#${num}: the API listed ${listed.length} of ${expected} changed files and gave no merge base for ${base}...${head}`);
+  if (!mergeBase) throw new Error(`#${num}: the API listed ${rows} of ${expected} changed files and gave no merge base for ${base}...${head}`);
   const all = git(mergeBase, head);
   // --no-renames counts a rename twice, so git may list more than GitHub counts, never fewer.
   if (all.length < expected) throw new Error(`#${num}: git lists ${all.length} files between ${mergeBase} and ${head}, the PR says ${expected} — refusing to judge part of the diff`);

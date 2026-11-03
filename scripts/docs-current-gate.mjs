@@ -10,11 +10,14 @@
 // Exit 0 = every named PR resolved; 1 = one or more need a docs decision; 2 = usage.
 
 import { execSync } from "node:child_process";
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { prFiles } from "./pr-files.mjs";
 
 const REPO = process.env.GITHUB_REPOSITORY;
-const IS_MAIN = import.meta.url === pathToFileURL(process.argv[1] || "").href;
+// Run as a command, not imported by its test. Compared by real path, so a symlinked invocation
+// still runs the gate rather than exiting 0 having judged nothing.
+const IS_MAIN = (() => { try { return realpathSync(process.argv[1] || "") === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })();
 if (IS_MAIN && !REPO) { console.error("docs-current-gate: GITHUB_REPOSITORY required"); process.exit(2); }
 
 // Product surfaces a user reads docs for (mirror pr-value's runtime filter — those are the
