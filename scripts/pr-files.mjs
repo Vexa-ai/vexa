@@ -25,8 +25,9 @@ const PER_PAGE = 100;
 // Names and statuses of every file changed between two commits. The fetch goes into a throwaway
 // bare repository, never into the caller's clone (a shallow fetch there would cut its history and
 // turn it into a partial clone). From `cwd` only the remote's URL and any http extraheader (the
-// Actions checkout token) are taken. The headers reach the fetch through GIT_CONFIG_* environment
-// variables: never argv (other users on a shared host can read a command line), never a file.
+// Actions checkout token) are taken. Both reach git through GIT_CONFIG_* environment variables:
+// never argv (other users on a shared host can read a command line, and a URL can carry a
+// credential), never a file.
 export function gitDiffFiles(base, head, { cwd = process.cwd(), remote = "origin", run = execFileSync } = {}) {
   const opts = { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 * 1024 * 1024 };
   const url = remoteUrl(run("git", ["remote", "get-url", remote], { cwd, ...opts }).trim(), cwd, run, opts);
@@ -35,15 +36,15 @@ export function gitDiffFiles(base, head, { cwd = process.cwd(), remote = "origin
   // -z: entries end in NUL, key and value split at the first newline, so a value spanning lines
   // stays one value.
   const headers = raw.split("\0").filter(Boolean).map((e) => { const nl = e.indexOf("\n"); return nl < 0 ? [e, ""] : [e.slice(0, nl), e.slice(nl + 1)]; });
-  const env = { ...process.env, GIT_CONFIG_COUNT: String(headers.length) };
-  headers.forEach(([k, v], i) => { env[`GIT_CONFIG_KEY_${i}`] = k; env[`GIT_CONFIG_VALUE_${i}`] = v; });
+  const settings = [["remote.origin.url", url], ...headers];
+  const env = { ...process.env, GIT_CONFIG_COUNT: String(settings.length) };
+  settings.forEach(([k, v], i) => { env[`GIT_CONFIG_KEY_${i}`] = k; env[`GIT_CONFIG_VALUE_${i}`] = v; });
   const dir = mkdtempSync(join(tmpdir(), "pr-files-"));
   try {
     const git = (args, extra = {}) => run("git", ["--git-dir", dir, ...args], { ...opts, ...extra });
     git(["init", "--quiet", "--bare"]);
-    git(["remote", "add", "origin", url]);
     git(["fetch", "--no-tags", "--quiet", "--depth=1", "--filter=blob:none", "origin", base, head], { env });
-    const out = git(["diff", "--no-renames", "--name-status", "-z", base, head]);
+    const out = git(["diff", "--no-renames", "--name-status", "-z", base, head], { env });
     const parts = out.split("\0").filter(Boolean);
     const files = [];
     for (let i = 0; i + 1 < parts.length; i += 2) files.push({ filename: parts[i + 1], status: STATUS[parts[i][0]] || parts[i] });
