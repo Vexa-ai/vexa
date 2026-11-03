@@ -875,6 +875,18 @@ admin on the repo) carries its marker for the PR's current head sha:
 - **Every base branch.** The card's script runs from `main` for PRs into any branch, so release-line
   PRs show the rows too. A red card blocks a merge only where the base branch's protection requires
   `merge-card`, which today means `main`.
+- **Who signs depends on the radius.** The card reads the PR's blast radius from its diff paths
+  (`scripts/pr-radius.mjs`, deterministic) and shows it as a **Radius** row. On a **small** radius
+  (CI, docs and tests in any number, plus code in at most one service, with no database, contract,
+  bot-protocol, billing, auth, gateway, merge-gate, deploy, release or shared-library path) the
+  independent reviewer agent signs: `vexa-reviewer.yml` reviews every head as the GitHub App
+  `vexa-reviewer[bot]`, reading the PR as text and running none of its code, and posts the same
+  markers. On a **large** radius its pass does not count, and a maintainer signs. A reviewer
+  `verdict=fail` blocks on any radius and routes the PR to a maintainer, whose newer pass clears
+  it. A reviewer pass counts only while every scanner on the head (CodeQL, GitGuardian,
+  dependency-review, osv, Trivy) agrees: a red scanner is a disagreement and goes to a maintainer.
+  The reviewer cannot waive. If it did not run, there is no marker and the card waits for a
+  maintainer. The value sign-off (`state: value-signed`) is unchanged.
 
 ## Release — the ship bar
 
@@ -1081,7 +1093,7 @@ silence is released, never punished · every decline names its reopen condition 
 | D9 value-signed, corroborated | `gate:value-signed` checks non-author + channel consistency (merge-time) · **release-time:** `value-gate` requires every batch PR pr-value-green/value-signed | **have** (CI: `merge-card-gate` merge-time, `release-value-gate` release-time; [ADR-0029](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0029-release-witness-and-value-gates-enforced.md)/[ADR-0030](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0030-merge-card-value-and-diff-gate.md)) |
 | D10 acceptance floor | bundle-vs-table check (merge-time) · **release-time:** guarantee line 8 enforced by `value-gate` | **TO BUILD** (bundle checker) / **have** (CI: `release-value-gate`) |
 | Merge bar — value + diff accepted (choke point 1) | `merge-card` required status check: value-fsm green + `state: value-signed` (value) AND a fresh non-author review approval, or maintainer self-review when the author holds the commit bit (diff) | **have** (CI: `merge-card-gate`, [ADR-0030](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0030-merge-card-value-and-diff-gate.md)) |
-| Merge bar — architecture + security passes on every PR | `merge-card` rows: a maintainer's `vexa-pass:architecture` and `vexa-pass:security` markers for the current head sha (`verdict=pass`, or `verdict=waived` with `waived-by=<maintainer>`), leading the comment; a pass comment re-runs the card (`merge-card-pass`); findings never on the PR | **have** (CI: `merge-card-gate`, [ADR-0030 amendment](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0030-merge-card-value-and-diff-gate.md#amendment-2026-10-08--architecture-and-security-passes)) |
+| Merge bar — architecture + security passes on every PR | `merge-card` rows: on a large radius a maintainer's, on a small radius (`pr-radius`) a maintainer's or the reviewer App's (`vexa-reviewer`, scanners agreeing), `vexa-pass:architecture` and `vexa-pass:security` markers for the current head sha (`verdict=pass`, or `verdict=waived` with `waived-by=<maintainer>`), leading the comment; a pass comment re-runs the card (`merge-card-pass`); findings never on the PR | **have** (CI: `merge-card-gate`, [ADR-0030 amendment](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0030-merge-card-value-and-diff-gate.md#amendment-2026-10-08--architecture-and-security-passes)) |
 | Contributor onboarding — explain the change | PR template + CONTRIBUTING recommend Discord; `pr-welcome` nudges first-timers (recommended, never a gate) | **have** (templates + CI) |
 | D11 both verdicts credited | release-notes generation from bundles | **TO BUILD** |
 | D12 altitude-scaled validation | stated live bar in every prepared issue | **have** (manual review) |

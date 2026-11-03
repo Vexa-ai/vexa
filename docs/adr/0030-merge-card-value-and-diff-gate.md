@@ -125,3 +125,46 @@ level. Until now they were review practice (D-S, TAKE step 3), so a PR could mer
 - The card's script runs from `main` for PRs into every base branch, so release-line PRs render the
   rows. Whether a red card blocks the merge is the base branch's protection: today only `main`
   requires `merge-card`.
+
+## Amendment 2026-10-28 — the reviewer agent signs a small radius
+
+**Decision.** The two pass rows keep their markers, placement and head binding; what changes is
+whose marker counts.
+
+- **Radius.** `scripts/pr-radius.mjs` classifies a PR from its diff paths (a rename brings its old
+  path). **Large** when any path is of a large kind: database (schema, models, SQL, migrations),
+  contracts (contract dirs, goldens, JSON schemas, seals), bot protocol, seam, billing, auth and
+  identity, gateway code, the merge gates and scanners themselves, deploy, release, shared
+  libraries and repo-wide manifests; or when runtime code spans two or more units; or when a path
+  is unclassified, or the file list is incomplete. **Small** otherwise: CI, docs and tests in any
+  number, plus code in at most one unit. The card shows it as a Radius row that gates nothing.
+- **The reviewer.** `vexa-reviewer.yml` runs on `pull_request_target`, so the default branch's copy
+  runs and a PR cannot change what reviews it. It checks out `main` only, reads the PR from the API
+  as text (title, body, files, the base...head diff), and runs Claude Code with every tool disabled,
+  no MCP servers, in an empty directory: it never runs the PR's code or sees its author's session.
+  It posts `vexa-pass` markers as the GitHub App `vexa-reviewer[bot]`, which holds issues and
+  pull-requests write, no push, and is not a maintainer. The reply is parsed strictly; a pass that
+  names a blocking finding is a fail. Security findings are age-encrypted to the maintainer and
+  kept as a run artifact; the comment carries their count.
+- **The card.** A reviewer marker for the head counts only on a small radius and only while every
+  scanner on the head agrees (newest run per name: success, neutral or skipped). A red scanner is a
+  disagreement and the row goes to a maintainer; a running scanner is waited out like value-fsm.
+  A reviewer `verdict=fail` counts on any radius and blocks until a newer maintainer pass. The
+  reviewer cannot waive. No marker means a maintainer signs: there is no fallback path.
+
+**Why.** Founder ruling 2026-10-28: the founder signed architecture and security passes by hand on
+every PR of 0.13.4, a 3-file CI fix included, and an agent posting them under the founder's account
+is rightly blocked as self-approval. Small radius (CI, docs, tests, one service without database or
+contracts) is signed by an independent reviewer that did not see the author's work; large radius
+(database, contracts, bot protocol, billing, auth) stays the founder's.
+
+**Consequences.**
+
+- The founder sees large-radius PRs, reviewer fails and reviewer–scanner disagreements; a small
+  PR the reviewer and the scanners agree on merges on the value sign-off and the diff row alone.
+- The reviewer reads untrusted text. A PR can try to steer it; the prompt fences the PR as data and
+  treats steering as a blocking finding, and the radius bounds what a fooled reviewer can sign.
+- Changing `pr-radius.mjs`, the card or the reviewer is itself a large-radius change.
+- Like the rest of the card, the rule is live where the base branch requires `merge-card`, and
+  takes effect from `main` (the workflows check out `main`'s scripts).
+

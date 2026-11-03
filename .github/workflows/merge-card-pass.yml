@@ -35,12 +35,14 @@ permissions:
 jobs:
   rerun:
     # Open pull requests only, a comment that carries (or, before an edit, carried) a pass marker,
-    # from an account associated with the repo. Anyone else's marker never counts on the card, so
-    # re-running for it would only spend minutes.
+    # from an account associated with the repo or from the reviewer App (vexa-reviewer.yml; an App
+    # has no association). Anyone else's marker never counts on the card, so re-running for it would
+    # only spend minutes.
     if: >-
       ${{
         github.event.issue.pull_request != null && github.event.issue.state == 'open' &&
-        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+        (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) ||
+         github.event.comment.user.login == 'vexa-reviewer[bot]') &&
         (contains(github.event.comment.body, 'vexa-pass:') || contains(github.event.changes.body.from, 'vexa-pass:'))
       }}
     runs-on: ubuntu-latest

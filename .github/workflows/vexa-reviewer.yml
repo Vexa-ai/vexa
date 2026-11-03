@@ -1,0 +1,118 @@
+# vexa-reviewer — the independent reviewer agent. For every PR head it reviews architecture and
+# security and posts `vexa-pass` markers as the reviewer GitHub App (vexa-reviewer[bot]), never as a
+# person. merge-card counts them only on a SMALL radius (scripts/pr-radius.mjs); on a LARGE radius a
+# maintainer signs, and the reviewer's verdict informs them. Its fail blocks on any radius.
+#
+# The trust boundary (tested in scripts/vexa-reviewer.test.mjs):
+#   • pull_request_target: GitHub runs the default branch's copy of this file, so a PR cannot
+#     change what reviews it. Every checkout is `main`; the PR's code is never checked out or run.
+#     The PR reaches the model as text from the API (title, body, files, base...head diff).
+#   • The model runs with every tool disabled, no MCP servers, in an empty directory.
+#   • The comment is posted with the App's installation token. The App holds issues/pull-requests
+#     write and read on contents and checks; it has no push and is not a maintainer.
+#   • Security findings never reach the public thread: they are age-encrypted to the maintainer's
+#     key and kept as a run artifact (SECURITY.md, coordinated disclosure).
+#   • No fallback: if a secret is missing, the model fails or the reply is not a verdict, the job
+#     fails, nothing is posted, and the card waits for a maintainer's passes.
+#
+# Setup (a maintainer, once): the App `vexa-reviewer` installed on this repo; repo variable
+# VEXA_REVIEWER_APP_ID; repo secrets VEXA_REVIEWER_APP_KEY (the App's private key) and
+# VEXA_REVIEWER_CLAUDE_TOKEN (a Claude Code OAuth token).
+name: vexa-reviewer
+run-name: "vexa-reviewer: PR #${{ github.event.pull_request.number }}"
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+# A new push supersedes the review of the old head.
+concurrency:
+  group: vexa-reviewer-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 75   # the review, then up to 40 minutes waiting for the scanners on a small radius
+    env:
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      # The maintainer's age recipient: security findings are encrypted to it (public key).
+      FINDINGS_RECIPIENT: age1w4xqa2dmw00jqvyld7ssw2whh3y2jf5uu6mfzx4rg7vsj4w2xffqtvm30m
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with: { ref: main, persist-credentials: false }   # main's scripts and P-book, never the PR
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with: { node-version: 22 }
+
+      - name: Already reviewed this head?
+        id: prior
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          if node scripts/vexa-reviewer.mjs prior; then echo "done=true" >> "$GITHUB_OUTPUT"; else echo "done=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: The review packet (the PR as text)
+        if: steps.prior.outputs.done != 'true'
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/review" "$RUNNER_TEMP/empty"
+          node scripts/vexa-reviewer.mjs packet > "$RUNNER_TEMP/review/packet.txt"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$PR/files?per_page=100" \
+            | jq -r '.[][] | .filename, (.previous_filename // empty)' | node scripts/pr-radius.mjs > "$RUNNER_TEMP/review/radius.json"
+          echo "radius: $(jq -r '.radius + " — " + .why' "$RUNNER_TEMP/review/radius.json")"
+
+      - name: Review (Claude Code, no tools, empty directory)
+        if: steps.prior.outputs.done != 'true'
+        working-directory: ${{ runner.temp }}/empty
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.VEXA_REVIEWER_CLAUDE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$CLAUDE_CODE_OAUTH_TOKEN" || { echo "::error ::VEXA_REVIEWER_CLAUDE_TOKEN is not set — no review; a maintainer signs this PR"; exit 1; }
+          npm install -g --no-fund --no-audit @anthropic-ai/claude-code@2.1.296 >/dev/null
+          claude -p --model opus --output-format json --tools "" --strict-mcp-config --no-session-persistence \
+            < "$RUNNER_TEMP/review/packet.txt" > "$RUNNER_TEMP/review/reply.json"
+
+      - name: Verdict
+        if: steps.prior.outputs.done != 'true'
+        run: |
+          set -euo pipefail
+          export RADIUS_JSON="$(cat "$RUNNER_TEMP/review/radius.json")" OUT_DIR="$RUNNER_TEMP/review"
+          node scripts/vexa-reviewer.mjs verdict "$RUNNER_TEMP/review/reply.json" | tee -a "$GITHUB_STEP_SUMMARY"
+          sudo apt-get install -y -qq age >/dev/null
+          age -r "$FINDINGS_RECIPIENT" -o "$RUNNER_TEMP/review/security-findings.age" "$RUNNER_TEMP/review/security-findings.json"
+          rm "$RUNNER_TEMP/review/security-findings.json" "$RUNNER_TEMP/review/reply.json"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.prior.outputs.done != 'true'
+        with:
+          name: security-findings
+          path: ${{ runner.temp }}/review/security-findings.age
+          retention-days: 30
+
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        if: steps.prior.outputs.done != 'true'
+        id: app
+        with:
+          app-id: ${{ vars.VEXA_REVIEWER_APP_ID }}
+          private-key: ${{ secrets.VEXA_REVIEWER_APP_KEY }}
+          permission-issues: write
+          permission-pull-requests: write
+          permission-checks: read
+          permission-contents: read
+
+      - name: Post the review as the reviewer App
+        if: steps.prior.outputs.done != 'true'
+        env: { GH_TOKEN: "${{ steps.app.outputs.token }}" }
+        run: |
+          set -euo pipefail
+          export RADIUS_JSON="$(cat "$RUNNER_TEMP/review/radius.json")"
+          node scripts/vexa-reviewer.mjs post "$RUNNER_TEMP/review/comment.md"
