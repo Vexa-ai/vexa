@@ -55,6 +55,9 @@ INTERNAL_SECRET_HEADER = "x-internal-secret"
 FLOWS_KEY_ENV = "VEXA_FLOWS_SERVICE_KEY"
 DOOR_PORT_ENV = "VEXA_GATEWAY_SERVICE_DOOR_PORT"
 DEFAULT_DOOR_PORT = 8002
+#: Where the door listens. Unset: the edge's own HOST, as before. Lite sets 127.0.0.1: every caller of
+#: its door (flows-api, flows-worker) runs in the same container, so the door never needs the bridge.
+DOOR_HOST_ENV = "VEXA_GATEWAY_SERVICE_DOOR_HOST"
 #: The scopes the meetings domain sees on a door call. Flows schedules bots and reads transcripts
 #: (`bot`, `tx`); `browser` grants nothing at this edge and is not given.
 DOOR_SCOPES = ("bot", "tx")
@@ -557,6 +560,12 @@ def build_door_app(env: Optional[Mapping[str, str]] = None, *, identity_key=None
     return create_door_app(flows_key=key, internal_secret=env.get("INTERNAL_API_SECRET", ""),
                            upstreams=upstreams, flows_api_url=env.get("FLOWS_API_URL", ""),
                            identity_key=identity_key, checks=checks)
+
+
+def door_host(default: str, env: Optional[Mapping[str, str]] = None) -> str:
+    import os  # noqa: PLC0415
+    env = os.environ if env is None else env
+    return (env.get(DOOR_HOST_ENV) or "").strip() or default
 
 
 def door_port(env: Optional[Mapping[str, str]] = None) -> int:
