@@ -72,6 +72,11 @@ don't route around it. A missing step must show up at once, not be hidden behind
      > Carry on with your next moves. Keep `<doc>` current on every change of state
      > (`brain_document_upsert`).
      >
+     > Before you call a page a person reads done, or hand out its link: read it back with
+     > `brain_page_view(<key>)`. Its `measures.over` must be empty; shorten and re-read until it is. Then
+     > look at it in your side pane at ~1500 px: at most two screens, and the first screen holds what the
+     > reader needs.
+     >
      > Questions for the person go through the CEO desk, one at a time, never to them directly.
      > Nothing goes out in their name: drafts only, until they say it goes.
      >
