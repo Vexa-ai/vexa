@@ -1688,7 +1688,8 @@ async function bandView($: any): Promise<BandView> {
 
 // /vexa: one press, the whole start. The panel opens beside the chat, the line from Vexa starts here
 // when none runs on this machine (vexa-link, one per machine as always), and a live call is listened
-// to in this chat. `/vexa stop` stops listening here. The command does it all itself; when a step
+// to in this chat; when the account's brain keeps desks, this chat wakes as the CEO desk and starts
+// the others (once per chat). `/vexa stop` stops listening here. The command does it all itself; when a step
 // cannot be done it says what is wrong and the one step that fixes it.
 // Vexa is reached with this chat's paired key, or through the connector where Claude lets the plugin
 // call it (never while vexa-link carries the line and no key is paired: the desktop app refuses that).
@@ -1713,12 +1714,38 @@ async function vexaSignIn($: any): Promise<string> {
   }
   return 'Vexa: sign in with Google in the browser window that just opened; /vexa carries on when you are in.'
 }
-export function vexaAnswer(x: { panel: boolean; line: 'running' | 'started' | 'other' | ''; call: string }): string {
+export function vexaAnswer(x: { panel: boolean; line: 'running' | 'started' | 'other' | ''; call: string; desks?: string }): string {
   return [
     x.panel ? 'panel open' : 'panel not opened',
     x.line === 'started' ? 'line from Vexa started' : x.line === 'other' ? 'line from Vexa runs in another chat' : 'line from Vexa running',
     x.call ? `listening to «${x.call}» here` : 'no live call: this chat listens when one starts',
+    ...(x.desks ? [x.desks] : []),
   ].join(' · ')
+}
+
+// The brain is the same Vexa: an account whose brain keeps desks (the `desks:registry` object) has
+// them woken by the same /vexa. This chat becomes the CEO desk and starts every other desk, each
+// waking only from the brain through Vexa's brain_* tools (the `desks` skill). One wake per chat.
+export const DESKS_REGISTRY = 'desks:registry'
+export const DESKS_WAKE = '[Vexa] This account keeps desks in its brain (desks:registry). This chat is the CEO desk: wake it and start the other desks now, following the vexa-live:desks skill.'
+async function offers($: any, tool: string): Promise<boolean> {
+  if (vexaKey) return proxied.has(tool)
+  return Boolean(server) && (await $.tool.list()).some((t: { name: string }) => t.name === `${prefix}${tool}`)
+}
+// 'desks' when the brain has a registry; '' when this Vexa has no brain or the brain no desks; else what failed.
+export function deskVerdict(r: { object?: unknown } | null, err?: string): string {
+  if (err !== undefined) return /not_found/.test(err) ? '' : `desks not read (${err.slice(0, 80)})`
+  return r?.object ? 'desks' : ''
+}
+async function readDesks($: any): Promise<string> {
+  if (!(await offers($, 'brain_object').catch(() => false))) return ''
+  try { return deskVerdict(await call($, 'brain_object', { id_or_key: DESKS_REGISTRY })) } catch (err) { return deskVerdict(null, message(err)) }
+}
+async function desksWokenHere($: any): Promise<boolean> {
+  try { return Boolean(mySession) && (await $.store.get(`desksWoken:${mySession}`)) === true } catch { return false }
+}
+async function markDesksWoken($: any): Promise<void> {
+  try { if (mySession) await $.store.set(`desksWoken:${mySession}`, true) } catch { /* this run only */ }
 }
 let linkChild: any = null
 async function startLink($: any): Promise<'started' | string> {
@@ -1745,6 +1772,8 @@ async function runVexa($: any): Promise<string> {
     const r = await call($, 'panel_link', { next: withChat(`${panelPath(m)}?surface=claude-panel`, mySession) })
     panel = Boolean(r?.url) && await openInPane($, String(r.url))
   } catch (err) { return `Vexa: the panel did not open (${message(err)}). Sign this chat in to Vexa: /vexa signin` }
+  // Read before the line starts: once vexa-link carries it, the plugin makes no MCP calls of its own.
+  const desks = (await desksWokenHere($)) ? '' : await readDesks($)
   await syncLink($)
   let line: 'running' | 'started' | 'other' | '' = 'running'
   if (!linkActive) {
@@ -1758,7 +1787,12 @@ async function runVexa($: any): Promise<string> {
   if (line !== 'started' && !(await ownsLink($))) line = 'other'
   const live = isLive(m) && m.nativeId ? (m.title || m.nativeId) : ''
   if (live) await updateListener($, x => ({ ...x, isOn: true, offer: null, declined: x.declined.filter(d => d !== roomKey(m)) }))
-  return `Vexa: ${vexaAnswer({ panel, line, call: live })}`
+  if (desks === 'desks') {
+    await markDesksWoken($)
+    // After this command returns: submitted from inside the command.run hook it would wait on itself.
+    $.clock.after(0, () => { void $.prompt.submit({ text: DESKS_WAKE }) })
+  }
+  return `Vexa: ${vexaAnswer({ panel, line, call: live, desks: desks === 'desks' ? 'waking the desks' : desks })}`
 }
 
 export const register: Register = (on) => {
@@ -1767,7 +1801,7 @@ export const register: Register = (on) => {
     lastSurface = String((e as { surface?: unknown }).surface ?? '')
     try { mySession = String(await $.session.id()) } catch { mySession = '' }
     try { usedVexaHere = Boolean(mySession) && await $.fs.exists(`${await linkDir($)}/active/${mySession}`) } catch { usedVexaHere = false }
-    await $.command.register({ name: 'vexa', description: 'Vexa: open the panel, start the line, listen to the live call here', argumentHint: '[stop | signin]' })
+    await $.command.register({ name: 'vexa', description: 'Vexa: open the panel, start the line, listen to the live call here, wake your desks', argumentHint: '[stop | signin]' })
     await $.tool.register({
       name: CONFIGURE,
       description: 'Control the Vexa meeting listener: read it, set what it listens for in the live meeting the person chose '

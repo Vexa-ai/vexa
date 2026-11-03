@@ -30,5 +30,7 @@ The desktop app loads it at once; in the terminal type `/reload-plugins`.
 
 Then type **`/vexa`**. It opens the Vexa panel beside the chat, starts the line from your Vexa
 (`bin/vexa-link`, one per machine) when none runs, and listens to a live call of yours in this
+chat. When your Vexa brain keeps desks (`desks:registry`), the same `/vexa` makes this chat the CEO
+desk and starts every other desk, each waking only from the brain (the `desks` skill), once per
 chat. `/vexa stop` stops listening here. If this chat can't reach your Vexa yet, `/vexa` (or
 `/vexa signin`) opens the sign-in, and carries on by itself once you're in.

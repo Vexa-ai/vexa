@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { TRIAGE_TO_CHAT, parseTriage } from '../hooks/listener'
 
-import { AFTER_CALL_PAGE, afterCallAsk, inThisCallAsk, inThisCallDue, inThisCallKnobs, inThisCallTiming, bandState, fromPerson, heardLine, panelShownHere, signalIndex, pickOwner, runsListener, withChat, FOLLOW_UP_CONTEXT, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, PERSON_CONTEXT, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
+import { AFTER_CALL_PAGE, DESKS_REGISTRY, DESKS_WAKE, deskVerdict, afterCallAsk, inThisCallAsk, inThisCallDue, inThisCallKnobs, inThisCallTiming, bandState, fromPerson, heardLine, panelShownHere, signalIndex, pickOwner, runsListener, withChat, FOLLOW_UP_CONTEXT, MEETING_CONTEXT_LINK, MEETING_CONTEXT_WORDS, PERSON_CONTEXT, leadingJson, localBand, meetingContext, serverOfCall, uiMessage, vexaServerOf } from '../hooks/register'
 
 const text = (o: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(o) }] })
 
@@ -81,6 +81,59 @@ test('/vexa: the panel opens, the line starts with a listen key, the live call i
   expect(r.text).not.toContain('vxa_listen_K')
   const stop: any = await $.command.run({ command: 'vexa', args: 'stop' } as any)
   expect(stop.text).toBe('Vexa: stopped listening in this chat.')
+})
+
+test('/vexa on an account whose brain keeps desks: read before the line, this chat wakes the desks once', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  const calls: { tool: string; args: any }[] = []
+  const prompts: string[] = []
+  engine(on, { isConnected: true, server: 'plugin:vexa:vexa' }, calls, [], { HOME: '/home/u' }, ['panel_link', 'listen_token', 'get_meeting_transcript', 'list_meetings', 'whats_waiting', 'brain_object'], true, false, (e: any) => {
+    if (e.tool === 'listen_token') return text({ key: 'vxa_listen_K', api_url: 'https://claude-rc.dev.vexa.ai' })
+    if (e.tool === 'brain_object') return text({ object: { key: 'desks:registry', type: 'Document' }, links: {}, facts: [] })
+    return undefined
+  })
+  on('session.id', () => ({ value: 's-ceo' }))
+  // Once the line runs, the plugin reaches Vexa with the line's key over HTTP.
+  on('http.fetch', () => ({ value: { ok: true, status: 200, headers: {}, text: JSON.stringify({ jsonrpc: '2.0', id: 1, result: text({ url: 'https://claude-rc.dev.vexa.ai/panel' }) }) } }))
+  on('fs.write', () => ({ value: undefined }))
+  on('fs.list', () => ({ value: [] }))
+  on('process.spawn', async function* () { return { value: { code: 0, signal: null } } })
+  on('prompt.submit', (_: unknown, e: any) => { prompts.push(e.text); return { text: e.text } })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const r: any = await $.command.run({ command: 'vexa', args: '' } as any)
+  expect(calls.find(c => c.tool === 'brain_object')?.args).toEqual({ id_or_key: DESKS_REGISTRY })
+  expect(calls.findIndex(c => c.tool === 'brain_object')).toBeLessThan(calls.findIndex(c => c.tool === 'listen_token'))
+  expect(r.text).toMatch(/ · waking the desks$/)
+  expect(prompts).toEqual([])
+  const again: any = await $.command.run({ command: 'vexa', args: '' } as any)
+  expect(again.text).not.toContain('desks')
+  await clock.advance(10)
+  expect(prompts).toEqual([DESKS_WAKE])
+})
+
+test('/vexa where the brain has no desks, or this Vexa has no brain: nothing is woken and nothing is said about desks', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  const calls: { tool: string; args: any }[] = []
+  const prompts: string[] = []
+  engine(on, { isConnected: true, server: 'plugin:vexa:vexa' }, calls, [], { HOME: '/home/u' }, ['panel_link', 'listen_token', 'get_meeting_transcript', 'list_meetings', 'whats_waiting'], true, false, (e: any) => {
+    if (e.tool === 'listen_token') return text({ key: 'vxa_listen_K', api_url: 'https://claude-rc.dev.vexa.ai' })
+    return undefined
+  })
+  on('session.id', () => ({ value: 's-other' }))
+  on('fs.write', () => ({ value: undefined }))
+  on('fs.list', () => ({ value: [] }))
+  on('process.spawn', async function* () { return { value: { code: 0, signal: null } } })
+  on('prompt.submit', (_: unknown, e: any) => { prompts.push(e.text); return { text: e.text } })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const r: any = await $.command.run({ command: 'vexa', args: '' } as any)
+  expect(calls.find(c => c.tool === 'brain_object')).toBeUndefined()
+  expect(r.text).not.toContain('desks')
+  expect(prompts).toEqual([])
+  expect(deskVerdict(null, '{"refused": "not_found", "ref": "desks:registry"}')).toBe('')
+  expect(deskVerdict({ object: { key: 'desks:registry' } })).toBe('desks')
+  expect(deskVerdict(null, 'Vexa answered 502')).toBe('desks not read (Vexa answered 502)')
 })
 
 test("a connector's Vexa is used through Claude Code's connection, and told the plugin is here", async ($, on) => {
