@@ -9,8 +9,8 @@ Answers (JSON ``{"code", "detail", …}``):
 * 201 ``started`` — the bot's pod is starting; ``meeting`` is the claimed row, ``join_at`` when it
   opens the meeting.
 * 404 ``not_found`` — no such row, or not the subject's.
-* 409 ``not_scheduled`` — no longer ``scheduled``, ``auto_join`` off, stopped, no link or start time:
-  nothing to do, ever. ``past_deadline`` — start + ``BOOKED_GRACE_S`` passed. ``already_live`` — a
+* 409 ``not_scheduled`` — no longer ``scheduled``, ``auto_join`` off, stopped, deleted by its owner,
+  no link or start time: nothing to do, ever. ``past_deadline`` — start + ``BOOKED_GRACE_S`` passed. ``already_live`` — a
   bot already owns the room (``holder``). ``too_early`` — before the pod may start (``Retry-After``).
 * 429 ``max_bots`` / ``backoff`` — the account's ceiling is full, or this occurrence is inside a hold
   a prior attempt earned; ``Retry-After`` says when to call again.

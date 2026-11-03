@@ -53,6 +53,9 @@ class InMemoryMeetingRepo:
         self._next_id = 1
         self.sessions: list[dict] = []  # exposed for assertions (all sessions, all meetings)
         self.reopened: list[int] = []   # meeting ids continue_meeting reused
+        # meeting id -> owner of each SCHEDULED planned row deleted (the SQL repo reads this from
+        # the row's last `meeting.planned.changed` fact, which outlives the row)
+        self._deleted_planned: dict[int, int] = {}
 
     async def find_active(self, user_id, platform, native_meeting_id) -> Optional[dict]:
         for m in self._meetings.values():
@@ -270,6 +273,20 @@ class InMemoryMeetingRepo:
                 m["data"].pop(k, None)
             else:
                 m["data"][k] = v
+
+    def delete_planned(self, meeting_id) -> bool:
+        """Delete a planned row as ``DELETE /meetings`` does (intent statuses only); a SCHEDULED
+        one leaves its owner on record, like the SQL repo's ``deleted`` fact."""
+        row = self._meetings.get(meeting_id)
+        if row is None or row.get("status") not in ("idle", "scheduled"):
+            return False
+        if row.get("status") == "scheduled":
+            self._deleted_planned[meeting_id] = row["user_id"]
+        del self._meetings[meeting_id]
+        return True
+
+    async def planned_row_deleted(self, meeting_id, user_id) -> bool:
+        return self._deleted_planned.get(meeting_id) == user_id
 
     async def get_meeting(self, meeting_id) -> Optional[dict]:
         row = self._meetings.get(meeting_id)
