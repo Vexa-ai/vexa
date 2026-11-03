@@ -387,14 +387,18 @@ async def start_planned_meeting(
     """The start route's work: start the bot for planned row ``meeting_id`` of person ``user_id``.
 
     Refuses ``not_found`` (no such row, or not this person's — never says which), ``not_scheduled``
-    (no longer ``scheduled``, ``auto_join`` off, stopped: re-checked under the row lock by the
-    repo, so a cancel that lands first always wins), ``past_deadline`` (start + ``BOOKED_GRACE_S``
+    (no longer ``scheduled``, ``auto_join`` off, stopped, or DELETED by its owner — ADR-0052 §5/§6:
+    a cancel is "nothing to do" however it was made; re-checked under the row lock by the repo, so
+    a cancel that lands first always wins), ``past_deadline`` (start + ``BOOKED_GRACE_S``
     has passed), ``backoff`` (inside the hold a prior attempt on this occurrence earned —
     ``auto_join_last_attempt`` / ``auto_join_next_retry``; ``Retry-After`` says when). Then the
     shared safeguards and the spawn (``start_row``) with ``join_at`` = start − ``BOOKED_JOIN_LEAD_S``.
     """
     now = now or datetime.now(timezone.utc)
     row = await repo.get_meeting(meeting_id)
+    if row is None and await repo.planned_row_deleted(meeting_id, user_id):
+        # A hard DELETE of the booking is a cancel too (ADR-0052 §5/§6): "nothing to do", not 404.
+        return Outcome("not_scheduled", "not_scheduled", 409, f"meeting {meeting_id} was deleted")
     if not isinstance(row, dict) or row.get("user_id") != user_id:
         return Outcome("not_found", "not_found", 404, "no such planned meeting")
     if not row.get("native_meeting_id") and row.get("platform_specific_id"):

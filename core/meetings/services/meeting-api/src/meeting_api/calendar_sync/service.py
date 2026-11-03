@@ -619,7 +619,9 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
                 updates["attendees"] = ev.get("attendees") or []
             if not updates:
                 continue
-            updated = await store.update_planned_meeting(user_id, row["id"], updates)
+            # Over the account's booking cap the change is still mirrored, with no bot (ADR-0052 §8).
+            updated = await store.update_planned_meeting(user_id, row["id"], updates,
+                                                         over_cap="stamp")
             if isinstance(updated, dict) and not updated.get("error"):
                 _remember(rows, updated)
                 out["updated"].append({"id": updated["id"], "native": updated.get("native_meeting_id"),
@@ -653,7 +655,7 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
                 adopted = await store.update_planned_meeting(user_id, manual["id"], {
                     **source_patch,
                     "scheduled_at": ev["scheduled_at"],
-                })
+                }, over_cap="stamp")
                 if isinstance(adopted, dict) and not adopted.get("error"):
                     by_uid_row = dict(adopted)
                     by_native[(ev["platform"], ev["native_meeting_id"])] = by_uid_row
@@ -757,7 +759,7 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
                 if not remaining and not managed:
                     patch.pop("auto_join", None)
                 updated = await store.update_planned_meeting(
-                    user_id, row["id"], patch,
+                    user_id, row["id"], patch, over_cap="stamp",
                 )
                 if isinstance(updated, dict) and not updated.get("error"):
                     _remember(rows, updated)

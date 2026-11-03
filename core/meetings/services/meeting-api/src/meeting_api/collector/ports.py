@@ -349,7 +349,7 @@ class TranscriptStore(Protocol):
         ...
 
     async def update_planned_meeting(
-        self, user_id: int, meeting_id: int, updates: dict
+        self, user_id: int, meeting_id: int, updates: dict, over_cap: str = "refuse"
     ) -> Optional[dict]:
         """OWNER-scoped, ROW-id-addressed edit of a PLANNED meeting. Refused unless the row's
         status is an intent status (``idle``/``scheduled``) — the bot FSM is never fought.

@@ -150,6 +150,19 @@ async def test_cancel_during_fire_answers_not_scheduled_and_no_bot():
     assert "auto_join_last_attempt" not in repo._meetings[mid]["data"], "no pod: no hold earned"
 
 
+async def test_a_deleted_booking_answers_not_scheduled_and_no_bot():
+    """ADR-0052 §5/§6: a cancel by DELETE is "nothing to do" (409), like every other cancel."""
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    mid = _seed(repo)
+    assert repo.delete_planned(mid)
+    out = await _start(repo, runtime, mid)
+    assert (out.code, out.http) == ("not_scheduled", 409) and runtime.specs == []
+    other = await _start(repo, runtime, mid, user_id=USER + 1)
+    assert (other.code, other.http) == ("not_found", 404), "never tells one person of another's row"
+    never = await _start(repo, runtime, 999)
+    assert (never.code, never.http) == ("not_found", 404)
+
+
 async def test_another_persons_row_is_not_found():
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     _seed(repo, user_id=99)

@@ -303,3 +303,64 @@ async def test_the_start_route_end_to_end_on_postgres(sf, monkeypatch):
     assert (await _facts(sf))[-1][1]["auto_join"] is False
     again = await start_planned_meeting(row["id"], **kw)
     assert (again.code, again.http) == ("not_scheduled", 409) and len(runtime.specs) == 1
+
+
+async def test_a_deleted_booking_answers_not_scheduled_on_postgres(sf):
+    """A booking deleted with ``DELETE /meetings`` (the store's ``delete_planned_meeting``) before
+    Flows fires: the start route answers 409 ``not_scheduled`` — done, no bot — not 404."""
+    from meeting_api.bot_spawn.adapters import SqlAlchemyMeetingRepo
+    from meeting_api.bot_spawn.fakes import FakeRuntimeClient
+    from meeting_api.bot_spawn.planned_start import start_planned_meeting
+    from meeting_api.collector.adapters import SqlAlchemyTranscriptStore
+
+    row = await _book(sf, at=_at(10))
+    assert await SqlAlchemyTranscriptStore(sf).delete_planned_meeting(USER, row["id"]) is True
+    repo, runtime = SqlAlchemyMeetingRepo(sf), FakeRuntimeClient()
+
+    async def ctx(_uid):
+        return {"max_concurrent": 2}
+
+    kw = dict(repo=repo, runtime=runtime, fetch_bot_context=ctx, transcribe_gate=lambda: None,
+              token_secret="s", redis_url="redis://r")
+    out = await start_planned_meeting(row["id"], user_id=USER, **kw)
+    assert (out.code, out.http) == ("not_scheduled", 409) and runtime.specs == []
+    foreign = await start_planned_meeting(row["id"], user_id=USER + 1, **kw)
+    assert (foreign.code, foreign.http) == ("not_found", 404)
+    never = await start_planned_meeting(row["id"] + 1000, user_id=USER, **kw)
+    assert (never.code, never.http) == ("not_found", 404)
+
+
+async def test_the_booking_cap_holds_on_every_writer_on_postgres(sf, monkeypatch):
+    """Review of #1998 @ 5898f34a: an idle plan PATCHed to a time, a plan scheduled through the
+    intent route, and a calendar update re-arming a row all count against the cap; nothing is
+    written on a refusal; a row that already counts still moves."""
+    from meeting_api.collector.adapters import SqlAlchemyTranscriptStore
+
+    monkeypatch.setenv("BOOKED_MAX_PER_ACCOUNT", "1")
+    store = SqlAlchemyTranscriptStore(sf)
+    first = await _book(sf, native="aaa-aaaa-aaa", minutes=30)
+    assert "error" not in first
+    idle = await store.create_planned_meeting(USER, platform=PLAT, native_meeting_id="idl-iiii-iii")
+    assert idle["status"] == "idle"
+    facts_before = len(await _facts(sf))
+    assert await store.update_planned_meeting(USER, idle["id"], {
+        "scheduled_at": _at(60).isoformat(), "title": "x"}) == {"error": "booking_cap", "cap": 1}
+    assert await store.set_intent(USER, PLAT, "idl-iiii-iii", "scheduled",
+                                  scheduled_at=_at(60).isoformat()) == {"error": "booking_cap",
+                                                                         "cap": 1}
+    assert await store.update_planned_meeting(USER, idle["id"], {
+        "scheduled_at": "not-a-time"}) == {"error": "invalid_scheduled_at"}
+    assert len(await _facts(sf)) == facts_before, "a refused write leaves no fact"
+    stamped = await store.update_planned_meeting(USER, idle["id"], {
+        "scheduled_at": _at(60).isoformat(), "auto_join": True}, over_cap="stamp")
+    assert stamped["status"] == "scheduled" and stamped["data"]["auto_join"] is False
+    assert stamped["data"]["auto_join_error"].startswith("booking cap reached")
+    assert (await _facts(sf))[-1][1]["auto_join"] is False, "no alarm for a capped row"
+    moved = await store.update_planned_meeting(USER, first["id"], {
+        "scheduled_at": _at(90).isoformat()})
+    assert "error" not in moved and moved["data"]["auto_join"] is True
+    assert await store.delete_planned_meeting(USER, first["id"]) is True
+    rearmed = await store.update_planned_meeting(USER, idle["id"], {"auto_join": True},
+                                                 over_cap="stamp")
+    assert rearmed["data"]["auto_join"] is True and "auto_join_error" not in rearmed["data"]
+    assert (await _facts(sf))[-1][1]["auto_join"] is True

@@ -244,6 +244,18 @@ class SqlAlchemyMeetingRepo:
             ).scalars().first()
             return _row_to_dict(m) if m else None
 
+    async def planned_row_deleted(self, meeting_id, user_id) -> bool:
+        from sqlalchemy import select
+
+        from ..sessions.models import MeetingPlannedOutbox as O
+
+        async with self._session_factory() as db:
+            event = (await db.execute(
+                select(O.event).where(O.meeting_id == meeting_id).order_by(O.id.desc()).limit(1)
+            )).scalar()
+        return (isinstance(event, dict) and event.get("status") == "deleted"
+                and event.get("uid") == str(user_id))
+
     async def reopen_meeting(self, *, meeting_id, data_patch=None) -> dict:
         from sqlalchemy import select
         from sqlalchemy.orm.attributes import flag_modified

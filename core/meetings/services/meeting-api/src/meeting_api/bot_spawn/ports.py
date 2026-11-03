@@ -182,6 +182,15 @@ class MeetingRepo(Protocol):
         changed under them."""
         ...
 
+    async def planned_row_deleted(self, meeting_id: int, user_id: int) -> bool:
+        """Was ``meeting_id`` a scheduled planned row of ``user_id`` that has since been DELETED
+        (``DELETE /meetings``, calendar sync)? The start route's answer to a row that no longer
+        exists (ADR-0052 §5/§6): a cancel that landed first is 409 ``not_scheduled``, the same as
+        every other cancel; any other missing or foreign id stays 404. Read from the row's last
+        ``meeting.planned.changed`` fact (``planned_outbox``), which outlives the row and names its
+        owner — so it never tells one person about another person's rows."""
+        ...
+
     async def count_active_bots(self, *, user_id: int, exclude_meeting_id: Optional[int] = None) -> int:
         """Count the user's ACTIVE (non-terminal) bots for the max-bots quota (P3e).
 

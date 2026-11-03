@@ -101,6 +101,154 @@ def test_post_meetings_with_a_non_iso_time_is_422():
     assert r.status_code == 422
 
 
+# ── every writer that can make a row a booking is capped, not only the creation path ────────────
+# (review of #1998 @ 5898f34a: idle plans ×N, then PATCH scheduled_at, armed >500 rows uncapped)
+
+async def _full(store):
+    for n in range(3):
+        assert "error" not in await _book(store, n)
+
+
+async def test_patch_giving_an_idle_plan_a_time_is_capped_and_writes_nothing():
+    store = InMemoryTranscriptStore()
+    await _full(store)
+    idle = await store.create_planned_meeting(USER, platform="google_meet",
+                                              native_meeting_id="idl-aaaa-aaa")
+    assert idle["status"] == "idle"
+    out = await store.update_planned_meeting(USER, idle["id"], {"scheduled_at": _future(120),
+                                                                "title": "x"})
+    assert out == {"error": "booking_cap", "cap": 3}
+    row = next(m for m in await store.list_meetings(USER) if m["id"] == idle["id"])
+    assert row["status"] == "idle" and "scheduled_at" not in row["data"] and "title" not in row["data"]
+
+
+async def test_patch_turning_auto_join_back_on_is_capped():
+    store = InMemoryTranscriptStore()
+    off = await _book(store, 9, auto_join=False)
+    await _full(store)
+    assert await store.update_planned_meeting(USER, off["id"], {"auto_join": True}) == {
+        "error": "booking_cap", "cap": 3}
+
+
+async def test_patch_moving_a_past_plan_ahead_is_capped():
+    store = InMemoryTranscriptStore()
+    past = await _book(store, 9, scheduled_at=_future(-30))
+    await _full(store)
+    assert (await store.update_planned_meeting(
+        USER, past["id"], {"scheduled_at": _future(200)}))["error"] == "booking_cap"
+
+
+async def test_a_booking_that_already_counts_moves_and_edits_at_the_cap():
+    store = InMemoryTranscriptStore()
+    await _full(store)
+    row = (await store.list_meetings(USER))[0]
+    out = await store.update_planned_meeting(USER, row["id"], {"scheduled_at": _future(300),
+                                                               "auto_join": True, "title": "t"})
+    assert "error" not in out and out["data"]["auto_join"] is True
+
+
+async def test_a_non_iso_time_is_refused_on_patch():
+    store = InMemoryTranscriptStore()
+    row = await _book(store, 0)
+    assert await store.update_planned_meeting(USER, row["id"], {"scheduled_at": "not-a-time"}) == {
+        "error": "invalid_scheduled_at"}
+    assert (await store.list_meetings(USER))[0]["data"]["scheduled_at"] != "not-a-time"
+
+
+async def test_set_intent_scheduling_a_plan_is_capped():
+    store = InMemoryTranscriptStore()
+    await _full(store)
+    await store.create_planned_meeting(USER, platform="google_meet", native_meeting_id="idl-bbbb-bbb")
+    out = await store.set_intent(USER, "google_meet", "idl-bbbb-bbb", "scheduled",
+                                 scheduled_at=_future(120))
+    assert out == {"error": "booking_cap", "cap": 3}
+    assert await store.set_intent(USER, "google_meet", "idl-bbbb-bbb", "scheduled",
+                                  scheduled_at="soon") == {"error": "invalid_scheduled_at"}
+    row = next(m for m in await store.list_meetings(USER) if m["native_meeting_id"] == "idl-bbbb-bbb")
+    assert row["status"] == "idle"
+
+
+async def test_calendar_sync_update_over_the_cap_mirrors_with_no_bot_then_rearms_under_it():
+    store = InMemoryTranscriptStore()
+    off = await _book(store, 9, auto_join=False)
+    await _full(store)
+    out = await store.update_planned_meeting(USER, off["id"], {"auto_join": True,
+                                                               "scheduled_at": _future(400)},
+                                             over_cap="stamp")
+    assert out["data"]["auto_join"] is False
+    assert out["data"]["auto_join_error"].startswith("booking cap reached")
+    assert out["data"]["scheduled_at"], "the calendar's change is still mirrored"
+    assert await store.delete_planned_meeting(USER, next(
+        m["id"] for m in await store.list_meetings(USER)
+        if m["id"] != off["id"] and m["data"].get("auto_join"))) is True
+    again = await store.update_planned_meeting(USER, off["id"], {"auto_join": True},
+                                               over_cap="stamp")
+    assert again["data"]["auto_join"] is True and "auto_join_error" not in again["data"]
+
+
+async def test_calendar_sync_cannot_rearm_a_row_over_the_cap():
+    """The review's recipe: a calendar row created over the cap (no bot) is re-derived
+    ``auto_join=True`` by ``_source_updates`` when its source changes; it must stay without a bot."""
+    from meeting_api.calendar_sync import parse_ics, sync_user
+
+    now = datetime.now(timezone.utc)
+    start = (now + timedelta(hours=3)).strftime("%Y%m%dT%H%M%SZ")
+    feed = ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//t//EN\r\nBEGIN:VEVENT\r\nUID:cap-1\r\n"
+            f"DTSTAMP:20261101T000000Z\r\nDTSTART:{start}\r\nSUMMARY:Sync\r\n"
+            "LOCATION:https://meet.google.com/cal-capp-one\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+    store = InMemoryTranscriptStore()
+    await _full(store)
+    await sync_user(store, USER, parse_ics(feed, now=now), calendar_id="work",
+                    calendar_name="Work", bot_name="Bot A")
+    row = next(m for m in await store.list_meetings(USER)
+               if m["native_meeting_id"] == "cal-capp-one")
+    assert row["data"]["auto_join"] is False and row["data"]["auto_join_error"]
+    # the source entry changes (another bot name) → sync re-derives auto_join from the calendars
+    await sync_user(store, USER, parse_ics(feed, now=now), calendar_id="work",
+                    calendar_name="Work", bot_name="Bot B")
+    row = next(m for m in await store.list_meetings(USER)
+               if m["native_meeting_id"] == "cal-capp-one")
+    assert row["data"]["auto_join"] is False, "calendar sync re-armed a row over the cap"
+    assert row["data"]["auto_join_error"].startswith("booking cap reached")
+
+
+def test_patch_over_the_cap_is_429_with_the_cap_and_non_iso_is_422():
+    store = InMemoryTranscriptStore()
+    c = _client(store)
+    for n in range(3):
+        assert c.post("/meetings", headers={"X-User-Id": "7"},
+                      json={"meeting_url": f"https://meet.google.com/abc-defg-hi{chr(97 + n)}",
+                            "scheduled_at": _future(60 + n)}).status_code == 201
+    idle = c.post("/meetings", headers={"X-User-Id": "7"},
+                  json={"meeting_url": "https://meet.google.com/abc-defg-hiz"})
+    assert idle.status_code == 201 and idle.json()["status"] == "idle"
+    mid = idle.json()["id"]
+    r = c.patch(f"/meetings/{mid}", headers={"X-User-Id": "7"}, json={"scheduled_at": _future(90)})
+    assert r.status_code == 429 and r.json()["cap"] == 3, r.text
+    r = c.patch("/meetings/google_meet/abc-defg-hiz", headers={"X-User-Id": "7"},
+                json={"scheduled_at": _future(90)})
+    assert r.status_code == 429 and r.json()["cap"] == 3, r.text
+    r = c.patch(f"/meetings/{mid}", headers={"X-User-Id": "7"}, json={"scheduled_at": "not-a-time"})
+    assert r.status_code == 422
+
+
+def test_put_intent_over_the_cap_is_429_and_non_iso_is_422():
+    store = InMemoryTranscriptStore()
+    c = _client(store)
+    for n in range(3):
+        assert c.post("/meetings", headers={"X-User-Id": "7"},
+                      json={"meeting_url": f"https://meet.google.com/abc-defg-hi{chr(97 + n)}",
+                            "scheduled_at": _future(60 + n)}).status_code == 201
+    assert c.post("/meetings", headers={"X-User-Id": "7"},
+                  json={"meeting_url": "https://meet.google.com/abc-defg-hiz"}).status_code == 201
+    r = c.put("/meetings/google_meet/abc-defg-hiz/intent", headers={"X-User-Id": "7"},
+              json={"intent": "scheduled", "at": _future(90)})
+    assert r.status_code == 429 and r.json()["cap"] == 3, r.text
+    r = c.put("/meetings/google_meet/abc-defg-hiz/intent", headers={"X-User-Id": "7"},
+              json={"intent": "scheduled", "at": "tomorrow"})
+    assert r.status_code == 422
+
+
 # ── the ceiling counts every pod that holds a slot ──────────────────────────────────────────────
 
 @pytest.mark.parametrize("status,counted", [
