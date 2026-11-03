@@ -68,6 +68,25 @@ async def test_calendar_sync_over_the_cap_mirrors_the_event_with_no_bot():
     assert row["data"]["auto_join_error"].startswith("booking cap reached")
 
 
+# One cap for the whole deployment (founder, 3 Nov 2026): BOOKED_MAX_PER_ACCOUNT, 500 when unset,
+# set through compose, Helm (meetingApi.bookedMaxPerAccount) or Lite.
+async def test_unset_the_cap_is_500(monkeypatch):
+    monkeypatch.delenv("BOOKED_MAX_PER_ACCOUNT")
+    store = InMemoryTranscriptStore()
+    for n in range(500):
+        assert "error" not in await _book(store, n)
+    assert await _book(store, 500) == {"error": "booking_cap", "cap": 500}
+
+
+@pytest.mark.parametrize("cap", [600, 10], ids=["raised", "lowered"])
+async def test_the_deployment_setting_raises_and_lowers_the_cap(monkeypatch, cap):
+    monkeypatch.setenv("BOOKED_MAX_PER_ACCOUNT", str(cap))
+    store = InMemoryTranscriptStore()
+    for n in range(cap):                         # 600: the 501st and on are booked
+        assert "error" not in await _book(store, n)
+    assert await _book(store, cap) == {"error": "booking_cap", "cap": cap}
+
+
 @pytest.mark.parametrize("bad", ["tomorrow", "2026-13-01T10:00:00Z", "10:00"])
 async def test_a_non_iso_time_is_refused(bad):
     store = InMemoryTranscriptStore()
@@ -92,6 +111,21 @@ def test_post_meetings_over_the_cap_is_429_with_the_cap():
                json={"meeting_url": "https://meet.google.com/abc-defg-hiz",
                      "scheduled_at": _future(90)})
     assert r.status_code == 429 and r.json()["cap"] == 3
+
+
+def test_the_429_reports_the_deployment_s_cap(monkeypatch):
+    monkeypatch.setenv("BOOKED_MAX_PER_ACCOUNT", "10")
+    c = _client(InMemoryTranscriptStore())
+    for n in range(10):
+        r = c.post("/meetings", headers={"X-User-Id": "7"},
+                   json={"meeting_url": f"https://meet.google.com/abc-defg-hi{chr(97 + n)}",
+                         "scheduled_at": _future(60 + n)})
+        assert r.status_code == 201, r.text
+    r = c.post("/meetings", headers={"X-User-Id": "7"},
+               json={"meeting_url": "https://meet.google.com/abc-defg-hiz",
+                     "scheduled_at": _future(90)})
+    assert r.status_code == 429 and r.json()["cap"] == 10
+    assert "already has 10 future meetings" in r.json()["detail"]
 
 
 def test_post_meetings_with_a_non_iso_time_is_422():

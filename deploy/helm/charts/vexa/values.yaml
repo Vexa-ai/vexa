@@ -670,6 +670,10 @@ meetingApi:
   systemWebhookUrl: ""
   systemWebhookAllowPrivateHttp: "false"
   systemWebhookTimeoutSeconds: "10"
+  # The booking cap (BOOKED_MAX_PER_ACCOUNT, ADR-0052 §8): how many future meetings one account may
+  # book with a bot, one value for the whole deployment. Over it POST /meetings answers 429 with the
+  # cap; calendar sync mirrors the event with no bot and the reason on the meeting.
+  bookedMaxPerAccount: "500"
   # Voice notes (docs: /minutes/voice-notes). The longest note, in seconds of audio
   # (VOICE_NOTE_MAX_DURATION_SEC), and how long a note's bot waits with neither audio nor Stop
   # before it ends the note (VOICE_NOTE_IDLE_TIMEOUT_SEC).

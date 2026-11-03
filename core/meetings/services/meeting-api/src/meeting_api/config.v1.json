@@ -666,8 +666,12 @@
    "key": "BOOKED_MAX_PER_ACCOUNT",
    "class": "defaulted",
    "default": "500",
-   "description": "booking cap (ADR-0052 \u00a78, founder 1 Nov 2026): an account's future scheduled meetings with auto_join on, counted where every planned row is created. Over it POST /meetings answers 429 with the cap; calendar sync still mirrors the event with no bot and auto_join_error stamped",
-   "targets": []
+   "description": "booking cap (ADR-0052 \u00a78, founder 1 Nov 2026): an account's future scheduled meetings with auto_join on, counted where every planned row is created. Over it POST /meetings answers 429 with the cap; calendar sync still mirrors the event with no bot and auto_join_error stamped. One value for the whole deployment (founder 3 Nov 2026), Helm meetingApi.bookedMaxPerAccount",
+   "targets": [
+    "compose",
+    "helm",
+    "lite"
+   ]
   },
   {
    "key": "MEETING_UNTRACKED_GRACE_SEC",
