@@ -143,6 +143,10 @@ Under the per-user advisory lock and a row lock it:
   `POST /meetings` and moves it with `PATCH` when the invite is rescheduled, so invites run through
   the same clock. It is registered in code like `booked_bot`, no longer a seed; a one-off migration
   in the same release removes the stored seed copy (logged when the stored copy had been edited).
+  One deferral (CEO, 3 Nov 2026, decision 7ba3d0b2ec84): while the seed copy is the only runnable
+  `invite_join` (every company version retired), the migration keeps it and refuses by name
+  (`former_seed_unrunnable`) until a company version is active again, so a rollback is never left
+  without one; the copy is removed on the first start after that.
 - The planned row's id, returned by `POST /meetings`, is kept in Flows against the invite's calendar
   UID: a reschedule `PATCH`es that row and a cancel `DELETE`s it. The invitees `post_meeting` needs
   are read from Flows' own invite record by meeting id. No public contract changes (decided item 5).
