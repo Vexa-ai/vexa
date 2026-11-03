@@ -75,8 +75,9 @@ For every planned row with `auto_join` on, API-booked and calendar-imported alik
 ### 3. One clock: Flows required in every profile (founder ruling 1)
 
 - meeting-api's `_auto_join_loop` and `auto_join_tick` are removed. `AUTO_JOIN_SWEEP_INTERVAL_S`,
-  `AUTO_JOIN_LEAD_S`, `AUTO_JOIN_GRACE_S`, `AUTO_JOIN_RETRY_BACKOFF_S`, `AUTO_JOIN_ALLOW_UNCAPPED`
-  go into `meeting_api/removed_config.py` with their replacements named.
+  `AUTO_JOIN_LEAD_S` and `AUTO_JOIN_GRACE_S` go into `meeting_api/removed_config.py` with their
+  replacements named. `AUTO_JOIN_RETRY_BACKOFF_S` and `AUTO_JOIN_ALLOW_UNCAPPED` keep their names:
+  the start route still reads them (founder, 3 Nov 2026, decided item 4).
 - Flows becomes part of every profile: added to lite as supervisord programs, `flows.enabled: true`
   by default in Helm, added to the bank profile. compose already runs it.
 - `meeting_api/events.py`'s statement that a deployment without a flows domain runs meetings the same
@@ -276,6 +277,9 @@ Order:
 3. **Notice before release.** Asked whether the release ships only after the lobby-billing notice
    has gone to customers: «NO». The release does not wait for the notice; it is not a release
    prerequisite.
+4. **Two auto-join keys stay** (3 Nov 2026). Asked whether `AUTO_JOIN_RETRY_BACKOFF_S` and
+   `AUTO_JOIN_ALLOW_UNCAPPED` are renamed, removed or kept: «оставить ("a")». Both keep their names;
+   §3 removes only the three sweep keys.
 
 ## Open questions
 
