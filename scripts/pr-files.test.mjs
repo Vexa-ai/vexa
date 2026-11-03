@@ -121,6 +121,9 @@ test("a copy's source is not listed as removed (only a rename moves a file)", ()
   assert.deepEqual(prFiles(pr(1), { repo: "o/r", api, git: gitOf([]) }).map((f) => f.filename), ["docs/b.md"]);
 });
 
+// A sentinel, built at run time so no credential-shaped literal sits in the source.
+const TOKEN = Buffer.from("sentinel").toString("base64");
+
 // A stand-in for git that records every call, for what reaches argv and the environment.
 function recordingGit(headerOut) {
   const calls = [];
@@ -135,22 +138,32 @@ function recordingGit(headerOut) {
 }
 
 test("the checkout token reaches the fetch through the environment, never argv", () => {
-  const SECRET = "AUTHORIZATION: basic c2VudGluZWw=";
+  const SECRET = `AUTHORIZATION: basic ${TOKEN}`;
   const { run, calls } = recordingGit(`http.https://github.com/.extraheader\n${SECRET}\0`);
   assert.deepEqual(gitDiffFiles(BASE, HEAD, { cwd: "/repo", run }), [{ filename: "core/x.py", status: "modified" }]);
-  assert.equal(calls.some((c) => c.args.some((a) => String(a).includes("c2VudGluZWw"))), false, "the token is on no command line");
+  assert.equal(calls.some((c) => c.args.some((a) => String(a).includes(TOKEN))), false, "the token is on no command line");
   const fetch = calls.find((c) => c.args.includes("fetch"));
-  assert.equal(fetch.env.GIT_CONFIG_COUNT, "1");
-  assert.equal(fetch.env.GIT_CONFIG_KEY_0, "http.https://github.com/.extraheader");
-  assert.equal(fetch.env.GIT_CONFIG_VALUE_0, SECRET);
+  assert.equal(fetch.env.GIT_CONFIG_COUNT, "2");
+  assert.equal(fetch.env.GIT_CONFIG_KEY_1, "http.https://github.com/.extraheader");
+  assert.equal(fetch.env.GIT_CONFIG_VALUE_1, SECRET);
+});
+
+test("a credential in the remote URL stays off every command line", () => {
+  const { run, calls } = recordingGit("");
+  const withCred = (cmd, args, o) => (args[0] === "remote" && args[1] === "get-url" ? `https://x-access-token:${TOKEN}@github.com/o/r.git\n` : run(cmd, args, o));
+  gitDiffFiles(BASE, HEAD, { cwd: "/repo", run: withCred });
+  assert.equal(calls.some((c) => c.args.some((a) => String(a).includes(TOKEN))), false);
+  const fetch = calls.find((c) => c.args.includes("fetch"));
+  assert.equal(fetch.env.GIT_CONFIG_KEY_0, "remote.origin.url");
+  assert.ok(fetch.env.GIT_CONFIG_VALUE_0.endsWith(`${TOKEN}@github.com/o/r.git`));
 });
 
 test("a header value spanning lines stays one value; nothing else is set from it", () => {
   const { run, calls } = recordingGit("http.https://github.com/.extraheader\nX-A: 1\ncore.sshCommand evil\0");
   gitDiffFiles(BASE, HEAD, { cwd: "/repo", run });
   const env = calls.find((c) => c.args.includes("fetch")).env;
-  assert.equal(env.GIT_CONFIG_COUNT, "1");
-  assert.equal(env.GIT_CONFIG_VALUE_0, "X-A: 1\ncore.sshCommand evil");
+  assert.equal(env.GIT_CONFIG_COUNT, "2");
+  assert.equal(env.GIT_CONFIG_VALUE_1, "X-A: 1\ncore.sshCommand evil");
   assert.equal(calls.some((c) => c.args.includes("core.sshCommand")), false);
 });
 
