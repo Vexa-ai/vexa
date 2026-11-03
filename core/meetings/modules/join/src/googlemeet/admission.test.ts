@@ -70,7 +70,7 @@ const GRACE_MS: number = (admission as any).CAPTCHA_SOLVE_GRACE_MS ?? 120_000;
 type CaptchaMode = false | 'invisible' | 'live';
 const RECAPTCHA_IFRAME = 'iframe[src*="recaptcha"]';
 
-function mockPage(visible: string[], captcha: CaptchaMode = false, participantLabels: string[] = []): any {
+function mockPage(visible: string[], captcha: CaptchaMode = false, participantLabels: string[] = [], url = 'https://meet.google.com/abc-defg-hij'): any {
   const captchaIframes: { visible: boolean; box: { x: number; y: number; width: number; height: number } | null }[] =
     captcha === 'live' ? [{ visible: true, box: { x: 300, y: 120, width: 400, height: 580 } }]
       : captcha === 'invisible' ? [{ visible: false, box: null }]
@@ -97,7 +97,7 @@ function mockPage(visible: string[], captcha: CaptchaMode = false, participantLa
         evaluateAll: async () => participantLabels,
       },
     mouse: { move: async () => {} },
-    url: () => 'https://meet.google.com/abc-defg-hij',
+    url: () => url,
     screenshot: async () => {},
     waitForTimeout: async (_ms: number) => {},
     frames: () => (captcha
@@ -134,21 +134,60 @@ async function outcomeOf(run: Promise<unknown>, watchdogMs = 10_000): Promise<st
 (async () => {
   console.log('\n=== Google Meet rejection detector — #471 fix + remaining #444 conflation ===');
 
-  // 1. #471 FIXED — the waiting screen's "Return to home screen" button alone is
-  //    NOT a denial anymore. Before the fix this false-rejected in ~4s.
+  // 1. #471 — the waiting screen ("Asking to be let in" + "Return to home screen")
+  //    is NOT a denial, and still reads as a waiting room.
+  const WAITING_SCREEN = ['text=Asking to be let in', 'button:has-text("Return to home screen")'];
   await check(
-    '#471 waiting screen ("Return to home screen", no denial text) → NOT a denial (fixed)',
-    await checkForGoogleRejection(mockPage(['button:has-text("Return to home screen")'])),
+    '#471 waiting screen (lobby copy + "Return to home screen") → NOT a denial',
+    await checkForGoogleRejection(mockPage(WAITING_SCREEN)),
     false,
   );
-
-  // 1b. #471 — the button now counts as a WAITING indicator, so the polling loop
-  //     keeps treating the screen as a lobby instead of an unknown state.
   await check(
-    '#471 "Return to home screen" → recognized as waiting-room indicator',
-    await checkForWaitingRoomIndicators(mockPage(['button:has-text("Return to home screen")'])),
+    '#471 waiting screen → recognized as waiting room',
+    await checkForWaitingRoomIndicators(mockPage(WAITING_SCREEN)),
     true,
   );
+
+  // 1b. Meet ended the knock itself (EndCause 72): "Return to home screen" with no
+  //     lobby copy. Must be terminal, not a waiting room (bot sat 15 min as
+  //     "awaiting admission" on this screen).
+  const KNOCK_ENDED = ['button:has-text("Return to home screen")'];
+  await check(
+    'knock ended ("Return to home screen", no lobby copy) → NOT a waiting room',
+    await checkForWaitingRoomIndicators(mockPage(KNOCK_ENDED)),
+    false,
+  );
+  await check(
+    'knock ended ("Return to home screen", no lobby copy) → rejection',
+    await checkForGoogleRejection(mockPage(KNOCK_ENDED)),
+    true,
+  );
+
+  // 1c. Meet redirected the bot off the meeting (workspace.google.com marketing page).
+  await check(
+    'page left meet.google.com before admission → rejection',
+    await checkForGoogleRejection(mockPage([], false, [], 'https://workspace.google.com/products/meet/?hl=en')),
+    true,
+  );
+  await check(
+    'NEG-CTRL: chrome-error page (network drop) → NOT a rejection',
+    await checkForGoogleRejection(mockPage([], false, [], 'chrome-error://chromewebdata/')),
+    false,
+  );
+  await check(
+    'NEG-CTRL: about:blank → NOT a rejection',
+    await checkForGoogleRejection(mockPage([], false, [], 'about:blank')),
+    false,
+  );
+  {
+    const got = await outcomeOf(waitForGoogleMeetingAdmission(mockPage(KNOCK_ENDED), 20_000, {} as any));
+    await check(
+      "shipped waitForGoogleMeetingAdmission(knock ended) → AdmissionError('denial')",
+      got === 'AdmissionError:denial',
+      true,
+      got,
+    );
+  }
 
   // 2. REMAINING #444 CONFLATION — a Google ERROR/BLOCK page's "Try again"
   //    affordance (no host-denial text, no live challenge) is still classified as

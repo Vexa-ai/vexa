@@ -44,13 +44,13 @@ export const googleWaitingRoomIndicators: string[] = [
   '[aria-label*="waiting room"]',
   '[aria-label*="Asking to be let in"]',
   '[aria-label*="waiting for admission"]',
+];
 
-  // FIX (Vexa-ai/vexa#471, @priitvimberg): the "Asking to be let in" waiting
-  // screen shows a "Return to home screen" button. It was listed in
-  // googleRejectionIndicators, so the bot false-rejected in ~4s
-  // (awaiting_admission_rejected) instead of waiting for the host to admit it.
-  // Reclassified as a WAITING indicator; genuine denials are still caught by
-  // the "denied your request" text patterns in googleRejectionIndicators.
+// "Return to home screen" shows on BOTH the "Asking to be let in" waiting screen
+// (Vexa-ai/vexa#471) and the screen Meet shows when it ends a knock without a host
+// decision (`DisconnectedError, EndCause = 72`, then a redirect to the Meet home page).
+// It alone says nothing; together with no waiting-room copy it means the knock ended.
+export const googleKnockEndedIndicators: string[] = [
   'button:has-text("Return to home screen")',
 ];
 
