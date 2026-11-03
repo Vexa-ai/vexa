@@ -1,17 +1,22 @@
-"""auto-join sweep — a `scheduled` meeting's bot joins at start time, loudly or not at all.
+"""A `scheduled` meeting's bot joins, loudly or not at all — the safeguards the auto-join sweep ran,
+now run by the planned-row start route Flows' booked_bot calls (ADR-0052 §3, §5, s2d).
 
-One ``auto_join_tick`` spawns every due scheduled row through the SAME ``request_bot`` flow
-POST /bots runs (the claim branch upgrades the row in place → idempotent), skips off-toggle /
-link-less / stale rows, stamps ``data.auto_join_error`` (+ retry backoff) on cap rejection or
-spawn failure, and treats a concurrent manual spawn (DuplicateMeeting) as success.
+The route spawns a scheduled row through the SAME ``request_bot`` flow POST /bots runs (the claim
+branch upgrades THAT row in place → idempotent), answers not_scheduled for off-toggle / link-less /
+stopped rows and past_deadline for stale ones, stamps ``data.auto_join_error`` (+ a hold) on a cap
+rejection or a spawn failure, and a row a manual spawn claimed first is simply no longer scheduled.
+These tests were the sweep's; each now drives the route over every scheduled row
+(``_booked_start.start_scheduled``). The clock itself is Flows' (core/flows/tests/test_booked_bot.py).
 
-Drives the SHIPPED ``auto_join_tick`` over the in-memory fakes, OFFLINE.
+Over the in-memory fakes, OFFLINE.
 """
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from meeting_api.bot_spawn.auto_join import DEFAULT_LEAD_S, auto_join_tick, due_rows
+from _booked_start import start_scheduled
+from meeting_api.bot_spawn import planned_start
+from meeting_api.bot_spawn.planned_start import start_planned_meeting
 from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
 
 USER = 7
@@ -44,7 +49,7 @@ async def _tick(repo, runtime, **kw):
     # Legacy spawn-mechanics tests don't wire an admin edge; opt them into uncapped spawns so they
     # exercise the spawn path. The #656 fail-closed tests pass allow_uncapped=False explicitly.
     kw.setdefault("allow_uncapped", True)
-    return await auto_join_tick(repo, runtime, **kw)
+    return await start_scheduled(repo, runtime, **kw)
 
 
 # ---- fires at lead time -------------------------------------------------------------
@@ -88,10 +93,13 @@ async def test_due_row_prefers_bot_name_from_auto_joining_calendar_source():
 
 
 async def test_not_yet_due_row_waits():
+    """Earlier than BOOKED_POD_LEAD_S + BOOKED_JOIN_LEAD_S + 60 s before the start the route answers
+    too_early (the bot's MeetingToken must not sit idle, §8); Flows calls at pod_at."""
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
-    _seed(repo, at=NOW + timedelta(seconds=300))  # 5 min out, lead is 60s
+    _seed(repo, at=NOW + timedelta(seconds=781))  # 13 min 1 s out: before start − 780 s
     counters = await _tick(repo, runtime)
     assert counters["due"] == 0 and runtime.specs == []
+    assert start_scheduled.last_kinds == ["too_early"]
 
 
 async def test_stale_row_skipped_never_joins_hours_late():
@@ -134,9 +142,10 @@ async def test_second_tick_is_a_noop():
     assert len(runtime.specs) == 1  # exactly one spawn ever
 
 
-async def test_manual_spawn_race_counts_as_already():
-    """A row still `scheduled` in the sweep's snapshot but claimed by a manual spawn before the
-    sweep's request_bot lands → DuplicateMeeting → success, no error stamp."""
+async def test_manual_spawn_race_is_not_scheduled_and_stamps_nothing():
+    """A row still `scheduled` in a stale snapshot but claimed by a manual spawn before the start
+    lands: the route reads the row fresh, it is no longer scheduled → nothing to do, no error stamp
+    (the sweep counted this race as `already`)."""
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     mid = _seed(repo)
     snapshot = [dict(repo._meetings[mid], data=dict(repo._meetings[mid]["data"]))]
@@ -153,8 +162,9 @@ async def test_manual_spawn_race_counts_as_already():
             return snapshot
 
     counters = await _tick(_FrozenRepo(), runtime)
-    assert counters["already"] == 1 and counters["errors"] == 0
+    assert counters["errors"] == 0 and start_scheduled.last_kinds == ["not_scheduled"]
     assert "auto_join_error" not in repo._meetings[mid]["data"]
+    assert len(runtime.specs) == 1, "only the manual bot"
 
 
 # ---- loud failures ------------------------------------------------------------------
@@ -243,58 +253,66 @@ async def test_no_admin_edge_with_explicit_opt_in_spawns_uncapped():
     assert len(runtime.specs) == 1
 
 
-# ---- pure filter unit ----------------------------------------------------------------
+# ---- the window and the join lead (ADR-0052 §2, §8) ----------------------------------------
 
-def test_due_rows_window_edges():
-    def row(at, **extra):
-        return {"id": 1, "user_id": USER, "platform": PLAT, "native_meeting_id": NID,
-                "data": {"scheduled_at": at.isoformat(), **extra}}
-    lead, grace = 60, 600
-    inside_lead = NOW + timedelta(seconds=59)
-    outside_lead = NOW + timedelta(seconds=61)
-    inside_grace = NOW - timedelta(seconds=599)
-    outside_grace = NOW - timedelta(seconds=601)
-    assert due_rows([row(inside_lead)], now=NOW, lead_s=lead, grace_s=grace)
-    assert not due_rows([row(outside_lead)], now=NOW, lead_s=lead, grace_s=grace)
-    assert due_rows([row(inside_grace)], now=NOW, lead_s=lead, grace_s=grace)
-    assert not due_rows([row(outside_grace)], now=NOW, lead_s=lead, grace_s=grace)
-    # malformed / missing time → never due
-    assert not due_rows([{"id": 2, "user_id": USER, "platform": PLAT,
-                          "native_meeting_id": NID, "data": {}}], now=NOW)
+async def test_the_route_window_edges():
+    """From start − 780 s (pod lead + join lead + 60 s) to start + BOOKED_GRACE_S; a row with no
+    readable time never starts."""
+    async def code_for(at, **extra):
+        repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+        _seed(repo, at=at, data_extra=extra)
+        if at is None:
+            repo._meetings[1]["data"]["scheduled_at"] = "not-a-time"
+        out = await start_planned_meeting(1, user_id=USER, repo=repo, runtime=runtime, now=NOW,
+                                          transcribe_gate=_NO_GATE, token_secret="s",
+                                          redis_url="redis://r", allow_uncapped=True)
+        return out.code
 
-
-def test_default_lead_dispatches_two_minutes_before_the_start():
-    """#1208 — the PRODUCT default: a meeting starting in 119s is due, one starting in 121s is not.
-    Two minutes of lead is what puts the bot in the lobby AT the scheduled start rather than
-    starting its browser then."""
-    def row(at):
-        return {"id": 1, "user_id": USER, "platform": PLAT, "native_meeting_id": NID,
-                "data": {"scheduled_at": at.isoformat()}}
-
-    assert DEFAULT_LEAD_S == 120
-    assert due_rows([row(NOW + timedelta(seconds=119))], now=NOW)
-    assert not due_rows([row(NOW + timedelta(seconds=121))], now=NOW)
+    assert await code_for(NOW + timedelta(seconds=779)) == "started"
+    assert await code_for(NOW + timedelta(seconds=781)) == "too_early"
+    assert await code_for(NOW - timedelta(seconds=599)) == "started"
+    assert await code_for(NOW - timedelta(seconds=601)) == "past_deadline"
+    assert await code_for(None) == "not_scheduled"
 
 
-def test_entrypoint_lead_default_matches_the_sweep_default(monkeypatch):
-    """One default, two readers: the entrypoint's env fallback IS ``DEFAULT_LEAD_S``, so the sweep's
-    own default and the deployed default can never drift apart. Deploy values still override."""
-    import os
+async def test_the_booked_bot_opens_the_meeting_two_minutes_before_the_start(monkeypatch):
+    """#1208 — the PRODUCT default, carried by BOOKED_JOIN_LEAD_S (ADR-0052 §2): the pod starts
+    early and waits; it opens the meeting 120 s before the start, so it is in the lobby AT it."""
+    import json
 
-    monkeypatch.delenv("AUTO_JOIN_LEAD_S", raising=False)
-    assert float(os.getenv("AUTO_JOIN_LEAD_S", str(DEFAULT_LEAD_S))) == 120.0
-    monkeypatch.setenv("AUTO_JOIN_LEAD_S", "60")
-    assert float(os.getenv("AUTO_JOIN_LEAD_S", str(DEFAULT_LEAD_S))) == 60.0
+    monkeypatch.delenv("BOOKED_JOIN_LEAD_S", raising=False)
+    assert planned_start.DEFAULT_BOOKED_JOIN_LEAD_S == 120 == planned_start.booked_join_lead_s()
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    _seed(repo, at=NOW + timedelta(seconds=600))
+    await _tick(repo, runtime)
+    join_at = json.loads(runtime.specs[0]["env"]["VEXA_BOT_CONFIG"])["joinAt"]
+    expected = (NOW + timedelta(seconds=480)).isoformat().replace("+00:00", "Z")
+    assert join_at == expected
+
+
+def test_the_join_lead_default_and_its_override(monkeypatch):
+    """One default, one reader: ``booked_join_lead_s`` is what the route uses and config.v1 declares
+    the same default. Deploy values still override."""
+    import json
+    from pathlib import Path
+
+    monkeypatch.delenv("BOOKED_JOIN_LEAD_S", raising=False)
+    assert planned_start.booked_join_lead_s() == 120
+    monkeypatch.setenv("BOOKED_JOIN_LEAD_S", "60")
+    assert planned_start.booked_join_lead_s() == 60
+    config = json.loads((Path(planned_start.__file__).parents[1] / "config.v1.json").read_text())
+    (key,) = [k for k in config["keys"] if k["key"] == "BOOKED_JOIN_LEAD_S"]
+    assert str(key["default"]).startswith("120")
 
 
 def test_lead_and_lobby_budget_together_cover_a_late_host():
-    """The pair, checked as one claim (#1208): dispatched at start-120s and permitted to wait 900s,
-    the bot is still knocking 13 minutes AFTER the scheduled start — and the reconcile floor it is
-    measured against outlasts that whole window, so nothing reaps it mid-wait."""
+    """The pair, checked as one claim (#1208): opening the meeting at start − 120 s and permitted to
+    wait 900 s, the bot is still knocking 13 minutes AFTER the scheduled start — and the reconcile
+    floor it is measured against outlasts that whole window, so nothing reaps it mid-wait."""
     from meeting_api.bot_spawn.service import lobby_budget_ms
     from meeting_api.lifecycle.reconcile import default_preactive_grace
 
-    waits_until_s_after_start = lobby_budget_ms() / 1000.0 - DEFAULT_LEAD_S
+    waits_until_s_after_start = lobby_budget_ms() / 1000.0 - planned_start.DEFAULT_BOOKED_JOIN_LEAD_S
     assert waits_until_s_after_start == 780.0
     assert default_preactive_grace() > lobby_budget_ms() / 1000.0
 
@@ -327,7 +345,7 @@ async def test_a_bot_still_waiting_for_admission_blocks_a_second_dispatch():
     sits in ``awaiting_admission`` for up to 15 minutes — longer than the auto-join grace window —
     so the sweep must treat that status as the room being OWNED, or the very fix that lets the bot
     wait becomes a duplicate-bot generator."""
-    from meeting_api.bot_spawn.auto_join import LIVE_STATUSES
+    from meeting_api.bot_spawn.planned_start import LIVE_STATUSES
 
     assert "awaiting_admission" in LIVE_STATUSES
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
@@ -349,7 +367,7 @@ async def test_live_row_for_another_user_does_not_block():
 
 
 async def test_live_keys_ignores_terminal_and_linkless_rows():
-    from meeting_api.bot_spawn.auto_join import live_keys
+    from meeting_api.bot_spawn.planned_start import live_keys
 
     keys = live_keys([
         {"id": 1, "user_id": USER, "platform": PLAT, "native_meeting_id": NID},
@@ -379,17 +397,19 @@ async def test_attempt_stamp_survives_a_failed_spawn_and_holds_the_next_tick():
     assert (await _tick(repo, runtime, now=NOW + timedelta(seconds=1)))["due"] == 0
 
 
-def test_due_rows_hold_a_row_carrying_a_spent_attempt_until_the_backoff_expires():
-    """The pure guard behind the storm fix: a row seeded with an attempt calendar sync carried
-    over from the terminal row it replaced is NOT due until one backoff interval has passed."""
-    def row(**extra):
-        return {"id": 26267, "user_id": USER, "platform": PLAT, "native_meeting_id": NID,
-                "data": {"scheduled_at": NOW.isoformat(), **extra}}
-
+async def test_a_row_carrying_a_spent_attempt_is_held_until_the_backoff_expires():
+    """The guard behind the storm fix: a row seeded with an attempt calendar sync carried over from
+    the terminal row it replaced does not start until one backoff interval has passed (the route
+    answers `backoff` with Retry-After); a garbage stamp never pins a row out forever."""
     spent = (NOW - timedelta(seconds=10)).isoformat()
-    assert not due_rows([row(auto_join_last_attempt=spent)], now=NOW, retry_backoff_s=300)
-    assert due_rows([row(auto_join_last_attempt=spent)],
-                    now=NOW + timedelta(seconds=291), retry_backoff_s=300)
-    # a garbage stamp never silently pins a row out of the sweep forever
-    assert due_rows([row(auto_join_last_attempt="not-a-time")], now=NOW)
-    assert due_rows([row()], now=NOW)
+
+    async def kinds(now, **extra):
+        repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+        _seed(repo, data_extra=extra)
+        await _tick(repo, runtime, now=now, retry_backoff_s=300)
+        return start_scheduled.last_kinds
+
+    assert await kinds(NOW, auto_join_last_attempt=spent) == ["backoff"]
+    assert await kinds(NOW + timedelta(seconds=291), auto_join_last_attempt=spent) == ["spawned"]
+    assert await kinds(NOW, auto_join_last_attempt="not-a-time") == ["spawned"]
+    assert await kinds(NOW) == ["spawned"]

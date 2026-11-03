@@ -110,5 +110,7 @@ async def test_boot_loop_set_excludes_dead_scheduler_tick(caplog):
     line = next(m for m in caplog.messages if "background loops started" in m)
     assert "scheduler-tick" not in line, "the dead scheduler-tick loop must be gone from the boot set"
     for live in ("segment-consumer", "db-writer", "webhook-drain",
-                 "stop-reconcile", "auto-join", "calendar-sync"):
+                 "stop-reconcile", "calendar-sync", "planned-outbox"):
         assert live in line, f"{live} must still be a started loop"
+    # ADR-0052 §3 (s2d): one clock. Flows' booked_bot starts booked bots; no meeting-api sweep.
+    assert "auto-join" not in line, "the auto-join sweep must be gone from the boot set"

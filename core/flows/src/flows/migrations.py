@@ -29,6 +29,20 @@ ADD_COLUMNS = (
     "CREATE INDEX IF NOT EXISTS keyed_person ON keyed_schedule (scope, person)",
     # subject-ticket.v1: the routine grant a person's flow presents on every run
     "ALTER TABLE flow_version ADD COLUMN IF NOT EXISTS subject_grant TEXT",
+    # ADR-0052 §7: a keyed row is missed only past its deadline, when it has one
+    "ALTER TABLE keyed_schedule ADD COLUMN IF NOT EXISTS deadline DOUBLE PRECISION",
+)
+
+#: ADR-0052 §7: `retired` joins the keyed statuses. Postgres cannot widen a CHECK in place, so the
+#: constraint is swapped once, after the catalogue says the current one lacks it.
+KEYED_STATUS_HAS_RETIRED = """SELECT COUNT(*) FROM information_schema.check_constraints
+                              WHERE constraint_name = 'keyed_status'
+                                AND POSITION('retired' IN check_clause) > 0"""
+
+SWAP_KEYED_STATUS = (
+    "ALTER TABLE keyed_schedule DROP CONSTRAINT IF EXISTS keyed_status",
+    "ALTER TABLE keyed_schedule ADD CONSTRAINT keyed_status CHECK (status IN "
+    "('armed','fired','cancelled','missed','retired'))",
 )
 
 KEY_HAS_SCOPE = """SELECT COUNT(*) FROM information_schema.key_column_usage k
@@ -47,9 +61,16 @@ def apply(execute: Callable) -> dict:
     """Bring an existing database up to the models. Returns what it changed (no row data)."""
     for stmt in ADD_COLUMNS:
         execute(stmt)
+    did = {"key_swapped": False, "keyed_status_swapped": False}
+    rows = execute(KEYED_STATUS_HAS_RETIRED)
+    if not (rows and int(rows[0][0] or 0) > 0):
+        for stmt in SWAP_KEYED_STATUS:
+            execute(stmt)
+        did["keyed_status_swapped"] = True
     rows = execute(KEY_HAS_SCOPE)
     if rows and int(rows[0][0] or 0) > 0:
-        return {"key_swapped": False}
+        return did
     for stmt in SWAP_KEY:
         execute(stmt)
-    return {"key_swapped": True}
+    did["key_swapped"] = True
+    return did

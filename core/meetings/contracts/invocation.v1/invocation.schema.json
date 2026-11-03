@@ -63,6 +63,7 @@
         "botName": { "type": "string" },
         "passcode": { "type": "string", "description": "meeting passcode (zoom passcode screen / jitsi room password); placeholder in goldens" },
         "nativeMeetingId": { "type": "string" },
+        "joinAt": { "type": "string", "format": "date-time", "description": "when the bot opens the meeting (UTC, ISO-8601). Absent or past ⇒ at once. Before it the bot boots its browser and capture pipeline and waits: it opens no meeting page, sends no `joining` event and runs no reachability gate until this time (ADR-0052). Set only by meeting-api for a booked meeting, never later than spawn time + BOOKED_POD_LEAD_S + 60 s. A bot that predates the field refuses an invocation that carries it" },
         "voiceNote": { "$ref": "#/$defs/VoiceNote" },
         "call": { "$ref": "#/$defs/Call" },
         "token": { "type": "string", "description": "SECRET — the session's MeetingToken and the bot's only credential: an HS256 token meeting-api mints per spawn, bound to this session's connectionId (claim session_uid). It is the transport bearer, `Authorization: Bearer <token>`, at four doors: every lifecycle.v1 event the bot POSTs to meetingApiCallbackUrl, every upload to recordingUploadUrl, an authenticated bot's session-profile.v1 write-back to sessionWritebackUrl, and its restore from sessionRestoreUrl; meeting-api refuses it for any other session, and requires its exp, aud and scope. Required by a meeting-api from v0.13.2: a bot that sends no bearer is refused (401). Placeholder in goldens" },

@@ -163,6 +163,8 @@ share. The tables admin-api and meeting-api own (`users`, `api_tokens`, `platfor
 | `flow_version` gains `scope` (`TEXT NOT NULL DEFAULT 'instance'`, so every existing flow is an instance flow) and `cron`, and its primary key changes from `(name, version)` to `(scope, name, version)` | flows | the first time a flows process (flows-api, flows-worker or flows-mailbox) uses the database, in one transaction; the key is swapped only while it lacks `scope` |
 | New table `friction_occurrence`, with index `friction_occurrence_by_id` | flows | the same moment |
 | `friction_occurrence` gains `admitted`; new tables `keyed_schedule` (gains `person` on a pre-release database), `sensor`, `mail_send` and `mail_test_send` | flows | the same moment (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`) |
+| `keyed_schedule` gains `deadline`, and its status check gains `retired` (swapped once, while the check lacks it) | flows | the same moment |
+| The stored company flow `invite_join` (`created_by: seed`) is removed, once, and versions the company submitted on top of it are retired (kept): the flow is registered in the code | flows-worker | its first start; a warning names the retired versions |
 
 There is no separate migration command for the schema: every step is idempotent and runs on each
 start.
@@ -351,6 +353,20 @@ turns it off. Upgrade with no meeting in flight. See
     users can set `REDIS_WORKLOAD_ACL=shared` on agent-api and meeting-api; then every workload uses
     the services' connection, which is safe only where every person on the instance trusts every
     other. Any other value stops both services at boot.
+
+### Flows runs in every profile
+
+- **Hits:** Helm installs that left `flows.enabled` at its old default (`false`) or set it, and every
+  Vexa Lite. Booked bots start from Flows' clock, so it is required.
+- **If you skip it:** a values file that still sets `flows.enabled: false` stops the render with
+  `flows.enabled: false is no longer supported`. On a default install there is nothing to skip: the
+  chart renders flows-api and flows-worker and generates both their keys (the service key and the
+  operator key, `flows.apiKey`), keeping them across upgrades. Lite runs both in its container.
+- **Do:** on Helm, remove `flows.enabled` from your values. When a GitOps tool renders the chart with
+  `helm template`, set `flows.apiKey` (or `flows.existingSecret`) and `secrets.flowsServiceKey`, since
+  a render cannot read the release's Secret. If your database user may not create tables in the main
+  database, read [Flows database](/deployment-kubernetes#flows-database) first. On Lite, keep the
+  `vexa-lite-state` volume: Flows' keys are kept there.
 
 ### Flows database with `sslmode=verify-ca`
 
@@ -554,7 +570,7 @@ If you start the Lite image with your own `docker run` instead of `make lite`:
 
 ### Mailbox invitations and calendar sensors
 
-A mailbox invitation now sends its bot from a keyed schedule one minute before the start (`invite_intake` v4 with the company flow `invite_join`), and the schedule moves with a reschedule and is removed on a cancellation. Sensors exist but run nothing until a person creates and enables one; the calendar kind needs the broker’s `sensors` key (Compose: re-run `connections-keys`). Details: [What is on after an upgrade](/flows/sensors#what-is-on-after-an-upgrade).
+A mailbox invitation now sends its bot from a keyed schedule one minute before the start (`invite_intake` v4 with the flow `invite_join`, registered in the code; a company copy stored by an earlier pre-release is removed at the first start), and the schedule moves with a reschedule and is removed on a cancellation. Sensors exist but run nothing until a person creates and enables one; the calendar kind needs the broker’s `sensors` key (Compose: re-run `connections-keys`). Details: [What is on after an upgrade](/flows/sensors#what-is-on-after-an-upgrade).
 
 ## After the upgrade, once
 

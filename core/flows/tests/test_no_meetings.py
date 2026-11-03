@@ -55,6 +55,8 @@ MEETINGS_STEPS = {
     "mail_meeting_share",
     # a bot at a time with no agent run (flows phase 0): a person's flow may name it, with its grant
     "request_meeting_bot",
+    # a booked meeting's bot at pod_at, through the start route for its planned row (ADR-0052 §6)
+    "start_booked_bot",
 }
 
 
@@ -153,8 +155,9 @@ def test_every_meetings_url_is_built_from_the_access_time_door():
     # "did this meeting transcribe?" without joining the words — is a twelfth call site. The
     # property is per-call door resolution, not the count; the count is recomputed, never guessed.
     # THIRTEEN with flows phase 0's `request_meeting_bot`, a person's bot at a time; FOURTEEN with
-    # dispatch_bot's second POST when the invite's workspace is refused (ADR-0050).
-    assert text.count("meetings_door()") == 14, "the fourteen sites resolve the door per call"
+    # dispatch_bot's second POST when the invite's workspace is refused (ADR-0050); FIFTEEN with
+    # `start_booked_bot`, the start route for a booked meeting's planned row (ADR-0052 §6).
+    assert text.count("meetings_door()") == 15, "the fifteen sites resolve the door per call"
 
 
 # ── the declarations on the steps ────────────────────────────────────────────────────────────
@@ -209,9 +212,8 @@ def test_every_production_reaction_reaches_a_terminal_state_with_meetings_absent
     terminal = {"done", "failed", "cancelled"}
     for (name, version), flow in reg.flows.items():
         db, clock = SqliteDB(), FakeClock()
-        admit(db, reg, clock, source_event_id=f"e-{name}", event_type=flow.on.name,
-              subject_refs={"meeting_id": "m-1", "organizer": "a@b.test", "uid": "7",
-                            "claim_id": "c-1"})
+        _start(db, reg, clock, flow, f"e-{name}",
+               {"meeting_id": "m-1", "organizer": "a@b.test", "uid": "7", "claim_id": "c-1"})
         rows = db.execute("SELECT reaction_id FROM reaction")
         assert rows, f"{name} admitted nothing for {flow.on.name}"
         rid = rows[0][0]
@@ -236,3 +238,17 @@ def test_the_agent_contract_still_holds_alongside_it():
     reg = _production_registry()
     assert {s for s, n in reg.step_needs.items() if "agent" in n} >= {
         "process_meeting", "email_minutes", "feedback_turn"}
+
+
+def _start(db, reg, clock, flow, source_event_id: str, refs: dict) -> None:
+    """Start one reaction of ``flow`` the way production does: an event admits it, and a flow with a
+    RELATIVE trigger (`invite_join`) starts from its keyed schedule's fire, which the worker inserts
+    as a `keyed.due` reaction (`flows.keyed.fire_due`)."""
+    from flows import keyed, triggers
+    from flows.admission import insert
+    if triggers.spec_of(flow).get("kind") == "relative":
+        insert(db, clock, flow, key=f"{source_event_id}::{flow.ident}",
+               event_type=keyed.KEYED_EVENT, subject_refs=refs)
+        return
+    admit(db, reg, clock, source_event_id=source_event_id, event_type=flow.on.name,
+          subject_refs=refs)

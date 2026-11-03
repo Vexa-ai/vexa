@@ -13,9 +13,14 @@ A PUBLISH EDGE IS NOT A DEPENDENCY:
 
   * a DEPENDENCY is a call whose answer the caller needs. This module has none — nothing the
     lifecycle callback does branches on whether flows heard about it.
-  * a PUBLISH is a fact handed over. Best-effort, bounded, swallowed. A deployment with no flows
-    domain runs meetings exactly as one with a flows domain does, and so does one where flows is
-    down or slow — that is a PROFILE, not a degraded state.
+  * a PUBLISH is a fact handed over. Best-effort, bounded, swallowed. A live meeting runs the same
+    whether flows heard about it or not, and so does one where flows is down or slow.
+
+  * BUT FLOWS IS NO LONGER OPTIONAL (ADR-0052 §3): it owns the clock booked bots start from, and
+    every profile (Compose, Lite, Helm) runs it. A deployment without a flows domain does not run
+    PLANNED meetings the same — the auto-join sweep is gone (s2d), so nothing starts their bots. These
+    best-effort publishes stay best-effort; the planned-row facts flows needs travel through a
+    durable outbox instead (ADR-0052 §4).
 
 So `VEXA_FLOWS_API_URL` / `VEXA_FLOWS_API_KEY` are declared as a `publish-edge` in `config.v1.json`,
 matching agent-api's own spelling of the URL key (identity's admin-api spelled it bare

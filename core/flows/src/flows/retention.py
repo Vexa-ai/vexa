@@ -27,7 +27,7 @@ from .db import DB
 DAY_S = 86_400.0
 BATCH = 500
 FINISHED = ("done", "failed", "cancelled")
-KEYED_FINISHED = ("fired", "cancelled", "missed")
+KEYED_FINISHED = ("fired", "cancelled", "missed", "retired")
 
 _FINISHED_SQL = ", ".join(f"'{s}'" for s in FINISHED)
 _KEYED_FINISHED_SQL = ", ".join(f"'{s}'" for s in KEYED_FINISHED)

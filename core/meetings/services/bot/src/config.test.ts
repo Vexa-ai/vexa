@@ -24,7 +24,7 @@ const throws = (fn: () => unknown): Error | null => { try { fn(); return null; }
 
 // ── every committed invocation.v1 golden parses ──
 const goldens = readdirSync(GOLDEN_DIR).filter((n) => n.startsWith('Invocation.') && n.endsWith('.json'));
-check('found all invocation goldens', goldens.length === 7, `got ${goldens.join(', ')}`);
+check('found all invocation goldens', goldens.length === 8, `got ${goldens.join(', ')}`);
 for (const g of goldens) {
   const raw = readFileSync(join(GOLDEN_DIR, g), 'utf8');
   const err = throws(() => parseInvocation(raw));
@@ -36,6 +36,14 @@ for (const g of goldens) {
   const onprem = parseInvocation(readFileSync(join(GOLDEN_DIR, 'Invocation.jitsi-onprem.json'), 'utf8'));
   check('jitsi-onprem: meetingHostAllow typed', JSON.stringify(onprem.meetingHostAllow) === '["jitsi.corp.example","10.20.0.0/16"]',
     JSON.stringify(onprem.meetingHostAllow));
+}
+
+// ── ADR-0052: a booked bot carries joinAt (date-time); a malformed one is refused at boot ──
+{
+  const booked = parseInvocation(readFileSync(join(GOLDEN_DIR, 'Invocation.booked.json'), 'utf8'));
+  check('booked: joinAt typed', booked.joinAt === '2026-11-03T09:58:00Z', String(booked.joinAt));
+  const bad = throws(() => parseInvocation(JSON.stringify({ ...booked, joinAt: 'tomorrow at ten' })));
+  check('booked: a joinAt that is not a date-time is refused', bad instanceof InvocationError && /joinAt|date-time/.test(bad.message), bad?.message ?? 'accepted');
 }
 
 // ── typed access on the full golden ──

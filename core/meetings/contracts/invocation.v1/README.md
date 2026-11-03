@@ -65,6 +65,16 @@ minimum bot version above: upgrade bots and meeting-api together. `sessionRestor
 case: a bot that predates it refuses an invocation carrying it, so a deployment sends bot-account
 joins only to bots that know the field.
 
+## When the bot joins: `joinAt`
+A booked meeting's bot is started before the meeting (ADR-0052): meeting-api sends `joinAt`, a UTC
+ISO-8601 time. The bot boots its browser and capture pipeline at once and then waits: it opens no
+meeting page, sends no `joining` event and runs no reachability gate before `joinAt`. Absent or in
+the past, it joins at once. A stop while it waits ends it `failed` at stage `requested`, reason
+`stopped`. meeting-api refuses to spawn with a `joinAt` later than now + `BOOKED_POD_LEAD_S` + 60 s,
+so a waiting pod never holds its MeetingToken long before joining, and it writes the time to the
+row's `data.join_at`. A bot that predates the field refuses an invocation that carries it: upgrade
+bots and meeting-api together.
+
 ## Where the browser may go: `meetingHostAllow`
 meeting-api holds a caller's `meetingUrl` to the platform's hosts and to public addresses before it
 spawns a bot, and the bot holds every navigation of its browser to the same rule: a top-level

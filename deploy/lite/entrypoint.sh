@@ -160,6 +160,8 @@ export VEXA_SYSTEM_WEBHOOK_URL="${VEXA_SYSTEM_WEBHOOK_URL:-}"
 export VEXA_SYSTEM_WEBHOOK_SECRET="${VEXA_SYSTEM_WEBHOOK_SECRET:-}"
 export VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP="${VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP:-false}"
 export VEXA_SYSTEM_WEBHOOK_TIMEOUT_S="${VEXA_SYSTEM_WEBHOOK_TIMEOUT_S:-10}"
+# The booking cap (ADR-0052 §8): an account's future meetings booked with a bot, for the deployment.
+export BOOKED_MAX_PER_ACCOUNT="${BOOKED_MAX_PER_ACCOUNT:-500}"
 
 # A company IdP the bot-account sign-in browser may also reach (comma-separated exact hosts; no wildcards).
 export VEXA_BOT_SIGNIN_EXTRA_HOSTS="${VEXA_BOT_SIGNIN_EXTRA_HOSTS:-}"
@@ -272,6 +274,16 @@ if [ "${VEXA_DISPATCH_SIGNING_KEY:-}" = "dev-dispatch-signing-key" ]; then
     unset VEXA_DISPATCH_SIGNING_KEY
 fi
 export VEXA_DISPATCH_SIGNING_KEY="${VEXA_DISPATCH_SIGNING_KEY:-$(/usr/local/bin/persisted-secret "$lite_state_dir/dispatch-signing-key")}"
+# FLOWS (ADR-0052 §3: required in every profile; booked bots start from its clock). Two keys, minted on
+# the first boot and kept in $VEXA_LITE_STATE_DIR like the two above: the operator key that gates
+# flows-api's POST /flows and POST /events, and the service key flows and the gateway share (the
+# gateway's service door on :8002). Pass either to fix it. Flows keeps its tables in the main database:
+# its DSN is built here from DB_* (user and password URL-quoted), unless VEXA_FLOWS_DB_URL is given.
+export VEXA_FLOWS_API_KEY="${VEXA_FLOWS_API_KEY:-$(/usr/local/bin/persisted-secret "$lite_state_dir/flows-api-key")}"
+export VEXA_FLOWS_SERVICE_KEY="${VEXA_FLOWS_SERVICE_KEY:-$(/usr/local/bin/persisted-secret "$lite_state_dir/flows-service-key")}"
+export VEXA_FLOWS_DB_URL="${VEXA_FLOWS_DB_URL:-$(python3 -c 'import os, urllib.parse as u
+e, q = os.environ, (lambda s: u.quote(s, safe=""))
+print("postgresql+pg8000://%s:%s@%s:%s/%s" % (q(e["DB_USER"]), q(e["DB_PASSWORD"]), e["DB_HOST"], e["DB_PORT"], q(e["DB_NAME"])))')}"
 # Read by no Lite program; minted per boot like the internal tier so no published value is exported.
 export JWT_SECRET="${JWT_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
 

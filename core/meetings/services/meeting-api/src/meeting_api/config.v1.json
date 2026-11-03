@@ -642,6 +642,38 @@
    "targets": []
   },
   {
+   "key": "BOOKED_POD_LEAD_S",
+   "class": "defaulted",
+   "default": "600",
+   "description": "booked-bot pod lead (s, ADR-0052): a booked meeting's bot pod starts this long before the meeting and waits for its join time. The spawn path refuses a join time later than now + this lead + 60 s, so a waiting pod never holds its MeetingToken longer than that before joining",
+   "targets": []
+  },
+  {
+   "key": "BOOKED_JOIN_LEAD_S",
+   "class": "defaulted",
+   "default": "120",
+   "description": "booked-bot join lead (s, ADR-0052 \u00a72): a booked meeting's bot opens the meeting this long before it starts. The planned-row start route passes join_at = start - this to the bot; the meeting.planned.changed fact carries the computed join_at",
+   "targets": []
+  },
+  {
+   "key": "BOOKED_GRACE_S",
+   "class": "defaulted",
+   "default": "600",
+   "description": "booked-bot grace (s, ADR-0052 \u00a72): the last moment a booked meeting's bot may still be started is start + this. The start route answers 409 past_deadline after it; the meeting.planned.changed fact carries it as deadline",
+   "targets": []
+  },
+  {
+   "key": "BOOKED_MAX_PER_ACCOUNT",
+   "class": "defaulted",
+   "default": "500",
+   "description": "booking cap (ADR-0052 \u00a78, founder 1 Nov 2026): an account's future scheduled meetings with auto_join on, counted where every planned row is created. Over it POST /meetings answers 429 with the cap; calendar sync still mirrors the event with no bot and auto_join_error stamped. One value for the whole deployment (founder 3 Nov 2026), Helm meetingApi.bookedMaxPerAccount",
+   "targets": [
+    "compose",
+    "helm",
+    "lite"
+   ]
+  },
+  {
    "key": "MEETING_UNTRACKED_GRACE_SEC",
    "class": "defaulted",
    "default": "600",
@@ -759,13 +791,6 @@
    ]
   },
   {
-   "key": "AUTO_JOIN_SWEEP_INTERVAL_S",
-   "class": "defaulted",
-   "default": "30",
-   "description": "auto-join sweep cadence (s) — how often scheduled meetings are checked for a due start",
-   "targets": []
-  },
-  {
    "key": "VEXA_MEET_RESPAWN_PODS",
    "class": "defaulted",
    "default": "3",
@@ -794,31 +819,17 @@
    "targets": []
   },
   {
-   "key": "AUTO_JOIN_LEAD_S",
-   "class": "defaulted",
-   "default": "120",
-   "description": "auto-join lead (s) — the bot is sent this long before data.scheduled_at, so it is standing in the lobby at the scheduled start rather than setting out then (#1208). Deploy values may override.",
-   "targets": []
-  },
-  {
-   "key": "AUTO_JOIN_GRACE_S",
-   "class": "defaulted",
-   "default": "600",
-   "description": "auto-join grace (s) — a scheduled meeting older than this is never auto-joined (no hours-late joins)",
-   "targets": []
-  },
-  {
    "key": "AUTO_JOIN_RETRY_BACKOFF_S",
    "class": "defaulted",
    "default": "300",
-   "description": "backoff (s) before an auto-join that failed loudly (cap/quota/spawn) is retried",
+   "description": "backoff (s) a booked meeting holds after a start attempt that started a pod (auto_join_last_attempt), so one occurrence gets at most one bot per interval however many rows calendar sync gives it; read by the planned-row start route (ADR-0052 §5). The auto-join sweep that also read it is gone (s2d)",
    "targets": []
   },
   {
    "key": "AUTO_JOIN_ALLOW_UNCAPPED",
    "class": "defaulted",
-   "default": "false — with no admin edge (ADMIN_API_URL/INTERNAL_API_SECRET) the per-user cap is unresolvable and the sweep fails closed (refuses to spawn); set 1 to deliberately allow uncapped self-host spawns",
-   "description": "opt-in escape hatch (#656): allow the auto-join sweep to spawn uncapped when the per-user cap cannot be resolved. Unsafe mode — chosen, never defaulted.",
+   "default": "false — with no admin edge (ADMIN_API_URL/INTERNAL_API_SECRET) the per-user cap is unresolvable and the planned-row start route fails closed (refuses to spawn); set 1 to deliberately allow uncapped self-host spawns",
+   "description": "opt-in escape hatch (#656): allow the planned-row start route (Flows' booked_bot) to spawn uncapped when the per-user cap cannot be resolved. Unsafe mode — chosen, never defaulted.",
    "targets": []
   },
   {
@@ -936,14 +947,14 @@
   {
    "key": "VEXA_FLOWS_API_URL",
    "class": "publish-edge",
-   "publishes_events": ["meeting.started", "meeting.completed", "meeting.shared"],
-   "description": "flows' intake, told when a bot this service dispatched goes active and when it completes, and when a meeting's owner invites an address by email from the Share dialog (meeting.shared, which flows mails) (F168/F181 — an ad hoc bot started via the MCP request_meeting_bot never reached flows before this; only invite_intake's own emit_started/emit_completed, calendar-only, ever did). MEETING-API TELLS FLOWS; IT DOES NOT ASK IT — best-effort, bounded at 2s, swallowed (events.py), so a deployment with no flows domain runs meetings exactly as one with a flows domain does, and so does one where flows is down. Unset is a profile, not a degraded state. Spelled VEXA_FLOWS_API_URL to match agent-api's control_plane/config.v1.json (identity's admin-api spells the bare key FLOWS_API_URL for the same edge — the two publishers that already exist do not agree with each other; not fixed here).",
+   "publishes_events": ["meeting.started", "meeting.completed", "meeting.shared", "meeting.planned.changed"],
+   "description": "flows' intake, told when a bot this service dispatched goes active and when it completes, and when a meeting's owner invites an address by email from the Share dialog (meeting.shared, which flows mails) (F168/F181 — an ad hoc bot started via the MCP request_meeting_bot never reached flows before this; only invite_intake's own emit_started/emit_completed, calendar-only, ever did). MEETING-API TELLS FLOWS; IT DOES NOT ASK IT — the three meeting facts are best-effort, bounded at 2s, swallowed (events.py). PLANNED MEETINGS ARE THE EXCEPTION (ADR-0052 §3, §4): meeting.planned.changed goes through a durable outbox, and Flows' `booked_bot` is the only thing that starts a booked meeting's bot, so a deployment without flows (or with flows down past a meeting's deadline) gets no bot for its booked and calendar meetings; ad hoc bots (POST /bots) are unaffected. Spelled VEXA_FLOWS_API_URL to match agent-api's control_plane/config.v1.json (identity's admin-api spells the bare key FLOWS_API_URL for the same edge — the two publishers that already exist do not agree with each other; not fixed here).",
    "targets": ["compose", "helm"]
   },
   {
    "key": "VEXA_FLOWS_API_KEY",
    "class": "publish-edge",
-   "publishes_events": ["meeting.started", "meeting.completed", "meeting.shared"],
+   "publishes_events": ["meeting.started", "meeting.completed", "meeting.shared", "meeting.planned.changed"],
    "secret": true,
    "description": "operator key for the same edge, sent as X-Flows-Operator-Key (flows' POST /events is authenticated). Declared as part of the edge rather than beside it, on the same terms as identity's admin-api and agent-api's control_plane declare theirs: unset alongside an unset URL is the no-flows profile; unset with a URL set is a deployment whose facts are being refused.",
    "targets": ["compose", "helm"]

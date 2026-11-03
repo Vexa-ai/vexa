@@ -86,6 +86,8 @@ export interface Invocation {
   botName: string;
   passcode?: string;
   nativeMeetingId?: string;
+  /** When to open the meeting (UTC ISO-8601, ADR-0052). Absent or past ⇒ at once. */
+  joinAt?: string;
   voiceNote?: VoiceNote;
   call?: Call;
   // ── identity / control plane ──

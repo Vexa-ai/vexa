@@ -55,7 +55,8 @@ import sys as _sys
 import time
 from pathlib import Path
 
-from flows import Done, NotPresent, Registry, StepCtx, StepError, Wait, EventType, tickets
+from flows import (Done, NotPresent, Registry, StepCtx, StepError, Unavailable, Wait, EventType,
+                   tickets)
 
 from flows_steps import agent as ag
 from flows_steps import emailx as mx          # thread bookkeeping + the iMIP calendar reply only
@@ -87,6 +88,24 @@ from flows_steps import outbound
 from flows_timeline.model import concerns as _concerns
 
 INVITE = EventType("invite.received")
+#: `invite_join`'s trigger (ADR-0050): the bot one minute before the start, keyed by the meeting.
+#: No `deadline` (ADR-0052 §7) yet: with a fire one minute before the start it would move the missed
+#: moment by a minute and take the bot away from an invite forwarded into a running meeting, which
+#: the catch-up rule still serves. The 10-minute lead and its deadline arrive with `booked_bot`.
+INVITE_JOIN_TRIGGER = {"kind": "relative", "filter": "payload.url exists",
+                       "at": "payload.start - 60s", "key": "payload.event_key"}
+#: `booked_bot`'s trigger (ADR-0052 §6): meeting-api's `meeting.planned.changed` fact (its outbox,
+#: §4) arms ONE keyed row per planned meeting at `pod_at` (start − BOOKED_POD_LEAD_S), missed only
+#: past `deadline` (start + BOOKED_GRACE_S); a fact that is not a scheduled booking with auto-join on
+#: (cancelled, deleted, toggled off, claimed) disarms it; an older revision changes nothing. Its
+#: share is per account and has no company total (§7): the account ceiling is the bound. meeting-api
+#: owns the times and puts them in the fact; Flows reads no setting of its own for them.
+PLANNED = EventType("meeting.planned.changed")
+BOOKED_BOT_TRIGGER = {"kind": "relative",
+                      "filter": 'payload.status == "scheduled" and payload.auto_join == true',
+                      "at": "payload.pod_at", "deadline": "payload.deadline",
+                      "key": "payload.meeting_id", "share": "account",
+                      "revision": "payload.revision"}
 ONB_PERSON = EventType("onboarding.person.needed")
 ONB_GROUP = EventType("onboarding.group.needed")
 COMPLETED = EventType("meeting.completed")
@@ -902,6 +921,8 @@ def _recorded_note_path(ctx, uid, meeting_id=None) -> str:
     if mid or native:
         try:
             row = mt.meeting_row(uid, mid, native)
+        except StepError:
+            raise           # the door had a moment: retried, never cached as "no recorded path"
         except Exception:  # noqa: BLE001 — a lookup we cannot make is not a recorded path
             row = None
         if isinstance(row, dict):
@@ -939,6 +960,8 @@ def _call_session(ctx) -> str:
     uid = ctx.refs.get("uid")
     try:
         row = mt.meeting_row(str(uid), ctx.refs.get("meeting_id"), ctx.refs.get("native"))
+    except StepError:
+        raise               # the door had a moment: retried, never cached as "not a call"
     except Exception:  # noqa: BLE001 — an unreadable row is a meeting with no session
         row = None
     data = (row or {}).get("data") if isinstance(row, dict) else None
@@ -1050,7 +1073,8 @@ def _mail_title(ctx) -> str:
          when platform is missing or the literal placeholder `"unknown"` (row 97's shape, R-B06's
          own comment above) — a title that says nothing beats one that says the wrong thing.
       4. `"Meeting on <date>"` — the honest last resort, from the same start-time chain
-         `_meeting_stamp` already owns. Never raises and never returns empty.
+         `_meeting_stamp` already owns. Never returns empty. A meetings door that had a moment
+         raises out of tiers 2 and 4 and the step is retried (brain:card/4310908cf3b3).
 
     Never "your meeting": that string was every OTHER step's own no-organizer-either guess, not a
     resolved title, and folding it in here would make a title-shaped mail sentence
@@ -1080,6 +1104,8 @@ def _mail_title(ctx) -> str:
     try:
         row = mt.meeting_row(uid, ctx.refs.get("meeting_id"), ctx.refs.get("native")) if uid \
             else None
+    except StepError:
+        raise               # the door had a moment: retried, never cached as a guessed title
     except Exception:  # noqa: BLE001 — a title lookup is never worth failing the mail over
         row = None
     if isinstance(row, dict):
@@ -1160,6 +1186,8 @@ def _scaffold_refs(ctx, uid, meeting_id=None) -> dict:
     try:
         carried = (_note_path(ctx, uid, ctx.refs["title"], meeting_id) if ctx.refs.get("title")
                    else _recorded_note_path(ctx, uid, meeting_id))
+    except StepError:
+        raise           # a door that had a moment is retried, not minted without its path
     except Exception:  # noqa: BLE001 — a path we cannot compute is not a reason to fail a mint
         carried = ""
     if carried:
@@ -1467,7 +1495,7 @@ def build(reg: Registry, db) -> None:
     # the reaction ends there, carrying the reason. Declared at registration rather than checked in
     # the body, for the reason `Registry.step` gives: a body that has to remember to ask cannot be
     # enumerated, and the next step somebody adds will not remember.
-    for _fn in (mt.await_start, mt.dispatch_bot, mt.run_meeting):
+    for _fn in (mt.await_start, mt.dispatch_bot, mt.run_meeting, mt.start_booked_bot):
         reg.step(needs=("meetings",))(_fn)
 
     @reg.step
@@ -2512,6 +2540,8 @@ def build(reg: Registry, db) -> None:
                     provenance={"flow": "post_meeting", "step": "email_attendees",
                                 "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
                                 "minted_by": str(ctx.refs["uid"])})
+            except Unavailable:
+                raise           # the meetings door had a moment: it keeps its own longer wait
             except StepError as e:
                 pending = [x for x in who if x not in sent]
                 raise StepError(
@@ -3214,9 +3244,25 @@ def build(reg: Registry, db) -> None:
     # never saw an update: a moved meeting got its bot at the old time, a cancelled one got it anyway.
     reg.flow(name="invite_intake", version=4, on=INVITE,
              steps=[s["ensure_user"], s["rsvp_accept"], s["ack_by_email"], s["emit_prep"]])
-    # THE BOT FOLLOWS THE MEETING (`invite_join`) is NOT registered here: it is a SEED (`SEEDS`), a
-    # company flow the global account's agent owns, reads and changes from chat (founder 2026-10-14:
-    # "the global level is owned by the global user's agent"). The image carries its steps only.
+    # THE BOT FOLLOWS THE MEETING (ADR-0050): one keyed schedule per meeting (`event_key`: UID, plus
+    # RECURRENCE-ID for one occurrence), armed by `invite.received`, MOVED by every update, CANCELLED
+    # by `invite.cancelled`; one minute before the start it runs the steps invite_intake v3 ran after
+    # `await_start`, with the invite's refs (its `workspace` among them), so the meeting's record is
+    # the same and it lands in the invite's workspace.
+    # REGISTERED IN CODE, NOT A SEED (ADR-0052 §6, decided 2026-11-01): it carries the guarantee that
+    # a booked bot is on time, so it changes with the code. It was a seed (a company flow the global
+    # account owned) until then; `drop_former_seeds` removes that stored copy once.
+    reg.flow(name="invite_join", version=1, on=EventType("invite.*"),
+             steps=[s["ensure_user"], s["dispatch_bot"], s["emit_started"], s["run_meeting"],
+                    s["emit_completed"]],
+             params={"_trigger": INVITE_JOIN_TRIGGER})
+    # THE BOOKED BOT (ADR-0052 §6, decided 2026-11-01): Flows owns the one clock (ADR-0046). A
+    # booking reaches it durably as `meeting.planned.changed` (meeting-api's outbox, §4); at `pod_at`
+    # the bot is started for THAT planned row id, through the start route meeting-api guards (§5).
+    # Instance-scoped: no person's daily run cap applies (`admissible` counts owned flows only); the
+    # account's concurrency ceiling is the bound. Registered in code so it changes with the code.
+    reg.flow(name="booked_bot", version=1, on=PLANNED,
+             steps=[s["start_booked_bot"]], params={"_trigger": BOOKED_BOT_TRIGGER})
     # `onboard_person` and `onboard_group` are RETIRED (decision 29) — the email conversations that
     # chased a person until they finished setup. They are not declared, so nothing reacts to
     # `onboarding.*.needed` any more, and `spawn_onboardings` no longer emits it either. Their
@@ -3298,15 +3344,6 @@ def build(reg: Registry, db) -> None:
 #: retire), and an upgrade that changes the seed does not overwrite it — the new seed is only a
 #: version the global agent may choose to submit. `created_by: seed` marks the copy.
 SEEDS = (
-    # THE BOT FOLLOWS THE MEETING (ADR-0050): one keyed schedule per meeting (`event_key`: UID, plus
-    # RECURRENCE-ID for one occurrence), armed by `invite.received`, MOVED by every update, CANCELLED
-    # by `invite.cancelled`; one minute before the start it runs the steps invite_intake v3 ran after
-    # `await_start`, with the invite's refs (its `workspace` among them), so the meeting's record is
-    # the same and it lands in the invite's workspace.
-    {"name": "invite_join", "on_event": "invite.*",
-     "steps": ["ensure_user", "dispatch_bot", "emit_started", "run_meeting", "emit_completed"],
-     "params": {"_trigger": {"kind": "relative", "filter": "payload.url exists",
-                             "at": "payload.start - 60s", "key": "payload.event_key"}}},
     # WHAT A MEETING SIGNAL DOES (transcript signals, 2026-10-15): the `signals` service posts one
     # `meeting.signal` when a live meeting's buffer is worth the agent's attention; this wakes the
     # meeting's agent in the meeting's chat with the buffer as data. A company changes the plan
@@ -3316,6 +3353,43 @@ SEEDS = (
     # …AND A ROOM'S (rooms, 2026-10-15): a room's sensor wakes the agent in the room itself.
     {"name": "room_signal", "on_event": "room.signal", "steps": ["wake_meeting_chat"], "params": {}},
 )
+
+
+#: Company flows that were seeds and are now registered in code (ADR-0052 §6). Their stored copy is
+#: removed once by `drop_former_seeds`, so no version in the table shadows the code's.
+FORMER_SEEDS = ("invite_join",)
+
+
+def drop_former_seeds(db) -> list:
+    """THE ONE-OFF MIGRATION (ADR-0052 §6): for each flow in `FORMER_SEEDS` whose seed row is still
+    stored (`created_by = 'seed'`), delete that seed row (the copy Vexa wrote) and RETIRE every other
+    instance version of it (versions the company account authored on top: kept, with their history,
+    never deleted), so the code's version is the one that runs. A retired version stays readable and
+    may be re-activated by the company. Said at warning level when such versions existed. Once the
+    seed row is gone this does nothing, so a version submitted later is never touched.
+    Returns the names whose seed copy was removed."""
+    removed = []
+    for name in FORMER_SEEDS:
+        try:
+            rows = db.execute("SELECT version, status, created_by FROM flow_version "
+                              "WHERE scope = 'instance' AND name = :n", {"n": name})
+        except Exception:  # noqa: BLE001 — a store with no table (a stub) has nothing to remove
+            return removed
+        if not any(by == "seed" for _, _, by in rows):
+            continue
+        db.execute("DELETE FROM flow_version WHERE scope = 'instance' AND name = :n "
+                   "AND created_by = 'seed'", {"n": name})
+        authored = [f"v{v} ({st}, by {by or 'unknown'})" for v, st, by in rows if by != "seed"]
+        if authored:
+            db.execute("UPDATE flow_version SET status = 'retired' WHERE scope = 'instance' "
+                       "AND name = :n AND status = 'active'", {"n": name})
+            logger.warning("former seed %s: seed copy removed; the company's own versions %s are "
+                           "kept and retired — the flow now runs from the code (ADR-0052)", name,
+                           ", ".join(authored))
+        else:
+            logger.info("former seed %s: seed copy removed; the flow now runs from the code", name)
+        removed.append(name)
+    return removed
 
 
 def seed(db, now: "float | None" = None) -> list:

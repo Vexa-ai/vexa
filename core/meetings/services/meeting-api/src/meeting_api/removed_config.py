@@ -21,6 +21,12 @@ REMOVED_KEYS = {
                            "tx); meeting ownership, workspace and share decide each meeting"),
     "VEXA_WEBHOOK_STORED_URL_POLICY": "every webhook delivery is held to the outbound-url.v1 guard",
     "VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S": "a transcript entry is stored only when it is signed",
+    # ADR-0052 §3 (s2d): meeting-api's auto-join sweep is gone; Flows' booked_bot starts booked bots.
+    "AUTO_JOIN_SWEEP_INTERVAL_S": ("there is no auto-join sweep: Flows' booked_bot starts a booked "
+                                   "meeting's bot at start − BOOKED_POD_LEAD_S"),
+    "AUTO_JOIN_LEAD_S": ("BOOKED_POD_LEAD_S (the bot's pod starts, default 600 s before the start) "
+                         "and BOOKED_JOIN_LEAD_S (it opens the meeting, default 120 s before)"),
+    "AUTO_JOIN_GRACE_S": "BOOKED_GRACE_S (the last moment a bot may still be started after the start)",
 }
 
 log = logging.getLogger(__name__)

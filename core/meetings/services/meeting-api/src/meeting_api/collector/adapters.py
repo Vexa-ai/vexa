@@ -1258,13 +1258,25 @@ class SqlAlchemyTranscriptStore:
     async def set_intent(self, user_id, platform, native_meeting_id, status, scheduled_at=None):
         """Owner-scoped atomic write of the INTENT status (``idle`` / ``scheduled``) onto the
         ``meetings.status`` column under ONE ``SELECT … FOR UPDATE`` row lock. Stamps / clears
-        ``meeting.data['scheduled_at']``. NEVER touches the bot FSM."""
-        from sqlalchemy import select
+        ``meeting.data['scheduled_at']``. NEVER touches the bot FSM.
+
+        ADR-0052 §8: a ``scheduled_at`` that is not ISO-8601 → ``{"error": "invalid_scheduled_at"}``;
+        a row that BECOMES a future booking with a bot while the account's other future bookings
+        are at ``BOOKED_MAX_PER_ACCOUNT`` → ``{"error": "booking_cap", "cap": N}``, nothing written.
+        Under the per-user advisory lock every planned-row writer takes, so the count is exact."""
+        from sqlalchemy import bindparam, select, text
         from sqlalchemy.orm.attributes import flag_modified
 
+        from .booking import cap_reached, future_bookings, is_future_booking, parse_scheduled_at
         from .models import Meeting
 
+        if status == "scheduled" and scheduled_at and parse_scheduled_at(scheduled_at) is None:
+            return {"error": "invalid_scheduled_at"}
+
         async with self._session_factory() as db:
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
+            )
             stmt = (
                 select(Meeting)
                 .where(
@@ -1283,12 +1295,23 @@ class SqlAlchemyTranscriptStore:
             prev_status = meeting.status
             prev_at = data.get("scheduled_at")
             new_at = scheduled_at if status == "scheduled" else None
-            meeting.status = status
+            after = dict(data)
             if status == "scheduled":
-                data["scheduled_at"] = new_at
+                after["scheduled_at"] = new_at
             else:
-                data.pop("scheduled_at", None)
-            meeting.data = data
+                after.pop("scheduled_at", None)
+            if is_future_booking(status, after) and not is_future_booking(prev_status, data):
+                held = future_bookings((await db.execute(
+                    select(Meeting.data).where(Meeting.user_id == user_id,
+                                               Meeting.status == "scheduled",
+                                               Meeting.id != meeting.id)
+                )).scalars().all())
+                cap = cap_reached(held)
+                if cap is not None:
+                    await db.rollback()
+                    return {"error": "booking_cap", "cap": cap}
+            meeting.status = status
+            meeting.data = after
             flag_modified(meeting, "data")
             await db.commit()
             changed = (prev_status != status) or (prev_at != new_at)
@@ -1328,7 +1351,8 @@ class SqlAlchemyTranscriptStore:
                                      calendar_source=None,
                                      workspace_source=None, attendees=None,
                                      auto_join_last_attempt=None,
-                                     auto_join_error=None, room_plan=None) -> dict:
+                                     auto_join_error=None, room_plan=None,
+                                     over_cap="refuse") -> dict:
         """Insert a PLANNED row (intent status, no bot). Takes the SAME per-user advisory lock as
         ``bot_spawn.create_meeting_guarded`` so planned-create serializes with concurrent spawns
         and calendar sync; the unique partial index remains the DB-level backstop (→ duplicate).
@@ -1372,11 +1396,29 @@ class SqlAlchemyTranscriptStore:
             if key in ROOM_PLAN_KEYS and value:
                 data[key] = value
         status = "scheduled" if scheduled_at else "idle"
+        from .booking import booked_max_per_account, cap_message, future_bookings, parse_scheduled_at
+
+        if scheduled_at and parse_scheduled_at(scheduled_at) is None:
+            return {"error": "invalid_scheduled_at"}
 
         async with self._session_factory() as db:
             await db.execute(
                 text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
             )
+            # ADR-0052 §8: under the same lock, the account's future bookings with a bot against
+            # BOOKED_MAX_PER_ACCOUNT. Over it the API is refused; calendar sync (`over_cap="stamp"`)
+            # still mirrors the event, with no bot and the reason on the row.
+            if status == "scheduled" and data.get("auto_join"):
+                cap = booked_max_per_account()
+                held = future_bookings((await db.execute(
+                    select(Meeting.data).where(Meeting.user_id == user_id,
+                                               Meeting.status == "scheduled")
+                )).scalars().all())
+                if held >= cap:
+                    if over_cap != "stamp":
+                        return {"error": "booking_cap", "cap": cap}
+                    data["auto_join"] = False
+                    data["auto_join_error"] = cap_message(cap)
             if native_meeting_id is not None:
                 dup = (await db.execute(
                     select(Meeting.id).where(
@@ -1643,14 +1685,28 @@ class SqlAlchemyTranscriptStore:
             await db.refresh(meeting)
             return self._planned_row(meeting)
 
-    async def update_planned_meeting(self, user_id, meeting_id, updates) -> "Optional[dict]":
+    async def update_planned_meeting(self, user_id, meeting_id, updates,
+                                     over_cap="refuse") -> "Optional[dict]":
         """ROW-id-addressed PATCH of a planned row (intent status only). ``updates`` carries only
-        the keys the caller sent — presence means apply (None clears where documented)."""
+        the keys the caller sent — presence means apply (None clears where documented).
+
+        ADR-0052 §8, the same bounds as ``create_planned_meeting``: a ``scheduled_at`` that is not
+        ISO-8601 → ``{"error": "invalid_scheduled_at"}``; a row that BECOMES a future booking with a
+        bot here (an idle plan given a time, ``auto_join`` back on, a past time moved ahead) while
+        the account's other future bookings are at the cap → ``{"error": "booking_cap", "cap": N}``
+        and nothing written, or with ``over_cap="stamp"`` (calendar sync) the change is written with
+        ``auto_join`` off and ``auto_join_error`` saying why. A row that already counted is never
+        refused."""
         from sqlalchemy import bindparam, select, text
         from sqlalchemy.exc import IntegrityError
         from sqlalchemy.orm.attributes import flag_modified
 
+        from .booking import (cap_reached, clear_cap_stamp, future_bookings, is_future_booking,
+                              parse_scheduled_at, stamp_over_cap)
         from .models import Meeting
+
+        if updates.get("scheduled_at") and parse_scheduled_at(updates["scheduled_at"]) is None:
+            return {"error": "invalid_scheduled_at"}
 
         async with self._session_factory() as db:
             await db.execute(
@@ -1665,6 +1721,16 @@ class SqlAlchemyTranscriptStore:
             if meeting.status not in ("idle", "scheduled"):
                 return {"error": "conflict"}
             data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            # ADR-0052 §8. Only `scheduled_at` (status + time) and `auto_join` can make a row count
+            # against the cap, so the other rows are counted only then — before this row is touched,
+            # so the read flushes nothing — under the per-user lock taken above.
+            others = select(Meeting.data).where(Meeting.user_id == user_id,
+                                                Meeting.status == "scheduled",
+                                                Meeting.id != meeting_id)
+            was_booking = is_future_booking(meeting.status, data)
+            held = None
+            if not was_booking and ("scheduled_at" in updates or "auto_join" in updates):
+                held = future_bookings((await db.execute(others)).scalars().all())
 
             if "native_meeting_id" in updates:
                 new_platform = updates.get("platform") or meeting.platform
@@ -1750,6 +1816,19 @@ class SqlAlchemyTranscriptStore:
                         data.pop(key, None)
             if "calendar_managed" in updates:
                 data["calendar_managed"] = bool(updates["calendar_managed"])
+
+            if is_future_booking(meeting.status, data) and not was_booking:
+                if held is None:
+                    with db.no_autoflush:
+                        held = future_bookings((await db.execute(others)).scalars().all())
+                cap = cap_reached(held)
+                if cap is not None:
+                    if over_cap != "stamp":
+                        await db.rollback()
+                        return {"error": "booking_cap", "cap": cap}
+                    stamp_over_cap(data, cap)
+            if is_future_booking(meeting.status, data):
+                clear_cap_stamp(data)
 
             meeting.data = data
             flag_modified(meeting, "data")

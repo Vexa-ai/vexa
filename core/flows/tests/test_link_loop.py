@@ -22,6 +22,8 @@ import flows_config
 import pytest
 from flows import Done, Reaction, Registry, StepCtx, StepError
 
+pytestmark = pytest.mark.usefixtures("meetings_hold_no_row")
+
 
 @pytest.fixture(autouse=True)
 def _person_settings_are_declared(monkeypatch):
@@ -283,8 +285,7 @@ def test_the_prep_fact_is_emitted_inside_invite_intake():
     steps = reg.get("invite_intake", newest).steps
     # VERSION 4 (ADR-0050): the intake ends at the prep; the bot is `invite_join`'s keyed schedule
     assert steps[-1] == "emit_prep" and "await_start" not in steps
-    from flows_defs.production import SEEDS
-    assert next(d for d in SEEDS if d["name"] == "invite_join")["steps"][1] == "dispatch_bot"
+    assert reg.get("invite_join", 1).steps[1] == "dispatch_bot"     # code since ADR-0052 §6
     # DECISION 29: three touches and no others — RSVP accept, the ack mail, the prepare mail.
     assert "spawn_onboardings" not in steps
     assert ("onboard_person", 1) not in reg.flows and ("onboard_group", 1) not in reg.flows

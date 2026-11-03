@@ -1,6 +1,6 @@
 ---
 kind: flow-index
-flows: 16
+flows: 18
 generated: from the code that runs them — edits here are overwritten
 ---
 
@@ -11,6 +11,7 @@ Everything this deployment does on its own, one page each. A flow is a trigger a
 | flow | runs when | steps | rules it honours |
 |---|---|---|---|
 | [`agent_messages`](agent_messages.md) | `thread.message` | 1 | — |
+| [`booked_bot`](booked_bot.md) | `meeting.planned.changed` | 1 | — |
 | [`desk_claim`](desk_claim.md) | `claim.proposed` | 1 | — |
 | [`desk_setup`](desk_setup.md) | `desk.unscaffolded` | 1 | — |
 | [`email_chat`](email_chat.md) | `mail.reply` | 2 | — |
@@ -19,6 +20,7 @@ Everything this deployment does on its own, one page each. A flow is a trigger a
 | [`home_compose`](home_compose.md) | `home.stale` | 1 | — |
 | [`invite_intake`](invite_intake.md) | `invite.received` | 9 | — |
 | [`invite_intake`](invite_intake.md) | `invite.received` | 4 | — |
+| [`invite_join`](invite_join.md) | `invite.*` | 5 | — |
 | [`live_meeting`](live_meeting.md) | `meeting.started` | 1 | — |
 | [`meeting_prep`](meeting_prep.md) | `meeting.upcoming` | 1 | `prep_and_invite_mail` |
 | [`meeting_share`](meeting_share.md) | `meeting.shared` | 1 | — |

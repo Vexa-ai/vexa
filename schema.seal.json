@@ -324,8 +324,9 @@
       "uid": "uid TEXT NOT NULL"
     },
     "keyed_schedule": {
-      "CONSTRAINT keyed_status CHECK (status IN ('armed','fired','cancelled','missed'))": "CONSTRAINT keyed_status CHECK (status IN ('armed','fired','cancelled','missed'))",
+      "CONSTRAINT keyed_status CHECK (status IN ('armed','fired','cancelled','missed','retired'))": "CONSTRAINT keyed_status CHECK (status IN ('armed','fired','cancelled','missed','retired'))",
       "PRIMARY KEY (scope, flow, key)": "PRIMARY KEY (scope, flow, key)",
+      "deadline": "deadline DOUBLE PRECISION",
       "event_type": "event_type TEXT NOT NULL",
       "fire_at": "fire_at DOUBLE PRECISION NOT NULL",
       "fired_for": "fired_for DOUBLE PRECISION",
@@ -486,6 +487,14 @@
       "token_hash": "Column(String(64), nullable=False, unique=True)",
       "uses": "Column(Integer, nullable=False, server_default='0', default=0)"
     },
+    "meeting_planned_outbox": {
+      "created_at": "Column(DateTime, server_default=func.now())",
+      "delivered": "Column(Boolean, nullable=False, default=False, server_default=text('false'))",
+      "delivered_at": "Column(DateTime, nullable=True)",
+      "event": "Column(JSONB, nullable=False)",
+      "id": "Column(BigInteger, primary_key=True, autoincrement=True)",
+      "meeting_id": "Column(Integer, nullable=False, index=True)"
+    },
     "meeting_sessions": {
       "id": "Column(Integer, primary_key=True, index=True)",
       "meeting_id": "Column(Integer, ForeignKey('meetings.id'), nullable=False, index=True)",
@@ -590,6 +599,14 @@
     }
   },
   "core/meetings/services/meeting-api/src/meeting_api/sessions/models.py": {
+    "meeting_planned_outbox": {
+      "created_at": "Column(DateTime, server_default=func.now())",
+      "delivered": "Column(Boolean, nullable=False, default=False, server_default=text('false'))",
+      "delivered_at": "Column(DateTime, nullable=True)",
+      "event": "Column(JSONB, nullable=False)",
+      "id": "Column(BigInteger, primary_key=True, autoincrement=True)",
+      "meeting_id": "Column(Integer, nullable=False, index=True)"
+    },
     "meeting_sessions": {
       "id": "Column(Integer, primary_key=True, index=True)",
       "meeting_id": "Column(Integer, ForeignKey('meetings.id'), nullable=False, index=True)",

@@ -30,7 +30,8 @@ import httpx
 import pytest
 
 from meeting_api import create_app
-from meeting_api.bot_spawn.auto_join import auto_join_tick, due_rows
+from _booked_start import start_scheduled
+from meeting_api.bot_spawn.ports import planned_row_startable
 from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
 from meeting_api.bot_spawn.ports import MeetingStopped
 from meeting_api.bot_spawn.service import request_bot
@@ -83,7 +84,8 @@ async def _seed_scheduled(repo, *, native=NATIVE, data=None) -> dict:
 
 
 async def _sweep(repo, runtime, at):
-    return await auto_join_tick(
+    """The start route over every scheduled row, as Flows' booked_bot calls it (ADR-0052 §6)."""
+    return await start_scheduled(
         repo, runtime, transcribe_gate=lambda: None, now=at,
         token_secret="s", redis_url="redis://r", allow_uncapped=True,
     )
@@ -135,17 +137,19 @@ async def test_f1_a_flagged_scheduled_row_is_never_due():
 
     Post-fix the stop terminalizes the plan, so this shape should not exist — but rev-193 rows do
     exist, and a row carrying the user's stop must never be due whatever left it that way. Asserted
-    on the PURE filter so it holds for every caller of ``due_rows``."""
+    on the ONE predicate every start path reads (``planned_row_startable``: the start route's
+    pre-check, and both repos' claim under the row lock), so it holds whoever calls it."""
     zombie = {
         "id": 26306, "user_id": USER, "platform": PLATFORM, "native_meeting_id": NATIVE,
         "status": "scheduled",
         "data": {"scheduled_at": WHEN, "auto_join": True, "stop_requested": True},
     }
-    assert due_rows([zombie], now=_at(0)) == []
-    # ...and the identical row WITHOUT the flag is due — so the test proves the flag is the cause,
-    # not the window.
+    key = dict(user_id=USER, platform=PLATFORM, native_meeting_id=NATIVE)
+    assert not planned_row_startable(zombie, **key)
+    # ...and the identical row WITHOUT the flag may start — so the test proves the flag is the
+    # cause, not the window.
     ok = {**zombie, "data": {k: v for k, v in zombie["data"].items() if k != "stop_requested"}}
-    assert due_rows([ok], now=_at(0)) == [ok]
+    assert planned_row_startable(ok, **key)
 
 
 async def test_f1_an_explicit_new_post_still_works_on_a_stopped_room():

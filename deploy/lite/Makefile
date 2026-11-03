@@ -332,6 +332,8 @@ init-db:
 ## runtime caller credential is held by the runtime, agent-api and meeting-api and nothing else.
 ## Then check the services (tests/service_checks.py): the admin key is not a published one, and
 ## admin-api reads its delegation revocation store in Redis.
+## Then check Flows (tests/flows_checks.py, ADR-0052): flows-api and flows-worker run and stay up,
+## flows-api reads its tables with the operator key, and the gateway's service door answers.
 ## Then start a worker for a numeric and a named subject, a bot, and refused dispatches through the
 ## runtime (tests/child_identities.py): no child is root, each runs as its own uid, and none can read
 ## another process's environment, a secret on any command line, or root's state.
@@ -347,6 +349,7 @@ test:
 	done; \
 	docker exec -i $(APP_CONTAINER) python3 - < "$(ROOT)/deploy/lite/tests/program_environments.py" || FAIL=1; \
 	docker exec -i $(APP_CONTAINER) python3 - < "$(ROOT)/deploy/lite/tests/service_checks.py" || FAIL=1; \
+	docker exec -i $(APP_CONTAINER) python3 - < "$(ROOT)/deploy/lite/tests/flows_checks.py" || FAIL=1; \
 	docker exec -i $(APP_CONTAINER) python3 - < "$(ROOT)/deploy/lite/tests/child_identities.py" || FAIL=1; \
 	exit $$FAIL
 
