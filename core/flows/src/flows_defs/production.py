@@ -55,7 +55,8 @@ import sys as _sys
 import time
 from pathlib import Path
 
-from flows import Done, NotPresent, Registry, StepCtx, StepError, Wait, EventType, tickets
+from flows import (Done, NotPresent, Registry, StepCtx, StepError, Unavailable, Wait, EventType,
+                   tickets)
 
 from flows_steps import agent as ag
 from flows_steps import emailx as mx          # thread bookkeeping + the iMIP calendar reply only
@@ -920,6 +921,8 @@ def _recorded_note_path(ctx, uid, meeting_id=None) -> str:
     if mid or native:
         try:
             row = mt.meeting_row(uid, mid, native)
+        except StepError:
+            raise           # the door had a moment: retried, never cached as "no recorded path"
         except Exception:  # noqa: BLE001 — a lookup we cannot make is not a recorded path
             row = None
         if isinstance(row, dict):
@@ -957,6 +960,8 @@ def _call_session(ctx) -> str:
     uid = ctx.refs.get("uid")
     try:
         row = mt.meeting_row(str(uid), ctx.refs.get("meeting_id"), ctx.refs.get("native"))
+    except StepError:
+        raise               # the door had a moment: retried, never cached as "not a call"
     except Exception:  # noqa: BLE001 — an unreadable row is a meeting with no session
         row = None
     data = (row or {}).get("data") if isinstance(row, dict) else None
@@ -1068,7 +1073,8 @@ def _mail_title(ctx) -> str:
          when platform is missing or the literal placeholder `"unknown"` (row 97's shape, R-B06's
          own comment above) — a title that says nothing beats one that says the wrong thing.
       4. `"Meeting on <date>"` — the honest last resort, from the same start-time chain
-         `_meeting_stamp` already owns. Never raises and never returns empty.
+         `_meeting_stamp` already owns. Never returns empty. A meetings door that had a moment
+         raises out of tiers 2 and 4 and the step is retried (brain:card/4310908cf3b3).
 
     Never "your meeting": that string was every OTHER step's own no-organizer-either guess, not a
     resolved title, and folding it in here would make a title-shaped mail sentence
@@ -1098,6 +1104,8 @@ def _mail_title(ctx) -> str:
     try:
         row = mt.meeting_row(uid, ctx.refs.get("meeting_id"), ctx.refs.get("native")) if uid \
             else None
+    except StepError:
+        raise               # the door had a moment: retried, never cached as a guessed title
     except Exception:  # noqa: BLE001 — a title lookup is never worth failing the mail over
         row = None
     if isinstance(row, dict):
@@ -1178,6 +1186,8 @@ def _scaffold_refs(ctx, uid, meeting_id=None) -> dict:
     try:
         carried = (_note_path(ctx, uid, ctx.refs["title"], meeting_id) if ctx.refs.get("title")
                    else _recorded_note_path(ctx, uid, meeting_id))
+    except StepError:
+        raise           # a door that had a moment is retried, not minted without its path
     except Exception:  # noqa: BLE001 — a path we cannot compute is not a reason to fail a mint
         carried = ""
     if carried:
@@ -2530,6 +2540,8 @@ def build(reg: Registry, db) -> None:
                     provenance={"flow": "post_meeting", "step": "email_attendees",
                                 "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
                                 "minted_by": str(ctx.refs["uid"])})
+            except Unavailable:
+                raise           # the meetings door had a moment: it keeps its own longer wait
             except StepError as e:
                 pending = [x for x in who if x not in sent]
                 raise StepError(

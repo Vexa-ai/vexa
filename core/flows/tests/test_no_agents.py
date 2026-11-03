@@ -20,6 +20,8 @@ from flows_steps import common
 
 import flows_defs.production as production
 
+pytestmark = pytest.mark.usefixtures("meetings_hold_no_row")
+
 
 @pytest.fixture(autouse=True)
 def _person_settings_are_declared(monkeypatch):

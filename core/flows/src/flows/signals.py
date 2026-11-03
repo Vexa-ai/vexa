@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 
 from .clock import Clock
-from .db import DB
+from .db import DB, dumps, loads
 
 
 def _record(db: DB, reaction_id: str, kind: str, actor: str, reason: str | None, clock: Clock) -> None:
@@ -38,11 +38,19 @@ def resume(db: DB, reaction_id: str, actor: str, clock: Clock, reason: str | Non
 def retry(db: DB, reaction_id: str, actor: str, clock: Clock, reason: str | None = None) -> bool:
     """Operator replay of a failed reaction: a NEW attempt, causally linked by the signal row.
     The ledger of what happened is never mutated — receipts stay."""
+    from .loop import without_outage_clocks
+    failed = db.execute("SELECT scratch FROM reaction WHERE reaction_id = :rid AND status = 'failed'",
+                        {"rid": reaction_id})
+    if not failed:
+        return False
+    # A new attempt starts its own outage clock, dropped in the same guarded UPDATE that makes it
+    # due: a worker claiming the row the moment it is due must not read the old one.
     rows = db.execute(
         """UPDATE reaction SET status = 'retrying', attempt = 0, next_run_at = :now,
-                  reason = NULL, updated_at = :now
+                  reason = NULL, scratch = :s, updated_at = :now
            WHERE reaction_id = :rid AND status = 'failed' RETURNING reaction_id""",
-        {"now": clock.now(), "rid": reaction_id})
+        {"now": clock.now(), "s": dumps(without_outage_clocks(loads(failed[0][0]))),
+         "rid": reaction_id})
     if rows:
         _record(db, reaction_id, "retry", actor, reason, clock)
     return bool(rows)

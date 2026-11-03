@@ -57,7 +57,8 @@ import json
 import logging
 import re
 
-from flows import Block, Done, Registry, StepCtx, StepError, Wait
+from flows import (UNAVAILABLE_SINCE, Block, Done, Registry, StepCtx, StepError,
+                   Unavailable, Wait)
 
 #: THE SAME CHANNEL AS THE OTHER HALF, deliberately: `production.py` logs to `flows.production`,
 #: and these five flows are one production definition that happens to live in two files. An
@@ -112,6 +113,13 @@ def build(reg: Registry, db, home=None) -> None:
 
         Reads: refs.{organizer|person, title, start, uid?, meeting_id?, url?}
         Effect: one notification · Result: {message_id, meeting_ref}."""
+        start = ctx.refs.get("start")
+        started = bool(start) and ctx.clock_now >= float(start)
+        # The wait on a meetings door that had a moment ends at the start even when the door is
+        # back by then: the attempt that finds it up must not mail a meeting already running.
+        if started and UNAVAILABLE_SINCE + "prepare_meeting" in (ctx.scratch or {}):
+            return Done({"skipped": "the meeting started while the meetings door was "
+                                    "unavailable; a prepare mail after the start prepares nobody"})
         to = ctx.refs.get("person") or ctx.refs["organizer"]
         # `person` is set when this fires for somebody other than the organiser. Only mail them if
         # they ALREADY have an account: ensure_platform_user would create one, and a prepare mail
@@ -135,14 +143,27 @@ def build(reg: Registry, db, home=None) -> None:
         if not p.setting(uid, "mail_prep"):
             return Done({"skipped": "mail_prep is off for this person"})
         title = ctx.refs.get("title") or "your meeting"
+
+        def _too_late(e: Unavailable):
+            """A meetings door that had a moment is waited on, but not past the meeting's start: a
+            prepare mail that lands after the meeting began prepares nobody."""
+            if started:
+                return Done({"skipped": f"the meeting started while the meetings door was "
+                                        f"unavailable ({e}); a prepare mail after the start "
+                                        f"prepares nobody"})
+            raise e
+
         ref = str(ctx.refs.get("meeting_id") or "")
         if not ref and ctx.refs.get("url"):
             # PLAN it, do not merely address it. The link used to carry the native id because the
             # row is minted at dispatch — so the prep chat opened on a Zoom number, held nothing
             # under it, and reached for the only meeting it could find. dispatch_bot claims this
             # same row at start-2min, so nothing downstream forks.
-            ref = p.mt.ensure_meeting_row(uid, ctx.refs["url"], ctx.refs.get("title"),
-                                          ctx.refs.get("start"))
+            try:
+                ref = p.mt.ensure_meeting_row(uid, ctx.refs["url"], ctx.refs.get("title"),
+                                              ctx.refs.get("start"))
+            except Unavailable as e:
+                return _too_late(e)
         if not ref:
             raise StepError("nothing to link to — refs carry neither meeting_id nor url",
                             retryable=False)
@@ -165,8 +186,12 @@ def build(reg: Registry, db, home=None) -> None:
         # THE SCAFFOLD (PRD §5.5). The row was planned above precisely so this link can name it;
         # the mint is the last check that the chat behind the button will hold the meeting, and it
         # RAISES rather than mailing a prepare note whose button opens a chat that knows nothing.
+        try:
+            scaffold_refs = p._scaffold_refs(ctx, uid, meeting_id=ref)
+        except Unavailable as e:
+            return _too_late(e)
         link = p.mint_scaffold("prep", to, opening="prep", meeting_id=ref,
-                               refs=p._scaffold_refs(ctx, uid, meeting_id=ref),
+                               refs=scaffold_refs,
                                provenance={"flow": "meeting_prep", "step": "prepare_meeting",
                                            "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
                                            "minted_by": str(uid)})

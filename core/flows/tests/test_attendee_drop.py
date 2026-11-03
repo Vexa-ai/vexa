@@ -28,6 +28,8 @@ from flows import Done, Reaction, Registry, StepCtx, StepError
 
 from test_link_loop import FakeScaffolds, _StubDB
 
+pytestmark = pytest.mark.usefixtures("meetings_hold_no_row")
+
 
 @pytest.fixture(autouse=True)
 def scaffolds(monkeypatch):

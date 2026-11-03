@@ -107,6 +107,20 @@ def registry(db, monkeypatch):
     return reg
 
 
+@pytest.fixture
+def meetings_hold_no_row(monkeypatch):
+    """THE MEETINGS DOOR ANSWERS "NO SUCH ROW", for a suite about a step that reads the row on its way
+    (the note path, the title, the stamp) and is not about that read.
+
+    The suite's door refuses every connection (`OFFLINE_DOORS`), and the meeting reads used to take a
+    refusal as "no row": these suites passed on it without saying so. A refusal now raises and is
+    retried (brain:card/4310908cf3b3), so a suite that means "no row" asks for it here. A test that
+    wants a row still stubs `meeting_row` / `meeting_start` itself."""
+    from flows_steps import meeting as mt
+    monkeypatch.setattr(mt, "meeting_row", lambda uid, meeting_id, native=None: None)
+    monkeypatch.setattr(mt, "meeting_start", lambda uid, meeting_id, native=None: None)
+
+
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
