@@ -164,6 +164,73 @@ def test_a_meetings_call_needs_a_real_subject(door):
     assert up.forwarded() == []
 
 
+# ADR-0052 decided item 6: a person lookup that got no answer (a network error, a timeout, a 5xx)
+# is a 503 Flows retries; identity's 404 is an answer, and it and every other refusal stay loud.
+START = "/meetings/internal/meetings/41/start"     # booked_bot's call
+
+
+def _door_whose_identity(answer, **upstreams):
+    """A door whose identity lookup answers `answer(request)`; every other call answers 200."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path.endswith("/identity"):
+            return answer(request)
+        return httpx.Response(200, json={"ok": True})
+
+    app = create_door_app(flows_key=FLOWS_KEY, internal_secret=INTERNAL,
+                          upstreams={**UPSTREAMS, **upstreams},
+                          client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+                          identity_key=SIGNING_KEY)
+    return app, seen
+
+
+def _raises(exc):
+    def answer(request):
+        raise exc("identity", request=request)
+    return answer
+
+
+@pytest.mark.parametrize("answer", [_raises(httpx.ConnectError), _raises(httpx.ReadTimeout),
+                                    _raises(httpx.ConnectTimeout),
+                                    lambda r: httpx.Response(500),
+                                    lambda r: httpx.Response(502),
+                                    lambda r: httpx.Response(503, json={"detail": "restarting"})],
+                         ids=["network_error", "read_timeout", "connect_timeout", "http_500",
+                              "http_502", "http_503"])
+def test_a_person_lookup_that_got_no_answer_is_a_503_to_retry(answer):
+    app, seen = _door_whose_identity(answer)
+    with TestClient(app) as c:
+        r = c.post(START, headers=_flows(**{"X-User-Id": "7"}))
+    assert r.status_code == 503 and r.json()["reason"] == "identity_unavailable"
+    # not the door's own refusal: Flows fails a detail that begins "service door:" loudly
+    assert not r.json()["detail"].startswith("service door:")
+    assert [q.url.path for q in seen] == ["/internal/users/7/identity"]    # nothing forwarded
+
+
+def test_an_unknown_person_is_a_loud_403_not_a_503(door):
+    c, up = door
+    r = c.post(START, headers=_flows(**{"X-User-Id": "8"}))               # identity: 404
+    assert r.status_code == 403 and r.json()["reason"] == "subject_unknown"
+    assert r.json()["detail"].startswith("service door:")
+    assert [q.url.path for q in up.seen] == ["/internal/users/8/identity"]
+
+
+def test_every_other_refusal_stays_loud_while_identity_is_down():
+    app, seen = _door_whose_identity(_raises(httpx.ConnectError))
+    with TestClient(app) as c:
+        r = c.post(START, headers={"X-Vexa-Service-Key": "nope", "X-User-Id": "7"})
+        assert r.status_code == 403 and r.json()["reason"] == "service_key_required"
+        r = c.post("/meetings/internal/meetings/41/stop", headers=_flows(**{"X-User-Id": "7"}))
+        assert r.status_code == 403 and r.json()["reason"] == "not_on_the_allow_list"
+    app, undeployed = _door_whose_identity(_raises(httpx.ConnectError), meetings="")
+    with TestClient(app) as c:
+        r = c.post(START, headers=_flows(**{"X-User-Id": "7"}))
+        assert r.status_code == 404 and r.json()["reason"] == "domain_not_deployed"
+    assert seen == [] and undeployed == []
+
+
 def test_only_the_subject_crosses_never_a_scope_a_class_or_a_delegation(door):
     """Before, the internal tier believed every `x-user-*` a secret holder sent — scopes, the
     credential class (`session` satisfies session-only rules), workspaces, a delegation."""
