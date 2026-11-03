@@ -159,9 +159,9 @@ spec:
               value: {{ .Values.meetingApi.systemWebhookAllowPrivateHttp | default "false" | quote }}
             - name: VEXA_SYSTEM_WEBHOOK_TIMEOUT_S
               value: {{ .Values.meetingApi.systemWebhookTimeoutSeconds | default "10" | quote }}
-            # meetingApi.bookedMaxPerAccount: the booking cap. hasKey, not `default`: 0 is a real cap.
+            # meetingApi.bookedMaxPerAccount: the booking cap (vexa.bookedMaxPerAccount). 0 is a real cap.
             - name: BOOKED_MAX_PER_ACCOUNT
-              value: {{ hasKey .Values.meetingApi "bookedMaxPerAccount" | ternary (toString .Values.meetingApi.bookedMaxPerAccount) "500" | quote }}
+              value: {{ include "vexa.bookedMaxPerAccount" . | quote }}
             # diagnostics.captureSignal (default "false"): no captured-signal tape unless turned on.
             - name: VEXA_CAPTURE_SIGNAL_DEFAULT
               value: {{ include "vexa.captureSignalDefault" . | quote }}

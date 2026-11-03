@@ -19,23 +19,25 @@ title) is never refused, so an account over the cap from before it existed keeps
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime, timezone
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Mapping, Optional
 
+BOOKED_MAX_ENV = "BOOKED_MAX_PER_ACCOUNT"
 DEFAULT_BOOKED_MAX_PER_ACCOUNT = 500
 CAP_REACHED = "booking cap reached"
 
 
-def booked_max_per_account() -> int:
-    """``BOOKED_MAX_PER_ACCOUNT``, default 500; an unparseable or negative value is the default."""
-    raw = os.getenv("BOOKED_MAX_PER_ACCOUNT")
+def booked_max_per_account(env: Optional[Mapping[str, str]] = None) -> int:
+    """``BOOKED_MAX_PER_ACCOUNT``, 500 when unset or empty. Anything but a whole number of 0 or more
+    raises ``ValueError`` naming it, and the boot refuses it (``_booking_cap_at_boot``): a typo used
+    to become 500 with no word, a cap nobody chose."""
+    raw = (os.environ if env is None else env).get(BOOKED_MAX_ENV)
     if raw is None or not raw.strip():
         return DEFAULT_BOOKED_MAX_PER_ACCOUNT
-    try:
-        value = int(raw)
-    except ValueError:
-        return DEFAULT_BOOKED_MAX_PER_ACCOUNT
-    return value if value >= 0 else DEFAULT_BOOKED_MAX_PER_ACCOUNT
+    if not re.fullmatch(r"[0-9]+", raw.strip()):
+        raise ValueError(f"{BOOKED_MAX_ENV} must be a whole number of 0 or more (got {raw!r})")
+    return int(raw.strip())
 
 
 def parse_scheduled_at(value: Any) -> Optional[datetime]:
