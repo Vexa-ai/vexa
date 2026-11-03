@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from flows import Block, Done, StepCtx, StepError, Wait
+from flows import Block, Done, StepCtx, StepError, Unavailable, Wait
 
 # `setting` was USED below and never imported — dispatch_bot raised NameError on its first line
 # of real work, which the loop reports as "unexpected: NameError(...)" against the gateway rather
@@ -22,24 +22,33 @@ from meeting_url_redaction import redact_url, redact_urls_in
 # the words, and reaches flows the same way a real one does: through the gateway.
 
 
+class MeetingsUnavailable(Unavailable):
+    """The meetings door answered a 5xx or a 429. `status` and `path` are the facts an operator
+    needs; the body is not carried, because it is the upstream's and may hold anything."""
+
+    def __init__(self, method: str, path: str, status):
+        self.status, self.path = status, path
+        super().__init__(f"the meetings door had a moment: {method} {path} answered HTTP {status}")
+
+
 def raise_if_unavailable(method: str, url: str, st, body) -> None:
-    """RAISE a retryable `StepError` when the door answered as the platform having a moment: a
-    5xx or a 429 (brain:card/4310908cf3b3).
+    """RAISE `MeetingsUnavailable` when the door answered as the platform having a moment: a 5xx
+    or a 429 (brain:card/4310908cf3b3).
 
     The reads below took any answer without rows as *there is nothing there*. A 503 while
     meeting-api restarted came back as no row, no start, nobody speaking, and the step went on to
     write the wrong thing: a prepare link on a Zoom number, a note stamped today, a room in invite
-    order. A flaky door is retried on the engine's own backoff, and an outage that outlasts it fails
-    the reaction with this line as its reason. A transport failure already raises out of `http`. A
-    404, and every other answer, is an answer and comes back as one."""
+    order. The engine parks the step without spending an attempt, for up to six hours (an upgrade
+    window outlasts the ~23 min the attempts buy), then fails it with this line as its reason. A
+    transport failure or a refused ticket raises out of `http` and keeps the normal budget. A 404,
+    and every other answer, is an answer and comes back as one."""
     try:
         code = int(st)
     except (TypeError, ValueError):
         code = 0
     if code == 429 or code >= 500:
         from urllib.parse import urlsplit
-        raise StepError(f"the meetings door had a moment: {method} {urlsplit(url).path} answered "
-                        f"HTTP {st} — {_http_detail(body)}", retryable=True)
+        raise MeetingsUnavailable(method, urlsplit(url).path, st)
 
 
 def meeting_ref(uid: str, url: str) -> str:
@@ -518,6 +527,12 @@ STOP_ATTEMPTS_MAX = 3
 #: forever — a 404 on a meeting that does not exist never becomes readable by asking again.
 STATUS_UNREADABLE = "unreadable"
 STATUS_READ_ATTEMPTS_MAX = 10
+#: HOW LONG A BOT MAY STAY `active` before the poll stops waiting on it. The bot ends itself at
+#: its own backstop (`DEFAULT_MAX_ACTIVE_MS`, core/meetings/services/bot/src/index.ts, 4 h unless
+#: a deployment sets `BOT_MAX_ACTIVE_MS`); the grace covers admission and teardown. The invite's
+#: refs carry no end, so this is measured from `refs.start`.
+BOT_MAX_ACTIVE_S = 4 * 3600
+ACTIVE_CEILING_S = BOT_MAX_ACTIVE_S + 30 * 60
 
 
 def _status(ctx: StepCtx) -> dict:
@@ -604,9 +619,22 @@ def run_meeting(ctx: StepCtx):
         # reading its absence as 45 s asked every invited bot to leave 45 s after the start. A bot
         # started any other way stays until the meeting ends and leaves on its own; so does this one.
         window = ctx.refs.get("transcribe_s")
+        if window is None:
+            # A CEILING ON THE POLL, the same kind `stopping` has: a Wait spends no attempt, so a
+            # bot whose status never moves would otherwise be polled for the life of the worker.
+            start = ctx.refs.get("start")
+            began = float(start) if start else ctx.scratch.setdefault("active_since", ctx.clock_now)
+            if ctx.clock_now - began > ACTIVE_CEILING_S:
+                return Block(
+                    reason=(f"the bot for {d['platform']}/{d['native']} has been active for "
+                            f"{int(ctx.clock_now - began)}s, past its own "
+                            f"{BOT_MAX_ACTIVE_S // 3600} h backstop, and has not reported the "
+                            f"meeting ended. It may still be in the call and recording."),
+                    deadline_s=STOP_DEADLINE_S)
+            return Wait(seconds=8)
         # The window is measured from the meeting's own start rather than from the moment the bot
         # went active: this step is stateless across ticks by design, and the start is a ref.
-        if window is None or ctx.clock_now - ctx.refs["start"] < float(window):
+        if ctx.clock_now - ctx.refs["start"] < float(window):
             return Wait(seconds=8)
         failures = _stop_bot(ctx, d)
         if failures and failures >= STOP_ATTEMPTS_MAX:
