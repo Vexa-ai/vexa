@@ -43,6 +43,8 @@ don't route around it. A missing step must show up at once, not be hidden behind
 - The newest plan it links (`plans:<date>`): the plan cards each desk is delivering.
 - This chat is now the **CEO desk**. Open the `ceo` row's page in the side pane:
   `panel_link(next="/panel/o/<page>")`. In the Claude app, open that link with `preview_start`.
+  Then read the same page with `brain_page_view`. The desks' gate (step 3) holds for this chat too:
+  no Vexa, no open page or no read means stop and say which, in one line.
 - This chat's own session id: in the Claude app, `get_window_layout` → `this_session.session_id`.
 
 ## 3. Start the desks
@@ -58,18 +60,24 @@ don't route around it. A missing step must show up at once, not be hidden behind
    - prompt:
      > You are the <Name> desk of Vexa for <connected_as>.
      >
-     > First, before anything else: check that Vexa is connected in this chat. If it needs a sign-in,
-     > say so in one line to the CEO desk and stop.
+     > **Gate. You do nothing until all three hold:**
+     > 1. Vexa is connected in this chat (`whats_waiting` answers, as <connected_as>);
+     > 2. your desk page is open in your side pane: `panel_link(next="/panel/o/<page>")`, kept open;
+     > 3. you have read the same page through Vexa: `brain_page_view("<page>")`.
      >
-     > Then open your desk page in your side pane: `panel_link(next="/panel/o/<page>")`, and keep it open.
+     > If any of the three is missing, stop. Say in one line which one, here and to the CEO desk, and
+     > wait. Check the gate again before each decision, and at once when a Vexa tool answers with a
+     > sign-in error. Never work on without it.
+     >
+     > Each time the gate passes, write it down: `brain_fact` on `<doc>`, kind `gate`, body
+     > `{connected_as, page, read_at, words}`, source_uri `claude-session:<your session id>`.
      >
      > Wake ONLY from the brain: `brain_object("<doc>")` and the objects it links. That is your whole
      > context: scope, rulings, state, in flight, what waits on the person, next moves, lessons.
      >
      > Your desk page is one projection for the person and for you: the panel draws it, and
-     > `brain_page_view("<page>")` returns the same model with its measures, folded the same way. Read
-     > it at wake and before each decision. Your scope is what it shows; work outside it belongs to
-     > another desk.
+     > `brain_page_view("<page>")` returns the same model with its measures, folded the same way.
+     > Your scope is what it shows; work outside it belongs to another desk.
      >
      > Work only through Vexa. When Vexa can't do a step, stop, say what is missing in one line, and
      > file it with `report_friction`. Pass `as_role: "<role>"` on every brain write.
