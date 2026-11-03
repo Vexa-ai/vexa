@@ -114,10 +114,9 @@ class TestSpawnFlagCallSites:
     def test_empty_env_no_longer_disarms_the_fail_loud_stt_gate(self, monkeypatch):
         """The second half of the witness bug: `"" != "true"` made the gate return None, so the
         503 designed to catch an unconfigured STT never fired. Empty must now reach the gate."""
-        from meeting_api.bot_spawn import auto_join
+        from meeting_api.bot_spawn import planned_start
 
         monkeypatch.setenv("TRANSCRIBE_ENABLED", "")
-        monkeypatch.setattr(auto_join, "__name__", auto_join.__name__)
 
         called = {"n": 0}
 
@@ -130,6 +129,6 @@ class TestSpawnFlagCallSites:
         monkeypatch.setattr(cp, "capability_state", _fake_state)
         monkeypatch.setattr(cp, "missing_capability_keys", lambda _c: ["TRANSCRIPTION_SERVICE_URL"])
 
-        reason = auto_join._production_transcribe_gate()
+        reason = planned_start.production_transcribe_gate()
         assert called["n"] == 1, "empty env must NOT short-circuit the gate"
         assert reason is not None and "STT not configured" in reason

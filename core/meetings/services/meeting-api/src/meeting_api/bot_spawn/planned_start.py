@@ -1,15 +1,11 @@
 """Starting the bot for a PLANNED row — the one place a booked meeting's bot is started (ADR-0052 §5).
 
-A planned row (``POST /meetings`` with a time, a calendar import) becomes a bot here and nowhere else.
-Two callers reach it today:
-
-* the start route, ``POST /internal/meetings/{meeting_id}/start`` (``start_planned_meeting``) — the
-  service door's call for Flows, which owns the clock (ADR-0046). It starts the bot for THAT row id,
-  never "the newest planned row of this room", with the bot's join time (``join_at`` = start −
-  ``BOOKED_JOIN_LEAD_S``) in its invocation, and answers why when it does not.
-* the 30 s auto-join sweep (``auto_join.auto_join_tick``) — still on until the clock moves to Flows
-  (s2d removes it). It calls ``start_row`` for each due row, so the sweep and the route run the SAME
-  safeguards, in the same order, from this one module.
+A planned row (``POST /meetings`` with a time, a calendar import) becomes a bot here and nowhere else:
+the start route, ``POST /internal/meetings/{meeting_id}/start`` (``start_planned_meeting``) — the
+service door's call for Flows' ``booked_bot``, which owns the clock (ADR-0046, ADR-0052 §3, §6). It
+starts the bot for THAT row id, never "the newest planned row of this room", with the bot's join
+time (``join_at`` = start − ``BOOKED_JOIN_LEAD_S``) in its invocation, and answers why when it does
+not. The 30 s auto-join sweep that also called ``start_row`` was removed in s2d.
 
 The safeguards (moved here unchanged from the sweep, so nothing is reimplemented in Flows):
 

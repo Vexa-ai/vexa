@@ -804,9 +804,10 @@ def _storm_rig():
 
 
 async def _sweep(repo, runtime, at):
-    from meeting_api.bot_spawn.auto_join import auto_join_tick
+    """The start route over every scheduled row, as Flows' booked_bot calls it (ADR-0052 §6)."""
+    from _booked_start import start_scheduled
 
-    return await auto_join_tick(
+    return await start_scheduled(
         repo, runtime, transcribe_gate=lambda: None, now=at,
         token_secret="s", redis_url="redis://r", allow_uncapped=True,
     )

@@ -27,7 +27,7 @@ from meeting_api import create_app
 from meeting_api.bot_spawn import build_router
 from meeting_api.bot_spawn import service as spawn_service
 from meeting_api.bot_spawn import transcription_language as tlang
-from meeting_api.bot_spawn.auto_join import auto_join_tick
+from _booked_start import start_scheduled
 from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
 from meeting_api.lifecycle.reconfigure_router import RoleUnavailable
 
@@ -254,7 +254,7 @@ def test_the_calendar_sweep_applies_the_persons_and_the_deployments_defaults(mon
             return context
 
         monkeypatch.setattr(spawn_service, "_fetch_bot_context", fetch)
-        counters = await auto_join_tick(repo, runtime, transcribe_gate=lambda: None, now=now,
+        counters = await start_scheduled(repo, runtime, transcribe_gate=lambda: None, now=now,
                                         token_secret="s", redis_url="redis://r", allow_uncapped=True)
         assert counters["spawned"] == 1
         return _invocation(runtime), repo._meetings[1]["data"]["transcription_language"]

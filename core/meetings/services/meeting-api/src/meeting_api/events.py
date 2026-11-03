@@ -18,7 +18,7 @@ A PUBLISH EDGE IS NOT A DEPENDENCY:
 
   * BUT FLOWS IS NO LONGER OPTIONAL (ADR-0052 §3): it owns the clock booked bots start from, and
     every profile (Compose, Lite, Helm) runs it. A deployment without a flows domain does not run
-    PLANNED meetings the same — once the auto-join sweep is gone, nothing starts their bots. These
+    PLANNED meetings the same — the auto-join sweep is gone (s2d), so nothing starts their bots. These
     best-effort publishes stay best-effort; the planned-row facts flows needs travel through a
     durable outbox instead (ADR-0052 §4).
 

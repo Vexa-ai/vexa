@@ -748,72 +748,11 @@ def _attach_background_loops(
             ticks["service-authority"] = _time.monotonic()
             await asyncio.sleep(service_authority_interval)
 
-    # Auto-join: "scheduled" means the bot joins. The sweep spawns a bot for every scheduled row
-    # whose data.scheduled_at arrived (lead window) and whose auto_join toggle is on, through the
-    # SAME request_bot flow POST /bots runs — the claim/upgrade branch makes it idempotent. The
-    # per-user spawn context (max-bots cap + webhook config the gateway would inject as headers)
-    # is fetched from admin-api's internal edge. Fail-closed: unset ADMIN_API_URL/INTERNAL_API_SECRET
-    # makes the cap unresolvable, so the sweep REFUSES to spawn (AUTO_JOIN_ALLOW_UNCAPPED=1 is the
-    # explicit self-host opt-in); an UNREACHABLE identity likewise skips the tick.
-    from .bot_spawn.auto_join import DEFAULT_LEAD_S
-
-    auto_join_interval = float(os.getenv("AUTO_JOIN_SWEEP_INTERVAL_S", "30"))
-    # The DEFAULT lives in one place (``auto_join.DEFAULT_LEAD_S``) so the sweep's own default and
-    # the entrypoint's env fallback can never drift apart. Deploy values may still override it.
-    auto_join_lead = float(os.getenv("AUTO_JOIN_LEAD_S", str(DEFAULT_LEAD_S)))
-    auto_join_grace = float(os.getenv("AUTO_JOIN_GRACE_S", "600"))
-    auto_join_backoff = float(os.getenv("AUTO_JOIN_RETRY_BACKOFF_S", "300"))
-    admin_api_url = (os.getenv("ADMIN_API_URL") or "").rstrip("/")
-    internal_secret = os.getenv("INTERNAL_API_SECRET") or ""
-    # Fail-closed default: with no admin edge configured the per-user cap is unresolvable, so the
-    # sweep refuses to spawn rather than spawn uncapped. AUTO_JOIN_ALLOW_UNCAPPED=1 is the explicit
-    # self-host opt-in that chooses the uncapped mode (never defaulted).
-    from .bot_spawn.env_flags import env_flag
-    auto_join_allow_uncapped = env_flag("AUTO_JOIN_ALLOW_UNCAPPED", default=False)
-    auto_join_block = _auto_join_block_at_boot()
-
-    async def _auto_join_loop() -> None:
-        if meeting_repo is None or runtime is None or not hasattr(meeting_repo, "list_scheduled_meetings"):
-            return
-        import json as _json
-
-        from .bot_spawn.auto_join import auto_join_tick
-
-        fetch_bot_context = _bot_context_fetcher(admin_api_url, internal_secret)
-
-        async def publish_status(*, user_id, meeting_id, native_id, status, when):
-            frame = {"type": "meeting.status", "meeting_id": meeting_id,
-                     "native": native_id, "status": status, "when": when}
-            try:
-                await redis_client.publish(f"u:{user_id}:meetings", _json.dumps(frame))
-            except Exception:
-                pass  # best-effort, like the collector's publish
-
-        async def _tick():
-            await auto_join_tick(
-                meeting_repo, runtime,
-                authority=service_authority,
-                fetch_bot_context=fetch_bot_context,
-                publish_status=publish_status,
-                lead_s=auto_join_lead, grace_s=auto_join_grace,
-                retry_backoff_s=auto_join_backoff,
-                token_secret=os.getenv("ADMIN_TOKEN") or None,
-                redis_url=os.getenv("REDIS_URL"),
-                redis_grant=bot_redis.grant if bot_redis is not None else None,
-                allow_uncapped=auto_join_allow_uncapped,
-                deployment_block=auto_join_block,
-            )
-
-        while True:
-            try:
-                # #637: one sweep per interval — the per-user spawn stays single-flighted by its own
-                # xact lock, but this also single-flights the doubled admin-api bot-context fetch.
-                await _guarded("auto-join", _tick)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                log.exception("auto-join tick failed")
-            await asyncio.sleep(auto_join_interval)
+    # NO AUTO-JOIN SWEEP (ADR-0052 §3, s2d). A booked meeting's bot is started by Flows' `booked_bot`
+    # at start − BOOKED_POD_LEAD_S, through POST /internal/meetings/{id}/start (bot_spawn/
+    # start_router.py), which runs every safeguard the sweep ran (bot_spawn/planned_start.py). Each
+    # planned row reaches Flows through the outbox below. The sweep's settings are named in
+    # removed_config.py.
 
     # Google Meet respawn (lifecycle/meet_respawn.py): start the next bot pod for every meeting whose
     # last bot Meet refused, once its wait is over. The row's `next_at` is the schedule; this sweep,
@@ -1029,7 +968,6 @@ def _attach_background_loops(
                 _service_authority_loop(),
                 name="service-authority",
             ),
-            asyncio.create_task(_auto_join_loop(), name="auto-join"),
             asyncio.create_task(_meet_respawn_loop(), name="meet-respawn"),
             asyncio.create_task(_calendar_sync_loop(), name="calendar-sync"),
             asyncio.create_task(_planned_outbox_loop(), name="planned-outbox"),
@@ -1064,9 +1002,9 @@ def __getattr__(name: str):
 
 
 def _planned_start_deps(redis_client, bot_redis):
-    """What the planned-row start route needs (ADR-0052 §5): the SAME context, block list, spawn
-    secrets and backoff the auto-join sweep is given (``_attach_background_loops``), so a bot started
-    by Flows and one started by the sweep are the same bot under the same rules."""
+    """What the planned-row start route needs (ADR-0052 §5): the owner's spawn context, the block
+    list, the spawn secrets and the backoff — what the auto-join sweep was given until s2d removed it,
+    so a booked bot is the same bot under the same rules."""
     import json as _json
 
     from .bot_spawn.env_flags import env_flag
@@ -1078,7 +1016,7 @@ def _planned_start_deps(redis_client, bot_redis):
         try:
             await redis_client.publish(f"u:{user_id}:meetings", _json.dumps(frame))
         except Exception:
-            pass  # best-effort, like the sweep's
+            pass  # best-effort, like the collector's publish
 
     return StartDeps(
         fetch_bot_context=_bot_context_fetcher((os.getenv("ADMIN_API_URL") or "").rstrip("/"),

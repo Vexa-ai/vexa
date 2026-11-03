@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from meeting_api.bot_spawn.auto_join import auto_join_tick
+from _booked_start import start_scheduled
 from meeting_api.bot_spawn.auto_join_block import (
     blocked_reason, deployment_block, normalize_entry, parse_block,
 )
@@ -45,7 +45,7 @@ def _seed(repo, *, mid=1, organiser="host@partner.example", attendees=(), platfo
 async def _tick(repo, runtime, *, ctx=None, deployment=None, allow_uncapped=False):
     async def fetch(_uid):
         return ctx
-    return await auto_join_tick(
+    return await start_scheduled(
         repo, runtime, transcribe_gate=lambda: None, now=NOW, token_secret="s",
         redis_url="redis://r", fetch_bot_context=(fetch if ctx is not None else None),
         allow_uncapped=allow_uncapped, deployment_block=deployment)
