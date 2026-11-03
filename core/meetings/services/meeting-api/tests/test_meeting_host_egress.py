@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from meeting_api.bot_spawn import build_router, meeting_host, request_bot
-from meeting_api.bot_spawn.auto_join import auto_join_tick
+from _booked_start import start_scheduled
 from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
 from meeting_api.bot_spawn.meeting_host import MeetingHostRefused
 
@@ -239,7 +239,7 @@ async def test_the_auto_join_stamps_a_refused_link_and_spawns_nothing():
                  "constructed_meeting_url": "https://meet.evil.example/room"},
         "created_at": "2026-07-08T09:00:00Z", "updated_at": "2026-07-08T09:00:00Z",
     }
-    counters = await auto_join_tick(repo, runtime, transcribe_gate=lambda: None, now=now,
+    counters = await start_scheduled(repo, runtime, transcribe_gate=lambda: None, now=now,
                                     token_secret="s", redis_url="redis://r", allow_uncapped=True)
     assert counters["errors"] == 1 and counters["spawned"] == 0
     assert "internal or private" in repo._meetings[1]["data"]["auto_join_error"]

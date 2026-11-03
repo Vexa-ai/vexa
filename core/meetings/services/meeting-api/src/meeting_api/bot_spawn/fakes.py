@@ -235,7 +235,7 @@ class InMemoryMeetingRepo:
         ]
 
     async def list_live_meetings(self) -> list:
-        from .auto_join import LIVE_STATUSES
+        from .planned_start import LIVE_STATUSES
 
         return [
             dict(m) for m in self._meetings.values()

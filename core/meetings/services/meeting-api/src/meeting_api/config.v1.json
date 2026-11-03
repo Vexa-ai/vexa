@@ -787,13 +787,6 @@
    ]
   },
   {
-   "key": "AUTO_JOIN_SWEEP_INTERVAL_S",
-   "class": "defaulted",
-   "default": "30",
-   "description": "auto-join sweep cadence (s) — how often scheduled meetings are checked for a due start",
-   "targets": []
-  },
-  {
    "key": "VEXA_MEET_RESPAWN_PODS",
    "class": "defaulted",
    "default": "3",
@@ -822,31 +815,17 @@
    "targets": []
   },
   {
-   "key": "AUTO_JOIN_LEAD_S",
-   "class": "defaulted",
-   "default": "120",
-   "description": "auto-join lead (s) — the bot is sent this long before data.scheduled_at, so it is standing in the lobby at the scheduled start rather than setting out then (#1208). Deploy values may override.",
-   "targets": []
-  },
-  {
-   "key": "AUTO_JOIN_GRACE_S",
-   "class": "defaulted",
-   "default": "600",
-   "description": "auto-join grace (s) — a scheduled meeting older than this is never auto-joined (no hours-late joins)",
-   "targets": []
-  },
-  {
    "key": "AUTO_JOIN_RETRY_BACKOFF_S",
    "class": "defaulted",
    "default": "300",
-   "description": "backoff (s) before an auto-join that failed loudly (cap/quota/spawn) is retried",
+   "description": "backoff (s) a booked meeting holds after a start attempt that started a pod (auto_join_last_attempt), so one occurrence gets at most one bot per interval however many rows calendar sync gives it; read by the planned-row start route (ADR-0052 §5). The auto-join sweep that also read it is gone (s2d)",
    "targets": []
   },
   {
    "key": "AUTO_JOIN_ALLOW_UNCAPPED",
    "class": "defaulted",
-   "default": "false — with no admin edge (ADMIN_API_URL/INTERNAL_API_SECRET) the per-user cap is unresolvable and the sweep fails closed (refuses to spawn); set 1 to deliberately allow uncapped self-host spawns",
-   "description": "opt-in escape hatch (#656): allow the auto-join sweep to spawn uncapped when the per-user cap cannot be resolved. Unsafe mode — chosen, never defaulted.",
+   "default": "false — with no admin edge (ADMIN_API_URL/INTERNAL_API_SECRET) the per-user cap is unresolvable and the planned-row start route fails closed (refuses to spawn); set 1 to deliberately allow uncapped self-host spawns",
+   "description": "opt-in escape hatch (#656): allow the planned-row start route (Flows' booked_bot) to spawn uncapped when the per-user cap cannot be resolved. Unsafe mode — chosen, never defaulted.",
    "targets": []
   },
   {

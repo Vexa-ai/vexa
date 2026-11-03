@@ -700,7 +700,7 @@ class SqlAlchemyMeetingRepo:
         from sqlalchemy import select
 
         from ..sessions.models import Meeting
-        from .auto_join import LIVE_STATUSES
+        from .planned_start import LIVE_STATUSES
 
         async with self._session_factory() as db:
             rows = (await db.execute(

@@ -81,8 +81,8 @@ __all__ = [
 # its pre-active grace from this budget (``lifecycle.reconcile.default_preactive_grace``) rather
 # than carrying a second, independently-drifting number (#862).
 #
-# 15 minutes by default (#1208): an auto-joined bot is dispatched BEFORE the scheduled start
-# (``AUTO_JOIN_LEAD_S``), so it reaches the lobby before a human host is there to admit it — the
+# 15 minutes by default (#1208): a booked bot opens the meeting BEFORE the scheduled start
+# (``BOOKED_JOIN_LEAD_S``, ADR-0052), so it reaches the lobby before a human host is there to admit it — the
 # budget has to cover the human's lateness, not just the click. The prior 10-minute budget is
 # exactly the ~10.4-minute banding the admission-timeout failure class shows in prod (#267): bots
 # were dying ON the deadline we handed them, which is a budget too small, not a join defect.
