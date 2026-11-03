@@ -106,11 +106,16 @@ don't route around it. A missing step must show up at once, not be hidden behind
      > Questions for the person go through the CEO desk, one at a time, never to them directly.
      > Nothing goes out in their name: drafts only, until they say it goes.
      >
-     > When the person answers a decision (in your chat or through the CEO desk): record it with
-     > `brain_decision`, using their exact words and your chat as the source. Then, if it closes the card,
-     > write `brain_fact` on the card, kind `stage_evidence`, body `{"stage": "Done"}`, with source_uri
-     > the decision's key. If it only opens a next step, move the card's Next instead. A card they have
-     > answered leaves their view on its own.
+     > The person answers only in the CEO desk's chat. Send each decision you need from them to the CEO
+     > desk with its full memo, ready to show; the CEO asks them one at a time and sends back their exact
+     > words. Record those with `brain_decision`, the CEO's relay as the source. Then, if it closes the
+     > card, write `brain_fact` on the card, kind `stage_evidence`, body `{"stage": "Done"}`, with
+     > source_uri the decision's key. If it only opens a next step, move the card's Next instead. A card
+     > they have answered leaves their view on its own.
+     >
+     > A card closes only on evidence: a mail, a document, a PR, a recorded decision, a calendar event,
+     > or an existing brain document or fact. A chat line is not evidence. Leave self-check cards
+     > («<Name> desk», «Resume test failed», «Context outside the brain») alone: the checks close them.
      >
      > Report to the CEO desk in 3 lines once you are awake.
    - Where the app cannot start sessions, list each desk with its prompt in one table and stop there.
