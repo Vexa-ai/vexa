@@ -73,11 +73,15 @@ that stored copy (see below).
   upgrade finish on version 3.
 - **`invite_join` runs from the code (0.13.4).** On its first start the flows worker removes the
   stored copy of the company flow `invite_join` that earlier releases wrote (`created_by: seed`),
-  once. Versions the company account submitted on top of it are kept and retired (re-activate one
-  to run it again), and a warning names them. A version submitted after the upgrade is not touched.
+  once, and no stored version of it runs any more. Versions the company account submitted on top of
+  it are kept: the newest active one stays active, so an earlier image you roll back to still runs
+  it, and older active ones are retired. A warning names them. A version submitted after the upgrade
+  is not touched.
 - **Two tables are added at startup**, `sensor` and `keyed_schedule` (`CREATE TABLE IF NOT EXISTS`).
   A stack that ran the first cut of `keyed_schedule` gains its `person` column; every stack gains
-  `deadline` and the `retired` status (`flows/migrations.py`).
+  `deadline`, the `retired` status and a key that includes `person` (`flows/migrations.py`). The
+  status check is validated and the new key's index is built after the startup transaction, without
+  holding the table.
 
 ## How it works
 
@@ -89,8 +93,12 @@ that stored copy (see below).
   Each change passes the sensor's filter and is admitted as `calendar.event.created|updated|cancelled`.
   It is deduplicated by event id and version, so a replay emits nothing twice. After three failures
   in a row the sensor reads `degraded`, says why, and backs off.
-- **Keyed schedules.** A `relative` trigger keeps one pending fire per key (`keyed_schedule`). Every
-  matching event moves it, and a cancellation or an event that stops passing the filter removes it.
+- **Keyed schedules.** A `relative` trigger keeps one pending fire per key and person
+  (`keyed_schedule`): the person is the user the event names, else its organizer. Two people whose
+  events carry the same key, such as two people invited to one meeting, get a fire each. Every
+  matching event moves that person's fire, and a cancellation or an event that stops passing the
+  filter removes it; another person's event never touches it. For an invitation the key is the
+  calendar UID plus, for one instance of a recurring meeting, its `RECURRENCE-ID`.
   The worker fires a due row into one run, keyed by the slot, so it fires at most once. A row moved
   after it fired re-arms once.
 - **Light runs.** A flow made only of steps that call no model (`request_meeting_bot`) counts on its
@@ -100,14 +108,15 @@ that stored copy (see below).
   marked `missed` after it. A row without a deadline fires within ten minutes of its time, counted
   from the slot or from when the row was armed or really moved, whichever is later: an invitation
   that arrives after its meeting started still sends the bot. A repeated delivery that changes
-  nothing does not restart those ten minutes. A row the worker could have fired and did not is
+  nothing does not restart those ten minutes. A deadline lies at most an hour after the fire time; a
+  later one is held to that hour. A row the worker could have fired and did not is
   marked `missed` and logged, and sends nothing.
 - **No row holds up another.** The worker reads due rows page by page past any it skips (a daily
   cap that refuses one), so a later row still fires. Rows of a flow that has no active version left
   are marked `retired`.
 - **Caps.** One person may hold 500 pending keyed fires per flow in a scope, their own or their
-  share of a company flow, and a company flow holds at most 20,000 for everyone. Rows of one flow
-  never count against another's. A fire over the cap is refused, logged, and answered to whoever
+  share of a company flow, and a company flow holds at most 20,000 for everyone. Rows of one company
+  flow never count against another's. A person's own flows share one total of 500 between them. A fire over the cap is refused, logged, and answered to whoever
   sent the event (`refused: keyed_share_full` from `POST /events`).
 
 **Who owns which data.**

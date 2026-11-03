@@ -147,7 +147,7 @@ CREATE TABLE IF NOT EXISTS keyed_schedule (
 	fired_for DOUBLE PRECISION, 
 	updated_at DOUBLE PRECISION NOT NULL, 
 	deadline DOUBLE PRECISION, 
-	PRIMARY KEY (scope, flow, key), 
+	PRIMARY KEY (scope, flow, key, person), 
 	CONSTRAINT keyed_status CHECK (status IN ('armed','fired','cancelled','missed','retired'))
 );
 

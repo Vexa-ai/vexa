@@ -7,12 +7,20 @@
   flow are marked `retired` instead of sitting in front of everyone else's;
 * the shares count per flow, and a code flow with `share: account` has no company total;
 * a full share is answered to the caller, not only logged;
-* `invite_join` is registered in code; its stored seed copy is removed once."""
+* `invite_join` is registered in code; its stored seed copy is removed once.
+
+Review of Vexa-ai/vexa#1996:
+
+* a row is its person's: two accounts whose events carry one key hold two rows and get two fires;
+* a person's own flows share one total, and a deadline lies at most an hour after the fire time;
+* a rollback to the image that still seeds `invite_join` finds a version of it to run."""
 from __future__ import annotations
 
 import calendar
 import json
 import logging
+
+import pytest
 
 from flows import FakeClock, Registry, admit, keyed, triggers
 from flows.registry import EventType
@@ -216,6 +224,92 @@ def test_a_full_personal_share_is_answered_to_the_caller():
     assert refusals == ["keyed_share_full"]
 
 
+def _own_flows(reg, n, uid="7"):
+    return [reg.flow_by_names(name=f"mine{i}", version=1, on_event=f"mine{i}.changed",
+                              step_names=["note"], params={"_trigger": TRIGGER}, scope=f"user:{uid}")
+            for i in range(n)]
+
+
+def test_a_persons_own_flows_share_one_total():
+    """Per flow alone, a person with N flows of their own would hold N × the share (the review's
+    250,000 rows at 500 flows), and every pass reads the due ones."""
+    db, clock, reg = _rig()
+    mine = _own_flows(reg, 3)
+    for flow in mine[:2]:
+        for i in range(2):
+            assert keyed.upsert(db, clock, flow, key=f"k{i}", fire_at=T, event_type="x", payload={},
+                                per_user=4) == "armed"
+    assert keyed.upsert(db, clock, mine[2], key="k0", fire_at=T, event_type="x", payload={},
+                        per_user=4) == "refused", "the third flow does not get a share of its own"
+    assert keyed.upsert(db, clock, mine[0], key="k0", fire_at=T + 60, event_type="x", payload={},
+                        per_user=4) == "moved", "a row already held still moves"
+
+
+def test_another_persons_own_flows_are_not_in_the_total():
+    db, clock, reg = _rig()
+    for i, flow in enumerate(_own_flows(reg, 2)):
+        assert keyed.upsert(db, clock, flow, key="k", fire_at=T, event_type="x", payload={},
+                            per_user=2) == "armed"
+    other = _own_flows(reg, 1, uid="8")[0]
+    assert keyed.upsert(db, clock, other, key="k", fire_at=T, event_type="x", payload={},
+                        per_user=2) == "armed"
+
+
+HOUR = 3600.0
+
+
+def test_a_deadline_lies_at_most_an_hour_after_the_fire_time():
+    """A submitted trigger may name any path as its deadline; a row the daily cap keeps refusing
+    stays armed and due until then, and every pass reads it again."""
+    db, clock, reg = _rig(trigger={**TRIGGER, "deadline": "payload.start + 2d"})
+    _book(db, reg, clock, "m1")
+    at, dl = db.execute("SELECT fire_at, deadline FROM keyed_schedule")[0]
+    assert dl == at + HOUR
+    clock._t = at + HOUR - 1
+    assert keyed.fire_due(db, reg, clock, admissible=lambda f, r: False) == 0
+    assert _status(db, "m1") == "armed"
+    clock._t = at + HOUR + 1
+    keyed.fire_due(db, reg, clock, admissible=lambda f, r: False)
+    assert _status(db, "m1") == "missed", "past the bound the refused row is missed, not read again"
+
+
+def test_the_booked_bots_own_window_is_inside_the_bound():
+    db, clock, reg = _rig()
+    _book(db, reg, clock, "m1")
+    assert db.execute("SELECT deadline FROM keyed_schedule")[0][0] == T + GRACE
+
+
+# ── a row is its person's ────────────────────────────────────────────────────────────────────────
+
+def test_two_accounts_with_one_key_hold_two_rows_and_fire_twice():
+    db, clock, reg = _rig()
+    _book(db, reg, clock, "m1", uid="7")
+    _book(db, reg, clock, "m1", uid="8", start=T + 60)        # the same key, another account
+    rows = db.execute("SELECT person, fire_at FROM keyed_schedule ORDER BY person")
+    assert rows == [("7", T - LEAD), ("8", T + 60 - LEAD)], "the second never moved the first"
+    clock._t = T + 60 - LEAD + 1
+    assert keyed.fire_due(db, reg, clock) == 2
+    uids = sorted(json.loads(r)["uid"] for (r,) in db.execute(
+        "SELECT subject_refs FROM reaction WHERE event_type = 'keyed.due'"))
+    assert uids == ["7", "8"]
+
+
+def test_one_accounts_cancel_touches_only_its_own_row():
+    db, clock, reg = _rig()
+    _book(db, reg, clock, "m1", uid="7")
+    _book(db, reg, clock, "m1", uid="8")
+    admit(db, reg, clock, source_event_id="c8", event_type="planned.changed",
+          subject_refs={"meeting_id": "m1", "start": T, "uid": "8", "status": "cancelled"})
+    assert db.execute("SELECT person, status FROM keyed_schedule ORDER BY person") == [
+        ("7", "armed"), ("8", "cancelled")]
+
+
+def test_two_accounts_firing_in_one_second_are_two_runs():
+    flow = Registry().flow(name="booked", version=1, on=EventType("x"), steps=[])
+    assert keyed.slot_key(flow, "k", T, "a/b") != keyed.slot_key(flow, "b/k", T, "a")
+    assert keyed.slot_key(flow, "k", T, "7") != keyed.slot_key(flow, "k", T, "8")
+
+
 # ── invite_join: code, not a seed ────────────────────────────────────────────────────────────────
 
 def _seed_row(db, version=1, status="active", by="seed"):
@@ -246,11 +340,69 @@ def test_the_companys_own_versions_are_retired_never_deleted(caplog):
     db = SqliteDB()
     _seed_row(db, status="retired")
     _seed_row(db, version=2, by="operator")
+    _seed_row(db, version=3, by="operator")
     with caplog.at_level(logging.WARNING, logger="flows.production"):
         assert production.drop_former_seeds(db) == ["invite_join"]
     assert db.execute("SELECT version, status, created_by FROM flow_version "
-                      "WHERE name = 'invite_join'") == [(2, "retired", "operator")]
-    assert "v2 (active, by operator)" in " ".join(r.getMessage() for r in caplog.records)
+                      "WHERE name = 'invite_join' ORDER BY version") == [
+        (2, "retired", "operator"), (3, "active", "operator")], "v3 is what a rollback runs"
+    said = " ".join(r.getMessage() for r in caplog.records)
+    assert "v2 (active, by operator)" in said and "v3 left active" in said
+
+
+def _previous_image(db):
+    """What the image before ADR-0052 §6 (`invite_join` a seed) does at its boot: `seed()` writes
+    `invite_join` v1 only where the table holds no version of it, then `refresh_from_db` loads the
+    ACTIVE rows. Returns the `invite_join` it would run, or None."""
+    if db.execute("SELECT COUNT(*) FROM flow_version WHERE scope = 'instance' "
+                  "AND name = 'invite_join'")[0][0] == 0:
+        _seed_row(db)
+    prev = Registry()
+
+    @prev.step
+    def ensure_user(ctx):  # noqa: ARG001 — the stored rows name it; only loading is under test
+        return None
+    prev.refresh_from_db(db)
+    return prev.newest("instance", "invite_join")
+
+
+@pytest.mark.parametrize("company", [
+    [],                                                      # the seed only
+    [(2, "active")],                                         # the company changed it
+    [(2, "retired"), (3, "active")],                         # …twice, and retired the first change
+], ids=["seed-only", "one-company-version", "two-company-versions"])
+@pytest.mark.parametrize("seed_status", ["active", "retired"])
+def test_a_rollback_to_the_image_that_seeds_it_still_runs_invite_join(company, seed_status):
+    if not company and seed_status == "retired":
+        pytest.skip("the company turned the flow off: nothing ran before either")
+    db = SqliteDB()
+    _seed_row(db, status=seed_status)
+    for v, st in company:
+        _seed_row(db, version=v, status=st, by="operator")
+    before = _previous_image(db)
+    assert before is not None
+    production.drop_former_seeds(db)
+    reg = Registry()
+    production.build(reg, db)
+    reg.refresh_from_db(db)
+    here = reg.newest("instance", "invite_join")
+    assert here.version == 1 and ("invite_join", 1) not in reg.db_versions, "this image: the code"
+    after = _previous_image(db)                               # rolled back
+    assert after is not None, "a rollback finds a version of invite_join to run"
+    assert after.version == before.version, "the one it ran before the upgrade"
+
+
+def test_this_image_never_chooses_a_stored_version_of_a_flow_the_code_owns(caplog):
+    db = SqliteDB()
+    _seed_row(db, version=9, by="operator")
+    reg = Registry()
+    production.build(reg, db)
+    with caplog.at_level(logging.WARNING, logger="flows.registry"):
+        reg.refresh_from_db(db)
+        reg.refresh_from_db(db)
+    assert reg.newest("instance", "invite_join").version == 1
+    said = [r.getMessage() for r in caplog.records if "invite_join@9" in r.getMessage()]
+    assert len(said) == 1, "said once, not on every refresh"
 
 
 def test_a_version_submitted_after_the_migration_is_never_touched():

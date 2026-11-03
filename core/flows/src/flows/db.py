@@ -152,6 +152,20 @@ def postgres_db(url: str):  # pragma: no cover — production composition; lazy 
                 migrations.apply(lambda sql, params=None: (
                     lambda res: [tuple(r) for r in res] if res.returns_rows else [])(
                         c.execute(text(sql), params or {})))
+            # …then what has to READ the table (a constraint check, an index build): outside that
+            # transaction, each statement committing on its own, so none of them holds the table.
+            # On a connection of its own, autocommit from the moment it opens: a POOLED connection's
+            # liveness ping runs in a transaction pg8000 leaves open, which CONCURRENTLY refuses. It
+            # is closed after, and the advisory lock `after` holds goes with it whatever happened.
+            from sqlalchemy.pool import NullPool
+            once = pg_engine(url, isolation_level="AUTOCOMMIT", poolclass=NullPool)
+            try:
+                with once.connect() as c:
+                    migrations.after(lambda sql, params=None: (
+                        lambda res: [tuple(r) for r in res] if res.returns_rows else [])(
+                            c.execute(text(sql), params or {})))
+            finally:
+                once.dispose()
 
         def _run_script(self, sql: str) -> None:
             # strip comment lines BEFORE splitting on ';' — comments legitimately contain

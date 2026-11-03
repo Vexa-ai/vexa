@@ -295,7 +295,8 @@ def _keyed(db: DB, clock: Clock, flow: Flow, spec: dict, event_type: str, refs: 
     gone = event_type.endswith(".cancelled") or str(refs.get("status") or "") == "cancelled"
     passes = not spec.get("filter") or triggers.passes(spec["filter"], event_type, refs)
     if gone or not passes or at is None:
-        keyed.cancel(db, clock, flow, key=key)
+        # the person this event names cancels their own row only, never another's of the same key
+        keyed.cancel(db, clock, flow, key=key, person=keyed.person_of(flow, refs))
         return "cancelled"
     # the last moment the fire is still wanted (ADR-0052 §7), when the trigger names one
     deadline = triggers.fire_at(spec["deadline"], event_type, refs) if spec.get("deadline") else None

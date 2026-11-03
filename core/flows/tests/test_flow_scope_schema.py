@@ -78,3 +78,67 @@ def test_the_migration_is_idempotent():
     did = migrations.apply(rec)
     assert not any("ADD PRIMARY KEY" in s or "DROP CONSTRAINT" in s for s in rec.sql)
     assert did == {"key_swapped": False, "keyed_status_swapped": False}
+
+
+# ── what reads the table runs outside the boot transaction (Vexa-ai/vexa#1996 review) ─────────────
+
+class _Catalogue:
+    """A Postgres stand-in for `after`: answers whether keyed_schedule's key has `person` and
+    whether `keyed_status` still waits for its validation."""
+
+    def __init__(self, key_has_person: bool, unvalidated: bool):
+        self.key_has_person, self.unvalidated = key_has_person, unvalidated
+        self.sql: list[str] = []
+
+    def __call__(self, sql: str, params=None):
+        self.sql.append(" ".join(sql.split()))
+        if "column_name = 'person'" in sql:
+            return [(1,)] if self.key_has_person else [(0,)]
+        if "convalidated" in sql:
+            return [(1,)] if self.unvalidated else [(0,)]
+        return []
+
+
+def test_the_keyed_status_check_is_added_without_a_scan_and_validated_apart():
+    """A CHECK added in one step holds ACCESS EXCLUSIVE on the table while it scans every row. Added
+    NOT VALID it scans nothing; VALIDATE runs later, under a lock that lets reads and writes go on."""
+    rec = _Recorder(key_has_scope=False)                     # the catalogue: no `retired` yet
+    migrations.apply(rec)
+    added = [s for s in rec.sql if "ADD CONSTRAINT keyed_status" in s]
+    assert added and added[0].endswith("NOT VALID")
+    assert not any("VALIDATE" in s for s in rec.sql), "nothing in the boot transaction scans"
+    cat = _Catalogue(key_has_person=True, unvalidated=True)
+    assert migrations.after(cat) == {"keyed_key_swapped": False, "keyed_status_validated": True}
+    assert "ALTER TABLE keyed_schedule VALIDATE CONSTRAINT keyed_status" in cat.sql
+    cat = _Catalogue(key_has_person=True, unvalidated=False)
+    migrations.after(cat)
+    assert not any("VALIDATE" in s for s in cat.sql), "a valid check is not validated again"
+
+
+def test_the_keyed_key_gains_person_on_an_index_built_concurrently():
+    cat = _Catalogue(key_has_person=False, unvalidated=False)
+    assert migrations.after(cat)["keyed_key_swapped"] is True
+    body = [s for s in cat.sql if "advisory" not in s]
+    assert body[1:] == [
+        "DROP INDEX CONCURRENTLY IF EXISTS keyed_identity",
+        "CREATE UNIQUE INDEX CONCURRENTLY keyed_identity ON keyed_schedule (scope, flow, key, person)",
+        "ALTER TABLE keyed_schedule DROP CONSTRAINT IF EXISTS keyed_schedule_pkey, ADD CONSTRAINT "
+        "keyed_schedule_pkey PRIMARY KEY USING INDEX keyed_identity",
+        body[-1]]                                            # then the validation question
+    assert cat.sql[0].startswith("SELECT pg_advisory_lock(") and \
+        cat.sql[-1].startswith("SELECT pg_advisory_unlock("), "two booting processes do it once"
+    cat = _Catalogue(key_has_person=True, unvalidated=False)
+    assert migrations.after(cat) == {"keyed_key_swapped": False, "keyed_status_validated": False}
+    assert not any("INDEX" in s for s in cat.sql)
+
+
+def test_a_failing_step_still_releases_the_lock():
+    def boom(sql, params=None):
+        boom.sql.append(sql)
+        if "CREATE UNIQUE INDEX" in sql:
+            raise RuntimeError("cancelled")
+        return [(0,)] if "information_schema" in sql else []
+    boom.sql = []
+    with pytest.raises(RuntimeError):
+        migrations.after(boom)
+    assert boom.sql[-1].startswith("SELECT pg_advisory_unlock(")

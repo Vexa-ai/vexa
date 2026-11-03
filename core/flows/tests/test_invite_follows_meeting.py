@@ -123,3 +123,83 @@ def test_a_row_armed_in_time_and_left_unfired_past_the_catch_up_is_missed():
     clock.advance(86400 - 60 + keyed.CATCHUP_S + 30)   # the worker was down past the catch-up
     assert keyed.fire_due(db, reg, clock) == 0
     assert [s for (s,) in db.execute("SELECT status FROM keyed_schedule")] == ["missed"]
+
+
+# ── the row is its owner's: owner + calendar UID + instance (Vexa-ai/vexa#1996 review) ─────────────
+
+ALICE, MALLORY = "alice@vexa.test", "mallory@vexa.test"
+USERS = {ALICE: "7", MALLORY: "9"}
+
+
+def _invite(org, *, method="REQUEST", start="20300823T153000Z", seq=0, rec=None,
+            url="https://meet.google.com/abc-defg-hij"):
+    """An invite with ONE UID whoever sends it — a meeting two people were both invited to, or a
+    UID a stranger copied. `rec`: the RECURRENCE-ID of one instance of a recurring series."""
+    return "\n".join(["BEGIN:VCALENDAR", f"METHOD:{method}", "BEGIN:VEVENT", f"DTSTART:{start}",
+                      f"ORGANIZER;CN=Org:mailto:{org}", "UID:meet-0001@google.com",
+                      *([f"RECURRENCE-ID:{rec}"] if rec else []), f"SEQUENCE:{seq}",
+                      f"LOCATION:{url}", "SUMMARY:Sync", "END:VEVENT", "END:VCALENDAR"])
+
+
+class _From:
+    def __init__(self, org, ics, mid):
+        self.frm, self.headers, self.ics, self.message_id, self.ext_id = org, authed(org), ics, mid, mid
+
+
+def _send_as(db, reg, clock, org, ics, mid):
+    return handle(db, reg, clock, "info@vexa.test", _From(org, ics, mid), known_uid=USERS.get,
+                  is_scaffolded=lambda u: True, provision=None, rules={"mail_domains": ("vexa.test",)})
+
+
+def _rows(db):
+    return sorted((who, k, at, st) for who, k, at, st in db.execute(
+        "SELECT person, key, fire_at, status FROM keyed_schedule"))
+
+
+def test_two_people_with_one_calendar_uid_hold_two_rows_and_get_two_bots():
+    db, clock, reg = _rig()
+    _send_as(db, reg, clock, ALICE, _invite(ALICE), "a1")
+    _send_as(db, reg, clock, MALLORY, _invite(MALLORY, start="20300823T163000Z",
+                                              url="https://meet.google.com/zzz-zzzz-zzz"), "m1")
+    key = "meet-0001@google.com"
+    assert _rows(db) == [(ALICE, key, START - 60, "armed"), (MALLORY, key, START + 3600 - 60, "armed")]
+    (alice_url,) = db.execute("SELECT payload FROM keyed_schedule WHERE person = :p", {"p": ALICE})[0]
+    assert json.loads(alice_url)["url"] == "https://meet.google.com/abc-defg-hij", \
+        "the other invite took nothing from Alice's row"
+    clock.advance(86400 - 60 + 1)
+    assert keyed.fire_due(db, reg, clock) == 1
+    clock.advance(3600)
+    assert keyed.fire_due(db, reg, clock) == 1
+    fired = sorted((r["organizer"], r["url"]) for r in (json.loads(s) for (s,) in db.execute(
+        "SELECT subject_refs FROM reaction WHERE event_type = 'keyed.due'")))
+    assert fired == [(ALICE, "https://meet.google.com/abc-defg-hij"),
+                     (MALLORY, "https://meet.google.com/zzz-zzzz-zzz")], "two bots, each its own"
+
+
+def test_one_persons_cancel_touches_only_their_own_row():
+    db, clock, reg = _rig()
+    _send_as(db, reg, clock, ALICE, _invite(ALICE), "a1")
+    _send_as(db, reg, clock, MALLORY, _invite(MALLORY), "m1")
+    assert _send_as(db, reg, clock, MALLORY, _invite(MALLORY, method="CANCEL", seq=1),
+                    "m2")[0] == "invite_cancel"
+    assert [(who, st) for who, _, _, st in _rows(db)] == [(ALICE, "armed"), (MALLORY, "cancelled")]
+    _send_as(db, reg, clock, MALLORY, _invite(MALLORY, start="20300823T163000Z", seq=2), "m3")
+    assert [(who, at) for who, _, at, _ in _rows(db)] == [
+        (ALICE, START - 60), (MALLORY, START + 3600 - 60)], "nor does their move"
+
+
+def test_two_instances_of_one_recurring_uid_are_two_rows_each_moved_and_cancelled_alone():
+    db, clock, reg = _rig()
+    week = 7 * 86400
+    first, second = "20300823T153000Z", "20300830T153000Z"
+    _send_as(db, reg, clock, ALICE, _invite(ALICE, start=first, rec=first), "i1")
+    _send_as(db, reg, clock, ALICE, _invite(ALICE, start=second, rec=second), "i2")
+    assert [(k, at) for _, k, at, _ in _rows(db)] == [
+        (f"meet-0001@google.com@{first}", START - 60),
+        (f"meet-0001@google.com@{second}", START + week - 60)]
+    # the second instance moves an hour (its RECURRENCE-ID stays its original start)
+    _send_as(db, reg, clock, ALICE, _invite(ALICE, start="20300830T163000Z", rec=second, seq=1), "i3")
+    _send_as(db, reg, clock, ALICE, _invite(ALICE, method="CANCEL", start=first, rec=first, seq=1),
+             "i4")
+    assert [(at, st) for _, _, at, st in _rows(db)] == [
+        (START - 60, "cancelled"), (START + week + 3600 - 60, "armed")]
