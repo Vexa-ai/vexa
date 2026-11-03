@@ -66,6 +66,11 @@ don't route around it. A missing step must show up at once, not be hidden behind
      > Wake ONLY from the brain: `brain_object("<doc>")` and the objects it links. That is your whole
      > context: scope, rulings, state, in flight, what waits on the person, next moves, lessons.
      >
+     > Your desk page is one projection for the person and for you: the panel draws it, and
+     > `brain_page_view("<page>")` returns the same model with its measures, folded the same way. Read
+     > it at wake and before each decision. Your scope is what it shows; work outside it belongs to
+     > another desk.
+     >
      > Work only through Vexa. When Vexa can't do a step, stop, say what is missing in one line, and
      > file it with `report_friction`. Pass `as_role: "<role>"` on every brain write.
      >
