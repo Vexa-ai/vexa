@@ -95,7 +95,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
-from flows import Registry, SystemClock, admit, cancel, db_from_url, resume, retry, wake  # noqa: E402
+from flows import (Registry, StepError, SystemClock, admit, cancel, db_from_url,  # noqa: E402
+                   resume, retry, wake)
 from flows import tickets  # noqa: E402 — subject tickets a request presents on its door calls
 from flows_steps import subject_ticket  # noqa: E402 — subject-ticket.v1 (carried, never minted)
 from flows import fact_envelope  # noqa: E402 — event.v2: the sealed fact envelope (D8)
@@ -2193,10 +2194,18 @@ def timeline(subject: str = "", since: str = "", until: str = "", limit: int = 2
     # database's own rows, which is the offline shape `meetings=false` already serves and already
     # tests. A person's own credential and the operator key are unchanged.
     want_meetings = bool(meetings) and not caller.is_timeline
-    out = build_timeline(db, subj, since=since or None, until=until or None,
-                         limit=max(1, min(int(limit or 20), 200)),
-                         meetings=fetch_meetings if want_meetings else None,
-                         identity=_as_me(caller))
+    try:
+        out = build_timeline(db, subj, since=since or None, until=until or None,
+                             limit=max(1, min(int(limit or 20), 200)),
+                             meetings=fetch_meetings if want_meetings else None,
+                             identity=_as_me(caller))
+    except StepError as e:
+        # THE MEETINGS HALF COULD NOT BE READ (brain:card/4310908cf3b3). Answered as an outage, not
+        # as a day with no meetings in it. The operator gets the cause in the log; the caller gets
+        # the class, and `meetings=false` still answers from this database alone.
+        logger.warning("timeline: the meetings door did not answer for %s: %s", subj, e)
+        raise HTTPException(status_code=503, detail=(
+            "the meetings half of the timeline could not be read right now; try again"))
     if out.get("unresolved"):
         raise HTTPException(status_code=404, detail=f"nobody answers to {subj!r}")
     shape = (format or "json").strip().lower()

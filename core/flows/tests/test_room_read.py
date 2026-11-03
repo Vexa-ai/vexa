@@ -142,12 +142,11 @@ def test_matching_uses_the_invite_names_not_the_email_local_part(monkeypatch):
 
 
 # ── 3 · never zero ───────────────────────────────────────────────────────────────────────────
-def test_an_unreadable_transcript_degrades_to_invite_order(monkeypatch):
-    from flows import StepError
-
-    def boom(*a, **k):
-        raise StepError("gateway down")
-    monkeypatch.setattr(mt, "http", boom)
+def test_a_transcript_that_is_not_there_degrades_to_invite_order(monkeypatch):
+    """A 404 is an answer: nobody is ordered and everyone is in the room. A gateway that did not
+    answer is not this case any more. It used to be ("gateway down" → invite order); it is now
+    retried (brain:card/4310908cf3b3, `test_meetings_door_flaky`)."""
+    monkeypatch.setattr(mt, "http", lambda *a, **k: (404, {"detail": "Not Found"}))
     assert mt.room_order("7", 97, ROOM, NAMES) == ROOM
 
 
