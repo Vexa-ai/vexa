@@ -326,4 +326,9 @@ def check_spec(spec: dict) -> dict:
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]{0,80}", key):
             raise TriggerError("a relative trigger needs `key`, a path such as payload.event_id")
         out.update(at=str(spec["at"]).strip(), key=key)
+        # ADR-0052 §7: the last moment the fire is still wanted (e.g. `payload.start + 600s`); past
+        # it the row is missed. `share` is not carried from a submission: only code sets it.
+        if spec.get("deadline"):
+            parse_at(spec["deadline"])
+            out["deadline"] = str(spec["deadline"]).strip()
     return out

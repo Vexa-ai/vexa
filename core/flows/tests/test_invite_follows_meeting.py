@@ -36,7 +36,7 @@ def _send(db, reg, clock, ics, mid):
 def _rig():
     db, clock, reg = SqliteDB(), FakeClock(START - 86400), Registry()
     production.build(reg, db)
-    assert production.seed(db) == ["invite_join", "meeting_signal", "room_signal"]
+    assert production.seed(db) == ["meeting_signal", "room_signal"]   # invite_join: code (ADR-0052)
     assert production.seed(db) == [], "a seed is written once, never overwritten"
     reg.refresh_from_db(db)
     return db, clock, reg
