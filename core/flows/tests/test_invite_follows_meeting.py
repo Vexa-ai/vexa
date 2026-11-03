@@ -106,6 +106,41 @@ def test_the_bot_carries_the_invites_workspace_and_falls_back_when_it_is_refused
         assert isinstance(out, Done) and [c.get("workspace_id") for c in calls] == want
 
 
+def test_an_invited_bot_stays_until_the_meeting_ends(monkeypatch):
+    """brain:card/d7faa9c3946c. No invite carries `transcribe_s`, and `run_meeting` read its absence
+    as 45 seconds: an invited bot was asked to leave 45 s after the start, so `invite_join` recorded
+    the first minute of every meeting. The refs here are the ones the real schedule fires with."""
+    from flows import Done, StepCtx, Wait
+    from flows_steps import meeting
+    db, clock, reg = _rig()
+    _send(db, reg, clock, _ics(), "m1")
+    clock.advance(86400 - 60 + 1)
+    assert keyed.fire_due(db, reg, clock) == 1
+    refs = json.loads(db.execute(
+        "SELECT subject_refs FROM reaction WHERE event_type = 'keyed.due'")[0][0])
+    assert "transcribe_s" not in refs and refs["start"] == START
+
+    asked, state = [], {"status": "active"}
+
+    def http(method, url, headers, body=None, timeout=20):
+        asked.append(method)
+        return (200, {**state, "segments": [{"text": "hi"}]}) if method == "GET" else (200, {})
+    monkeypatch.setattr(meeting, "http", http)
+
+    class R:
+        reaction_id = "r"
+    prior = {"ensure_user": {"uid": "7"},
+             "dispatch_bot": {"meeting_id": 9, "native": "abc-defg-hij", "platform": "google_meet"}}
+    for minutes in (1, 30, 90):
+        ctx = StepCtx(reaction=R(), effect_key="e", prior=prior,
+                      clock_now=START + minutes * 60, scratch={})
+        ctx.reaction.subject_refs = refs
+        assert isinstance(meeting.run_meeting(ctx), Wait), f"{minutes} min in"
+    assert "DELETE" not in asked, "nobody asked the bot to leave a meeting that is still running"
+    state["status"] = "completed"                     # the meeting ended; the bot left on its own
+    assert meeting.run_meeting(ctx) == Done({"segments": 1})
+
+
 def test_an_invite_that_arrives_after_the_meeting_started_still_sends_the_bot():
     """Invite the bot to a meeting already running (forwarded mid-meeting): the fire time is in the
     past when the row is armed, so lateness counts from when the row was armed, not from the slot.

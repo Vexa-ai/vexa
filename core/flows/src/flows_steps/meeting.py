@@ -554,7 +554,8 @@ def _stop_bot(ctx: StepCtx, d: dict):
 
 
 def run_meeting(ctx: StepCtx):
-    """Poll-composite until completed, over the transcribe window."""
+    """Poll-composite until completed: the bot stays until the meeting ends, unless
+    `refs.transcribe_s` caps its window."""
     d = ctx.prior["dispatch_bot"]
     m = _status(ctx)
     s = m.get("status") or "?"
@@ -575,10 +576,14 @@ def run_meeting(ctx: StepCtx):
     if s in ("requested", "joining", "awaiting_admission"):
         return Wait(seconds=6)
     if s == "active":
-        window = ctx.refs.get("transcribe_s", 45.0)
+        # NO WINDOW, NO STOP (brain:card/d7faa9c3946c). The window is a REHEARSAL's cap: the first
+        # harness ran a real bot for 45 s and then stopped it. No invite carries `transcribe_s`, so
+        # reading its absence as 45 s asked every invited bot to leave 45 s after the start. A bot
+        # started any other way stays until the meeting ends and leaves on its own; so does this one.
+        window = ctx.refs.get("transcribe_s")
         # The window is measured from the meeting's own start rather than from the moment the bot
         # went active: this step is stateless across ticks by design, and the start is a ref.
-        if ctx.clock_now - ctx.refs["start"] < window:
+        if window is None or ctx.clock_now - ctx.refs["start"] < float(window):
             return Wait(seconds=8)
         failures = _stop_bot(ctx, d)
         if failures and failures >= STOP_ATTEMPTS_MAX:
