@@ -29,6 +29,7 @@
 
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { prFiles } from "./pr-files.mjs";
 
 // A release compare carries every file patch, so the payload scales with the batch, not with
 // what these scripts read from it. v0.12.18...v0.12.22 returned 1.51 MB and blew execSync's 1 MB
@@ -127,7 +128,7 @@ for (const num of prs) {
   const pr = ghj(`repos/${REPO}/pulls/${num}`);
   const title = (pr.title || "").trim();
   if (/^release: .*version bump/i.test(title)) continue;   // release mechanics, not a value
-  let files = []; for (let pg = 1; pg <= 10; pg++) { const f = ghj(`repos/${REPO}/pulls/${num}/files?per_page=100&page=${pg}`); files.push(...f); if (f.length < 100) break; }
+  const files = prFiles(pr, { repo: REPO, api: ghj });   // every changed file, past the API's 3,000 cap (#2008)
   const c = classify(files);
   const entry = { pr: String(num), title, visibility: c.visibility };
   if (c.platform) entry.platform = c.platform;
