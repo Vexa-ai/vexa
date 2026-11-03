@@ -97,15 +97,6 @@ test("a committer email at the claude[bot] noreply address fails", () =>
 test("a human at a GitHub noreply address passes", () =>
   assert.deepEqual(coAuthor("Jane Doe <123+jane@users.noreply.github.com>"), []));
 
-test("a record with 0x1e keeps the whole message", () => {
-  const c = ha.parseRecord("b".repeat(40), "Jane\0j@example.com\0Jane\0j@example.com\0feat: x\x1e y\n\n"
-    + "Co-Authored-By: Claude <noreply@anthropic.com>\n");
-  assert.deepEqual([c.an, c.ce], ["Jane", "j@example.com"]);
-  assert.deepEqual(patterns(c), ["co-authored-by-claude"]);
-});
-test("a malformed record is a hard error", () =>
-  assert.throws(() => ha.parseRecord("b".repeat(40), "Jane\0j@example.com\0Jane"), /commit b{40}: git show printed 2 NUL/));
-
 const MACHINE_CO_AUTHORS = [
   "Claude Assistant <noreply@example.com>", "Claude (AI) <x@example.com>", "Claude.ai <x@example.com>",
   "\"Claude Opus 5\" <x@example.com>", "Claude Sonnet4 <x@example.com>", "Claude Mythos <x@example.com>",
@@ -140,7 +131,7 @@ const FOOTERS = [
   "- Generated with Claude Code", "1. Generated with Claude Code", "2) Generated with Claude Code",
   "+ Generated with [Claude Code]", "> Generated with Claude Code",
   "<sub>Generated with Claude Code</sub>",
-  "\u{1F916}️ Generated with [Claude Code](https://claude.com/claude-code)",
+  "\u{1F916}\ufe0f Generated with [Claude Code](https://claude.com/claude-code)",
   "**\u{1F916} Generated with** Claude Code",
   "Thanks. Generated with [Claude Code](https://claude.com/claude-code)",
   "Done. \u{1F916} Generated with Claude Code",
@@ -163,7 +154,7 @@ test("a lone CR before a trailer in a commit fails", () =>
 test("a CRLF trailer in a commit fails", () =>
   assert.deepEqual(patterns(commit({ body: "x\r\n\r\n" + TRAILER_LINE + "\r\n" })), ["co-authored-by-claude"]));
 // git and GitHub end a line only at CR or LF, so a trailer after any of these is mid-line.
-for (const sep of ["\x1c", "\x1d", "\x1e", "\x85", " ", " ", "\x0b", "\x0c"]) {
+for (const sep of ["\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029", "\x0b", "\x0c"]) {
   test(`${JSON.stringify(sep)} does not end a line`, () =>
     assert.deepEqual(patterns(commit({ body: "x" + sep + TRAILER_LINE + "\n" })), []));
 }
@@ -195,6 +186,142 @@ test("a fence in a commit message is not skipped", () =>
   assert.deepEqual(patterns(commit({ body: "x\n\n```\n" + QUOTED + "```\n" })), BOTH));
 
 
+// Commits are read raw (git cat-file commit); anything not readable exactly is a hard error.
+const RAW_HEAD = "tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n"
+  + "author Jane <jane@example.com> 1700000000 +0000\n"
+  + "committer Jane <jane@example.com> 1700000000 +0000\n";
+const RAW_MSG = "feat: x\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n";
+const refuse = (raw, message) => assert.throws(() => ha.parseCommit("b".repeat(40), raw), message);
+test("a raw commit with 0x1e keeps the whole message", () => {
+  const c = ha.parseCommit("b".repeat(40), Buffer.from(RAW_HEAD + "\nfeat: x\x1e y\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n"));
+  assert.deepEqual([c.an, c.ce], ["Jane", "jane@example.com"]);
+  assert.deepEqual(patterns(c), ["co-authored-by-claude"]);
+});
+test("an IBM037 encoding header is a hard error", () =>
+  refuse(Buffer.from(RAW_HEAD + "encoding IBM037\n\n" + RAW_MSG), /commit b{40}: declares encoding IBM037; only UTF-8/));
+test("a UTF-16LE encoding header is a hard error", () =>
+  refuse(Buffer.from(RAW_HEAD + "encoding UTF-16LE\n\n" + RAW_MSG), /declares encoding UTF-16LE/));
+test("a UTF-8 encoding header is read", () =>
+  assert.deepEqual(patterns(ha.parseCommit("b".repeat(40), Buffer.from(RAW_HEAD + "encoding utf-8\n\n" + RAW_MSG))), ["co-authored-by-claude"]));
+test("a NUL in the message is a hard error", () =>
+  refuse(Buffer.from(RAW_HEAD + "\nfeat: x\0\n\nCo-Authored-By: Claude\n"), /holds a NUL byte/));
+test("a NUL in the author is a hard error", () =>
+  refuse(Buffer.from(RAW_HEAD.replace("author Jane", "author Claude\0x") + "\nx\n"), /holds a NUL byte/));
+test("an invalid UTF-8 message is a hard error", () =>
+  refuse(Buffer.concat([Buffer.from(RAW_HEAD + "\nfeat: "), Buffer.from([0xff, 0x0a])]), /the message is not valid UTF-8/));
+test("an author without an address is a hard error", () =>
+  refuse(Buffer.from(RAW_HEAD.replace("Jane <jane@example.com> 1700000000", "Claude 1700000000") + "\nx\n"), /the author line has no <address>/));
+test("a missing committer is a hard error", () =>
+  refuse(Buffer.from(RAW_HEAD.split("committer")[0] + "\nx\n"), /1 author and 0 committer line/));
+test("signature continuation lines are not headers", () => {
+  const head = RAW_HEAD + "gpgsig -----BEGIN PGP SIGNATURE-----\n author Claude <noreply@anthropic.com> 1 +0000\n -----END PGP SIGNATURE-----\n";
+  assert.deepEqual(scanCommit(ha.parseCommit("b".repeat(40), Buffer.from(head + "\nfeat: x\n"))), []);
+});
+
+test("a co-author at @claude's id noreply address fails", () =>
+  assert.deepEqual(coAuthor("Dmitriy <81847+claude@users.noreply.github.com>"), ["co-authored-by-claude"]));
+test("a co-author at @claude's noreply address fails", () =>
+  assert.deepEqual(coAuthor("Dmitriy <claude@users.noreply.github.com>"), ["co-authored-by-claude"]));
+test("a co-author at @claude's account id fails", () =>
+  assert.deepEqual(coAuthor("Dmitriy <81847+dmitriy@users.noreply.github.com>"), ["co-authored-by-claude"]));
+test("an author email at @claude's noreply address fails", () =>
+  assert.deepEqual(patterns(commit({ ae: "81847+claude@users.noreply.github.com" })), ["author-email-claude-user"]));
+test("a committer email at @claude's noreply address fails", () =>
+  assert.deepEqual(patterns(commit({ ce: "CLAUDE@users.noreply.github.com" })), ["committer-email-claude-user"]));
+test("an author email at claude[bot]'s account id fails", () =>
+  assert.deepEqual(patterns(commit({ ae: "209825114+x@users.noreply.github.com" })), ["author-email-claude-bot"]));
+for (const v of ["Jane <123+claudette@users.noreply.github.com>", "Jane <notclaude@users.noreply.github.com>",
+  "Jane <181847+jane@users.noreply.github.com>"]) {
+  test(`a co-author ${v} passes`, () => assert.deepEqual(coAuthor(v), []));
+}
+
+// Each is a Claude trailer to git (git interpret-trailers --parse), with CR as git reads it.
+const GIT_CR_TRAILERS = [
+  "Co-authored-by:\rClaude <noreply@anthropic.com>",
+  "Co-authored-by: Dmitriy\r<noreply@anthropic.com>",
+  "Co-authored-by: Dmitriy\n\r<noreply@anthropic.com>",
+  "Co-authored-by: Dmitriy\r<209825114+claude[bot]@users.noreply.github.com>",
+];
+const gitTrailerValues = (message) => execFileSync("git", ["interpret-trailers", "--parse"], { input: message, encoding: "utf8" })
+  .split("\n").filter((l) => l.toLowerCase().startsWith("co-authored-by:")).map((l) => l.slice(l.indexOf(":") + 1));
+for (const v of GIT_CR_TRAILERS) {
+  test(`${JSON.stringify(v)} fails as git reads it`, () => {
+    const message = "feat: x\n\n" + v + "\n";
+    assert.ok(gitTrailerValues(message).some((t) => ha.machine(t)), "git reads no Claude trailer");
+    assert.deepEqual(patterns(commit({ body: message })), ["co-authored-by-claude"]);
+  });
+}
+
+const MORE_MACHINE_CO_AUTHORS = [
+  "\u0421laude <x@example.com>", "\uff23\uff4c\uff41\uff55\uff44\uff45 <x@example.com>",
+  "C\u200blaude Code <x@example.com>", "Claude\u034fCode <x@example.com>", "Claude\ufe0fCode <x@example.com>",
+  "(Claude) <x@example.com>", "\u00abClaude\u00bb <x@example.com>", "ClaudeCode <x@example.com>",
+  "ClaudeAI <x@example.com>", "Jane (Anthr\u03bfpic) <x@example.com>", "Jane (anthropics) <x@example.com>",
+  "Claude, AI <x@example.com>", "Claude (paris) <x@example.com>", "Claude (Opus) <x@example.com>",
+  "Claude, Jean <noreply@example.com>",
+];
+for (const v of MORE_MACHINE_CO_AUTHORS) {
+  test(`a co-author ${JSON.stringify(v)} fails`, () => assert.deepEqual(coAuthor(v), ["co-authored-by-claude"]));
+}
+for (const v of ["Claudemir Silva <cs@example.com>", "Claude, Jean <jean@example.com>", "Claude (Paris) <cp@example.com>"]) {
+  test(`a co-author ${v} passes`, () => assert.deepEqual(coAuthor(v), []));
+}
+test("an author named Cyrillic Claude Code fails", () =>
+  assert.deepEqual(patterns(commit({ an: "\u0421laude Code", ae: "x@example.com" })), ["author-name-claude"]));
+test("an author named Claude, Jean passes", () =>
+  assert.deepEqual(patterns(commit({ an: "Claude, Jean", ae: "jean@gmail.com" })), []));
+
+const PR_SHAPES = [
+  ["see `x\n`\u{1F916} Generated with [Claude Code](https://claude.com/claude-code)`", "generated-with"],
+  ["see `x\n`Co-authored-by: Claude <noreply@anthropic.com>`", "co-authored-by-claude"],
+  ["<https://x/`>\u{1F916} Generated with [Claude Code](https://claude.com/claude-code)<https://y/`>", "generated-with"],
+  ["Text <a title=\"`\"></a>\u{1F916} Generated with [Claude Code](https://claude.com/claude-code)<a title=\"`\"></a>", "generated-with"],
+  ["<a title=\"`\"></a>\u{1F916} Generated with [Claude Code](https://claude.com/claude-code)<a title=\"`\"></a>", "generated-with"],
+  ["\\`Co-authored-by: Claude <noreply@anthropic.com>\\`", "co-authored-by-claude"],
+  ["<!--\n```\n-->\n\u{1F916} Generated with [Claude Code](https://claude.com/claude-code)\n<!--\n```\n-->", "generated-with"],
+  ["<div>\n```\nCo-authored-by: Claude <noreply@anthropic.com>\n```\n</div>", "co-authored-by-claude"],
+  ["> Co-authored-by: Claude <noreply@anthropic.com>", "co-authored-by-claude"],
+  ["- Co-authored-by: Claude <noreply@anthropic.com>", "co-authored-by-claude"],
+  ["\u{1F916} **Generated** with [Claude Code](https://claude.com/claude-code)", "generated-with"],
+  ["## Generated with Claude Code", "generated-with"],
+  ["| Generated with Claude Code |", "generated-with"],
+  ["\u{1F916}\u200d Generated with Claude Code", "generated-with"],
+  ["\u{1F916} _Generated with Claude Code_", "generated-with"],
+  ["Generated with [Claude&nbsp;Code](https://claude.com/claude-code)", "generated-with"],
+  ["\u{1F916} Generated&#32;with [Claude Code](https://claude.com/claude-code)", "generated-with"],
+  ["\u{1F916} Generated\nwith [Claude Code](https://claude.com/claude-code)", "generated-with"],
+  ["Generated with Claude\u200bCode", "generated-with"],
+  [":robot: Generated with Claude Code", "generated-with"],
+  ["Generated with <a href=\"https://claude.com/claude-code\">Claude Code</a>", "generated-with"],
+  ["Generated with **[Claude Code](https://claude.com/claude-code)**", "generated-with"],
+];
+for (const [b, p] of PR_SHAPES) {
+  test(`the PR body ${JSON.stringify(b)} fails`, () => assert.deepEqual(prPatterns(b), [p]));
+}
+const PR_GUARDS = [
+  "<!-- Describe the change -->\nFixes the parser.", "<div>x</div>\n\n```\n" + QUOTED + "```\n",
+  "Use <kbd>Ctrl</kbd> and `\u{1F916} Generated with` text.", "See https://claude.com/claude-code for the tool.",
+];
+for (const b of PR_GUARDS) {
+  test(`the PR body ${JSON.stringify(b)} passes`, () => assert.deepEqual(prPatterns(b), []));
+}
+
+const PR_OPENERS = [
+  { login: "claude[bot]", type: "Bot", id: 209825114 }, { login: "claude", type: "User", id: 81847 },
+  { login: "Claude" }, { login: "claude-code-action[bot]", type: "Bot", id: 208546643 },
+  { login: "renamed", type: "User", id: 81847 },
+];
+const openedBy = (user) => scanPr({ pull_request: { title: "t", body: "b", user } }).map((f) => [f.where, f.pattern]);
+test("the opener finding names the account", () =>
+  assert.deepEqual(scanPr({ pull_request: { user: PR_OPENERS[0] } }),
+    [{ where: "pr-user", pattern: "opened-by-claude", line: "claude[bot] (Bot, 209825114)" }]));
+for (const u of PR_OPENERS) {
+  test(`a PR opened by ${JSON.stringify(u)} fails`, () => assert.deepEqual(openedBy(u), [["pr-user", "opened-by-claude"]]));
+}
+for (const u of [{ login: "claudette", type: "User", id: 5 }, { login: "jane-claude", type: "User", id: 6 }]) {
+  test(`a PR opened by ${JSON.stringify(u)} passes`, () => assert.deepEqual(openedBy(u), []));
+}
+
 // End to end over a real git range, in a private repository under the OS temp dir.
 const SCRIPT = fileURLToPath(new URL("./human-authors.mjs", import.meta.url));
 function repo() {
@@ -214,7 +341,16 @@ function repo() {
     if (event) { const p = join(dir, "event.json"); writeFileSync(p, JSON.stringify(event)); args.push("--event", p); }
     return spawnSync(process.execPath, args, { cwd: dir, encoding: "utf8" });
   };
-  return { dir, mk, run, base: mk("base"), done: () => rmSync(dir, { recursive: true, force: true }) };
+  // a commit written byte for byte with git hash-object, on top of the current tip
+  const mkRaw = (header = "", message = "feat: x\n", literally = false) => {
+    const tree = git(["hash-object", "-t", "tree", "-w", "/dev/null"]);
+    const raw = `tree ${tree}\nparent ${tip}\nauthor Jane <jane@example.com> 1700000000 +0000\n`
+      + `committer Jane <jane@example.com> 1700000000 +0000\n${header}\n${message}`;
+    tip = execFileSync("git", ["hash-object", "-t", "commit", "-w", "--stdin", ...(literally ? ["--literally"] : [])],
+      { cwd: dir, input: raw, encoding: "utf8" }).trim();
+    return tip;
+  };
+  return { dir, git, mk, mkRaw, tip: () => tip, run, base: mk("base"), done: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 test("a clean range exits 0", () => {
@@ -297,5 +433,70 @@ test("an unreadable range is a hard error", () => {
     const out = r.run(r.base, "no-such-ref");
     assert.equal(out.status, 2, out.stdout + out.stderr);
     assert.match(out.stderr, /human-authors: git rev-list/);
+  } finally { r.done(); }
+});
+
+test("a CR-after-colon trailer fails the range", () => {
+  const r = repo();
+  try {
+    const head = r.mk("feat: x\n\nCo-authored-by:\rClaude <noreply@anthropic.com>");
+    const out = r.run(r.base, head);
+    assert.equal(out.status, 1, out.stdout + out.stderr);
+    assert.match(out.stdout, /co-authored-by-claude/);
+    assert.ok(!out.stdout.includes("\r"));
+  } finally { r.done(); }
+});
+
+test("a @claude author fails the range", () => {
+  const r = repo();
+  try {
+    const head = r.mk("feat: x", "Dmitriy", "claude@users.noreply.github.com");
+    const out = r.run(r.base, head);
+    assert.equal(out.status, 1);
+    assert.match(out.stdout, /author-email-claude-user/);
+  } finally { r.done(); }
+});
+
+test("an IBM037 commit is a hard error", () => {
+  const r = repo();
+  try {
+    const tree = r.git(["hash-object", "-t", "tree", "-w", "/dev/null"]);
+    const head = r.git(["-c", "i18n.commitEncoding=IBM037", "commit-tree", tree, "-p", r.tip(),
+      "-m", "feat: x\n\nCo-authored-by: Claude <noreply@anthropic.com>"],
+    { GIT_AUTHOR_NAME: "Claude", GIT_AUTHOR_EMAIL: "209825114+claude[bot]@users.noreply.github.com",
+      GIT_COMMITTER_NAME: "Jane", GIT_COMMITTER_EMAIL: "jane@example.com" });
+    const out = r.run(r.base, head);
+    assert.equal(out.status, 2, out.stdout + out.stderr);
+    assert.match(out.stderr, /declares encoding IBM037/);
+  } finally { r.done(); }
+});
+
+test("a UTF-16LE commit is a hard error", () => {
+  const r = repo();
+  try {
+    const head = r.mkRaw("encoding UTF-16LE\n", "feat: x\n\nCo-authored-by: Claude <noreply@anthropic.com>\n");
+    const out = r.run(r.base, head);
+    assert.equal(out.status, 2, out.stdout + out.stderr);
+    assert.match(out.stderr, /declares encoding UTF-16LE/);
+  } finally { r.done(); }
+});
+
+test("a NUL in a message is a hard error", () => {
+  const r = repo();
+  try {
+    const head = r.mkRaw("", "feat: x\0\n\nCo-authored-by: Claude <noreply@anthropic.com>\n", true);
+    const out = r.run(r.base, head);
+    assert.equal(out.status, 2, out.stdout + out.stderr);
+    assert.match(out.stderr, /holds a NUL byte/);
+  } finally { r.done(); }
+});
+
+test("a PR opened by claude[bot] fails the range", () => {
+  const r = repo();
+  try {
+    const head = r.mk("feat: x");
+    const out = r.run(r.base, head, { pull_request: { title: "x", body: "y", user: { login: "claude[bot]", type: "Bot" } } });
+    assert.equal(out.status, 1);
+    assert.match(out.stdout, /pr-user\topened-by-claude/);
   } finally { r.done(); }
 });
