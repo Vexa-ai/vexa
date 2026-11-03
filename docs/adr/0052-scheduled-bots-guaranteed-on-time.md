@@ -146,7 +146,9 @@ Under the per-user advisory lock and a row lock it:
   One deferral (CEO, 3 Nov 2026, decision 7ba3d0b2ec84): while the seed copy is the only runnable
   `invite_join` (every company version retired), the migration keeps it and refuses by name
   (`former_seed_unrunnable`) until a company version is active again, so a rollback is never left
-  without one; the copy is removed on the first start after that.
+  without one; the copy is removed on the first start after that. When it is removed, the company's
+  newest active `invite_join` version stays active for a rollback and its older active versions are
+  retired. The lifecycle door refuses (409) to retire the only active stored version.
 - The planned row's id, returned by `POST /meetings`, is kept in Flows against the invite's calendar
   UID: a reschedule `PATCH`es that row and a cancel `DELETE`s it. The invitees `post_meeting` needs
   are read from Flows' own invite record by meeting id. No public contract changes (decided item 5).
