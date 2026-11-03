@@ -364,3 +364,82 @@ async def test_the_booking_cap_holds_on_every_writer_on_postgres(sf, monkeypatch
                                                  over_cap="stamp")
     assert rearmed["data"]["auto_join"] is True and "auto_join_error" not in rearmed["data"]
     assert (await _facts(sf))[-1][1]["auto_join"] is True
+
+
+# ── the boot backfill (s2d, ADR-0052 §3) ────────────────────────────────────────────────────────
+
+async def _legacy_row(sf, *, status="scheduled", minutes=60, auto_join=True, native=None):
+    """A row as a release before the outbox wrote it: a Core insert, so no flush hook runs."""
+    from sqlalchemy import insert
+
+    from meeting_api.sessions.models import Meeting
+
+    data = {"auto_join": auto_join}
+    if minutes is not None:
+        data["scheduled_at"] = _at(minutes).isoformat()
+    async with sf() as db:
+        mid = (await db.execute(insert(Meeting).values(
+            user_id=USER, platform=PLAT, platform_specific_id=native or f"leg-{status}-{minutes}",
+            status=status, data=data).returning(Meeting.id))).scalar_one()
+        await db.commit()
+    return mid
+
+
+async def test_the_backfill_hands_every_open_booking_without_a_fact_to_flows_once(sf):
+    from meeting_api.planned_outbox import backfill
+
+    armed = await _legacy_row(sf, minutes=60, native="aaa-bbbb-ccc")
+    just_started = await _legacy_row(sf, minutes=-5, native="ddd-eeee-fff")   # inside the grace
+    await _legacy_row(sf, minutes=-30, native="ggg-hhhh-iii")                 # window closed
+    await _legacy_row(sf, minutes=60, auto_join=False, native="jjj-kkkk-lll")  # no bot wanted
+    await _legacy_row(sf, status="idle", minutes=None, native="mmm-nnnn-ooo")  # no time
+    await _legacy_row(sf, status="completed", minutes=-90, native="ppp-qqqq-rrr")
+    already = await _book(sf, native="sss-tttt-uuu", minutes=90)                # has its fact
+    before = len(await _facts(sf))
+    assert await backfill(sf) == 2
+    facts = await _facts(sf)
+    new = {e["meeting_id"]: e for _, e, _ in facts[before:]}
+    assert set(new) == {armed, just_started}
+    assert new[armed]["auto_join"] is True and new[armed]["status"] == "scheduled"
+    assert new[armed]["pod_at"] and new[armed]["join_at"] and new[armed]["deadline"]
+    assert "meeting_url" not in new[armed] and "constructed_meeting_url" not in new[armed]
+    assert [e["meeting_id"] for _, e, _ in facts].count(already["id"]) == 1
+    assert await backfill(sf) == 0, "idempotent: the second boot writes nothing"
+    assert len(await _facts(sf)) == len(facts)
+
+
+async def test_backfilled_facts_are_delivered_like_any_other(sf, monkeypatch):
+    from meeting_api.planned_outbox import backfill, deliver
+
+    mid = await _legacy_row(sf, minutes=60, native="vvv-wwww-xxx")
+    await backfill(sf)
+    posted = []
+
+    async def post(body):
+        posted.append(body)
+        return 202
+
+    out = await deliver(sf, post=post)
+    assert out["delivered"] == 1
+    (body,) = posted
+    assert body["event_type"] == "meeting.planned.changed"
+    assert body["refs"]["meeting_id"] == mid and body["refs"]["auto_join"] is True
+    assert body["source_event_id"] == f"planned-{mid}-r{body['refs']['revision']}"
+
+
+async def test_a_booking_flows_would_not_arm_is_stamped_for_its_owner(sf):
+    """ADR-0052 §8: Flows took the fact (202) but refused to arm it (the account's keyed share is
+    full): the fact is delivered — asking again changes nothing — and the row says why."""
+    from meeting_api.bot_spawn.adapters import SqlAlchemyMeetingRepo
+    from meeting_api.planned_outbox import FLOWS_REFUSED, deliver
+
+    row = await _book(sf, native="ref-useddd-one")
+
+    async def post(body):
+        return 202, {"reactions_created": 0, "refused": ["keyed_share_full"]}
+
+    out = await deliver(sf, post=post)
+    assert out["delivered"] == 1 and not out["pending"]
+    stored = await SqlAlchemyMeetingRepo(sf).get_meeting(row["id"])
+    assert stored["data"]["auto_join_error"] == f"{FLOWS_REFUSED}: keyed_share_full"
+    assert len(await _facts(sf)) == 1, "the stamp is not part of the fact: no new fact"

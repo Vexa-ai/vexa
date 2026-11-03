@@ -55,6 +55,8 @@ MEETINGS_STEPS = {
     "mail_meeting_share",
     # a bot at a time with no agent run (flows phase 0): a person's flow may name it, with its grant
     "request_meeting_bot",
+    # a booked meeting's bot at pod_at, through the start route for its planned row (ADR-0052 §6)
+    "start_booked_bot",
 }
 
 
@@ -153,8 +155,9 @@ def test_every_meetings_url_is_built_from_the_access_time_door():
     # "did this meeting transcribe?" without joining the words — is a twelfth call site. The
     # property is per-call door resolution, not the count; the count is recomputed, never guessed.
     # THIRTEEN with flows phase 0's `request_meeting_bot`, a person's bot at a time; FOURTEEN with
-    # dispatch_bot's second POST when the invite's workspace is refused (ADR-0050).
-    assert text.count("meetings_door()") == 14, "the fourteen sites resolve the door per call"
+    # dispatch_bot's second POST when the invite's workspace is refused (ADR-0050); FIFTEEN with
+    # `start_booked_bot`, the start route for a booked meeting's planned row (ADR-0052 §6).
+    assert text.count("meetings_door()") == 15, "the fifteen sites resolve the door per call"
 
 
 # ── the declarations on the steps ────────────────────────────────────────────────────────────

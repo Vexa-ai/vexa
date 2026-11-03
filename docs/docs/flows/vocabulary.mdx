@@ -157,6 +157,10 @@ Poll-composite until completed, over the transcribe window.
 
 RETIRED BY DECISION 29 (2026-09-02). Kept as a no-op, for the reason above. It emitted `onboarding.person.needed` / `onboarding.group.needed`, which started the email conversations that chased a person until they finished setup. Those flows are gone, so the facts now have no consumer — and a step that emits a fact nothing reacts to is worse than one that does nothing, because it leaves rows in the log implying work that never existed. The invite's touches are RSVP accept, the ack mail, and the prepare mail. Three, and no others. Group setup happens in a chat behind a `group-setup` scaffold, where the person is there to be asked. Result: \{\} — no reactions created, deliberately.
 
+### `start_booked_bot`
+
+THE BOOKED BOT (ADR-0052 §5, §6). At `pod_at` the keyed schedule fires this with the `meeting.planned.changed` fact's refs; it asks meeting-api to start the bot for THAT planned row — `POST /internal/meetings/{meeting_id}/start` through the service door, as the row's owner — never by URL. meeting-api re-checks the row under its lock, so a cancel that landed first wins whatever is still armed here. * 201 `started` → done (the pod waits in the meeting-api row's `requested` until `join_at`); * 409 `not_scheduled` / `past_deadline` / `already_live`, 404 → done, nothing to do; * 409 `too_early`, 429, 503, 402, a transport error → wait `Retry-After` (default 15 s) and call again, until the fact's `deadline` (start + `BOOKED_GRACE_S`); past it → done, with the last reason meeting-api gave (it is also stamped on the row, `auto_join_error`); * 403 `blocked`, 422 `meeting_host_refused` → done with that reason (asking again changes nothing). Reads: refs.meeting_id, refs.uid, refs.deadline. Result: \{meeting_id, code, http, join_at?\}.
+
 ### `wake_meeting_chat`
 
 Wake the meeting's agent in the meeting's chat with what was just said: ask agent-api which chat the meeting wakes, then post `meeting.signal` with that chat as `target.chat` and the plan; the buffer rides as data, never as instructions. Result: \{chat, queued\}.

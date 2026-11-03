@@ -1,6 +1,6 @@
 ---
 kind: flow-index
-flows: 17
+flows: 18
 generated: from the code that runs them — edits here are overwritten
 ---
 
@@ -11,6 +11,7 @@ Everything this deployment does on its own, one page each. A flow is a trigger a
 | flow | runs when | steps | rules it honours |
 |---|---|---|---|
 | [`agent_messages`](agent_messages.md) | `thread.message` | 1 | — |
+| [`booked_bot`](booked_bot.md) | `meeting.planned.changed` | 1 | — |
 | [`desk_claim`](desk_claim.md) | `claim.proposed` | 1 | — |
 | [`desk_setup`](desk_setup.md) | `desk.unscaffolded` | 1 | — |
 | [`email_chat`](email_chat.md) | `mail.reply` | 2 | — |

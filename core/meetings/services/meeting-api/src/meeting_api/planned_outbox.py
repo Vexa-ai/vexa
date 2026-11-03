@@ -165,6 +165,50 @@ def install() -> None:
     _installed = True
 
 
+# ── backfill: rows booked before the outbox existed (ADR-0052 §3) ───────────────────────────────
+
+#: The key the boot backfill serializes on (``pg_advisory_xact_lock``), so two replicas booting at
+#: once write one fact per row, not two. Any constant no other lock in this service uses.
+BACKFILL_LOCK_KEY = 520052
+
+
+async def backfill(session_factory, *, now: Optional[datetime] = None) -> int:
+    """The one-time backfill (ADR-0052 §3): one ``meeting.planned.changed`` fact for every
+    ``scheduled`` row with auto-join on whose start window is still open (``deadline`` = start +
+    ``BOOKED_GRACE_S`` not passed) and that has NO fact yet — the rows booked before this release,
+    which no write has touched since. Flows arms them like any other booking, so the release that
+    switches the clock to Flows loses no booking.
+
+    Idempotent: a row with any fact (written by the flush hook since, or by an earlier backfill) is
+    skipped, so it runs at every boot and writes nothing the second time. Serialized across replicas
+    by an advisory lock inside the transaction that writes the facts. Returns the facts written."""
+    from sqlalchemy import bindparam, exists, select, text
+
+    from .sessions.models import Meeting
+    from .sessions.models import MeetingPlannedOutbox as O
+
+    now = now or datetime.now(timezone.utc)
+    async with session_factory() as db:
+        await db.execute(text("SELECT pg_advisory_xact_lock(:k)")
+                         .bindparams(bindparam("k", BACKFILL_LOCK_KEY)))
+        rows = (await db.execute(
+            select(Meeting.id, Meeting.user_id, Meeting.status, Meeting.data)
+            .where(Meeting.status == "scheduled", ~exists().where(O.meeting_id == Meeting.id))
+            .order_by(Meeting.id)
+        )).all()
+        facts = []
+        for meeting_id, user_id, status, data in rows:
+            fact = planned_fact(meeting_id=meeting_id, user_id=user_id, status=status, data=data)
+            deadline = _parse_iso(fact["deadline"])
+            if not fact["auto_join"] or deadline is None or deadline <= now:
+                continue
+            facts.append({"meeting_id": meeting_id, "event": fact})
+        if facts:
+            await db.execute(O.__table__.insert(), facts)
+        await db.commit()
+    return len(facts)
+
+
 # ── delivery: at least once, in revision order ──────────────────────────────────────────────────
 
 def _flows() -> tuple[str, str]:
@@ -180,13 +224,48 @@ def body_of(row_id: int, event: dict) -> dict:
             "refs": refs}
 
 
+#: What the owner reads on a booking Flows accepted but would not arm (ADR-0052 §8).
+FLOWS_REFUSED = "Flows refused this booking"
+
+
+async def _stamp_refused(session_factory, refused: dict) -> None:
+    """ADR-0052 §8: a booking Flows took (202) but would not arm — ``refused`` in its answer, e.g. the
+    account's keyed share is full — is not a log line: ``data.auto_join_error`` on the row says so,
+    for the owner. Only a row still ``scheduled``; the stamp is not part of the fact, so it writes no
+    new fact."""
+    from sqlalchemy import select
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from .sessions.models import Meeting
+
+    async with session_factory() as db:
+        rows = (await db.execute(
+            select(Meeting).where(Meeting.id.in_(list(refused)), Meeting.status == "scheduled")
+            .with_for_update()
+        )).scalars().all()
+        for m in rows:
+            data = dict(m.data) if isinstance(m.data, dict) else {}
+            data["auto_join_error"] = f"{FLOWS_REFUSED}: {', '.join(refused[m.id])}"
+            m.data = data
+            flag_modified(m, "data")
+        await db.commit()
+
+
+def _answer(out: Any) -> tuple[int, Any]:
+    """A transport's answer as (status, body): a bare status code (a test's `post`) has no body."""
+    if isinstance(out, tuple):
+        return int(out[0]), out[1]
+    return int(out), None
+
+
 async def deliver(session_factory, *, limit: int = DELIVER_LIMIT,
                   post: Optional[Callable[[dict], Any]] = None) -> dict:
     """One pass: post pending rows to Flows in id order until one is not accepted.
 
-    ``post(body) -> status code`` is injectable for tests; by default it posts to
-    ``VEXA_FLOWS_API_URL/events`` with ``VEXA_FLOWS_API_KEY``. Without a Flows address nothing is
-    posted and the rows stay pending."""
+    ``post(body) -> status code`` (or ``(status, body)``) is injectable for tests; by default it
+    posts to ``VEXA_FLOWS_API_URL/events`` with ``VEXA_FLOWS_API_KEY``. Without a Flows address
+    nothing is posted and the rows stay pending. A fact Flows accepted with ``refused`` in its
+    answer is delivered (asking again changes nothing) and its row is stamped (``_stamp_refused``)."""
     from sqlalchemy import select, update
 
     from .sessions.models import MeetingPlannedOutbox as O
@@ -203,9 +282,13 @@ async def deliver(session_factory, *, limit: int = DELIVER_LIMIT,
         if key:
             headers["X-Flows-Operator-Key"] = key
 
-        async def post(body: dict) -> int:          # noqa: F811 — the default transport
+        async def post(body: dict):                 # noqa: F811 — the default transport
             r = await client.post(f"{base}/events", content=json.dumps(body), headers=headers)
-            return r.status_code
+            try:
+                answer = r.json()
+            except ValueError:
+                answer = None
+            return r.status_code, answer
 
     # Read, post, mark — three steps, no session held across the HTTP calls (the tx-scope rule).
     # Single-flight across replicas is the caller's (`__main__`'s guarded loop); a second drain
@@ -215,11 +298,12 @@ async def deliver(session_factory, *, limit: int = DELIVER_LIMIT,
             select(O.id, O.event).where(O.delivered.is_(False)).order_by(O.id).limit(limit)
         )).all()
     delivered: list[int] = []
+    refused: dict = {}
     result: dict = {}
     try:
         for row_id, event in rows:
             try:
-                status = await post(body_of(row_id, event))
+                status, answer = _answer(await post(body_of(row_id, event)))
             except Exception:  # noqa: BLE001 — a transport error is "not yet", never lost
                 result = {"reason": "Flows unavailable"}
                 break
@@ -227,6 +311,11 @@ async def deliver(session_factory, *, limit: int = DELIVER_LIMIT,
                 result = {"status": int(status)}
                 break
             delivered.append(row_id)
+            reasons = answer.get("refused") if isinstance(answer, dict) else None
+            if reasons and event.get("auto_join"):
+                refused[int(event["meeting_id"])] = [str(r) for r in reasons][:3]
+            else:
+                refused.pop(int(event["meeting_id"]), None)
     finally:
         if client is not None:
             await client.aclose()
@@ -235,5 +324,7 @@ async def deliver(session_factory, *, limit: int = DELIVER_LIMIT,
             await db.execute(update(O).where(O.id.in_(delivered)).values(
                 delivered=True, delivered_at=datetime.now(timezone.utc).replace(tzinfo=None)))
             await db.commit()
+    if refused:
+        await _stamp_refused(session_factory, refused)
     return {"delivered": len(delivered),
             "pending": bool(result) or len(rows) == limit, **result}

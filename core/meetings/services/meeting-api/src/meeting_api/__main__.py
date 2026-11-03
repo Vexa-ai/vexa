@@ -837,11 +837,19 @@ def _attach_background_loops(
     async def _planned_outbox_loop() -> None:
         if session_factory is None:
             return
-        from .planned_outbox import deliver
+        from .planned_outbox import backfill, deliver
 
         last: dict = {}
+        backfilled: list = []
 
         async def _tick():
+            # ADR-0052 §3: rows booked before the outbox existed get their fact first, once, so
+            # Flows arms them before anything else is delivered. Retried every pass until it ran.
+            if not backfilled:
+                written = await backfill(session_factory)
+                backfilled.append(written)
+                log.info("planned-outbox backfill: %d booking(s) without a fact handed to Flows",
+                         written)
             last.clear()
             last.update(await deliver(session_factory))
 
