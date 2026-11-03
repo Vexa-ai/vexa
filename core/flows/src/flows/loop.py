@@ -7,12 +7,14 @@ from typing import Optional
 from . import receipts, tickets
 from .clock import Clock
 from .db import DB, dumps, loads
-from .model import Block, Done, NotPresent, Reaction, StepCtx, StepError, Wait
+from .model import Block, Done, NotPresent, Reaction, StepCtx, StepError, Unavailable, Wait
 from .registry import Registry
 
 LEASE_S = 90.0
 BACKOFF_S = (5.0, 30.0, 120.0, 600.0)
 MAX_ATTEMPTS = 6
+#: The scratch key under which a step's first `Unavailable` is remembered, per step.
+UNAVAILABLE_SINCE = "_unavailable_since:"
 
 def _row_to_reaction(row: tuple):
     (rid, sid, et, refs, flow, ver, step, status, attempt,
@@ -161,10 +163,17 @@ def tick(db: DB, registry: Registry, clock: Clock, *, emit=None, present=None) -
             {"lease": clock.now() + LEASE_S, "now": clock.now(), "rid": r.reaction_id})
 
     ctx.checkpoint = _checkpoint
+    since_key = UNAVAILABLE_SINCE + r.step
     try:
         with tickets.presenting(tickets.union(tickets.of(r.subject_refs), _grant_of(db, flow))):
             out = registry.steps[r.step](ctx)
+        ctx.scratch.pop(since_key, None)
         _save_scratch()
+    except Unavailable as e:
+        since = float(ctx.scratch.setdefault(since_key, clock.now()))
+        _save_scratch()
+        _unavailable(db, r, clock, e, since)
+        return True
     except StepError as e:
         _save_scratch()
         _retry_or_fail(db, r, clock, str(e), retryable=e.retryable)
@@ -308,6 +317,22 @@ def _fail(db: DB, r: Reaction, clock: Clock, why: str) -> None:
         """UPDATE reaction SET status = 'failed', reason = :why,
                   lease_until = NULL, updated_at = :now WHERE reaction_id = :rid""",
         {"why": why, "now": clock.now(), "rid": r.reaction_id})
+
+
+def _unavailable(db: DB, r: Reaction, clock: Clock, e: Unavailable, since: float) -> None:
+    """A service the step reads had a moment: wait like a `Wait`, no attempt burned, with the cause
+    as the reason, until `e.deadline_s` after `since`; past it, fail with that cause."""
+    waited = clock.now() - since
+    if waited >= e.deadline_s:
+        _retry_or_fail(db, r, clock, f"{e} — still, after {int(waited)}s; gave up at "
+                                     f"{int(e.deadline_s)}s", retryable=False)
+        return
+    db.execute(
+        """UPDATE reaction SET status = 'retrying', attempt = attempt - 1,
+                  next_run_at = :due, reason = :why, lease_until = NULL, updated_at = :now
+           WHERE reaction_id = :rid""",
+        {"due": clock.now() + e.wait_s, "why": f"{e} — waiting, {int(waited)}s so far",
+         "now": clock.now(), "rid": r.reaction_id})
 
 
 def _retry_or_fail(db: DB, r: Reaction, clock: Clock, why: str, *, retryable: bool) -> None:

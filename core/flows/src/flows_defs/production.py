@@ -55,7 +55,8 @@ import sys as _sys
 import time
 from pathlib import Path
 
-from flows import Done, NotPresent, Registry, StepCtx, StepError, Wait, EventType, tickets
+from flows import (Done, NotPresent, Registry, StepCtx, StepError, Unavailable, Wait, EventType,
+                   tickets)
 
 from flows_steps import agent as ag
 from flows_steps import emailx as mx          # thread bookkeeping + the iMIP calendar reply only
@@ -1173,6 +1174,8 @@ def _scaffold_refs(ctx, uid, meeting_id=None) -> dict:
     try:
         carried = (_note_path(ctx, uid, ctx.refs["title"], meeting_id) if ctx.refs.get("title")
                    else _recorded_note_path(ctx, uid, meeting_id))
+    except StepError:
+        raise           # a door that had a moment is retried, not minted without its path
     except Exception:  # noqa: BLE001 — a path we cannot compute is not a reason to fail a mint
         carried = ""
     if carried:
@@ -2525,6 +2528,8 @@ def build(reg: Registry, db) -> None:
                     provenance={"flow": "post_meeting", "step": "email_attendees",
                                 "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
                                 "minted_by": str(ctx.refs["uid"])})
+            except Unavailable:
+                raise           # the meetings door had a moment: it keeps its own longer wait
             except StepError as e:
                 pending = [x for x in who if x not in sent]
                 raise StepError(

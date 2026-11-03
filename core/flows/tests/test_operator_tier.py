@@ -259,19 +259,28 @@ def test_the_operator_key_does_still_take_the_meetings_hop(api, monkeypatch):
     assert reached == ["126"]
 
 
-def test_a_meetings_door_that_had_a_moment_is_a_503_not_a_day_with_no_meetings(api, monkeypatch):
+def test_a_meetings_door_that_had_a_moment_is_a_503_not_a_day_with_no_meetings(api, monkeypatch,
+                                                                              caplog):
     """brain:card/4310908cf3b3. The REAL `fetch_meetings` over a door answering 503: the route says
     the meetings half could not be read, where it used to answer a day with no meetings in it.
-    `meetings=false` never takes the hop and still answers."""
+    `meetings=false` never takes the hop and still answers. The log names the status and the path,
+    a hash of the subject and none of the upstream's body."""
+    import hashlib
+    import logging
     from flows_steps import common
     flows_api, client = api
     monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "timeline-door-flows-key")
     monkeypatch.setattr(common, "MEETINGS_API", "http://gateway.test", raising=False)
     monkeypatch.setattr(common, "http", lambda *a, **k: (503, {"detail": "meeting-api restarting"}))
-    r = client.get("/timeline", params={"subject": "126", "meetings": "true"},
-                   headers=operator(flows_api))
+    with caplog.at_level(logging.WARNING, logger=flows_api.logger.name):
+        r = client.get("/timeline", params={"subject": "126", "meetings": "true"},
+                       headers=operator(flows_api))
     assert r.status_code == 503, r.text
     assert "meetings" in r.json()["detail"]
+    (line,) = [m for m in caplog.messages if "meetings door" in m]
+    assert "status=503" in line and "path=/meetings" in line
+    assert f"subject={hashlib.sha256(b'126').hexdigest()[:10]}" in line
+    assert "subject=126" not in line and "restarting" not in line
     r = client.get("/timeline", params={"subject": "126", "meetings": "false"},
                    headers=operator(flows_api))
     assert r.status_code == 200, r.text

@@ -78,6 +78,7 @@ fine"). The intakes no longer park facts and the operator verbs no longer refuse
 unwritten; the company layer is optional."""
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import re
@@ -2201,9 +2202,12 @@ def timeline(subject: str = "", since: str = "", until: str = "", limit: int = 2
                              identity=_as_me(caller))
     except StepError as e:
         # THE MEETINGS HALF COULD NOT BE READ (brain:card/4310908cf3b3). Answered as an outage, not
-        # as a day with no meetings in it. The operator gets the cause in the log; the caller gets
-        # the class, and `meetings=false` still answers from this database alone.
-        logger.warning("timeline: the meetings door did not answer for %s: %s", subj, e)
+        # as a day with no meetings in it. The operator gets the status and the path in the log,
+        # never the subject (a short hash of it) nor the upstream's body; the caller gets the
+        # class, and `meetings=false` still answers from this database alone.
+        logger.warning("timeline: meetings door unavailable status=%s path=%s subject=%s",
+                       getattr(e, "status", None) or type(e).__name__, getattr(e, "path", "") or "-",
+                       hashlib.sha256(subj.encode()).hexdigest()[:10])
         raise HTTPException(status_code=503, detail=(
             "the meetings half of the timeline could not be read right now; try again"))
     if out.get("unresolved"):
