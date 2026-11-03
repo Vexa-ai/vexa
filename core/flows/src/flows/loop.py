@@ -2,6 +2,7 @@
 behavior of the engine lives on this screen."""
 from __future__ import annotations
 
+import random
 from typing import Optional
 
 from . import receipts, tickets
@@ -15,6 +16,9 @@ BACKOFF_S = (5.0, 30.0, 120.0, 600.0)
 MAX_ATTEMPTS = 6
 #: The scratch key under which a step's first `Unavailable` is remembered, per step.
 UNAVAILABLE_SINCE = "_unavailable_since:"
+#: How far an `Unavailable` wait is spread around its `wait_s`, so a fleet parked on one outage
+#: does not come back to the door in the same second.
+UNAVAILABLE_JITTER = 0.2
 
 def _row_to_reaction(row: tuple):
     (rid, sid, et, refs, flow, ver, step, status, attempt,
@@ -317,6 +321,7 @@ def _fail(db: DB, r: Reaction, clock: Clock, why: str) -> None:
         """UPDATE reaction SET status = 'failed', reason = :why,
                   lease_until = NULL, updated_at = :now WHERE reaction_id = :rid""",
         {"why": why, "now": clock.now(), "rid": r.reaction_id})
+    forget_unavailable(db, r.reaction_id)
 
 
 def _unavailable(db: DB, r: Reaction, clock: Clock, e: Unavailable, since: float) -> None:
@@ -327,12 +332,25 @@ def _unavailable(db: DB, r: Reaction, clock: Clock, e: Unavailable, since: float
         _retry_or_fail(db, r, clock, f"{e} — still, after {int(waited)}s; gave up at "
                                      f"{int(e.deadline_s)}s", retryable=False)
         return
+    wait = e.wait_s * random.uniform(1 - UNAVAILABLE_JITTER, 1 + UNAVAILABLE_JITTER)
     db.execute(
         """UPDATE reaction SET status = 'retrying', attempt = attempt - 1,
                   next_run_at = :due, reason = :why, lease_until = NULL, updated_at = :now
            WHERE reaction_id = :rid""",
-        {"due": clock.now() + e.wait_s, "why": f"{e} — waiting, {int(waited)}s so far",
+        {"due": clock.now() + wait, "why": f"{e} — waiting, {int(waited)}s so far",
          "now": clock.now(), "rid": r.reaction_id})
+
+
+def forget_unavailable(db: DB, reaction_id: str) -> None:
+    """Drop every outage clock (`UNAVAILABLE_SINCE`) from a reaction's scratch. A failed reaction
+    keeps none and a retried one starts its own: an operator retrying after a 7 h outage must not
+    be failed on the first read because six hours had already passed."""
+    rows = db.execute("SELECT scratch FROM reaction WHERE reaction_id = :rid", {"rid": reaction_id})
+    scratch = loads(rows[0][0]) if rows else {}
+    kept = {k: v for k, v in scratch.items() if not str(k).startswith(UNAVAILABLE_SINCE)}
+    if kept != scratch:
+        db.execute("UPDATE reaction SET scratch = :s WHERE reaction_id = :rid",
+                   {"s": dumps(kept), "rid": reaction_id})
 
 
 def _retry_or_fail(db: DB, r: Reaction, clock: Clock, why: str, *, retryable: bool) -> None:
@@ -353,3 +371,4 @@ def _retry_or_fail(db: DB, r: Reaction, clock: Clock, why: str, *, retryable: bo
             """UPDATE reaction SET status = 'failed', reason = :why,
                       lease_until = NULL, updated_at = :now WHERE reaction_id = :rid""",
             {"why": why, "now": clock.now(), "rid": r.reaction_id})
+        forget_unavailable(db, r.reaction_id)

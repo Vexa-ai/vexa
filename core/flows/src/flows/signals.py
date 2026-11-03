@@ -44,6 +44,8 @@ def retry(db: DB, reaction_id: str, actor: str, clock: Clock, reason: str | None
            WHERE reaction_id = :rid AND status = 'failed' RETURNING reaction_id""",
         {"now": clock.now(), "rid": reaction_id})
     if rows:
+        from .loop import forget_unavailable
+        forget_unavailable(db, reaction_id)      # a new attempt starts its own outage clock
         _record(db, reaction_id, "retry", actor, reason, clock)
     return bool(rows)
 

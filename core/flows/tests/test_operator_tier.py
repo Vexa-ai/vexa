@@ -264,8 +264,9 @@ def test_a_meetings_door_that_had_a_moment_is_a_503_not_a_day_with_no_meetings(a
     """brain:card/4310908cf3b3. The REAL `fetch_meetings` over a door answering 503: the route says
     the meetings half could not be read, where it used to answer a day with no meetings in it.
     `meetings=false` never takes the hop and still answers. The log names the status and the path,
-    a hash of the subject and none of the upstream's body."""
+    an HMAC of the subject and none of the upstream's body."""
     import hashlib
+    import hmac
     import logging
     from flows_steps import common
     flows_api, client = api
@@ -279,7 +280,9 @@ def test_a_meetings_door_that_had_a_moment_is_a_503_not_a_day_with_no_meetings(a
     assert "meetings" in r.json()["detail"]
     (line,) = [m for m in caplog.messages if "meetings door" in m]
     assert "status=503" in line and "path=/meetings" in line
-    assert f"subject={hashlib.sha256(b'126').hexdigest()[:10]}" in line
+    tag = hmac.new(flows_api.DOOR_KEY.encode(), b"126", hashlib.sha256).hexdigest()[:16]
+    assert f"subject={tag}" in line, "an HMAC under the flows key"
+    assert hashlib.sha256(b"126").hexdigest()[:10] not in line, "not an unkeyed, reversible hash"
     assert "subject=126" not in line and "restarting" not in line
     r = client.get("/timeline", params={"subject": "126", "meetings": "false"},
                    headers=operator(flows_api))

@@ -535,6 +535,13 @@ BOT_MAX_ACTIVE_S = 4 * 3600
 ACTIVE_CEILING_S = BOT_MAX_ACTIVE_S + 30 * 60
 
 
+def _ran(ctx: StepCtx) -> float:
+    """Seconds since the meeting's start (`refs.start`), else since this step first polled."""
+    start = ctx.refs.get("start")
+    began = float(start) if start else ctx.scratch.setdefault("active_since", ctx.clock_now)
+    return ctx.clock_now - began
+
+
 def _status(ctx: StepCtx) -> dict:
     """The bot's own status document, or a NAMED unreadable answer.
 
@@ -544,14 +551,17 @@ def _status(ctx: StepCtx) -> dict:
     state this function had not heard of. Two different things were hidden in that one string: a
     status we do not recognise (a genuine unknown, worth waiting on) and a read that did not
     happen (worth counting, and worth giving up on). `unreadable` is the second, and it carries the
-    code so an operator reading the reason knows which door said what."""
+    code so an operator reading the reason knows which door said what. A 5xx or a 429 is neither:
+    it is the door having a moment, and it raises `MeetingsUnavailable` like every other meetings
+    read, so an upgrade window is waited out instead of failing every live meeting in a minute."""
     d = ctx.prior["dispatch_bot"]
     hdr = door_headers(ctx.prior["ensure_user"]["uid"])
+    door = f"{meetings_door()}/transcripts/{d['platform']}/{d['native']}"
     try:
-        st, body = http("GET", f"{meetings_door()}/transcripts/{d['platform']}/{d['native']}",
-                        hdr)
+        st, body = http("GET", door, hdr)
     except StepError as e:
         return {"status": STATUS_UNREADABLE, "http": None, "detail": str(e)[:200]}
+    raise_if_unavailable("GET", door, st, body)
     if st == 200 and isinstance(body, dict):
         return body
     return {"status": STATUS_UNREADABLE, "http": st, "detail": _http_detail(body)}
@@ -595,7 +605,17 @@ def run_meeting(ctx: StepCtx):
     """Poll-composite until completed: the bot stays until the meeting ends, unless
     `refs.transcribe_s` caps its window."""
     d = ctx.prior["dispatch_bot"]
-    m = _status(ctx)
+    try:
+        m = _status(ctx)
+    except MeetingsUnavailable as e:
+        # The engine waits on it, and the run's own ceiling still bounds the wait.
+        if _ran(ctx) > ACTIVE_CEILING_S:
+            return Block(
+                reason=(f"the bot's status for {d['platform']}/{d['native']} could not be read "
+                        f"{int(_ran(ctx))}s after the meeting's start ({e}), past the bot's own "
+                        f"{BOT_MAX_ACTIVE_S // 3600} h backstop and a 30 min grace."),
+                deadline_s=STOP_DEADLINE_S)
+        raise
     s = m.get("status") or "?"
     if s == STATUS_UNREADABLE:
         # THE READ ITSELF FAILED, and that is not a meeting state. Bounded, because a 404 on a
@@ -622,14 +642,12 @@ def run_meeting(ctx: StepCtx):
         if window is None:
             # A CEILING ON THE POLL, the same kind `stopping` has: a Wait spends no attempt, so a
             # bot whose status never moves would otherwise be polled for the life of the worker.
-            start = ctx.refs.get("start")
-            began = float(start) if start else ctx.scratch.setdefault("active_since", ctx.clock_now)
-            if ctx.clock_now - began > ACTIVE_CEILING_S:
+            if _ran(ctx) > ACTIVE_CEILING_S:
                 return Block(
-                    reason=(f"the bot for {d['platform']}/{d['native']} has been active for "
-                            f"{int(ctx.clock_now - began)}s, past its own "
-                            f"{BOT_MAX_ACTIVE_S // 3600} h backstop, and has not reported the "
-                            f"meeting ended. It may still be in the call and recording."),
+                    reason=(f"the bot for {d['platform']}/{d['native']} still reported active "
+                            f"{int(_ran(ctx))}s after the meeting's start, past its own "
+                            f"{BOT_MAX_ACTIVE_S // 3600} h backstop and a 30 min grace, and never "
+                            f"reported the meeting ended. Flows did not ask it to leave."),
                     deadline_s=STOP_DEADLINE_S)
             return Wait(seconds=8)
         # The window is measured from the meeting's own start rather than from the moment the bot

@@ -17,7 +17,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from flows import Done, EventType, FakeClock, Registry, StepError, Unavailable, admit, status, tick
+from flows import (Done, EventType, FakeClock, Reaction, Registry, StepCtx, StepError, Unavailable,
+                   admit, retry, status, tick)
 from flows_defs import production
 from flows_steps import common
 from flows_steps import meeting as mt
@@ -156,9 +157,9 @@ def test_a_scaffold_with_no_meetings_domain_is_still_minted_without_a_path(monke
 
 
 # ── through the engine: how long a flaky door is waited on ───────────────────────────────────────
-def _engine(monkeypatch, read, answer):
+def _loop(monkeypatch, read, answer):
     """One step doing `read()` under the real loop; `answer(elapsed)` is the door at that moment.
-    Returns the reaction's status and how long the loop ran."""
+    Returns `drive()`, which runs the loop to rest and answers (status, scratch, elapsed)."""
     from sqlite_double import SqliteDB
     db, clock, reg = SqliteDB(), FakeClock(1_000_000.0), Registry()
     t0 = clock.now()
@@ -169,14 +170,25 @@ def _engine(monkeypatch, read, answer):
     reg.flow(name="door", version=1, on=EventType("t.door"), steps=[door_read])
     _wire(monkeypatch, lambda: answer(clock.now() - t0))
     admit(db, reg, clock, source_event_id="s1", event_type="t.door", subject_refs={})
-    for _ in range(2000):
-        if not tick(db, reg, clock):
-            nxt = db.execute("SELECT MIN(next_run_at) FROM reaction "
-                             "WHERE status IN ('admitted','retrying')")[0][0]
-            if nxt is None:
-                break
-            clock._t = max(clock._t, nxt)
-    return status(db, db.execute("SELECT reaction_id FROM reaction")[0][0]), clock.now() - t0
+    rid = db.execute("SELECT reaction_id FROM reaction")[0][0]
+
+    def drive(ticks=2000):
+        for _ in range(ticks):
+            if not tick(db, reg, clock):
+                nxt = db.execute("SELECT MIN(next_run_at) FROM reaction "
+                                 "WHERE status IN ('admitted','retrying')")[0][0]
+                if nxt is None:
+                    break
+                clock._t = max(clock._t, nxt)
+        scratch = db.execute("SELECT scratch FROM reaction WHERE reaction_id = :r", {"r": rid})[0][0]
+        return status(db, rid), scratch or "", clock.now() - t0
+    drive.retry = lambda: retry(db, rid, "operator", clock)
+    return drive
+
+
+def _engine(monkeypatch, read, answer):
+    st, _scratch, ran = _loop(monkeypatch, read, answer)()
+    return st, ran
 
 
 def _row(_elapsed=0):
@@ -208,4 +220,107 @@ def test_a_refused_ticket_keeps_the_normal_budget_then_fails_loudly(monkeypatch)
     assert st["status"] == "failed"
     assert "subject_ticket_required" in st["reason"]
     assert ran < 30 * 60, "the normal budget, not the six-hour wait"
+
+
+def test_a_retry_after_the_give_up_succeeds_when_the_door_is_back(monkeypatch):
+    """The give-up clears the step's outage clock, and so does a retry: an operator retrying after a
+    7 h outage used to be failed on the first read, the six hours already spent."""
+    door = {"up": False}
+    drive = _loop(monkeypatch, lambda: mt.meeting_row("7", 41, NATIVE),
+                  lambda t: _row() if door["up"] else _503())
+    st, scratch, _ = drive()
+    assert st["status"] == "failed" and "_unavailable_since" not in scratch
+    door["up"] = True
+    assert drive.retry()
+    st, _, _ = drive()
+    assert st["status"] == "done", st["reason"]
+
+
+def test_a_retry_with_the_door_still_down_waits_again_from_zero(monkeypatch):
+    drive = _loop(monkeypatch, lambda: mt.meeting_row("7", 41, NATIVE), lambda t: _503())
+    assert drive()[0]["status"] == "failed"
+    assert drive.retry()
+    st, scratch, _ = drive(ticks=1)
+    assert st["status"] == "retrying" and "waiting, 0s so far" in st["reason"]
+    assert "_unavailable_since" in scratch
+
+
+def test_a_parked_fleet_comes_back_spread_out(monkeypatch):
+    """A Wait on an unavailable door is jittered ±20 % around its 60 s."""
+    from sqlite_double import SqliteDB
+    db, clock, reg = SqliteDB(), FakeClock(1_000_000.0), Registry()
+
+    @reg.step
+    def door_down(ctx):
+        raise Unavailable("the door had a moment", wait_s=60)
+    reg.flow(name="down", version=1, on=EventType("t.down"), steps=[door_down])
+    for i in range(20):
+        admit(db, reg, clock, source_event_id=f"s{i}", event_type="t.down", subject_refs={})
+    while tick(db, reg, clock):
+        pass
+    waits = [nra - clock.now() for (nra,) in db.execute("SELECT next_run_at FROM reaction")]
+    assert len(waits) == 20 and all(48 <= w <= 72 for w in waits), waits
+    assert len({round(w, 3) for w in waits}) > 1, "spread, not one instant"
+
+
+# ── run_meeting's own read of the bot's status ───────────────────────────────────────────────────
+def _run_ctx(now, scratch):
+    refs = {"uid": "7", "start": 1_000_000.0}
+    r = Reaction("rid", "sid", "keyed.due", refs, "invite_join", 1, "run_meeting", "running", 1,
+                 0.0, None, None, None)
+    return StepCtx(reaction=r, effect_key="rid:run_meeting", clock_now=now, scratch=scratch,
+                   prior={"ensure_user": {"uid": "7"}, "dispatch_bot": {
+                       "meeting_id": 41, "native": NATIVE, "platform": "google_meet"}})
+
+
+@pytest.mark.parametrize("code", [429, 502, 503, 504])
+def test_a_status_door_that_had_a_moment_is_waited_on_not_counted_unreadable(monkeypatch, code):
+    """`_status` read a 5xx as unreadable and failed after ten reads, about a minute: an upgrade
+    window failed every live invite. It waits like every other meetings read now, and the run's
+    4 h 30 min ceiling still bounds it."""
+    _wire(monkeypatch, _http(code))
+    scratch: dict = {}
+    for _ in range(mt.STATUS_READ_ATTEMPTS_MAX + 2):
+        with pytest.raises(Unavailable):
+            mt.run_meeting(_run_ctx(1_000_000.0 + 600, scratch))
+    assert not scratch.get("status_unreadable")
+    out = mt.run_meeting(_run_ctx(1_000_000.0 + 5 * 3600, scratch))
+    assert type(out).__name__ == "Block" and out.deadline_s == mt.STOP_DEADLINE_S
+    assert f"HTTP {code}" in out.reason and NATIVE in out.reason
+
+
+# ── prepare_meeting: the wait ends at the meeting's start ────────────────────────────────────────
+def _prepare(monkeypatch, now):
+    from test_link_loop import FakeScaffolds, _StubDB
+    reg = Registry()
+    production.build(reg, _StubDB())
+    sent: list = []
+    monkeypatch.setattr(production, "setting", lambda uid, key: True if key == "mail_prep" else "")
+    monkeypatch.setattr(production, "mint_scaffold", FakeScaffolds())
+    monkeypatch.setattr(production, "notify", lambda *a, **k: sent.append(a) or "<mid@x>")
+    monkeypatch.setattr(production.mx, "register_thread", lambda *a, **k: None)
+    monkeypatch.setattr(production.mailtext, "render", lambda *a, **k: ("Prepare: T", "body"))
+    _wire(monkeypatch, _503)
+    refs = {"uid": "7", "organizer": "anna@bank.test", "title": "Pilot sync",
+            "start": 1_700_003_600.0, "url": URL}
+    r = Reaction("rid", "sid", "meeting.upcoming", refs, "meeting_prep", 1, "prepare_meeting",
+                 "running", 1, 0.0, None, None, None)
+    ctx = StepCtx(reaction=r, effect_key="rid:prepare_meeting", prior={}, clock_now=now,
+                  scratch={})
+    return reg.steps["prepare_meeting"], ctx, sent
+
+
+def test_prepare_waits_on_the_door_before_the_meeting_starts(monkeypatch):
+    step, ctx, sent = _prepare(monkeypatch, now=1_700_003_600.0 - 3600)
+    with pytest.raises(Unavailable):
+        step(ctx)
+    assert sent == []
+
+
+def test_prepare_skips_the_mail_once_the_meeting_has_started(monkeypatch):
+    """An outage in the hour before a meeting used to send the Prepare mail after it ended."""
+    step, ctx, sent = _prepare(monkeypatch, now=1_700_003_600.0 + 1)
+    out = step(ctx)
+    assert isinstance(out, Done) and "the meeting started" in out.result["skipped"]
+    assert "HTTP 503" in out.result["skipped"] and sent == []
 

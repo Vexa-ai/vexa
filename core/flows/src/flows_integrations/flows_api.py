@@ -2145,6 +2145,16 @@ def signal_reaction(reaction_id: str, verb: str, subject: str = "",
     return {verb: True}
 
 
+def _subject_tag(subject: str) -> str:
+    """A subject as a log line may carry it: an HMAC under the flows key, so the same person reads
+    as the same tag across lines and nobody holding the user list can reverse it (an unkeyed hash
+    of a uid or an address can be). `-` when this process holds no key."""
+    key = (DOOR_KEY or "").encode()
+    if not key:
+        return "-"
+    return hmac.new(key, str(subject).encode(), hashlib.sha256).hexdigest()[:16]
+
+
 @app.get("/timeline")
 def timeline(subject: str = "", since: str = "", until: str = "", limit: int = 20,
              meetings: bool = True, format: str = "json",
@@ -2203,11 +2213,11 @@ def timeline(subject: str = "", since: str = "", until: str = "", limit: int = 2
     except StepError as e:
         # THE MEETINGS HALF COULD NOT BE READ (brain:card/4310908cf3b3). Answered as an outage, not
         # as a day with no meetings in it. The operator gets the status and the path in the log,
-        # never the subject (a short hash of it) nor the upstream's body; the caller gets the
-        # class, and `meetings=false` still answers from this database alone.
+        # never the subject nor the upstream's body; the caller gets the class, and
+        # `meetings=false` still answers from this database alone.
         logger.warning("timeline: meetings door unavailable status=%s path=%s subject=%s",
                        getattr(e, "status", None) or type(e).__name__, getattr(e, "path", "") or "-",
-                       hashlib.sha256(subj.encode()).hexdigest()[:10])
+                       _subject_tag(subj))
         raise HTTPException(status_code=503, detail=(
             "the meetings half of the timeline could not be read right now; try again"))
     if out.get("unresolved"):
