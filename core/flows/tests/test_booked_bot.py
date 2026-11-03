@@ -232,6 +232,26 @@ def test_the_wait_never_runs_past_the_deadline_and_past_it_the_fire_ends(monkeyp
     assert "concurrency" in out.result["reason"] and calls == [], "no start past the deadline"
 
 
+@pytest.mark.parametrize("status,reason", [(403, "service_key_required"),
+                                           (403, "not_on_the_allow_list"),
+                                           (403, "subject_unknown"), (404, "domain_not_deployed"),
+                                           (400, "subject_required")])
+def test_a_door_refusal_fails_the_fire_loudly(monkeypatch, status, reason):
+    """The gateway door refusing the call itself (`service_door._refuse`) is a configuration fault:
+    meeting-api never saw it and stamped nothing. It must fail the step, never end it as done."""
+    _wire(monkeypatch, status, {"detail": f"service door: {reason}", "reason": reason,
+                                "method": "POST", "path": "/internal/meetings/41/start"})
+    with pytest.raises(StepError) as e:
+        mt.start_booked_bot(_ctx(T - POD))
+    assert e.value.retryable is False and reason in str(e.value)
+
+
+def test_meeting_api_answers_with_the_same_codes_still_end_the_fire(monkeypatch):
+    for status, code in ((403, "blocked"), (404, "not_found")):
+        _wire(monkeypatch, status, {"code": code, "detail": "why"})
+        assert isinstance(mt.start_booked_bot(_ctx(T - POD)), Done)
+
+
 def test_a_fact_without_its_owner_is_refused_for_good(monkeypatch):
     _wire(monkeypatch, 201, {"code": "started"})
     with pytest.raises(StepError) as e:
