@@ -13,7 +13,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { prFiles, gitDiffFiles, API_FILE_CAP } from "./pr-files.mjs";
 import { card as docsCard } from "./docs-current-gate.mjs";
-import * as mergeCard from "./merge-card-gate.mjs";
 
 const BASE = "b".repeat(40), HEAD = "h".repeat(40), MB = "m".repeat(40);
 const names = (n, at) => Array.from({ length: n }, (_, i) => `${at}/f${i}.py`);
@@ -86,24 +85,6 @@ test("docs-current: the same surface change with no docs anywhere still fails (t
 test("docs-current: an evaluation error surfaces (git short of the count) rather than a verdict", () => {
   const all = [...names(4668, "core"), ...names(475, "docs")];
   assert.throws(() => docsCard(2008, { repo: "o/r", api: fakeApi(pr(5143), all), git: gitOf(all.slice(0, 3000)) }));
-});
-
-test("merge-card: a runtime file past the 1,000th still makes the value-fsm leg required", async () => {
-  const all = [...names(1200, "docs"), "core/meetings/x.py"];
-  const fsm = (conclusion) => (path) => {
-    if (/\/check-runs/.test(path)) return { check_runs: [{ name: "value-fsm", status: "completed", conclusion, started_at: "2026-11-03T00:00:00Z" }] };
-    if (/\/collaborators\/maint\/permission$/.test(path)) return { permission: "write" };
-    if (/\/issues\/\d+\/comments/.test(path)) return [];
-    if (/\/reviews/.test(path)) return [];
-    return undefined;
-  };
-  const signed = pr(1201, { labels: [{ name: "state: value-signed" }] });
-  const red = await mergeCard.card(2008, { api: fakeApi(signed, all, fsm("failure")), git: gitOf(all), readClosing: () => [] });
-  assert.equal(red.valueOk, false);
-  assert.match(red.valueWhy, /value-fsm is failure/);
-  const green = await mergeCard.card(2008, { api: fakeApi(signed, all, fsm("success")), git: gitOf(all), readClosing: () => [] });
-  assert.equal(green.valueOk, true);
-  assert.match(green.valueWhy, /value-fsm green/);
 });
 
 // The git path itself, against a real repository: shallow, blob-less, renames as remove + add.

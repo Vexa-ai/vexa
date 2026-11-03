@@ -1,5 +1,5 @@
-// pr-files — every file a PR changes, however many. Shared by the gates that judge a PR by its
-// file list (docs-current, merge-card, release-value, release-witness).
+// pr-files — every file a PR changes, however many. For the gates that judge a PR by its file
+// list (docs-current, release-witness; merge-card and release-value once #2008 is on main).
 //
 // GitHub's REST list (pulls/{n}/files) stops at 3,000 files, and the gates paged it only to 1,000
 // or 2,000. A gate that decides from a cut list judges a large PR on part of its diff and never
