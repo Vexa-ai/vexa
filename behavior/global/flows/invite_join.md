@@ -45,7 +45,7 @@ EMIT meeting.started — the fact the live flow reacts to. Prior: dispatch_bot.
 
 ### 4. `run_meeting`
 
-Poll-composite until completed, over the transcribe window.
+Poll-composite until completed: the bot stays until the meeting ends, unless `refs.transcribe_s` caps its window.
 
 - **domains:** without **meetings** the reaction ends there, saying so
 
@@ -176,9 +176,20 @@ def emit_started(ctx: StepCtx):
 
 ```python
 def run_meeting(ctx: StepCtx):
-    """Poll-composite until completed, over the transcribe window."""
+    """Poll-composite until completed: the bot stays until the meeting ends, unless
+    `refs.transcribe_s` caps its window."""
     d = ctx.prior["dispatch_bot"]
-    m = _status(ctx)
+    try:
+        m = _status(ctx)
+    except MeetingsUnavailable as e:
+        # The engine waits on it, and the run's own ceiling still bounds the wait.
+        if _ran(ctx) > ACTIVE_CEILING_S:
+            return Block(
+                reason=(f"the bot's status for {d['platform']}/{d['native']} could not be read "
+                        f"{int(_ran(ctx))}s after the meeting's start ({e}), past the bot's own "
+                        f"{BOT_MAX_ACTIVE_S // 3600} h backstop and a 30 min grace."),
+                deadline_s=STOP_DEADLINE_S)
+        raise
     s = m.get("status") or "?"
     if s == STATUS_UNREADABLE:
         # THE READ ITSELF FAILED, and that is not a meeting state. Bounded, because a 404 on a
@@ -197,10 +208,25 @@ def run_meeting(ctx: StepCtx):
     if s in ("requested", "joining", "awaiting_admission"):
         return Wait(seconds=6)
     if s == "active":
-        window = ctx.refs.get("transcribe_s", 45.0)
+        # NO WINDOW, NO STOP (brain:card/d7faa9c3946c). The window is a REHEARSAL's cap: the first
+        # harness ran a real bot for 45 s and then stopped it. No invite carries `transcribe_s`, so
+        # reading its absence as 45 s asked every invited bot to leave 45 s after the start. A bot
+        # started any other way stays until the meeting ends and leaves on its own; so does this one.
+        window = ctx.refs.get("transcribe_s")
+        if window is None:
+            # A CEILING ON THE POLL, the same kind `stopping` has: a Wait spends no attempt, so a
+            # bot whose status never moves would otherwise be polled for the life of the worker.
+            if _ran(ctx) > ACTIVE_CEILING_S:
+                return Block(
+                    reason=(f"the bot for {d['platform']}/{d['native']} still reported active "
+                            f"{int(_ran(ctx))}s after the meeting's start, past its own "
+                            f"{BOT_MAX_ACTIVE_S // 3600} h backstop and a 30 min grace, and never "
+                            f"reported the meeting ended. Flows did not ask it to leave."),
+                    deadline_s=STOP_DEADLINE_S)
+            return Wait(seconds=8)
         # The window is measured from the meeting's own start rather than from the moment the bot
         # went active: this step is stateless across ticks by design, and the start is a ref.
-        if ctx.clock_now - ctx.refs["start"] < window:
+        if ctx.clock_now - ctx.refs["start"] < float(window):
             return Wait(seconds=8)
         failures = _stop_bot(ctx, d)
         if failures and failures >= STOP_ATTEMPTS_MAX:
