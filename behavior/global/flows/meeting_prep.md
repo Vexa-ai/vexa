@@ -81,14 +81,28 @@ def prepare_meeting(ctx: StepCtx):
     if not p.setting(uid, "mail_prep"):
         return Done({"skipped": "mail_prep is off for this person"})
     title = ctx.refs.get("title") or "your meeting"
+
+    def _too_late(e: Unavailable):
+        """A meetings door that had a moment is waited on, but not past the meeting's start: a
+        prepare mail that lands after the meeting began prepares nobody."""
+        start = ctx.refs.get("start")
+        if start and ctx.clock_now >= float(start):
+            return Done({"skipped": f"the meeting started while the meetings door was "
+                                    f"unavailable ({e}); a prepare mail after the start "
+                                    f"prepares nobody"})
+        raise e
+
     ref = str(ctx.refs.get("meeting_id") or "")
     if not ref and ctx.refs.get("url"):
         # PLAN it, do not merely address it. The link used to carry the native id because the
         # row is minted at dispatch — so the prep chat opened on a Zoom number, held nothing
         # under it, and reached for the only meeting it could find. dispatch_bot claims this
         # same row at start-2min, so nothing downstream forks.
-        ref = p.mt.ensure_meeting_row(uid, ctx.refs["url"], ctx.refs.get("title"),
-                                      ctx.refs.get("start"))
+        try:
+            ref = p.mt.ensure_meeting_row(uid, ctx.refs["url"], ctx.refs.get("title"),
+                                          ctx.refs.get("start"))
+        except Unavailable as e:
+            return _too_late(e)
     if not ref:
         raise StepError("nothing to link to — refs carry neither meeting_id nor url",
                         retryable=False)
@@ -111,8 +125,12 @@ def prepare_meeting(ctx: StepCtx):
     # THE SCAFFOLD (PRD §5.5). The row was planned above precisely so this link can name it;
     # the mint is the last check that the chat behind the button will hold the meeting, and it
     # RAISES rather than mailing a prepare note whose button opens a chat that knows nothing.
+    try:
+        scaffold_refs = p._scaffold_refs(ctx, uid, meeting_id=ref)
+    except Unavailable as e:
+        return _too_late(e)
     link = p.mint_scaffold("prep", to, opening="prep", meeting_id=ref,
-                           refs=p._scaffold_refs(ctx, uid, meeting_id=ref),
+                           refs=scaffold_refs,
                            provenance={"flow": "meeting_prep", "step": "prepare_meeting",
                                        "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
                                        "minted_by": str(uid)})

@@ -160,7 +160,7 @@ def test_an_invited_bot_that_never_reports_the_end_is_blocked_at_the_ceiling(mon
     assert isinstance(at(4 * 3600), Wait), "inside the bot's own 4 h backstop: a long meeting"
     out = at(5 * 3600)                              # past the backstop plus its 30 min grace
     assert isinstance(out, Block) and out.deadline_s == meeting.STOP_DEADLINE_S
-    assert "abc-defg-hij" in out.reason and "recording" in out.reason
+    assert "abc-defg-hij" in out.reason and "never reported the meeting ended" in out.reason
 
 
 def test_an_invite_that_arrives_after_the_meeting_started_still_sends_the_bot():
