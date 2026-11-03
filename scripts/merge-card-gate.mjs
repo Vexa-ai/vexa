@@ -77,6 +77,7 @@
 
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { prFiles } from "./pr-files.mjs";
 
 const REPO = process.env.GITHUB_REPOSITORY;
 const IS_MAIN = import.meta.url === pathToFileURL(process.argv[1] || "").href;
@@ -105,16 +106,11 @@ function prNumbers() {
   return [...new Set([...ref.matchAll(/pr-(\d+)-/g)].map((m) => +m[1]))];
 }
 
-function touchesRuntime(num, api = ghj) {
-  for (let page = 1; page <= 10; page++) {
-    const files = api(`repos/${REPO}/pulls/${num}/files?per_page=100&page=${page}`);
-    for (const f of files) {
-      const p = f.filename;
-      if (RUNTIME_FILES.includes(p) || RUNTIME_PREFIXES.some((pre) => p.startsWith(pre))) return true;
-    }
-    if (files.length < 100) break;
-  }
-  return false;
+// Judged on every changed file: pr-files reads past the API's 3,000-file cap (#2008). This used
+// to stop at 1,000 files, so a larger PR whose runtime files came later skipped its value-fsm leg.
+function touchesRuntime(pr, api = ghj, git) {
+  return prFiles(pr, { repo: REPO, api, ...(git ? { git } : {}) })
+    .some(({ filename: p }) => RUNTIME_FILES.includes(p) || RUNTIME_PREFIXES.some((pre) => p.startsWith(pre)));
 }
 
 // value-fsm is a live sibling check: `labeled` (which triggers merge-card) also re-triggers
@@ -425,7 +421,7 @@ export function cardOk({ valueOk, diffOk, acceptance, architecture, security }) 
 // One PR's card. `expectedHead` is the sha the check is posted for (the event's head); when the
 // PR's head has moved past it, nothing is judged. Without it (merge_group) the PR's head as queued
 // is the binding. Every read goes through the injected `api`, so the card is testable offline.
-export async function card(num, { api = ghj, expectedHead = "", readClosing = readClosingIssues } = {}) {
+export async function card(num, { api = ghj, git, expectedHead = "", readClosing = readClosingIssues } = {}) {
   const pr = api(`repos/${REPO}/pulls/${num}`);
   if (pr.draft) return { num, ok: true, skip: "draft" };
   const live = pr.head?.sha;
@@ -434,7 +430,7 @@ export async function card(num, { api = ghj, expectedHead = "", readClosing = re
   const head = live;
   const labels = (pr.labels || []).map((l) => l.name);
   const signed = labels.includes("state: value-signed");
-  const runtime = touchesRuntime(num, api);
+  const runtime = touchesRuntime(pr, api, git);
   // Only a runtime PR has a value-fsm leg, and only then do we pay the wait. A non-terminal
   // value-fsm is waited out to its real verdict rather than sampled once mid-run (the #655 race).
   const vf = runtime && head ? await waitForTerminalValueFsm(head, { read: (sha) => readValueFsmRuns(sha, api) }) : "absent";
