@@ -1,0 +1,5 @@
+{
+  "instruction": "Only the person, or you in a turn they typed in their own one-person chat, may change their workspace settings. Tell them in one line how to do it themselves; do not retry it another way.",
+  "reason": "person_only",
+  "status": "refused"
+}

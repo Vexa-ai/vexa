@@ -23,6 +23,10 @@ domain).
   which is also the one that may retire them.
 - `fetch_ics(url, client=None)` — **SSRF-pinned** (`webhooks/ssrf.build_pinned_transport`), 2 MB cap,
   no redirects; pass a `build_ics_client()` to share one connection pool across a sweep.
+  `build_ics_client` builds the transport with the operator's calendar-feed allowance
+  (`feed_allowance()`, env `VEXA_CALENDAR_FEED_ALLOW`, parsed at boot): internal hosts/networks a
+  feed may be served from. Nothing else in meeting-api uses it. See
+  [Calendar sync → Enterprise settings](../../../../../../../docs/docs/how-to/calendar-sync.mdx).
   `fetch_configs(admin_api_url, secret)` — the internal discovery hop.
 
 ## Wiring (entrypoint)

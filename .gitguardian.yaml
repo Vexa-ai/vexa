@@ -1,0 +1,10 @@
+# GitGuardian / ggshield configuration (format version 2).
+version: 2
+
+secret:
+  # Machine-written seals: each value is a SHA-256 of a file's content, so every line is a
+  # high-entropy string and none is a secret. Only content-hash seals belong here. Goldens,
+  # fixtures and schema.seal.json (DB column definitions, not hashes) stay scanned.
+  ignored_paths:
+    - 'contracts.seal.json'
+    - 'architecture.seal.json'

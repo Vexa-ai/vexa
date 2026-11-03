@@ -2,7 +2,7 @@
 
 import { type MouseEventHandler } from "react";
 import { useService } from "../platform";
-import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
+import { LayoutServiceId, type TabDescriptor } from "../platform/layout";
 
 /**
  * VS Code preview/pin click behavior: single-click opens (or reuses) the shared

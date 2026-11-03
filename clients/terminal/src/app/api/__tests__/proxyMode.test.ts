@@ -15,7 +15,7 @@ describe("proxyMode — meetings-only server gate", () => {
 
   it("meetings mode passes the meeting domain and refuses everything else", () => {
     process.env.NEXT_PUBLIC_TERMINAL_MODE = "meetings";
-    for (const p of ["meetings", "meetings/google_meet/abc", "transcripts/google_meet/abc", "bots", "bots/google_meet/abc"]) {
+    for (const p of ["meetings", "meetings/google_meet/abc", "transcripts/google_meet/abc", "bots", "bots/google_meet/abc", "bot-accounts", "bot-accounts/sessions/x"]) {
       expect(refusedInMeetingsMode(p)).toBe(false);
     }
     for (const p of ["sessions", "chat", "routines", "workspace/tree", "events", "models", "meetingsX"]) {
@@ -27,6 +27,7 @@ describe("proxyMode — meetings-only server gate", () => {
     expect(MEETINGS_DOMAIN.test("meetings")).toBe(true);
     expect(MEETINGS_DOMAIN.test("meetingsomething")).toBe(false);
     expect(MEETINGS_DOMAIN.test("botsy")).toBe(false);
+    expect(MEETINGS_DOMAIN.test("bot-accountsx")).toBe(false);
   });
 
   it("user self-serve configs route to the gateway ROOT (calendar/webhook live in identity)", () => {

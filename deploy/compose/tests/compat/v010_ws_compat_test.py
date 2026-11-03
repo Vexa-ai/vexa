@@ -1,7 +1,7 @@
 """V010-compat · WebSockets — the 0.10 `/ws` client protocol against the 0.12 gateway.
 
 The 0.10 handshake (api-gateway main.py:2163): connect `/ws`, authenticate via the
-`X-API-Key` HEADER (or `api_key` query param), send `{"action":"subscribe","meetings":
+`X-API-Key` HEADER, send `{"action":"subscribe","meetings":
 [{"platform","native_id"}]}` → `{"type":"subscribed"}` ack → receive raw redis payloads
 fanned in from `tc:meeting:{id}:mutable` (transcripts) and `bm:meeting:{id}:status`
 (status updates, the sealed `{type:"meeting.status", meeting:{...}, payload:{...},
@@ -94,12 +94,12 @@ def test_20_ws_transcript_stream_xapikey_header(stack):
         assert ack and ack.get("meetings"), f"no `subscribed` ack for {native_id}: {ack}"
 
         seg_id = f"v010-seg-{uuid.uuid4().hex[:8]}"
-        stack.redis_cli("XADD", "transcription_segments", "*", "payload", json.dumps({
+        stack.xadd_segment_entry(json.dumps({
             "type": "transcription", "meeting_id": meeting_id,
             "segments": [{"segment_id": seg_id, "start": 90.0, "end": 92.0,
                           "text": "v010 compat live segment", "language": "en",
                           "speaker": "Compat", "completed": True}],
-        }))
+        }), meeting_id)
 
         frame = None
         deadline = time.time() + 30
@@ -133,7 +133,7 @@ def test_21_ws_status_updates_sealed_envelope(stack):
     m = _wait_status(stack, native_id, {"active", "joining", "awaiting_admission"}, timeout=90)
     assert m, f"mock never went live for {native_id}"
 
-    with WS(f"{_ws_base(stack)}/ws?api_key={api_key}", timeout=15) as ws:  # query-param auth leg
+    with WS(f"{_ws_base(stack)}/ws", timeout=15, headers={"X-API-Key": api_key}) as ws:
         ws.send_text(json.dumps({"action": "subscribe",
                                  "meetings": [{"platform": "google_meet", "native_id": native_id}]}))
         deadline = time.time() + 15
@@ -207,3 +207,18 @@ def test_22_ws_no_unsolicited_frames(stack):
             f"{unsolicited[0]} (flat={_is_flat_status(unsolicited[0])}). 0.10 sockets were silent "
             f"until an explicit subscribe."
         )
+
+
+# ── 3 · the 0.10/0.12 query-param handshake still works, deprecated until 0.13.6 ──────────────────
+
+def test_31_ws_query_param_key_is_still_accepted(stack):
+    """A client that authenticates with `?api_key=` (the 0.10 dashboard, clients built from the 0.12
+    docs) still gets a working socket until 0.13.6: a ping is answered, no error frame."""
+    api_key = _api_key(stack)
+    with WS(f"{_ws_base(stack)}/ws?api_key={api_key}", timeout=15) as ws:
+        ws.send_text(json.dumps({"action": "ping"}))
+        frames = []
+        while not any(f.get("type") == "pong" for f in frames) and len(frames) < 5:
+            frames.append(_recv_json(ws, timeout=10))
+    assert any(f.get("type") == "pong" for f in frames), frames
+    assert not [f for f in frames if f.get("type") == "error"], frames

@@ -76,7 +76,7 @@ def test_lifecycle_callback_on_unified_app():
     assert events, "expected lifecycle.v1 goldens"
     event = json.loads(events[0].read_text())
 
-    client = TestClient(create_app())
+    client = TestClient(create_app(open_callbacks=True))
     r = client.post("/bots/internal/callback/lifecycle", json=event)
     assert r.status_code in (200, 409), r.text  # accepted, or a legal-transition rejection
 

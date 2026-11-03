@@ -20,6 +20,7 @@ that does not run agents has no use for any of it and may carry none of it.
 | `prompts/` | agent-turn kickoffs and instructions (showcase examples) | no — nothing dispatches a turn |
 | `asks/` | the MCP edge's presets | no |
 | `workspaces/` | the workspace seeds — what a new personal/shared/org workspace is born as | no |
+| `workspace-templates/` | what a new workspace can start as (event, client project, …), seeded into `_global/workspace-templates/` | no |
 
 This README used to list `prompts/` and `workspaces/` as though the tree were fixed, and the code
 believed it: `flows_defs/production.py` read three files out of `prompts/` at MODULE IMPORT, so a

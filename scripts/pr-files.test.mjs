@@ -18,6 +18,9 @@ import { join } from "node:path";
 import { prFiles, gitDiffFiles, API_FILE_CAP } from "./pr-files.mjs";
 import { card as docsCard } from "./docs-current-gate.mjs";
 import { card as mergeCard, renderCard as renderMergeCard } from "./merge-card-gate.mjs";
+import { guardTree } from "./test-tree.mjs";
+
+guardTree();
 
 const BASE = "b".repeat(40), HEAD = "h".repeat(40), MB = "m".repeat(40);
 const names = (n, at) => Array.from({ length: n }, (_, i) => `${at}/f${i}.py`);

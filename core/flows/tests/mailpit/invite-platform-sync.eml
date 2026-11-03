@@ -1,3 +1,4 @@
+Authentication-Results: mx.rehearsal.test; dkim=pass header.d=example.test; spf=pass smtp.mailfrom=example.test; dmarc=pass header.from=example.test
 From: Robin Vale <Organizer@Example.test>
 To: vexa@example.com
 Subject: Invitation: Platform Sync weekly @ Sat Mar 2, 2030 2pm (UTC)

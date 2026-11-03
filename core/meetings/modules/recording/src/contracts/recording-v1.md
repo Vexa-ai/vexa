@@ -87,3 +87,13 @@ The vectors are the spec. To change how a master is built:
 4. Review the new `master_sha256` values in the diff — they are the proof the
    change is intentional. `--check` will fail in CI until the committed vectors
    match the oracle again.
+
+### Playback clock
+
+Chunk metadata may carry `capture_started_at_ms`, the Unix epoch milliseconds at
+MediaRecorder's `onstart` (audio position zero). The bot repeats this origin on
+subsequent chunks and the final marker. Meeting-api preserves the first valid
+origin per media file and exposes it in recording list/detail responses. Clients
+subtract it from absolute transcript timestamps to seek/highlight passages.
+Older recordings without this field can only use an explicitly approximate
+meeting-start alignment; a displayed wall-clock string is not an audio offset.

@@ -156,7 +156,7 @@ def test_completes_when_their_meeting_transcribed(db, registry, clock, monkeypat
     _admit(db, registry, clock, event_type=ONBOARDED, source_event_id="onboarding-77",
            refs={"subject": "77"})
     _seed_completion(db, clock, meeting_id="501", uid="77")
-    monkeypatch.setattr(SEGMENT_COUNT, lambda uid, mid: 42)
+    monkeypatch.setattr(SEGMENT_COUNT, lambda uid, mid, tickets=None: 42)
     out = registry.steps["first_meeting"](_ctx(db, "onboarding", clock=clock))
     assert isinstance(out, Done)
     assert out.result == {"meeting_id": "501", "segments": 42, "activated": True}
@@ -169,7 +169,7 @@ def test_a_completion_with_no_transcript_does_not_activate(db, registry, clock, 
     _admit(db, registry, clock, event_type=ONBOARDED, source_event_id="onboarding-77",
            refs={"subject": "77"})
     _seed_completion(db, clock, meeting_id="501", uid="77")
-    monkeypatch.setattr(SEGMENT_COUNT, lambda uid, mid: 0)
+    monkeypatch.setattr(SEGMENT_COUNT, lambda uid, mid, tickets=None: 0)
     assert isinstance(registry.steps["first_meeting"](_ctx(db, "onboarding", clock=clock)), Wait)
 
 
@@ -181,7 +181,7 @@ def test_a_silent_meeting_is_read_once_and_remembered(db, registry, clock, monke
     _seed_completion(db, clock, meeting_id="501", uid="77")
     calls = []
     monkeypatch.setattr(SEGMENT_COUNT,
-                        lambda uid, mid: calls.append(mid) or 0)
+                        lambda uid, mid, tickets=None: calls.append(mid) or 0)
     scratch: dict = {}
     for _ in range(4):
         registry.steps["first_meeting"](_ctx(db, "onboarding", clock=clock, scratch=scratch))
@@ -196,7 +196,7 @@ def test_an_unreadable_transcript_is_not_a_silent_meeting(db, registry, clock, m
            refs={"subject": "77"})
     _seed_completion(db, clock, meeting_id="501", uid="77")
     answers = [None, None, 7]
-    monkeypatch.setattr(SEGMENT_COUNT, lambda uid, mid: answers.pop(0))
+    monkeypatch.setattr(SEGMENT_COUNT, lambda uid, mid, tickets=None: answers.pop(0))
     scratch: dict = {}
     assert isinstance(registry.steps["first_meeting"](
         _ctx(db, "onboarding", clock=clock, scratch=scratch)), Wait)
@@ -213,7 +213,7 @@ def test_another_persons_meeting_does_not_complete_it(db, registry, clock, monke
     _admit(db, registry, clock, event_type=ONBOARDED, source_event_id="onboarding-77",
            refs={"subject": "77"})
     _seed_completion(db, clock, meeting_id="900", uid="88")
-    monkeypatch.setattr(SEGMENT_COUNT, lambda uid, mid: 99)
+    monkeypatch.setattr(SEGMENT_COUNT, lambda uid, mid, tickets=None: 99)
     assert isinstance(registry.steps["first_meeting"](_ctx(db, "onboarding", clock=clock)), Wait)
 
 
@@ -232,7 +232,7 @@ def test_the_subject_may_also_arrive_spelled_uid(db, registry, clock, monkeypatc
     _admit(db, registry, clock, event_type=ONBOARDED, source_event_id="onboarding-77",
            refs={"uid": "77"})
     _seed_completion(db, clock, meeting_id="501", uid="77")
-    monkeypatch.setattr(SEGMENT_COUNT, lambda uid, mid: 3)
+    monkeypatch.setattr(SEGMENT_COUNT, lambda uid, mid, tickets=None: 3)
     assert isinstance(registry.steps["first_meeting"](_ctx(db, "onboarding", clock=clock)), Done)
 
 
@@ -245,8 +245,8 @@ def test_the_queue_resolves_words_for_this_flow():
     words = flows_queue.say("onboarding", flows_queue.TYPE_PENDING)
     assert words, "behavior/queue/onboarding.pending.md resolved to nothing"
     lowered = words.lower()
-    for token in ("meet.new", "request_meeting_bot", "get_meeting_transcript",
-                  "since_index", "stop_bot"):
+    # v0.13.2 onboarding is private knowledge first and never requires a meeting.
+    for token in ("flows/personal.md", "skip or pause", "do not require a first meeting"):
         assert token in lowered, f"the onboarding words never name {token}"
 
 
@@ -279,7 +279,7 @@ def test_a_pending_onboarding_row_becomes_one_spoken_item(db, registry, clock):
     assert item["flow"] == "onboarding"
     assert item["step"] == "first_meeting"
     assert item["reason"]["type"] == flows_queue.TYPE_PENDING
-    assert "meet.new" in item["say"].lower()
+    assert "flows/personal.md" in item["say"].lower()
 
 
 # ── the schema this suite's double stands in for ─────────────────────────────────────────────────

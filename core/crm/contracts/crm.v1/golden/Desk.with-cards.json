@@ -1,0 +1,135 @@
+{
+  "card_invites": [],
+  "card_proposals": [],
+  "cards": [
+    {
+      "about": null,
+      "can": {
+        "edit": true,
+        "members": true,
+        "review": true,
+        "transition": true
+      },
+      "children": {
+        "done": 0,
+        "items": [],
+        "total": 0
+      },
+      "due": null,
+      "face": [
+        {
+          "type": "stepper"
+        },
+        {
+          "type": "next"
+        },
+        {
+          "type": "waiting"
+        },
+        {
+          "type": "movement"
+        },
+        {
+          "type": "subcards"
+        },
+        {
+          "type": "people"
+        }
+      ],
+      "href": "/crm?record=525210c4-cf0e-457a-8192-8083c89e578c",
+      "id": "525210c4-cf0e-457a-8192-8083c89e578c",
+      "members": [
+        {
+          "status": "member",
+          "subject": "8"
+        }
+      ],
+      "movement": {
+        "at": "2026-10-15T18:13:26.146805+00:00",
+        "by": "8",
+        "kind": "person",
+        "what": "Made the card"
+      },
+      "new": true,
+      "next": null,
+      "parent": null,
+      "progress": null,
+      "ref": "card:525210c4-cf0e-457a-8192-8083c89e578c",
+      "revision": 1,
+      "side_states": [
+        "Dropped"
+      ],
+      "stalled": false,
+      "state": "To do",
+      "states": [
+        "To do",
+        "Doing",
+        "Done"
+      ],
+      "summary": null,
+      "title": "Bo board",
+      "type": "Card",
+      "waiting": null,
+      "workspaces": [
+        "sales"
+      ]
+    }
+  ],
+  "layout": {
+    "columns": {
+      "desktop": 1,
+      "phone": 1
+    },
+    "filters": {},
+    "groups": {},
+    "hidden_cards": [
+      "card:a47a794f-12db-4c58-a177-d97df9c855f3"
+    ],
+    "order": {},
+    "sections": [
+      {
+        "collapsed": false,
+        "column": 1,
+        "hidden": false,
+        "id": "workspaces",
+        "size": "normal",
+        "span": 1
+      },
+      {
+        "collapsed": false,
+        "column": 1,
+        "hidden": false,
+        "id": "agents",
+        "size": "normal",
+        "span": 1
+      },
+      {
+        "collapsed": false,
+        "column": 1,
+        "hidden": false,
+        "id": "files",
+        "size": "normal",
+        "span": 1
+      },
+      {
+        "collapsed": false,
+        "column": 1,
+        "hidden": false,
+        "id": "cards",
+        "size": "normal",
+        "span": 1
+      }
+    ]
+  },
+  "placements": [
+    {
+      "placed_at": "2026-10-15T09:00:00+00:00",
+      "ref": "card:525210c4-cf0e-457a-8192-8083c89e578c",
+      "seen_at": null
+    }
+  ],
+  "proposals": [],
+  "saved": [],
+  "undo_version": 1,
+  "version": 2
+}

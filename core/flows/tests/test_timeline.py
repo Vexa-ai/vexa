@@ -236,11 +236,13 @@ def test_identity_resolution_asks_admin_api_for_the_half_it_lacks():
 
     def lookup(path):
         seen.append(path)
-        return {"email": "admin@vexa.ai"} if path.endswith("/126") else {"id": 126}
+        return {"email": "admin@vexa.ai"} if path.endswith("/126/email") else {"id": 126}
 
     assert resolve_identity("126", lookup) == ("126", "admin@vexa.ai")
     assert resolve_identity("Admin@Vexa.ai", lookup) == ("126", "admin@vexa.ai")
-    assert seen == ["/admin/users/126", "/admin/users/email/admin@vexa.ai"]
+    # identity's internal lookups, through the service door — never the admin routes
+    assert seen == ["/internal/users/126/email", "/internal/users/by-email/admin%40vexa.ai"]
+    assert not [p for p in seen if p.startswith("/admin/")]
 
 
 def test_identity_failure_degrades_to_the_half_we_were_given():

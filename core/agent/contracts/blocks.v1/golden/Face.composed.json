@@ -1,0 +1,17 @@
+[
+ {
+  "type": "stepper"
+ },
+ {
+  "type": "metric",
+  "field": "Amount",
+  "label": "Amount"
+ },
+ {
+  "type": "text",
+  "field": "Next"
+ },
+ {
+  "type": "subcards"
+ }
+]

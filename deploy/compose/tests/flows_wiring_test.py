@@ -49,26 +49,66 @@ def test_flows_api_listens_on_the_network_not_its_own_loopback():
     assert re.search(r"VEXA_FLOWS_API_PORT=\$\{VEXA_FLOWS_API_PORT:-8200\}", block), block
 
 
-def test_flows_api_has_a_healthcheck_and_depends_on_identity_only():
-    """`depends_on` names what flows-api cannot start without: its database and the identity it
-    authenticates against. NOT meeting-api, NOT agent-api — flows reaches those at step time and
-    the whole point of decision 40's assembly is that a deployment may not run them at all. A
-    depends_on there would make an optional domain a boot requirement."""
+def test_flows_api_has_a_healthcheck_and_depends_on_identity_and_the_door_only():
+    """`depends_on` names what flows-api cannot start without: its database, the identity it
+    authenticates against, and the gateway whose service door is its only way to every other domain.
+    NOT meeting-api, NOT agent-api — flows reaches those at step time and the whole point of
+    decision 40's assembly is that a deployment may not run them at all. A depends_on there would
+    make an optional domain a boot requirement."""
     block = _service("flows-api")
     assert "healthcheck:" in block and "/health" in block
 
-    deps = block.split("depends_on:")[1]
-    assert "postgres:" in deps and "admin-api:" in deps, deps
-    for optional in ("meeting-api", "agent-api", "mcp", "gateway"):
-        assert f"{optional}:" not in deps, f"{optional} is not something flows-api needs to BOOT"
+    deps = _depends_on(block)
+    assert {"postgres", "admin-api", "gateway"} <= set(deps), deps
+    for optional in ("meeting-api", "agent-api", "mcp"):
+        assert optional not in deps, f"{optional} is not something flows-api needs to BOOT"
+
+
+def _depends_on(block: str) -> dict:
+    """`depends_on` of one service block: {service: condition}."""
+    lines = block.split("\n")
+    start = lines.index("    depends_on:") + 1
+    out, name = {}, None
+    for line in lines[start:]:
+        if line.strip() and not line.startswith("      "):
+            break
+        m = re.match(r"^      ([a-z][a-z0-9-]*):\s*$", line)
+        if m:
+            name = m.group(1)
+            out[name] = None
+            continue
+        c = re.match(r"^        condition:\s*(\S+)", line)
+        if c and name:
+            out[name] = c.group(1)
+    return out
+
+
+@pytest.mark.parametrize("lane", ["flows-api", "flows-worker", "flows-mailbox"])
+def test_every_flows_lane_starts_after_the_door_answers(lane):
+    """THE FIRST-BOOT RACE. Every flows lane reaches identity, meetings, the agent domain and the
+    CRM through the gateway's service door (port 8002), and the worker reads `_global/POLICIES.md`
+    through it before its first step. Started before the gateway, that read failed and the worker
+    ran under the closed rules. Each lane waits for the gateway's healthcheck."""
+    deps = _depends_on(_service(lane))
+    assert deps.get("gateway") == "service_healthy", (lane, deps)
+
+
+def test_the_gateway_waits_for_no_flows_lane():
+    """No cycle: the gateway forwards `/to-flows/*` to flows-api at request time and names it in its
+    environment only, never in `depends_on` (compose refuses a dependency cycle)."""
+    gw = _service("gateway")
+    assert "healthcheck:" in gw, "service_healthy needs the gateway's healthcheck"
+    deps = _depends_on(gw)
+    assert not [d for d in deps if d.startswith("flows-")], deps
 
 
 def test_the_doors_are_service_names():
     """#1453 made the doors required-explicit: unnamed is a loud refusal at the moment of use.
-    On the compose network they are service names — never a host IP, never a bridge address."""
+    On the compose network they are the gateway's service door by service name — never a host IP,
+    never a bridge address."""
     block = _service("flows-api")
-    assert "VEXA_FLOWS_ADMIN_API_URL=http://admin-api:8001" in block
-    assert "VEXA_FLOWS_GATEWAY_URL=http://gateway:8000" in block
+    assert "VEXA_FLOWS_ADMIN_API_URL=http://gateway:8002/identity" in block
+    assert "VEXA_FLOWS_GATEWAY_URL=http://gateway:8002/meetings" in block
 
     # The ENVIRONMENT only. A published port is `127.0.0.1:<port>` by design (loopback on the host,
     # not the box's public interfaces) and the healthcheck's `localhost` is the container's own —
@@ -99,10 +139,11 @@ def test_the_mailbox_is_a_lane_of_its_own_and_off_by_default():
     assert "core/flows/Dockerfile" in block, "same image as flows-api — one image, three entrypoints"
 
 
-def test_both_flows_lanes_carry_the_same_configuration():
-    """ONE DECLARATION, TWO LANES. `config.v1` is declared for the flows DOMAIN, and
-    `gate:config-contract` reads the flows-api block; a mail policy that held in one lane and not
-    the other would pass that gate and still be wrong. Same keys, both lanes."""
+def test_every_flows_lane_carries_the_same_configuration():
+    """ONE DECLARATION, THREE LANES. `config.v1` is declared for the flows DOMAIN, and
+    `gate:config-contract` reads the flows-api block; a key that held in one lane and not another
+    would pass that gate and still be wrong. Same keys, every lane: flows-api, flows-mailbox and
+    flows-worker run one image under one configuration and differ by `command` alone."""
     def keys(name):
         lines = _service(name).split("\n")
         start = lines.index("    environment:") + 1
@@ -115,9 +156,9 @@ def test_both_flows_lanes_carry_the_same_configuration():
                 out.add(m.group(1))
         return out
 
-    api, mailbox = keys("flows-api"), keys("flows-mailbox")
-    assert api == mailbox, {"only flows-api": sorted(api - mailbox),
-                            "only flows-mailbox": sorted(mailbox - api)}
+    api, mailbox, worker = keys("flows-api"), keys("flows-mailbox"), keys("flows-worker")
+    for lane, got in (("flows-mailbox", mailbox), ("flows-worker", worker)):
+        assert api == got, {"only flows-api": sorted(api - got), f"only {lane}": sorted(got - api)}
     assert "VEXA_FLOWS_MAIL_DOMAINS" in mailbox, "the intake allow-list must reach the intake"
 
 

@@ -1,0 +1,1 @@
+- A meeting in front of the pages panel now shows its live view even when a notice from an earlier, refused link is still held; switching chats clears that notice.

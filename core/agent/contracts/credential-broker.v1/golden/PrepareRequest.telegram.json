@@ -1,0 +1,16 @@
+{
+  "setup": {
+    "endpoint": "https://api.telegram.org/bot{secret}/sendMessage",
+    "scheme": "telegram",
+    "method": "POST",
+    "secret_label": "Bot token",
+    "documentation_url": "https://core.telegram.org/bots/api",
+    "fields": [
+      {
+        "name": "chat_id",
+        "label": "Chat ID",
+        "location": "body"
+      }
+    ]
+  }
+}

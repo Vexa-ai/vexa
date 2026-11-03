@@ -1,0 +1,7 @@
+{
+  "what": "a correctly signed agent ticket opening transcript.read, which agent may not grant",
+  "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n-----END PUBLIC KEY-----\n",
+  "now": 1767225600,
+  "token": "st1.eyJjbHMiOlsidHJhbnNjcmlwdC5yZWFkIl0sImV2dCI6InRocmVhZC5tZXNzYWdlOjkiLCJleHAiOjE3NjcyMjkyMDAsImlhdCI6MTc2NzIyNTYwMCwiaXNzIjoiYWdlbnQiLCJqdGkiOiJmZmVlZGRjY2JiYWE5OTg4Nzc2NjU1NDQiLCJraW5kIjoiZXZlbnQiLCJzdWIiOiI0MiIsInYiOiJzdWJqZWN0LXRpY2tldC52MSJ9.JNJXr8DKmSj1jN_DM-OARcBuKZ_TavyHMoX6aum5eCYgwE7z2FYE0vnw9VVJ5ekP2J0UefvdVBvlum2wgxkFAA",
+  "reason": "issuer_not_allowed"
+}

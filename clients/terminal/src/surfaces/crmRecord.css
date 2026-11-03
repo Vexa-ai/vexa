@@ -1,0 +1,18 @@
+/* The CRM record page (ADR-0047). Tokens only: no colour literal, no literal-duration motion. */
+.crm-page { max-width: 880px; margin: 0 auto; padding: 32px 20px 48px; color: var(--t1); font-family: var(--sans); font-size: 13px; line-height: 1.55; }
+.crm-meta { font-size: 11px; color: var(--t3); }
+.crm-title { font-size: 20px; font-weight: 600; margin: 4px 0 18px; }
+.crm-section { margin: 22px 0; }
+.crm-section h2 { font-size: 10.5px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--t3); margin: 0 0 8px; }
+.crm-fields { display: grid; grid-template-columns: minmax(120px, 200px) 1fr; gap: 6px 16px; margin: 0; }
+.crm-fields dt { color: var(--t2); }
+.crm-fields dd { margin: 0; }
+.crm-list { list-style: none; padding: 0; margin: 0; }
+.crm-list li { padding: 4px 0; border-bottom: 1px solid var(--line); }
+.crm-card { border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px; margin: 10px 0; background: var(--panel); }
+.crm-actions { display: flex; gap: 8px; margin-top: 10px; }
+.crm-button { font-family: var(--sans); font-size: 12.5px; font-weight: 600; padding: 6px 12px; border-radius: var(--r); border: 1px solid var(--line2); background: var(--panel2); color: var(--t1); cursor: pointer; }
+.crm-button-primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.crm-alert { color: var(--danger); }
+.crm-note { color: var(--t2); }
+.crm-hint { color: var(--t3); font-size: 11px; margin-top: 4px; }

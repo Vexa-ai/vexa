@@ -1,0 +1,7 @@
+{
+  "secret": "delegation.v1-published-test-vector-key",
+  "now": 1767225600,
+  "token": "vxd_eyJhbGciOiJIUzI1NiIsInR5cCI6InZ4ZGxnIn0.eyJhdWQiOiJ2ZXhhLWdhdGV3YXkiLCJleHAiOjE3NjcyMjkyMDAsImlhdCI6MTc2NzIyNTYwMCwianRpIjoidmVjLWh1bWFuLTAwMDEiLCJzY29wZSI6eyJyZWdpbWUiOiJodW1hbiIsIndvcmtzcGFjZXMiOiIqIn0sInN1YiI6IjQyIn0.Ido0jHog-R_z1HsoErxChrgN-oMdiTwe5mGg7fPR_uM",
+  "reason": "bad_audience",
+  "what": "correctly signed for another audience"
+}

@@ -104,7 +104,7 @@ def test_platform_settings_crud_and_gate(client):
 def test_model_config_resolves_user_over_platform(client):
     uid, tok = _user_token(client, email="resolve@vexa.ai")
     client.put("/internal/settings/models", headers=_internal(),
-               json={"model": "global-model", "meeting_model": "global-meeting",
+               json={"model": "global-model", "effort": "medium",
                      "base_url": "https://global.example.com"})
     client.put("/user/models", headers={"X-API-Key": tok},
                json={"model": "my-model", "api_key": "sk-user-key"})
@@ -113,12 +113,55 @@ def test_model_config_resolves_user_over_platform(client):
     assert r.status_code == 200, r.text
     models = r.json()["models"]
     assert models["model"] == "my-model"                       # user beats platform
-    assert models["meeting_model"] == "global-meeting"         # platform fills the gap
+    assert models["effort"] == "medium"                        # platform fills the gap
     assert models["base_url"] == "https://global.example.com"  # field-by-field, not all-or-nothing
     assert models["api_key"] == "sk-user-key"                  # the secret crosses ONLY here
 
     # unknown subject → 404 (dispatch treats it as env defaults)
     assert client.get("/internal/users/999999/model-config", headers=_internal()).status_code == 404
+
+
+def test_default_model_resolves_person_over_organisation(client):
+    """ADR-0043: the model a person runs on before picking one — their own default, else the
+    organisation's (platform tier). Stored as an opaque catalog id; agent-api owns the catalog."""
+    uid, tok = _user_token(client, email="default-model@vexa.ai")
+    assert client.put("/internal/settings/models", headers=_internal(),
+                      json={"default_model": "qwen3-32b"}).status_code == 200
+    r = client.get(f"/internal/users/{uid}/model-config", headers=_internal())
+    assert r.json()["models"]["default_model"] == "qwen3-32b"          # the organisation's
+    put = client.put("/user/models", headers={"X-API-Key": tok}, json={"default_model": "claude"})
+    assert put.status_code == 200 and put.json()["default_model"] == "claude"
+    r = client.get(f"/internal/users/{uid}/model-config", headers=_internal())
+    assert r.json()["models"]["default_model"] == "claude"             # the person's own wins
+    assert client.put("/user/models", headers={"X-API-Key": tok},
+                      json={"default_model": "Not An Id"}).status_code == 422
+
+
+def test_a_persons_own_endpoint_never_inherits_the_platform_credential(client):
+    """A person who names their OWN endpoint brings its credential: the operator's platform key (and
+    its server-specific request fields) are for the operator's endpoint and never fill the gap —
+    the rule bot-context already applies to a person's transcription URL."""
+    uid, tok = _user_token(client, email="own-endpoint@vexa.ai")
+    client.put("/internal/settings/models", headers=_internal(),
+               json={"mode": "custom", "base_url": "https://gw.operator.example/v1",
+                     "api_key": "operator-platform-key", "extra_body": '{"operator": true}',
+                     "model": "operator-model"})
+    client.put("/user/models", headers={"X-API-Key": tok},
+               json={"mode": "custom", "base_url": "https://own.person.example/v1"})
+    models = client.get(f"/internal/users/{uid}/model-config", headers=_internal()).json()["models"]
+    assert models["base_url"] == "https://own.person.example/v1"
+    assert "api_key" not in models and "extra_body" not in models
+    assert "operator-platform-key" not in str(models)
+
+    client.put("/user/models", headers={"X-API-Key": tok}, json={"api_key": "person-own-key"})
+    models = client.get(f"/internal/users/{uid}/model-config", headers=_internal()).json()["models"]
+    assert models["api_key"] == "person-own-key"
+
+    # no endpoint of their own: the operator's endpoint with the operator's key, as before
+    client.put("/user/models", headers={"X-API-Key": tok}, json={"base_url": "", "api_key": ""})
+    models = client.get(f"/internal/users/{uid}/model-config", headers=_internal()).json()["models"]
+    assert models["base_url"] == "https://gw.operator.example/v1"
+    assert models["api_key"] == "operator-platform-key"
 
 
 def test_bot_context_carries_effective_transcription(client):

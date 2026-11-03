@@ -1,0 +1,19 @@
+{
+  "why": "stream applies to a forwarded domain's literal rows only",
+  "manifest": {
+    "contract": "routes.v1",
+    "domain": "meetings",
+    "owner": "core/meetings",
+    "edge": "gateway",
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/meetings",
+        "scopes": [
+          "tx"
+        ],
+        "stream": true
+      }
+    ]
+  }
+}

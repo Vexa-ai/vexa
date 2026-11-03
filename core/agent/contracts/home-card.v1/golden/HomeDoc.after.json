@@ -1,0 +1,273 @@
+{
+ "spec": "home-card.v1",
+ "composed_at": "2026-10-13T10:14:00Z",
+ "greeting": {
+  "title": "Northwind pilot review ended 6 minutes ago",
+  "text": "Tue 13 Oct · Notes are ready and 4 follow-ups are proposed. Nothing else until 15:00."
+ },
+ "left_out": "not shown: things to try. Cleared since the morning: dev check-in, check-emails.",
+ "people": {
+  "mira": {
+   "name": "Mira Chen",
+   "initials": "MC",
+   "role": "Operations",
+   "last": "Standup today, 09:05",
+   "reach": "Direct chat",
+   "vexa": true,
+   "account_id": "acct-mira"
+  },
+  "lena": {
+   "name": "Lena Novak",
+   "initials": "LN",
+   "role": "Beta tester",
+   "last": "Email 3 days ago",
+   "reach": "Direct chat",
+   "vexa": true,
+   "account_id": "acct-lena"
+  },
+  "jonas": {
+   "name": "Jonas Weber",
+   "initials": "JW",
+   "role": "Engineering lead",
+   "last": "Product sync yesterday",
+   "reach": "Email · Discord",
+   "vexa": false,
+   "email": "jonas@example.com"
+  },
+  "paul": {
+   "name": "Paul Okafor",
+   "initials": "PO",
+   "role": "Open source funding",
+   "last": "Call 9 days ago",
+   "reach": "Email",
+   "vexa": false,
+   "email": "paul@example.org"
+  }
+ },
+ "cards": [
+  {
+   "type": "card",
+   "id": "r-pilot-review",
+   "kind": "result",
+   "label": "Just finished",
+   "meta": "47 min · Teams · transcript + notes",
+   "wide": true,
+   "controls": false,
+   "tone": "default",
+   "rank": {
+    "pos": 1,
+    "score": 0.97,
+    "signal": "ended 6 min ago, 4 proposals"
+   },
+   "blocks": [
+    {
+     "type": "title",
+     "text": "Northwind: pilot review"
+    },
+    {
+     "type": "person",
+     "people": [
+      "mira"
+     ],
+     "extra": [
+      "Northwind ×3"
+     ]
+    },
+    {
+     "type": "text",
+     "tone": "why",
+     "text": "Agreed: the pilot stays at two teams; the third team is decided in November."
+    },
+    {
+     "type": "checklist",
+     "items": [
+      {
+       "id": "p1",
+       "text": "Recap email to the Northwind team",
+       "meta": "draft",
+       "checked": true
+      },
+      {
+       "id": "p2",
+       "text": "Share the pilot scope doc with them",
+       "meta": "share",
+       "checked": true
+      },
+      {
+       "id": "p3",
+       "text": "Book a November check-in",
+       "meta": "calendar",
+       "checked": true
+      },
+      {
+       "id": "p4",
+       "text": "Two tasks for Mira: SSO list, usage report",
+       "meta": "message",
+       "checked": false
+      }
+     ],
+     "action": {
+      "type": "action",
+      "label": "Review 4 proposals",
+      "prompt": "Show the 4 proposals from the Northwind pilot review so I can approve or edit each.",
+      "primary": true
+     }
+    },
+    {
+     "type": "action",
+     "label": "Open notes",
+     "prompt": "Open the notes from the Northwind pilot review."
+    },
+    {
+     "type": "attach",
+     "card": {
+      "type": "card",
+      "id": "s-workspace-call",
+      "kind": "suggestion",
+      "blocks": [
+       {
+        "type": "text",
+        "tone": "why",
+        "text": "Start the Northwind workspace with this call. It's the 3rd this week and they have no shared place yet."
+       },
+       {
+        "type": "action",
+        "label": "Create workspace",
+        "prompt": "Create a Northwind workspace starting with today's pilot review and the two earlier calls."
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "type": "card",
+   "id": "s-hand-mira",
+   "kind": "suggestion",
+   "person": "mira",
+   "rank": {
+    "pos": 2,
+    "score": 0.81,
+    "signal": "owns 2 of 4 items"
+   },
+   "blocks": [
+    {
+     "type": "title",
+     "text": "Hand Mira her two items now"
+    },
+    {
+     "type": "text",
+     "tone": "why",
+     "text": "She was on the call. A message now beats a recap tonight."
+    },
+    {
+     "type": "person",
+     "people": [
+      "mira"
+     ]
+    },
+    {
+     "type": "action",
+     "label": "Message Mira",
+     "primary": true,
+     "message": "mira"
+    }
+   ]
+  },
+  {
+   "type": "card",
+   "id": "m-product-sync",
+   "kind": "meeting",
+   "meta": "15:00 · Meet · in 2 h 46",
+   "controls": false,
+   "rank": {
+    "pos": 3,
+    "score": 0.58,
+    "signal": "next call, not prepped"
+   },
+   "blocks": [
+    {
+     "type": "title",
+     "text": "Product sync"
+    },
+    {
+     "type": "person",
+     "people": [
+      "jonas"
+     ]
+    },
+    {
+     "type": "text",
+     "tone": "warn",
+     "text": "Not prepared"
+    },
+    {
+     "type": "action",
+     "label": "Prepare",
+     "prompt": "Prepare me for the 15:00 product sync with Jonas Weber.",
+     "primary": true
+    },
+    {
+     "type": "action",
+     "label": "Send bot",
+     "prompt": "Send the Vexa bot to the 15:00 sync with Jonas Weber."
+    }
+   ]
+  },
+  {
+   "type": "card",
+   "id": "w-paul",
+   "kind": "waiting",
+   "person": "paul",
+   "rank": {
+    "pos": 4,
+    "score": 0.52,
+    "signal": "9d"
+   },
+   "blocks": [
+    {
+     "type": "row",
+     "person": "paul",
+     "text": "Re: funding reference model",
+     "age": "9d",
+     "hot": true,
+     "action": {
+      "type": "action",
+      "label": "Draft",
+      "prompt": "Draft a reply to Paul Okafor about the funding reference model.",
+      "needs_go": true
+     }
+    }
+   ]
+  },
+  {
+   "type": "card",
+   "id": "c-pilot-scope",
+   "kind": "continue",
+   "controls": false,
+   "rank": {
+    "pos": 5,
+    "score": 0.25,
+    "signal": "the call confirmed this"
+   },
+   "blocks": [
+    {
+     "type": "title",
+     "text": "Pilot scope"
+    },
+    {
+     "type": "text",
+     "tone": "why",
+     "text": "You: keep the pilot to two teams, revisit in November"
+    },
+    {
+     "type": "action",
+     "label": "Continue",
+     "open": {
+      "chat": "chat-pilot-scope"
+     }
+    }
+   ]
+  }
+ ]
+}

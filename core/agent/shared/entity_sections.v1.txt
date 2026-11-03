@@ -1,0 +1,16 @@
+# GENERATED FROM `shared/entities.py` — the sections and fields, per kind, exactly as the
+# `entity_upsert` tool description must state them.
+#
+# It is a file because the two things that must agree are in DIFFERENT TREES: the renderer is
+# here, and the tool description that tells an agent which sections exist is in the MCP. A
+# description listing a section the renderer does not have is worse than one listing none — the
+# model files a fact into a heading that silently becomes an 'extra' section nobody reads.
+#
+# `core/agent/tests/test_entity_card.py` asserts the generator still produces exactly this, so
+# the file cannot fall behind the code; the MCP's own suite asserts its description carries
+# every line. Neither side reads the other's source.
+- person: Role and organisation · What they care about · How we relate  (fields: cares_about, company, relationship, role)
+- company: What it is · People · Our relationship  (fields: people, relationship, what)
+- meeting: When and who · Decided · Committed  (fields: committed, decided, participants, when, who)
+- project: What it is · Who · Status  (fields: status, what, who)
+- decision: What was decided · Why · What it changes  (fields: changes, what, why)

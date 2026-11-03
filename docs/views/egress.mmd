@@ -17,13 +17,26 @@ flowchart LR
     terminal["terminal"]
     segments_table["transcription_segments (table)"]
     runtime["runtime"]
+    model_proxy["model-proxy"]
     agent_worker["agent-worker"]
     redis["redis"]
     postgres["postgres"]
     object_store["object-store"]
+    livekit["livekit"]
     dashboard["dashboard (deprecated)"]
     flows_api["flows-api"]
     flows_worker["flows-worker"]
+    credentials_broker["credential-broker"]
+    credentials_vault["OpenBao (optional)"]
+    crm_api["crm-api"]
+    signals_service["signals"]
   end
   transcription["transcription"]
   bot ==>|"audio -> tenant-hosted"| transcription
+  signal_model["signal model"]
+  signals_service ==>|"transcript -> external-saas"| signal_model
+  model_provider["model provider"]
+  model_proxy ==>|"transcript -> external-saas"| model_provider
+  agent_api ==>|"transcript -> external-saas"| model_provider
+  customer_webhook["customer webhook"]
+  meeting_api ==>|"metadata -> external-saas"| customer_webhook

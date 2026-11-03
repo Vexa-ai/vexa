@@ -1,14 +1,17 @@
 /** Per-user API key for the upstream proxies.
  *
- *  The X-API-Key the terminal forwards to the gateway / agent-api is the logged-in user's APIToken,
- *  read from the httpOnly `vexa-token` cookie (set by /api/auth/login). When there's no cookie (e.g.
- *  before login, or a self-host deploy with a baked key) we fall back to VEXA_API_KEY, then to the
- *  legacy VEXA_BOT_API_KEY so existing single-key deploys keep working. */
+ *  The X-API-Key the terminal forwards to the gateway / agent-api is the signed-in person's token,
+ *  read from the httpOnly `vexa-token` cookie (set by /api/auth/login). A request with no cookie is
+ *  anonymous and is forwarded with no key, so the gateway refuses it — unless the deployment
+ *  switched zero-login on, where it acts as the deployment key (`auth/deploymentKey.mjs`, the one
+ *  rule the relayed sockets read too). */
 import { cookies } from "next/headers";
 import { AUTH_COOKIE } from "./auth/adminApi";
+import { anonymousKey } from "./auth/deploymentKey.mjs";
 
-/** Resolve the API key to send upstream: cookie token → VEXA_API_KEY → VEXA_BOT_API_KEY → "".
- *  cookies() can throw outside a request scope (e.g. in tests / edge cases); degrade to the env keys. */
+/** Resolve the API key to send upstream: the cookie token, else the anonymous key (empty unless
+ *  zero-login is on). cookies() can throw outside a request scope (e.g. in tests); that request is
+ *  anonymous too. */
 export async function resolveApiKey(): Promise<string> {
   let cookieToken: string | undefined;
   try {
@@ -16,5 +19,5 @@ export async function resolveApiKey(): Promise<string> {
   } catch {
     cookieToken = undefined;
   }
-  return cookieToken || process.env.VEXA_API_KEY || process.env.VEXA_BOT_API_KEY || "";
+  return cookieToken || anonymousKey(process.env);
 }

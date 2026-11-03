@@ -6,7 +6,7 @@ A chat grounded in a meeting behaves differently by the meeting's lifecycle phas
   prep  (intent: idle/scheduled)      — no transcript exists; steer toward preparation
         (agenda, attendee research, a brief written into the bound workspace).
   live  (requested→active→stopping)   — fold the live transcript; answer from it.
-  post  (completed/failed/stopped)    — fold the PROCESSED notes (cleaned transcript);
+  post  (completed/failed/stopped)    — fold the recorded transcript;
         steer toward recap, decisions, action items, follow-ups.
 
 The templates below are the hardcoded FALLBACK. The governed control surface is the
@@ -30,9 +30,11 @@ override raise at format time → caught → loud log + fallback):
 from __future__ import annotations
 
 import logging
-import os
 import re
 from pathlib import Path
+import stat
+
+from workspaces.shared import workspace_paths as wpaths
 
 logger = logging.getLogger("agent_api.meeting_steering")
 
@@ -65,9 +67,10 @@ DEFAULT_TEMPLATES: dict[str, str] = {
         "Research PROACTIVELY: when workspace knowledge is thin, search public sources (the web) for "
         "the attendees, their organizations, and the topic without waiting to be asked — and mark "
         "what is public-sourced vs. confirmed by the user. Ground every claim in workspace "
-        "knowledge or named public sources; say plainly when you don't have prior context. Seeded EXAMPLE entities "
-        "(frontmatter `example: true` — e.g. the shipped Jane Liu / Acme Corp demo) exist only to "
-        "show how knowledge is kept: never cite them as records or count them as prior context. "
+        "knowledge or named public sources; say plainly when you don't have prior context. Entity SHAPES "
+        "(anything under `kg/templates/`, or frontmatter `template: true` / `example: true`) exist only "
+        "to show how knowledge is kept: never cite them as records, never name them, and never count "
+        "them as prior context — if you hold nothing on this meeting, say exactly that. "
         "If you don't yet know who the user is (no `self: true` person entity), ask — and invite "
         "them to share a LinkedIn profile or a short intro so the brief and future knowledge are "
         "tailored to them; if their calendar is synced, infer what you can from their schedule "
@@ -81,7 +84,12 @@ DEFAULT_TEMPLATES: dict[str, str] = {
     "post": (
         "The meeting \"{title}\" ({platform}/{native}) has ended{failed}. Its {source} is below — "
         "answer from it. Default moves: recap what was decided, extract action items with owners, "
-        "and draft follow-ups on request. Don't paste the transcript back verbatim.\n\n"
+        "and draft follow-ups on request. Don't paste the transcript back verbatim. When you write or "
+        "update this meeting's note under kg/entities/meeting/, add a markdown link to THIS session's "
+        "recording & transcript to the note's YAML frontmatter `recording:` field — "
+        "`recording: [▶ Recording & transcript](/?meeting={meeting_id})`. If you are CONTINUING an existing "
+        "note (an earlier session of this same meeting), KEEP the earlier links in that field and ADD this "
+        "one after them — a meeting can have several recorded sessions.\n\n"
         "<transcript>\n{transcript}\n</transcript>\n\n"
     ),
     # Ambient terminal-state digest (context bundle): one steering sentence AFTER the
@@ -143,23 +151,33 @@ OVERRIDE_RELPATH = "agents/meeting-lifecycle.md"
 
 def steering_templates(global_ws_path: "str | None" = None) -> dict[str, str]:
     """The effective per-phase templates: built-in defaults overlaid with the _global
-    override file when present/parseable. ``global_ws_path`` defaults to the same env the
-    _global mount uses (VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH — config.v1-declared)."""
-    root = (global_ws_path if global_ws_path is not None else os.environ.get("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH", "")).strip()
+    override file when present/parseable. ``global_ws_path`` defaults to where the _global mount
+    reads from (``system_mounts.global_root``), so an override the admin writes in the default
+    in-store ``_global`` is read too, not only one in an out-of-store path."""
+    if global_ws_path is None:
+        from control_plane import system_mounts
+        from shared.config import load_settings
+        global_ws_path = str(system_mounts.global_root(load_settings()))
+    root = global_ws_path.strip()
     if not root:
         return dict(DEFAULT_TEMPLATES)
     path = Path(root) / OVERRIDE_RELPATH
-    try:
-        mtime = path.stat().st_mtime
-    except OSError:
+    # NOFOLLOW (`workspace_paths`): `_global` is written by an admin's turn, and these templates
+    # steer every person's chat — an override reached through a planted link is no override.
+    st = wpaths.stat_inside(Path(root), OVERRIDE_RELPATH)
+    if st is None or not stat.S_ISREG(st.st_mode):
         return dict(DEFAULT_TEMPLATES)  # no override file — the normal case, not an error
+    mtime = st.st_mtime
     key = str(path)
     cached = _cache.get(key)
     if cached and cached[0] == mtime:
         sections = cached[1]
     else:
         try:
-            sections = _parse_sections(path.read_text(encoding="utf-8"))
+            raw = wpaths.read_text_inside(Path(root), OVERRIDE_RELPATH)
+            if raw is None:
+                raise OSError("the override is not a plain file")
+            sections = _parse_sections(raw)
         except Exception as exc:  # noqa: BLE001 — a broken override must never break chat
             logger.warning("meeting-lifecycle override %s unreadable (%s) — using built-in templates", path, exc)
             sections = {}

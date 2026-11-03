@@ -14,7 +14,7 @@ description: "The meeting/agent separation of concerns, the terminal jobs, and t
 | Layer | What it is | Owns | Never does |
 |---|---|---|---|
 | **Domain** | `meetings`, `agent` — each a bounded context with its own carriers/logic | meetings: bots, meeting rows, the transcript (single writer), status. agent: copilot lifecycle, chat, workspace, notes/cards, config | reach into the other domain's internals; re-derive the other's data |
-| **API** | each domain's published, gateway-fronted endpoints | meetings-control (`/bots`, `/meetings`, `/transcripts`, `/intent`, `/ws` status). agent-control (`/api/meeting/process`, `/api/chat`, `/api/workspace/*`, `/api/models`) | hold business logic in the gateway; let a client reach a domain backend directly |
+| **API** | each domain's published, gateway-fronted endpoints | meetings-control (`/bots`, `/meetings`, `/transcripts`, `/intent`, `/ws` status). agent-control (`/api/meeting/stream`, `/api/chat`, `/api/workspace/*`, `/api/models`) | hold business logic in the gateway; let a client reach a domain backend directly |
 | **Top-level wiring (cookbook)** | composed operations + tool-authorization patterns that deliver *state* | "agent listening on a meeting" (compose bot-spawn + copilot-enable); per-turn meeting-scoped tool grants | live *inside* a domain (that re-merges `meetings ⊥ agent`); compose over anything but published contracts |
 
 **The rule:** the two domains never reach into each other's internals. They meet only through **published
@@ -45,7 +45,8 @@ copilot (agent, the `proc:on` toggle) *processes* it. The cookbook layer is wher
   at connect; meeting-api publishes every status change there (no polling). *Already built.*
 
 **Agent-domain control** (terminal → gateway → agent-api):
-- enable/disable copilot ("start agent listening") — `POST /api/meeting/process` (the `proc:on` toggle)
+- follow a live meeting — `GET /api/meeting/stream` (the transcript SSE; there is no second, in-product
+  processing lane to switch on — PRD decision 34)
 - chat with copilot — `POST /api/chat`
 - read meeting doc/notes — `GET /api/workspace/file` (`kg/entities/meeting/{native}.md`)
 - browse workspace — `GET /api/workspace/tree` (the user's workspace git repo = durable agent memory)
@@ -54,7 +55,8 @@ copilot (agent, the `proc:on` toggle) *processes* it. The cookbook layer is wher
 - model list — `GET /api/models`
 
 **Cross-domain (cookbook / composed at the edge):**
-- "agent on meeting" — one op = `POST /bots` + `POST /api/meeting/process` (cookbook entry #2)
+- "agent on meeting" — one op = `POST /bots`, then a `POST /api/chat` turn carrying an `active`
+  meeting reference (cookbook entry #2)
 - chat grounded in a live meeting — agent-api folds the meeting's live transcript from its redis Stream
   (`tc:meeting:{native}`, the same wire the copilot tails) into the prompt, not a file (cookbook entry #1)
 - live view — the gateway *composes* the meetings transcript feed + the agent card feed
@@ -85,7 +87,7 @@ LLM/turn). Where an LLM reply is inherently non-deterministic, assert the *plumb
 | **CP5** | live view = transcript feed + card feed → one client stream, gapless resume by a dual-stream cursor | agent-api SSE today (reader-composes); gateway-composed eventually | canned transcript + cards → merged ordered stream, gapless resume | `_encode/_decode_sse_cursor` + `test_meeting_stream` (`test_api.py`) |
 | **CP6** | chat `active={meeting}` → agent-api folds `tc:meeting:{native}` into the prompt | agent (reads meetings' transcript Stream) | seeded stream → folded `speaker: text` prompt grounding; refining drafts deduped, empty stream → "no transcript yet" |
 | **CP7** | status change → `u:{user}:meetings` → gateway fan-in → client | meetings | one status change → exact user-channel frame |
-| **CP8** | cookbook "agent-on-meeting" = `POST /bots` + `POST /api/meeting/process` | wiring | meeting input → both calls (right args) + combined state + partial-failure surfaced |
+| **CP8** | cookbook "agent-on-meeting" = `POST /bots`, then a `POST /api/chat` turn carrying the meeting reference | wiring | meeting input → the bot call (right args) + state + partial-failure surfaced |
 
 ## 5. Cookbook — patterns, not yet a home
 

@@ -128,22 +128,26 @@ class _FakeRedis:
 
 
 def test_pipeline_snapshot_rows_and_s2_flag():
+    """The panel reports the TRANSCRIPT carrier. It used to report four more columns off the
+    copilot's — the proc stream, its `:on` flag and `:cursor`, and the `processed_pending` drain —
+    and PRD decision 34 removed their producer, so a leftover `proc:meeting:*` key in redis is
+    residue the panel neither discovers nor lights."""
     r = _FakeRedis(
         streams={
-            "proc:meeting:42": [("1-0", {"note": "{}"}), ("2-0", {"note": "{}"})],
             "tc:meeting:42": [("9-0", {"segment": "{}"})],
-            # a native-keyed proc stream — the S2 bug the panel must surface
-            "proc:meeting:abc-defg-hij": [("1-0", {"note": "{}"})],
+            # a native-keyed transcript stream — the S2 bug the panel must surface
+            "tc:meeting:abc-defg-hij": [("1-0", {"segment": "{}"})],
+            "proc:meeting:42": [("1-0", {"note": "{}"})],          # legacy residue…
+            "proc:meeting:zzz-zzzz-zzz": [("1-0", {"note": "{}"})],  # …and residue of a dead row
         },
         kv={"proc:meeting:42:on": "1", "proc:meeting:42:cursor": "9-0"},
         active={"42"},
     )
     rows = {row["meeting_id"]: row for row in admin_panel.pipeline_snapshot(r)}
-    assert set(rows) == {"42", "abc-defg-hij"}
+    assert set(rows) == {"42", "abc-defg-hij"}      # the dead row's proc residue discovers nothing
     assert rows["42"]["row_keyed"] and rows["42"]["in_active_meetings"]
-    assert rows["42"]["processing_on"] and rows["42"]["copilot_cursor"] == "9-0"
-    assert rows["42"]["proc_stream"] == {"len": 2, "last_id": "2-0"}
     assert rows["42"]["transcript_stream"] == {"len": 1, "last_id": "9-0"}
+    assert "proc_stream" not in rows["42"] and "processing_on" not in rows["42"]
     assert rows["abc-defg-hij"]["row_keyed"] is False  # never drained by the numeric-keyed db-writer
 
 
@@ -164,25 +168,11 @@ def test_pipeline_snapshot_includes_live_registry():
 def test_pipeline_snapshot_keeps_real_native_carriers_despite_alias():
     """A native id that HAS content (a real mis-keyed stream) still shows even when the live
     registry also aliases it to a numeric row — real S2 evidence is never suppressed."""
-    r = _FakeRedis(streams={"proc:meeting:xyz": [("1-0", {"note": "{}"})]})
+    r = _FakeRedis(streams={"tc:meeting:xyz": [("1-0", {"segment": "{}"})]})
     rows = admin_panel.pipeline_snapshot(
         r, [{"numeric_meeting_id": "7", "native_id": "xyz", "status": "live"}])
     by_id = {row["meeting_id"]: row for row in rows}
     assert "xyz" in by_id and by_id["xyz"]["row_keyed"] is False
-
-
-def test_pipeline_snapshot_surfaces_pending_drain_and_view_end():
-    import time as _time
-    now = _time.time()
-    r = _FakeRedis(
-        streams={"proc:meeting:46": [("1-0", {"note": "{}"}), ("2-0", {"type": "view_end", "cursor": "1-0"})]},
-        pending={"46": now + 60, "44": now - 60},  # 46 draining (within deadline), 44 overdue = S1 live
-    )
-    rows = {row["meeting_id"]: row for row in admin_panel.pipeline_snapshot(r)}
-    assert set(rows) == {"46", "44"}  # 44 discovered via the zset alone (no streams left)
-    assert rows["46"]["pending_drain"]["overdue"] is False
-    assert rows["44"]["pending_drain"]["overdue"] is True
-    assert rows["46"]["proc_stream"]["last_type"] == "view_end"
 
 
 # ── the golden smoke probe ────────────────────────────────────────────────────────────────────

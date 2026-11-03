@@ -1,0 +1,25 @@
+{
+  "what": "meeting.completed for the meeting's owner (post-meeting processing)",
+  "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n-----END PUBLIC KEY-----\n",
+  "now": 1767225600,
+  "ttl_sec": 259200,
+  "claims": {
+    "cls": [
+      "chat.autonomous",
+      "desk.write",
+      "room.bills_to",
+      "transcript.read"
+    ],
+    "evt": "meeting.completed:7781",
+    "exp": 1767484800,
+    "iat": 1767225600,
+    "iss": "meetings",
+    "jti": "0f1e2d3c4b5a69788796a5b4",
+    "kind": "event",
+    "mid": "7781",
+    "native": "google_meet/abc-defg-hij",
+    "sub": "42",
+    "v": "subject-ticket.v1"
+  },
+  "token": "st1.eyJjbHMiOlsiY2hhdC5hdXRvbm9tb3VzIiwiZGVzay53cml0ZSIsInJvb20uYmlsbHNfdG8iLCJ0cmFuc2NyaXB0LnJlYWQiXSwiZXZ0IjoibWVldGluZy5jb21wbGV0ZWQ6Nzc4MSIsImV4cCI6MTc2NzQ4NDgwMCwiaWF0IjoxNzY3MjI1NjAwLCJpc3MiOiJtZWV0aW5ncyIsImp0aSI6IjBmMWUyZDNjNGI1YTY5Nzg4Nzk2YTViNCIsImtpbmQiOiJldmVudCIsIm1pZCI6Ijc3ODEiLCJuYXRpdmUiOiJnb29nbGVfbWVldC9hYmMtZGVmZy1oaWoiLCJzdWIiOiI0MiIsInYiOiJzdWJqZWN0LXRpY2tldC52MSJ9.yyzDXe-_LcyIEvO-QVkxaLhcYq9EjfjvhRumw01L3keQBKlOibQrBmW5BhERBAbxZv3z9AlBsijml0tosKG4BQ"
+}

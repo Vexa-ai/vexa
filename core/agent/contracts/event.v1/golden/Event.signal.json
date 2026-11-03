@@ -1,0 +1,16 @@
+{
+  "name": "meeting.signal",
+  "subject": "u_jane",
+  "target": { "chat": "pchat-mv9qx0lo" },
+  "plan": { "prompt": "Signals since your last look (score 1.3 against your brief). Update the meeting page; if your focus should change, call meeting_listen." },
+  "data": {
+    "meeting_row": "4417",
+    "buffer": [
+      { "segment_id": "4417:118", "speaker": "Alex", "text": "We decided the proxy goes in on Tuesday.", "start": 812.4, "scores": { "decision": 0.91, "addressed_to_vexa": 0.02 } },
+      { "segment_id": "4417:119", "speaker": "Sam", "text": "Vexa, note that as an action item for me.", "start": 816.0, "scores": { "action_item": 0.84, "addressed_to_vexa": 0.97 } }
+    ],
+    "score": 1.3,
+    "reason": "addressed",
+    "brief_version": 3
+  }
+}

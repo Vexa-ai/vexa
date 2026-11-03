@@ -5,7 +5,7 @@
 Four tabs, all driven ONLY by `cookbook.*` (a working click IS a cookbook proof):
   · Chat / Onboard  — talk to your agent; "Start onboarding" runs the cold-start interview
   · Workspace       — your kg/entities, click to read
-  · Meeting         — paste a Meet URL → send bot → live notes + cards
+  · Meeting         — paste a Meet URL → send bot → live transcript
   · Routines        — list + schedule
 
 Auth: reads VEXA_API_KEY from clients/terminal/.env.local (run `python -m vexa_slim.play login …` once).
@@ -88,8 +88,7 @@ _PAGE = r"""<!doctype html><meta charset=utf-8><title>Vexa · control panel</tit
    </div>
    <div id=pipeline class=row style="margin-top:8px;gap:14px;font-size:13px"></div></div>
    <div class=grid>
-     <div class=panel><h2>Notes</h2><div id=notes class=mut>—</div></div>
-     <div class=panel><h2>Cards</h2><div id=cards class=mut>—</div></div>
+     <div class=panel><h2>Transcript</h2><div id=transcript class=mut>—</div></div>
    </div>
  </section>
  <section id=routines class="tab">
@@ -134,19 +133,18 @@ function dot(ok,label,detail){const c=ok?'#2a6':'#e0533a';return `<span title="$
 async function pipeline(d){  // P18: light each hop; the stuck one goes red with the typed reason
   let h={}; try{h=await j('/relay')}catch(e){}
   const ing=h.ingest||{}, nr=h.native_resolve||{};
-  const counts=d.counts||{}, hasTx=(counts.transcript||0)>0, hasOut=((counts.note||0)+(counts.card||0))>0;
+  const counts=d.counts||{}, hasTx=(counts.transcript||0)>0;
   const relayOk = nr.ok!==false;
   const els=[
     dot(true,'bot',''),
     dot((ing.segments||0)>0,'transcribing', (ing.segments||0)+' segments'),
     dot(relayOk,'relaying', relayOk?'ok':((nr.kind||'')+': '+(nr.detail||''))),
-    dot(hasOut,'copilot', hasOut?'notes+cards':'waiting'),
+    dot(hasTx,'transcript', (counts.transcript||0)+' segments'),
   ];
   $('pipeline').innerHTML = els.join('') + (relayOk?'':` <span style="color:#e0533a">— ${nr.detail||'relay stalled'}</span>`);
 }
 async function poll(n){const d=await j('/snapshot?native='+encodeURIComponent(n));$('counts').textContent=JSON.stringify(d.counts||{});
-  $('notes').innerHTML=(d.notes||[]).map(x=>`<div class=note><span class=spk>${x.speaker||''}</span> ${x.text||''}</div>`).join('')||'<i>waiting…</i>';
-  $('cards').innerHTML=(d.cards||[]).map(c=>`<div class=card><span class=kind>${c.kind||''}</span><b>${c.title||''}</b><br>${c.body||''}</div>`).join('')||'<i>waiting…</i>';
+  $('transcript').innerHTML=(d.transcript||[]).map(x=>`<div class=note><span class=spk>${x.speaker||''}</span> ${x.text||''}</div>`).join('')||'<i>waiting…</i>';
   pipeline(d);}
 
 // ROUTINES
@@ -159,8 +157,10 @@ async function addroutine(){const d=await j('/routine_add?name='+encodeURICompon
 async def _snapshot(native: str) -> dict:
     h = await asyncio.wait_for(harvest(_SLIM, native, seconds=3.0), timeout=8.0)
     return {"counts": h.counts(),
-            "notes": [e.get("note", {}) for e in h.of("note")][-60:],
-            "cards": [e.get("card", {}) for e in h.of("card")][-40:]}
+            # The feed carries the transcript and nothing else — the notes/cards lane that used to
+            # share it had one producer, removed by PRD decision 34.
+            "transcript": [{"speaker": e.get("speaker"), "text": e.get("text")}
+                           for e in h.of("transcript")][-80:]}
 
 
 async def _relay() -> dict:

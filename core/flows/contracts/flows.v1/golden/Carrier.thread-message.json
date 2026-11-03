@@ -1,0 +1,8 @@
+{
+  "event": "thread.message",
+  "owner": "agent",
+  "cardinality": "once_per_occurrence",
+  "refs": ["uid", "thread", "text", "message_id", "sender_uid", "sender_thread", "sender_label", "shared", "sender_routine"],
+  "source_event_id": "msg:<sender_uid>:<message_id> — keyed to the sender and the one message, so a retried tool call is one delivery and the sender's daily message count reads off the key",
+  "description": "One agent wrote to another (ADR-0046 decision 13). An agent's address is its chat thread: `uid` owns the target `thread`, and `sender_uid` / `sender_thread` are where the reply goes. Published by the agent domain at POST /api/agents/message — the `message_agent` tool — after it has checked that the sending thread is the caller's own and the target thread exists; `shared` says whether the two people share a workspace and `sender_routine` whether the sender is a routine running with nobody in the loop, the two facts the policy keys `agent_messages_shared` and `agent_messages_from_routines` decide on at the intake. The refs carry `_origin`, the chain of threads the conversation has passed through, which is what the loop guard caps. Consumed by `agent_messages`, whose `deliver_message` step queues the text as a turn in the target thread, marked as the sending agent's and never as the person's words."
+}

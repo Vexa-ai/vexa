@@ -1,5 +1,5 @@
 /**
- * Capture bridge (2b) — the browser-resident capture → pipeline pump + the speak path.
+ * Capture bridge (2b) — the browser-resident capture → pipeline pump + the speak and chat-send paths.
  *
  * ╔══════════════════════════════════════════════════════════════════════════════════════╗
  * ║ L4 (O6/VM): live-validated against a real meeting.                                      ║
@@ -27,11 +27,14 @@
 import {
   launchPersistentBrowser,
   syncBrowserDataFromS3,
-  syncBrowserDataToS3,
   cleanStaleLocks,
   getAuthenticatedBrowserArgs,
   makeEphemeralProfileDir,
   removeProfileDir,
+  restrictNavigation,
+  authenticatedNavigationDomains,
+  withSiteIsolation,
+  type AuthPlatform,
   type Page,
   type BrowserContext,
 } from '@vexa/remote-browser';
@@ -43,6 +46,9 @@ import type { BotRecordingSink } from './recording.js';
 import type { TelemetrySink } from './ports.js';
 import type { RemoteAudioActivityTap } from './aloneness.js';
 import { createTtsPlayback } from './tts-playback.js';
+import { writeBackSession } from './session-writeback.js';
+import { restoreSession } from './session-restore.js';
+import { guardMeetingNavigation, meetingNavigationPolicy, pinMeetingHostArgs, type NavigationGuard } from './meeting-navigation.js';
 
 /** Float32 PCM → base64 of its little-endian bytes — the EXACT codec wire payload, so a stored
  *  captured-signal.v1 frame round-trips through @vexa/capture-codec (encode→decode→same PCM). */
@@ -559,20 +565,31 @@ const BROWSER_UTILS_PATH = process.env.VEXA_BROWSER_UTILS_PATH ?? '/app/browser-
 export interface BrowserSession {
   context: BrowserContext;
   page: Page;
+  /** The meeting navigation guard (meeting-navigation.ts): its first top-level refusal, if any. */
+  navigation: NavigationGuard;
   close(): Promise<void>;
 }
 
 /**
  * Launch the browser the bot joins through. Authenticated bots restore the persistent profile
- * from S3 first (so they join as a signed-in user); guest bots launch a fresh persistent context.
+ * first — from S3, or from meeting-api's `sessionRestoreUrl` for a saved bot account — so they join
+ * as a signed-in user; guest bots launch a fresh persistent context.
  * Always uses getJoinBrowserArgs() (the join lane's canonical flag set) merged with the
  * remote-browser auth args, so the page the JoinDriver receives is configured identically to
  * what @vexa/join expects.  // L4 (O6/VM): live-validated against a real meeting.
  */
+/** The stored-session platform behind each meeting platform (Jitsi has none). */
+const AUTH_PLATFORM: Partial<Record<Invocation['platform'], AuthPlatform>> = {
+  google_meet: 'google',
+  teams: 'teams',
+  zoom: 'zoom',
+};
+
 export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   // Every bot gets its OWN profile dir — concurrent bots sharing one dir die on Chromium's
   // SingletonLock (#478: joining → failed <1s, "Opening in existing browser session").
-  // Authenticated: restore the S3 userdata into this bot's dir before launch (index.ts:2313–2347).
+  // Authenticated: restore the stored session into this bot's dir before launch (index.ts:2313–2347),
+  // with the deployment's read-only userdata key — the session profile only (SESSION_PROFILE).
   const dataDir = makeEphemeralProfileDir();
   const s3Config = {
     userdataS3Path: inv.userdataS3Path,
@@ -581,19 +598,48 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
     s3AccessKey: inv.s3AccessKey,
     s3SecretKey: inv.s3SecretKey,
   };
-  if (inv.authenticated && inv.userdataS3Path) {
-    // Fail-loud restore: an unreachable/misconfigured store surfaces as a typed SessionSyncError
-    // naming the session-restore step (the composition root drives it to a clean terminal failed)
-    // — an authenticated bot never silently proceeds to join signed-out on a failed restore.
-    syncBrowserDataFromS3(s3Config, dataDir);
+  // An authenticated browser carries the deployment's stored session: it navigates only to the
+  // platform's own domains, and the meeting host must be one of them (checked before the stored
+  // session is restored — a host outside them refuses the launch). Its sites are isolated from each other
+  // (--site-per-process). A guest browser is neither (a Jitsi meeting may be on any host).
+  const authDomains = inv.authenticated
+    ? authenticatedNavigationDomains(AUTH_PLATFORM[inv.platform] ?? null, inv.meetingUrl)
+    : null;
+  // Every browser — guest or signed in — navigates only to the meeting platform's hosts and the
+  // meeting's own host, and only to public (or operator-listed) addresses. A meeting on a host of the
+  // organisation's choosing (Jitsi, a Zoom front door) is resolved and checked here, before launch,
+  // and Chromium is pinned to the checked address. A refusal fails the launch with a
+  // `meeting_host_refused` reason (the composition root drives it to a clean terminal failed).
+  const navigationPolicy = meetingNavigationPolicy(inv.platform, inv.meetingUrl ?? null, inv.meetingHostAllow);
+  const pinArgs = await pinMeetingHostArgs(navigationPolicy);
+  if (inv.authenticated && (inv.sessionRestoreUrl || inv.userdataS3Path)) {
+    // Fail-loud restore: an unreachable/misconfigured store, or a refused/off-contract answer from
+    // meeting-api, surfaces as a typed SessionSyncError naming the session-restore step (the
+    // composition root drives it to a clean terminal failed) — an authenticated bot never silently
+    // proceeds to join signed-out on a failed restore. A saved bot account's profile comes over HTTP
+    // (sessionRestoreUrl, session-restore.ts) and is the whole profile: the store is not mixed in.
+    try {
+      if (inv.sessionRestoreUrl) await restoreSession(inv, dataDir);
+      else syncBrowserDataFromS3(s3Config, dataDir);
+    } catch (e) {
+      removeProfileDir(dataDir);
+      throw e;
+    }
     cleanStaleLocks(dataDir);
   }
 
   // getAuthenticatedBrowserArgs() is the minimal clean set remote-browser uses for signed-in
   // joins; getJoinBrowserArgs() adds the fake-device / autoplay flags the join lane needs. The
   // join args win on conflict (later wins in Chromium arg parsing).
-  const args = [...getAuthenticatedBrowserArgs(), ...getJoinBrowserArgs()];
+  const baseArgs = [...getAuthenticatedBrowserArgs(), ...getJoinBrowserArgs()];
+  const args = [...(authDomains ? withSiteIsolation(baseArgs) : baseArgs), ...pinArgs];
   const { context, page } = await launchPersistentBrowser({ dataDir, args });
+  const navigation = await guardMeetingNavigation(context, navigationPolicy);
+
+  // ...and its navigations are held to those domains from before the first one.
+  if (inv.authenticated) {
+    await restrictNavigation(context, authDomains ?? []);
+  }
 
   // Voice-agent gate the page reads to decide whether to keep the mic hot (production parity).
   await context.addInitScript(`window.__vexa_voice_agent_enabled = ${!!inv.voiceAgentEnabled};`);
@@ -656,16 +702,23 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   return {
     context,
     page,
+    navigation,
     async close() {
       await context.close().catch(() => { /* best-effort */ });
       // Write-back on clean teardown (#725): Google rotates session cookies during use, so the
       // durable copy is refreshed from the LIVE profile dir after the context flushes — the next
-      // spawn restores the freshest state instead of a decaying snapshot. Clean teardown only:
-      // a SIGKILL never reaches close(), so a hard-killed meeting keeps the last durable copy.
-      // Failures are attributed warnings, bounded per upload — teardown never hangs on S3.
-      if (inv.authenticated && inv.userdataS3Path) {
+      // spawn restores the freshest state instead of a decaying snapshot. The bot's userdata key is
+      // read-only: the session profile goes to meeting-api at the invocation's sessionWritebackUrl
+      // (MeetingToken), which stores only SESSION_PROFILE paths and only from the live authenticated
+      // session; no URL in the invocation, no write-back. Clean teardown only: a
+      // SIGKILL never reaches close(), so a hard-killed meeting keeps the last durable copy.
+      // Failures are attributed warnings, one bounded attempt — teardown never hangs on it.
+      if (inv.authenticated && (inv.userdataS3Path || inv.sessionRestoreUrl)) {
         try {
-          syncBrowserDataToS3(s3Config, dataDir);
+          const r = await writeBackSession(inv, dataDir);
+          console.log(r.skipped
+            ? `[bot] session write-back skipped: ${r.skipped}`
+            : `[bot] session write-back: ${r.sent} session file(s) accepted by meeting-api`);
         } catch (e) {
           console.error(`[bot] session write-back failed (durable copy stays at last restore): ${String(e)}`);
         }
@@ -689,7 +742,7 @@ export async function startCaptureBridge(
   inv: Invocation,
   pipeline: BotPipeline,
   telemetry?: TelemetrySink,
-  /** In-meeting chat sink (jitsi lane) — each captured chat message crosses here;
+  /** In-meeting chat sink (google_meet + jitsi) — each captured chat message crosses here;
    *  the composition root publishes it as a transcript.v1 `source:'chat'` segment. */
   onChat?: (sender: string, text: string) => void,
   /** Active-phase silence signal. It remains unavailable until page capture reports ready. */
@@ -788,7 +841,8 @@ export async function startCaptureBridge(
   await page.exposeFunction('__vexaStreamPresence', (count: number): void => activity?.observeStreamPresence?.(count)).catch((e: Error) => {
     if (!String(e.message).includes('already registered')) throw e;
   });
-  // jitsi chat → the embedder's sink (a transcript.v1 `chat` segment at the composition root).
+  // In-meeting chat (google_meet + jitsi readers) → the embedder's sink (a transcript.v1 `chat`
+  // segment at the composition root).
   await page.exposeFunction('__vexaChatMessage', (sender: string, text: string): void => {
     try { onChat?.(sender, text); } catch (e) { console.error(`[bot] chat sink rejected: ${String(e)}`); }
   }).catch(() => { /* optional */ });
@@ -1274,7 +1328,15 @@ export async function startCaptureBridge(
       // (Zoom's watcher lives in the per-track branch above — it feeds the resolver, not the mix.)
       return;
     }
-    // gmeet lane: per-channel capture + glow attribution (the SAME module the extension runs).
+    // gmeet lane: the chat reader (opens the chat panel itself; the bot's own lines are skipped),
+    // then per-channel capture + glow attribution (the SAME module the extension runs).
+    if (w.VexaBrowserUtils?.createGmeetChat && !w.__vexaGmeetChat) {
+      w.__vexaGmeetChat = w.VexaBrowserUtils.createGmeetChat({
+        selfName: botName,
+        log: (m: string) => w.logBot?.('[GmeetChat] ' + m),
+        onMessage: (m: { sender: string; text: string }) => w.__vexaChatMessage?.(m.sender, m.text),
+      });
+    }
     if (w.VexaBrowserUtils?.createGmeetCapture && !w.__vexaGmeetCapture) {
       w.__vexaGmeetSpeakers = w.__vexaGmeetSpeakers
         ?? w.VexaBrowserUtils.createGmeetSpeakers?.({ log: (m: string) => w.logBot?.('[PerSpeaker] ' + m) });
@@ -1316,6 +1378,7 @@ export async function startCaptureBridge(
     await page.evaluate(() => {
       const w = (globalThis as any) as Record<string, any>;
       try { w.__vexaGmeetCapture?.stop?.(); } catch { /* best-effort */ }
+      try { w.__vexaGmeetChat?.destroy?.(); w.__vexaGmeetChat = null; } catch { /* best-effort */ }
       try { if (w.__vexaTeamsHealthTimer) { (globalThis as any).clearInterval(w.__vexaTeamsHealthTimer); w.__vexaTeamsHealthTimer = null; } } catch { /* */ }
       try { w.__vexaTeamsSpeakers?.destroy?.(); w.__vexaTeamsSpeakers = null; } catch { /* best-effort */ }
       // destroy() flushes a caption still mid-refinement as stable:false — the meeting's last
@@ -1393,20 +1456,22 @@ export async function startRecording(page: Page, inv: Invocation, recording: Bot
     return Number.isFinite(n) && n > 0 ? n : 15000;
   })();
   // Node-side: decode one base64 recording.v1 chunk → the per-chunk upload sink. mimeType→format.
-  await page.exposeFunction('__vexaRecordingChunk', (base64: string, chunkSeq: number, isFinal: boolean, mimeType: string): void => {
+  await page.exposeFunction('__vexaRecordingChunk', (base64: string, chunkSeq: number, isFinal: boolean, mimeType: string, startedAtMs?: number): void => {
     const bytes = base64 ? new Uint8Array(Buffer.from(base64, 'base64')) : new Uint8Array(0);
     const format: RecordingMasterFormat = /wav/i.test(mimeType) ? 'wav' : 'webm';
-    recording.chunk(key, chunkSeq, isFinal, format, bytes);
+    recording.chunk(key, chunkSeq, isFinal, format, bytes, startedAtMs);
   }).catch((e: Error) => { if (!String(e.message).includes('already registered')) throw e; });
 
   // Page-side: start the generic recording tap (finds + combines the page audio elements).
   await page.evaluate(async (timesliceMs) => {
     const w = (globalThis as any) as Record<string, any>;
     if (w.VexaBrowserUtils?.createRecordingTap && !w.__vexaRecordingTap) {
+      let recordingStartedAtMs: number | undefined;
       w.__vexaRecordingTap = w.VexaBrowserUtils.createRecordingTap({
+        onStarted: () => { recordingStartedAtMs = Date.now(); },
         timesliceMs,
         onChunk: async (c: { base64: string; chunkSeq: number; isFinal: boolean; mimeType: string }) => {
-          try { await w.__vexaRecordingChunk(c.base64, c.chunkSeq, c.isFinal, c.mimeType); return true; }
+          try { await w.__vexaRecordingChunk(c.base64, c.chunkSeq, c.isFinal, c.mimeType, recordingStartedAtMs); return true; }
           catch { return false; }
         },
       });
@@ -1484,6 +1549,116 @@ export function createSpeakController(page: Page, inv: Invocation): SpeakControl
       tts.stop();                                             // barge-in: kill playback + re-mute tts_sink
       await setMic(false);
       console.log('[bot] speak_stop');
+    },
+  };
+}
+
+/**
+ * The CHAT-SEND path — write a line into the meeting chat (acts.v1 `chat_send`).  // L4 (O6/VM).
+ *
+ * google_meet sends with TRUSTED input: the page-side prepareGmeetChatSend opens the panel, finds the
+ * visible composer and its send button by structure (language-independent, never a hidden field or
+ * reCAPTCHA's — see gmeet-chat.ts) and marks them; Playwright then fills the marked composer and
+ * clicks the marked button, or presses Enter when the row has no identifiable button. When that path
+ * cannot run (no Playwright locator, or a step throws before the line went out), the page-side
+ * sendGmeetChatMessage (DOM value + click / synthetic Enter) is the fallback. Either way the send
+ * counts only when the line shows in Meet's message list (awaitGmeetChatLanded). jitsi calls the
+ * conference's own sendTextMessage (sendJitsiChatMessage). Not gated on voiceAgentEnabled: chat is a
+ * text act, not a voice one. Every other platform reports `unsupported_platform`.
+ *
+ * The outcome is logged here (`chat_send: sent …` once the line is in the meeting, else
+ * `chat_send_failed reason=<ChatSendFailure>`) and returned; the act handler (act-dispatch.ts) reports
+ * it to meeting-api when the act carried an `id`.
+ */
+export type ChatSendFailure =
+  | 'unsupported_platform'  // the platform's bot has no chat sender
+  | 'no_composer'           // no visible chat composer, even after opening the panel
+  | 'not_landed'            // written and sent, but the line never showed in the message list
+  | 'no_chat_api'           // the page has no sender (bundle missing / jitsi conference API absent)
+  | 'page_error'            // the page-side sender threw
+  | 'empty_text';
+
+/** The outcome of one chat_send: sent only once the line is in the meeting. */
+export type ChatSendResult = { sent: true; via: string } | { sent: false; reason: ChatSendFailure };
+
+export interface ChatSender {
+  /** Send `text` into the meeting chat. Resolves `sent: true` only once the line is in the meeting. */
+  send(text: string): Promise<ChatSendResult>;
+}
+
+/** How long a sent line may take to show in Meet's message list before the send is a failure. */
+const GMEET_CHAT_LAND_WAIT_MS = Number(process.env.VEXA_GMEET_CHAT_LAND_WAIT_MS || 8000);
+
+/** google_meet's trusted send: page-side lookup + marks, then Playwright input on the marks, then the
+ *  landing check. Resolves the outcome, or null when the trusted path could not put the line out (the
+ *  caller falls back to the page-side sender). */
+async function sendGmeetTrusted(page: Page, text: string, landWaitMs: number): Promise<ChatSendResult | null> {
+  if (typeof (page as { locator?: unknown }).locator !== 'function') return null;
+  let found: { composer: string | null; send: string | null; before: number } | null = null;
+  const landed = () => page.evaluate(async ({ text, before, waitMs }) => {
+    const u = (globalThis as any).VexaBrowserUtils;
+    return u?.awaitGmeetChatLanded ? !!(await u.awaitGmeetChatLanded(text, before, waitMs)) : false;
+  }, { text, before: found?.before ?? 0, waitMs: landWaitMs });
+  try {
+    found = await page.evaluate(async (text: string) => {
+      const u = (globalThis as any).VexaBrowserUtils;
+      if (!u?.prepareGmeetChatSend) return null;
+      const log = (m: string) => (globalThis as any).logBot?.('[ChatSend] ' + m);
+      return await u.prepareGmeetChatSend(text, { log }) as { composer: string | null; send: string | null; before: number };
+    }, text);
+    if (!found) return null;
+    if (!found.composer) return { sent: false, reason: 'no_composer' };
+    const composer = page.locator('[data-vexa-chat-composer]').first();
+    await composer.fill(text, { timeout: 5000 });
+    const send = page.locator('[data-vexa-chat-send]').first();
+    let how: string;
+    if (found.send && await send.isEnabled({ timeout: 2000 }).catch(() => false)) {
+      await send.click({ timeout: 5000 });
+      how = `trusted fill + click (composer via ${found.composer}, send via ${found.send})`;
+    } else {
+      await composer.press('Enter', { timeout: 5000 });
+      how = `trusted fill + Enter (composer via ${found.composer}, send via ${found.send ?? 'none'})`;
+    }
+    if (await landed()) return { sent: true, via: how };
+    console.error(`[bot] chat_send: ${how} — the line did not show in the message list within ${landWaitMs} ms`);
+    return { sent: false, reason: 'not_landed' };
+  } catch (e) {
+    // A step threw. If the line is in the list anyway it went out; otherwise the page-side sender retries.
+    if (found?.composer && await landed().catch(() => false)) return { sent: true, via: 'trusted (a step threw after the line went out)' };
+    console.error(`[bot] chat_send: trusted path failed, falling back to the page-side sender: ${String(e)}`);
+    return null;
+  }
+}
+
+export function createChatSender(page: Page, inv: Invocation, opts: { landWaitMs?: number } = {}): ChatSender {
+  const platform = inv.platform;
+  const landWaitMs = opts.landWaitMs ?? GMEET_CHAT_LAND_WAIT_MS;
+  const report = (text: string, r: ChatSendResult): ChatSendResult => {
+    if (r.sent) console.log(`[bot] chat_send: sent via ${r.via}: "${text.slice(0, 60)}"`);
+    else console.error(`[bot] chat_send_failed reason=${r.reason} platform=${platform} chars=${text.length}`);
+    return r;
+  };
+  return {
+    async send(text: string): Promise<ChatSendResult> {
+      if (platform !== 'google_meet' && platform !== 'jitsi') return report(text, { sent: false, reason: 'unsupported_platform' });
+      const trusted = platform === 'google_meet' ? await sendGmeetTrusted(page, text, landWaitMs) : null;
+      if (trusted) return report(text, trusted);
+      // Runs IN THE BROWSER; the platform's sender lives on the injected bundle.
+      const r = await page.evaluate(async ({ text, platform, landWaitMs }): Promise<ChatSendResult> => {
+        const u = (globalThis as any).VexaBrowserUtils;
+        const log = (m: string) => (globalThis as any).logBot?.('[ChatSend] ' + m);
+        if (platform === 'google_meet') {
+          if (!u?.sendGmeetChatMessage) return { sent: false, reason: 'no_chat_api' };
+          const res = await u.sendGmeetChatMessage(text, { log, landWaitMs });
+          return res.ok ? { sent: true, via: `page-side ${res.send} (composer via ${res.composer})` } : { sent: false, reason: res.reason };
+        }
+        return u?.sendJitsiChatMessage && u.sendJitsiChatMessage(text)
+          ? { sent: true, via: 'jitsi conference API' } : { sent: false, reason: 'no_chat_api' };
+      }, { text, platform, landWaitMs }).catch((e): ChatSendResult => {
+        console.error(`[bot] chat_send: page-side send threw: ${String(e)}`);
+        return { sent: false, reason: 'page_error' };
+      });
+      return report(text, r);
     },
   };
 }

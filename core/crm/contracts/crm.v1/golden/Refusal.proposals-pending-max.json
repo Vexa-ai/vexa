@@ -1,0 +1,5 @@
+{
+  "instruction": "This person already has 5 desktop suggestions waiting. Do not add another; mention the waiting ones instead.",
+  "reason": "proposals_pending_max",
+  "status": "refused"
+}

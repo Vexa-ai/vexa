@@ -139,6 +139,9 @@ def test_zoom_invite_becomes_the_exact_invite_received_refs():
         # THE OCCURRENCE — what makes this one instance of a series rather than the series
         # (R-B02). `RECURRENCE-ID` when the sender sends one, else the occurrence's own DTSTART.
         "occurrence": "20300302T140000Z",
+        # THE MEETING ACROSS ITS UPDATES (ADR-0050): UID (+@RECURRENCE-ID), never DTSTART
+        "event_key": "platform-sync-20300302@zoom.us",
+        "sequence": 0,
         "title": "Platform Sync weekly",
         "group": "platform-sync",
         "participants": ["casey@example.test", "priya@example.test"],
@@ -274,5 +277,23 @@ def test_imap_cursor_row_is_the_integer_it_always_was():
     assert box.restore(db) == "4711"
     box.commit(db, from_rfc822((FIX / "reply-minutes.eml").read_bytes(),
                                cursor="4712", ext_id="4712"))
-    assert db.execute("SELECT uid, token FROM mail_cursor WHERE id = 1")[0] == (4712, None)
+    uid, token = db.execute("SELECT uid, token FROM mail_cursor WHERE id = 1")[0]
+    assert uid == 4712 and token.startswith("imap:"), "the UID is kept WITH its mailbox"
     assert db.execute("SELECT COUNT(*) FROM mail_seen")[0][0] == 0, "IMAP writes no seen rows"
+
+
+def test_a_cursor_from_another_mailbox_is_not_a_position(monkeypatch):
+    """Switching a deployment from the mail double (or another address) to a shared mailbox must
+    anchor at that mailbox's TAIL — never read the old row's uid 0 as "replay everything"."""
+    db = SqliteDB()
+    db.execute("INSERT INTO mail_cursor (id, uid) VALUES (1, 0)")
+    from flows_integrations.inbox import ensure_token_column, write_watermark
+    ensure_token_column(db)
+    write_watermark(db, "2026-10-14T10:00:00.000000Z")       # what the mail double left behind
+    monkeypatch.setenv("VEXA_MAIL_ADDR", "info@vexa.ai")
+    box = ImapInbox()
+    assert box.restore(db) is None
+    box.anchor(db, "90210")
+    assert box.restore(db) == "90210"
+    monkeypatch.setenv("VEXA_MAIL_ADDR", "someone-else@vexa.ai")
+    assert ImapInbox().restore(db) is None

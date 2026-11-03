@@ -1,0 +1,32 @@
+{
+  "request_id": "fixture-draft-0002",
+  "recipient": "person@example.test",
+  "cc": [
+    "colleague@example.test"
+  ],
+  "bcc": [],
+  "subject": "",
+  "body": "Thanks — fixture reply.",
+  "thread_id": "18c0fixturethread",
+  "in_reply_to": "18c0fixturemessage",
+  "attachments": [
+    {
+      "filename": "agenda.md",
+      "content_type": "text/markdown",
+      "data": "IyBBZ2VuZGEK"
+    }
+  ],
+  "policy": {
+    "unattended": false,
+    "notify_attendees": false,
+    "attendee_domains": null,
+    "calendars": [
+      "primary"
+    ],
+    "recipient_domains": [
+      "example.test"
+    ],
+    "attachments": true,
+    "attachment_max_bytes": 5242880
+  }
+}

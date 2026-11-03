@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Transcription worker (CPU-only) — same codebase, no CUDA. For testing/dev without a GPU.
 # CTranslate2 has built-in CPU support (no PyTorch). Build context is the carve root.
-FROM python:3.10-slim
+FROM python:3.10-slim@sha256:6ff506466f8b1e981719b468cc0023b8ef000b983cdec0eafe119d01f379e31d
 
 ENV UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
@@ -14,14 +14,14 @@ ENV UV_LINK_MODE=copy \
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl libsndfile1 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir uv==0.9.22
+RUN pip install --no-cache-dir uv==0.11.33
 RUN uv python install 3.12
 
 WORKDIR /app
 
 COPY core/meetings/services/transcription/pyproject.toml core/meetings/services/transcription/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project
+    uv sync --frozen --no-install-project --no-dev
 
 COPY core/meetings/services/transcription/src ./src
 RUN mkdir -p /app/models

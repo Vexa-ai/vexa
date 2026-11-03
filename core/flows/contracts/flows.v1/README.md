@@ -16,27 +16,21 @@ billing on the paid product, so its stamp is written in the same transaction as 
 describes — the guarantee is the stamp, not the code path, which is why it holds against a replay, a
 restore, and a second producer somebody adds later.
 
-The table below is a rendering of `carriers.json`, in file order — read it off the census, never the
-other way round. It said `meeting.completed | flows` and omitted `meeting.started` entirely until the
-0.12.27 candidate; both carriers had been handed over to **meetings** (F168/F181, meeting-api
-publishes them from its own lifecycle) and the prose here still named the previous producer, which is
-the one thing a census may not get wrong.
-
 | carrier | owner | cardinality |
 |---|---|---|
 | `onboarding.completed` | identity | exactly once per subject |
-| `meeting.started` | meetings | once per occurrence |
-| `meeting.completed` | meetings | once per occurrence |
+| `meeting.completed` | flows | once per occurrence |
 | `invite.received` | flows | once per occurrence |
 | `desk.unscaffolded` | agent | exactly once per subject |
 | `claim.proposed` | agent | once per occurrence |
 | `friction.reported` | flows | once per occurrence |
+| `workspace.invited` | agent | once per occurrence |
+| `routine.paused` | agent | once per occurrence |
 
-`meeting.started` and `meeting.completed` are recorded from meeting-api's `config.v1.json`
-publish-edge keys, `invite.received` from `core/flows/mcp.tools.v1.json`'s own `publishes_events`,
-and the two desk carriers from agent-api's `config.v1.json` publish-edge keys. None of them is
-asserted afresh: this file is a reading of what the repository already declares, which is what makes
-it a census rather than a wish.
+`meeting.completed` and `invite.received` are recorded from `core/flows/mcp.tools.v1.json`'s own
+`publishes_events`; the two desk carriers from agent-api's `config.v1.json` publish-edge keys. None
+of them is asserted afresh: this file is a reading of what the repository already declares, which is
+what makes it a census rather than a wish.
 
 `friction.reported` (PRD 40.9 open-decision 8) is owned by **flows**, not agent, even though the
 fact it describes is about using the product: the producer is flows-api's own `POST /friction`
@@ -46,6 +40,17 @@ no product surface beyond `report_friction`, so its one canonical ingestion poin
 timeline already lives, and works whether or not the agent domain is deployed at all. `friction.
 fixed` (the close-out half) is not registered here yet; it stays on the agent-domain's operator
 surface (`friction_dump`/`friction_fixed`) pending a follow-up that gives it the same treatment.
+
+`workspace.invited` (Vexa-ai/vexa#1632) is the third agent-owned carrier and the one that is
+easiest to over-promise. It ends in a mail to a stranger, which reads like an irreversible action
+and invites `exactly_once_per_subject` — but the subject a membership invite is about is the
+INVITE, not the person: a re-invite after an expiry, or the same address at a different role, is a
+second fact and must mail again, and deduping it away would leave the inviter told an invitation
+went out and the invitee with nothing. So it is `once_per_occurrence`, it holds no stamp, and what
+stops one invite mailing twice is a `source_event_id` keyed to the invite. It is published ONLY
+for an address that is external to this instance — an invitee who already has an account here is
+handed the link in the chat that invited them and no fact is published at all, so the consumer
+never has to ask whether the recipient is one of ours.
 
 `desk.unscaffolded` claims exactly-once and its stamp is **the desk itself** rather than a column.
 That is a weaker guarantee than `onboarding.completed`'s and it is the right one here: the fact is
@@ -64,22 +69,17 @@ loses a card and never loses the fact.
 - **the flows suite** — `test_carrier_census.py` holds the census and the domain manifests in
   agreement in both directions.
 
-## Registered, not yet sealed
+## `FlowDefinition` — one version of one flow (ADR-0046)
 
-It is registered in `architecture.calm.json` as node `flows.v1` (`metadata.path`
-`core/flows/contracts/flows.v1`, `domain` `flows`), inside the `flows-composed` container —
-`gate:dataflow`'s completeness check requires every contract dir on disk to appear in the chart, so
-registration is not optional and not deferrable.
+Beside the census, the contract carries the shape `flow_version` stores and `GET /flows` reads
+back: `scope` (`instance` or `user:<uid>`), `name`, `version`, a `trigger` (`event` naming a
+carrier, or `schedule` with a five-field UTC cron), `steps` by name and `params` as data. The key is
+(scope, name, version). A routine is a user-scoped flow with a schedule trigger and `agent_run`.
+Goldens: `FlowDefinition.user-routine.json`, `FlowDefinition.instance-event.json`.
 
-⚠ From the commit that created this contract until the 0.12.27 candidate, this paragraph said the
-registration existed and it did not: there was no `flows.v1` node, `gate:dataflow` was RED on exactly
-that, and `gate:arch-report` was red behind it. A README asserting the state a gate is failing on is
-worse than silence — it answers the question a reader would otherwise have gone and checked. Landed
-with the node, so the sentence and the chart move together.
+## Sealed
 
-It carries no entry in `contracts.seal.json`, so `gate:contract-version` reports it as *in
-development* — and that part is deliberate. Sealing publishes a frozen `.vN`; freezing a shape on
-the branch that introduces it would pin it before anybody has built a consumer against it. Re-seal
-with `pnpm seal:contracts` in a `lane:contract` review once it has one.
+Registered in `architecture.calm.json` (node `flows.v1`) and sealed in `contracts.seal.json`.
+`FlowDefinition` was added back-compatibly and re-sealed (`pnpm seal:contracts`).
 
 _Governed by `docs/docs/governance/architecture.mdx` (P1–P12). This folder owns one concern; its public surface is its `index`/contract; it may depend only on what the dependency-rules allow._

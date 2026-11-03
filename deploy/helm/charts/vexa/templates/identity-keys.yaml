@@ -1,0 +1,77 @@
+{{- /*
+gateway-identity.v1 — the gateway's Ed25519 signing keypair.
+
+The PRIVATE key lives in the Secret below and is mounted by the gateway alone; it signs the identity
+the gateway resolved onto every forward. The PUBLIC key is the ConfigMap below, mounted by agent-api,
+meeting-api and the credential broker, which verify that signature and cannot make one.
+
+Generated once, then reused: an explicit identity.signingKey wins, then the key the release's Secret
+already holds (lookup, so an upgrade keeps it), and only a brand-new install mints one. The Secret is
+kept through an uninstall (resource-policy), so a reinstall keeps the same key. `helm template`
+cannot look the Secret up and mints a new pair on every render — set identity.signingKey when a
+GitOps tool renders the chart.
+
+The public key is DERIVED from the private key on every render, so the two can never disagree. Helm
+has no function that returns a public key, so the chart self-signs a throwaway certificate with the
+key and lifts its Ed25519 SubjectPublicKeyInfo — the 12-byte DER prefix 302a300506032b6570032100 and
+the 32-byte key after it. The certificate itself is discarded. A key that is not Ed25519 has no such
+prefix in its certificate, and the render fails naming the fix.
+*/}}
+{{- if .Values.identity.existingSecret }}
+{{- /* The operator's Secret holds the private key (key `signing-key.pem`); a render cannot read it,
+so the public key is given beside it. Nothing here is generated. */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vexa.componentName" (list . "identity-public-key") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+data:
+  public-key.pem: |
+    {{- required "identity.publicKey is required with identity.existingSecret — the PEM public key of the Secret's signing-key.pem (`openssl pkey -in signing-key.pem -pubout`)" .Values.identity.publicKey | trim | nindent 4 }}
+{{- else }}
+{{- $signingName := include "vexa.componentName" (list . "identity-signing-key") }}
+{{- $pem := .Values.identity.signingKey | default "" }}
+{{- if not $pem }}
+{{- $existing := (lookup "v1" "Secret" .Release.Namespace $signingName).data | default dict }}
+{{- if hasKey $existing "signing-key.pem" }}
+{{- $pem = index $existing "signing-key.pem" | b64dec }}
+{{- end }}
+{{- end }}
+{{- if not $pem }}
+{{- $pem = genPrivateKey "ed25519" }}
+{{- end }}
+{{- $cert := genSelfSignedCertWithKey "vexa-gateway-identity" nil nil 1 $pem }}
+{{- $der := $cert.Cert | replace "-----BEGIN CERTIFICATE-----" "" | replace "-----END CERTIFICATE-----" "" | nospace | b64dec }}
+{{- $spki := "\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00" }}
+{{- $pub := (split $spki $der)._1 | trunc 32 }}
+{{- if ne (len $pub) 32 }}
+{{- fail "identity.signingKey must be an Ed25519 private key in PKCS#8 PEM (`openssl genpkey -algorithm ed25519`), or empty to generate one" }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $signingName }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+  annotations:
+    helm.sh/resource-policy: keep
+type: Opaque
+data:
+  signing-key.pem: {{ $pem | b64enc }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vexa.componentName" (list . "identity-public-key") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+data:
+  public-key.pem: |
+    -----BEGIN PUBLIC KEY-----
+    {{ printf "%s%s" $spki $pub | b64enc }}
+    -----END PUBLIC KEY-----
+{{- end }}

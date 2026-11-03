@@ -197,12 +197,32 @@ plural API above.
 | Endpoint | Behavior |
 |---|---|
 | `GET /user/calendar` | Returns the first active connection's masked URL and auto-join state; `bot_name` is the legacy user-wide fallback. |
-| `PUT /user/calendar` | Creates or updates the first active connection. `ics_url: null` disconnects it. `bot_name` also updates the legacy user-wide fallback. |
+| `PUT /user/calendar` | Creates or updates the first active connection. `ics_url: null` disconnects it. `bot_name` also updates the legacy user-wide fallback. `auto_join_block` sets your [auto-join block list](#auto-join-block-list). |
 | `GET /user/calendar/sync` | Returns the aggregate last-sync stamp across active connections, or `{}` before a sync. |
 | `POST /user/calendar/sync` | Synchronizes all active connections and returns aggregate counts plus a `calendars` array of per-connection stamps. |
 
 `POST /user/calendar/sync` returns **404 Not Found** when no active feed is connected and **503
 Service Unavailable** when sync is not wired.
+
+## Auto-join block list
+
+Domains and email addresses the calendar bot must **never auto-join**. A planned meeting whose
+organiser, an invitee or the meeting link's host matches an entry is skipped at start time, and the
+meeting shows why (`data.auto_join_error`). A domain matches itself and its subdomains
+(`gated.example` matches `x@dept.gated.example`); an address matches exactly. Sending a bot by hand
+(`POST /bots`, **Send bot now**) is not affected.
+
+```bash PUT /user/calendar
+curl -X PUT "$API_BASE/user/calendar" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"auto_join_block":["gated.example","ceo@partner.example"]}'
+```
+
+The response, and `GET /user/calendar`, carry the stored list (lowercased; `@gated.example` and
+`*.gated.example` are stored as `gated.example`). `[]` clears it; leaving the field out keeps it. At
+most 200 entries; anything that is not a domain or an address is a `422` and changes nothing. The
+operator can set a list for every account as well; see
+[Enterprise settings](/how-to/calendar-sync#enterprise-settings).
 
 ## Imported meeting metadata
 
@@ -246,5 +266,5 @@ See [What Vexa stores](/how-to/calendar-sync#what-vexa-stores) for the complete 
 | `401` / `403` | all | API key missing, invalid, or not authorized for the route. |
 | `404` | update, delete, or POST sync | Calendar unavailable, deleted, disabled for sync, or no singular feed connected. |
 | `409` | create | Ten active connections already exist. |
-| `422` | create/update/singular put | Invalid name, bot name, or ICS URL. |
+| `422` | create/update/singular put | Invalid name, bot name, ICS URL (including an internal address the operator has not allowed), or `auto_join_block` entry. |
 | `503` | sync endpoints | Calendar sync is not wired in this deployment. |

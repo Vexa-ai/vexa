@@ -23,7 +23,7 @@ The bridge runs as a long-running container, not a one-shot script. It repeats o
 
 ## What you need
 
-- A Vexa API key scoped `tx` (minted below) and a base URL ([Authentication](/authentication)):
+- A Vexa API key (minted below) and a base URL ([Authentication](/authentication)):
 
   | Deployment | `API_BASE` |
   |---|---|
@@ -38,7 +38,7 @@ The bridge runs as a long-running container, not a one-shot script. It repeats o
 
 <Steps>
   <Step title="Mint a per-user token">
-    Scope it `tx`, the bridge only reads meetings and transcripts:
+    Any API key works (`bot` or `tx`); it reads only the meetings and transcripts its user owns:
 
     ```bash
     curl -X POST "$ADMIN/admin/users/1/tokens?scopes=tx" \
@@ -89,7 +89,7 @@ The bridge runs as a long-running container, not a one-shot script. It repeats o
 | Variable | Default | What it does |
 |---|---|---|
 | `VEXA_API_URL` | - | Vexa gateway base URL, e.g. `http://gateway:8000` in-stack. |
-| `VEXA_API_KEY` | - | The per-user `tx`-scoped token from step 1. Not the admin token. |
+| `VEXA_API_KEY` | - | The per-user API key from step 1. Not the admin token. |
 | `SUMMARIZE_PLATFORMS` | `discord` | CSV of platforms to summarize, e.g. `discord,google_meet,zoom`. |
 | `MIN_TRANSCRIPT_SECONDS` | `30` | Skip meetings with less speech than this. |
 | `MIN_TRANSCRIPT_COVERAGE` | `0.05` | Skip meetings, past a wall-clock floor, whose speech-to-wall-clock ratio falls below this. |

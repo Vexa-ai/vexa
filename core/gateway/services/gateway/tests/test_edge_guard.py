@@ -27,7 +27,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from conftest import FakeAuthorizer, FakeDownstream, FakeRedis, VALID_KEY
 from gateway import edge_guard as _edge_guard
-from gateway.app import run_multiplex
+from gateway.multiplex import run_multiplex
 from gateway.edge_guard import (
     _GUARD_EXCLUDE_PATHS,
     apply_guard,
@@ -528,7 +528,7 @@ class TestBothLayers:
         self,
     ) -> None:
         """A valid-key burst → per-user 429 (rate_limiter, ``Retry-After: 1``); a keyless
-        flood from one IP → per-IP 429 (guard, no ``Retry-After``). Neither shadows the other.
+        flood from one IP → per-IP 429 (guard, ``Retry-After`` = its 60s window). Neither shadows the other.
 
         Uses XFF IPs unique to this test (10.0.0.50/10.0.0.51): guard's
         ``RateLimitManager`` is a process-wide singleton, so the in-memory
@@ -553,10 +553,10 @@ class TestBothLayers:
                 headers={"x-api-key": VALID_KEY, "X-Forwarded-For": "10.0.0.50"},
             )
             assert resp.status_code == 429
-            # Retry-After: 1 is the per-user limiter's signature (app.py:154); guard's 429 has none.
+            # Retry-After: 1 is the per-user limiter's signature; guard's 429 carries its window.
             assert resp.headers.get("retry-after") == "1"
 
-            # Per-IP path: keyless flood from a distinct IP → guard 429 (no Retry-After).
+            # Per-IP path: keyless flood from a distinct IP → guard 429.
             for _ in range(4):
                 resp = await ac.get("/bots", headers={"X-Forwarded-For": "10.0.0.51"})
                 assert (
@@ -564,6 +564,5 @@ class TestBothLayers:
                 )  # guard passes, auth rejects (missing key)
             resp = await ac.get("/bots", headers={"X-Forwarded-For": "10.0.0.51"})
             assert resp.status_code == 429  # guard per-IP 429
-            assert (
-                resp.headers.get("retry-after") is None
-            )  # guard's 429, not the limiter's
+            # guard's 429 asks the client to wait out its rate window, not the limiter's 1s.
+            assert resp.headers.get("retry-after") == "60"

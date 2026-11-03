@@ -1,0 +1,14 @@
+{
+  "aud": "vexa-mcp",
+  "exp": 1767226500,
+  "iat": 1767225600,
+  "jti": "vec-auto-0001",
+  "scope": {
+    "regime": "autonomous",
+    "workspaces": [
+      "acme-account",
+      "standup-notes"
+    ]
+  },
+  "sub": "42"
+}

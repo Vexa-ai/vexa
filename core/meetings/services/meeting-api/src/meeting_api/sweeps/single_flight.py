@@ -17,6 +17,7 @@ Design choices (see the issue's "Along the way" forks):
 * **Session-level, explicitly released.** ``pg_try_advisory_lock`` (not ``_xact_``) so the lock
   spans the whole tick and is released in a ``finally`` — and a replica that dies mid-tick drops the
   lock when its connection closes, so the other replica acquires it on the next tick (no starvation).
+  The lock is held on an AUTOCOMMIT connection, so a held guard never leaves a transaction open.
 * **Degrade to run-the-tick.** When there is no DB session factory (Lite single-replica, or a store
   without Postgres) the guard runs the body unconditionally — it never fails closed into skipping all
   work. On a single replica the lock is always free, so every tick runs: single-replica behavior is
@@ -79,48 +80,51 @@ async def run_single_flight(
 
 
 class PgAdvisoryLock:
-    """``AdvisoryLock`` over a SQLAlchemy-async ``session_factory``.
+    """``AdvisoryLock`` over the async engine behind a SQLAlchemy ``session_factory``.
 
-    ``try_lock`` opens a session, takes ``pg_try_advisory_lock(cast(:key as bigint))`` on that
-    connection, and — if acquired — HOLDS the session open so the session-scoped lock spans the tick.
-    ``unlock`` releases the lock and closes the held session. ``unlock`` is best-effort: on shutdown
-    the connection may already be closing, and a session-level lock releases on disconnect anyway.
+    ``try_lock`` opens a connection in AUTOCOMMIT, takes ``pg_try_advisory_lock(cast(:key as
+    bigint))`` on it and, if acquired, HOLDS the connection so the session-scoped lock spans the tick.
+    The held connection is idle outside any transaction: a held guard has no snapshot and no virtual
+    transaction id, so nothing the body runs waits on it. ``CREATE INDEX CONCURRENTLY`` waits for
+    every transaction older than its own, and a guard that sat ``idle in transaction`` would hold that
+    build until the process exits. ``unlock`` releases the lock and closes the held connection; it is
+    best-effort, since a session-level lock is released on disconnect anyway.
     """
 
     def __init__(self, session_factory):
-        self._session_factory = session_factory
-        self._held: dict[int, object] = {}  # key -> open AsyncSession holding the lock
+        self._engine = _engine_of(session_factory)
+        self._held: dict[int, object] = {}  # key -> open AsyncConnection holding the lock
 
     async def try_lock(self, key: int) -> bool:
         from sqlalchemy import bindparam, text
 
-        db = self._session_factory()
-        await db.__aenter__()
+        conn = await self._engine.connect()
         try:
+            conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
             got = (
-                await db.execute(
+                await conn.execute(
                     text("SELECT pg_try_advisory_lock(cast(:key as bigint))").bindparams(
                         bindparam("key", key)
                     )
                 )
             ).scalar()
         except BaseException:
-            await db.__aexit__(None, None, None)
+            await conn.close()
             raise
         if not got:
-            await db.__aexit__(None, None, None)
+            await conn.close()
             return False
-        self._held[key] = db
+        self._held[key] = conn
         return True
 
     async def unlock(self, key: int) -> None:
-        db = self._held.pop(key, None)
-        if db is None:
+        conn = self._held.pop(key, None)
+        if conn is None:
             return
         try:
             from sqlalchemy import bindparam, text
 
-            await db.execute(
+            await conn.execute(
                 text("SELECT pg_advisory_unlock(cast(:key as bigint))").bindparams(
                     bindparam("key", key)
                 )
@@ -128,4 +132,12 @@ class PgAdvisoryLock:
         except Exception:
             log.debug("advisory unlock best-effort failed for key %s", key, exc_info=True)
         finally:
-            await db.__aexit__(None, None, None)
+            await conn.close()
+
+
+def _engine_of(session_factory):
+    """The ``AsyncEngine`` an ``async_sessionmaker`` is bound to."""
+    engine = getattr(session_factory, "kw", {}).get("bind")
+    if engine is None:
+        raise ValueError("PgAdvisoryLock needs a session factory bound to an async engine")
+    return engine

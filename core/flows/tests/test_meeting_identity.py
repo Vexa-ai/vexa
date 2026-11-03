@@ -163,9 +163,10 @@ def test_the_gate_reads_the_resolved_row_not_the_ref(monkeypatch):
 
 def test_transcript_text_separates_unreadable_from_empty(monkeypatch):
     """The unit under both branches above."""
-    monkeypatch.setattr(mt, "user_api_key", lambda uid: "k")
-    monkeypatch.setattr(mt, "http", lambda *a, **k: (200, {"segments": []}))
+    seen = []
+    monkeypatch.setattr(mt, "http", lambda m, u, h, *a, **k: seen.append(h) or (200, {"segments": []}))
     assert mt.transcript_text("7", 1) == ""
+    assert seen[0]["X-User-Id"] == "7" and "X-API-Key" not in seen[0]
     monkeypatch.setattr(mt, "http", lambda *a, **k: (404, {"detail": "no such meeting"}))
     assert mt.transcript_text("7", 1) is None
 

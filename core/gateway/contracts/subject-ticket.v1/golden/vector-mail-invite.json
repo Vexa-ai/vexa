@@ -1,0 +1,32 @@
+{
+  "what": "an authenticated invite: its organizer, meeting and attendees; the bot once",
+  "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n-----END PUBLIC KEY-----\n",
+  "now": 1767225600,
+  "ttl_sec": 864000,
+  "claims": {
+    "addr": "organizer@example.com",
+    "cls": [
+      "bot.dispatch",
+      "chat.autonomous",
+      "desk.write",
+      "transcript.read"
+    ],
+    "evt": "invite.received:m-311",
+    "exp": 1768089600,
+    "iat": 1767225600,
+    "iss": "mail",
+    "jti": "5c4b3a2918f7e6d5c4b3a291",
+    "kind": "event",
+    "native": "zoom/83012345678",
+    "once": [
+      "bot.dispatch"
+    ],
+    "peers": [
+      "bob@example.com",
+      "carol@example.org"
+    ],
+    "sub": "42",
+    "v": "subject-ticket.v1"
+  },
+  "token": "st1.eyJhZGRyIjoib3JnYW5pemVyQGV4YW1wbGUuY29tIiwiY2xzIjpbImJvdC5kaXNwYXRjaCIsImNoYXQuYXV0b25vbW91cyIsImRlc2sud3JpdGUiLCJ0cmFuc2NyaXB0LnJlYWQiXSwiZXZ0IjoiaW52aXRlLnJlY2VpdmVkOm0tMzExIiwiZXhwIjoxNzY4MDg5NjAwLCJpYXQiOjE3NjcyMjU2MDAsImlzcyI6Im1haWwiLCJqdGkiOiI1YzRiM2EyOTE4ZjdlNmQ1YzRiM2EyOTEiLCJraW5kIjoiZXZlbnQiLCJuYXRpdmUiOiJ6b29tLzgzMDEyMzQ1Njc4Iiwib25jZSI6WyJib3QuZGlzcGF0Y2giXSwicGVlcnMiOlsiYm9iQGV4YW1wbGUuY29tIiwiY2Fyb2xAZXhhbXBsZS5vcmciXSwic3ViIjoiNDIiLCJ2Ijoic3ViamVjdC10aWNrZXQudjEifQ.-QF776bgyI_etwvuwn52OsVcJBD4vs6gkcImRmlwCJXYiUfSvPI2wp3vsKQVFmAPgNCwM6KK118Tsz1I8lmeAA"
+}

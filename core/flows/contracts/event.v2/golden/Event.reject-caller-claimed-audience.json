@@ -1,0 +1,13 @@
+{
+  "event_type": "crm.record.changed",
+  "source_event_id": "e9f8d7c6-b5a4-4321-8fed-cba987654344",
+  "refs": {
+    "org_id": "org-acme",
+    "record_id": "rec-42",
+    "revision": 3,
+    "uid": "21",
+    "_audience": [
+      "99"
+    ]
+  }
+}

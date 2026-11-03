@@ -1,0 +1,9 @@
+{
+  "source": "model-provider",
+  "kind": "not_configured",
+  "provider": "",
+  "model": "",
+  "status": null,
+  "detail": "No model on this deployment is open to you.",
+  "remedy": "Ask an operator to offer one in the model catalog."
+}

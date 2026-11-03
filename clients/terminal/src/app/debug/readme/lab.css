@@ -1,0 +1,12 @@
+.lab-rd { min-height: 100vh; background: var(--surface-0, var(--surface-1)); color: var(--text-1); padding: 16px; display: flex; flex-direction: column; gap: 24px; }
+.lab-rd-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.lab-rd-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; align-items: start; }
+.lab-rd-pane { border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 16px; min-width: 0; }
+.lab-rd-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; min-width: 0; }
+.lab-rd-head h1 { font-size: var(--text-lg, 18px); margin: 0; min-width: 0; overflow-wrap: break-word; }
+.lab-rd-who { color: var(--text-3); font-size: var(--text-xs); }
+.lab-rd-sec { display: flex; flex-direction: column; gap: 8px; }
+.lab-rd-sec h2 { font-size: var(--text-sm); margin: 0; }
+.lab-rd-compose { width: 100%; min-height: 64px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); color: var(--text-1); font: inherit; }
+.lab-rd-msg { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; user-select: none; }
+@media (max-width: 480px) { .lab-rd { padding: 16px; } .lab-rd-cols { grid-template-columns: 1fr; } }

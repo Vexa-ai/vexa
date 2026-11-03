@@ -9,8 +9,8 @@
  *
  * `resource` is the meeting key (`platform/native_meeting_id`, i.e. desktop's
  * `keyOf`). `subject` is derived from the request (X-API-Key header value, else
- * 'local'; the /ws path has no headers, so the `api_key` query param, else
- * 'local'). `action` is 'read' on every read path; 'write' is reserved for when
+ * 'local'; on /ws the header, else the `vexa.key.<key>` subprotocol entry, else
+ * 'local' — a key in the URL is refused). `action` is 'read' on every read path; 'write' is reserved for when
  * write paths route through the same port.
  *
  * The DEFAULT adapter (`ownerOnly`) allows everything: the all-in-one localhost

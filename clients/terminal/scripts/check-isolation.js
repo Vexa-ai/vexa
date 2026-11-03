@@ -9,7 +9,7 @@
 // stderr: the warning pushed the actual violation list out of the diagnostic. A gate whose failure
 // message is a warning about module resolution tells the reader nothing about what it caught.
 import { readFileSync, readdirSync } from "node:fs";
-import { join, relative, dirname } from "node:path";
+import { join, relative, dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { builtinModules } from "node:module";
 
@@ -93,6 +93,33 @@ const IMPORT_SPECIFIER = new RegExp([
 
 let files = 0;
 const violations = [];
+/** FOLDER CYCLES (architecture pass 4, S7). dependency-cruiser's no-circular works per FILE, so
+ *  top-level folders of src/ can import each other through different files and no gate sees it:
+ *  canvas/ ⇄ minutes/ did, through a shared vocabulary of event names that lived in canvas/actions.
+ *  That vocabulary now lives in platform/ (events.ts, turnMarks.ts), below every surface.
+ *
+ *  This records which folder imports which (production files only; tests may reach across) and
+ *  refuses ANY cycle among folders — every strongly connected component of two or more, a chain
+ *  a → b → c → a as much as a pair — and prints the cycle's path. Until Vexa-ai/vexa#1783 it refused
+ *  only mutual pairs, against an allow-list of eight known ones; that work emptied the list, so the
+ *  list is gone: no cycle is allowed. The folders form layers, each importing only the ones below:
+ *  platform < contributions · data < ui-kit < surfaces < minutes < canvas, with workbench above
+ *  surfaces and app above all. What a lower folder renders from a higher one it reaches by kind
+ *  through contributions/, never by import. */
+const folderEdges = new Map();   // "from" -> Set("to")
+const folderOf = (abs) => { const r = relative(SRC, abs); return r.startsWith("..") ? null : r.split(sep)[0]; };
+const isTest = (p) => p.includes(`${sep}__tests__${sep}`) || /\.test\.tsx?$/.test(p);
+/** A lazy `import("../x")` is a runtime edge too: ui-kit once reached surfaces/ and minutes/ that way
+ *  so that no static cycle showed. Relative specifiers only, so the type-query ambiguity above does not
+ *  arise for a package name. */
+const LAZY_RELATIVE = /(?<![\w$.])import\(\s*['"](\.[^'"\n]+)['"]\s*\)/g;
+const noteEdge = (p, spec) => {
+  const target = spec.startsWith("@/") ? join(SRC, spec.slice(2)) : resolve(dirname(p), spec);
+  const from = folderOf(p), to = folderOf(target);
+  if (isTest(p) || !from || !to || from === to || from.includes(".") || to.includes(".")) return;
+  if (!folderEdges.has(from)) folderEdges.set(from, new Set());
+  folderEdges.get(from).add(to);
+};
 (function walk(d) {
   for (const e of readdirSync(d, { withFileTypes: true })) {
     const p = join(d, e.name);
@@ -100,10 +127,11 @@ const violations = [];
     else if (e.name.endsWith(".ts") || e.name.endsWith(".tsx")) {
       files++;
       const src = stripComments(readFileSync(p, "utf8"));
+      for (const m of src.matchAll(LAZY_RELATIVE)) noteEdge(p, m[1]);
       for (const m of src.matchAll(IMPORT_SPECIFIER)) {
         const spec = m[1] || m[2] || m[3];
         if (spec.includes("${")) continue;                             // a `from "${x}"` substring inside a template/string literal, not a real import
-        if (spec.startsWith(".") || spec.startsWith("@/")) continue;    // intra-package (relative or @/* alias)
+        if (spec.startsWith(".") || spec.startsWith("@/")) { noteEdge(p, spec); continue; }  // intra-package (relative or @/* alias)
         const bare = spec.startsWith("node:") ? spec.slice(5) : spec;
         const scoped = bare.startsWith("@") ? bare.split("/").slice(0, 2).join("/") : bare.split("/")[0];
         if (builtins.has(bare) || builtins.has(scoped)) continue;       // builtin (± node: prefix)
@@ -114,4 +142,48 @@ const violations = [];
   }
 })(SRC);
 if (violations.length) { console.error("❌ ISOLATION VIOLATION (undeclared dep):\n  " + violations.join("\n  ")); process.exit(1); }
-console.log(`✅ ISOLATION VERIFIED — scanned ${files} files in src/; every import intra-package (./ or @/), builtin, or declared dep.`);
+// Tarjan: every strongly connected component of the folder graph. Size ≥ 2 is a cycle (a folder
+// never edges to itself — noteEdge drops from === to).
+const sccs = [];
+{
+  const nodes = new Set([...folderEdges.keys(), ...[...folderEdges.values()].flatMap((t) => [...t])]);
+  const index = new Map(), low = new Map(), stack = [], on = new Set();
+  let i = 0;
+  const visit = (v) => {
+    index.set(v, i); low.set(v, i); i++; stack.push(v); on.add(v);
+    for (const w of [...(folderEdges.get(v) || [])].sort()) {
+      if (!index.has(w)) { visit(w); low.set(v, Math.min(low.get(v), low.get(w))); }
+      else if (on.has(w)) low.set(v, Math.min(low.get(v), index.get(w)));
+    }
+    if (low.get(v) === index.get(v)) {
+      const comp = [];
+      let w;
+      do { w = stack.pop(); on.delete(w); comp.push(w); } while (w !== v);
+      if (comp.length > 1) sccs.push(comp.sort());
+    }
+  };
+  for (const v of [...nodes].sort()) if (!index.has(v)) visit(v);
+}
+/** One concrete cycle through a component, as a path that returns to its start: BFS from the
+ *  component's first folder back to itself, staying inside the component. */
+const cyclePath = (comp) => {
+  const inside = new Set(comp), start = comp[0];
+  const prev = new Map(), queue = [start];
+  const seen = new Set();
+  while (queue.length) {
+    const v = queue.shift();
+    for (const w of [...(folderEdges.get(v) || [])].sort()) {
+      if (!inside.has(w)) continue;
+      if (w === start) { const path = [start]; for (let u = v; u !== start; u = prev.get(u)) path.splice(1, 0, u); return [...path, start].join(" -> "); }
+      if (!seen.has(w)) { seen.add(w); prev.set(w, v); queue.push(w); }
+    }
+  }
+  return comp.join(", ");
+};
+if (sccs.length) {
+  console.error("❌ FOLDER CYCLE (src/ folders that reach each other through imports):\n  " +
+    sccs.map((c) => `${cyclePath(c)}   [component: ${c.join(", ")}]`).join("\n  ") +
+    "\n  Move what both need below both (platform/ holds shared vocabulary), or have the lower folder reach the higher one by kind through contributions/.");
+  process.exit(1);
+}
+console.log(`✅ ISOLATION VERIFIED — scanned ${files} files in src/; every import intra-package (./ or @/), builtin, or declared dep; no folder cycle (the src/ folders are layered).`);

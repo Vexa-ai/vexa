@@ -3,28 +3,91 @@ Postgres. Run N replicas freely (SKIP LOCKED). A step-duration watchdog enforces
 law the live witness taught us."""
 from __future__ import annotations
 
+import logging
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from flows import Registry, SystemClock, admit, escalate, postgres_db, reclaim, tick
+from flows import Registry, SystemClock, admit, escalate, postgres_db, reclaim, retention
+from flows.schedule import fire_due
+from flows import keyed
+from flows.admission import admissible
 from flows_defs import production
-from flows_integrations import instance_gate
 import flows_config
+from flows_steps import policies
+import flows_obs
 from flows_steps import common
-from flows_steps.common import db_url, require_internal_secret
+from flows_worker.unit import SERVICE, instrument, run_unit
+from flows_steps.common import db_url, require_service_key
 
 POLL_S = 1.0
 SLOW_STEP_S = 8.0
 
+_log = logging.getLogger("flows_worker")
+
+#: Errors that mean THE CODE IS WRONG, not that the world is: a retry next tick fails the same way,
+#: forever. A pass that hits one must say so at error level with the traceback — on 2026-10-14 an
+#: undefined name in the keyed pass was printed as "keyed pass failed: NameError" on every due row
+#: and no keyed schedule (the bot one minute before a meeting) ever fired.
+CODE_ERRORS = (NameError, AttributeError, TypeError, ImportError, SyntaxError, KeyError, IndexError)
+
+
+class PassFailed(RuntimeError):
+    """One reconciliation pass failed this tick. Raised to the tick, never out of the worker."""
+
+
+def guarded(name: str, fn, *args, **kwargs):
+    """Run one reconciliation pass. A failure fails THIS PASS loudly — error level, traceback, a
+    `BUG` marker when the error is a code error — and raises `PassFailed` so the tick records it;
+    the loop catches that and goes on. Nothing is swallowed into a one-word print."""
+    try:
+        return fn(*args, **kwargs)
+    except CODE_ERRORS as exc:
+        _log.error("BUG: %s pass failed with a code error (%s: %s) — it will fail the same way every "
+                   "tick until the code is fixed", name, type(exc).__name__, exc, exc_info=True)
+        raise PassFailed(name) from exc
+    except Exception as exc:  # noqa: BLE001 — the pass failed; the tick says so, the worker lives
+        _log.error("%s pass failed (%s: %s)", name, type(exc).__name__, exc, exc_info=True)
+        raise PassFailed(name) from exc
+
+
+def admission_limits() -> dict:
+    """The loop guard and the per-person daily cap, from `config.v1` (ADR-0046 decisions 8, 9)."""
+    return {"loop_limit": flows_config.get_int("VEXA_FLOWS_LOOP_LIMIT"),
+            "max_hops": flows_config.get_int("VEXA_FLOWS_MAX_HOPS"),
+            # live from `_global/POLICIES.md` (`routine_runs_per_day`), the env as the install default
+            "runs_per_day": policies.company_quota("routine_runs_per_day", "VEXA_FLOWS_USER_RUNS_PER_DAY"),
+            "messages_per_day": flows_config.get_int("VEXA_FLOWS_USER_MESSAGES_PER_DAY")}
+
+
+def keyed_pass(db, reg, clock, limits: "dict | None" = None) -> int:
+    """KEYED SCHEDULES (ADR-0050): one pending fire per key — the bot one minute before a meeting,
+    moved by every update, called off by a cancel — fired here like a slot. The daily cap is the
+    same admission check every other run takes."""
+    limits = admission_limits() if limits is None else limits
+    return keyed.fire_due(db, reg, clock, admissible=lambda f, refs: admissible(
+        db, f, clock, event_type=keyed.KEYED_EVENT, subject_refs=refs, **limits))
+
+
+#: How often the retention pass runs when it left no backlog; with one, it runs again next tick.
+RETENTION_EVERY_S = 3600.0
+
+
+def retention_pass(db, clock) -> dict:
+    """CAPTURED FACTS EXPIRE (PRD 0.13.4): finished reactions with their receipts and signals,
+    quarantined mail, old mail turns and spent keyed payloads older than
+    `VEXA_FLOWS_FACT_RETENTION_DAYS` are removed (`flows.retention`). 0 keeps everything."""
+    return retention.purge(db, clock, days=flows_config.get_int("VEXA_FLOWS_FACT_RETENTION_DAYS"),
+                           rate_window_s=float(flows_config.get_int("VEXA_FLOWS_MAIL_RATE_WINDOW_S")))
+
 
 def main() -> int:
-    # Refuse to start without the internal-tier secret, the same refusal flows-api already makes
-    # for the operator key: a worker that starts without it runs every post-meeting turn with no
-    # room and nothing says so until somebody reads a log.
-    require_internal_secret()
+    # Refuse to start without the flows key, the same refusal flows-api already makes for the
+    # operator key: a worker that starts without it reaches no other domain, and nothing says so
+    # until somebody reads a log.
+    require_service_key()
     # …and without a door it cannot name. There are no host-port defaults: `http://localhost:18057`
     # is a DIFFERENT DEPLOYMENT'S admin-api on any host running two stacks, so an unnamed door that
     # falls back to one is worse than a refusal — it works, against the wrong thing. The agent door
@@ -42,13 +105,33 @@ def main() -> int:
     clock = SystemClock()
     reg = Registry()
     production.build(reg, db)
+    # COMPANY FLOWS ARE THE GLOBAL ACCOUNT'S (seeds, written once, never overwritten).
+    seeded = production.seed(db)
+    if seeded:
+        print(f"seeded company flow(s): {', '.join(seeded)}", flush=True)
+    reg.refresh_from_db(db)
+    # logevent.v1: one trace per unit of work (one tick = at most one step), forwarded as
+    # X-Trace-Id on every Vexa call the step makes; see flows_worker/unit.py.
+    flows_obs.set_service(SERVICE)
+    instrument(reg)
+    # THE COMPANY'S RULES BEFORE THE FIRST STEP. Every step reads `_global/POLICIES.md` through the
+    # gateway's door; a worker that starts before the door answers waits for it here (bounded) and
+    # says what it heard, instead of running its first steps under rules nobody wrote.
+    policies.read_at_boot()
 
     def emit(event_type: str, source_id: str, refs: dict) -> int:
-        return admit(db, reg, clock, source_event_id=source_id,
-                     event_type=event_type, subject_refs=refs)
+        n = admit(db, reg, clock, source_event_id=source_id,
+                  event_type=event_type, subject_refs=refs, **admission_limits())
+        # A ROOM'S PLANNED CALL FOLLOWS ITS CREATOR'S CALENDAR (PLAN-8H 8.4): a moved or cancelled
+        # event is handed to agent-api's room door as its owner. Never stops the pass.
+        if event_type.startswith("calendar.event.") and common.domain_present("agent"):
+            from flows_sensors import planned_sync as _planned_sync
+            _planned_sync.on_change(event_type, refs)
+        return n
 
     print(f"flows-worker up · {len(reg.flows)} flows · {len(reg.steps)} steps", flush=True)
     last_recon = 0.0
+    next_retention = 0.0
     while True:
         if time.time() - last_recon > 10:
             last_recon = time.time()
@@ -57,19 +140,67 @@ def main() -> int:
             fresh = reg.refresh_from_db(db)
             if fresh:
                 print(f"hot-loaded {fresh} flow version(s) from the DB", flush=True)
+            # FLOWS OWN TIME (ADR-0046 decision 3): a due schedule slot becomes a reaction here.
+            fired = fire_due(db, reg, clock,
+                             catchup_s=float(flows_config.get_int("VEXA_FLOWS_SCHEDULE_CATCHUP_S")),
+                             **admission_limits())
+            if fired:
+                print(f"fired {fired} schedule slot(s)", flush=True)
+            # KEYED SCHEDULES (ADR-0050): see `keyed_pass`. A failure fails this pass loudly
+            # (`guarded`) and the tick goes on to the sensors.
+            failed: list[str] = []
+            try:
+                kfired = guarded("keyed", keyed_pass, db, reg, clock)
+                if kfired:
+                    print(f"fired {kfired} keyed schedule(s)", flush=True)
+            except PassFailed as exc:
+                failed.append(str(exc))
+            # SENSORS (ADR-0050 decision 6): every enabled sensor whose check is due reads its
+            # provider's changes through the broker, filters them and admits them as events.
+            def _sensor_pass():
+                from flows_sensors import pool as _sensors
+                from flows_sensors.calendar import KINDS as _kinds
+                return _sensors.run_due(db, _kinds, emit)
+            try:
+                ticked = guarded("sensor", _sensor_pass)
+                if ticked:
+                    print(f"ticked {len(ticked)} sensor(s)", flush=True)
+            except PassFailed as exc:
+                failed.append(str(exc))
+            if time.time() >= next_retention:
+                try:
+                    gone = guarded("retention", retention_pass, db, clock)
+                    removed = {k: v for k, v in gone.items() if k != "more" and v}
+                    if removed:
+                        print(f"retention pass removed {removed}", flush=True)
+                    next_retention = time.time() + (0.0 if gone.get("more") else RETENTION_EVERY_S)
+                except PassFailed as exc:
+                    failed.append(str(exc))
+                    next_retention = time.time() + RETENTION_EVERY_S
+            if failed:
+                _log.error("reconciliation tick FAILED: %s pass(es) raised (traceback above)",
+                           ", ".join(failed))
+            # THE DELIVERY GATE (PRD 0.13.4 D15, S6): in-app first, one email after the idle window,
+            # then the digest — stopping the moment crm says the item is seen. Off unless declared.
+            if flows_config.get_bool("VEXA_FLOWS_NUDGES"):
+                from flows_delivery import run as _delivery
+                done = _delivery.tick(db, clock)
+                if any(v for k, v in done.items() if k in ("notified", "emailed", "digest_digests")):
+                    print(f"delivery pass: {done}", flush=True)
+            # …and a fire the person's daily cap refused says so in the routine's chat, once a day.
+            if common.domain_present("agent"):
+                from flows_steps import routine as _routine
+                try:
+                    _routine.announce_refusals(db)
+                except Exception as exc:  # noqa: BLE001 — a notice never stops the loop
+                    print(f"refusal notice not posted: {type(exc).__name__}", flush=True)
         t0 = time.time()
-        # The instance gate is injected HERE and nowhere else. `flows/` is the engine core and
-        # `flows_integrations/` the adapters, so the loop must not learn what an instance is —
-        # the process that composes them does. While the gate is up `tick` claims nothing, so
-        # every fact admitted during setup keeps its place and runs, in order, once the admin
-        # commits the company layer.
-        # …and the DOMAIN PRESENCE predicate is injected in the same place and for the same
-        # reason (PRD decision 40.7): which domains a deployment runs is a fact about this
-        # process's configuration, not about the engine. A step that names an absent domain
-        # answers `not_present` — terminal, with the reason on the reaction — instead of
-        # retrying against a door that is not there.
-        worked = tick(db, reg, clock, emit=emit, gate=instance_gate.company_layer_ready,
-                      present=common.domain_present)
+        # The DOMAIN PRESENCE predicate is injected HERE and nowhere else (PRD decision 40.7):
+        # which domains a deployment runs is a fact about this process's configuration, not about
+        # the engine. A step that names an absent domain answers `not_present` — terminal, with the
+        # reason on the reaction — instead of retrying against a door that is not there.
+        # There is no instance gate: nothing waits for a company layer (founder ruling 2026-10-08).
+        worked = run_unit(db, reg, clock, emit=emit, present=common.domain_present)
         dt = time.time() - t0
         if dt > SLOW_STEP_S:
             print(f"⚠ SLOW STEP {dt:.1f}s — steps must never sleep (no-sleep law)", flush=True)

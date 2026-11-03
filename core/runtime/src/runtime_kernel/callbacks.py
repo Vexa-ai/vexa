@@ -91,6 +91,9 @@ class CallbackQueue:
         # 0 ⇒ retry forever (until acked or TTL expiry, matching 0.11's durable stance).
         self.max_attempts = max_attempts
         self._seq = 0
+        #: Headers made afresh for each delivery attempt from (url, event) — the signature, whose
+        #: timestamp a receiver bounds, so a retry is signed when it is sent, not when it was queued.
+        self.signer: Optional[Callable[[str, dict], dict]] = None
 
     def enqueue(self, url: str, event: dict, headers: Optional[dict] = None) -> str:
         self._seq += 1
@@ -106,7 +109,10 @@ class CallbackQueue:
             return True
         rec["attempts"] = rec.get("attempts", 0) + 1
         try:
-            code = self.poster(rec["url"], rec["event"], rec.get("headers") or {})
+            headers = dict(rec.get("headers") or {})
+            if self.signer is not None:
+                headers.update(self.signer(rec["url"], rec["event"]))
+            code = self.poster(rec["url"], rec["event"], headers)
             if code < 400:
                 self.store.delete(key)
                 logger.info("callback %s delivered (attempt %d) -> %s", key, rec["attempts"], code)

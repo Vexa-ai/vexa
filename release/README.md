@@ -3,7 +3,14 @@
 This directory contains release-time instruments that do not enter any Vexa
 runtime image.
 
-`candidate-image-map.mjs` validates a frozen candidate map (eleven images under schema 2, ten under schema 1) and proves
+`image-names.mjs` is the one place a release image is named: `vexaai/vexa-<service>`. v0.13.3 is the
+single transition release that also pushes each service image under its old `v012-<service>` repository
+name in the same push (one digest); `LEGACY_DUAL_PUSH_ENDS_AFTER` stops it from v0.13.4.
+`image-names.test.mjs` fails any surface that still writes an old name outside the frozen records.
+
+`candidate-image-map.mjs` validates a frozen candidate map (twelve images under schema 4 with the
+`vexa-` names, twelve under schema 3, eleven under schema 2, ten under schema 1, the last three with the
+`v012-` names they were frozen with) and proves
 that the source paths copied by each release Dockerfile are tree-identical to
 that image's witnessed build source. Root-context images include
 `.dockerignore`, because it shapes the bytes Docker receives. A difference is a
