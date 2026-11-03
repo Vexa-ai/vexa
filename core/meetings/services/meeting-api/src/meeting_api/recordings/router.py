@@ -8,7 +8,11 @@
   * **GET /recordings** — the caller's recordings (from ``meeting.data``), scoped by the
     gateway-injected ``x-user-id``.
   * **GET /recordings/{recording_id}/master?type=audio|video** — finalize-on-read: build + upload the
-    master if absent, then return its storage key. (The byte stream / Range download is P3.)
+    master if absent or behind its chunks, then return its storage key and the raw byte route.
+  * **GET /recordings/{recording_id}/media/{media_file_id}/raw** — the master's bytes, STREAMED from
+    object storage in bounded pieces; honors ``Range`` (206 / 416). A master the media file's own
+    counters show as current is served without finalize; a read writes nothing unless the master
+    changed.
 """
 from __future__ import annotations
 
@@ -18,7 +22,7 @@ import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from ..meeting_token import InvalidMeetingToken, admit_session
 from ..regime import require_person
@@ -30,6 +34,7 @@ from .service import (
     InvalidSignalTape,
     SessionNotFound,
     finalize_master,
+    master_is_current,
     upload_chunk,
     upload_signal_tape,
 )
@@ -190,21 +195,13 @@ def _parse_range(range_header: Optional[str], total: int) -> Optional[tuple[int,
     return start, end
 
 
-async def _storage_size(storage: Storage, key: str) -> Optional[int]:
-    """Object size without fetching the body when the adapter exposes ``size``; else ``None``."""
-    sizer = getattr(storage, "size", None)
-    if sizer is None:
-        return None
-    return await sizer(key)
-
-
-async def _storage_get_range(storage: Storage, key: str, start: int, end: int) -> Optional[bytes]:
-    """Fetch ONLY ``[start, end]`` (inclusive) when the adapter exposes ``get_range`` (S3 passes the
-    Range through to ``get_object``); else ``None`` so the caller slices a full ``get()``."""
-    getter = getattr(storage, "get_range", None)
-    if getter is None:
-        return None
-    return await getter(key, start, end)
+def _media_content_type(mf: dict) -> str:
+    media_format = mf.get("format", "webm")
+    if media_format == "wav":
+        return "audio/wav"
+    if media_format == "webm":
+        return "audio/webm" if mf.get("type") == "audio" else "video/webm"
+    return "application/octet-stream"
 
 
 def build_router(
@@ -449,43 +446,33 @@ def build_router(
         )
         if mf is None:
             raise HTTPException(status_code=404, detail="No such media file")
-        # Finalize-on-read, ALWAYS: serve the ASSEMBLED master, never a raw part or the empty
-        # final-signal chunk. The ONLY playable object is master.<fmt>. finalize_master is
-        # re-assemblable and idempotent (#768) — it rebuilds only when new chunks arrived since the
-        # master was last assembled — so calling it unconditionally reflects late chunks and makes a
-        # mid-recording read impossible to freeze at the retrieval boundary too. (A prior guard that
-        # skipped finalize once storage_path already named the master key was the second freeze door:
-        # after a mid-meeting /master it never re-assembled, serving the stale partial forever.)
-        await finalize_master(
-            repo, storage, meeting_id=rec["meeting_id"], recording_id=recording_id,
-            media_type=mf.get("type", type),
-        )
-        recs = await _readable(user_id, request)
-        rec = next((r for r in recs if r.get("id") == recording_id), rec)
-        mf = next(
-            (m for m in (rec or {}).get("media_files", []) if str(m.get("id")) == str(media_file_id)),
-            mf,
-        )
-        storage_path = mf.get("storage_path")
-        if not storage_path:
-            raise HTTPException(status_code=404, detail="Media file has no storage path")
-        media_format = mf.get("format", "webm")
-        if media_format == "wav":
-            content_type = "audio/wav"
-        elif media_format == "webm":
-            content_type = "audio/webm" if mf.get("type") == "audio" else "video/webm"
+        # Serve the ASSEMBLED master, never a raw part or the empty final-signal chunk: the ONLY
+        # playable object is master.<fmt>. When the media file's own counters say that master
+        # already holds every folded chunk (``master_is_current``: assembled_chunk_count ==
+        # chunk_count, both bumped under the row lock), the read serves it as it stands: no chunk
+        # listing, no row lock, no write. Otherwise ``finalize_master`` (re)assembles first (#768),
+        # and it writes only when something changed. The freshness signal is the chunk COUNT, not
+        # the master's existence: a guard that skipped finalize once storage_path named the master
+        # key froze a mid-meeting partial forever (#768); any chunk folded after assembly bumps
+        # chunk_count and drops assembled_chunk_count, so this read reassembles.
+        if master_is_current(mf):
+            storage_path = mf["storage_path"]
         else:
-            content_type = "application/octet-stream"
+            storage_path = await finalize_master(
+                repo, storage, meeting_id=rec["meeting_id"], recording_id=recording_id,
+                media_type=mf.get("type", type),
+            )
+            if not storage_path:
+                # Deleted while this read ran, or nothing to assemble: there is no master to serve.
+                raise HTTPException(status_code=404, detail="Media file has no master")
+        content_type = _media_content_type(mf)
 
         # Honor HTTP Range so the <audio>/<video> element + dashboard proxy can seek without
-        # downloading the whole master. Resolve total size cheaply (S3 head) when we can; only fall
-        # back to fetching the full body if neither size() nor get_range() are available.
+        # downloading the whole master. The size comes from a HEAD; the bytes are STREAMED from
+        # object storage in bounded pieces (``Storage.open_range``), so neither a 200 nor a 206
+        # holds the object in this process: memory per read is one piece, whatever the file size.
         range_header = request.headers.get("range") or request.headers.get("Range")
-        total = await _storage_size(storage, storage_path)
-        full_body: Optional[bytes] = None
-        if total is None:
-            full_body = await storage.get(storage_path)
-            total = len(full_body)
+        total = await storage.size(storage_path)
 
         # A save, not a play: the same owner-scoped bytes, marked as a file. Set only on request so
         # the <audio> element's reads stay inline.
@@ -496,31 +483,16 @@ def build_router(
 
         rng = _parse_range(range_header, total)  # may raise 416
         if rng is None:
-            data = full_body if full_body is not None else await storage.get(storage_path)
-            return Response(
-                content=data,
-                media_type=content_type,
-                headers={"Accept-Ranges": "bytes", "Content-Length": str(len(data)), **disposition},
-            )
-
-        start, end = rng
-        slice_bytes: Optional[bytes] = None
-        if full_body is None:
-            slice_bytes = await _storage_get_range(storage, storage_path, start, end)
-        if slice_bytes is None:
-            if full_body is None:
-                full_body = await storage.get(storage_path)
-            slice_bytes = full_body[start : end + 1]
-        return Response(
-            content=slice_bytes,
-            status_code=206,
-            media_type=content_type,
-            headers={
-                "Accept-Ranges": "bytes",
-                "Content-Range": f"bytes {start}-{end}/{total}",
-                "Content-Length": str(len(slice_bytes)),
-                **disposition,
-            },
-        )
+            start, end, status, headers = 0, total - 1, 200, {}
+        else:
+            start, end = rng
+            status, headers = 206, {"Content-Range": f"bytes {start}-{end}/{total}"}
+        length = end - start + 1
+        headers = {"Accept-Ranges": "bytes", **headers, "Content-Length": str(length), **disposition}
+        if length <= 0:
+            return Response(content=b"", status_code=status, media_type=content_type, headers=headers)
+        # Opened BEFORE the response starts, so a storage fault is a 5xx, not a cut-off body.
+        pieces = await storage.open_range(storage_path, start, end)
+        return StreamingResponse(pieces, status_code=status, media_type=content_type, headers=headers)
 
     return router

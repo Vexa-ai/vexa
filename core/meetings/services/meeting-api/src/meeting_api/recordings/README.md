@@ -25,8 +25,11 @@ and stamps the JSONB media-file.
 `file_size_bytes` / `chunk_count`, the chunk/master `storage_path`, and `is_final` / `finalized_by`
 (Pack U.7 master-preserve + sticky-COMPLETED status are ported verbatim).
 
-## P3 seams (NOT built here)
-The raw byte-stream / Range download of a finalized master, and the lifecycle-driven server-side
-finalize (this carve finalizes lazily on read via `GET /recordings/{id}/master`).
+## Reads
+Finalize runs lazily on read (`GET /recordings/{id}/master`, and `.../media/{mf}/raw` when the media
+file's `assembled_chunk_count` is behind its `chunk_count`). It writes `meeting.data` only when the
+master or its stamp changed, so repeated reads of a finished recording write nothing.
+`.../media/{mf}/raw` streams the master from storage in bounded pieces (`Storage.open_range`) for
+both 200 and 206 answers. Not built here: a lifecycle-driven server-side finalize at meeting end.
 
 Tests: `../../../tests/test_recordings.py`. Codec golden: `../../../tests/test_recording_golden.py`.

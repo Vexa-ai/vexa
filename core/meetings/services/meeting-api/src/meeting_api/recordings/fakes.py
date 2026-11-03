@@ -65,6 +65,20 @@ class InMemoryStorage:
         # INCLUSIVE [start, end], like S3's get_object(Range=...).
         return self.blobs[key][start : end + 1]
 
+    #: Piece size of ``open_range`` — small, so a test sees a window arrive in several pieces.
+    PIECE_BYTES = 64 * 1024
+
+    async def open_range(self, key: str, start: int, end: int):
+        # INCLUSIVE [start, end]; a missing key raises KeyError now, like S3's NoSuchKey at GET.
+        blob = self.blobs[key]
+        piece = self.PIECE_BYTES
+
+        async def pieces():
+            for at in range(start, min(end, len(blob) - 1) + 1, piece):
+                yield blob[at : min(at + piece, end + 1)]
+
+        return pieces()
+
     async def exists(self, key: str) -> bool:
         return key in self.blobs
 

@@ -85,6 +85,32 @@ class S3Storage:
         resp = await self._run(self._c().get_object, Bucket=self._bucket, Key=key, Range=f"bytes={start}-{end}")
         return await self._run(resp["Body"].read)
 
+    #: Bytes per read from an open S3 body. One piece is what a streamed media read holds in memory
+    #: at a time; 256 KiB keeps the thread hops per 33 MB master near 130.
+    STREAM_PIECE_BYTES = 256 * 1024
+
+    async def open_range(self, key: str, start: int, end: int):
+        # The GET is issued HERE (a missing key raises before the caller starts a response); the
+        # body is then read one piece per thread hop as the iterator is consumed, and closed when
+        # the iterator finishes or is closed early (a client that stops listening).
+        resp = await self._run(
+            self._c().get_object, Bucket=self._bucket, Key=key, Range=f"bytes={start}-{end}"
+        )
+        body = resp["Body"]
+        piece_bytes = self.STREAM_PIECE_BYTES
+
+        async def pieces():
+            try:
+                while True:
+                    piece = await self._run(body.read, piece_bytes)
+                    if not piece:
+                        return
+                    yield piece
+            finally:
+                body.close()
+
+        return pieces()
+
     async def exists(self, key: str) -> bool:
         from botocore.exceptions import ClientError
 

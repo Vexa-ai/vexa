@@ -244,6 +244,48 @@ async def upload_signal_tape(
             "meeting_id": meeting_id, "part": part}
 
 
+_FINALIZED_BY = "recording_finalizer.master"
+
+
+def _stamp_is_current(rec: dict, mf: dict, *, master_key: str, assembled_count: int,
+                      media_type: str) -> bool:
+    """True when ``finalize_master``'s stamp would write nothing new: the media file already points
+    at ``master_key``, is final, was assembled from ``assembled_count`` chunks, carries a finalize
+    stamp, and the recording already advertises a playback URL for this media type."""
+    return (
+        mf.get("storage_path") == master_key
+        and mf.get("is_final") is True
+        and mf.get("assembled_chunk_count") == assembled_count
+        and mf.get("finalized_by") == _FINALIZED_BY
+        and bool(mf.get("finalized_at"))
+        and bool((rec.get("playback_url") or {}).get(media_type))
+    )
+
+
+def master_is_current(mf: dict) -> bool:
+    """True when the media file's OWN counters say its master already holds every folded chunk, so a
+    byte read can serve ``storage_path`` without calling ``finalize_master`` (no chunk listing, no
+    row lock, no write).
+
+    The freshness signal is a COUNT, never existence (#768): ``chunk_count`` is bumped by every
+    chunk fold under the row lock, and the fold rewrites the media file without
+    ``assembled_chunk_count`` (``jsonb.apply_chunk_to_recording``). So any chunk that lands after the
+    master was assembled makes this False until a finalize reassembles it. Both counts must be
+    present integers; a WebM master must also already be the seekable remux."""
+    storage_path = mf.get("storage_path")
+    media_format = mf.get("format", "wav")
+    assembled = mf.get("assembled_chunk_count")
+    folded = mf.get("chunk_count")
+    return (
+        isinstance(storage_path, str)
+        and storage_path == master_storage_key(storage_path, media_format)
+        and mf.get("is_final") is True
+        and mf.get("finalized_by") == _FINALIZED_BY
+        and type(assembled) is int and type(folded) is int and assembled == folded
+        and (media_format != "webm" or mf.get("seekable_version") == 1)
+    )
+
+
 async def finalize_master(
     repo: RecordingRepo,
     storage: Storage,
@@ -262,6 +304,12 @@ async def finalize_master(
     assembles a partial, and every later read that finds new chunks rebuilds — which also repairs a
     master frozen by a pre-fix stack on its next read. The freeze is impossible to reintroduce
     silently: the assembled-chunk-count is recorded and compared, and a rebuild-on-growth is logged.
+
+    WRITES ONLY WHAT CHANGED. When no master bytes were written and the media file already carries
+    the stamp this call would write (``_stamp_is_current``), nothing is written: no row lock taken
+    for a write, no ``meeting.data`` rewrite, no fresh ``finalized_at``. Before, every read restamped
+    — ``finalized_at`` changed on each call, so each HTTP Range request of a playing recording
+    rewrote the whole ``meeting.data`` row under ``SELECT … FOR UPDATE``.
     """
     recordings = await repo.get_recordings(meeting_id)
     rec = next((r for r in recordings if r.get("id") == recording_id), None)
@@ -323,6 +371,13 @@ async def finalize_master(
         await storage.upload(master_key, master_bytes, content_type=_content_type(media_format))
         master_written = True
 
+    if not master_written and _stamp_is_current(
+        rec, mf, master_key=master_key, assembled_count=listed_count, media_type=media_type,
+    ):
+        # Nothing new to record: the media file already names this master, as final, assembled from
+        # exactly the chunks listed now. A read stays a read.
+        return master_key
+
     # G3 — stamp the media-file finalized ATOMICALLY (read→modify→write under one row lock), so a late
     # concurrent chunk upload can't clobber the finalized master pointer (the master bytes are already
     # uploaded above, idempotently by key). The mutator re-reads the LIVE recording.
@@ -341,7 +396,7 @@ async def finalize_master(
         m["is_final"] = True
         m["assembled_chunk_count"] = listed_count
         m["finalized_at"] = _now_iso()
-        m["finalized_by"] = "recording_finalizer.master"
+        m["finalized_by"] = _FINALIZED_BY
         existing_pb = r.get("playback_url") or {}
         r["playback_url"] = {
             "audio": existing_pb.get("audio")

@@ -17,7 +17,7 @@ fakes (an in-memory blob store + an in-memory meeting store).
 """
 from __future__ import annotations
 
-from typing import Optional, Protocol, runtime_checkable
+from typing import AsyncIterator, Optional, Protocol, runtime_checkable
 
 
 class MeetingErased(Exception):
@@ -49,6 +49,14 @@ class Storage(Protocol):
     async def get_range(self, key: str, start: int, end: int) -> bytes:
         """The INCLUSIVE byte slice ``[start, end]`` — S3/MinIO pass the Range through to
         ``get_object`` so seeking fetches only the requested window, not the whole object."""
+        ...
+
+    async def open_range(self, key: str, start: int, end: int) -> AsyncIterator[bytes]:
+        """Open the INCLUSIVE byte window ``[start, end]`` and return an async iterator over it in
+        bounded pieces. The storage request is made by this call (so a missing object or a backend
+        fault raises here, before any response starts); the bytes arrive as the iterator is
+        consumed, and closing it early releases the backend stream. The raw media route serves
+        every 200 and 206 through this, so no read holds a whole object in memory."""
         ...
 
     async def list_detailed(self, prefix: str) -> list[dict]:
