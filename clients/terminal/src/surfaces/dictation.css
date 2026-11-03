@@ -1,0 +1,12 @@
+/* Composer dictation status: level meter, elapsed time, how to stop. */
+.vx-dictation { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--t2); }
+.vx-dictation-meter { width: 48px; height: 4px; border-radius: 2px; accent-color: var(--accent); }
+.vx-dictation-hint { opacity: 0.8; }
+
+/* A routine's quiet wake (chat.tsx `isQuietCheck`): one muted tick line instead of a message. */
+.vx-quiet-check { margin: 0 0 var(--space-3, 12px); font-size: var(--text-xs, 12px); color: var(--t3); }
+/* A reply the meeting's signals woke (ADR transcript signals): one quiet line above it. */
+.vx-from-meeting {
+  display: inline-flex; align-items: center; gap: var(--space-1); margin-bottom: var(--space-1);
+  font-size: var(--text-xs); color: var(--t3);
+}

@@ -1,0 +1,7 @@
+{
+  "now": 1760000001,
+  "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n-----END PUBLIC KEY-----\n",
+  "reason": "bad_signature",
+  "token": "v1.eyJlbWFpbCI6ImFkYUBleGFtcGxlLmNvbSIsImV4cCI6MTc2MDAwMDA2MCwiaWF0IjoxNzYwMDAwMDAwLCJzY29wZXMiOlsiYm90IiwidHgiXSwic3ViIjoiNDIiLCJ0eXAiOiJ2ZXhhLWlkZW50aXR5In0.FN1EDwQ0nmgpbSoAzz8UNpYZBfSjaIvcoIwDgd83qV4",
+  "what": "an HMAC-SHA256 keyed with the public key itself: the classic algorithm confusion"
+}

@@ -7,22 +7,20 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 
-@pytest.fixture(autouse=True)
-def _admin_key_present(monkeypatch):
-    """A test process has an admin identity, the same way a deployment does.
-
-    `VEXA_FLOWS_ADMIN_KEY` lost its `changeme` default (R-B11): it opens `ensure_platform_user`
-    and `user_api_key`, so an unset value now REFUSES rather than trying a placeholder. That is
-    the right behaviour for a deployment and it makes every offline test that touches a step
-    raise on the refusal instead of on the thing it is testing — so the suite declares a key,
-    exactly as the lane's start script does, and the tests that are ABOUT the refusal unset it
-    themselves (`test_admin_key_refusal.py`).
-
-    `setdefault` semantics on purpose: a run that already exports a real key — the live contract
-    smoke against a running admin-api — keeps it.
-    """
-    if not (os.environ.get("VEXA_FLOWS_ADMIN_KEY") or "").strip():
-        monkeypatch.setenv("VEXA_FLOWS_ADMIN_KEY", "test-admin-key-not-a-placeholder")
+#: THE FLOWS KEY, declared the way a deployment declares it — AT IMPORT, beside the doors.
+#:
+#: Every call flows makes into another domain goes through the gateway's service door with this key
+#: (`common.door_headers`), and an unset value REFUSES rather than trying a placeholder. That makes
+#: every offline test that touches a step raise on the refusal instead of on the thing it is
+#: testing, so the suite declares a key, exactly as a deployment does.
+#:
+#: NOT AN AUTOUSE FIXTURE: a fixture runs far too late (F-D20 b) — flows-api validates its whole
+#: `config.v1` declaration at import, and several test modules import it at MODULE SCOPE, during
+#: collection, before any fixture has run.
+#:
+#: `setdefault` semantics on purpose: a run that already exports a real key keeps it. The tests
+#: that are ABOUT the refusal unset it themselves with `monkeypatch.delenv`, which is per-test.
+os.environ.setdefault("VEXA_FLOWS_SERVICE_KEY", "test-flows-service-key-not-a-placeholder")
 
 
 #: The doors, declared for the test process the way a deployment declares them. NOT autouse-set to
@@ -111,3 +109,60 @@ def registry(db, monkeypatch):
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+# ── THE MAIL-KIND SWITCHES, FOR THE SUITES THAT PREDATE THEM ─────────────────────────────────────
+# `mail.<kind>` in `_global/POLICIES.md` (flows_steps/mailkinds.py) ships most kinds OFF until the
+# global account turns them on. Every suite written before the switches existed is a test of what a
+# kind SAYS once it is on, so they run with every kind on — overlaid on whatever `policies.read`
+# answers, so a suite that writes its own POLICIES still decides what it writes.
+# A test about the switches themselves opts out with `@pytest.mark.mail_defaults`.
+@pytest.fixture(autouse=True)
+def _mail_kinds_on(request, monkeypatch):
+    if request.node.get_closest_marker("mail_defaults"):
+        yield
+        return
+    # The operator's own answer for "every kind on unless _global says otherwise" — read per call,
+    # so it holds for every copy of the modules, including suites that purge and re-import them.
+    monkeypatch.setenv("VEXA_MAIL_KINDS_DEFAULT", "on")
+    yield
+
+
+# ── THE OFFLINE AGENT DOOR HOLDS NO POLICY FILE ──────────────────────────────────────────────────
+# `policies.read` tells a file that is not there (the defaults) from one that could not be read (the
+# CLOSED rules, S03-1). The offline agent door refuses every connection, which is "could not be
+# read" — so every suite that never meant to say anything about the policy file would run with the
+# rules closed. Here the offline door answers "no POLICIES.md" (404); a suite that writes its own
+# POLICIES patches `policies.ws_file` (or `policies.read`) as before, and a test about the
+# unreachable door itself opts out with `@pytest.mark.policy_door`.
+@pytest.fixture(autouse=True)
+def _offline_door_has_no_policy_file(request, monkeypatch):
+    if request.node.get_closest_marker("policy_door"):
+        yield
+        return
+    import importlib
+    import types
+    importlib.import_module("flows_steps.policies")
+    # EVERY COPY: a sibling suite purges `flows_steps.*` from sys.modules, so a step module (or a
+    # test module) can still hold the policies module it imported before the purge.
+    copies = {id(m): m for m in [sys.modules.get("flows_steps.policies"), *(
+        v for mod in list(sys.modules.values()) if isinstance(mod, types.ModuleType)
+        for v in (getattr(mod, "policies", None),))]
+        if isinstance(m, types.ModuleType) and m.__name__ == "flows_steps.policies"}
+    offline = OFFLINE_DOORS["VEXA_FLOWS_AGENT_API_URL"]
+    for copy in copies.values():
+        real = copy.ws_get
+
+        def ws_get(uid, path, slug=None, _real=real):
+            # the door as the copy's OWN `common` holds it (a test may blank or move it)
+            if (getattr(_real, "__globals__", {}).get("AGENT_API") or "").rstrip("/") == offline:
+                return 404, {"detail": "not found"}
+            return _real(uid, path, slug)
+
+        monkeypatch.setattr(copy, "ws_get", ws_get)
+    yield
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "mail_defaults: run with the shipped mail-kind switches")
+    config.addinivalue_line("markers", "policy_door: the offline agent door is unreachable for POLICIES.md too")

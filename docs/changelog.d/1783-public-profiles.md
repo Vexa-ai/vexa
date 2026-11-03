@@ -1,0 +1,5 @@
+- **Public profiles and the directory (behind the `public_profiles` switch, off by default and not included in `all`).**
+  - A person publishes their own profile field by field (name, photo, role, company, links, bio) and can withdraw it. They see how many organisations link a contact to it, never which.
+  - An organisation's contact can link to a published profile. It then shows the public fields live, next to the organisation's own private notes, and nothing is copied. After a withdrawal, only the organisation's own data shows.
+  - The directory finds published profiles from a query of at least 3 letters, with at most 10 answers. Profiles are reached by opaque handles only, and reads are rate-limited.
+  - A company domain can be verified by a DNS TXT record, or by the person's own verified email on that domain. This is recorded only; there is no payment.

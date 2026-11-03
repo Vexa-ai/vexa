@@ -1,0 +1,13 @@
+{
+  "generated_at": 1792100000,
+  "needs": [],
+  "workspaces": {
+    "client-x": {"needs": [], "working": [], "rooms_active": 0, "live_call": null, "last": null,
+                 "rooms": [{"session": "s-0a1b2c", "name": "Launch plan", "members": 3, "last_active": 1792099000}],
+                 "chats": [{"session": "pchat-own", "name": "My notes", "last_active": 1792090000}],
+                 "routines": [{"ref": "agent:flow:weekly-digest", "name": "Weekly digest", "state": "ok", "when": "2d ago", "last_at": 1791927200, "next_at": 1792531200,
+                               "runs": [{"at": 1791927200, "ok": true, "what": "Ran"}]}],
+                 "calls": [{"meeting": "601", "name": "Kickoff", "at": 1792110800, "state": "upcoming"},
+                           {"meeting": "502", "name": "Client X sync", "at": 1791990000, "state": "ended"}]}
+  }
+}

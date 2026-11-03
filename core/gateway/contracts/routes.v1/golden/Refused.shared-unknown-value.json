@@ -1,0 +1,24 @@
+{
+  "why": "a row's shared declaration is allow or refuse; any other value (true, \"maybe\") is one nobody can read the same way twice, so a shared token's reach would depend on who reads it",
+  "manifest": {
+    "contract": "routes.v1",
+    "domain": "agent",
+    "owner": "core/agent",
+    "edge": "gateway",
+    "forward": {
+      "edge_prefix": "/agent/",
+      "upstream_prefix": "/api/"
+    },
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/agent/people/followups",
+        "scopes": [
+          "bot",
+          "tx"
+        ],
+        "shared": true
+      }
+    ]
+  }
+}

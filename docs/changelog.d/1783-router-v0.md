@@ -1,0 +1,2 @@
+- **Model routing rules.** `model_rules` in `_global/POLICIES.md` maps a task type (chat, routines, events, home) to a model — `cheapest` (by market price), a catalog id, or `level:N` — inside `models_allowed`. It overlays the existing per-task keys; without it, routing is unchanged.
+- **Model levels (behind the `levels` switch, off by default; for hosted plans).** Levels 1 (fastest) to 5 (most capable) map to models from `model_levels` or, where unset, the allowed models ordered by market price. A chat takes its level once and keeps it unless switched.

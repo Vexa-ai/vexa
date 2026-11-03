@@ -27,6 +27,14 @@ from typing import Mapping, Optional
 logger = logging.getLogger("runtime_kernel.mounts")
 
 
+#: ``VEXA_WORKSPACE_MOUNT_SOURCE`` value for the s3 workspace backend (WS-S3): nothing on the
+#: substrate backs the store — the bucket does, and a worker hydrates its own mounts from agent-api.
+#: k8s gives the worker a private ``emptyDir`` at the store target (``RUNTIME_WORKSPACE_CACHE_SIZE``
+#: caps it); docker binds nothing (the container's own filesystem is the cache).
+EMPTYDIR_SOURCE = "emptyDir:"
+CACHE_SIZE_ENV = "RUNTIME_WORKSPACE_CACHE_SIZE"
+
+
 @dataclass(frozen=True)
 class MountBind:
     """One substrate bind: expose host ``source`` at container ``target``. ``read_only`` reflects the
@@ -83,6 +91,8 @@ def workspace_binds(env: Mapping[str, str]) -> list[MountBind]:
 
     src = env.get("VEXA_WORKSPACE_MOUNT_SOURCE")
     root = env.get("VEXA_WORKSPACE_MOUNT_TARGET")
+    if src == EMPTYDIR_SOURCE:
+        return []  # s3 backend: the worker hydrates its mounts into its own filesystem
 
     for m in mount_set(env):
         path = m["path"]
@@ -136,6 +146,13 @@ def k8s_volume_mounts(env: Mapping[str, str], *, pvc_name: str, store_target: st
     Returns ``(volumes, volume_mounts)`` ready to merge into a Pod spec and its container."""
     if not pvc_name or not store_target:
         return [], []
+    if pvc_name == EMPTYDIR_SOURCE:
+        # s3 backend: a private, pod-lifetime cache the worker fills with ONLY its dispatch's mounts
+        # (fetched through agent-api); nothing of any other tenant is ever on it.
+        size = (os.environ.get(CACHE_SIZE_ENV) or "").strip()
+        empty: dict = {"sizeLimit": size} if size else {}
+        return ([{"name": "workspace-cache", "emptyDir": empty}],
+                [{"name": "workspace-cache", "mountPath": store_target}])
     vol_name = "workspace-store"
     volumes = [{"name": vol_name, "persistentVolumeClaim": {"claimName": pvc_name}}]
     volume_mounts: list[dict] = []

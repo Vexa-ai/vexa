@@ -42,6 +42,7 @@ async def run_user_sync(
     now: Optional[datetime] = None,
     rows: Optional[list] = None,
     client: Any = None,
+    writable_of: Optional[Callable[[int], Awaitable[Optional[set]]]] = None,
 ) -> dict:
     """Run one full sync for ``cfg = {user_id, ics_url, auto_join}`` → the status stamp.
 
@@ -66,7 +67,14 @@ async def run_user_sync(
                 stamp["last_error"] = fetch_err or "fetch failed"
                 return stamp
             parsed = parse_ics(text, now=moment, redact_values=(cfg.get("ics_url") or "",))
+        # The owner's CURRENT edit rights, read once per run: a series occurrence inherits its
+        # workspace only while they may still write there (R1801-3). None → may write nowhere.
+        if writable_of is None:
+            from ..collector.reader_directory import writable_from_env
+            writable_of = writable_from_env()
+        writable = await writable_of(user_id) if writable_of is not None else None
         result = await sync_user(store, user_id, parsed,
+                                 writable_workspaces=writable,
                                  auto_join_default=bool(cfg.get("auto_join", True)),
                                  calendar_id=cfg.get("calendar_id"),
                                  calendar_name=cfg.get("calendar_name"),

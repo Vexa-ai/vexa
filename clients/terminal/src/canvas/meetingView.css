@@ -1,0 +1,104 @@
+/* The meeting view (canvas/MeetingView.tsx): notes, the transcript tray and its sidebar/sheet.
+ * Tokens only; the type rows mirror the minutes type scale (minutes/tokens.ts `type`). Geometry the
+ * code computes (sidebar width, the collapsed window's height) stays inline. `--mv-inset` is set on
+ * the view's root from MEETING_VIEW_INSET. */
+.vx-mv-root { background: var(--bg); }
+.vx-mv-header { padding: 14px var(--mv-inset) var(--space-3); border-bottom: 1px solid var(--line); min-width: 0; }
+.vx-mv-content { padding: var(--space-4) var(--mv-inset) var(--space-8); display: flex; flex-direction: column; gap: var(--space-5); min-width: 0; }
+/* a wide pane: the header's contents and the notes + transcript sit in one centred measure, so the
+   view never hugs the left edge of a wide pane, nor runs lines the pane's full width */
+.vx-mv-measure { max-width: 1040px; margin-inline: auto; display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+[data-meeting-main][data-centred] > .vx-mv-content { max-width: 1040px; margin-inline: auto; box-sizing: content-box; }
+.vx-mv-recorder { min-width: 0; }
+.vx-mv-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1_5) var(--space-2); min-width: 0; }
+.vx-mv-head-tight { gap: var(--space-1_5); }
+.vx-mv-label { font-family: var(--sans); font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--t1); margin: 0; }
+.vx-mv-meta { font-family: var(--sans); font-size: 11px; font-weight: var(--weight-regular); color: var(--t3); }
+.vx-mv-error { color: var(--danger); }
+.vx-mv-busy { display: inline-flex; align-items: center; gap: var(--space-1_5); }
+.vx-mv-spin { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--line2); border-top-color: var(--accent); }
+.vx-mv-btn {
+  font-family: var(--sans); font-size: var(--text-xs); font-weight: var(--weight-medium);
+  display: inline-flex; align-items: center; gap: var(--space-1_5); color: var(--t2);
+  background: transparent; border: 1px solid var(--line); border-radius: var(--radius-md); padding: var(--space-1) 10px; cursor: pointer;
+}
+.vx-mv-btn-primary { color: var(--accent); border-color: var(--accent); background: var(--accentbg); font-weight: var(--weight-semibold); }
+.vx-mv-notes { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.vx-mv-path {
+  font-family: var(--mono); font-size: 11px; color: var(--t3);
+  min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.vx-mv-empty {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 14px var(--space-4);
+  border: 1px dashed var(--line2); border-radius: 8px; color: var(--t3);
+}
+.vx-mv-empty-text { font-family: var(--sans); font-size: var(--text-sm); font-weight: var(--weight-regular); color: var(--t2); flex: 1 1 12em; }
+.vx-mv-notes-body { font-family: var(--sans); font-size: var(--text-sm); font-weight: var(--weight-regular); line-height: 1.6; color: var(--t1); min-width: 0; }
+/* the transcript: a contained tray under the notes, or a full-height panel beside/over them */
+.vx-mv-tray { display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; background: var(--panel); }
+.vx-mv-tray[data-mode="collapsed"] { padding: var(--space-2) var(--mv-inset); }
+.vx-mv-tray[data-mode="open"] { height: 100%; padding: var(--space-3) var(--mv-inset) 0; box-sizing: border-box; }
+/* the drawer: a line at the foot of the view; opened, it covers the note from the bottom up */
+.vx-mv-drawer { border-top: 1px solid var(--line); background: var(--panel); z-index: 5; min-width: 0; }
+.vx-mv-drawer[data-open] { box-shadow: var(--shadow-1); }
+.vx-mv-preview {
+  flex: 1 1 0%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left;
+  font-family: var(--sans); font-size: var(--text-xs); color: var(--t2); background: transparent; border: 0; padding: 0; cursor: pointer;
+}
+.vx-mv-preview b { color: var(--t1); font-weight: var(--weight-medium); }
+.vx-mv-notes-editor { min-height: 240px; border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; }
+.vx-mv-tray-icon { display: inline-flex; color: var(--t2); }
+.vx-mv-count { font-variant-numeric: tabular-nums; }
+.vx-mv-live { display: inline-flex; align-items: center; gap: 5px; color: var(--accent); }
+.vx-mv-live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.vx-mv-window-open { padding-bottom: var(--space-3); }
+.vx-mv-fade { background: linear-gradient(var(--panel), transparent); }
+/* the header (canvas/MeetingViewHeader.tsx, #1783): name + status, when · how long · who, one act row */
+.vx-mvh { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.vx-mvh-top { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-2); min-width: 0; }
+.vx-mvh-title { margin: 0; min-width: 0; max-width: 100%; font-family: var(--sans); font-size: var(--text-lg); font-weight: var(--weight-semibold); color: var(--t1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-mvh-title .vx-callname-btn { font: inherit; color: inherit; }
+.vx-mvh-status { display: inline-flex; align-items: center; gap: 5px; font-family: var(--sans); font-size: 11px; font-weight: var(--weight-medium); color: var(--t3); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
+.vx-mvh-status[data-tone="live"] { color: var(--accent); border-color: var(--accent); }
+.vx-mvh-status[data-tone="pending"] { color: var(--t2); }
+.vx-mvh-meta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1_5) var(--space-3); font-family: var(--sans); font-size: var(--text-xs); color: var(--t3); min-width: 0; }
+.vx-mvh-people { display: inline-flex; align-items: center; flex-wrap: wrap; gap: var(--space-1_5) var(--space-2); min-width: 0; }
+.vx-mvh-person { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--t2); }
+.vx-mvh-avatar { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: var(--accentbg); color: var(--accent); font-size: 9.5px; font-weight: var(--weight-semibold); flex: none; }
+.vx-mvh-name { max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-mvh-more { color: var(--t3); }
+.vx-mvh-acts { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1_5) var(--space-2); min-width: 0; }
+.vx-mvh-danger:hover { color: var(--danger); border-color: var(--danger); }
+/* the transcript's search, and what it matched */
+.vx-mv-search { font-family: var(--sans); font-size: var(--text-xs); color: var(--t1); background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius-md); padding: var(--space-1) var(--space-2); min-width: 0; flex: 0 1 14em; }
+.vx-lt-mark { background: color-mix(in srgb, var(--accent) 25%, transparent); color: inherit; border-radius: 2px; }
+/* A page that names its meeting: one small chip at its top (MeetingChip). */
+.vx-meeting-chip {
+  display: inline-flex; align-items: center; gap: var(--space-1); max-width: 100%;
+  font-family: var(--sans); font-size: var(--text-xs); color: var(--t2);
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); padding: 2px var(--space-2); cursor: pointer;
+}
+.vx-meeting-chip-k { color: var(--t3); }
+.vx-meeting-chip-name { color: var(--t1); font-weight: var(--weight-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.vx-meeting-chip-open { color: var(--accent); }
+/* the drawer's top edge: a grab line, draggable by mouse and touch */
+.vx-mv-drawer-handle { height: 10px; margin-top: -5px; display: flex; align-items: center; justify-content: center; cursor: row-resize; touch-action: none; flex: none; }
+.vx-mv-drawer-grip { width: 36px; height: 3px; border-radius: var(--radius-full); background: var(--line2); }
+.vx-mv-drawer-handle:hover .vx-mv-drawer-grip, .vx-mv-drawer-handle:focus-visible .vx-mv-drawer-grip { background: var(--t3); }
+.vx-lang-label { font-size: 11px; color: var(--t3); border: 1px solid var(--line); border-radius: var(--radius-full); padding: 0 var(--space-1_5); }
+/* the drawer's one header row: words left, icon acts right */
+.vx-mv-tray-row { display: flex; align-items: center; gap: var(--space-1_5); min-width: 0; min-height: 28px; }
+.vx-mv-tray-row .vx-mv-label { flex: none; }
+.vx-mv-icon {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px;
+  color: var(--t2); background: transparent; border: 0; border-radius: var(--radius-md); cursor: pointer;
+}
+.vx-mv-icon:hover { background: var(--panel2, var(--line)); color: var(--t1); }
+.vx-mv-icon:disabled { opacity: 0.4; cursor: default; }
+.vx-mv-search-wrap { display: inline-flex; align-items: center; gap: 2px; min-width: 0; flex: 0 1 220px; }
+.vx-mv-search-wrap .vx-mv-search { min-width: 0; flex: 1 1 auto; }
+.vx-mv-tray[data-mode="open"] { gap: var(--space-1); }
+
+/* read by a screen reader, not drawn: the collapsed drawer's name */
+.vx-mv-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.vx-mvh-platform { display: inline-flex; align-items: center; color: var(--t3); }

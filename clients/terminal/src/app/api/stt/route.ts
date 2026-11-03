@@ -1,6 +1,7 @@
 /** POST /api/stt[?prompt=…] — speech-to-text proxy for composer dictation.
  *
- *  Body: audio/wav (16 kHz mono PCM from ui-kit/micDictation). Forwards to the same
+ *  Body: audio/flac (default from ui-kit/micDictation) or audio/wav, 16 kHz mono. `language` (optional)
+ *  is passed on as the STT's language; absent, the STT detects it. No record is created. Forwards to the same
  *  transcription service the meeting pipeline uses (`TRANSCRIPTION_SERVICE_URL`,
  *  OpenAI-compatible /v1/audio/transcriptions — see @vexa/transcribe-whisper's
  *  TranscriptionClient for the canonical contract). `prompt` carries the already-
@@ -33,16 +34,20 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (wav.byteLength < 100) return NextResponse.json({ error: "Empty recording" }, { status: 400 });
   if (wav.byteLength > MAX_BYTES) return NextResponse.json({ error: "Recording too long" }, { status: 413 });
 
-  const prompt = new URL(req.url).searchParams.get("prompt") ?? "";
+  const params = new URL(req.url).searchParams;
+  const prompt = params.get("prompt") ?? "";
+  const language = (params.get("language") ?? "").trim();
+  const flac = (req.headers.get("content-type") ?? "").includes("flac");
 
   const form = new FormData();
-  form.append("file", new Blob([wav], { type: "audio/wav" }), "dictation.wav");
+  form.append("file", new Blob([wav], { type: flac ? "audio/flac" : "audio/wav" }), flac ? "dictation.flac" : "dictation.wav");
   // The deployment's STT model id (validating backends reject unknown ids) — same env the
   // meeting pipeline's invocation carries; unset → whisper-1.
   form.append("model", process.env.TRANSCRIPTION_MODEL || "whisper-1");
   form.append("response_format", "verbose_json");
   form.append("timestamp_granularities", "word");
   if (prompt) form.append("prompt", prompt.slice(0, 800));
+  if (/^[a-z]{2,3}$/.test(language)) form.append("language", language);
 
   const headers: Record<string, string> = {};
   const token = process.env.TRANSCRIPTION_SERVICE_TOKEN;

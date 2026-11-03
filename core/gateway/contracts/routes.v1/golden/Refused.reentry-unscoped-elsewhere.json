@@ -1,0 +1,17 @@
+{
+  "why": "only the edge's own identity read checks mcp_reentry on an unscoped row",
+  "manifest": {
+    "contract": "routes.v1",
+    "domain": "meetings",
+    "owner": "core/meetings",
+    "edge": "gateway",
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/meetings",
+        "scopes": [],
+        "mcp_reentry": true
+      }
+    ]
+  }
+}

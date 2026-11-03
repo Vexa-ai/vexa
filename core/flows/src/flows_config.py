@@ -32,27 +32,13 @@ import os
 # None for required-explicit, and for capability keys whose absence IS the off state.
 DECLARED: dict[str, tuple[str, object, str]] = {
     # ── identity and secrets ────────────────────────────────────────────────
-    "INTERNAL_API_SECRET": (
+    "VEXA_FLOWS_SERVICE_KEY": (
         "required-explicit", None,
-        "the internal-tier identity flows presents to agent-api's meeting room — the ONE name the "
-        "whole internal tier uses since F95. No default: a weak default makes an unconfigured "
-        "deployment look configured (common.require_internal_secret). Read through "
-        "`common.INTERNAL_SECRET_ENV`, which is why this table's test also scans `*_ENV` constants "
-        "and not only literals."),
-    "VEXA_INTERNAL_SECRET": (
-        "capability", None,
-        "DEPRECATED alias of INTERNAL_API_SECRET (F95) — honoured with a warning for one release, "
-        "removed next. Declared so the removal is a deletion here rather than an archaeology."),
-    "VEXA_INTERNAL_API_SECRET": (
-        "capability", None,
-        "the second DEPRECATED alias of INTERNAL_API_SECRET (F95) — same terms as the one above. "
-        "One secret with three names is what F95 was; the third name is gone and these two are on "
-        "a clock."),
-    "VEXA_FLOWS_ADMIN_KEY": (
-        "required-explicit", None,
-        "the admin-api key flows uses to resolve and create platform users and to mint gateway "
-        "tokens. It opens `ensure_platform_user` and `user_api_key`, so it is refused the same way "
-        "as the internal secret rather than defaulting to `changeme` (R-B11)."),
+        "the flows tier's ONE credential into the other domains: it opens the gateway's service "
+        "door, which forwards exactly the calls on its flows allow-list and refuses the rest. Flows "
+        "holds no internal-tier secret and no admin key. No default (common.require_service_key); "
+        "read through `common.SERVICE_KEY_ENV`, which is why this table's test also scans `*_ENV` "
+        "constants and not only literals."),
     "VEXA_FLOWS_API_KEY": (
         "required-explicit", None,
         "the operator key that gates `POST /flows` and `POST /events` on flows-api — decision 4's "
@@ -61,6 +47,18 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "capability", None,
         "a read-only key that opens the timeline projection and nothing else. Unset = only the "
         "operator key opens it."),
+    "VEXA_FLOWS_CRM_PUBLISH_KEY": (
+        "capability", None,
+        "the crm outbox's publish key: `POST /events` for the CRM's own facts (`crm.record.changed`) "
+        "and nothing else. Unset = only the operator key admits facts."),
+    "VEXA_FACT_VERIFY_KEYS_DIR": (
+        "capability", None,
+        "the directory of the sealing producers' Ed25519 PUBLIC keys, one `<producer>.pem` each "
+        "(event.v2, D8): `POST /events` verifies a producer's envelope under that producer's own "
+        "public key, bound to the fact it rides on. Read through `flows_api.FACT_VERIFY_KEYS_DIR_ENV`. "
+        "Public keys only: nothing flows holds can seal. Unset, or no file for a producer = that "
+        "producer's envelopes do not verify, so its sealed facts are refused 403 and only facts "
+        "without an envelope admit (to their subject)."),
 
     # ── service endpoints: THE DOORS ────────────────────────────────────────
     #
@@ -108,6 +106,23 @@ DECLARED: dict[str, tuple[str, object, str]] = {
     # flow step that would dispatch an agent turn reports `not_present` instead of knocking on a
     # door that is not there. `defaulted` could not express that: a default URL asserts the domain
     # exists, and the absence then arrives as a connection error that retries forever.
+    "VEXA_FLOWS_CRM_API_URL": ("capability", None,
+                               "the optional CRM's door (ADR-0047). UNSET MEANS NO CRM IS DEPLOYED — "
+                               "flows_defs.crm then ends its step not_present."),
+    "VEXA_FLOWS_SENSORS_BROKER_URL": ("capability", None,
+                                      "the credential broker, for sensors' read-only provider calls "
+                                      "(ADR-0050). UNSET: no sensor reads a connection."),
+    "VEXA_FLOWS_SENSORS_KEY_FILE": ("capability", None,
+                                    "the broker's sensors-role key file (ADR-0050); the broker holds "
+                                    "the same file. UNSET: no sensor reads a connection."),
+    "VEXA_FLOWS_MAIL_TICKET_KEY_FILE": ("capability", None,
+                                       "the mail issuer's private key (PKCS#8 PEM, Ed25519) for "
+                                       "subject-ticket.v1: the mail intake and the worker's mailbox "
+                                       "sensor sign the tickets an authenticated invite or reply "
+                                       "carries; the gateway's service door holds its public half "
+                                       "(mail.pem). Read through `mail_tickets.KEY_FILE_ENV`. "
+                                       "UNSET: mail facts carry no ticket and the door refuses the "
+                                       "calls they would have opened."),
     "VEXA_FLOWS_AGENT_API_URL": ("capability", None,
                                  "agent-api's internal tier. UNSET MEANS THE AGENT DOMAIN IS NOT "
                                  "DEPLOYED — see flows_steps.common.domain_present."),
@@ -134,7 +149,7 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "why the interim wiring had to bind the lane to the docker bridge address by hand."),
 
     # ── the mailbox: which inbox, and what it will answer ───────────────────
-    "VEXA_MAIL_INBOX": ("defaulted", "imap", "`imap` (real) or `mailpit` (the dev double)."),
+    "VEXA_MAIL_INBOX": ("defaulted", "imap", "`imap` (any IMAP server; Gmail preset), `mailpit` (the dev double) or `graph`."),
     # `capability`, not `required-explicit` — the ruling on the #1479 x #1483 collision (P14: a
     # capability is optional BY DEFINITION, and a deployment may carry no mail intake at all). The
     # pair stays grouped under `mailbox` in `all` mode, so a set address with no password is
@@ -142,12 +157,14 @@ DECLARED: dict[str, tuple[str, object, str]] = {
     # at boot. Decision 18(c) holds either way: the `sops -d` vault path is gone from `emailx.creds`
     # regardless of class. VEXA_FLOWS_DB_URL went the OTHER way and is `required-explicit` — flows
     # without a database is not a deployment — so the `own_database` capability is gone.
-    # WHERE THESE CLASSES BITE, precisely: flows-api’s runtime entrypoint calls this module’s own
-    # `preflight`, which enforces DOOR_KEYS only , and nothing under core/flows/src imports the vendored
-    # `config_preflight`. But the SHARED validator’s semantics are asserted by flows’ own contract
-    # tests (tests/test_config_contract.py drives `cp.preflight` directly), so `required-explicit`
-    # here is NOT merely documentary: it is the difference between the no-agents profile reading
-    # as capabilities-off and reading as a service that cannot boot.
+    # WHERE THESE CLASSES BITE, precisely: flows-api’s runtime entrypoint calls BOTH validators —
+    # this module’s own `preflight`, which enforces DOOR_KEYS, and the vendored `config_preflight`,
+    # which enforces the whole `config.v1.json` declaration (F-D20 b). It did not always: this
+    # comment used to end *“and nothing under core/flows/src imports the vendored
+    # config_preflight”*, which was true, and meant flows-api’s own boot refusal was a hand-written
+    # placeholder list three literals shorter than the declared one — so the service booted on
+    # `vexa-internal-secret`. `required-explicit` here was never merely documentary; it is now not
+    # documentary anywhere.
     "VEXA_MAIL_ADDR": (
         "capability", None,
         "the address this deployment's mailbox answers as, and the identity every allow-list is "
@@ -161,11 +178,88 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "below): the deploy surface feeds it from a secret store, the service never reads one. "
         "Required WITHIN the capability, not at boot: `mailbox` is `all` mode, so a set address "
         "with no password is misconfigured rather than optional."),
-    "VEXA_MAIL_SMTP_HOST": ("capability", None, "unset = Gmail SMTP over SSL; set = a plain host (the mail double)."),
+    # THE DEPLOYMENT'S MAIL RELAY is one family of keys for every sender: the terminal mails its
+    # sign-in links through the same VEXA_MAIL_SMTP_* (clients/terminal/config.v1.json), so a relay
+    # an operator configures once has to work for both — TLS and AUTH included, not only plain.
+    "VEXA_MAIL_SMTP_HOST": ("capability", None, "unset = Gmail SMTP over SSL; set = the deployment's relay (plain, or TLS with _SECURE; AUTH with _USER + _PASSWORD) — the mail double in a rig."),
     "VEXA_MAIL_SMTP_PORT": ("defaulted", "25", "the port for a set VEXA_MAIL_SMTP_HOST."),
+    "VEXA_MAIL_SMTP_SECURE": ("defaulted", "0", "1 = implicit TLS to a set relay (a provider's :465)."),
+    "VEXA_MAIL_SMTP_TLS_INSECURE": ("defaulted", "0", "1 = skip the relay's certificate check under _SECURE; development only."),
+    "VEXA_MAIL_SMTP_USER": ("defaulted", "", "AUTH LOGIN user for a set relay; used only with VEXA_MAIL_SMTP_PASSWORD."),
+    "VEXA_MAIL_SMTP_PASSWORD": ("defaulted", "", "AUTH LOGIN password for a set relay, a P14 SECRET; used only with VEXA_MAIL_SMTP_USER."),
+    "VEXA_MAIL_RECIPIENT_ALLOW": ("defaulted", "", "a comma list of exact addresses and domains; when set, mail to anybody else is diverted to the capture double (VEXA_MAIL_CAPTURE_SMTP) and logged `mail_diverted`, never sent (PRD 0.13.4 S2). Unset: no restriction."),
+    "VEXA_MAIL_SMTP_PASSWORD_REF": ("defaulted", "", "the relay password BY REFERENCE, `broker:mail/<name>` — read from the credential broker with the flows broker key (PRD 0.13.4 S2); when set it is the only source and VEXA_MAIL_SMTP_PASSWORD is ignored."),
+    # THE IMAP ENDPOINT and the relay's TLS policy — `flows_steps/mail_transport.py`. Every default
+    # is the Gmail preset, so a deployment that names none of these behaves exactly as before.
+    "VEXA_MAIL_IMAP_HOST": ("defaulted", "imap.gmail.com",
+        "The IMAP server the mailbox reads invites from. The default is the Gmail preset; an on-premises Exchange with IMAP enabled names its own host here."),
+    "VEXA_MAIL_IMAP_PORT": ("defaulted", "",
+        "The IMAP port. Empty = 993 for VEXA_MAIL_IMAP_TLS=tls, 143 for starttls and none."),
+    "VEXA_MAIL_IMAP_TLS": ("defaulted", "tls",
+        "How the IMAP connection is secured: `tls` (implicit TLS, :993), `starttls` (upgrade on :143, refused if the server does not offer it) or `none` (cleartext, the password included \u2014 a lab server only, announced on every connection). Anything else is refused by name."),
+    "VEXA_MAIL_IMAP_USER": ("defaulted", "",
+        "The IMAP login name when it is not the mailbox address (an Exchange `DOMAIN\\\\user` or UPN). Empty = VEXA_MAIL_ADDR. The password is VEXA_MAIL_APP_PASSWORD."),
+    "VEXA_MAIL_IMAP_FOLDER": ("defaulted", "INBOX",
+        "The IMAP folder invites arrive in."),
+    "VEXA_MAIL_IMAP_CA_FILE": ("defaulted", "",
+        "A PEM CA bundle the IMAP server's certificate must chain to, INSTEAD of the system store (an internal CA). Empty = the system store. A named file that does not exist is a config fault."),
+    "VEXA_MAIL_SMTP_TLS": ("defaulted", "auto",
+        "How a set VEXA_MAIL_SMTP_HOST is secured: `auto` (implicit TLS when VEXA_MAIL_SMTP_SECURE is on, else STARTTLS whenever offered \u2014 the previous behaviour), `tls` (implicit), `starttls` (required; a relay that does not offer it is refused) or `none` (never upgrade; no credentials are sent). Flows only \u2014 the terminal's sign-in mail reads VEXA_MAIL_SMTP_SECURE."),
+    "VEXA_MAIL_SMTP_CA_FILE": ("defaulted", "",
+        "A PEM CA bundle a set relay's certificate must chain to, instead of the system store. Empty = the system store. Flows only \u2014 the terminal's Node runtime takes NODE_EXTRA_CA_CERTS."),
+    # THE SENDER IDENTITY AND THE ONE SWITCH FOR REAL DELIVERY (`flows_steps/emailx.py`). The same
+    # keys the terminal's sign-in mailer reads, so every mail leaves as one sender.
+    "VEXA_MAIL_SMTP_FROM": ("defaulted", "",
+        "The sender identity on every mail, e.g. `Vexa <info@vexa.ai>`. Empty = `Vexa <VEXA_MAIL_ADDR>`."),
+    "VEXA_MAIL_REPLY_TO": ("defaulted", "",
+        "The Reply-To on every mail — the mailbox the inbound mail sensor reads. Empty = no Reply-To."),
+    "VEXA_MAIL_RELAY": ("defaulted", "",
+        "THE ONE SWITCH for real delivery. Empty = as before (VEXA_MAIL_SMTP_HOST, or the Gmail preset); `capture` = every mail goes to VEXA_MAIL_CAPTURE_SMTP and reaches no real mailbox; `relay` = the VEXA_MAIL_SMTP_* relay for real. Under `relay`, recipients at test domains (.test, .invalid, .localhost, .example, example.com/org/net) are never relayed."),
+    "VEXA_MAIL_CAPTURE_SMTP": ("defaulted", "mailpit:1025",
+        "host:port of the capture double used when VEXA_MAIL_RELAY=capture."),
+    "VEXA_MAIL_MAX_PER_DAY": ("defaulted", "2000",
+        "The operator's ceiling on mail per kind per day, under whatever `mail_caps` in _global/POLICIES.md says. The sign-in link is never capped here (the terminal rate-limits it)."),
+    "VEXA_MAIL_KINDS_DEFAULT": ("defaulted", "shipped",
+        "What a mail kind does when _global/POLICIES.md does not answer `mail.<kind>`: `shipped` (sign-in, sharing and call invites on, everything else off) or `on` (every kind on — the behaviour before the mail catalogue, until the admin account decides)."),
+    "VEXA_MAIL_INBOUND_FILTER": ("defaulted", "vexa",
+        "Which inbound mail the mailbox acts on: `vexa` (meeting invitations and replies to mail Vexa sent; everything else is dropped at the edge, unstored) or `all` (the previous behaviour: every message is routed)."),
     "VEXA_MAILPIT_URL": ("defaulted", "http://127.0.0.1:8025", "mailpit's HTTP base, when the inbox is mailpit."),
     "VEXA_MAILPIT_LOOKBACK_S": ("defaulted", "300", "re-scan window behind the mailpit watermark."),
-    "VEXA_NOTIFY_CHANNEL": ("defaulted", "smtp", "where a notification goes; `smtp` is the only real one."),
+    "VEXA_NOTIFY_CHANNEL": ("defaulted", "smtp",
+                            "where a notification goes: `smtp` or `graph` (Microsoft 365 with "
+                            "SMTP AUTH off). Anything else is refused loudly."),
+    # ── Microsoft 365 / Graph mailbox ───────────────────────────────────────
+    #
+    # FOUR KEYS, ONE CAPABILITY, AND NONE OF THEM CAN BE `required-explicit` — which is a fact
+    # about the contract, not a preference. `required-explicit` refuses the BOOT when a key is
+    # unset, so declaring the client secret that way would stop every deployment that is not on
+    # Microsoft from starting. config.v1 has no way to say "required only when another key
+    # selects this path": the class is a property of the key, evaluated against the environment,
+    # and there is no conditional in the schema (`deploy/contracts/config.v1/README.md`).
+    #
+    # `capability` with mode=all is the closest true statement and it is not a weaker one: all
+    # four set = `configured`, none set = `not_configured` (this deployment is not on Microsoft),
+    # SOME set = `misconfigured`, surfaced by name on /health. The refusal for the selected path
+    # then happens where it can name the keys — `graph_client.GraphClient.__init__`, at the
+    # moment the mailbox is constructed, exactly as `emailx.creds` refuses a half-configured
+    # SMTP pair.
+    "VEXA_GRAPH_TENANT_ID": ("capability", None,
+                             "the Microsoft Entra tenant the mailbox lives in."),
+    "VEXA_GRAPH_CLIENT_ID": ("capability", None,
+                             "the app registration's application (client) id."),
+    "VEXA_GRAPH_CLIENT_SECRET": (
+        "capability", None,
+        "the app registration's client secret, and a P14 SECRET. Application permissions "
+        "Mail.ReadWrite + Mail.Send with admin consent, and an Exchange ApplicationAccessPolicy "
+        "scoping the app to the ONE mailbox — without that policy this credential reads every "
+        "mailbox in the tenant."),
+    "VEXA_GRAPH_MAILBOX": ("capability", None,
+                           "the mailbox address Graph polls and sends as (`vexa@customer.tld`)."),
+    "VEXA_GRAPH_BASE": ("defaulted", "https://graph.microsoft.com/v1.0",
+                        "the Graph endpoint — an in-code dial for a national cloud."),
+    "VEXA_GRAPH_LOGIN": ("defaulted", "https://login.microsoftonline.com",
+                         "the token endpoint — the same dial, same reason."),
+    "VEXA_GRAPH_PAGE_SIZE": ("defaulted", "25", "`$top` on the inbox listing."),
 
     # ── WHO THE MAILBOX WILL ACT FOR (R-B12) ────────────────────────────────
     "VEXA_FLOWS_MAIL_DOMAINS": (
@@ -175,6 +269,23 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "it means the mailbox's own domain, exactly as `VEXA_FLOWS_ATTENDEE_DOMAINS` unset means "
         "the organizer's. A sender who is neither a known user nor inside it gets no account, no "
         "agent turn and no model spend — only a quarantine row."),
+    "VEXA_FLOWS_MAIL_AUTHSERV_ID": (
+        "capability", None,
+        "the authserv-id this mailbox's own receiving server writes in `Authentication-Results` "
+        "(e.g. `mx.google.com`). Set, only a verdict naming it counts; unset, the topmost one counts "
+        "(the receiving server prepends its own). REQUIRED for an IMAP server other than the Gmail "
+        "preset: such a server may write no verdict, leaving the sender's own on top, so the mailbox "
+        "refuses to start without it. A mail whose `From:` the domain did not vouch for (no DMARC "
+        "pass, no aligned DKIM or SPF pass) is treated as a stranger's (D25)."),
+    "VEXA_FLOWS_MAIL_AUTH_MODE": (
+        "defaulted", "mta",
+        "whose verdict says a `From:` is authentic. `mta`: the receiving server's "
+        "`Authentication-Results` (under `VEXA_FLOWS_MAIL_AUTHSERV_ID` when set). `inapp`: that "
+        "header is ignored; the message's DKIM signature is verified here against the key the "
+        "signing domain publishes in DNS, and must align with the `From:` domain under its DMARC "
+        "record (`adkim`). `both`: the server's verdict AND the signature. SPF is not checked "
+        "in-app (an IMAP reader never sees the connecting IP). `inapp` needs no authserv-id; "
+        "`inapp` and `both` need the message bytes, so the Graph inbox refuses them."),
     "VEXA_FLOWS_MAIL_QUARANTINE_REPLY": (
         "capability", None,
         "`1` answers a quarantined stranger ONCE with a fixed one-line template — no model, no "
@@ -188,10 +299,34 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "defaulted", "120",
         "mail-triggered agent turns the whole deployment may run per window — the ceiling on what "
         "one inbox can cost, whoever sends it."),
+    "VEXA_FLOWS_SCHEDULE_CATCHUP_S": (
+        "defaulted", "3600",
+        "After downtime the worker fires a schedule flow's most recent missed slot once, if it is younger than this many seconds; older slots are skipped and counted (ADR-0046 decision 3)."),
+    "VEXA_FLOWS_FACT_RETENTION_DAYS": (
+        "defaulted", "90",
+        "How many days a captured fact is kept after its reaction finished: the flows-worker's retention pass removes finished reactions (their refs, mail bodies included, scratch, receipts and signals), quarantined mail and old mail turns, and clears the payload of spent keyed schedules, once they are older than this. A reaction still running or waiting is never removed. 0 keeps everything (PRD 0.13.4: a fact is admitted, then expires)."),
+    "VEXA_FLOWS_LOOP_LIMIT": (
+        "defaulted", "1",
+        "How many times an event may start a flow that is already in the chain of flows that produced it (ADR-0046 decision 8). 1 means a flow's own step events never start that flow again."),
+    "VEXA_FLOWS_MAX_HOPS": (
+        "defaulted", "8",
+        "The longest chain of flows an event may carry; an event at this depth starts no flow at all (ADR-0046 decision 8)."),
+    "VEXA_FLOWS_USER_ACTIVE_FLOWS": (
+        "defaulted", "20",
+        "How many active flows one person may own. A submission over it is refused with quota_active_flows (ADR-0046 decision 9)."),
+    "VEXA_FLOWS_USER_MIN_INTERVAL_S": (
+        "defaulted", "900",
+        "The shortest gap, in seconds, a person's schedule flow may leave between two fires. A cron that fires closer is refused with quota_min_interval (ADR-0046 decision 9)."),
+    "VEXA_FLOWS_USER_RUNS_PER_DAY": (
+        "defaulted", "48",
+        "How many runs one person's flows may start in any 24 hours, counted separately for schedule fires and for event-started runs, so events about a person never use up the budget their scheduled routines run from. A run over it is not admitted, and is counted (ADR-0046 decision 9)."),
+    "VEXA_FLOWS_USER_MESSAGES_PER_DAY": (
+        "defaulted", "100",
+        "How many messages one person's agents may send to other agents in any 24 hours (message_agent, ADR-0046 decision 13). A message over it is refused with quota_messages_per_day."),
     "VEXA_FLOWS_MAIL_RATE_WINDOW_S": ("defaulted", "3600", "the window both mail rate limits count over."),
     "VEXA_FLOWS_MAIL_BODY_MAX": (
         "defaulted", "4000",
-        "how much of an inbound body may enter an agent prompt, inside the untrusted block."),
+        "how many characters of an inbound body a mail reply carries into its reaction and its agent prompt, inside the untrusted block. At most 16000; a higher value is read as 16000."),
 
     # ── behaviour and content ───────────────────────────────────────────────
     "VEXA_FLOWS_ATTENDEE_DOMAINS": (
@@ -211,30 +346,45 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "pack and starts without it reacts to none of that pack's events, silently, for as long "
         "as nobody looks."),
     "VEXA_JITSI_HOSTS": ("capability", None, "extra Jitsi hosts a meeting link may live on, beyond meet.jit.si."),
-    "VEXA_FLOWS_INSTANCE_GATE": ("capability", None, "forces the instance gate open or shut, for the rig."),
-    "VEXA_FLOWS_USER_KEY_TTL_S": (
-        "defaulted", "900",
-        "how long a minted gateway token lives AND how long this process reuses it. One 20-person "
-        "meeting used to leave ~30 permanent full-scope tokens on the organiser's account (R-B13)."),
+    # ── nudges: the delivery gate (PRD 0.13.4 D15, D32; S6) ─────────────────
+    "VEXA_FLOWS_NUDGES": (
+        "capability", None,
+        "the delivery gate's worker pass (flows_delivery.run). UNSET IS OFF: no card or room item "
+        "is nudged outside the Inbox, and the in-app Inbox is unchanged (it reads crm). `1` turns "
+        "it on; the pack `flows_defs.nudges` arms the items."),
+    "VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN": (
+        "defaulted", "5",
+        "the global FLOOR under a person's idle window: no email for an item sooner than this many "
+        "minutes after its in-app notice, whatever the person set (D15 tuning line, global floor)."),
+    "VEXA_FLOWS_NUDGE_BUDGET_CEILING": (
+        "defaulted", "12",
+        "the global CEILING over a person's attention budget: deliveries outside the Inbox per "
+        "local day (D32). The person's rule sets the cap below it; the floor is 1."),
     "VEXA_TIMELINE_SCAN_ROWS": ("defaulted", "2000", "how many reaction rows the timeline projection scans."),
 }
 
 
 #: THE CREDENTIALS (P14). A value named here is never logged, never written into a golden, and
 #: never appears in an error message: every refusal below names the KEY, exactly as
-#: `common.require_admin_key` does one file over. It is a SET rather than a fourth class because
+#: `common.require_service_key` does one file over. It is a SET rather than a fourth class because
 #: secrecy is orthogonal to necessity — `VEXA_FLOWS_TIMELINE_KEY` is a capability AND a secret,
 #: `VEXA_MAIL_ADDR` is required and public. The deploy surface feeds each of these from a secret
 #: store; a service that reads a secret store itself is the shape decision 18(c) removed.
 SECRETS = frozenset({
-    "INTERNAL_API_SECRET", "VEXA_INTERNAL_SECRET", "VEXA_INTERNAL_API_SECRET",
-    "VEXA_FLOWS_ADMIN_KEY", "VEXA_FLOWS_API_KEY", "VEXA_FLOWS_TIMELINE_KEY",
-    "VEXA_MAIL_APP_PASSWORD",
+    "VEXA_FLOWS_SERVICE_KEY", "VEXA_FLOWS_API_KEY", "VEXA_FLOWS_TIMELINE_KEY",
+    "VEXA_FLOWS_CRM_PUBLISH_KEY",
+    "VEXA_MAIL_APP_PASSWORD", "VEXA_MAIL_SMTP_PASSWORD",
 })
 
 #: The mail capability's keys, in one place so a half-declared control is visible as one.
 MAIL_KEYS = ("VEXA_MAIL_ADDR", "VEXA_MAIL_APP_PASSWORD", "VEXA_MAIL_SMTP_HOST",
-             "VEXA_MAIL_SMTP_PORT")
+             "VEXA_MAIL_SMTP_PORT", "VEXA_MAIL_SMTP_SECURE", "VEXA_MAIL_SMTP_TLS_INSECURE",
+             "VEXA_MAIL_SMTP_USER", "VEXA_MAIL_SMTP_PASSWORD", "VEXA_MAIL_SMTP_PASSWORD_REF",
+             "VEXA_MAIL_RECIPIENT_ALLOW", "VEXA_MAIL_SMTP_TLS",
+             "VEXA_MAIL_SMTP_CA_FILE", "VEXA_MAIL_IMAP_HOST", "VEXA_MAIL_IMAP_PORT",
+             "VEXA_MAIL_IMAP_TLS", "VEXA_MAIL_IMAP_USER", "VEXA_MAIL_IMAP_FOLDER",
+             "VEXA_MAIL_IMAP_CA_FILE", "VEXA_MAIL_SMTP_FROM", "VEXA_MAIL_REPLY_TO",
+             "VEXA_MAIL_RELAY", "VEXA_MAIL_CAPTURE_SMTP")
 
 
 def _decl(name: str) -> tuple[str, object, str]:

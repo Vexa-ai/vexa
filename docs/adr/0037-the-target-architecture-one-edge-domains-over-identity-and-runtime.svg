@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="700" viewBox="0 0 1100 700" role="img" aria-label="Target architecture: clients call the gateway with a bearer; the gateway assembles routes and the MCP tool list from each domain's declarations; meetings, flows and agent each depend only on identity and runtime; domains publish events into flows over the flows.v1 contract; flows and agent may declare an optional dependency on another domain that degrades to not-present; behavior content and deploy config feed the services by contract.">
+<style>
+  svg { font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  :root {
+    --ink:#1E2328; --muted:#5F6A73; --ok:#1F8A70;
+    --ship:#E7ECF7; --ship-line:#3B5BDB; --hold:#EFEFEC; --hold-line:#8A9199;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink:#E6E9EC; --muted:#A3ACB5; --ok:#3FBF9C;
+      --ship:#1E2740; --ship-line:#7C93F0; --hold:#1C2024; --hold-line:#6B737B;
+    }
+  }
+</style>
+<defs>
+  <marker id="d-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--ok)"/></marker>
+  <marker id="d-deg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker>
+  <marker id="d-ev" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--ship-line)"/></marker>
+</defs>
+
+<!-- clients -->
+<rect x="40" y="30" width="230" height="54" rx="4" fill="var(--hold)" stroke="var(--hold-line)"/>
+<text x="155" y="52" text-anchor="middle" fill="var(--ink)">a person's Claude Code</text>
+<text x="155" y="70" text-anchor="middle" fill="var(--muted)" font-size="11">local · their workspace · their thinking</text>
+<rect x="310" y="30" width="200" height="54" rx="4" fill="var(--hold)" stroke="var(--hold-line)"/>
+<text x="410" y="52" text-anchor="middle" fill="var(--ink)">web client (terminal)</text>
+<text x="410" y="70" text-anchor="middle" fill="var(--muted)" font-size="11">full profile · a client like any other</text>
+<rect x="550" y="30" width="230" height="54" rx="4" fill="var(--hold)" stroke="var(--hold-line)"/>
+<text x="665" y="52" text-anchor="middle" fill="var(--ink)">the cloud worker (agent)</text>
+<text x="665" y="70" text-anchor="middle" fill="var(--muted)" font-size="11">full profile · ephemeral · a client too</text>
+
+<!-- the edge -->
+<rect x="40" y="150" width="740" height="64" rx="4" fill="var(--ship)" stroke="var(--ship-line)"/>
+<text x="410" y="174" text-anchor="middle" fill="var(--ink)">the edge — gateway + one MCP server · owns nothing</text>
+<text x="410" y="194" text-anchor="middle" fill="var(--muted)" font-size="11">strips and re-stamps authority · assembles routes.v1 and mcp.tools.v1 from the domains present · refuses what it cannot authenticate</text>
+
+<!-- clients -> edge -->
+<line x1="155" y1="84" x2="200" y2="150" stroke="var(--ok)" stroke-width="1.5" marker-end="url(#d-ok)"/>
+<line x1="410" y1="84" x2="410" y2="150" stroke="var(--ok)" stroke-width="1.5" marker-end="url(#d-ok)"/>
+<line x1="665" y1="84" x2="620" y2="150" stroke="var(--ok)" stroke-width="1.5" marker-end="url(#d-ok)"/>
+<text x="410" y="120" text-anchor="middle" fill="var(--ok)" font-size="11">bearer in the header · one auth path (40.8) · the same tools for every client</text>
+
+<!-- domains -->
+<rect x="40" y="300" width="220" height="80" rx="4" fill="var(--ship)" stroke="var(--ship-line)"/>
+<text x="150" y="326" text-anchor="middle" fill="var(--ink)">meetings</text>
+<text x="150" y="344" text-anchor="middle" fill="var(--muted)" font-size="11">bots · rows · transcripts</text>
+<text x="150" y="360" text-anchor="middle" fill="var(--muted)" font-size="11">bot defaults · routes.v1 · mcp.tools.v1</text>
+<rect x="320" y="300" width="240" height="80" rx="4" fill="var(--ship)" stroke="var(--ship-line)"/>
+<text x="440" y="326" text-anchor="middle" fill="var(--ink)">flows</text>
+<text x="440" y="344" text-anchor="middle" fill="var(--muted)" font-size="11">schedule · reactions · what is waiting</text>
+<text x="440" y="360" text-anchor="middle" fill="var(--muted)" font-size="11">the event log (incl. the friction sink)</text>
+<rect x="620" y="300" width="220" height="80" rx="4" fill="var(--ship)" stroke="var(--ship-line)" stroke-dasharray="6 3"/>
+<text x="730" y="326" text-anchor="middle" fill="var(--ink)">agent</text>
+<text x="730" y="344" text-anchor="middle" fill="var(--muted)" font-size="11">workspaces · turns · desk</text>
+<text x="730" y="360" text-anchor="middle" fill="var(--muted)" font-size="11">full profile only</text>
+
+<!-- edge -> domains: route bindings -->
+<line x1="150" y1="214" x2="150" y2="300" stroke="var(--ok)" stroke-width="1.5" marker-end="url(#d-ok)"/>
+<line x1="440" y1="214" x2="440" y2="300" stroke="var(--ok)" stroke-width="1.5" marker-end="url(#d-ok)"/>
+<line x1="730" y1="214" x2="730" y2="300" stroke="var(--ok)" stroke-width="1.5" stroke-dasharray="6 3" marker-end="url(#d-ok)"/>
+<text x="295" y="262" text-anchor="middle" fill="var(--ok)" font-size="11">forwards each call to the route its manifest binds · auth per tool (15)</text>
+<text x="742" y="262" fill="var(--muted)" font-size="11">only when deployed</text>
+
+<!-- optional dependencies among the three (degrade) -->
+<line x1="320" y1="330" x2="260" y2="330" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#d-deg)"/>
+<text x="290" y="292" text-anchor="middle" fill="var(--muted)" font-size="11">bot join · optional (5)</text>
+<line x1="560" y1="330" x2="620" y2="330" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#d-deg)"/>
+<text x="590" y="292" text-anchor="middle" fill="var(--muted)" font-size="11">agent turn · not_present</text>
+
+<!-- events into flows (flows.v1) -->
+<path d="M 200 380 C 200 420, 380 420, 400 380" fill="none" stroke="var(--ship-line)" stroke-width="1.5" marker-end="url(#d-ev)"/>
+<path d="M 690 380 C 690 420, 500 420, 480 380" fill="none" stroke="var(--ship-line)" stroke-width="1.5" marker-end="url(#d-ev)"/>
+<text x="440" y="424" text-anchor="middle" fill="var(--ship-line)" font-size="11">events, flows.v1: meeting.started / .completed · desk.unscaffolded · claim.proposed · friction.reported</text>
+<text x="440" y="438" text-anchor="middle" fill="var(--muted)" font-size="10">a publish is not a dependency · definitions in behavior/ decide what waits (42.2)</text>
+
+<!-- shared dependencies -->
+<rect x="40" y="480" width="520" height="64" rx="4" fill="var(--ship)" stroke="var(--ship-line)"/>
+<text x="300" y="504" text-anchor="middle" fill="var(--ink)">identity — the only shared dependency</text>
+<text x="300" y="524" text-anchor="middle" fill="var(--muted)" font-size="11">accounts · who is this bearer · person facts (timezone, mail prefs) · membership · publishes onboarding.completed</text>
+<rect x="620" y="480" width="220" height="64" rx="4" fill="var(--ship)" stroke="var(--ship-line)"/>
+<text x="730" y="504" text-anchor="middle" fill="var(--ink)">runtime — a primitive</text>
+<text x="730" y="524" text-anchor="middle" fill="var(--muted)" font-size="11">spawns what it is told, knows nothing</text>
+
+<line x1="150" y1="380" x2="150" y2="480" stroke="var(--ok)" stroke-width="1.5" marker-end="url(#d-ok)"/>
+<line x1="440" y1="380" x2="440" y2="480" stroke="var(--ok)" stroke-width="1.5" marker-end="url(#d-ok)"/>
+<line x1="640" y1="380" x2="560" y2="480" stroke="var(--ok)" stroke-width="1.5" marker-end="url(#d-ok)"/>
+<text x="470" y="466" fill="var(--ok)" font-size="11">who is this · what are their facts</text>
+<line x1="760" y1="380" x2="760" y2="480" stroke="var(--ok)" stroke-width="1.5" marker-end="url(#d-ok)"/>
+<path d="M 240 380 C 240 450, 640 450, 700 480" fill="none" stroke="var(--ok)" stroke-width="1.5" marker-end="url(#d-ok)"/>
+<text x="768" y="440" fill="var(--ok)" font-size="11">runtime.v1: spawn a bot / a worker</text>
+<text x="768" y="454" fill="var(--muted)" font-size="10">mounts and names passed in, never decoded</text>
+<path d="M 560 500 C 590 500, 600 500, 620 500" fill="none" stroke="var(--ship-line)" stroke-width="1.5" stroke-dasharray="3 3"/>
+<text x="590" y="492" text-anchor="middle" fill="var(--ship-line)" font-size="10">onboarding.completed →</text>
+
+<!-- content and deploy -->
+<rect x="40" y="620" width="340" height="50" rx="4" fill="var(--ship)" stroke="var(--ship-line)"/>
+<text x="210" y="641" text-anchor="middle" fill="var(--ink)">behavior/ — content the runtime loads</text>
+<text x="210" y="658" text-anchor="middle" fill="var(--muted)" font-size="11">mail · flow definitions · presets · prompts · seeds · a private tree mounted per deployment</text>
+<rect x="420" y="620" width="420" height="50" rx="4" fill="var(--ship)" stroke="var(--ship-line)"/>
+<text x="630" y="641" text-anchor="middle" fill="var(--ink)">deploy/ — config.v1 per service, delivered by env, validated at boot</text>
+<text x="630" y="658" text-anchor="middle" fill="var(--muted)" font-size="11">profiles: no-agents = identity + meetings + flows + edge · full adds agent</text>
+<line x1="380" y1="330" x2="380" y2="300" stroke="none"/>
+<path d="M 210 620 C 210 590, 380 590, 400 380" fill="none" stroke="var(--ok)" stroke-width="1.2" stroke-dasharray="1 3" marker-end="url(#d-ok)"/>
+<text x="230" y="598" fill="var(--muted)" font-size="10">read at run time, never compiled in (P11)</text>
+</svg>

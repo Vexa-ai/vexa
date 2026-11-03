@@ -175,15 +175,23 @@ def test_admin_get_user_by_id_is_exact_side_effect_free_and_authenticated(client
         },
     )
     assert updated.status_code == 200, updated.text
-    assert _data(updated) == {
+    # the webhook view, alongside the 0.12 account record the answer still carries
+    assert {k: updated.json()[k] for k in
+            ("webhook_url", "webhook_secret_set", "webhook_secret", "webhook_events")} == {
         "webhook_url": "https://example.com/by-id",
+        "webhook_secret_set": True,
+        "webhook_secret": "********this",
         "webhook_events": {"meeting.completed": True},
     }
+    assert "webhook_secret" not in updated.json()["data"]
     assert "never-return-this" not in updated.text
 
     found = client.get(f"/admin/users/{created['id']}", headers=_admin())
     assert found.status_code == 200, found.text
-    assert _data(found) == _data(updated)
+    assert _data(found) == {
+        "webhook_url": "https://example.com/by-id",
+        "webhook_events": {"meeting.completed": True},
+    }
     assert "never-return-this" not in found.text
 
     assert client.get(f"/admin/users/{created['id']}").status_code == 403
@@ -447,7 +455,17 @@ def test_user_webhook_serializes_with_concurrent_platform_billing_update(
         engine.dispose()
 
     assert updated.status_code == 200, updated.text
-    assert _data(updated) == {
+    # the webhook view, alongside the 0.12 account record the answer still carries
+    assert {k: updated.json()[k] for k in
+            ("webhook_url", "webhook_secret_set", "webhook_secret", "webhook_events")} == {
+        "webhook_url": "https://example.com/user-settings",
+        "webhook_secret_set": True,
+        "webhook_secret": "********cret",
+        "webhook_events": {"meeting.completed": True},
+    }
+    assert "webhook_secret" not in updated.json()["data"]
+    stored = client.get(f"/admin/users/{user_id}", headers=_admin())
+    assert _data(stored) == {
         "subscription_tier": "commitment_25",
         "billing_contract_version": 1,
         "webhook_url": "https://example.com/user-settings",

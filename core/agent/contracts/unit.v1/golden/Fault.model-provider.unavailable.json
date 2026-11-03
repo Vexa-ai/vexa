@@ -1,0 +1,9 @@
+{
+  "source": "model-provider",
+  "kind": "unavailable",
+  "provider": "api.anthropic.com",
+  "model": "",
+  "status": null,
+  "detail": "ConnectTimeout",
+  "remedy": "Send it again shortly, or choose another model under Settings → Models."
+}

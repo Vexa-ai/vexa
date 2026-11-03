@@ -14,6 +14,7 @@ import { createClient } from 'redis';
 import { actsChannel, parseAct, type Act } from '../contracts.js';
 import type { ActsSource } from '../ports.js';
 import { makeLazyConnect } from './redis-lazy-connect.js';
+import { botReconnectStrategy, type BotRedisOptions } from './redis-terminal.js';
 
 /** The minimal subscriber surface the source needs — injected so the adapter is offline-provable.
  *  `subscribe(channel, cb)` delivers each raw message string to `cb`. */
@@ -78,8 +79,9 @@ export type LiveRedisActsClient = RedisActsClient & {
 /** Wrap a node-redis v4 SUBSCRIBER connection into the minimal `RedisActsClient`. A subscriber
  *  needs its own dedicated connection (v4 reserves a subscribed client for pub/sub), so this is
  *  a separate client from the transcript writer. Connects lazily on first subscribe. */
-export function redisActsClientFrom(redisUrl: string): LiveRedisActsClient {
-  const client = createClient({ url: redisUrl });
+export function redisActsClientFrom(redisUrl: string, opts: BotRedisOptions = {}): LiveRedisActsClient {
+  // Stops reconnecting once the session is over (`redis-terminal.ts`): a revoked credential ends it.
+  const client = createClient({ url: redisUrl, socket: { reconnectStrategy: botReconnectStrategy(opts.session) } });
   client.on('error', (err: unknown) => {
     console.error(`[bot] redis (acts) error: ${(err as Error)?.message ?? String(err)}`);
   });

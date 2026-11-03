@@ -1,0 +1,17 @@
+{
+  "key": "fixture-bots-key-not-a-deployment-secret-00001",
+  "claims": {
+    "role": "bots",
+    "actor": "meeting-api",
+    "session": "bot-accounts-0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+    "at": 1760000000,
+    "nonce": "5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f",
+    "method": "POST",
+    "path": "/api/internal/bot-account",
+    "body": "714b8817a1e3ef47f5843e9bc58d14dcf12b079cae45916512d52562355c027f"
+  },
+  "request_body": "{\"action\":\"list\",\"owners\":[\"user:42\",\"company\"]}",
+  "encoded": "eyJyb2xlIjoiYm90cyIsImFjdG9yIjoibWVldGluZy1hcGkiLCJzZXNzaW9uIjoiYm90LWFjY291bnRzLTBmMWUyZDNjNGI1YTY5Nzg4Nzk2YTViNGMzZDJlMWYwIiwiYXQiOjE3NjAwMDAwMDAsIm5vbmNlIjoiNWM0ZDNlMmYxYTBiOWM4ZDdlNmY1YTRiM2MyZDFlMGYiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii9hcGkvaW50ZXJuYWwvYm90LWFjY291bnQiLCJib2R5IjoiNzE0Yjg4MTdhMWUzZWY0N2Y1ODQzZTliYzU4ZDE0ZGNmMTJiMDc5Y2FlNDU5MTY1MTJkNTI1NjIzNTVjMDI3ZiJ9",
+  "signature": "750f4122524e5e76be39a897f24f7b8b1ec276f4fe293238157bf10155d9370d",
+  "header": "eyJyb2xlIjoiYm90cyIsImFjdG9yIjoibWVldGluZy1hcGkiLCJzZXNzaW9uIjoiYm90LWFjY291bnRzLTBmMWUyZDNjNGI1YTY5Nzg4Nzk2YTViNGMzZDJlMWYwIiwiYXQiOjE3NjAwMDAwMDAsIm5vbmNlIjoiNWM0ZDNlMmYxYTBiOWM4ZDdlNmY1YTRiM2MyZDFlMGYiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii9hcGkvaW50ZXJuYWwvYm90LWFjY291bnQiLCJib2R5IjoiNzE0Yjg4MTdhMWUzZWY0N2Y1ODQzZTliYzU4ZDE0ZGNmMTJiMDc5Y2FlNDU5MTY1MTJkNTI1NjIzNTVjMDI3ZiJ9.750f4122524e5e76be39a897f24f7b8b1ec276f4fe293238157bf10155d9370d"
+}

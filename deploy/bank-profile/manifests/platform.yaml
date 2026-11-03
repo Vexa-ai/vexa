@@ -1,0 +1,162 @@
+# The bank's platform, applied by the CLUSTER ADMIN before anyone installs Vexa (run.sh up).
+# Placeholders (__X__) are filled by run.sh. Nothing here is part of the chart.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vexa
+  labels:
+    # Pod Security Admission `restricted`, enforced: a Pod that is not runAsNonRoot, drops a
+    # capability short of ALL, allows privilege escalation or runs without a seccomp profile is refused.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+    # The restricted-v2 emulation (the scc webhook below) acts on Pods in namespaces with this label.
+    bank-profile/scc: restricted-v2
+  annotations:
+    openshift.io/sa.scc.uid-range: "__SCC_UID__/10000"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bank-platform
+  labels: {pod-security.kubernetes.io/enforce: baseline}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bank-ext
+  labels: {pod-security.kubernetes.io/enforce: baseline, bank-profile/zone: ext}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bank-db
+  labels: {pod-security.kubernetes.io/enforce: baseline, bank-profile/zone: db}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bank-users
+  labels: {pod-security.kubernetes.io/enforce: restricted, bank-profile/zone: users}
+---
+# ── restricted-v2, emulated: the SCC admission OpenShift runs, as a mutating webhook ──────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: scc, namespace: bank-platform}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: scc}}
+  template:
+    metadata: {labels: {app: scc}}
+    spec:
+      containers:
+        - name: scc
+          image: __STUB_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "-u", "/stub/stub.py", "scc"]
+          env:
+            - {name: SCC_UID, value: "__SCC_UID__"}
+            - {name: SCC_RO, value: "__SCC_RO__"}
+          ports: [{containerPort: 8443}]
+          readinessProbe: {tcpSocket: {port: 8443}, periodSeconds: 2}
+          volumeMounts:
+            - {name: stub, mountPath: /stub}
+            - {name: tls, mountPath: /tls}
+      volumes:
+        - {name: stub, configMap: {name: bank-stub}}
+        - {name: tls, secret: {secretName: scc-tls}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: scc, namespace: bank-platform}
+spec:
+  selector: {app: scc}
+  ports: [{port: 443, targetPort: 8443}]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata: {name: bank-profile-restricted-v2}
+webhooks:
+  - name: restricted-v2.scc.bank-profile
+    admissionReviewVersions: [v1]
+    sideEffects: None
+    failurePolicy: Fail
+    reinvocationPolicy: IfNeeded
+    timeoutSeconds: 10
+    namespaceSelector: {matchLabels: {bank-profile/scc: restricted-v2}}
+    rules:
+      - {operations: [CREATE], apiGroups: [""], apiVersions: [v1], resources: [pods], scope: Namespaced}
+    clientConfig:
+      service: {name: scc, namespace: bank-platform, path: /admit, port: 443}
+      caBundle: __CA_BUNDLE__
+---
+# ── the platform's own egress default in the release namespace ────────────────────────────────────
+# Policies add up: this denies every egress no other policy allows. The chart's own policies, with
+# values-bank.yaml, allow exactly the declared endpoints (DNS, the release's own Pods, bank-ext,
+# bank-db and the API server for the runtime).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: bank-default-deny-egress, namespace: vexa}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+---
+# ── the deployer: namespace-scoped, the rights docs/docs/deployment-kubernetes.mdx#required-permissions names ──
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: bank-deployer, namespace: vexa}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bank-deployer-token
+  namespace: vexa
+  annotations: {kubernetes.io/service-account.name: bank-deployer}
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: vexa-deployer, namespace: vexa}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [configmaps, services, persistentvolumeclaims, serviceaccounts]
+    verbs: [get, list, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, daemonsets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, rolebindings]
+    verbs: [get, list, create, update, patch, delete]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies, ingresses]
+    verbs: [get, list, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [pods, pods/log]
+    verbs: [get, list, watch]
+  # Every right the chart's runtime Role grants (Kubernetes lets you grant only what you hold).
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [create, delete]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: vexa-deployer, namespace: vexa}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: vexa-deployer}
+subjects:
+  - {kind: ServiceAccount, name: bank-deployer, namespace: vexa}

@@ -7,7 +7,7 @@ correctly*, a question an agent that never calls it does not have. Nothing anywh
 
 So the route now carries an explicit `summary` written for the agent, and NO docstring: the MCP
 edge derives a tool's description from this operation, preferring the docstring and falling back
-to the summary (`core/meetings/services/mcp/src/vexa_mcp/bind.py::_describe`), so a docstring here
+to the summary (`core/gateway/services/mcp/src/vexa_mcp/bind.py::_describe`), so a docstring here
 is served to every agent in front of every call, forever. The maintainer's half moved to a comment
 block above the route, where no agent pays for it by the token.
 

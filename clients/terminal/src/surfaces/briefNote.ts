@@ -48,10 +48,11 @@ export function findBriefNote(
   return best?.file ?? null;
 }
 
-/** A note whose frontmatter carries `example: true` is seeded demo data, never a brief. */
+/** A doc whose frontmatter carries `template: true` (a SHAPE) or `example: true` (legacy demo
+ *  data) is never a record: never a brief, never prior context, never named to the reader. */
 export function isExampleNote(text: string): boolean {
   if (!text.startsWith("---")) return false;
   const end = text.indexOf("\n---", 3);
   const fm = end === -1 ? text.slice(0, 800) : text.slice(0, end);
-  return /^example:\s*true\b/m.test(fm);
+  return /^(?:template|example):\s*true\b/m.test(fm);
 }

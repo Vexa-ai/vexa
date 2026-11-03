@@ -114,6 +114,10 @@ MATRIX: list[Cell] = [
     Cell("failed/awaiting_admission_rejected", status="failed",
          reason="awaiting_admission_rejected", stage="awaiting_admission", expect=SERVED,
          why="the host said NO; PERMANENT in retry.py — a retry re-knocks on a slammed door"),
+    Cell("failed/platform_join_refused", status="failed", reason="platform_join_refused",
+         stage="joining", expect=SERVED,
+         why="Meet refused every bot pod meeting-api already tried (meet_respawn.py); the sweep "
+             "sending more minutes later repeats what just failed, as awaiting_admission_rejected did"),
     Cell("failed/auth_session_missing", status="failed", reason="auth_session_missing",
          stage="joining", expect=SERVED,
          why="signed-out profile; a re-spawn hits the same dead cookie jar"),

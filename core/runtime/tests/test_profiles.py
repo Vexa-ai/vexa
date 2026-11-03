@@ -125,16 +125,16 @@ def test_agent_env_matches_spec_agent_golden(monkeypatch):
 
 def test_worker_image_derives_distinct_name_from_agent_api(monkeypatch):
     monkeypatch.delenv("AGENT_WORKER_IMAGE", raising=False)
-    assert worker_image_for("vexaai/v012-agent-api:dev") == "vexaai/v012-agent-worker:dev"
+    assert worker_image_for("vexaai/vexa-agent-api:dev") == "vexaai/vexa-agent-worker:dev"
     # tag is preserved through the swap
-    assert worker_image_for("vexaai/v012-agent-api:0.12-rc1") == "vexaai/v012-agent-worker:0.12-rc1"
+    assert worker_image_for("vexaai/vexa-agent-api:0.12-rc1") == "vexaai/vexa-agent-worker:0.12-rc1"
     # bare 'agent-api' repo (no -api dash prefix) still rewrites
     assert worker_image_for("agent-api:dev") == "agent-worker:dev"
 
 
 def test_worker_image_override_env_wins(monkeypatch):
     monkeypatch.setenv("AGENT_WORKER_IMAGE", "registry.example.com/custom-worker:x")
-    assert worker_image_for("vexaai/v012-agent-api:dev") == "registry.example.com/custom-worker:x"
+    assert worker_image_for("vexaai/vexa-agent-api:dev") == "registry.example.com/custom-worker:x"
 
 
 def test_worker_image_falls_back_when_not_derivable(monkeypatch):
@@ -145,19 +145,19 @@ def test_worker_image_falls_back_when_not_derivable(monkeypatch):
 
 
 def test_agent_profile_uses_distinct_worker_image(monkeypatch):
-    monkeypatch.setenv("AGENT_IMAGE", "vexaai/v012-agent-api:dev")
+    monkeypatch.setenv("AGENT_IMAGE", "vexaai/vexa-agent-api:dev")
     monkeypatch.delenv("AGENT_WORKER_IMAGE", raising=False)
     reg = default_registry()
-    assert reg.get("agent").runnable.image == "vexaai/v012-agent-worker:dev"
+    assert reg.get("agent").runnable.image == "vexaai/vexa-agent-worker:dev"
 
 
 def test_agent_profile_honors_worker_image_override(monkeypatch):
     """build_production_app pins AGENT_WORKER_IMAGE to the alias's resolved name (or the agent-api
     fallback); the registry must honor it so a tag-failure fallback reaches dispatch."""
-    monkeypatch.setenv("AGENT_IMAGE", "vexaai/v012-agent-api:dev")
-    monkeypatch.setenv("AGENT_WORKER_IMAGE", "vexaai/v012-agent-api:dev")  # simulated fallback
+    monkeypatch.setenv("AGENT_IMAGE", "vexaai/vexa-agent-api:dev")
+    monkeypatch.setenv("AGENT_WORKER_IMAGE", "vexaai/vexa-agent-api:dev")  # simulated fallback
     reg = default_registry()
-    assert reg.get("agent").runnable.image == "vexaai/v012-agent-api:dev"
+    assert reg.get("agent").runnable.image == "vexaai/vexa-agent-api:dev"
 
 
 # ── command overrides (process-backend / lite) ────────────────────────────────────────────────────

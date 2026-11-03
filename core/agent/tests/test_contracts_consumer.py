@@ -42,7 +42,7 @@ def test_segment_goldens_conform(name):
     ["EntityFrontmatter.meeting.json", "EntityFrontmatter.contact.json"],
 )
 def test_workspace_goldens_conform(name):
-    contracts.validate_entity_frontmatter(_load(f"agent/contracts/workspace.v1/golden/{name}"))
+    contracts.validate_entity_frontmatter(_load(f"workspaces/contracts/workspace.v1/golden/{name}"))
 
 
 def test_no_meetings_internals_imported():

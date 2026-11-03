@@ -3,7 +3,7 @@
  *  command in the one registry; keybindings point at command ids. */
 import { CommandServiceId, KeybindingServiceId, type ServiceContainer } from "../platform";
 import { registry } from "../contributions";
-import { LayoutServiceId } from "./layout";
+import { LayoutServiceId } from "../platform/layout";
 import { PaletteServiceId } from "./palette";
 
 export function registerEngineCommands(container: ServiceContainer): void {

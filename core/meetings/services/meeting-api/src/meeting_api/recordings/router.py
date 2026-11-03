@@ -2,7 +2,8 @@
 
   * **POST /internal/recordings/upload** — the bot's chunk upload. Auth via the MeetingToken it
     carries (``Authorization: Bearer <token>``, re-verified here — the parent's
-    ``require_recording_upload_token``). Multipart form: ``file`` + ``session_uid`` + media metadata.
+    ``require_recording_upload_token``), which names the meeting and the session it may write; the
+    internal tier is also accepted. Multipart form: ``file`` + ``session_uid`` + media metadata.
     Folds the chunk into ``meeting.data['recordings']`` JSONB. ``include_in_schema=False`` (internal).
   * **GET /recordings** — the caller's recordings (from ``meeting.data``), scoped by the
     gateway-injected ``x-user-id``.
@@ -11,20 +12,23 @@
 """
 from __future__ import annotations
 
+import hmac
 import json
 import os
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
+from ..meeting_token import InvalidMeetingToken, admit_session
+from ..regime import require_person
 from .ports import RecordingRepo, Storage
 from .deletion import MeetingNotTerminal, delete_owned_recording
+from .jsonb import RECORDING_MEDIA_FORMATS, RECORDING_MEDIA_TYPES
 from .service import (
     SIGNAL_MEDIA_TYPE,
     InvalidSignalTape,
     SessionNotFound,
-    _verify_meeting_token,
     finalize_master,
     upload_chunk,
     upload_signal_tape,
@@ -44,7 +48,7 @@ MAX_LIST_LIMIT = 200
 #: `storage_path`, `storage_backend`, `is_final`, `finalized_at/by`, `metadata` — which is upload
 #: bookkeeping no list renders and no caller can act on. It stays whole on
 #: ``GET /recordings/{id}``, which is where a caller goes when they want one recording.
-LIST_MEDIA_FILE_KEYS = ("id", "type", "format", "duration_seconds", "file_size_bytes")
+LIST_MEDIA_FILE_KEYS = ("id", "type", "format", "duration_seconds", "file_size_bytes", "capture_started_at_ms")
 
 #: Top-level keys the LIST row keeps. `playback_url` is the one a client actually follows, so it
 #: stays; `user_id`/`session_uid`/`source` identify the producer, not the recording, and the
@@ -92,6 +96,39 @@ def _bearer_token(authorization: Optional[str]) -> str:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Missing recording upload token")
     return authorization.split(" ", 1)[1].strip()
+
+
+def _upload_scope(authorization: Optional[str], session_uid: str,
+                  token_secret: Optional[str]) -> Optional[int]:
+    """Authenticate one upload. Returns the MeetingToken's meeting id (which the service checks
+    against the session's meeting), or ``None`` for the internal tier, which is scoped by the
+    session alone. A MeetingToken admits only the session it is bound to
+    (``meeting_token.admit_session``, the rule the lifecycle callback applies too). Raises 401."""
+    bearer = _bearer_token(authorization)
+    internal_secret = os.getenv("INTERNAL_API_SECRET") or ""
+    if internal_secret and bearer and hmac.compare_digest(bearer.encode(), internal_secret.encode()):
+        return None
+    try:
+        claims = admit_session(bearer, session_uid=session_uid, secret=token_secret)
+        return int(claims["meeting_id"])
+    except (InvalidMeetingToken, KeyError, TypeError, ValueError) as e:
+        raise HTTPException(status_code=401, detail=f"Invalid recording upload token: {e}")
+
+
+def _attachment_name(rec: dict, mf: dict) -> str:
+    """The filename a ``?download=1`` read is saved under: ``meeting-<id>-<date>-<type>.<ext>``.
+
+    Built only from server-owned fields (ids, the recording's ``created_at`` date and the media
+    file's own ``format``), never from anything the caller sent, so the header cannot be steered.
+    The extension is the real container's; an unknown format falls back to ``bin`` rather than
+    lying about what the bytes are."""
+    fmt = str(mf.get("format") or "")
+    ext = fmt if fmt.isalnum() and len(fmt) <= 8 else "bin"
+    kind = "video" if mf.get("type") == "video" else "audio"
+    date = str(rec.get("created_at") or "")[:10]
+    date_part = f"-{date}" if len(date) == 10 and date[4] == "-" and date[7] == "-" and \
+        date.replace("-", "").isdigit() else ""
+    return f"meeting-{int(rec['meeting_id'])}{date_part}-{kind}.{ext}"
 
 
 def _resolve_user_id(x_user_id: Optional[str]) -> int:
@@ -177,6 +214,23 @@ def build_router(
     token_secret: Optional[str] = None,
 ) -> APIRouter:
     """The recordings routes over the injected ``RecordingRepo`` + ``Storage`` ports."""
+
+    async def _readable(user_id: int, request: Request, *, shared: bool = True) -> list:
+        """The recordings this caller may READ: their own, plus the recordings of meetings shared with
+        them whose owner allowed recipients the recording (``shared_access``) — a transcript-share
+        recipient or a member of the bound workspace. ``shared=False`` keeps exactly the caller's own
+        (the account-wide list stays "my recordings"). Read off ``request`` so the route signatures,
+        which other changes also touch, stay as they are."""
+        recs = await repo.list_meeting_recordings(user_id)
+        if not shared:
+            return recs
+        workspaces = {w.strip() for w in (request.headers.get("x-user-workspaces") or "").split(",")
+                      if w.strip()}
+        raw_mid = request.query_params.get("meeting_id")
+        meeting_id = int(raw_mid) if raw_mid and raw_mid.isdigit() else None
+        own = {r.get("meeting_id") for r in recs}
+        extra = await repo.list_shared_recordings(user_id, workspaces, meeting_id=meeting_id)
+        return recs + [r for r in extra if r.get("meeting_id") not in own]
     router = APIRouter()
 
     @router.post("/internal/recordings/upload", include_in_schema=False)
@@ -211,16 +265,7 @@ def build_router(
         # server path: no JSONB fold, no chunking, no master. See service.upload_signal_tape.
         if media_type == SIGNAL_MEDIA_TYPE:
             part = str(meta.get("part") or "")
-            bearer = _bearer_token(authorization)
-            internal_secret = os.getenv("INTERNAL_API_SECRET")
-            token_meeting_id = None
-            if not (internal_secret and bearer == internal_secret):
-                try:
-                    claims = _verify_meeting_token(bearer, secret=token_secret)
-                except ValueError as e:
-                    raise HTTPException(status_code=401,
-                                        detail=f"Invalid recording upload token: {e}")
-                token_meeting_id = int(claims["meeting_id"])
+            token_meeting_id = _upload_scope(authorization, session_uid, token_secret)
             try:
                 receipt = await upload_signal_tape(
                     repo, storage,
@@ -233,24 +278,21 @@ def build_router(
             except SessionNotFound as e:
                 raise HTTPException(status_code=404, detail=str(e))
             return JSONResponse(content=receipt)
+        # Both become path segments of the chunk's object key: only the media a bot records reach it.
+        if media_type not in RECORDING_MEDIA_TYPES or media_format not in RECORDING_MEDIA_FORMATS:
+            raise HTTPException(
+                status_code=422,
+                detail=(f"media_type must be one of {list(RECORDING_MEDIA_TYPES)} (or {SIGNAL_MEDIA_TYPE!r} "
+                        f"for a signal tape) and media_format one of {list(RECORDING_MEDIA_FORMATS)}"),
+            )
         chunk_seq = chunk_seq if chunk_seq is not None else int(meta.get("chunk_seq", 0) or 0)
         is_final = is_final if is_final is not None else bool(meta.get("is_final", True))
         duration_seconds = duration_seconds if duration_seconds is not None else meta.get("duration_seconds")
         sample_rate = sample_rate if sample_rate is not None else meta.get("sample_rate")
 
-        # Auth: accept either the INTERNAL_API_SECRET (the bot's internal upload uses it, like the
-        # lifecycle callback; meeting is scoped by session_uid) OR a MeetingToken (carries its meeting_id).
-        bearer = _bearer_token(authorization)
-        internal_secret = os.getenv("INTERNAL_API_SECRET")
-        token_meeting_id: Optional[int] = None
-        if internal_secret and bearer == internal_secret:
-            token_meeting_id = None  # internal auth → scope by session; skip the MeetingToken cross-check
-        else:
-            try:
-                claims = _verify_meeting_token(bearer, secret=token_secret)
-            except ValueError as e:
-                raise HTTPException(status_code=401, detail=f"Invalid recording upload token: {e}")
-            token_meeting_id = int(claims["meeting_id"])
+        # Auth: the bot's MeetingToken (its meeting, and the session it is bound to), or the internal
+        # tier (scoped by session_uid).
+        token_meeting_id = _upload_scope(authorization, session_uid, token_secret)
 
         data = await file.read()
         try:
@@ -261,6 +303,7 @@ def build_router(
                 media_type=media_type, media_format=media_format,
                 chunk_seq=chunk_seq, is_final=is_final,
                 duration_seconds=duration_seconds, sample_rate=sample_rate,
+                capture_started_at_ms=meta.get("capture_started_at_ms"),
             )
         except SessionNotFound as e:
             raise HTTPException(status_code=404, detail=str(e))
@@ -289,7 +332,7 @@ def build_router(
         of scope; what changes is that the RESPONSE is bounded, which is what reaches a caller.
         """
         user_id = _resolve_user_id(x_user_id)
-        recs = await repo.list_meeting_recordings(user_id)
+        recs = await _readable(user_id, request, shared=meeting_id is not None)
         if meeting_id is not None:
             recs = [r for r in recs if r.get("meeting_id") == meeting_id]
         recs = sorted(recs, key=_list_sort_key, reverse=True)
@@ -312,16 +355,15 @@ def build_router(
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
     ):
-        """Recording detail (api/meetings.mdx: GET /recordings/{recording_id}) — the single recording
-        record, scoped to the caller. 404 if the id isn't one of the caller's recordings."""
+        """Get a single recording and its media files. 404 if the id is not one of your recordings."""
         user_id = _resolve_user_id(x_user_id)
-        recs = await repo.list_meeting_recordings(user_id)
+        recs = await _readable(user_id, request)
         rec = next((r for r in recs if r.get("id") == recording_id), None)
         if rec is None:
             raise HTTPException(status_code=404, detail="Recording not found")
         return JSONResponse(content=rec)
 
-    @router.delete("/recordings/{recording_id}")
+    @router.delete("/recordings/{recording_id}", dependencies=[Depends(require_person)])
     async def delete_recording(
         recording_id: int,
         x_user_id: Optional[str] = Header(default=None),
@@ -355,7 +397,7 @@ def build_router(
     ):
         user_id = _resolve_user_id(x_user_id)
         # Find which meeting owns this recording (scoped to the caller).
-        recs = await repo.list_meeting_recordings(user_id)
+        recs = await _readable(user_id, request)
         rec = next((r for r in recs if r.get("id") == recording_id), None)
         if rec is None:
             raise HTTPException(status_code=404, detail="Recording not found")
@@ -389,12 +431,15 @@ def build_router(
         media_file_id: int,
         request: Request,
         type: str = "audio",
+        download: bool = Query(default=False, description=(
+            "Ask for the bytes as a file to save: adds `Content-Disposition: attachment`. Same "
+            "ownership check as playback; nothing else about the answer changes.")),
         x_user_id: Optional[str] = Header(default=None),
     ):
         # Stream the finalized master bytes from object storage (recordings P3). The player fetches
         # /master first (which finalizes), then this; finalize-on-read here too as a safety net.
         user_id = _resolve_user_id(x_user_id)
-        recs = await repo.list_meeting_recordings(user_id)
+        recs = await _readable(user_id, request)
         rec = next((r for r in recs if r.get("id") == recording_id), None)
         if rec is None:
             raise HTTPException(status_code=404, detail="Recording not found")
@@ -415,7 +460,7 @@ def build_router(
             repo, storage, meeting_id=rec["meeting_id"], recording_id=recording_id,
             media_type=mf.get("type", type),
         )
-        recs = await repo.list_meeting_recordings(user_id)
+        recs = await _readable(user_id, request)
         rec = next((r for r in recs if r.get("id") == recording_id), rec)
         mf = next(
             (m for m in (rec or {}).get("media_files", []) if str(m.get("id")) == str(media_file_id)),
@@ -442,13 +487,20 @@ def build_router(
             full_body = await storage.get(storage_path)
             total = len(full_body)
 
+        # A save, not a play: the same owner-scoped bytes, marked as a file. Set only on request so
+        # the <audio> element's reads stay inline.
+        disposition = (
+            {"Content-Disposition": f'attachment; filename="{_attachment_name(rec, mf)}"'}
+            if download else {}
+        )
+
         rng = _parse_range(range_header, total)  # may raise 416
         if rng is None:
             data = full_body if full_body is not None else await storage.get(storage_path)
             return Response(
                 content=data,
                 media_type=content_type,
-                headers={"Accept-Ranges": "bytes", "Content-Length": str(len(data))},
+                headers={"Accept-Ranges": "bytes", "Content-Length": str(len(data)), **disposition},
             )
 
         start, end = rng
@@ -467,6 +519,7 @@ def build_router(
                 "Accept-Ranges": "bytes",
                 "Content-Range": f"bytes {start}-{end}/{total}",
                 "Content-Length": str(len(slice_bytes)),
+                **disposition,
             },
         )
 

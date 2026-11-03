@@ -1,0 +1,90 @@
+[
+  {
+    "args": {
+      "name": "notes",
+      "org": null,
+      "private": true
+    },
+    "request": {
+      "body": {
+        "name": "notes",
+        "private": true
+      },
+      "headers": {
+        "accept": "application/vnd.github+json",
+        "authorization": "Bearer recorded-test-token",
+        "content-type": "application/json",
+        "user-agent": "vexa-agent"
+      },
+      "method": "POST",
+      "url": "https://api.github.com/user/repos"
+    },
+    "returned": "https://github.com/acme/notes.git"
+  },
+  {
+    "args": {
+      "name": "notes",
+      "org": null,
+      "private": false
+    },
+    "request": {
+      "body": {
+        "name": "notes",
+        "private": false
+      },
+      "headers": {
+        "accept": "application/vnd.github+json",
+        "authorization": "Bearer recorded-test-token",
+        "content-type": "application/json",
+        "user-agent": "vexa-agent"
+      },
+      "method": "POST",
+      "url": "https://api.github.com/user/repos"
+    },
+    "returned": "https://github.com/acme/notes.git"
+  },
+  {
+    "args": {
+      "name": "notes",
+      "org": "acme",
+      "private": true
+    },
+    "request": {
+      "body": {
+        "name": "notes",
+        "private": true
+      },
+      "headers": {
+        "accept": "application/vnd.github+json",
+        "authorization": "Bearer recorded-test-token",
+        "content-type": "application/json",
+        "user-agent": "vexa-agent"
+      },
+      "method": "POST",
+      "url": "https://api.github.com/orgs/acme/repos"
+    },
+    "returned": "https://github.com/acme/notes.git"
+  },
+  {
+    "args": {
+      "name": "notes",
+      "org": "acme",
+      "private": false
+    },
+    "request": {
+      "body": {
+        "name": "notes",
+        "private": false
+      },
+      "headers": {
+        "accept": "application/vnd.github+json",
+        "authorization": "Bearer recorded-test-token",
+        "content-type": "application/json",
+        "user-agent": "vexa-agent"
+      },
+      "method": "POST",
+      "url": "https://api.github.com/orgs/acme/repos"
+    },
+    "returned": "https://github.com/acme/notes.git"
+  }
+]

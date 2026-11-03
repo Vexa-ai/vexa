@@ -1,6 +1,7 @@
 """Storage readiness uses the application's endpoint and proves actual object I/O offline."""
 import importlib.util
 import io
+import json
 from pathlib import Path
 
 import pytest
@@ -44,6 +45,8 @@ class FakeS3:
 
     def get_object(self, *, Bucket, Key):
         self.call("GET probe", Bucket, Key)
+        if Key not in self.objects:
+            raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
         return {"Body": io.BytesIO(b"wrong bytes" if self.corrupt else self.objects[Key])}
 
     def delete_object(self, *, Bucket, Key):
@@ -190,18 +193,112 @@ def test_explicit_credentials_and_bucket_fallback(store, monkeypatch):
     assert {bucket for _, bucket, _ in store.calls} == {"fallback-bucket"}
 
 
-def test_scope_probe_never_writes_recordings(store, monkeypatch):
-    class ScopedClient:
-        def __getattr__(self, operation):
-            def call(**kwargs):
-                if not kwargs.get("Key", kwargs.get("Prefix", "")).startswith("userdata/"):
-                    raise ClientError({"Error": {"Code": "AccessDenied"}}, operation)
-                return getattr(store, operation)(**kwargs)
-            return call
+class ReadOnlyScoped:
+    """The bots' account as the read-only policy makes it: list and read its own prefix, nothing else."""
 
-    monkeypatch.setattr(storage_init, "client", lambda *args: ScopedClient())
+    READ = ("get_object", "list_objects_v2")
+
+    def __init__(self, store, prefix="userdata", writable=False):
+        self.store, self.prefix, self.writable = store, prefix, writable
+        self.attempts = []
+
+    def __getattr__(self, operation):
+        def call(**kwargs):
+            target = kwargs.get("Key", kwargs.get("Prefix", ""))
+            self.attempts.append((operation, target))
+            in_prefix = target.startswith(f"{self.prefix}/")
+            if not in_prefix or (operation not in self.READ and not self.writable):
+                raise ClientError({"Error": {"Code": "AccessDenied"}}, operation)
+            return getattr(self.store, operation)(**kwargs)
+        return call
+
+
+def test_scope_probe_never_writes_recordings(store, monkeypatch):
+    scoped = ReadOnlyScoped(store)
+    monkeypatch.setattr(storage_init, "client", lambda *args: scoped)
     original = dict(store.objects)
     assert storage_init.prove_scope("http://storage:9000", "bot", "secret", "test-recordings", "userdata", store) == []
     assert store.objects == original
     writes = [key for step, _, key in store.calls if step in ("PUT probe", "DELETE probe")]
     assert all(key.startswith((".vexa-storage-init/", "userdata/")) for key in writes)
+
+
+# ── the bots' account is READ-ONLY on its prefix (deny tests on the policy storage-init attaches) ──
+
+def _statements(policy):
+    return policy["Statement"]
+
+
+def test_bot_policy_grants_no_write_or_delete():
+    policy = storage_init.userdata_policy("vexa", "userdata/bot-identity-1", "bot-key")
+    actions = {a for st in _statements(policy) for a in st["Action"]}
+    assert actions == {"s3:ListBucket", "s3:GetObject"}
+    assert not any(a.startswith(("s3:Put", "s3:Delete", "s3:Abort", "s3:Restore")) or a in ("s3:*", "*")
+                   for a in actions)
+    assert all(st["Effect"] == "Allow" for st in _statements(policy))
+    assert all(st["Principal"] == {"AWS": ["bot-key"]} for st in _statements(policy))
+
+
+def test_bot_policy_reaches_only_its_own_prefix():
+    policy = storage_init.userdata_policy("vexa", "userdata/bot-identity-1", "bot-key")
+    for st in _statements(policy):
+        if st["Action"] == ["s3:GetObject"]:
+            assert st["Resource"] == ["arn:aws:s3:::vexa/userdata/bot-identity-1/*"]
+        else:
+            assert st["Action"] == ["s3:ListBucket"]
+            assert st["Resource"] == ["arn:aws:s3:::vexa"]
+            assert st["Condition"] == {"StringLike": {"s3:prefix": ["userdata/bot-identity-1/*"]}}
+
+
+@pytest.fixture
+def bot_env(store, monkeypatch):
+    monkeypatch.setenv("STORAGE_ENDPOINT", "http://storage:9000")
+    monkeypatch.setenv("BOT_S3_ENDPOINT", "http://storage:9000")
+    monkeypatch.setenv("BOT_S3_ACCESS_KEY", "bot-key")
+    monkeypatch.setenv("BOT_S3_SECRET_KEY", "bot-secret")
+    monkeypatch.setenv("BOT_USERDATA_S3_PATH", "userdata")
+    store.policies = {}
+    store.list_buckets = lambda: {"Buckets": []}
+    store.put_bucket_policy = lambda *, Bucket, Policy: store.policies.__setitem__(Bucket, Policy)
+    monkeypatch.setattr(storage_init, "ensure_scoped_account", lambda *a: "created")
+    return store
+
+
+def test_main_attaches_the_read_only_policy_and_proves_it(bot_env, monkeypatch, capsys):
+    scoped = ReadOnlyScoped(bot_env)
+    monkeypatch.setattr(storage_init, "client", lambda ep, ak, sk: scoped if ak == "bot-key" else bot_env)
+    assert storage_init.main() == 0
+    policy = json.loads(bot_env.policies["test-recordings"])
+    assert {a for st in policy["Statement"] for a in st["Action"]} == {"s3:ListBucket", "s3:GetObject"}
+    tried = {op for op, _ in scoped.attempts}
+    assert {"put_object", "delete_object"} <= tried          # writes were attempted by the proof — and denied
+    assert "read-only" in capsys.readouterr().out
+
+
+def test_main_stops_when_the_bots_account_can_write_its_prefix(bot_env, monkeypatch, capsys):
+    """A store that ignores the policy and lets the bots' account write is a STOP, not a start."""
+    scoped = ReadOnlyScoped(bot_env, writable=True)
+    monkeypatch.setattr(storage_init, "client", lambda ep, ak, sk: scoped if ak == "bot-key" else bot_env)
+    monkeypatch.setattr(storage_init.time, "sleep", lambda s: None)
+    assert storage_init.main() == 1
+    out = capsys.readouterr().out
+    assert "STOP" in out and "in own prefix was allowed but must be denied" in out
+
+
+@pytest.mark.parametrize("bot_var,root_var", [
+    ("BOT_S3_ACCESS_KEY", "MINIO_ACCESS_KEY"),
+    ("BOT_S3_ACCESS_KEY", "S3_ACCESS_KEY"),
+    ("BOT_S3_SECRET_KEY", "MINIO_SECRET_KEY"),
+    ("BOT_S3_SECRET_KEY", "S3_SECRET_KEY"),
+])
+def test_main_refuses_a_bot_pair_that_reuses_a_root_half(bot_env, monkeypatch, capsys, bot_var, root_var):
+    monkeypatch.setenv("S3_ACCESS_KEY", "s3-root-key")
+    monkeypatch.setenv("S3_SECRET_KEY", "s3-root-secret")
+    monkeypatch.setenv(bot_var, storage_init.os.environ[root_var])
+    monkeypatch.setattr(storage_init, "ensure_scoped_account",
+                        lambda *a: pytest.fail("no account may be made for a root key or secret"))
+    assert storage_init.main() == 1
+    out = capsys.readouterr().out
+    assert f"STOP: {bot_var}" in out
+    assert storage_init.os.environ[root_var] not in out
+    assert bot_env.policies == {}

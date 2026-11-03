@@ -1,0 +1,35 @@
+/* MEETING BUNDLES — the "Export" / "Import meeting" controls and dialog (MeetingBundleActions.tsx)
+   and the import cards a bundle dropped into a chat leaves in the conversation (ChatBundleImport.tsx).
+   Colours are tokens; a value off the scale stays literal here. */
+
+/* ── the small outlined button both controls use ── */
+.bun-btn {
+  background: transparent; color: var(--t2); border: 1px solid var(--line); border-radius: var(--radius-md);
+  padding: var(--space-1) 9px; font-size: var(--text-xs); cursor: pointer;
+}
+.bun-btn[data-compact] { border: none; padding: var(--space-0_5) var(--space-1_5); }
+.bun-btn[data-variant="primary"] { background: var(--accent); color: var(--on-accent); border: none; }
+
+.bun-note { font-size: var(--text-xs); color: var(--t3); line-height: 1.5; }
+.bun-danger { color: var(--danger); }
+.bun-accent { color: var(--accent); }
+.bun-small { font-size: var(--text-xs); }
+.bun-mt-10 { margin-top: 10px; }
+.bun-mt-14 { margin-top: 14px; }
+
+.bun-preview { font-size: var(--text-sm); color: var(--t2); }
+.bun-done { font-size: var(--text-sm); color: var(--t2); line-height: 1.5; }
+
+/* the drop target: dashed, accent while a file is over it */
+.bun-drop { border: 1px dashed var(--line2); border-radius: 8px; padding: 18px var(--space-3); }
+.bun-drop[data-over] { border-color: var(--accent); }
+
+/* ── a bundle's card in the chat ── */
+.bun-card {
+  display: flex; flex-direction: column; gap: var(--space-1); margin: 0 0 14px; padding: 10px var(--space-3);
+  border: 1px solid var(--line2); border-radius: var(--radius-lg); background: var(--panel);
+  font-size: var(--text-sm); color: var(--t2); line-height: 1.45;
+}
+.bun-card[data-tone="danger"] { border-color: var(--danger); }
+.bun-link { background: none; border: none; padding: 0; color: var(--blue); cursor: pointer; font: inherit; text-align: left; }
+.bun-dismiss { margin-left: auto; flex: none; background: none; border: none; padding: 0; color: var(--t3); cursor: pointer; }

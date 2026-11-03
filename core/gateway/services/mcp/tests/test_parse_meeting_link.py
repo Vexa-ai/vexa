@@ -1,0 +1,374 @@
+"""Unit tests for ``vexa_mcp.link_parser.parse_meeting_url``.
+
+Ported from 0.10.6 ``services/mcp/tests/test_parse_meeting_url.py`` (the
+Platform.construct_meeting_url / MeetingCreate sections belong to meeting-api's
+schemas and stayed there).
+"""
+import hashlib
+
+import pytest
+from fastapi import HTTPException
+
+from vexa_mcp.link_parser import parse_meeting_url
+
+
+def parse(url: str):
+    return parse_meeting_url(url)
+
+
+def assert_422(url: str, fragment: str = ""):
+    with pytest.raises(HTTPException) as exc_info:
+        parse_meeting_url(url)
+    assert exc_info.value.status_code == 422
+    if fragment:
+        assert fragment.lower() in str(exc_info.value.detail).lower(), (
+            f"Expected '{fragment}' in detail: {exc_info.value.detail}"
+        )
+
+
+class TestGoogleMeet:
+    def test_standard_code(self):
+        r = parse("https://meet.google.com/abc-defg-hij")
+        assert r.platform == "google_meet"
+        assert r.native_meeting_id == "abc-defg-hij"
+        assert r.passcode is None
+        assert r.warnings == []
+
+    def test_standard_code_with_authuser_param(self):
+        r = parse("https://meet.google.com/abc-defg-hij?authuser=0&hs=pCv")
+        assert r.native_meeting_id == "abc-defg-hij"
+
+    def test_custom_workspace_nickname(self):
+        r = parse("https://meet.google.com/our-team-standup")
+        assert r.platform == "google_meet"
+        assert r.native_meeting_id == "our-team-standup"
+        assert any("workspace" in w.lower() for w in r.warnings)
+
+    def test_custom_nickname_short_minimum(self):
+        # 5 chars is the minimum (1 + 3 middle + 1)
+        r = parse("https://meet.google.com/ab-cd")
+        assert r.native_meeting_id == "ab-cd"
+
+    def test_lookup_url_rejected(self):
+        assert_422("https://meet.google.com/lookup/c2dhdn5hqs", "lookup")
+
+    def test_invalid_code_rejected(self):
+        assert_422("https://meet.google.com/INVALID_CODE!")
+
+    def test_empty_path_rejected(self):
+        assert_422("https://meet.google.com/")
+
+
+class TestTeamsPersonal:
+    def test_standard_with_passcode(self):
+        r = parse("https://teams.live.com/meet/9361792952021?p=abc12345")
+        assert r.platform == "teams"
+        assert r.native_meeting_id == "9361792952021"
+        assert r.passcode == "abc12345"
+        # The host rides along, like every other short-link parse. A personal meeting id lives on
+        # teams.live.com and the id alone does not say so, so whoever rebuilds the join URL from
+        # (id, passcode) — bot_spawn's construct_meeting_url — would default to the world-wide
+        # enterprise host and send the bot to a different Teams (#892).
+        assert r.teams_base_host == "teams.live.com"
+        assert r.meeting_url is None
+
+    def test_no_passcode_warns(self):
+        r = parse("https://teams.live.com/meet/9361792952021")
+        assert r.native_meeting_id == "9361792952021"
+        assert r.passcode is None
+        assert any("passcode" in w.lower() for w in r.warnings)
+
+    def test_invalid_path_rejected(self):
+        assert_422("https://teams.live.com/join/9361792952021")
+
+
+class TestTeamsEnterpriseShort:
+    def test_teams_microsoft_com(self):
+        r = parse("https://teams.microsoft.com/meet/33749853217630?p=em7xplMpIFquiFGvn8")
+        assert r.platform == "teams"
+        assert r.native_meeting_id == "33749853217630"
+        assert r.passcode == "em7xplMpIFquiFGvn8"
+        assert r.teams_base_host == "teams.microsoft.com"
+        assert r.meeting_url is None
+
+    def test_17_digit_id_is_a_short_id(self):
+        # Prod handed out 17-digit /meet/<id> links that joined (28 Oct 2026); meeting-api builds
+        # them onto /meet/, so the parser takes the same lengths (parity `teams-meeting-id-length`).
+        r = parse("https://teams.microsoft.com/meet/12345678901234567?p=abc")
+        assert r.native_meeting_id == "12345678901234567"
+        assert r.passcode == "abc"
+
+    def test_18_digit_id_is_refused(self):
+        assert_422("https://teams.microsoft.com/meet/123456789012345678")
+
+    def test_no_passcode_warns(self):
+        r = parse("https://teams.microsoft.com/meet/33749853217630")
+        assert r.teams_base_host == "teams.microsoft.com"
+        assert any("passcode" in w.lower() for w in r.warnings)
+
+    def test_gcc_gov(self):
+        r = parse("https://gov.teams.microsoft.us/meet/12345678901234")
+        assert r.platform == "teams"
+        assert r.native_meeting_id == "12345678901234"
+        assert r.teams_base_host == "gov.teams.microsoft.us"
+
+    def test_dod(self):
+        r = parse("https://dod.teams.microsoft.us/meet/12345678901234")
+        assert r.teams_base_host == "dod.teams.microsoft.us"
+
+    def test_v2_deep_link(self):
+        r = parse("https://teams.microsoft.com/v2/?meetingjoin=true#/meet/33749853217630?p=em7xplMpIFquiFGvn8&anon=true&deeplinkId=c34d42b3")
+        assert r.platform == "teams"
+        assert r.native_meeting_id == "33749853217630"
+        assert r.passcode == "em7xplMpIFquiFGvn8"
+        assert r.teams_base_host == "teams.microsoft.com"
+
+    def test_v2_deep_link_no_passcode_warns(self):
+        r = parse("https://teams.microsoft.com/v2/?meetingjoin=true#/meet/33749853217630")
+        assert r.native_meeting_id == "33749853217630"
+        assert any("passcode" in w.lower() for w in r.warnings)
+
+
+class TestTeamsEnterpriseLong:
+    LONG_URL = (
+        "https://teams.microsoft.com/l/meetup-join/"
+        "19%3Ameeting_MjM2NzczMmEtMmRiNi00MGNhLWI1ZTYtMjI0ODQxMjI4NGNk%40thread.skype"
+        "/0?context=%7B%22Tid%22%3A%22d0880d3f-e6d1-4a41-9e81-b8fbcddf7b6c%22%7D"
+    )
+
+    def test_long_url_parsed(self):
+        r = parse(self.LONG_URL)
+        assert r.platform == "teams"
+        # native_meeting_id is a 16-char hex hash
+        assert len(r.native_meeting_id) == 16
+        assert all(c in "0123456789abcdef" for c in r.native_meeting_id)
+        # raw URL is preserved
+        assert r.meeting_url == self.LONG_URL
+        assert r.passcode is None
+        assert any("legacy" in w.lower() for w in r.warnings)
+
+    def test_hash_is_deterministic(self):
+        assert parse(self.LONG_URL).native_meeting_id == parse(self.LONG_URL).native_meeting_id
+
+    def test_hash_matches_sha256(self):
+        r = parse(self.LONG_URL)
+        assert r.native_meeting_id == hashlib.sha256(self.LONG_URL.encode()).hexdigest()[:16]
+
+    def test_unsupported_enterprise_path_rejected(self):
+        assert_422("https://teams.microsoft.com/l/channel/something")
+
+
+class TestZoom:
+    def test_standard_meeting(self):
+        r = parse("https://zoom.us/j/12345678901?pwd=placeholder-passcode")
+        assert r.platform == "zoom"
+        assert r.native_meeting_id == "12345678901"
+        assert r.passcode == "placeholder-passcode"
+
+    def test_regional_subdomain(self):
+        assert parse("https://us02web.zoom.us/j/12345678901").native_meeting_id == "12345678901"
+
+    def test_vanity_subdomain(self):
+        assert parse("https://company.zoom.us/j/12345678901?pwd=xyz").native_meeting_id == "12345678901"
+
+    def test_webinar_w_path(self):
+        assert parse("https://zoom.us/w/98765432101?pwd=abc").native_meeting_id == "98765432101"
+
+    def test_web_client_wc_join(self):
+        assert parse("https://zoom.us/wc/join/12345678901").native_meeting_id == "12345678901"
+
+    def test_9_digit_legacy_id(self):
+        assert parse("https://zoom.us/j/123456789").native_meeting_id == "123456789"
+
+    def test_zoomgov(self):
+        r = parse("https://frbmeetings.zoomgov.com/j/12345678901?pwd=xyz")
+        assert r.platform == "zoom"
+        assert r.native_meeting_id == "12345678901"
+
+    def test_my_personal_link_rejected(self):
+        assert_422("https://zoom.us/my/john.smith", "personal meeting room")
+
+    def test_12_digit_id_rejected(self):
+        assert_422("https://zoom.us/j/123456789012")  # 12 digits > max 11
+
+    def test_zoom_events_rejected(self):
+        assert_422("https://events.zoom.us/ev/abc123", "zoom events")
+
+    def test_password_spelling_is_read_as_well_as_pwd(self):
+        """A dropped passcode is invisible: the bot sits in a prompt nobody can see."""
+        r = parse("https://zoom.us/j/12345678901?password=placeholder-passcode")
+        assert r.passcode == "placeholder-passcode"
+
+
+class TestZoomHostedDomains:
+    """Zoom served under somebody else's hostname (fr_042129f5d53aa543).
+
+    An organisation can front its Zoom tenancy on its own domain, and the link it hands out then
+    carries no "zoom" anywhere. Recognised on the PATH SHAPE — Zoom's own two join paths, a 10-11
+    digit id, AND a passcode — never on the hostname, because the hostname is the part that was
+    replaced. Narrow on purpose: answering a wrong platform confidently is worse than the 422.
+    """
+
+    #: The exact link that 422'd in production, 2026-09-05.
+    LFX = ("https://zoom-lfx.platform.linuxfoundation.org/meeting/96088138284"
+           "?password=placeholder-passcode-not-a-secret")
+
+    def test_the_linux_foundation_link_that_422d(self):
+        r = parse(self.LFX)
+        assert r.platform == "zoom"
+        assert r.native_meeting_id == "96088138284"
+        assert r.passcode == "placeholder-passcode-not-a-secret"
+
+    def test_the_hosted_read_says_so(self):
+        """A host we inferred rather than recognised is reported, the way the jitsi inference is."""
+        assert any("path shape" in w for w in parse(self.LFX).warnings)
+
+    def test_the_j_path_on_a_hosted_domain(self):
+        r = parse("https://meetings.example.org/j/98765432101?pwd=placeholder-pwd")
+        assert (r.platform, r.native_meeting_id, r.passcode) == ("zoom", "98765432101", "placeholder-pwd")
+
+    def test_without_a_passcode_it_is_not_claimed(self):
+        """THE negative case. A bare numeric path on an unknown host is not a meeting — the
+        passcode is what makes the shape recognizable, so it stays a 422."""
+        assert_422("https://zoom-lfx.platform.linuxfoundation.org/meeting/96088138284",
+                   "unknown provider")
+
+    def test_a_nine_digit_id_is_not_claimed(self):
+        """9-digit legacy ids are accepted on zoom.us, where the HOST already proves the platform.
+        On an unknown host the id length is part of the evidence, so the shape stays 10-11."""
+        assert_422("https://portal.example.org/meeting/123456789?password=x", "unknown provider")
+
+    def test_an_ordinary_page_with_a_number_in_it_is_not_claimed(self):
+        assert_422("https://news.example.org/article/96088138284?password=x", "unknown provider")
+
+    def test_a_declared_jitsi_host_is_not_overruled(self, monkeypatch):
+        """An operator who named a host in VEXA_JITSI_HOSTS has said what it is, and a heuristic
+        must not overrule them. The link still fails — a two-segment path is not a jitsi room —
+        but it fails as JITSI, which is the branch that owns that host."""
+        monkeypatch.setenv("VEXA_JITSI_HOSTS", "video.corp.example")
+        assert_422("https://video.corp.example/j/12345678901?pwd=x", "jitsi")
+
+
+class TestJitsi:
+    def test_canonical_room(self):
+        r = parse("https://meet.jit.si/VexaStandup")
+        assert r.platform == "jitsi"
+        assert r.native_meeting_id == "VexaStandup"
+        assert r.passcode is None
+        # The bot always navigates the full URL, so the parser echoes it back.
+        assert r.meeting_url == "https://meet.jit.si/VexaStandup"
+        assert r.warnings == []
+
+    def test_trailing_slash(self):
+        assert parse("https://meet.jit.si/MyRoom/").native_meeting_id == "MyRoom"
+
+    def test_bare_origin_rejected(self):
+        assert_422("https://meet.jit.si/", "jitsi")
+
+    def test_multi_segment_path_rejected(self):
+        assert_422("https://meet.jit.si/a/b", "jitsi")
+
+    def test_self_hosted_jitsi_host_inferred_with_warning(self):
+        r = parse("https://jitsi.example.org/MyRoom")
+        assert r.platform == "jitsi"
+        # Deployment-scoped id (room@host) — same-named rooms on different hosts never collide.
+        assert r.native_meeting_id == "MyRoom@jitsi.example.org"
+        assert r.meeting_url == "https://jitsi.example.org/MyRoom"
+        # Name-based inference is a guess — the caller is told so.
+        assert any("inferred" in w.lower() for w in r.warnings)
+
+    def test_self_hosted_meet_convention_inferred(self):
+        r = parse("https://meet.example.org/TeamSync")
+        assert r.platform == "jitsi"
+        assert r.native_meeting_id == "TeamSync@meet.example.org"
+        assert any("inferred" in w.lower() for w in r.warnings)
+
+    def test_regionalized_meet_label_inferred(self):
+        r = parse("https://eu.meet.example.org/QualifiedRoomName")
+        assert r.platform == "jitsi"
+        assert r.native_meeting_id == "QualifiedRoomName@eu.meet.example.org"
+        assert r.meeting_url == "https://eu.meet.example.org/QualifiedRoomName"
+
+    def test_declared_host_parses_without_warning(self, monkeypatch):
+        # VEXA_JITSI_HOSTS makes a deployment EXPLICIT — same setting meeting-api honours.
+        monkeypatch.setenv("VEXA_JITSI_HOSTS", "calls.example.io")
+        r = parse("https://calls.example.io/Standup")
+        assert r.platform == "jitsi"
+        assert r.native_meeting_id == "Standup@calls.example.io"
+        assert r.warnings == []
+
+    def test_whitespace_room_rejected(self):
+        # The id round-trips into path params — whitespace never parses (matches the
+        # meeting-api and terminal twins).
+        assert_422("https://meet.jit.si/My Room", "jitsi")
+
+    def test_meet_substring_label_not_inferred(self):
+        assert_422("https://meetings.example.org/Room", "unknown provider")
+
+
+class TestMisc:
+    def test_empty_url_rejected(self):
+        assert_422("", "empty")
+
+    def test_unknown_provider_rejected(self):
+        assert_422("https://example.com/meeting/123", "unknown provider")
+
+
+class TestHostnameSpoofing:
+    """A hostname matched by SUBSTRING can be spoofed from both ends, and both ends are cheap:
+    the attacker owns the registrable domain in ``zoom.us.evil.example`` and owns the label in
+    ``notzoom.us``. Either one used to satisfy ``"zoom.us" in host`` /
+    ``host.endswith("teams.live.com")``. The parser now compares the parsed ``hostname``
+    exactly, or as a dot-separated subdomain of a listed host
+    (CodeQL py/incomplete-url-substring-sanitization).
+    """
+
+    def test_zoom_suffix_spoof_is_not_a_recognised_zoom_host(self):
+        # /wc/join is a zoom.us-only path shape: on a host that is not zoom.us it is nothing.
+        assert_422("https://zoom.us.evil.example/wc/join/12345678901", "unknown provider")
+
+    def test_zoom_prefix_spoof_is_not_claimed(self):
+        assert_422("https://notzoom.us/wc/join/12345678901", "unknown provider")
+        assert_422("https://notzoomgov.com/wc/join/12345678901", "unknown provider")
+
+    def test_zoomgov_suffix_spoof_is_not_claimed(self):
+        assert_422("https://zoomgov.com.evil.example/wc/join/12345678901", "unknown provider")
+
+    def test_a_spoofed_host_gets_no_zoom_only_leniency(self):
+        """9-digit ids are accepted on zoom.us because the HOST proves the platform. A spoofed
+        host has proved nothing, so it does not inherit that leniency."""
+        assert_422("https://zoom.us.evil.example/j/123456789?pwd=x", "unknown provider")
+
+    def test_teams_live_suffix_spoof_is_not_claimed(self):
+        assert_422("https://teams.live.com.evil.example/meet/9361792952021?p=x",
+                   "unknown provider")
+
+    def test_teams_live_prefix_spoof_is_not_claimed(self):
+        assert_422("https://eviltteams.live.com/meet/9361792952021?p=x", "unknown provider")
+
+    def test_teams_enterprise_prefix_spoof_is_not_claimed(self):
+        assert_422("https://notteams.microsoft.com/meet/9361792952021?p=x", "unknown provider")
+        assert_422("https://notteams.microsoft.us/meet/9361792952021?p=x", "unknown provider")
+
+    def test_google_meet_suffix_spoof_is_not_google_meet(self):
+        assert parse("https://meet.google.com.evil.example/abc-defg-hij").platform != "google_meet"
+
+    # …and every legitimate host in the same shapes still parses.
+
+    def test_vanity_and_gov_zoom_subdomains_still_parse(self):
+        assert parse("https://us02web.zoom.us/j/12345678901").native_meeting_id == "12345678901"
+        assert parse("https://zoom.us/j/12345678901").native_meeting_id == "12345678901"
+        assert parse("https://frbmeetings.zoomgov.com/j/12345678901").native_meeting_id == "12345678901"
+        assert parse("https://zoomgov.com/j/12345678901").native_meeting_id == "12345678901"
+
+    def test_teams_hosts_still_parse(self):
+        assert parse("https://teams.live.com/meet/9361792952021?p=x").platform == "teams"
+        assert parse("https://gov.teams.microsoft.us/meet/12345678901234").platform == "teams"
+        assert parse("https://contoso.teams.microsoft.com/meet/12345678901234").platform == "teams"
+
+@pytest.mark.parametrize("host", ["teams.microsoft.com", "teams.live.com"])
+def test_sixteen_digit_teams_meeting_id(host):
+    result = parse(f"https://{host}/meet/1234567890123456?p=fixture")
+    assert result.native_meeting_id == "1234567890123456"
+    assert result.teams_base_host == host
+    assert result.passcode == "fixture"

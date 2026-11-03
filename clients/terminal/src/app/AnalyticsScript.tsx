@@ -7,15 +7,19 @@
  *
  *  The App Router doesn't trigger gtag's automatic page_view on client-side navigations, so we send the
  *  initial page_view via gtag config and every SUBSEQUENT one from a pathname effect (skipping the first
- *  run to avoid double-counting the load). */
+ *  run to avoid double-counting the load).
+ *
+ *  GA reads `page_location` and `page_referrer` from the document unless told otherwise, and those
+ *  carry query strings: `/join?i=…` is an invite that signs its holder in for days. So both are set
+ *  explicitly to origin + path (`scrubbedLocation`), on the load's config and on every page view. */
 import Script from "next/script";
 import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
-import { gaPageview } from "./analytics";
+import { gaPageview } from "../platform/analytics";
 
 const GA_ID = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
 
-export function Analytics() {
+export function Analytics({ nonce }: { nonce?: string } = {}) {
   const pathname = usePathname();
   const firstRun = useRef(true);
 
@@ -29,11 +33,15 @@ export function Analytics() {
   }, [pathname]);
 
   if (!GA_ID) return null;
+  // The design catalogue is excluded from analytics (it is a fixture page for builders, not a
+  // product surface; terminal design guidelines §9).
+  if (pathname?.startsWith("/design")) return null;
   return (
     <>
-      <Script src={`https://www.googletagmanager.com/gtag/js?id=${GA_ID}`} strategy="afterInteractive" />
-      <Script id="ga-init" strategy="afterInteractive">
-        {`window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}window.gtag=gtag;gtag('js',new Date());gtag('config','${GA_ID}');`}
+      <Script src={`https://www.googletagmanager.com/gtag/js?id=${GA_ID}`} strategy="afterInteractive" nonce={nonce} />
+      <Script id="ga-init" strategy="afterInteractive" nonce={nonce}>
+        {`window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}window.gtag=gtag;gtag('js',new Date());` +
+          `gtag('config','${GA_ID}',{page_location:location.origin+location.pathname,page_referrer:(document.referrer||'').split(/[?#]/)[0]});`}
       </Script>
     </>
   );

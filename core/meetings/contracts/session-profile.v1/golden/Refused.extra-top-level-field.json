@@ -1,0 +1,12 @@
+{
+  "why": "the body is exactly {files}",
+  "body": {
+    "files": [
+      {
+        "path": "Default/Cookies",
+        "data": "cm90YXRlZC1jb29raWUtZGI="
+      }
+    ],
+    "extra": true
+  }
+}

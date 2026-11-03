@@ -5,4 +5,10 @@ import { authOptions } from "./authOptions";
 
 const handler = NextAuth(authOptions);
 
-export { handler as GET, handler as POST };
+import { NextRequest } from "next/server";
+import { connectionCallback } from "../../connections/callback";
+export async function GET(req: NextRequest, context: any) {
+  if (req.nextUrl.pathname === '/api/auth/callback/google' && req.nextUrl.searchParams.get('state')?.startsWith('vxc_')) return connectionCallback(req);
+  return handler(req, context);
+}
+export { handler as POST };

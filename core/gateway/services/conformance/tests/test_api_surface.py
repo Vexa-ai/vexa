@@ -132,15 +132,16 @@ def test_invalid_api_key_is_rejected(client):
 
 def test_insufficient_scope_is_rejected():
     """SCOPE-NEGATIVE: a token lacking the route scope → 403. Mirrors main ROUTE_SCOPES."""
-    # Build a gateway whose fake admin-api hands back a tx-only token, then hit a /bots route.
+    # Build a gateway whose fake admin-api hands back a browser-only token (it holds neither bot nor
+    # tx, #1922), then hit a /bots route.
     from gateway_conformance import fake_meeting_api as fma
 
     original = dict(fma.VALID_USER)
     try:
-        fma.VALID_USER["scopes"] = ["tx"]  # no 'bot'/'browser' → /bots forbidden
+        fma.VALID_USER["scopes"] = ["browser"]  # neither 'bot' nor 'tx' → /bots forbidden
         c = TestClient(build_gateway())
         resp = c.get("/bots/status", headers=AUTH)
-        assert resp.status_code == 403, f"tx-only key on /bots → {resp.status_code} (expected 403)"
+        assert resp.status_code == 403, f"browser-only key on /bots → {resp.status_code} (expected 403)"
         assert "scope" in resp.json().get("detail", "").lower()
     finally:
         fma.VALID_USER.clear()

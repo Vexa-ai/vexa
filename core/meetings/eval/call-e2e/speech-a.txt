@@ -1,0 +1,1 @@
+Good morning everyone. I would like to start with the quarterly budget review. We spent less on infrastructure than planned, mostly because the new storage cluster came online two weeks early. I propose we move the remaining funds to the hiring plan for the support team.

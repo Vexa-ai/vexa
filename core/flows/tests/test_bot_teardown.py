@@ -53,8 +53,8 @@ def _ctx(*, now: float = 1_000_000.0, start: float = 0.0, scratch=None,
 
 
 @pytest.fixture(autouse=True)
-def _no_key(monkeypatch):
-    monkeypatch.setattr(mt, "user_api_key", lambda uid: "k")
+def _flows_key(monkeypatch):
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "teardown-flows-key")
 
 
 def _wire(monkeypatch, answers):
@@ -63,6 +63,8 @@ def _wire(monkeypatch, answers):
 
     def fake_http(method, url, headers, body=None, timeout=20):
         calls.append((method, url))
+        # every status read and every stop acts for the meeting's owner, through the service door
+        assert headers == {"X-Vexa-Service-Key": "teardown-flows-key", "X-User-Id": "7"}, headers
         out = answers(method, url)
         if isinstance(out, Exception):
             raise out

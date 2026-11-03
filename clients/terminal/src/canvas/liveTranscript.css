@@ -1,0 +1,35 @@
+/* The live transcript (canvas/LiveTranscriptEngine.tsx): inline entity mentions and their action
+ * menu. The mention's hue is the entity palette's, passed in as `--lt-hue`. Tokens only. */
+.vx-lt-mention {
+  color: var(--lt-hue); cursor: pointer; border-bottom: 1px dotted var(--lt-hue);
+  background: transparent; border-radius: 3px; padding: 0 1px; outline-color: var(--lt-hue);
+}
+.vx-lt-mention[aria-expanded="true"] { background: color-mix(in srgb, currentColor 12%, transparent); }
+.vx-lt-menu {
+  z-index: 20; margin-top: var(--space-1); background: var(--bg); border: 1px solid var(--line2);
+  border-radius: 8px; box-shadow: var(--shadow-mention-menu); padding: var(--space-1);
+  font-size: var(--text-xs); font-weight: var(--weight-medium);
+}
+.vx-lt-menu-item {
+  text-align: left; background: transparent; border: none; color: var(--t1); cursor: pointer;
+  padding: 5px var(--space-2); border-radius: 5px; font-size: var(--text-xs); line-height: 1.3;
+}
+/* Captured audio that was never transcribed: a quiet marker where the words would have been. */
+.vx-lt-gap { color: var(--t3); font-size: var(--text-xs); font-style: italic; padding: var(--space-0_5) 0; }
+.vx-lt-empty { color: var(--t3); font-size: var(--text-sm); padding: var(--space-2) var(--space-0_5); }
+/* the drawer's rows: who · when on one line, the words under it, tight */
+.vx-lt-rows { display: flex; flex-direction: column; gap: 8px; }
+.vx-lt-row { min-width: 0; }
+.vx-lt-who { display: flex; align-items: baseline; gap: 6px; font-size: 11px; line-height: 1.4; min-width: 0; }
+.vx-lt-speaker { font-weight: 600; color: var(--t2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.vx-lt-clock { color: var(--t3); font-variant-numeric: tabular-nums; flex: none; }
+.vx-lt-body { min-width: 0; }
+.vx-lt-words { font-size: 13px; color: var(--t1); line-height: 1.45; }
+/* Transcript signals: a significant word reads heavier (weight, never colour alone); a wake label is a
+ * small quiet chip after the words it belongs to. */
+.vx-lt-sigword { font-weight: var(--weight-semibold); color: inherit; }
+.vx-lt-sigchip {
+  display: inline-block; margin-left: var(--space-1); padding: 0 var(--space-1_5); vertical-align: baseline;
+  font-size: var(--text-xs); font-weight: var(--weight-medium); line-height: 1.5; color: var(--t2);
+  border: 1px solid var(--line2); border-radius: var(--radius-full); background: transparent; white-space: nowrap;
+}

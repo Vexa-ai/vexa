@@ -1,0 +1,18 @@
+{
+  "aud": "vexa-mcp",
+  "exp": 1767229200,
+  "iat": 1767225600,
+  "jti": "vec-workspace-0001",
+  "on_behalf_of": "43",
+  "principal_kind": "workspace",
+  "principal_workspace": "team-ws",
+  "scope": {
+    "regime": "human",
+    "shared": true,
+    "workspaces": [
+      "team-ws"
+    ]
+  },
+  "sub": "1042",
+  "unit": "agent-ws-team-ws-room-s-room1"
+}

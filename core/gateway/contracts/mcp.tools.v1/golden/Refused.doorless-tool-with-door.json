@@ -1,0 +1,24 @@
+{
+  "why": "a domain with a door names the route of every tool",
+  "manifest": {
+    "contract": "mcp.tools.v1",
+    "domain": "agent",
+    "source": "oss",
+    "depends_on": [
+      "identity"
+    ],
+    "base_url_env": "AGENT_API_URL",
+    "tools": [
+      {
+        "name": "t",
+        "identity": "user",
+        "auth": "subject",
+        "requires": [
+          "identity",
+          "agent"
+        ],
+        "route": null
+      }
+    ]
+  }
+}

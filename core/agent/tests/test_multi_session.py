@@ -47,7 +47,7 @@ def test_dispatch_id_meeting_and_digest_unchanged():
         start=units.entrypoint(inline="brief"),
         context={"kind": "meeting", "meeting": {"meeting_id": "abc", "session_uid": "abc"}},
     )
-    assert units.dispatch_id(meeting) == "agent-meet-abc"  # session never touches the meeting key
+    assert units.dispatch_id(meeting) == "agent-meet-abc-u_live"  # session never touches the meeting key
 
     scheduled = units.make_dispatch(
         subject="u1", trigger="scheduled", start=units.entrypoint(inline="digest"),

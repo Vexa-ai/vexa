@@ -1,0 +1,85 @@
+---
+title: "Orgs and personal CRMs"
+description: "Each install records one org in identity, and every account belongs to it. A personal CRM for individual accounts exists behind a flag that is off by default."
+---
+
+<Note>
+Nothing on this page changes what people see. The org is recorded and used for policy lookups, but
+there is one org per install, and every answer is the same as before. The personal CRM is **off by
+default**, and `VEXA_FEATURES=all` does not switch it on.
+</Note>
+
+## The org
+
+Identity records the company as an **org**. Each install has one org, `default`, and every
+account, workspace and policy read belongs to it:
+
+- **Policy** is read through the org. The default org's policy source is the install's `_global`, so
+  `POLICIES.md` is read from exactly where it was before.
+- **The CRM** is tied to the org. The org stores the CRM organisation the install runs as
+  (`CRM_ORG_ID`).
+- **Billing** has a field on the org (`billing_account`). Nothing reads it yet.
+
+### How it works
+
+- Identity (admin-api, the only writer) holds `orgs`, `org_members` and each account's home org,
+  `users.org_id`.
+- An account is a member of its home org without a membership row. The instance admin has the role
+  `admin`; everyone else is a `member`.
+- Every workspace access check asks identity for the viewer's org (cached for 5 minutes). A
+  workspace in another org reads as not yours. An individual's own desk is in their org of one.
+- agent-api resolves every company-layer read as org → policy source → folder. For the default org
+  that folder is `_global`. An org the install does not know resolves to nothing, never to another
+  org's `_global`.
+- A workspace belongs to the org on its record, or to the default org when its record names none. No
+  workspace file is rewritten.
+
+### Why it complies
+
+- **One writer, one boundary.** Org data has a single writer, identity. Every org-scoped read in
+  identity answers another org's people and records exactly like ones that do not exist. Tests
+  create a second org and prove this, ready for the day an install holds more than one.
+- **The upgrade is safe on a live database.** The schema step adds two empty tables and one column
+  with a constant default. No table is rewritten, no row is updated, and readers never wait on it.
+  Rollback is three statements: see `schema/MIGRATION-0008-orgs.md` in admin-api.
+
+## Personal CRM (individual accounts, off by default)
+
+An account that does not belong to a company can have its own CRM. Its records are never visible
+to the install's company CRM, and the company's records are never visible to it.
+
+### Turn it on (operators)
+
+```bash
+VEXA_FEATURES=crm,personal_crm      # personal_crm must be named; `all` does not include it
+```
+
+An account becomes an individual one only by an explicit act on the internal tier:
+`POST /internal/users/{id}/personal-org`. It gets its own org of one, `p-<id>`, and administers it.
+Nothing does this automatically, and joining a company later is a separate, explicit act.
+
+### How it works
+
+- With the flag on, crm-api asks identity for each person's home org
+  (`GET /internal/users/{id}/org`, cached 30 s).
+- A person whose home org is **their own** org of one is served from that org's records only. The
+  org is created on first use, with the standard record types and the person as its only
+  administrator.
+- Everyone else is served from `CRM_ORG_ID`, as before. With the flag off, identity is never asked.
+- **Deleting the account deletes the personal CRM.** Identity first asks crm-api to erase the org
+  of one (`POST /internal/orgs/p-<id>/erase`, which accepts only that shape and works even with the
+  CRM switched off), then removes the org. If the CRM cannot confirm, nothing is deleted and the
+  delete can be retried. Set `CRM_API_URL` on admin-api wherever `personal_crm` runs.
+- **Kept for now: the record history.** The CRM's history tables are append-only (revisions, the
+  audit, card and desktop layout versions), and how they are erased is not decided yet. Until then
+  the erase leaves them, keeps the records they name as empty, deleted rows, and lists what it kept
+  in its answer (`left`). Everything else of the org of one is deleted.
+
+### Why it complies
+
+- **The org comes from identity, never from the request.** A header or a body field cannot choose an
+  org.
+- **Every CRM query carries the org key.** A record from the other side answers `not_found`.
+- **No fallback.** If identity cannot answer, the request fails with 503 instead of falling back to
+  the company's CRM.
+- These guarantees are pinned by `core/crm/tests/test_personal_crm.py` and the admin-api org tests.

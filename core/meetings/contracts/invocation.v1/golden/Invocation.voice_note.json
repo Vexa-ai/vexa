@@ -1,0 +1,20 @@
+{
+  "platform": "voice_note",
+  "meetingUrl": null,
+  "botName": "Vexa",
+  "nativeMeetingId": "vn-3f9c2a7d1e4b",
+  "voiceNote": {
+    "audioStream": "voice_note:meeting:42:audio",
+    "maxDurationSec": 1800,
+    "idleTimeoutSec": 120
+  },
+  "token": "<meeting-token-placeholder>",
+  "connectionId": "c0ffee00-0000-4000-8000-000000000042",
+  "meeting_id": 42,
+  "redisUrl": "redis://vexa-bot-c0ffee00:<password-placeholder>@redis:6379/0",
+  "meetingApiCallbackUrl": "http://meeting-api:8080/bots/internal/callback/lifecycle",
+  "transcribeEnabled": true,
+  "transcriptionServiceUrl": "http://transcription:8000/v1/audio/transcriptions",
+  "transcriptionServiceToken": "<stt-token-placeholder>",
+  "recordingEnabled": false
+}

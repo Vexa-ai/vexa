@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 /**
- * gate:schema for api.v1 — the PUBLIC surface, frozen IDENTICAL to vexa main's api-gateway.
+ * gate:schema for api.v1 — the PUBLIC surface.
  *
- * `api.schema.json` is the OpenAPI 3.1 document emitted by main's api-gateway (title
- * "Vexa API Gateway", version 1.5.0) — captured verbatim, sealed by `contracts.seal.json`
- * so the v0.12 services (meeting-api, dashboard, bot) build against the REAL production
- * surface, not invented shapes. This validator pins main's identity + the core paths every
- * consumer depends on, and checks each golden `<Shape>.<case>.json` against the frozen
- * `#/components/schemas/<Shape>`. Re-capture (a deliberate main bump) → re-seal on lane:contract.
+ * `api.schema.json` is the OpenAPI 3.1 document captured from main's api-gateway (title
+ * "Vexa API Gateway", version 1.5.0) and extended additively since, each extension re-sealed in
+ * `contracts.seal.json` on lane:contract. This validator pins that identity + the core paths every
+ * consumer depends on, and checks each golden `<Shape>.<case>.json` against the sealed
+ * `#/components/schemas/<Shape>`. A breaking change is api.v2, not an edit here.
  */
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
@@ -75,5 +74,18 @@ for (const f of readdirSync(dir).filter((n) => n.endsWith(".json"))) {
   check(`golden ${f} ≡ ${shape}${validate(data) ? "" : " — " + ajv.errorsText(validate.errors)}`, validate(data));
 }
 
-console.log(failed ? `\napi.v1: ${failed} check(s) FAILED` : `\napi.v1: all checks pass (frozen ≡ vexa main api-gateway 1.5.0)`);
+// ── 5) THE DELETION STAMP — a reshape of data.artifact_deletion must fail here, not in a reader ──
+// agent-api and the terminal both decide "this transcript was deleted" from this one field; they read
+// it by the name and states written here (and their tests read these goldens).
+{
+  const meeting = ajv.getSchema(`${BASE}#/components/schemas/MeetingResponse`);
+  const base = JSON.parse(readFileSync(join(dir, "MeetingResponse.deleted.json"), "utf8"));
+  for (const [why, stamp] of [["an unknown state", { state: "gone" }], ["no state", { scope: "x" }],
+                              ["a stamp that is not an object", true]]) {
+    const body = { ...base, data: { ...base.data, artifact_deletion: stamp } };
+    check(`MeetingResponse refuses data.artifact_deletion with ${why}`, !meeting(body));
+  }
+}
+
+console.log(failed ? `\napi.v1: ${failed} check(s) FAILED` : `\napi.v1: all checks pass`);
 process.exit(failed ? 1 : 0);

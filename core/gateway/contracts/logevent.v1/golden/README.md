@@ -7,4 +7,6 @@ every file validates against `#/$defs/LogEvent` (see `../validate.mjs`):
 - `system-*` — a system/debug event (`audience=system`).
 - `error-*` — an error-level system event (`audience=system`, `level=error|critical`).
 
-All three carry the **same `trace_id`** to show one request traced across hops.
+All carry the **same `trace_id`** to show one request traced across hops.
+
+`system-worker-tool-call.json` also carries `session` — the agent unit that caused the line.

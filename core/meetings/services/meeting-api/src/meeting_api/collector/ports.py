@@ -22,6 +22,64 @@ from __future__ import annotations
 from typing import Any, AsyncIterator, Optional, Protocol, runtime_checkable
 
 
+#: The meeting-row field a typed delete of a meeting's transcript and recordings stamps — api.v1's
+#: ``MeetingResponse.data.artifact_deletion`` (schema ``ArtifactDeletion``), which agent-api and the
+#: terminal read to show the meeting as deleted. ``deletion_stamp`` is its one shape.
+ARTIFACT_DELETION_FIELD = "artifact_deletion"
+#: api.v1 ``ArtifactDeletion.state`` — both mean the transcript and recordings are gone. Pinned to the
+#: sealed schema by ``tests/test_artifact_deletion_contract.py``.
+ARTIFACT_DELETION_STATES = ("pending", "completed")
+_DELETION_SCOPE = "primary_transcript_recording_and_fixture_storage"
+_DELETION_BACKUP_RESIDUALS = "expire_under_deployment_retention_policy"
+
+
+#: ``meeting.data`` key set when a meeting is deleted while its bot still runs; the deletion then
+#: completes at the terminal lifecycle callback.
+DELETE_WHEN_ENDED_FIELD = "delete_when_ended"
+
+
+def deletion_stamp(state: str, *, at: str, prior: "Optional[dict]" = None) -> dict:
+    """The ``ArtifactDeletion`` value for ``state`` (``pending`` while the delete runs, ``completed``
+    once it is done), at time ``at`` (ISO-8601, Z). A pending stamp keeps the first request time."""
+    if state == "pending":
+        return {"state": "pending", "requested_at": (prior or {}).get("requested_at") or at,
+                "scope": _DELETION_SCOPE, "backup_residuals": _DELETION_BACKUP_RESIDUALS}
+    if state == "completed":
+        return {"state": "completed", "completed_at": at,
+                "scope": _DELETION_SCOPE, "backup_residuals": _DELETION_BACKUP_RESIDUALS}
+    raise ValueError(f"not an ArtifactDeletion state: {state!r}")
+
+
+def meeting_is_erased(data: Any) -> bool:
+    """Whether a meeting's ``data`` carries an ``ArtifactDeletion`` stamp — its transcript and
+    recordings are being deleted (``pending``) or deleted (``completed``), and nothing may write them
+    again. A value present in another shape still reads as erased (fail closed: a reader that missed
+    a reshaped stamp would bring deleted data back) and is reported."""
+    stamp = data.get(ARTIFACT_DELETION_FIELD) if isinstance(data, dict) else None
+    if stamp is None:
+        return False
+    if not (isinstance(stamp, dict) and stamp.get("state") in ARTIFACT_DELETION_STATES):
+        from ..obs import log_event
+
+        log_event("artifact_deletion_unreadable", audience="operator", level="warning",
+                  span="meetings.deletion", fields={"type": type(stamp).__name__})
+    return True
+
+
+def erased_meeting_cache_keys(meeting_id) -> tuple[str, ...]:
+    """Every Redis key that holds a meeting's transcript, removed when its owner deletes it.
+
+    * ``meeting:{id}:segments`` — the in-flight segment hash (``db_writer.segments_hash_key``);
+    * ``proc:meeting:{id}`` — the cleaned-notes stream the db-writer folds into the row;
+    * ``tc:meeting:{id}`` — the live transcript feed the collector appends every persisted segment
+      to (``ingest._transcript_stream``), which the live view and the chat replay from the start.
+
+    ``tc:meeting:{id}:mutable`` is a pub/sub CHANNEL, not a key: nothing is stored there. Both
+    stores' finalize steps delete exactly this tuple, and a test ties it to the writers' own key
+    functions so a new transcript key cannot be added without being erased."""
+    return (f"meeting:{meeting_id}:segments", f"proc:meeting:{meeting_id}", f"tc:meeting:{meeting_id}")
+
+
 @runtime_checkable
 class TranscriptStore(Protocol):
     """Read a meeting's transcript; list a user's meetings; append a segment; authorize a
@@ -104,6 +162,62 @@ class TranscriptStore(Protocol):
         same one-time token as the pair-keyed mint; ``None`` when the row is unknown OR not the caller's."""
         ...
 
+    async def get_share_access(self, user_id: int, meeting_id: int) -> "Optional[dict]":
+        """OWNER-scoped: who can read this meeting — ``share_access.access_view``. ``None`` when the
+        row is unknown or not the caller's."""
+        ...
+
+    async def stamp_share_mail(self, user_id: int, meeting_id: int, grant_id: str) -> None:
+        """OWNER-scoped: record that an invite mail was handed over for ``grant_id``."""
+        ...
+
+    async def count_share_mails_since(self, user_id: int, since_iso: str) -> int:
+        """Invite mails this owner handed over since ``since_iso`` (the hourly cap's count)."""
+        ...
+
+    async def backfill_share_roster(self, user_id: int, meeting_id: int,
+                                    emails: "dict[int, str]") -> "Optional[dict]":
+        """OWNER-scoped, one-time per reader: name the readers who redeemed before the roster
+        existed, from ``{user_id: address}``. Answers the access view; ``None`` for a row that is
+        not the caller's."""
+        ...
+
+    async def revoke_share_grant(self, user_id: int, meeting_id: int, grant_id: str) -> "Optional[dict]":
+        """OWNER-scoped: revoke one grant and drop the people who joined through it. ``None`` when the
+        row or the grant is not found."""
+        ...
+
+    async def remove_share_viewer(self, user_id: int, meeting_id: int, viewer_id: int) -> "Optional[dict]":
+        """OWNER-scoped: remove one person's access. ``None`` when they had none."""
+        ...
+
+    async def set_share_settings(self, user_id: int, meeting_id: int, *, recording: bool) -> "Optional[dict]":
+        """OWNER-scoped: whether people the meeting is shared with may play its recording."""
+        ...
+
+    async def complete_transcript_import(
+        self, user_id: int, meeting_id: int, *, segments: list, started_at, ended_at,
+        source: str, session_uid: str,
+    ) -> "Optional[dict]":
+        """OWNER-scoped: land an ALREADY-HAPPENED meeting's transcript on the row and complete it.
+
+        The import route's whole persistence. One transaction: the segments are upserted into
+        ``transcriptions`` through the SAME sink the db-writer flushes with (the ``(meeting_id,
+        segment_id)`` identity), the row's ``status`` becomes ``completed``, ``start_time`` /
+        ``end_time`` become the window the caller states (the ONE thing a bot run cannot express —
+        it derives both from ``now()``), and ``data.transcript_import`` records the provenance.
+
+        IDEMPOTENT on ``session_uid``, which the caller derives from ``(source, meeting_id)``: a
+        second import of the same source onto the same row writes NOTHING and reports
+        ``imported: False``. The segment ids are derived from the same ``session_uid``, so even a
+        write that did land twice would upsert in place rather than duplicate.
+
+        Returns the completed row summary, ``{"error": "conflict", ...}`` when the row is inside the
+        bot FSM (this never fights the FSM — a live meeting is completed by its bot, not by an
+        import), or ``None`` when the caller owns no such row (→ 404, no existence oracle).
+        """
+        ...
+
     async def redeem_transcript_share(
         self, user_id: int, user_email: "Optional[str]", token: str
     ) -> "Optional[dict]":
@@ -134,6 +248,14 @@ class TranscriptStore(Protocol):
         modules observe only tiles that emit a SPEAKING signal, and no producer writes an observed
         roster to any store (Vexa-ai/vexa#861). This port must never synthesize one from the two
         above — inventing attendance from speech is the exact failure #861's preparation forbids."""
+        ...
+
+    async def transcript_erased(self, meeting_id: int) -> bool:
+        """Whether the meeting's owner deleted (or is deleting) its transcript: the row carries
+        ``data.artifact_deletion``. Ingest refuses every message for such a meeting and the db-writer
+        flushes nothing for it, so a segment that arrives after the delete re-creates no feed, no
+        live hash and no rows. Cross-user (the collector is the trusted internal consumer). An
+        unknown id is not erased."""
         ...
 
     async def append_segment(self, meeting_id: int, segment: dict) -> None:
@@ -299,6 +421,7 @@ class TranscriptStore(Protocol):
         self, user_id: int, meeting_id: int, *,
         title: Optional[str] = None,
         metadata: "Optional[dict]" = None,
+        notes: Optional[str] = None,
     ) -> Optional[dict]:
         """Attach the CALLER's own annotations to a row in ANY status — including one the bot FSM
         owns, and including one already completed.
@@ -321,6 +444,10 @@ class TranscriptStore(Protocol):
         a CRM record, a ticket, its own summary — and it is queryable through
         ``list_meetings(metadata_filter=...)``.
 
+        ``notes`` replaces ``data.notes`` (the meeting's free-text notes; an empty string clears
+        them). No route takes it: it is the meeting-bundle import restoring the notes a bundle
+        carries, through the one writer of the row's description.
+
         Returns the updated row (``list_meetings`` shape), or ``None`` when the user owns no such
         row (→ 404). Never returns a conflict: there is no state in which annotating is refused."""
         ...
@@ -341,6 +468,17 @@ class TranscriptStore(Protocol):
         ``pending`` tombstone under the row lock so ``continue_meeting`` cannot reopen the row, but
         retains every artifact and path; storage failures therefore remain addressable/retryable.
         """
+        ...
+
+    async def mark_delete_when_ended(self, user_id: int, meeting_id: int) -> Optional[dict]:
+        """OWNER-scoped: record that the person deleted this meeting while its bot was still
+        running, so the deletion completes when the lifecycle ends (``DELETE_WHEN_ENDED_FIELD``).
+        Returns ``None`` for unknown/unowned, ``{"terminal": True}`` if it already ended (delete
+        now), else ``{"platform", "native_meeting_id"}`` so the caller can stop the bot."""
+        ...
+
+    async def delete_when_ended_requested(self, user_id: int, meeting_id: int) -> bool:
+        """Whether ``mark_delete_when_ended`` was recorded for this owner's meeting."""
         ...
 
     async def finalize_completed_artifact_deletion(
@@ -421,4 +559,11 @@ class RedisBus(Protocol):
         """Append one entry to a redis STREAM (``payload`` is the inner JSON, stored under the
         ``payload`` field). The collector is the SINGLE writer of the per-meeting native transcript
         feed ``tc:meeting:{native}`` (P23) — the copilot worker + terminal SSE read it."""
+        ...
+
+    async def settle_chat_send(
+        self, request_id: str, *, meeting_id: int, posted: bool, reason: Optional[str] = None
+    ) -> bool:
+        """Apply a bot's ``chat_send_result`` to the chat send it names (``chat_delivery.py``):
+        only a ``queued`` send into ``meeting_id`` changes. Returns whether one did."""
         ...

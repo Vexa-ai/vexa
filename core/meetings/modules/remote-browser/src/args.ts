@@ -10,6 +10,9 @@
  *
  * (The *meeting* args — getBrowserArgs / browserArgs / userAgent, built on the join
  * brick's JOIN_BROWSER_ARGS — stay in vexa-bot/constans.ts; those are a bot concern.)
+ *
+ * No set here turns Chromium's sandbox off: launchPersistentBrowser keeps it on wherever it can
+ * start, and drops it, saying why, only where it cannot (sandbox.ts).
  */
 
 // CDP debug args — let an agent attach over the gateway /b/{token}/cdp proxy to clear
@@ -29,8 +32,6 @@ export const CDP_DEBUG_ARGS = [
  */
 export function getAuthenticatedBrowserArgs(): string[] {
   return [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
     '--disable-blink-features=AutomationControlled',
     '--disable-infobars',
     '--disable-gpu',
@@ -50,8 +51,6 @@ export function getAuthenticatedBrowserArgs(): string[] {
  */
 export function getBrowserSessionArgs(): string[] {
   return [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
     '--disable-blink-features=AutomationControlled',
     '--use-fake-ui-for-media-stream',
     '--start-maximized',

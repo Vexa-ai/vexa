@@ -1,0 +1,43 @@
+{
+  "operation_id": "5f4e3d2c1b0a99887766554433221100",
+  "source": "google_email",
+  "untrusted_content": true,
+  "thread_id": "t1",
+  "messages": [
+    {
+      "id": "m1",
+      "threadId": "t1",
+      "labels": [
+        "INBOX"
+      ],
+      "is_draft": false,
+      "headers": {
+        "from": "person@example.test",
+        "subject": "Recap"
+      },
+      "body": "hello"
+    },
+    {
+      "id": "m2",
+      "threadId": "t1",
+      "labels": [
+        "DRAFT"
+      ],
+      "is_draft": true,
+      "draft_id": "r-recap",
+      "headers": {
+        "subject": "Re: Recap"
+      },
+      "body": "recap draft"
+    }
+  ],
+  "drafts": [
+    {
+      "draft_id": "r-recap",
+      "message_id": "m2"
+    }
+  ],
+  "has_more": false,
+  "next_page_token": "",
+  "total_messages": 2
+}

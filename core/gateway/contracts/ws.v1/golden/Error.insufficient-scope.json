@@ -1,0 +1,8 @@
+{
+  "type": "error",
+  "error": "insufficient_scope",
+  "changed_in": "0.13.4",
+  "do_instead": "use a key that holds the scopes the same REST read takes (meeting status for the socket, tx for a transcript subscription; a bot-only key streams nothing); GET /auth/me lists yours",
+  "docs": "https://docs.vexa.ai/changes-0-13-4-auth",
+  "details": "subscribing streams a meeting's transcript; this key may not read transcripts"
+}

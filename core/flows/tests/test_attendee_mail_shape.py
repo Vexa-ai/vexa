@@ -316,18 +316,22 @@ def test_an_unset_param_is_ON(monkeypatch):
 
 # ── {{company}} — mailtext's own rule, not a second one ──────────────────────────────────────
 @pytest.mark.parametrize("readme,expected", [
-    ("# Acme Bank\n\nthe org handbook", "Acme Bank"),          # the heading the setup gate demands
+    ("# Acme Bank\n\nthe org handbook", "Acme Bank"),          # the heading an admin writes
     ("\n\n#  Acme Bank  \nrest", "Acme Bank"),                 # leading blanks are skipped
     ("Acme Bank\n", mailtext.COMPANY_UNSET),                   # no heading is not a company name
     (None, mailtext.COMPANY_UNSET),                            # nor is an unreadable README
+    ("", mailtext.COMPANY_UNSET),                              # an empty `_global` names nobody
+    ("# Company\n\n<!-- vexa:unwritten — the setup conversation replaces this -->\n",
+     mailtext.COMPANY_UNSET),                                  # nor does the seed's placeholder
 ])
 def test_company_follows_mailtexts_rule(monkeypatch, readme, expected):
     """`mailtext.company_name` takes the FIRST HEADING of `_global/README.md` and nothing else.
-    The step used to carry its own looser reader that stripped hashes off any first line and
-    degraded to "your organisation" — two answers to one question, and `_global/README.md` is
-    written by the setup gate, which requires the heading. The fallback string is deliberately
-    unpretty: reaching a recipient means the gate let a mail out before the company layer
-    existed, which is a bug, not a wording choice."""
+    The step used to carry its own looser reader that stripped hashes off any first line — two
+    answers to one question.
+
+    An instance with no company layer is ORDINARY since founder ruling 2026-10-08 ("let it be
+    empty with no data - it's fine"), so the fallback is what strangers read and has to read as a
+    sentence: "At this organisation." — never "At Company." off the seed's placeholder."""
     reg, ch = _rig(monkeypatch, readme=readme, head="At {{company}}.")
     reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR))
     assert ch.sent[0]["body"].startswith(f"At {expected}.")

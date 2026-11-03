@@ -1,0 +1,7 @@
+{
+  "type": "error",
+  "error": "api_key_query_removed",
+  "changed_in": "0.13.4",
+  "do_instead": "send the key in the x-api-key header, or (a browser) in the subprotocol list: new WebSocket(url, ['vexa.v1', 'vexa.key.' + key])",
+  "docs": "https://docs.vexa.ai/changes-0-13-4-auth"
+}

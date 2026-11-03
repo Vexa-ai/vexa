@@ -1,0 +1,103 @@
+---
+title: "Nudges and notification settings"
+description: "How a card or a mention that waits on you reaches you outside the app — in-app first, one email after you stay away, then a digest — and how you set when, how often and for which rooms."
+---
+
+When something waits on you — a card you need to decide, a mention, a call that rang you and was
+missed, a request to join a room you can approve, a card that slipped past its date — Vexa tells you
+in the app first. If you don't look at it, it sends **one email**; if it is still unseen after that,
+it goes into your **digest**. The moment you open the item anywhere, everything still pending for it
+is called off.
+
+## What you can do
+
+### Get nudged, in this order
+
+1. **In the app.** A toast and the Inbox badge, at the card's check time.
+2. **One email**, after your idle delay (10 minutes by default) — only if you have not seen the item.
+3. **The digest**, hourly or daily: one email listing everything that is still unseen, grouped by
+   workspace. An item rides one digest, then stays in your Inbox.
+
+A plain room message never interrupts you: it is an unread count, never a toast, a sound or an email.
+
+### Open to decide
+
+Every nudge email holds the item's title, who is waiting, and one link: **Open to decide**. It opens
+the card alone, full width, with every field shown before any button. You sign in by link if you
+need to; a mail scanner opening the link signs nothing — the sign-in is spent only by your click.
+After you decide, the page says how many more wait on you and offers **Next**.
+
+### Settings → Notifications
+
+| Setting | Default | What it does |
+|---|---|---|
+| Email | on | Off keeps everything in the app and the Inbox |
+| WhatsApp | coming | Shown; not sent in this release |
+| Idle delay | after 10 min unseen | How long an item waits in the app before its one email |
+| Digest | hourly, only if unseen | Hourly, daily at a time you pick, or off |
+| Quiet hours | 22:00–08:00 | No email inside them, in your own time zone; it waits until they end |
+| Attention budget | 6 a day | Emails (single or digest) per day, counted in your own day |
+| Per room and workspace | Mentions and cards | All messages · Mentions and cards · Nothing |
+| Sounds | on | Three sounds, each with a preview, and a volume |
+
+Sounds play only for interruptions — a card or a mention for you (a chime), a call ringing you (a ring
+until Join or Not now, 30 s at most) — never for the room you are looking at and never in quiet hours.
+Browsers block sound until you click once; **Enable sounds** does that.
+
+## Limits and errors
+
+| You see | Why |
+|---|---|
+| No email although the item is unseen | Quiet hours, today's budget is spent (it waits for the digest or tomorrow), email is off, or the room is set to Nothing |
+| "Couldn't deliver the nudge … by email" | The person waiting on someone sees this when the mail server refused it three times |
+| A setting refused | Values are checked all-or-nothing; the deployment keeps a floor under the idle delay (5 min) and a ceiling over the budget (12) |
+
+## How it works
+
+flows owns delivery (PRD 0.13.4 D15). A card fact from crm (`crm.record.changed`, refs and lifecycle
+fields only) or a room item (`nudge.requested`) arms one row in flows' `delivery` table per person and
+item, at the item's `next_check_at`. The worker wakes due rows and, for each, asks crm whether the
+card is still open, waits on this person, and was seen or acted on (agent-api's read state for room
+items). The order of the gate: unknown → ask again in a minute (never send on a guess); closed, acted
+or seen → stop; muted room → stop; otherwise the in-app notice, then after the idle window one email
+(or the digest if the budget is spent), then the digest.
+
+Every delivery outside the Inbox is one row in `delivery_send` — the attention budget's unit (D32).
+It is written before the mail is sent under a deterministic id, so a crash between the two never sends
+twice. The person's policy lives in identity (`GET`/`PUT /user/notifications`, also carried on the
+internal settings read flows already makes); flows clamps it to the deployment's floors and ceilings.
+
+### Configuration
+
+| Key (flows) | Default | |
+|---|---|---|
+| `VEXA_FLOWS_NUDGES` | unset (off) | `1` turns the worker's delivery pass on |
+| `VEXA_FLOWS_DEFS_EXTRA` | — | include `flows_defs.nudges` to arm items |
+| `VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN` | 5 | global floor under the idle delay |
+| `VEXA_FLOWS_NUDGE_BUDGET_CEILING` | 12 | global ceiling over the daily budget |
+
+Mail goes through the deployment's existing channel (`VEXA_NOTIFY_CHANNEL`, SMTP or Graph). With
+`VEXA_MAIL_RELAY=capture` every message goes to the capture sink and never reaches a mailbox.
+
+## Why it complies
+
+- **Fixed bodies (M4, D38 floor `nudge_body = template_only`).** The renderer's whole vocabulary is
+  kind, title, who, room, workspace and link; an item carrying `body`, `text`, `message` or similar is
+  refused at the door and in the renderer. URLs inside a title become "[link]"; the one link is always
+  this deployment's terminal. The title is fetched from crm at send time for the recipient, so flows
+  stores no content (D8).
+- **Seen stops everything (deny test 30).** crm's per-viewer `seen` relation, written by the terminal
+  when the card is rendered in view, is read before every send.
+- **Content behind sign-in.** The landing page shows nothing about the card before sign-in.
+
+| Test | Proves |
+|---|---|
+| `core/flows/tests/test_nudge_deny_26_30.py` | deny test 26 (template fields only, byte for byte) and 30 (seen suppresses the pending email and digest line) |
+| `core/flows/tests/test_nudge_delivery.py` | in-app first, one email after idle, the digest, the cap, quiet hours in local time, rooms, at-most-once, failures |
+| `core/identity/services/admin-api/tests/test_notification_policy.py` | the vocabulary, all-or-nothing, WhatsApp refused, the doors |
+| `core/agent/tests/test_nudge_notice_kinds.py` | the in-app kinds and per-recipient read state |
+| `clients/terminal/src/app/__tests__/decide.test.tsx`, `src/minutes/__tests__/notificationSettings.test.tsx`, `src/platform/__tests__/sounds.test.ts` | the landing, the settings page, the sound rules |
+
+## Related
+
+- [Notifications](/minutes/notifications)

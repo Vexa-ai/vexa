@@ -23,8 +23,8 @@ shipped app; this package imports nothing from conformance.
 """
 from __future__ import annotations
 
-from .app import (CARRIED_DOMAINS, ROUTE_SCOPES, UNSCOPED_ROUTES, create_app, run_multiplex,
-                  undeclared_routes)
+from .app import CARRIED_DOMAINS, ROUTE_SCOPES, UNSCOPED_ROUTES, create_app, undeclared_routes
+from .multiplex import run_multiplex
 from .ports import Authorizer, DownstreamClient, PubSub, RedisBus
 
 __all__ = [

@@ -1,48 +1,220 @@
 "use client";
 /** Login gate. Polls /api/auth/me on mount; if unauthenticated, renders the sign-in card.
- *  Primary path is OAuth — Google / Microsoft buttons (next-auth/react `signIn`, which works without a
- *  SessionProvider). Enabled providers are discovered from NextAuth's /api/auth/providers so a deploy
- *  with no OAuth creds simply hides the buttons. The direct email form is kept as a DEBUG path (server
- *  restricts it to addresses containing "test"), tucked behind a toggle. Styled to match the terminal
- *  (CSS vars from globals.css); does not redesign the workbench.
+ *
+ *  Two real doors, and no third:
+ *   • OAuth — Google / Microsoft / the instance's own OIDC issuer (ADFS, Keycloak), via next-auth/react
+ *     `signIn`, which works without a SessionProvider. Enabled providers are discovered from
+ *     NextAuth's /api/auth/providers, so a deploy with no OAuth creds simply hides the buttons; the
+ *     OIDC button carries the name the operator gave it (`VEXA_OIDC_DISPLAY_NAME`).
+ *   • EMAIL MAGIC LINK — the address goes to /api/auth/request-link, which mails a signed,
+ *     single-use link; clicking it hits /api/auth/redeem, which sets the session cookies and
+ *     drops the visitor exactly where they were headed. The card's job here ends at
+ *     "Check your email" — this component never mints a session itself.
+ *
+ *  What used to be here and is now GONE: a `?as=<recipient>` query parameter that POSTed straight
+ *  to /api/auth/login, and a "debug sign-in" form onto the same route. Both were password-less —
+ *  anyone who could type a URL could become anyone. The emailed link replaces them; the mailbox is
+ *  the proof. /api/auth/login still exists for local dev tooling and is refused in production.
+ *
+ *  An operator can close the emailed link (`VEXA_SIGNIN_METHODS` without `email`); /api/auth/instance
+ *  then says `email_link: false` and the form is not drawn. The routes refuse on their own either way.
  *
  *  FIRST RUN: /api/auth/instance says whether an admin exists. On a fresh instance the card becomes
- *  the one-time "Set up your instance" claim screen — first sign-in becomes the admin — through
- *  whatever auth the deploy actually has: OAuth buttons when configured, otherwise the test-mode
- *  direct entry with an honest banner naming the OAuth upgrade path. */
-import { useEffect, useState, type FormEvent } from "react";
+ *  the one-time "Set up your instance" claim screen. It asks first for the ADMIN CLAIM CODE that
+ *  admin-api wrote to its log at boot (/api/auth/claim-code keeps a valid one for the sign-in that
+ *  follows), then offers whichever doors the deploy has; that sign-in becomes the admin. No code, no
+ *  claim: the first visitor to an exposed instance is not its owner. An existing account can still
+ *  sign in plainly from the same screen.
+ *
+ *  WHO MAY SIGN IN is decided by the server, never here (Vexa-ai/vexa#1783): an existing user, an
+ *  admin, or an address on the instance's allow-list. The card learns of a refusal only as an OAuth
+ *  round-trip coming back with `?error=` (`takeSigninError`), and shows the one shared sentence. The
+ *  email form says "check your email" for every address, allowed or not, by design.
+ *
+ *  NO COMPANY-LAYER GATE (founder ruling 2026-10-08: "let's remove global setup at all so that
+ *  there is no need to setup global at all - let it be empty with no data - it's fine"). This
+ *  reverses the 2026-09-02 ruling that a fresh instance served nobody until its admin had written
+ *  `_global`. Every signed-in person gets the terminal from their first sign-in, and `_global` may
+ *  stay empty for as long as nobody chooses to write it.
+ *
+ *  What is still decided here, on every page load, is whether the instance HAS an administrator
+ *  (`gateVerdict` below): a session minted before any admin existed never walks through a sign-in
+ *  door again, so the claim has to be offered to it in place (observed live 2026-09-02, 08:48Z). It
+ *  gates `children`, not a banner over them, and it holds a blank screen until the probe has
+ *  settled, because rendering the workbench "for now" and retracting it a moment later is the same
+ *  defect with a shorter duration. An unreachable probe reads as "an admin exists" and the terminal
+ *  renders — a probe that cannot answer never produces a screen that refuses people.
+ *
+ *  A SESSION THAT DIES MID-USE (2026-09-01). The mount probe used to be the only probe there was:
+ *  once this gate said "in" it never asked again, so a session revoked server-side left the entire
+ *  shell rendered over an app where every request 401'd — and the user's only report of it was a
+ *  chat turn ending in a generic "something went wrong". The gate now LISTENS: the HTTP chokepoints
+ *  raise a session-suspect signal on any 401/403 (see @/platform/session), this component re-probes
+ *  /api/auth/me — which really validates the token now — and only a genuine 401 takes the screen.
+ *  The probe is the authority precisely because a 403 is usually resource-scoped and means nothing
+ *  about the session; suspicion never signs anybody out on its own. */
+import "./gate.css";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { adoptAccount } from "../platform/accountStorage";
+import { navigateWithin } from "../platform/navigate";
 import { signIn } from "next-auth/react";
+import { onSessionSuspect } from "../platform/session";
+import { signinErrorMessage } from "./signinRefusal";
+import { SESSION_ENDED_HEADLINE } from "../data/apiClient";
 
 type Status = "checking" | "out" | "in";
-type Providers = { google: boolean; microsoft: boolean };
+/** `oidc` is the button's label when the instance's OIDC provider is registered, else null. */
+type Providers = { google: boolean; microsoft: boolean; oidc: string | null };
+
+/** The enabled providers, from NextAuth's /api/auth/providers answer. */
+export function providersFrom(p: Record<string, unknown>): Providers {
+  const oidc = p.oidc as { name?: unknown } | undefined;
+  return {
+    google: !!p.google,
+    microsoft: !!p.microsoft,
+    oidc: oidc ? (typeof oidc.name === "string" && oidc.name.trim() ? oidc.name.trim() : "Single sign-on") : null,
+  };
+}
+
+/** Where the link should land: whatever deeplink the visitor already had in the URL (`?ask=`,
+ *  `?meeting=`, `?view=`) travels through the mail, so the click is door AND destination. */
+function currentPath(): string {
+  if (typeof window === "undefined") return "/";
+  return window.location.pathname + window.location.search;
+}
+
+/** A refused OAuth sign-in comes back to `/?error=<code>` (Vexa-ai/vexa#1783 — see
+ *  api/auth/[...nextauth]/authOptions.ts). Read the code ONCE and take it out of the address bar, so
+ *  a reload does not repeat a refusal that is over and the next sign-in link does not carry it into
+ *  its `next=`. */
+export function takeSigninError(): string | null {
+  if (typeof window === "undefined") return null;
+  const url = new URL(window.location.href);
+  const code = url.searchParams.get("error");
+  if (!code) return null;
+  url.searchParams.delete("error");
+  try { window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash); } catch { /* history unavailable */ }
+  return signinErrorMessage(code);
+}
+
+/** Don't re-probe more than once every few seconds: a dead session makes EVERY in-flight surface
+ *  401 at once, and one answer settles all of them. */
+const REPROBE_COOLDOWN_MS = 3000;
+
+/** What a signed-in subject gets. */
+export type GateVerdict = "pending" | "open" | "claim";
+
+/** The decision, as a pure function so it is testable without a DOM. There is no company-layer row
+ *  any more (founder ruling 2026-10-08): an instance with an administrator is open to everybody who
+ *  signed in, and one without offers the claim. */
+export function gateVerdict(input: {
+  /** The instance probe has settled (answered or failed). Until then: no screen at all. */
+  probed: boolean;
+  adminExists: boolean;
+}): GateVerdict {
+  if (!input.probed) return "pending";
+  // No admin yet: this is NOT a refusal. Somebody has to be able to claim the instance, and for a
+  // session that predates any admin the signed-in person is the only one who can — the sign-in
+  // doors they would otherwise claim through are behind them.
+  return input.adminExists ? "open" : "claim";
+}
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<Status>("checking");
-  const [providers, setProviders] = useState<Providers>({ google: false, microsoft: false });
+  const [providers, setProviders] = useState<Providers>({ google: false, microsoft: false, oidc: null });
   const [adminExists, setAdminExists] = useState(true); // fail-safe: plain sign-in until told otherwise
-  const [showDebug, setShowDebug] = useState(false);
+  // Is the emailed link offered? Drawn unless the instance says it is closed; the routes refuse anyway.
+  const [emailLink, setEmailLink] = useState(true);
+  // Has the instance probe SETTLED (answered or failed)? Distinct from its value, because "we have
+  // not asked yet" and "we asked and an admin exists" must not render the same thing.
+  const [instanceProbed, setInstanceProbed] = useState(false);
+  const [subjectEmail, setSubjectEmail] = useState<string | null>(null);
+  // The claim screen's first step: the one-time code from the admin-api log, accepted by the server.
+  const [claimCode, setClaimCode] = useState("");
+  const [codeAccepted, setCodeAccepted] = useState(false);
+  const [plainSignIn, setPlainSignIn] = useState(false);
   const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [sent, setSent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Why the last OAuth round-trip did not sign anybody in, when it said (`?error=` on the way back).
+  const [notice, setNotice] = useState<string | null>(null);
+  // The session died while the app was open (as opposed to arriving signed-out). Drives the
+  // "your session ended" card, whose one button reveals the sign-in card below it.
+  const [ended, setEnded] = useState(false);
+  // Where the user WAS when it died, captured at that moment so the emailed link / OAuth callback
+  // brings them back to the same deeplink.
+  const [returnTo, setReturnTo] = useState<string | null>(null);
+  const probing = useRef(false);
+  const lastProbe = useRef(0);
+
+  /** Confirm a suspicion. Only a real 401 from /api/auth/me takes the screen — a 403 on one
+   *  resource, or an unreachable oracle, leaves the session alone. */
+  const confirmSession = useCallback(async () => {
+    if (probing.current) return;
+    const now = Date.now();
+    if (now - lastProbe.current < REPROBE_COOLDOWN_MS) return;
+    probing.current = true;
+    lastProbe.current = now;
+    try {
+      const r = await fetch("/api/auth/me", { cache: "no-store" });
+      if (r.status === 401) {
+        setReturnTo((prev) => prev ?? currentPath());
+        setEnded(true);
+        setStatus("out");
+      }
+    } catch {
+      /* the probe itself couldn't run — that's a network fault, not a dead session */
+    } finally {
+      probing.current = false;
+    }
+  }, []);
+
+  useEffect(() => onSessionSuspect(() => { void confirmSession(); }), [confirmSession]);
 
   useEffect(() => {
     let active = true;
+    setNotice(takeSigninError());
+    // The session probe also carries what to call the subject on the claim screen.
     fetch("/api/auth/me", { cache: "no-store" })
-      .then((r) => (active ? setStatus(r.ok ? "in" : "out") : undefined))
+      .then(async (r) => {
+        const body = r.ok ? ((await r.json().catch(() => ({}))) as { user?: { id?: string | null; email?: string | null } }) : {};
+        if (!active) return;
+        // Stored browser state is this account's alone: another account's open workspace, pending
+        // meeting or layout is never applied. A switch of account reloads before anything renders,
+        // so nothing read under the previous account survives into this one.
+        if (r.ok && adoptAccount(body.user?.id ?? null) === "changed") { window.location.reload(); return; }
+        setStatus(r.ok ? "in" : "out");
+        setSubjectEmail(body.user?.email ?? null);
+      })
       .catch(() => active && setStatus("out"));
     // NextAuth lists configured providers here; absent/failed → just no OAuth buttons.
     fetch("/api/auth/providers", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : {}))
       .then((p: Record<string, unknown>) =>
-        active && setProviders({ google: !!p.google, microsoft: !!p.microsoft }))
+        active && setProviders(providersFrom(p)))
       .catch(() => undefined);
-    // First-run probe — {admin_exists:false} flips the card into the admin-claim variant.
+    // First-run probe — {admin_exists:false} flips the card into the admin-claim variant. It
+    // defaults to "an admin exists" on any failure (a bad response, a parse error, an unreachable
+    // server), so a probe that cannot answer never shows a claim screen that cannot succeed.
     fetch("/api/auth/instance", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : { admin_exists: true }))
-      .then((d: { admin_exists?: boolean }) => active && setAdminExists(d.admin_exists !== false))
-      .catch(() => undefined);
+      .then((d: { admin_exists?: boolean; email_link?: boolean }) => {
+        if (!active) return;
+        setAdminExists(d.admin_exists !== false);
+        setEmailLink(d.email_link !== false);
+        setInstanceProbed(true);
+      })
+      // A probe that could not run has still SETTLED — it settled on the fail-safe values already in
+      // state. Not marking it settled would hold the blank screen forever on an unreachable server,
+      // which is the lockout this whole gate is written to avoid.
+      .catch(() => active && setInstanceProbed(true));
     return () => { active = false; };
   }, []);
+
+  /** Where the door should put them: the deeplink they were on when the session died, else where
+   *  they are now. Captured rather than re-read so a dead session returns to the SAME place. */
+  const destination = () => returnTo ?? currentPath();
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -51,129 +223,222 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     setSubmitting(true);
     setError(null);
     try {
-      const r = await fetch("/api/auth/login", {
+      const r = await fetch("/api/auth/request-link", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: value }),
+        body: JSON.stringify({ email: value, next: destination() }),
       });
-      if (r.ok) { window.location.reload(); return; }
+      if (r.ok) { setSent(value); return; }
       const body = (await r.json().catch(() => ({}))) as { error?: string };
-      setError(body.error || `Login failed (${r.status})`);
+      setError(body.error || `Could not send the link (${r.status})`);
     } catch (err) {
-      setError((err as Error).message || "Login failed");
+      setError((err as Error).message || "Could not send the link");
     } finally {
       setSubmitting(false);
     }
   };
 
-  if (status === "in") return <>{children}</>;
-  if (status === "checking") return <div style={{ height: "100vh", background: "var(--bg)" }} />;
+  /** The claim screen's first step: hand the code to the server, which keeps a valid one (httpOnly)
+   *  for the sign-in that follows. A wrong one is said so here, at once. */
+  const submitCode = async (e: FormEvent) => {
+    e.preventDefault();
+    const value = claimCode.trim();
+    if (!value || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/auth/claim-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: value }),
+      });
+      if (r.ok) { setCodeAccepted(true); return; }
+      const body = (await r.json().catch(() => ({}))) as { error?: string };
+      setError(body.error || `Could not check the code (${r.status})`);
+    } catch (err) {
+      setError((err as Error).message || "Could not check the code");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
-  const hasOAuth = providers.google || providers.microsoft;
-  const claiming = !adminExists; // fresh instance → this sign-in claims the admin role
+  /** Sign out and reload — same discipline as the workbench's own profile row: wipe client state so
+   *  the next person does not inherit this one's chats, tabs and pane widths. */
+  const signOut = () => {
+    void fetch("/api/auth/logout", { method: "POST" }).finally(() => {
+      try { localStorage.clear(); sessionStorage.clear(); } catch { /* storage unavailable */ }
+      window.location.reload();
+    });
+  };
+
+  if (status === "in") {
+    // Evaluated on every page load — see the header. It is here, above `children`, because the
+    // workbench mounts chats and fires dispatches on mount.
+    const verdict = gateVerdict({ probed: instanceProbed, adminExists });
+    if (verdict === "pending") return <div className="bg-0 vx-gate-blank" />;
+    if (verdict === "claim") return <ClaimInstanceCard email={subjectEmail} onSignOut={signOut} />;
+    return <>{children}</>;
+  }
+  if (status === "checking") return <div className="bg-0 vx-gate-blank" />;
+
+  // The session died under a running app. Say THAT — not a status code, and not a console pointer —
+  // and offer exactly one thing to do about it. The button reveals the sign-in card below, which
+  // carries `destination()` so the round trip lands back on the same deeplink.
+  if (ended) {
+    return (
+      <div className="bg-0 vx-gate-center">
+        <div
+          data-testid="session-ended"
+          className="bg-2 bd-strong r-lg p-6" style={{ width: 340, display: "flex", flexDirection: "column", gap: 14, boxShadow: "0 8px 32px rgba(0,0,0,.3)" }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/vexa-logo.svg" alt="Vexa" width={28} height={28} className="r-md" style={{ display: "block", flex: "none" }} />
+            <div className="t-md fw-600 c-1">{SESSION_ENDED_HEADLINE}</div>
+          </div>
+          <div className="vx-auth-text">
+            This device was signed out. Signing in again brings you back to where you were.
+          </div>
+          <button
+            onClick={() => setEnded(false)}
+            className="bg-accent c-on-accent bd-none r-md pt-2 pr-2 pb-2 pl-2 t-sm fw-600" style={{ cursor: "pointer" }}
+          >
+            Sign in again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const claiming = !adminExists && !plainSignIn; // fresh instance → this sign-in claims the admin role
+  const needCode = claiming && !codeAccepted;     // …once the claim code has been accepted
+  // With no OAuth configured (this deploy's /api/auth/providers is empty) the emailed link is not
+  // an alternative to anything — it is the door. "Or …" would read as if a button were missing.
+  const hasOAuth = providers.google || providers.microsoft || !!providers.oidc;
 
   return (
-    <div style={{ height: "100vh", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+    <div className="bg-0 vx-gate-center">
       <div
-        style={{
-          width: claiming ? 380 : 320, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 12,
-          padding: 24, display: "flex", flexDirection: "column", gap: 14, boxShadow: "0 8px 32px rgba(0,0,0,.3)",
-        }}
+        className="bg-2 bd-strong r-lg p-6" style={{ width: claiming ? 380 : 320, display: "flex", flexDirection: "column", gap: 14, boxShadow: "0 8px 32px rgba(0,0,0,.3)" }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/vexa-logo.svg" alt="Vexa" width={28} height={28} style={{ borderRadius: 8, display: "block", flex: "none" }} />
-          <div style={{ fontSize: 15, fontWeight: 600, color: "var(--t1)" }}>
+          <img src="/vexa-logo.svg" alt="Vexa" width={28} height={28} className="r-md" style={{ display: "block", flex: "none" }} />
+          <div className="t-md fw-600 c-1">
             {claiming ? "Set up your instance" : "Vexa Terminal"}
           </div>
         </div>
-        {claiming ? (
+
+        {sent ? (
           <>
-            <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>
-              This Vexa instance has no administrator yet. The first sign-in becomes the admin and can
-              configure models, transcription, and other users.
+            <div className="t-sm c-1 lh-snug">Check your email.</div>
+            <div className="t-xs c-3 lh-snug">
+              If {sent} can sign in here, a link is on its way. It works once and expires in a few minutes.
             </div>
-            <div
-              style={{
-                alignSelf: "flex-start", fontSize: 11, color: "var(--t2)", border: "1px solid var(--line2)",
-                borderRadius: 20, padding: "3px 10px", display: "inline-flex", alignItems: "center", gap: 6,
-              }}
+            <button
+              onClick={() => { setSent(null); setError(null); }}
+              className="bg-none bd-none c-3 t-xs p-0" style={{ cursor: "pointer", alignSelf: "flex-start" }}
             >
-              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--accent)", display: "inline-block" }} />
-              First sign-in = administrator
-            </div>
-            {!hasOAuth && (
-              <div
-                style={{
-                  fontSize: 11.5, lineHeight: 1.5, color: "var(--t2)", background: "var(--panel2)",
-                  border: "1px solid var(--line2)", borderRadius: 8, padding: "9px 11px",
-                }}
-              >
-                ⚠ Test mode — no OAuth configured. Sign-in is limited to emails containing &ldquo;test&rdquo;.
-                For real authentication, acquire Google or Microsoft OAuth credentials and add them to this
-                instance&rsquo;s environment (GOOGLE_CLIENT_ID/SECRET or MICROSOFT_CLIENT_ID/SECRET).
-              </div>
-            )}
+              Use a different address
+            </button>
           </>
         ) : (
-          <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5 }}>Sign in to continue.</div>
+          <>
+            {notice && (
+              <div role="alert" data-testid="signin-notice" className="vx-field-error">
+                {notice}
+              </div>
+            )}
+            {needCode ? (
+              <form onSubmit={submitCode} data-testid="claim-code" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div className="vx-auth-text">
+                  This Vexa instance has no administrator yet. To claim it, enter the one-time claim code
+                  from the admin-api log; whoever signs in with it becomes the admin and can configure
+                  models, transcription, and other users.
+                </div>
+                <input
+                  type="text"
+                  required
+                  autoComplete="one-time-code"
+                  spellCheck={false}
+                  value={claimCode}
+                  onChange={(e) => setClaimCode(e.target.value)}
+                  placeholder="XXXX-XXXX-XXXX-XXXX"
+                  aria-label="Claim code"
+                  className="vx-input vx-auth-input" data-mono=""
+                />
+                {error && <div role="alert" className="vx-field-error">{error}</div>}
+                <button
+                  type="submit"
+                  disabled={!claimCode.trim() || submitting}
+                  className="vx-btn vx-auth-btn" data-variant="primary" data-size="md"
+                >
+                  {submitting ? "Checking…" : "Continue"}
+                </button>
+                <button type="button" onClick={() => { setPlainSignIn(true); setError(null); }} className="vx-auth-quiet">
+                  Already have an account here? Sign in
+                </button>
+              </form>
+            ) : claiming ? (
+              <div className="vx-auth-text">
+                Code accepted. Sign in now — this sign-in becomes the administrator. If you use the
+                emailed link, open it in this browser.
+              </div>
+            ) : (
+              <div className="vx-auth-text">Sign in to continue.</div>
+            )}
+
+            {!needCode && providers.google && (
+              <button onClick={() => signIn("google", { callbackUrl: destination() })} className="vx-btn vx-auth-btn" data-variant="secondary" data-size="md">
+                <GoogleMark /> Continue with Google
+              </button>
+            )}
+            {!needCode && providers.microsoft && (
+              <button onClick={() => signIn("microsoft", { callbackUrl: destination() })} className="vx-btn vx-auth-btn" data-variant="secondary" data-size="md">
+                <MicrosoftMark /> Continue with Microsoft
+              </button>
+            )}
+            {!needCode && providers.oidc && (
+              <button data-testid="signin-oidc" onClick={() => signIn("oidc", { callbackUrl: destination() })} className="vx-btn vx-auth-btn" data-variant="secondary" data-size="md">
+                Continue with {providers.oidc}
+              </button>
+            )}
+            {!needCode && !hasOAuth && !emailLink && (
+              <div className="vx-gate-error">
+                No sign-in method is configured on this instance. Ask its operator.
+              </div>
+            )}
+
+            {!needCode && emailLink && <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div className="vx-auth-text">
+                {hasOAuth
+                  ? "Or get a sign-in link by email."
+                  : "Enter your email and we\u2019ll send you a sign-in link."}
+              </div>
+              <input
+                type="email"
+                required
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@company.com"
+                aria-label="Email address"
+                className="vx-input vx-auth-input"
+              />
+              {error && <div role="alert" className="vx-field-error">{error}</div>}
+              <button
+                type="submit"
+                disabled={!email.trim() || submitting}
+                className="vx-btn vx-auth-btn" data-variant="primary" data-size="md"
+              >
+                {submitting ? "Sending…" : "Send me a link"}
+              </button>
+            </form>}
+          </>
         )}
 
-        {providers.google && (
-          <button onClick={() => signIn("google", { callbackUrl: window.location.pathname + window.location.search })} style={oauthBtn}>
-            <GoogleMark /> Continue with Google
-          </button>
-        )}
-        {providers.microsoft && (
-          <button onClick={() => signIn("microsoft", { callbackUrl: window.location.pathname + window.location.search })} style={oauthBtn}>
-            <MicrosoftMark /> Continue with Microsoft
-          </button>
-        )}
-
-        {hasOAuth && (
-          <button
-            onClick={() => setShowDebug((v) => !v)}
-            style={{ background: "none", border: "none", color: "var(--t3)", fontSize: 11, cursor: "pointer", padding: 0, alignSelf: "flex-start" }}
-          >
-            {showDebug ? "Hide debug sign-in" : "Debug sign-in"}
-          </button>
-        )}
-
-        {(!hasOAuth || showDebug) && (
-          <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.4 }}>
-              {claiming && !hasOAuth
-                ? "Email — must contain “test” (test mode)."
-                : "Debug login — email must contain “test”."}
-            </div>
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you-test@company.com"
-              style={{
-                background: "var(--panel2)", border: "1px solid var(--line2)", borderRadius: 7,
-                padding: "9px 10px", color: "var(--t1)", fontSize: 13, outline: "none",
-              }}
-            />
-            {error && <div style={{ fontSize: 11, color: "var(--danger)", lineHeight: 1.4 }}>{error}</div>}
-            <button
-              type="submit"
-              disabled={!email.trim() || submitting}
-              style={{
-                background: email.trim() ? "var(--accent)" : "var(--panel2)",
-                color: email.trim() ? "var(--on-accent)" : "var(--t3)",
-                border: "none", borderRadius: 7, padding: "9px 10px", fontSize: 13, fontWeight: 600,
-                cursor: email.trim() && !submitting ? "pointer" : "default",
-              }}
-            >
-              {submitting ? "Signing in…" : claiming ? "Sign in as admin" : "Sign in"}
-            </button>
-          </form>
-        )}
-        {claiming && (
-          <div style={{ fontSize: 10.5, color: "var(--t3)", lineHeight: 1.4 }}>
+        {claiming && !sent && (
+          <div className="t-xs c-3 lh-snug">
             This claim screen disappears once an admin exists.
           </div>
         )}
@@ -182,11 +447,103 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   );
 }
 
-const oauthBtn: React.CSSProperties = {
-  display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
-  background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)",
-  borderRadius: 7, padding: "10px 10px", fontSize: 13, fontWeight: 600, cursor: "pointer",
-};
+/** The shell the claim screen sits in — deliberately the same furniture as the sign-in card, so a
+ *  person who lands on it recognises where they are. */
+function GateShell({ testId, title, children }: { testId: string; title: string; children: React.ReactNode }) {
+  return (
+    <div className="bg-0 vx-gate-center vx-gate-scroll">
+      <div
+        data-testid={testId}
+        className="bg-2 bd-strong r-lg p-6" style={{ width: 400, maxWidth: "94vw", display: "flex", flexDirection: "column", gap: 14, boxShadow: "0 8px 32px rgba(0,0,0,.3)" }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/vexa-logo.svg" alt="Vexa" width={28} height={28} className="r-md" style={{ display: "block", flex: "none" }} />
+          <div className="t-md fw-600 c-1">{title}</div>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+
+/** The instance has no administrator and this person is signed in.
+ *
+ *  This is NOT a refusal and must not read like one. It is also not a dismissible notice: claiming
+ *  is the single highest-privilege act the product offers and it cannot be undone from inside the
+ *  product (there is no second administrator to reverse it). So the button comes AFTER the sentence
+ *  that says what it means, not before it. */
+function ClaimInstanceCard({ email, onSignOut }: { email: string | null; onSignOut: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [code, setCode] = useState("");
+
+  const claim = async () => {
+    if (!code.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/auth/claim-admin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: code.trim() }),
+      });
+      if (r.ok) {
+        // FOLLOW THE URL THE SERVER HANDED BACK — the claimer's first-visit arrival (`/?s=<id>`), or
+        // `/` when there is none. A full navigation, not a flip: the claim changes what every probe
+        // on this page would answer, so nothing may be left holding the old answer.
+        const body = (await r.json().catch(() => ({}))) as { url?: string };
+        navigateWithin(body.url);
+        return;
+      }
+      const body = (await r.json().catch(() => ({}))) as { error?: string; reload?: boolean };
+      // Somebody else claimed it first — the screen is stale, not broken. Reloading shows the truth.
+      if (body.reload) { window.location.reload(); return; }
+      setError(body.error || `Could not claim this instance (${r.status})`);
+    } catch (err) {
+      setError((err as Error).message || "Could not claim this instance");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <GateShell testId="claim-instance" title="Set up this Vexa">
+      <div className="t-xs c-1 lh-normal">
+        This Vexa has no administrator yet.
+      </div>
+      <div className="t-xs c-3 lh-normal">
+        Claiming it makes {email ? <strong className="c-2 fw-600">{email}</strong> : "you"} this
+        instance&rsquo;s administrator, who configures models, transcription, and other users.
+      </div>
+      <div className="t-xs c-3 lh-snug">
+        There is no second administrator to undo this, so claim it only if the instance is yours to run.
+        Claiming takes the one-time claim code from the admin-api log.
+      </div>
+      <input
+        type="text"
+        autoComplete="one-time-code"
+        spellCheck={false}
+        value={code}
+        onChange={(e) => setCode(e.target.value)}
+        placeholder="XXXX-XXXX-XXXX-XXXX"
+        aria-label="Claim code"
+        className="vx-input vx-auth-input" data-mono=""
+      />
+      {error && <div role="alert" className="vx-field-error">{error}</div>}
+      <button
+        onClick={() => void claim()}
+        disabled={busy || !code.trim()}
+        className="vx-btn vx-auth-btn" data-variant="primary" data-size="md" aria-busy={busy || undefined}
+      >
+        {busy ? "Claiming\u2026" : "Claim this instance"}
+      </button>
+      <button onClick={onSignOut} className="vx-auth-quiet">Not you? Sign out</button>
+    </GateShell>
+  );
+}
+
 
 /** Google's multicolor "G" brand mark. */
 function GoogleMark() {

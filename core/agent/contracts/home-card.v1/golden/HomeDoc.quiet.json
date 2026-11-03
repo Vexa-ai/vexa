@@ -1,0 +1,282 @@
+{
+ "spec": "home-card.v1",
+ "composed_at": "2026-10-13T14:40:00Z",
+ "greeting": {
+  "title": "A quiet afternoon",
+  "text": "Tue 13 Oct · Nothing scheduled until tomorrow 10:00. A good window for the things that slipped."
+ },
+ "left_out": "not shown: nothing else is waiting on a reply.",
+ "people": {
+  "mira": {
+   "name": "Mira Chen",
+   "initials": "MC",
+   "role": "Operations",
+   "last": "Standup today, 09:05",
+   "reach": "Direct chat",
+   "vexa": true,
+   "account_id": "acct-mira"
+  },
+  "lena": {
+   "name": "Lena Novak",
+   "initials": "LN",
+   "role": "Beta tester",
+   "last": "Email 3 days ago",
+   "reach": "Direct chat",
+   "vexa": true,
+   "account_id": "acct-lena"
+  },
+  "jonas": {
+   "name": "Jonas Weber",
+   "initials": "JW",
+   "role": "Engineering lead",
+   "last": "Product sync yesterday",
+   "reach": "Email · Discord",
+   "vexa": false,
+   "email": "jonas@example.com"
+  },
+  "paul": {
+   "name": "Paul Okafor",
+   "initials": "PO",
+   "role": "Open source funding",
+   "last": "Call 9 days ago",
+   "reach": "Email",
+   "vexa": false,
+   "email": "paul@example.org"
+  }
+ },
+ "cards": [
+  {
+   "type": "card",
+   "id": "s-paul-model",
+   "kind": "suggestion",
+   "wide": true,
+   "person": "paul",
+   "rank": {
+    "pos": 1,
+    "score": 0.86,
+    "signal": "9 days, draft exists"
+   },
+   "blocks": [
+    {
+     "type": "title",
+     "text": "Send Paul Okafor the draft funding model"
+    },
+    {
+     "type": "text",
+     "tone": "why",
+     "text": "He asked for it on the call. The 3-tier draft has been sitting in a chat for six days."
+    },
+    {
+     "type": "person",
+     "people": [
+      "paul"
+     ]
+    },
+    {
+     "type": "evidence",
+     "items": [
+      {
+       "text": "No follow-up 9 days after the call",
+       "source": "Gmail"
+      },
+      {
+       "text": "Draft model finished 6 days ago",
+       "source": "chat"
+      },
+      {
+       "text": "Action item “send model” still open",
+       "source": "transcript"
+      }
+     ]
+    },
+    {
+     "type": "action",
+     "label": "Draft follow-up",
+     "prompt": "Draft a follow-up to Paul Okafor with the 3-tier funding model from our chat. Leave it as a draft.",
+     "primary": true,
+     "needs_go": true
+    }
+   ]
+  },
+  {
+   "type": "card",
+   "id": "s-lena-retest",
+   "kind": "suggestion",
+   "person": "lena",
+   "rank": {
+    "pos": 2,
+    "score": 0.74,
+    "signal": "fix shipped, reply owed"
+   },
+   "blocks": [
+    {
+     "type": "title",
+     "text": "Unblock Lena's Zoom re-test"
+    },
+    {
+     "type": "text",
+     "tone": "why",
+     "text": "She has been waiting 3 days, and the join fix she needs went out yesterday."
+    },
+    {
+     "type": "evidence",
+     "items": [
+      {
+       "text": "Re-test results unanswered 3d",
+       "source": "Gmail"
+      },
+      {
+       "text": "Zoom join fix done yesterday",
+       "source": "timeline"
+      }
+     ]
+    },
+    {
+     "type": "action",
+     "label": "Message Lena",
+     "primary": true,
+     "message": "lena"
+    },
+    {
+     "type": "action",
+     "label": "Draft email",
+     "prompt": "Draft a reply to Lena Novak with the Zoom fix and re-test steps.",
+     "needs_go": true
+    }
+   ]
+  },
+  {
+   "type": "card",
+   "id": "t-routine",
+   "kind": "try",
+   "rank": {
+    "pos": 3,
+    "score": 0.55,
+    "signal": "ran it by hand 6×"
+   },
+   "blocks": [
+    {
+     "type": "row",
+     "icon": "repeat",
+     "text": "Make “Check my email” a routine"
+    },
+    {
+     "type": "text",
+     "tone": "why",
+     "text": "You ran it by hand 6 times this week. As a routine it runs at 08:00 and shows up here."
+    },
+    {
+     "type": "action",
+     "label": "Try it",
+     "prompt": "Turn my 'Check my email' chat into a weekday 08:00 routine that reports to my home."
+    }
+   ]
+  },
+  {
+   "type": "card",
+   "id": "t-folder",
+   "kind": "try",
+   "rank": {
+    "pos": 4,
+    "score": 0.41,
+    "signal": "folder on Drive"
+   },
+   "blocks": [
+    {
+     "type": "row",
+     "icon": "folder",
+     "text": "Drop a folder to make a workspace"
+    },
+    {
+     "type": "text",
+     "tone": "why",
+     "text": "Drag the Northwind folder here and Minutes turns it into a workspace it can answer from."
+    },
+    {
+     "type": "action",
+     "label": "Try it",
+     "prompt": "Make a workspace from my Northwind Drive folder."
+    }
+   ]
+  },
+  {
+   "type": "card",
+   "id": "m-weekly",
+   "kind": "meeting",
+   "meta": "tomorrow 10:00 · Teams",
+   "controls": false,
+   "rank": {
+    "pos": 5,
+    "score": 0.38,
+    "signal": "prep tonight, not 9:55"
+   },
+   "blocks": [
+    {
+     "type": "title",
+     "text": "Northwind weekly"
+    },
+    {
+     "type": "person",
+     "people": [
+      "mira"
+     ],
+     "extra": [
+      "Northwind ×3"
+     ]
+    },
+    {
+     "type": "action",
+     "label": "Prepare tonight",
+     "prompt": "Prepare me for tomorrow's 10:00 Northwind weekly.",
+     "primary": true
+    }
+   ]
+  },
+  {
+   "type": "card",
+   "id": "r-airport",
+   "kind": "result",
+   "meta": "06:00 · routine",
+   "controls": false,
+   "rank": {
+    "pos": 6,
+    "score": 0.2
+   },
+   "blocks": [
+    {
+     "type": "row",
+     "icon": "plane",
+     "text": "Airport movements: Thu departure on schedule"
+    }
+   ]
+  },
+  {
+   "type": "card",
+   "id": "c-call-offsite",
+   "kind": "continue",
+   "controls": false,
+   "rank": {
+    "pos": 7,
+    "score": 0.18
+   },
+   "blocks": [
+    {
+     "type": "title",
+     "text": "Call with Vexa: offsite ideas"
+    },
+    {
+     "type": "text",
+     "tone": "why",
+     "text": "Minutes: 5 ideas captured; 2 turned into tasks."
+    },
+    {
+     "type": "action",
+     "label": "Continue",
+     "open": {
+      "chat": "chat-call-offsite"
+     }
+    }
+   ]
+  }
+ ]
+}

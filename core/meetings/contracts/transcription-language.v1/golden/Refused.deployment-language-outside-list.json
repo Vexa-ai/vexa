@@ -1,0 +1,1 @@
+{ "shape": "DeploymentDefault", "value": { "DEFAULT_TRANSCRIPTION_LANGUAGE": "fr", "DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES": "de,en" }, "reason": "language must be one of allowed_languages" }

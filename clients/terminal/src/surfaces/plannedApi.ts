@@ -6,7 +6,7 @@
  *  (link-less plans have no native id to address). Calendar CONNECTIONS (`/api/user/calendars`)
  *  live in the identity domain — the ICS URL is a secret, write-only, never read back. */
 
-import { ApiError } from "./apiClient";
+import { ApiError } from "../data/apiClient";
 
 async function jsonOrThrow<T>(r: Response): Promise<T> {
   if (!r.ok) {

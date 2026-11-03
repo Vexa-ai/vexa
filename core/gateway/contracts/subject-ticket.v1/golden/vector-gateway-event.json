@@ -1,0 +1,22 @@
+{
+  "what": "the person's own bearer, validated through the door",
+  "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n-----END PUBLIC KEY-----\n",
+  "now": 1767225600,
+  "ttl_sec": 600,
+  "claims": {
+    "cls": [
+      "bot.dispatch",
+      "desk.write",
+      "routine.turn"
+    ],
+    "evt": "validate",
+    "exp": 1767226200,
+    "iat": 1767225600,
+    "iss": "gateway",
+    "jti": "00112233445566778899aabb",
+    "kind": "event",
+    "sub": "42",
+    "v": "subject-ticket.v1"
+  },
+  "token": "st1.eyJjbHMiOlsiYm90LmRpc3BhdGNoIiwiZGVzay53cml0ZSIsInJvdXRpbmUudHVybiJdLCJldnQiOiJ2YWxpZGF0ZSIsImV4cCI6MTc2NzIyNjIwMCwiaWF0IjoxNzY3MjI1NjAwLCJpc3MiOiJnYXRld2F5IiwianRpIjoiMDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiIiwia2luZCI6ImV2ZW50Iiwic3ViIjoiNDIiLCJ2Ijoic3ViamVjdC10aWNrZXQudjEifQ.axaDiyUsVDmJ9zKEpMbwrrDUJvrx0__aDfMneK52hyzttP48svCqkFrisnF9qZFmQvRPv-fWewEE3AADF6teBg"
+}

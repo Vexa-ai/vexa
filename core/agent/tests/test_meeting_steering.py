@@ -2,9 +2,9 @@
 
 _meeting_grounding branches on the meeting status the terminal passes in ``active``:
 prep (idle/scheduled) never reads a stream and steers toward preparation; post
-(completed/failed/stopped) prefers the PROCESSED notes stream, falls back to the raw
-transcript, and says plainly when neither exists; an ABSENT status is the legacy live
-path byte-for-byte. Steering templates are overridable from the _global workspace file
+(completed/failed/stopped) folds the recorded transcript and says plainly when there is
+none; an ABSENT status is the legacy live path byte-for-byte. (It used to prefer a
+"processed notes" stream first — PRD decision 34 removed that producer.) Steering templates are overridable from the _global workspace file
 ``agents/meeting-lifecycle.md`` — malformed overrides fail loud and fall back.
 """
 from __future__ import annotations
@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 
 from control_plane import meeting_steering
-from control_plane.api import _fold_meeting_processed, _meeting_grounding
+from control_plane.api import _meeting_grounding
 
 
 def _fake_redis(monkeypatch, seed):
@@ -54,22 +54,22 @@ def test_prep_grounding_reads_no_stream_and_names_the_workspace(monkeypatch):
     would warn on a read — none happens), the title/time/bound workspace are named, and the
     steering pushes agenda/research/brief."""
     ctx, tools, prompt = _meeting_grounding(
-        {"kind": "meeting", "meeting": {
-            "platform": "google_meet", "native_id": "abc-defg-hij", "meeting_id": 46,
-            "status": "scheduled", "title": "OeNB pilot discussion",
-            "scheduled_at": "2026-07-13T10:00:00Z", "workspace_id": "oenb-1424e3"}},
+        {"kind": "meeting",
+         "platform": "google_meet", "native_id": "abc-defg-hij", "meeting_id": 46,
+         "status": "scheduled", "title": "Example Bank pilot discussion",
+         "scheduled_at": "2026-07-13T10:00:00Z", "workspace_id": "bank-1424e3"},
         session="main", prompt="build the agenda", redis_url=None)
     assert ctx == {"kind": "none", "session": "main"} and tools == []
-    assert "PREPARE" in prompt and "OeNB pilot discussion" in prompt
+    assert "PREPARE" in prompt and "Example Bank pilot discussion" in prompt
     assert "scheduled for 2026-07-13T10:00:00Z" in prompt
-    assert 'oenb-1424e3' in prompt
+    assert 'bank-1424e3' in prompt
     assert "there is no transcript" in prompt.lower() or "has not happened yet" in prompt
     assert prompt.endswith("build the agenda")
 
 
 def test_prep_grounding_without_workspace_says_so():
     _ctx, _tools, prompt = _meeting_grounding(
-        {"kind": "meeting", "meeting": {"native_id": "n1", "status": "idle", "title": "Untitled"}},
+        {"kind": "meeting", "native_id": "n1", "status": "idle", "title": "Untitled"},
         session="s", prompt="hi", redis_url=None)
     assert "No shared prep workspace is bound" in prompt
     assert "user's OWN workspace" in prompt  # own-workspace brief note is the steer, not a dead end
@@ -78,20 +78,22 @@ def test_prep_grounding_without_workspace_says_so():
 
 # ── post branch ──────────────────────────────────────────────────────────────────────
 
-def test_post_grounding_prefers_processed_notes(monkeypatch):
+def test_post_grounding_reads_the_raw_transcript_and_never_a_second_stream(monkeypatch):
+    """PRD decision 34: there is ONE transcript. A leftover proc:meeting:{row} stream (a legacy row
+    written before the pipeline was removed) must not be read, let alone preferred."""
     url = _fake_redis(monkeypatch, {
         "proc:meeting:46": [_note("s1", "Jane", "we agreed on the Q3 pilot")],
         "tc:meeting:46": [{"payload": json.dumps({"type": "transcription", "segments": [
             {"segment_id": "s1", "speaker": "Jane", "text": "uh so we kinda agreed Q3??"}]})}],
     })
     _ctx, _tools, prompt = _meeting_grounding(
-        {"kind": "meeting", "meeting": {"native_id": "abc", "meeting_id": 46, "status": "completed",
-                                         "title": "Acme kickoff"}},
+        {"kind": "meeting", "native_id": "abc", "meeting_id": 46, "status": "completed",
+         "title": "Acme kickoff"},
         session="s", prompt="what was decided?", redis_url=url)
     assert "has ended" in prompt and "Acme kickoff" in prompt
-    assert "processed notes" in prompt
-    assert "we agreed on the Q3 pilot" in prompt          # cleaned line, not…
-    assert "kinda agreed Q3??" not in prompt              # …the raw one
+    assert "raw transcript" in prompt
+    assert "kinda agreed Q3??" in prompt                  # what the bot heard…
+    assert "we agreed on the Q3 pilot" not in prompt      # …never the retired "cleaned" body
     assert prompt.endswith("what was decided?")
 
 
@@ -101,7 +103,7 @@ def test_post_grounding_falls_back_to_raw_transcript(monkeypatch):
             {"segment_id": "s1", "speaker": "Raj", "text": "SSO first"}]})}],
     })
     _ctx, _tools, prompt = _meeting_grounding(
-        {"kind": "meeting", "meeting": {"native_id": "abc", "meeting_id": 46, "status": "completed"}},
+        {"kind": "meeting", "native_id": "abc", "meeting_id": 46, "status": "completed"},
         session="s", prompt="recap", redis_url=url)
     assert "raw transcript" in prompt and "Raj: SSO first" in prompt
 
@@ -109,25 +111,12 @@ def test_post_grounding_falls_back_to_raw_transcript(monkeypatch):
 def test_post_grounding_with_no_record_is_honest(monkeypatch):
     url = _fake_redis(monkeypatch, {})
     _ctx, _tools, prompt = _meeting_grounding(
-        {"kind": "meeting", "meeting": {"native_id": "abc", "meeting_id": 46, "status": "failed",
-                                         "title": "Ghost"}},
+        {"kind": "meeting", "native_id": "abc", "meeting_id": 46, "status": "failed",
+         "title": "Ghost"},
         session="s", prompt="summary?", redis_url=url)
     assert "no record of this meeting exists" in prompt
     assert "FAILED" in prompt
     assert "do not reconstruct or invent" in prompt
-
-
-def test_fold_processed_upserts_by_id_and_skips_view_end(monkeypatch):
-    url = _fake_redis(monkeypatch, {
-        "proc:meeting:9": [
-            _note("a", "Jane", "baseline text"),
-            _note("a", "Jane", "polished text"),          # same id → upgrade in place
-            {"type": "view_end", "cursor": "1-1"},        # terminal marker → skipped
-            _note("b", "Raj", "second note"),
-        ],
-    })
-    folded = _fold_meeting_processed(url, "9", limit=400)
-    assert folded == "Jane: polished text\nRaj: second note"
 
 
 # ── legacy (status-less) client keeps today's exact live behavior ────────────────────
@@ -138,7 +127,7 @@ def test_statusless_active_is_legacy_live_path(monkeypatch):
             {"segment_id": "s1", "speaker": "Jane", "text": "ship it Friday"}]})}],
     })
     _ctx, _tools, prompt = _meeting_grounding(
-        {"kind": "meeting", "meeting": {"platform": "google_meet", "native_id": "abc-defg-hij"}},
+        {"kind": "meeting", "platform": "google_meet", "native_id": "abc-defg-hij"},
         session="main", prompt="who spoke last?", redis_url=url)
     assert prompt.startswith("You are assisting in a live meeting (google_meet/abc-defg-hij).")
     assert "Jane: ship it Friday" in prompt and prompt.endswith("who spoke last?")

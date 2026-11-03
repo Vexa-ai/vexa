@@ -1,0 +1,18 @@
+{
+  "note": "Synthetic 3-minute call recorded for the S5 founder check (PRD 0.13.4 §8.3 S5). Speakers and content are invented; no real person's words.",
+  "meeting_id": 153,
+  "day": "2026-10-17",
+  "workspace": "ai-tinkerers",
+  "participants": {"founder@vexa.test": "Dmitry", "valeriia@unicorn.test": "Valeriia"},
+  "segments": [
+    {"t": "00:00:04", "speaker": "Dmitry", "text": "Thanks for jumping on. Two things: the venue for the November meetup and the sponsor deck."},
+    {"t": "00:00:19", "speaker": "Valeriia", "text": "Unicorn Factory can host on the eighth. I need to get the contract signed on our side first."},
+    {"t": "00:00:41", "speaker": "Dmitry", "text": "Great. Can you send me the venue contract?"},
+    {"t": "00:00:47", "speaker": "Valeriia", "text": "Yes, I'll send the venue contract by Friday."},
+    {"t": "00:01:10", "speaker": "Valeriia", "text": "And we need the sponsor deck to show our partners."},
+    {"t": "00:01:18", "speaker": "Dmitry", "text": "I'll send you the sponsor deck tomorrow."},
+    {"t": "00:01:52", "speaker": "Valeriia", "text": "Someone should book the catering, maybe thirty people."},
+    {"t": "00:02:20", "speaker": "Dmitry", "text": "Open question for later: do we stream it?"},
+    {"t": "00:02:51", "speaker": "Valeriia", "text": "Okay, talk soon."}
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "key": "fixture-human-key-not-a-deployment-secret-0001",
+  "claims": {
+    "role": "human",
+    "actor": "42",
+    "session": "5d41402abc4b2a76b9719d911017c592ae2f3bd8f0a1c4e6b7d9e2f3a4b5c6d7",
+    "at": 1760000000,
+    "nonce": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+    "method": "POST",
+    "path": "/api/setup",
+    "body": "2e561092c01a3379935c01beb9fc3fb515c54eb884fbbbc65a56fe66c678969f"
+  },
+  "request_body": "{\"provider\":\"custom_secret\",\"label\":\"Telegram bot\"}",
+  "encoded": "eyJyb2xlIjoiaHVtYW4iLCJhY3RvciI6IjQyIiwic2Vzc2lvbiI6IjVkNDE0MDJhYmM0YjJhNzZiOTcxOWQ5MTEwMTdjNTkyYWUyZjNiZDhmMGExYzRlNmI3ZDllMmYzYTRiNWM2ZDciLCJhdCI6MTc2MDAwMDAwMCwibm9uY2UiOiIwZjFlMmQzYzRiNWE2OTc4ODc5NmE1YjRjM2QyZTFmMCIsIm1ldGhvZCI6IlBPU1QiLCJwYXRoIjoiL2FwaS9zZXR1cCIsImJvZHkiOiIyZTU2MTA5MmMwMWEzMzc5OTM1YzAxYmViOWZjM2ZiNTE1YzU0ZWI4ODRmYmJiYzY1YTU2ZmU2NmM2Nzg5NjlmIn0",
+  "signature": "c9efebc350afce621bf1a8bed8d170e0314347ad10f811565a97b6fff12384a4",
+  "header": "eyJyb2xlIjoiaHVtYW4iLCJhY3RvciI6IjQyIiwic2Vzc2lvbiI6IjVkNDE0MDJhYmM0YjJhNzZiOTcxOWQ5MTEwMTdjNTkyYWUyZjNiZDhmMGExYzRlNmI3ZDllMmYzYTRiNWM2ZDciLCJhdCI6MTc2MDAwMDAwMCwibm9uY2UiOiIwZjFlMmQzYzRiNWE2OTc4ODc5NmE1YjRjM2QyZTFmMCIsIm1ldGhvZCI6IlBPU1QiLCJwYXRoIjoiL2FwaS9zZXR1cCIsImJvZHkiOiIyZTU2MTA5MmMwMWEzMzc5OTM1YzAxYmViOWZjM2ZiNTE1YzU0ZWI4ODRmYmJiYzY1YTU2ZmU2NmM2Nzg5NjlmIn0.c9efebc350afce621bf1a8bed8d170e0314347ad10f811565a97b6fff12384a4"
+}

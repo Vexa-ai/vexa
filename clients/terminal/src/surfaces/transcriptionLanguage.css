@@ -1,0 +1,32 @@
+/* Transcription language picker (surfaces/TranscriptionLanguagePicker.tsx) — its three homes share
+ * one look. Tokens only; swaps to the ui-kit Select/Chip primitives in one edit. */
+.vx-lang :is(button, select):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.vx-lang :is(button, select) { min-height: 24px; }
+.vx-lang button:disabled, .vx-lang select:disabled { cursor: default; opacity: .55; }
+.vx-lang-default { display: flex; flex-direction: column; gap: var(--space-2); max-width: 460px; }
+.vx-lang-meeting { display: flex; flex-direction: column; gap: var(--space-1_5); margin-top: var(--space-1_5); }
+.vx-lang-stack { display: flex; flex-direction: column; gap: var(--space-1_5); }
+.vx-lang-row { display: flex; align-items: center; gap: var(--space-1_5); flex-wrap: wrap; }
+.vx-lang-list { list-style: none; margin: 0; padding: 0; }
+.vx-lang-label { font-size: 11.5px; color: var(--t3); }
+.vx-lang-value { font-size: var(--text-xs); color: var(--t1); }
+.vx-lang-select {
+  font-size: var(--text-xs); padding: 3px var(--space-1_5); border-radius: var(--radius-md); border: 1px solid var(--line2);
+  background: var(--panel); color: var(--t1); cursor: pointer; max-width: 100%;
+}
+.vx-lang-chip {
+  display: inline-flex; align-items: center; gap: var(--space-0_5); height: 24px; padding: 0 var(--space-0_5) 0 var(--space-2);
+  border-radius: var(--radius-md); border: 1px solid var(--line2); background: var(--panel2); color: var(--t1); font-size: var(--text-xs);
+}
+.vx-lang-chip-remove {
+  display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 22px; border: none;
+  border-radius: var(--radius-sm); background: transparent; color: var(--t2); cursor: pointer; font-size: var(--text-sm); line-height: 1;
+}
+.vx-lang-btn {
+  font-size: var(--text-xs); padding: 3px 10px; border-radius: var(--radius-md); border: 1px solid var(--line2);
+  background: var(--panel2); color: var(--t1); cursor: pointer;
+}
+.vx-lang-btn-primary { background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent); font-weight: var(--weight-medium); }
+.vx-lang-hint { font-size: 11px; color: var(--t3); line-height: 1.45; }
+.vx-lang-error { font-size: 11.5px; color: var(--danger); line-height: 1.45; }
+.vx-lang-ok { font-size: 11.5px; color: var(--green); }

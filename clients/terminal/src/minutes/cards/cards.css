@@ -1,0 +1,136 @@
+/* The card core's UI (0.13.4 S5). Every selector is scoped to this directory's own classes
+   (.vx-crow · .vx-cs · .vx-ci · .vx-cin). Tokens only; no solid accent fills (7r): the primary is an
+   accent outline with a tint on hover/focus. No hover-revealed actions anywhere (R11). */
+
+/* ── the primary, outlined (7r) ─────────────────────────────────────────────────────────────── */
+.vx-crow .vx-btn[data-primary], .vx-cs-decide .vx-btn[data-primary], .vx-ci .vx-btn[data-primary] {
+  border-color: var(--accent); color: var(--accent-text); background: transparent;
+}
+.vx-crow .vx-btn[data-primary]:hover:not(:disabled), .vx-crow .vx-btn[data-primary]:focus-visible,
+.vx-cs-decide .vx-btn[data-primary]:hover:not(:disabled), .vx-cs-decide .vx-btn[data-primary]:focus-visible,
+.vx-ci .vx-btn[data-primary]:hover:not(:disabled), .vx-ci .vx-btn[data-primary]:focus-visible { background: var(--accent-tint); }
+
+/* ── CardRow (7m): icon · title + tail · slot · ONE action · ⋯ ───────────────────────────────── */
+/* the row is the size container; its grid is the child, because a container query cannot restyle
+   the container itself (with the grid on .vx-crow the phone columns never applied and the action
+   button sat on top of the title) */
+.vx-crow { border-radius: var(--radius-md); container-type: inline-size; }
+.vx-crow-grid { display: grid; grid-template-columns: minmax(0, 1fr) 24px auto 28px; align-items: center; column-gap: var(--space-2);
+  min-height: 44px; padding: 0 var(--space-2); }
+.vx-crow[data-folded] .vx-crow-grid { grid-template-columns: minmax(0, 1fr); }
+.vx-crow-main { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: var(--space-2); min-width: 0; cursor: pointer; padding: var(--space-1) 0; }
+.vx-crow-main:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: var(--radius-sm); }
+.vx-crow-icon { flex: none; display: inline-grid; place-items: center; width: 20px; color: var(--text-3); }
+.vx-crow[data-mine] .vx-crow-icon { color: var(--accent-text); }
+.vx-crow-text { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+.vx-crow-title { font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--text-1); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
+.vx-crow-main:hover .vx-crow-title { text-decoration: underline; text-underline-offset: 2px; }
+.vx-crow-tail { font-size: var(--text-xs); color: var(--text-3); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
+.vx-crow[data-folded] .vx-crow-title { font-weight: var(--weight-regular); color: var(--text-2); }
+.vx-crow-slot { display: inline-grid; place-items: center; color: var(--text-3); }
+.vx-crow-act { display: flex; justify-content: flex-end; min-width: 88px; }
+.vx-crow-act .vx-btn { white-space: nowrap; }
+.vx-crow-more { display: inline-grid; place-items: center; }
+/* phone / narrow pane: the title wraps to two lines, the tail goes under it; nothing scrolls sideways */
+@container (max-width: 520px) {
+  .vx-crow-grid { grid-template-columns: minmax(0, 1fr) auto 28px; }
+  .vx-crow[data-folded] .vx-crow-grid { grid-template-columns: minmax(0, 1fr); }
+  .vx-crow-slot { display: none; }
+  .vx-crow-text { flex-direction: column; align-items: stretch; gap: 0; }
+  .vx-crow-title { white-space: normal; overflow-wrap: break-word; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .vx-crow-act { min-width: 0; }
+}
+
+/* ── the decision block (7q) ─────────────────────────────────────────────────────────────────── */
+.vx-cs-decide { display: flex; flex-direction: column; gap: var(--space-2); container-type: inline-size; }
+.vx-cs-acts { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.vx-cs-acts .vx-btn { min-width: 72px; justify-content: center; gap: var(--space-1); }
+.vx-cs-gap { width: var(--space-3); flex: none; }
+.vx-cs-rule { margin: 0; font-size: var(--text-xs); color: var(--text-2); line-height: var(--leading-xs); }
+.vx-cs-err { margin: 0; font-size: var(--text-xs); color: var(--danger-text); }
+.vx-cs-held { margin: 0; display: flex; align-items: center; gap: var(--space-3); font-size: var(--text-sm); color: var(--text-2); }
+.vx-cs-input { display: flex; gap: var(--space-2); }
+.vx-cs-input input { flex: 1; min-width: 0; font: inherit; font-size: var(--text-sm); padding: var(--space-1) var(--space-2); border: 1px solid var(--border-control);
+  border-radius: var(--radius-md); background: var(--surface-1); color: var(--text-1); }
+@container (max-width: 400px) { .vx-cs-gap { flex-basis: 100%; height: 0; } }
+
+/* ── the card sheet (7q; phone: full-screen sheet with ‹ Back) ───────────────────────────────── */
+.vx-cs-layer { position: fixed; inset: 0 0 0 auto; width: min(480px, 100vw); z-index: var(--z-drawer); display: flex; }
+.vx-cs { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--surface-0); border-left: 1px solid var(--border-subtle); box-shadow: var(--shadow-2); }
+.vx-cs-head { display: flex; align-items: center; gap: var(--space-2); min-height: 44px; padding: 0 var(--space-3); border-bottom: 1px solid var(--border-subtle); }
+.vx-cs-back { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: var(--space-1); min-height: 32px; padding: 0 var(--space-1);
+  font-size: var(--text-sm); color: var(--text-2); border-radius: var(--radius-sm); }
+.vx-cs-back:hover { color: var(--text-1); background: var(--surface-2); }
+.vx-cs-back:focus-visible { outline: 2px solid var(--focus-ring); }
+.vx-cs-icon { flex: none; color: var(--text-3); display: inline-grid; place-items: center; }
+.vx-cs-title { flex: 1; min-width: 0; margin: 0; font-size: var(--text-md); font-weight: var(--weight-medium); color: var(--text-1); line-height: var(--leading-sm);
+  overflow: hidden; overflow-wrap: break-word; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; padding: var(--space-1) 0; }
+.vx-cs-body { flex: 1; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: var(--space-4); padding: 0 var(--space-4) var(--space-6); }
+.vx-cs-top { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3) 0; background: var(--surface-0); border-bottom: 1px solid var(--border-subtle); }
+.vx-cs-sticky { position: sticky; top: 0; z-index: var(--z-sticky); }
+.vx-cs-ctx, .vx-cs-state, .vx-cs-note { margin: 0; font-size: var(--text-xs); color: var(--text-2); }
+.vx-cs-note { padding: var(--space-4); }
+.vx-cs-group { display: flex; flex-direction: column; gap: var(--space-2); }
+.vx-cs-h { margin: 0; font-size: var(--text-xs); font-weight: var(--weight-medium); color: var(--text-3); }
+.vx-cs-prose { margin: 0; font-size: var(--text-sm); color: var(--text-1); line-height: var(--leading-sm); }
+.vx-cs-pre { margin: 0; padding: var(--space-3); white-space: pre-wrap; font: inherit; font-size: var(--text-sm); color: var(--text-1);
+  background: var(--surface-1); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); }
+.vx-cs-gates { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.vx-cs-gates li { display: flex; flex-direction: column; gap: 0; padding: var(--space-1) var(--space-2); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); font-size: var(--text-xs); color: var(--text-3); }
+.vx-cs-gates li[data-gate="done"] { color: var(--text-2); }
+.vx-cs-gates li[data-gate="current"] { color: var(--accent-text); border-color: var(--accent); }
+.vx-cs-gate-name { color: inherit; }
+.vx-cs-gates small { color: var(--text-3); }
+.vx-cs-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.vx-cs-conn { all: unset; box-sizing: border-box; cursor: pointer; display: flex; align-items: center; gap: var(--space-2); width: 100%; min-height: 32px;
+  padding: 0 var(--space-2); border-radius: var(--radius-sm); font-size: var(--text-sm); color: var(--text-1); }
+.vx-cs-conn:hover:not(:disabled) { background: var(--surface-2); }
+.vx-cs-conn:disabled { cursor: default; }
+.vx-cs-conn svg { flex: none; }
+.vx-cs-conn small { flex: none; white-space: nowrap; color: var(--text-3); font-size: var(--text-xs); }
+.vx-cs-conn span { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; padding: var(--space-1) 0; }
+.vx-cs-locked { margin: 0; display: flex; align-items: center; gap: var(--space-1); font-size: var(--text-xs); color: var(--text-3); }
+.vx-cs-hist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--text-xs); color: var(--text-2); }
+.vx-cs-hist li { display: flex; align-items: center; gap: var(--space-2); min-height: 24px; }
+.vx-cs-hist time { color: var(--text-3); min-width: 72px; }
+.vx-cs-verify { display: inline-flex; align-items: center; min-height: 24px; padding: 0 var(--space-1); color: var(--accent-text); }
+@media (max-width: 719px) {
+  .vx-cs-layer { inset: 0; width: 100vw; z-index: var(--z-modal); }
+  .vx-cs { border-left: 0; box-shadow: none; }
+}
+
+/* ── the inline card in chat (7q) ─────────────────────────────────────────────────────────────── */
+.vx-ci { margin: var(--space-2) 0; padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); max-width: 560px;
+  display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--text-sm); background: var(--surface-1); }
+.vx-ci[data-folded], .vx-ci[data-loading] { padding: var(--space-1) var(--space-3); background: none; color: var(--text-2); }
+.vx-ci-head { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+.vx-ci-icon { flex: none; color: var(--text-3); align-self: center; display: inline-grid; }
+.vx-ci-title { all: unset; cursor: pointer; font-weight: var(--weight-medium); color: var(--text-1); min-width: 0; }
+.vx-ci-title:hover { text-decoration: underline; text-underline-offset: 2px; }
+.vx-ci-title:focus-visible { outline: 2px solid var(--focus-ring); }
+.vx-ci-ctx, .vx-ci-wait { margin: 0; font-size: var(--text-xs); color: var(--text-2); }
+.vx-ci-pre { margin: 0; padding: var(--space-2) var(--space-3); white-space: pre-wrap; font: inherit; font-size: var(--text-xs); color: var(--text-1);
+  background: var(--surface-0); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); }
+.vx-ci-all { all: unset; cursor: pointer; font-size: var(--text-xs); color: var(--accent-text); min-height: 24px; }
+.vx-ci-fold { display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--space-2); min-width: 0; font-size: var(--text-xs); }
+.vx-ci-fold .vx-ci-title { font-weight: var(--weight-regular); color: var(--text-2); }
+.vx-ci-fold small { color: var(--text-3); white-space: nowrap; }   /* "Signed by Ana · Thu" is never cut; it wraps under the title */
+
+/* ── lists: Inbox, Now, the room badge ───────────────────────────────────────────────────────── */
+.vx-cin { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+.vx-cin-head { display: flex; align-items: baseline; gap: var(--space-2); }
+.vx-cin-head h2 { margin: 0; font-size: var(--text-lg); font-weight: var(--weight-semibold); color: var(--text-1); }
+.vx-cin-count, .vx-cin-nowcount { font-size: var(--text-xs); color: var(--text-3); }
+.vx-cin-nowcount { margin: 0; }
+.vx-cin-note { margin: 0; font-size: var(--text-sm); color: var(--text-2); }
+.vx-cin-sec { display: flex; flex-direction: column; gap: var(--space-1); }
+.vx-cin-h { margin: 0; font-size: var(--text-xs); font-weight: var(--weight-medium); color: var(--text-3); }
+.vx-cin-rows, .vx-cin-now { display: flex; flex-direction: column; }
+.vx-cin-badge { display: inline-grid; place-items: center; min-width: 18px; padding: 0 var(--space-1); font-size: var(--text-xs); color: var(--accent-text);
+  border: 1px solid var(--accent); border-radius: var(--radius-sm); }
+
+/* R11: touch never reveals a destructive action on the first tap — nothing here appears on hover,
+   and on touch screens the underline affordance is off too */
+@media (hover: none) {
+  .vx-crow-main:hover .vx-crow-title, .vx-ci-title:hover { text-decoration: none; }
+}
