@@ -39,18 +39,28 @@ def retry(db: DB, reaction_id: str, actor: str, clock: Clock, reason: str | None
     """Operator replay of a failed reaction: a NEW attempt, causally linked by the signal row.
     The ledger of what happened is never mutated — receipts stay."""
     from .loop import without_outage_clocks
-    failed = db.execute("SELECT scratch FROM reaction WHERE reaction_id = :rid AND status = 'failed'",
-                        {"rid": reaction_id})
+    failed = db.execute(
+        "SELECT scratch, updated_at FROM reaction WHERE reaction_id = :rid AND status = 'failed'",
+        {"rid": reaction_id})
     if not failed:
         return False
+    seen_scratch, seen_at = failed[0]
     # A new attempt starts its own outage clock, dropped in the same guarded UPDATE that makes it
-    # due: a worker claiming the row the moment it is due must not read the old one.
+    # due: a worker claiming the row the moment it is due must not read the old one. The guard is
+    # the row AS READ, not only its status: a second retry, its worker's saved scratch and a second
+    # failure in between leave the row 'failed' again, and this read's scratch written back over it
+    # would undo them (a room mailed twice; Factory re-review of #1997 at 4f617b95).
+    same = "scratch IS NULL" if seen_scratch is None else "scratch = :seen"
+    params = {"now": clock.now(), "s": dumps(without_outage_clocks(loads(seen_scratch))),
+              "rid": reaction_id, "at": seen_at}
+    if seen_scratch is not None:
+        params["seen"] = seen_scratch
     rows = db.execute(
-        """UPDATE reaction SET status = 'retrying', attempt = 0, next_run_at = :now,
+        f"""UPDATE reaction SET status = 'retrying', attempt = 0, next_run_at = :now,
                   reason = NULL, scratch = :s, updated_at = :now
-           WHERE reaction_id = :rid AND status = 'failed' RETURNING reaction_id""",
-        {"now": clock.now(), "s": dumps(without_outage_clocks(loads(failed[0][0]))),
-         "rid": reaction_id})
+           WHERE reaction_id = :rid AND status = 'failed' AND updated_at = :at AND {same}
+           RETURNING reaction_id""",
+        params)
     if rows:
         _record(db, reaction_id, "retry", actor, reason, clock)
     return bool(rows)

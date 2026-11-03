@@ -295,6 +295,33 @@ def test_a_give_up_does_not_wipe_the_clock_a_retry_right_after_it_started(monkey
     assert st["status"] == "retrying" and "_unavailable_since:door_read" in scratch, scratch
 
 
+def test_two_retries_of_one_failed_reaction_do_not_undo_each_other():
+    """A retry read the failed row and wrote it back in two statements guarded by status only. A
+    second retry, its worker's saved `sent` list and a second failure in between left the row
+    'failed', and the first retry wrote its stale scratch over it: everybody already mailed would
+    be mailed again (Factory re-review at 4f617b95, LOW)."""
+    from sqlite_double import SqliteDB
+    db, clock, reg = _Between(SqliteDB()), FakeClock(1_000_000.0), Registry()
+
+    @reg.step
+    def mail_room(ctx):
+        ctx.scratch.setdefault("sent", []).append(len(ctx.scratch["sent"]))
+        raise StepError("the mail relay refused", retryable=False)
+    reg.flow(name="room", version=1, on=EventType("t.room"), steps=[mail_room])
+    admit(db, reg, clock, source_event_id="s1", event_type="t.room", subject_refs={})
+    rid = db.execute("SELECT reaction_id FROM reaction")[0][0]
+    assert tick(db, reg, clock) and status(db, rid)["status"] == "failed"
+
+    def the_other_retry():
+        clock._t += 1
+        assert retry(db, rid, "operator-y", clock) and tick(db, reg, clock)
+    db.after, db.then = "SELECT scratch", the_other_retry
+    assert not retry(db, rid, "operator-x", clock), "it read a row that has moved on since"
+    scratch = json.loads(db.execute("SELECT scratch FROM reaction WHERE reaction_id = :r",
+                                    {"r": rid})[0][0])
+    assert status(db, rid)["status"] == "failed" and scratch["sent"] == [0, 1], scratch
+
+
 def test_a_parked_fleet_comes_back_spread_out(monkeypatch):
     """A Wait on an unavailable door is jittered ±20 % around its 60 s."""
     from sqlite_double import SqliteDB
