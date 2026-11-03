@@ -233,6 +233,17 @@ _MCP_HEADERS = ("mcp-session-id", "mcp-protocol-version")
 #: up to ten minutes between chunks (a slow uplink, a recording master being assembled).
 BUNDLE_TIMEOUT = httpx.Timeout(connect=10.0, read=600.0, write=600.0, pool=10.0)
 
+#: The recording byte hop's deadline (`_forward_meeting_media`). Its answer is relayed as it arrives
+#: instead of buffered, on the streaming client, whose own read timeout is unbounded (SSE). A media
+#: answer that stops speaking IS a fault, so the read is bounded here: long enough for meeting-api
+#: to assemble a master before the first byte, and per piece after it, never the whole transfer.
+MEDIA_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=60.0, pool=10.0)
+
+#: The end-to-end headers a relayed recording answer keeps: what a 200/206/416 media answer is made
+#: of (length, range, type, disposition). Hop-by-hop and transfer headers are never relayed.
+_MEDIA_HEADERS = ("content-length", "content-range", "accept-ranges", "content-disposition",
+                  "cache-control", "x-content-type-options")
+
 
 # Every hop's path is built from what the request MATCHED, never interpolated raw: a meetings row's
 # target is its manifest row's (`_meeting_target`), a forwarded domain's literal row and catch-all
@@ -810,6 +821,63 @@ def create_app(
         return StreamingResponse(body(), status_code=upstream.status_code,
                                  media_type=up.get("content-type") or "application/json", headers=relayed)
 
+    # A RECORDING'S BYTES ARE RELAYED, NOT BUFFERED. The raw media row (and its `download` alias)
+    # answers a whole master — up to tens of MB per request, and the browser's first `Range: bytes=0-`
+    # IS the whole file — so the buffered forward held each answer whole in this process before
+    # sending a byte. This leg opens the hop as a stream and relays each piece as it arrives, with
+    # the media headers a 200/206/416 needs. Authorization, the target, the identity it carries, the
+    # privacy mark and the connect retry are the buffered forward's, unchanged; it is a GET with no
+    # body, so a connect that never opened is safe to retry like any other.
+    async def _forward_meeting_media(request: Request) -> Response:
+        url, error = _meeting_target(request)
+        if error is not None:
+            return error
+        headers, error = await _authorize(request.method, request)
+        if error is not None:
+            return error
+        params = dict(request.query_params) or None
+        stack = AsyncExitStack()
+        try:
+            waited, attempt = 0.0, 0
+            while True:
+                try:
+                    upstream = await stack.enter_async_context(downstream.open_stream(
+                        request.method, url, headers=headers, params=params, timeout=MEDIA_TIMEOUT))
+                    break
+                except httpx.ConnectError:
+                    pause = _CONNECT_BACKOFF_S[min(attempt, len(_CONNECT_BACKOFF_S) - 1)]
+                    if waited + pause > CONNECT_RETRY_WINDOW_S:
+                        raise
+                    await _retry_sleep(pause)
+                    waited += pause
+                    attempt += 1
+        except httpx.InvalidURL:
+            await stack.aclose()
+            return invalid_path_param_response()
+        except httpx.TimeoutException:
+            await stack.aclose()
+            return _upstream_fault(url, None)
+        except httpx.RequestError as e:
+            await stack.aclose()
+            return _upstream_fault(url, e)
+        log_event("downstream_stream_opened", audience="system", level="debug", span="proxy",
+                  fields={"method": request.method, "path": url, "downstream_status": upstream.status_code})
+
+        up = upstream.headers
+        if not await _mark_answer(request, upstream.status_code, up.get(taint_mod.LABEL_HEADER)):
+            await stack.aclose()
+            return _mark_refused()
+
+        async def body():
+            async with stack:  # closes the downstream stream when the client goes away
+                async for chunk in upstream.aiter_bytes():
+                    yield chunk
+
+        relayed = {k: up[k] for k in _MEDIA_HEADERS if k in up}
+        return StreamingResponse(body(), status_code=upstream.status_code,
+                                 media_type=up.get("content-type") or "application/octet-stream",
+                                 headers=relayed)
+
     # ---- CORE routes (each forwards to the matching downstream path, per main's route table) ----
     # Bot accounts (ADR-0049): saved signed-in browser profiles a meeting bot can join as, and the
     # short-lived sign-in sessions a person makes one through. meeting-api owns them; a session is
@@ -935,16 +1003,17 @@ def create_app(
         return await _forward_meeting(request)
 
     # The master byte stream the recording player loads (the master metadata's raw_url points here).
+    # Relayed as a stream (`_forward_meeting_media`), Range and the media headers preserved.
     @app.get("/recordings/{recording_id}/media/{media_file_id}/raw")
     async def get_recording_media_raw(recording_id: int, media_file_id: int, request: Request):
-        return await _forward_meeting(request)
+        return await _forward_meeting_media(request)
 
     # native download alias (#579 C3): the sealed api.v1 media-download path a 0.10 client calls.
     # 0.12 renamed the media byte route to .../raw (finalize-on-read master stream); alias .../download
     # to it so recording playback no longer 404s. Forwarded verbatim (Range headers preserved).
     @app.get("/recordings/{recording_id}/media/{media_file_id}/download")
     async def get_recording_media_download(recording_id: int, media_file_id: int, request: Request):
-        return await _forward_meeting(request)
+        return await _forward_meeting_media(request)
 
     @app.get("/meetings")
     async def meetings(request: Request):
