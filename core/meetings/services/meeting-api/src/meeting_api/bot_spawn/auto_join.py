@@ -42,20 +42,20 @@ entrypoint (``__main__``) wraps it in the standard poll loop; tests drive single
 """
 from __future__ import annotations
 
-import os
 from datetime import datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Optional
 
-from ..obs import log_event
-from ..service_authority import (
-    ServiceAuthorityDenied,
-    ServiceAuthorityUnavailable,
+# The safeguards live with the start route (ADR-0052 §5): the sweep and the route run the same ones
+# from one module. Re-exported under their old names for this module's readers.
+from .planned_start import (  # noqa: F401 — re-exports
+    DEFAULT_RETRY_BACKOFF_S,
+    LIVE_STATUSES,
+    calendar_bot_name as _calendar_bot_name,
+    live_keys,
+    parse_iso as _parse_iso,
+    production_transcribe_gate as _production_transcribe_gate,
+    start_row,
 )
-from .auto_join_block import blocked_reason, parse_block
-from .env_flags import resolve_spawn_flag
-from .ports import MaxBotsExceeded, MeetingStopped, QuotaExceeded, SpawnFailed
-from .meeting_host import MeetingHostRefused
-from .service import DuplicateMeeting, request_bot
 
 # Sweep cadence/window env vocabulary (config.v1: all optional, sane defaults).
 # 120s (#1208): the bot must be STANDING IN THE LOBBY when the meeting starts, not setting out then
@@ -64,17 +64,6 @@ from .service import DuplicateMeeting, request_bot
 # already there" true for a host who joins late.
 DEFAULT_LEAD_S = 120         # AUTO_JOIN_LEAD_S — join this many seconds BEFORE scheduled_at
 DEFAULT_GRACE_S = 600        # AUTO_JOIN_GRACE_S — never join more than this AFTER scheduled_at
-DEFAULT_RETRY_BACKOFF_S = 300  # AUTO_JOIN_RETRY_BACKOFF_S — error-stamped rows wait this long
-
-
-def _parse_iso(value: Any) -> Optional[datetime]:
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 def due_rows(rows: list[dict], *, now: datetime,
@@ -129,63 +118,6 @@ def due_rows(rows: list[dict], *, now: datetime,
     return due
 
 
-# Every status in which a bot OWNS the room. A due row whose (user, platform, native) is held by
-# one of these on ANOTHER row must never spawn: two Vexa bots in one meeting is customer-visible
-# and never correct, however the two rows came to exist.
-LIVE_STATUSES = (
-    "requested", "joining", "awaiting_admission", "active",
-    "needs_help", "needs_human_help", "stopping",
-)
-
-
-def live_keys(rows: Optional[list]) -> dict[tuple, Any]:
-    """``{(user_id, platform, native_meeting_id): meeting_id}`` over the repo's live rows."""
-    out: dict[tuple, Any] = {}
-    for row in rows or ():
-        if not isinstance(row, dict):
-            continue
-        key = (row.get("user_id"), row.get("platform"), row.get("native_meeting_id"))
-        if key[0] is None or not key[1] or not key[2]:
-            continue
-        out.setdefault(key, row.get("id"))
-    return out
-
-
-def _calendar_bot_name(data: dict) -> Optional[str]:
-    """Resolve the bot name from the calendar source that armed this meeting.
-
-    Multi-calendar meetings use the first auto-joining source in stable source order. Legacy rows
-    without per-source names fall back to the user-wide bot context below.
-    """
-    raw = data.get("calendar_sources")
-    sources = [source for source in raw if isinstance(source, dict)] if isinstance(raw, list) else []
-    source = next((item for item in sources if item.get("auto_join", True)), None)
-    if source is None and sources:
-        source = sources[0]
-    value = source.get("bot_name") if source else None
-    return value.strip() if isinstance(value, str) and value.strip() else None
-
-
-def _production_transcribe_gate() -> Optional[str]:
-    """Mirror POST /bots' CC4 fail-loud STT gate: when transcription resolves ON (env default) but
-    the ``stt`` capability is not configured, refuse the auto-spawn with the reason string.
-
-    Read through ``env_flag`` for the same reason as router.py: with a bare ``os.getenv`` a
-    set-but-empty ``TRANSCRIBE_ENABLED=`` made ``"" != "true"`` true, so this gate returned None and
-    refused nothing — the empty value both disabled transcription AND disarmed the alarm meant to
-    catch it. That double failure is why the v0.12.5 witness saw silence with no error."""
-    from ..config_preflight import CONFIGURED, capability_state, missing_capability_keys
-    from .env_flags import env_flag
-
-    if not env_flag("TRANSCRIBE_ENABLED", True):
-        return None
-    state = capability_state("stt")
-    if state != CONFIGURED:
-        unset = ", ".join(missing_capability_keys("stt"))
-        return f"STT not configured (capability 'stt' is {state}: {unset} unset)"
-    return None
-
-
 async def auto_join_tick(
     repo,
     runtime,
@@ -205,7 +137,12 @@ async def auto_join_tick(
     deployment_block=None,
 ) -> dict:
     """One sweep: spawn every due scheduled meeting. Returns counters for observability:
-    ``{"due": n, "spawned": n, "already": n, "errors": n, "skipped_uncapped": n}``.
+    ``{"due": n, "spawned": n, "already": n, "errors": n, "skipped_uncapped": n, ...}``.
+
+    Each due row goes through ``planned_start.start_row`` — the SAME safeguards the start route
+    (``POST /internal/meetings/{id}/start``) runs: block lists, the duplicate-room check, the STT
+    gate, the owner's context and block list, the last-attempt stamp, the calendar bot name, the
+    recording/transcription resolver, and the error stamps.
 
     ``fetch_bot_context(user_id)`` supplies the per-user spawn context the gateway would have
     injected as headers (including the Calendar default ``bot_name``).
@@ -214,23 +151,14 @@ async def auto_join_tick(
     UNAVAILABLE right now — SKIP the row this tick).
 
     Fail-closed by default: an unresolvable cap SKIPS the row (never spawns past a cap we cannot
-    read), both when no admin edge is configured (``fetch_bot_context is None``) and when identity
-    is unreachable (the fetch returns ``None``). Set ``allow_uncapped=True`` (the deliberate
-    self-host opt-in, env ``AUTO_JOIN_ALLOW_UNCAPPED=1``) to spawn uncapped when no admin edge is
-    configured — the unsafe mode is then chosen, never defaulted.
+    read). Set ``allow_uncapped=True`` (the deliberate self-host opt-in, env
+    ``AUTO_JOIN_ALLOW_UNCAPPED=1``) to spawn uncapped when no admin edge is configured.
 
     ``publish_status(user_id=…, meeting_id=…, native_id=…, status=…, when=…)`` optionally fans the
-    row's frame to ``u:{user}:meetings`` after an error stamp so the terminal refreshes.
+    row's frame to ``u:{user}:meetings`` after an error stamp so the terminal refreshes."""
+    from ..obs import log_event
 
-    BLOCK LISTS (``auto_join_block``): ``deployment_block`` (the operator's ``VEXA_AUTO_JOIN_BLOCK``)
-    and the owner's ``auto_join_block`` from the bot context. A due row whose organiser, an invitee
-    or the meeting link's host matches either is NEVER spawned: it is stamped with the reason
-    (counter ``blocked``), like every other refusal here. The owner's list is read from the same
-    context the cap comes from; when that context is unavailable the row is skipped anyway, and an
-    owner's list that cannot be read refuses the spawn rather than ignoring the list."""
     now = now or datetime.now(timezone.utc)
-    gate = transcribe_gate if transcribe_gate is not None else _production_transcribe_gate
-
     rows = await repo.list_scheduled_meetings()
     due = due_rows(rows, now=now, lead_s=lead_s, grace_s=grace_s,
                    retry_backoff_s=retry_backoff_s)
@@ -242,165 +170,31 @@ async def auto_join_tick(
         await repo.list_live_meetings() if hasattr(repo, "list_live_meetings") else None
     )
     ctx_cache: dict[int, Optional[dict]] = {}
+
+    async def get_context(user_id: int) -> Optional[dict]:
+        if user_id not in ctx_cache:
+            ctx_cache[user_id] = await fetch_bot_context(user_id)
+        return ctx_cache[user_id]
+
     uncapped_warned = False
-    # A calendar bot records and transcribes exactly like a manual one (founder ruling
-    # 2026-08-17: the split default is not a policy, it is a bug). `request_bot` defaults
-    # `recording_enabled=False` for its own callers' safety, so a sweep that passed nothing spawned
-    # every calendar bot with `capture_modes=None` — no recording pipeline, `data.recording_enabled
-    # = false`, and a dashboard that says "No audio recording for this meeting" as if that were
-    # normal (#1216; stage rev 194 meeting 26353 auto/0 recordings vs 26354 manual/893KB master.webm,
-    # 10 of 10 auto-joined rows unrecorded). Resolved through the SAME resolver POST /bots uses, so
-    # the two spawners cannot drift again; there is no per-user setting today, and this invents none.
-    recording_enabled = resolve_spawn_flag("RECORDING_ENABLED", default=True)
-    transcribe_enabled = resolve_spawn_flag("TRANSCRIBE_ENABLED", default=True)
-
-    async def _stamp_error(row: dict, message: str, *, counter: str = "errors",
-                           event: str = "auto_join_failed") -> None:
-        counters[counter] += 1
-        next_retry = (now + timedelta(seconds=retry_backoff_s)).isoformat()
-        await repo.merge_meeting_data(row["id"], {
-            "auto_join_error": message,
-            "auto_join_next_retry": next_retry,
-        })
-        log_event(event, audience="user", level="warning", span="meetings.auto_join",
-                  user_id=row["user_id"], meeting_id=str(row["id"]),
-                  fields={"error": message, "next_retry": next_retry})
-        if publish_status is not None:
-            data = row.get("data") if isinstance(row.get("data"), dict) else {}
-            await publish_status(
-                user_id=row["user_id"], meeting_id=row["id"],
-                native_id=row.get("native_meeting_id"), status=row.get("status"),
-                when=data.get("scheduled_at"),
-            )
-
     for row in due:
-        user_id = row["user_id"]
-        # THE OPERATOR SAID NEVER — checked before anything else can lead to a spawn.
-        reason = blocked_reason(row, deployment_block)
-        if reason:
-            await _stamp_error(row, reason, counter="blocked", event="auto_join_blocked")
-            continue
-        holder = live.get((user_id, row.get("platform"), row.get("native_meeting_id")))
-        if holder is not None and holder != row.get("id"):
-            # A bot is already in this room on another row — the classic shape is a manual
-            # "Send bot now" plus a calendar import of the same link that failed to adopt it
-            # (live 2026-08-17: rows 26237 live + 26251 imported, native mjm-dycn-qdp). Refuse
-            # LOUDLY (P18): the row carries the reason the terminal renders, never a silent skip.
-            await _stamp_error(
-                row,
-                f"a bot is already in this meeting (meeting {holder}) — auto-join skipped so a "
-                f"second bot never joins",
-                counter="skipped_live", event="auto_join_skipped_live",
-            )
-            continue
-        gate_error = gate()
-        if gate_error:
-            await _stamp_error(row, gate_error)
-            continue
-
-        ctx: Optional[dict]
-        if fetch_bot_context is None:
-            # No admin edge configured → the per-user cap is unresolvable. Fail closed: refuse to
-            # spawn rather than spawn uncapped, unless the operator explicitly opted in.
-            if not allow_uncapped:
-                counters["skipped_uncapped"] += 1
-                if not uncapped_warned:
-                    uncapped_warned = True
-                    log_event(
-                        "auto_join_skipped_uncapped", audience="operator", level="warning",
-                        span="meetings.auto_join", user_id=user_id, meeting_id=str(row["id"]),
-                        fields={"reason": "no ADMIN_API_URL/INTERNAL_API_SECRET — per-user cap "
-                                "unresolvable; refusing uncapped spawn. Set AUTO_JOIN_ALLOW_UNCAPPED=1 "
-                                "to opt into uncapped self-host spawns."})
-                continue
-            ctx = {}
-        else:
-            if user_id not in ctx_cache:
-                ctx_cache[user_id] = await fetch_bot_context(user_id)
-            ctx = ctx_cache[user_id]
-            if ctx is None:
-                # identity configured but unreachable — skip this tick rather than spawn uncapped
-                continue
-            # THE OWNER SAID NEVER. A list identity sent but this side cannot read is a refusal,
-            # never "no list": ignoring it would send the bot exactly where the owner forbade.
-            try:
-                owner_block = parse_block(ctx.get("auto_join_block") or [],
-                                          what="auto_join_block")
-            except ValueError:
-                await _stamp_error(row, "auto-join refused: this account's block list could not be "
-                                   "read", counter="blocked", event="auto_join_blocked")
-                continue
-            reason = blocked_reason(row, owner_block)
-            if reason:
-                await _stamp_error(row, reason, counter="blocked", event="auto_join_blocked")
-                continue
-
-        data = row.get("data") if isinstance(row.get("data"), dict) else {}
-        # Record the ATTEMPT before making it. Written first so it survives everything the attempt
-        # can do next — including the two outcomes that leave no trace on this row: a spawn that
-        # succeeds and a bot that then fails to join (the row goes terminal, and calendar sync
-        # recreates it), or a process death mid-spawn. The stamp is what ``due_rows`` and calendar
-        # sync both read to hold the next dispatch for one backoff interval.
-        await repo.merge_meeting_data(row["id"], {"auto_join_last_attempt": now.isoformat()})
-        try:
-            await request_bot(
-                repo, runtime,
-                authority=authority,
-                user_id=user_id,
-                platform=row["platform"],
-                native_meeting_id=row["native_meeting_id"],
-                meeting_url=data.get("constructed_meeting_url"),
-                bot_name=_calendar_bot_name(data) or ctx.get("bot_name"),
-                recording_enabled=recording_enabled,
-                transcribe_enabled=transcribe_enabled,
-                max_concurrent=ctx.get("max_concurrent"),
-                webhook_url=ctx.get("webhook_url"),
-                webhook_secret=ctx.get("webhook_secret"),
-                webhook_events=ctx.get("webhook_events"),
-                token_secret=token_secret,
-                redis_url=redis_url,
-                redis_grant=redis_grant,
-            )
-        except DuplicateMeeting:
-            # a manual "Send bot now" (or a racing sweep) already claimed it — success, not an error
-            counters["already"] += 1
-            continue
-        except MeetingStopped:
-            # The user stopped it between this tick's read and the spawn fence. Not an error and not
-            # a backoff-worthy failure: the row is already terminalized as stopped by the fence, and
-            # `due_rows` will never offer it again. Counted so the sweep's numbers stay honest.
-            counters["stopped"] += 1
-            log_event("auto_join_stopped", audience="user", span="meetings.auto_join",
-                      user_id=user_id, meeting_id=str(row["id"]),
-                      fields={"reason": "the user stopped this meeting while the bot was starting"})
-            continue
-        except (MaxBotsExceeded, QuotaExceeded) as e:
-            await _stamp_error(row, str(e) or "bot concurrency limit reached")
-            continue
-        except ServiceAuthorityDenied as e:
-            await _stamp_error(
-                row,
-                f"service not allowed ({e.reason}; decision {e.decision_id})",
-            )
-            continue
-        except ServiceAuthorityUnavailable:
-            await _stamp_error(row, "service authority unavailable")
-            continue
-        except SpawnFailed as e:
-            await _stamp_error(row, str(e) or "bot workload failed to start")
-            continue
-        except MeetingHostRefused as e:
-            # The link's host is not the platform's, or reaches inside the deployment's network.
-            await _stamp_error(row, str(e))
-            continue
-        counters["spawned"] += 1
-        if data.get("auto_join_error"):
-            # a prior failure resolved — clear the stamp so the row reads clean
-            await repo.merge_meeting_data(row["id"], {
-                "auto_join_error": None, "auto_join_next_retry": None,
-            })
-        log_event("auto_join_spawned", audience="user", span="meetings.auto_join",
-                  user_id=user_id, meeting_id=str(row["id"]),
-                  fields={"platform": row["platform"], "native": row["native_meeting_id"]})
-
+        outcome = await start_row(
+            row, repo=repo, runtime=runtime, authority=authority, get_context=get_context,
+            publish_status=publish_status, transcribe_gate=transcribe_gate,
+            live_holder=live.get((row["user_id"], row.get("platform"),
+                                  row.get("native_meeting_id"))),
+            now=now, retry_backoff_s=retry_backoff_s, token_secret=token_secret,
+            redis_url=redis_url, redis_grant=redis_grant, allow_uncapped=allow_uncapped,
+            uncapped=fetch_bot_context is None, deployment_block=deployment_block,
+        )
+        if outcome.kind == "skipped_uncapped" and not uncapped_warned:
+            uncapped_warned = True
+            log_event(
+                "auto_join_skipped_uncapped", audience="operator", level="warning",
+                span="meetings.auto_join", user_id=row["user_id"], meeting_id=str(row["id"]),
+                fields={"reason": "no ADMIN_API_URL/INTERNAL_API_SECRET — per-user cap "
+                        "unresolvable; refusing uncapped spawn. Set AUTO_JOIN_ALLOW_UNCAPPED=1 "
+                        "to opt into uncapped self-host spawns."})
+        if outcome.kind in counters:
+            counters[outcome.kind] += 1
     return counters

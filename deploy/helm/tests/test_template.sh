@@ -1098,6 +1098,29 @@ if cal_env deployment-meeting-api.yaml VEXA_AUTO_JOIN_BLOCK --set calendar.autoJ
    && [ "$(cal_env deployment-meeting-api.yaml VEXA_AUTO_JOIN_BLOCK)" = '              value: ""' ]; then
   echo "  OK: meeting-api VEXA_AUTO_JOIN_BLOCK empty by default, carries calendar.autoJoinBlock"
 else echo "  FAIL: meeting-api VEXA_AUTO_JOIN_BLOCK plumbing"; fail=1; fi
+# The booking cap (ADR-0052 §8): 500 by default; meetingApi.bookedMaxPerAccount sets it, 0 included.
+if [ "$(cal_env deployment-meeting-api.yaml BOOKED_MAX_PER_ACCOUNT)" = '              value: "500"' ] \
+   && cal_env deployment-meeting-api.yaml BOOKED_MAX_PER_ACCOUNT --set meetingApi.bookedMaxPerAccount=600 \
+     | has 'value: "600"' \
+   && cal_env deployment-meeting-api.yaml BOOKED_MAX_PER_ACCOUNT --set meetingApi.bookedMaxPerAccount=0 \
+     | has 'value: "0"'; then
+  echo "  OK: meeting-api BOOKED_MAX_PER_ACCOUNT 500 by default, carries meetingApi.bookedMaxPerAccount"
+else echo "  FAIL: meeting-api BOOKED_MAX_PER_ACCOUNT plumbing"; fail=1; fi
+# A number written in a values file reaches the template as a float64: 1000000 must render as
+# "1000000", never "1e+06", which meeting-api cannot read (Factory review of #1998 at 4ef91713).
+CAP_VALUES="$(mktemp)"
+printf 'meetingApi:\n  bookedMaxPerAccount: 1000000\n' > "$CAP_VALUES"
+if cal_env deployment-meeting-api.yaml BOOKED_MAX_PER_ACCOUNT -f "$CAP_VALUES" | has 'value: "1000000"'; then
+  echo "  OK: meeting-api BOOKED_MAX_PER_ACCOUNT 1000000 from a values file renders as a whole number"
+else echo "  FAIL: meeting-api BOOKED_MAX_PER_ACCOUNT from a values file: $(cal_env deployment-meeting-api.yaml BOOKED_MAX_PER_ACCOUNT -f "$CAP_VALUES")"; fail=1; fi
+printf 'meetingApi:\n  bookedMaxPerAccount: 2.5\n' > "$CAP_VALUES"
+refuse "booking cap 2.5 in a values file" 'meetingApi\.bookedMaxPerAccount must be a whole number of 0 or more' \
+  -f "$CHART/values-test.yaml" -f "$CAP_VALUES"
+rm -f "$CAP_VALUES"
+refuse "booking cap -1" 'meetingApi\.bookedMaxPerAccount must be a whole number of 0 or more' \
+  -f "$CHART/values-test.yaml" --set meetingApi.bookedMaxPerAccount=-1
+refuse "booking cap abc" 'meetingApi\.bookedMaxPerAccount must be a whole number of 0 or more' \
+  -f "$CHART/values-test.yaml" --set meetingApi.bookedMaxPerAccount=abc
 if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" | has 'VEXA_CALENDAR_FEED_ALLOW' \
    && ! helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" -s templates/deployment-gateway.yaml \
         | has 'VEXA_CALENDAR_FEED_ALLOW'; then

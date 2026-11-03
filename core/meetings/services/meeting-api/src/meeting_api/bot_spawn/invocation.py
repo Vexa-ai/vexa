@@ -119,6 +119,7 @@ def build_invocation(
     call: Optional[dict] = None,
     session_restore_url: Optional[str] = None,
     meeting_host_allow: Optional[list[str]] = None,
+    join_at: Optional[str] = None,
 ) -> dict:
     """Assemble the bot's ``invocation.v1`` Invocation (the parent's ``BOT_CONFIG``).
 
@@ -139,6 +140,9 @@ def build_invocation(
         "botName": bot_name,
         "passcode": passcode,
         "nativeMeetingId": native_meeting_id,
+        # When the bot opens the meeting (ADR-0052): a booked bot's pod starts early and waits for
+        # it. UTC ISO-8601; absent = at once (an older bot refuses an invocation that carries it).
+        "joinAt": join_at,
         "token": token,
         "connectionId": connection_id,
         "meeting_id": meeting_id,

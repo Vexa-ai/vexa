@@ -17,6 +17,9 @@ from typing import Optional
 from ..lifecycle.machine import dominant_completion_reason
 from ..sessions import new_session
 from .ports import (
+    CEILING_STATUSES,
+    NotScheduled,
+    planned_row_startable,
     DuplicateMeeting,
     MaxBotsExceeded,
     MeetingStopped,
@@ -26,6 +29,7 @@ from .ports import (
     _archive_completion,
     _stopped_reopen_detail,
     reconcile_grace_for_status,
+    reconcile_reference_time,
 )
 
 
@@ -240,6 +244,18 @@ class SqlAlchemyMeetingRepo:
             ).scalars().first()
             return _row_to_dict(m) if m else None
 
+    async def planned_row_deleted(self, meeting_id, user_id) -> bool:
+        from sqlalchemy import select
+
+        from ..sessions.models import MeetingPlannedOutbox as O
+
+        async with self._session_factory() as db:
+            event = (await db.execute(
+                select(O.event).where(O.meeting_id == meeting_id).order_by(O.id.desc()).limit(1)
+            )).scalar()
+        return (isinstance(event, dict) and event.get("status") == "deleted"
+                and event.get("uid") == str(user_id))
+
     async def reopen_meeting(self, *, meeting_id, data_patch=None) -> dict:
         from sqlalchemy import select
         from sqlalchemy.orm.attributes import flag_modified
@@ -429,7 +445,7 @@ class SqlAlchemyMeetingRepo:
                 .select_from(Meeting)
                 .where(
                     Meeting.user_id == user_id,
-                    Meeting.status.in_(["requested", "joining", "awaiting_admission", "active"]),
+                    Meeting.status.in_(CEILING_STATUSES),
                     Meeting.platform != "browser_session",  # infra excluded (parent meetings.py:1091)
                 )
             )
@@ -512,6 +528,7 @@ class SqlAlchemyMeetingRepo:
             if mid in out or upd is None or not sid:
                 continue
             u = upd if upd.tzinfo else upd.replace(tzinfo=timezone.utc)
+            u = reconcile_reference_time(status, u, data)
             grace = reconcile_grace_for_status(status, stop_grace, active_grace, preactive_grace)
             if (now - u).total_seconds() >= grace:
                 stop_req = bool(isinstance(data, dict) and data.get("stop_requested"))
@@ -533,7 +550,7 @@ class SqlAlchemyMeetingRepo:
 
     async def create_meeting_guarded(
         self, *, user_id, platform, native_meeting_id, data, max_concurrent=None,
-        exclude_meeting_id=None,
+        exclude_meeting_id=None, planned_meeting_id=None,
     ) -> dict:
         """ATOMIC dedup + cap + insert in ONE transaction (ROB1/ROB2).
 
@@ -579,15 +596,29 @@ class SqlAlchemyMeetingRepo:
                 raise DuplicateMeeting(
                     f"An active meeting already exists for {platform}/{native_meeting_id}"
                 )
-            # 2. cap — count the user's active bots (browser_session excluded); reject the N+1th.
-            #    (cap <= 0 was already rejected as depleted above.)
+            # 1b. the start route's row (ADR-0052 §5): lock THAT row and require it still be this
+            #     person's scheduled row for this room with auto_join on — a cancel or a toggle that
+            #     committed first wins, whatever Flows still has armed.
+            from sqlalchemy.orm.attributes import flag_modified
+
+            target = None
+            if planned_meeting_id is not None:
+                target = (await db.execute(
+                    select(Meeting).where(Meeting.id == planned_meeting_id).with_for_update()
+                )).scalars().first()
+                if target is None or not planned_row_startable(
+                        _row_to_dict(target), user_id=user_id, platform=platform,
+                        native_meeting_id=native_meeting_id):
+                    raise NotScheduled(f"meeting {planned_meeting_id} is not scheduled")
+            # 2. cap — count the user's bots holding a slot (browser_session excluded); reject the
+            #    N+1th. (cap <= 0 was already rejected as depleted above.)
             if max_concurrent is not None:
                 count_stmt = (
                     select(func.count())
                     .select_from(Meeting)
                     .where(
                         Meeting.user_id == user_id,
-                        Meeting.status.in_(active),
+                        Meeting.status.in_(CEILING_STATUSES),
                         Meeting.platform != "browser_session",
                     )
                 )
@@ -603,9 +634,7 @@ class SqlAlchemyMeetingRepo:
             #     atomic under the same advisory lock. Spawn keys merge OVER the planned data; the
             #     plan's `title` / `scheduled_at` / `workspace_id` / `auto_join` / `calendar_uid`
             #     survive — the plan, its workspace bind, and the transcript live on ONE row.
-            from sqlalchemy.orm.attributes import flag_modified
-
-            claimable = (await db.execute(
+            claimable = target if planned_meeting_id is not None else (await db.execute(
                 select(Meeting).where(
                     Meeting.user_id == user_id,
                     Meeting.platform == platform,

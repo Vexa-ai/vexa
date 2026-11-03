@@ -211,6 +211,11 @@ def create_app(
     # signed-out hook. None → one with no broker (every bot-account route answers 409) over the
     # runtime below and an in-memory session store.
     bot_accounts: Optional["object"] = None,
+    # bot_spawn.start_router.StartDeps — what POST /internal/meetings/{id}/start needs that a request
+    # does not carry (the owner's spawn context, the block list, the spawn secrets), the same things
+    # the auto-join sweep is given (ADR-0052 §5). None → no identity edge: the route refuses every
+    # start with 503 cap_unresolvable (the in-process harness passes its own).
+    planned_start: Optional["object"] = None,
 ) -> FastAPI:
     """Build the unified meeting-api app from the injected ports.
 
@@ -384,6 +389,12 @@ def create_app(
         calls=calls,
         bot_accounts=bot_accounts,
     ))
+
+    # --- the planned-row start: POST /internal/meetings/{id}/start (ADR-0052 §5) — Flows, through the
+    #     service door, starts the bot for THAT planned row, with the sweep's safeguards ---
+    from .bot_spawn.start_router import build_start_router as _build_start_router
+    app.include_router(_build_start_router(meeting_repo, runtime, service_authority,
+                                           deps=planned_start))
 
     # --- user-stop: DELETE /bots/{platform}/{native_meeting_id} (lifecycle/stop.py over redis) ---
     from .lifecycle.stop_router import InMemoryCommandPublisher, build_stop_router

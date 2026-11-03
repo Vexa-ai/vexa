@@ -489,7 +489,18 @@ class InMemoryTranscriptStore:
         data["docs"] = docs
         return docs
 
+    def _held_by_others(self, user_id, meeting_id) -> int:
+        from .booking import future_bookings
+
+        return future_bookings(m.get("data") for mid, m in self._meetings.items()
+                               if m["user_id"] == user_id and m["status"] == "scheduled"
+                               and mid != meeting_id)
+
     async def set_intent(self, user_id, platform, native_meeting_id, status, scheduled_at=None):
+        from .booking import cap_reached, is_future_booking, parse_scheduled_at
+
+        if status == "scheduled" and scheduled_at and parse_scheduled_at(scheduled_at) is None:
+            return {"error": "invalid_scheduled_at"}
         mid = self._find(user_id, platform, native_meeting_id)
         if mid is None:
             return None
@@ -498,6 +509,11 @@ class InMemoryTranscriptStore:
         prev_status = m.get("status")
         prev_at = data.get("scheduled_at")
         new_at = scheduled_at if status == "scheduled" else None
+        after = {**data, "scheduled_at": new_at} if status == "scheduled" else data
+        if is_future_booking(status, after) and not is_future_booking(prev_status, data):
+            cap = cap_reached(self._held_by_others(user_id, mid))
+            if cap is not None:
+                return {"error": "booking_cap", "cap": cap}
         m["status"] = status
         if status == "scheduled":
             data["scheduled_at"] = new_at
@@ -552,9 +568,23 @@ class InMemoryTranscriptStore:
                                      calendar_source=None,
                                      workspace_source=None, attendees=None,
                                      auto_join_last_attempt=None,
-                                     auto_join_error=None, room_plan=None):
+                                     auto_join_error=None, room_plan=None,
+                                     over_cap="refuse"):
+        from .booking import booked_max_per_account, cap_message, future_bookings, parse_scheduled_at
+
+        if scheduled_at and parse_scheduled_at(scheduled_at) is None:
+            return {"error": "invalid_scheduled_at"}
         if self._dup_non_terminal(user_id, platform, native_meeting_id):
             return {"error": "duplicate"}
+        # ADR-0052 §8: the account's future bookings with a bot, against BOOKED_MAX_PER_ACCOUNT.
+        if scheduled_at and auto_join:
+            cap = booked_max_per_account()
+            held = future_bookings(m.get("data") for m in self._meetings.values()
+                                   if m["user_id"] == user_id and m["status"] == "scheduled")
+            if held >= cap:
+                if over_cap != "stamp":
+                    return {"error": "booking_cap", "cap": cap}
+                auto_join, auto_join_error = False, cap_message(cap)
         data: dict = {"auto_join": bool(auto_join)}
         if title:
             data["title"] = title
@@ -727,12 +757,21 @@ class InMemoryTranscriptStore:
                 data.pop("notes", None)
         return self._planned_row(meeting_id)
 
-    async def update_planned_meeting(self, user_id, meeting_id, updates):
+    async def update_planned_meeting(self, user_id, meeting_id, updates, over_cap="refuse"):
+        import copy
+
+        from .booking import (cap_reached, clear_cap_stamp, is_future_booking,
+                              parse_scheduled_at, stamp_over_cap)
+
+        if updates.get("scheduled_at") and parse_scheduled_at(updates["scheduled_at"]) is None:
+            return {"error": "invalid_scheduled_at"}
         m = self._meetings.get(meeting_id)
         if m is None or not share_access.owns(m["user_id"], m.get("data"), user_id):
             return None
         if m["status"] not in ("idle", "scheduled"):
             return {"error": "conflict"}
+        before = copy.deepcopy(m)
+        was_booking = is_future_booking(m["status"], m["data"])
         data = m["data"]
         if "native_meeting_id" in updates:
             new_platform = updates.get("platform") or m["platform"]
@@ -808,6 +847,15 @@ class InMemoryTranscriptStore:
                     data.pop(key, None)
         if "calendar_managed" in updates:
             data["calendar_managed"] = bool(updates["calendar_managed"])
+        if is_future_booking(m["status"], data) and not was_booking:
+            cap = cap_reached(self._held_by_others(m["user_id"], meeting_id))
+            if cap is not None:
+                if over_cap != "stamp":
+                    self._meetings[meeting_id] = before     # nothing written
+                    return {"error": "booking_cap", "cap": cap}
+                stamp_over_cap(data, cap)
+        if is_future_booking(m["status"], data):
+            clear_cap_stamp(data)
         return self._planned_row(meeting_id)
 
     async def delete_planned_meeting(self, user_id, meeting_id):

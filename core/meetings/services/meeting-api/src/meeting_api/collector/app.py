@@ -623,6 +623,14 @@ def build_router(
                 status_code=409,
                 detail=f"A meeting already exists for {platform}/{native_id}",
             )
+        if isinstance(row, dict) and row.get("error") == "invalid_scheduled_at":
+            raise HTTPException(status_code=422, detail="'scheduled_at' must be an ISO8601 string")
+        if isinstance(row, dict) and row.get("error") == "booking_cap":
+            # ADR-0052 §8: the account's future bookings with a bot are capped.
+            from .booking import cap_message
+
+            return JSONResponse(status_code=429, content={
+                "detail": cap_message(row["cap"]), "cap": row["cap"]})
         log_event(
             "meeting_planned", audience="user", span="meetings.plan",
             user_id=user_id, meeting_id=str(row.get("id")),
@@ -654,7 +662,7 @@ def build_router(
 
     # --- the ROW-id PATCH/DELETE bodies, factored out so the native-keyed aliases (#579 C1) forward
     # to the SAME owner-scoped, FSM-refusing logic once they have resolved (platform, native) → row. ---
-    async def _apply_meeting_patch(user_id: int, meeting_id: int, payload, headers) -> dict:
+    async def _apply_meeting_patch(user_id: int, meeting_id: int, payload, headers):
         from .projection import project_response_data
 
         if not isinstance(payload, dict):
@@ -715,6 +723,14 @@ def build_router(
         row = await store.update_planned_meeting(user_id, meeting_id, updates)
         if row is None:
             raise HTTPException(status_code=404, detail="Meeting not found")
+        if row.get("error") == "invalid_scheduled_at":
+            raise HTTPException(status_code=422, detail="'scheduled_at' must be an ISO8601 string")
+        if row.get("error") == "booking_cap":
+            # ADR-0052 §8: a plan that becomes a booking with a bot counts like a new booking.
+            from .booking import cap_message
+
+            return JSONResponse(status_code=429, content={
+                "detail": cap_message(row["cap"]), "cap": row["cap"]})
         if row.get("error") == "conflict":
             raise HTTPException(
                 status_code=409, detail="Meeting is no longer planned (bot lifecycle owns it)"
@@ -926,7 +942,8 @@ def build_router(
                                               start=body.get("start"), end=body.get("end"))
             if not updates:
                 continue
-            out = await store.update_planned_meeting(user_id, row["id"], updates)
+            # A calendar's change is mirrored even over the booking cap, with no bot (ADR-0052 §8).
+            out = await store.update_planned_meeting(user_id, row["id"], updates, over_cap="stamp")
             if out and not out.get("error"):
                 synced.append(row["id"])
                 d = row.get("data") or {}
@@ -969,7 +986,7 @@ def build_router(
         except Exception:
             raise HTTPException(status_code=422, detail="invalid JSON body")
         row = await _apply_meeting_patch(user_id, meeting_id, payload, request.headers)
-        return JSONResponse(content=row)
+        return row if isinstance(row, Response) else JSONResponse(content=row)
 
     # --- DELETE /meetings/{meeting_id} → delete a PLANNED row (intent status only; an FSM row is
     # never deletable from here). Owner-scoped, ROW-id addressed. ---
@@ -1109,7 +1126,7 @@ def build_router(
                 detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
             )
         row = await _apply_meeting_patch(user_id, meeting_id, payload, request.headers)
-        return JSONResponse(content=row)
+        return row if isinstance(row, Response) else JSONResponse(content=row)
 
     @router.delete("/meetings/{platform}/{native_meeting_id}", dependencies=[Depends(require_person)])
     async def delete_native_meeting(
@@ -1723,6 +1740,14 @@ def build_router(
                 status_code=404,
                 detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
             )
+        if result.get("error") == "invalid_scheduled_at":
+            raise HTTPException(status_code=422, detail="'at' must be an ISO8601 string")
+        if result.get("error") == "booking_cap":
+            # ADR-0052 §8: scheduling a plan with a bot counts like a new booking.
+            from .booking import cap_message
+
+            return JSONResponse(status_code=429, content={
+                "detail": cap_message(result["cap"]), "cap": result["cap"]})
         log_event(
             "meeting_intent_set", audience="user", span="meetings.intent.set",
             user_id=user_id, meeting_id=f"{platform}/{native_meeting_id}",

@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 import re
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -45,6 +46,7 @@ from .workload_redis import voice_note_stream
 from .ports import (
     AuthSessionBusy,
     DuplicateMeeting,
+    JoinAtRefused,
     MaxBotsExceeded,
     MeetingRepo,
     MeetingStopped,
@@ -65,6 +67,8 @@ __all__ = [
     "teams_id_needs_meeting_url",
     "DuplicateMeeting",
     "MeetingStopped",
+    "JoinAtRefused",
+    "booked_pod_lead_s",
     "LOBBY_BUDGET_MS",
     "DEFAULT_LOBBY_BUDGET_S",
     "lobby_budget_ms",
@@ -103,6 +107,49 @@ def lobby_budget_ms() -> int:
     if seconds <= 0:
         return DEFAULT_LOBBY_BUDGET_S * 1000
     return int(seconds * 1000)
+
+# A booked meeting's bot is started this long before the meeting and waits for its join time
+# (ADR-0052 §2, ``BOOKED_POD_LEAD_S``). The spawn path reads it for one bound: a join time later than
+# now + this lead + ``JOIN_AT_SLACK_S`` is refused, so a pod never holds its MeetingToken (5 h TTL)
+# for more than ~11 minutes before it joins (§8).
+DEFAULT_BOOKED_POD_LEAD_S = 600
+JOIN_AT_SLACK_S = 60
+
+
+def booked_pod_lead_s() -> int:
+    """``BOOKED_POD_LEAD_S`` (s), default 600. Read at call time; an unparseable or negative value
+    falls back to the default rather than widening or closing the join-time bound by accident."""
+    raw = os.getenv("BOOKED_POD_LEAD_S")
+    if raw is None or not raw.strip():
+        return DEFAULT_BOOKED_POD_LEAD_S
+    try:
+        value = int(float(raw))
+    except ValueError:
+        return DEFAULT_BOOKED_POD_LEAD_S
+    return value if value >= 0 else DEFAULT_BOOKED_POD_LEAD_S
+
+
+def _checked_join_at(join_at: Optional[datetime], *, no_page: bool,
+                     now: Optional[datetime] = None) -> Optional[str]:
+    """The invocation's ``joinAt`` for this spawn (UTC ISO-8601), or None for "join at once".
+
+    Refuses (``JoinAtRefused``) a naive datetime, a join time on a bot with no meeting page, and one
+    later than now + ``BOOKED_POD_LEAD_S`` + 60 s. A time already past is kept: the bot joins at once."""
+    if join_at is None:
+        return None
+    if join_at.tzinfo is None:
+        raise JoinAtRefused("join_at must carry a time zone (UTC)")
+    if no_page:
+        raise JoinAtRefused("a voice note or a call has no meeting to wait for; join_at is refused")
+    now = now or datetime.now(timezone.utc)
+    latest = now + timedelta(seconds=booked_pod_lead_s() + JOIN_AT_SLACK_S)
+    if join_at > latest:
+        raise JoinAtRefused(
+            f"join_at is too far ahead: at most {booked_pod_lead_s() + JOIN_AT_SLACK_S} s after the "
+            f"bot is started (BOOKED_POD_LEAD_S + {JOIN_AT_SLACK_S} s)"
+        )
+    return join_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
 
 # Non-terminal statuses (parent's active set) — a prior meeting in one of these blocks a new spawn.
 _ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active", "stopping")
@@ -524,6 +571,15 @@ async def request_bot(
     # validated and stripped by the router. Stored as ``data.chat_on_join = {text, request_id}``;
     # the request_id is minted here, one per bot request, so a re-sent bot posts again.
     chat_on_join: Optional[str] = None,
+    # WHEN THE BOT OPENS THE MEETING (ADR-0052): a booked meeting's bot is started before the
+    # meeting and waits for this time (tz-aware). None = join at once. Never later than now +
+    # BOOKED_POD_LEAD_S + 60 s (``JoinAtRefused``). Not exposed on public POST /bots; the planned-row
+    # start route sets it. Stored as ``data.join_at`` so the row says when it will join.
+    join_at: Optional[datetime] = None,
+    # THE PLANNED ROW THIS BOT IS FOR (ADR-0052 §5, the start route): claim exactly this row id,
+    # never the room's newest planned row and never a fresh insert. The repo re-checks it under its
+    # locks and raises ``NotScheduled`` when a cancel or toggle landed first.
+    planned_meeting_id: Optional[int] = None,
 ) -> dict:
     """Run the spawn flow and return a MeetingResponse-shaped dict.
 
@@ -548,6 +604,8 @@ async def request_bot(
     # A call has no page either: its audio is the LiveKit room's tracks (calls).
     is_call = platform == CALL_PLATFORM
     no_page = is_voice_note or is_call
+    # 0b. The join time, bounded before any lookup, row or workload (ADR-0052 §8).
+    join_at_iso = _checked_join_at(join_at, no_page=no_page)
     if is_call:
         recording_enabled = False
         if call_invocation is None or call_data is None:
@@ -699,7 +757,7 @@ async def request_bot(
     #     stays a plain query — the reused-row path reopens an existing terminal row (no NEW active row
     #     is inserted), so it is not part of the dedup/cap TOCTOU window.
     reused_row: Optional[dict] = None
-    if continue_meeting and respawn_of is None:
+    if continue_meeting and planned_meeting_id is None and respawn_of is None:
         latest = await repo.find_latest(user_id, platform, native_meeting_id)
         latest_data = (latest or {}).get("data") or {}
         if ((latest_data.get("room_principal") or {}).get("principal")
@@ -856,6 +914,8 @@ async def request_bot(
         reopen_patch[meet_respawn.KEY] = respawn_block
         # A fresh line (and request_id) for this run, or None: the reopen pops a prior run's.
         reopen_patch["chat_on_join"] = _chat_on_join_data(chat_on_join)
+        # This run's join time, or None: a prior run's never carries over.
+        reopen_patch["join_at"] = join_at_iso
         row = await repo.reopen_meeting(meeting_id=reused_row["id"], data_patch=reopen_patch)
     else:
         meeting_data: dict[str, Any] = {}
@@ -890,6 +950,10 @@ async def request_bot(
             meeting_data[meet_respawn.KEY] = respawn_block
         if chat_on_join:
             meeting_data["chat_on_join"] = _chat_on_join_data(chat_on_join)
+        # When the waiting bot will open the meeting (ADR-0052): the row stays `requested` until
+        # then, and the reconciler measures its pre-active window from this time.
+        if join_at_iso:
+            meeting_data["join_at"] = join_at_iso
         # Per-user webhook config carried on the meeting (delivered by the lifecycle callback).
         # Stripped from any outbound meeting projection (webhooks.delivery._INTERNAL_DATA_KEYS). At
         # the API response edge the treatment splits (collector.projection): `webhook_secret` is
@@ -909,6 +973,8 @@ async def request_bot(
                 native_meeting_id=native_meeting_id,
                 data=meeting_data,
                 max_concurrent=max_concurrent,
+                **({"planned_meeting_id": planned_meeting_id}
+                   if planned_meeting_id is not None else {}),
             )
         except MaxBotsExceeded:
             log_event(
@@ -976,6 +1042,7 @@ async def request_bot(
         token=token,
         native_meeting_id=native_meeting_id,
         connection_id=connection_id,
+        join_at=join_at_iso,
         language=transcription_language["language"],
         allowed_languages=transcription_language["allowed_languages"],
         task=task,

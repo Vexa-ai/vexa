@@ -99,6 +99,7 @@ class MeetingRepo(Protocol):
         data: dict,
         max_concurrent: Optional[int] = None,
         exclude_meeting_id: Optional[int] = None,
+        planned_meeting_id: Optional[int] = None,
     ) -> dict:
         """ATOMIC dedup + cap-check + insert — the TOCTOU-safe spawn primitive (ROB1/ROB2).
 
@@ -118,7 +119,12 @@ class MeetingRepo(Protocol):
         ``pg_advisory_xact_lock`` and backstops dedup with a unique partial index on active rows; the
         in-memory fake performs the check+insert with no ``await`` between them so the race closes
         offline too. Replaces the old separate ``find_active`` + ``count_active_bots`` +
-        ``create_meeting`` pre-check sequence on the fresh-insert path."""
+        ``create_meeting`` pre-check sequence on the fresh-insert path.
+
+        The cap counts ``CEILING_STATUSES``. ``planned_meeting_id`` (ADR-0052 §5, the start route):
+        claim THAT planned row and no other — never the newest planned row of the room, never a
+        fresh insert. Under the same lock and with the row locked it must still pass
+        ``planned_row_startable``; otherwise ``NotScheduled``."""
         ...
 
     async def reopen_meeting(
@@ -174,6 +180,15 @@ class MeetingRepo(Protocol):
         (and the stop route's fresh read of ``bot_container_id``). Deliberately not served from any
         snapshot the caller already holds: both readers exist precisely because the row may have
         changed under them."""
+        ...
+
+    async def planned_row_deleted(self, meeting_id: int, user_id: int) -> bool:
+        """Was ``meeting_id`` a scheduled planned row of ``user_id`` that has since been DELETED
+        (``DELETE /meetings``, calendar sync)? The start route's answer to a row that no longer
+        exists (ADR-0052 §5/§6): a cancel that landed first is 409 ``not_scheduled``, the same as
+        every other cancel; any other missing or foreign id stays 404. Read from the row's last
+        ``meeting.planned.changed`` fact (``planned_outbox``), which outlives the row and names its
+        owner — so it never tells one person about another person's rows."""
         ...
 
     async def count_active_bots(self, *, user_id: int, exclude_meeting_id: Optional[int] = None) -> int:
@@ -334,6 +349,13 @@ class AuthSessionBusy(Exception):
         )
 
 
+class JoinAtRefused(ValueError):
+    """A spawn asked for a join time it may not have (ADR-0052 §8): later than now +
+    ``BOOKED_POD_LEAD_S`` + 60 s, or on a bot with no meeting page (a voice note, a call). Refused
+    before any row or workload exists, so a pod never sits on its MeetingToken (5 h TTL) long before
+    it joins."""
+
+
 class SpawnFailed(Exception):
     """The runtime kernel could not start the workload (non-201, non-429) — meeting → failed.
 
@@ -416,6 +438,37 @@ class MeetingStopped(Exception):
     starts a new run on a new row, and that is the documented path. The detail string says so."""
 
 
+#: The statuses a bot counts against its account's concurrency ceiling (ADR-0052 §8, decided by the
+#: CEO 2026-11-01): every pod that holds a slot — the four pre-active/active ones, and a bot that
+#: asked for help (``needs_help`` / ``needs_human_help``), whose pod still runs. ``stopping`` does
+#: not count: its slot is being given back. The ONE list both repos' cap checks read.
+CEILING_STATUSES = (
+    "requested", "joining", "awaiting_admission", "active", "needs_help", "needs_human_help",
+)
+
+
+class NotScheduled(Exception):
+    """A start for a planned row that may no longer start (ADR-0052 §5): the row is not
+    ``scheduled`` any more, its ``auto_join`` is off, its owner stopped it, or it is not this
+    person's row for this room. Raised by ``create_meeting_guarded(planned_meeting_id=…)`` UNDER the
+    per-user lock with the row locked, so a cancel or a toggle that commits first always wins."""
+
+
+def planned_row_startable(row: Optional[dict], *, user_id: int, platform: str,
+                          native_meeting_id: str) -> bool:
+    """May the start route claim this planned row? The ONE predicate the SQL adapter, the fake and
+    the route's pre-check read: this person's row for this room, still ``scheduled``, ``auto_join``
+    not off (absent = on), no stop on it."""
+    if not isinstance(row, dict) or row.get("status") != "scheduled":
+        return False
+    if row.get("user_id") != user_id or row.get("platform") != platform:
+        return False
+    if (row.get("native_meeting_id") or row.get("platform_specific_id")) != native_meeting_id:
+        return False
+    data = row.get("data") if isinstance(row.get("data"), dict) else {}
+    return data.get("auto_join") is not False and not data.get("stop_requested")
+
+
 class DuplicateMeeting(Exception):
     """The user already has an active/requested meeting for (platform, native_id) → HTTP 409.
 
@@ -428,6 +481,30 @@ class DuplicateMeeting(Exception):
 # parked in a waiting room reports `awaiting_admission` once and then polls silently for the whole
 # lobby budget the control plane handed it — so they carry their OWN (longer) reconcile window.
 PRE_ACTIVE_MEETING_STATUSES = frozenset({"requested", "joining", "awaiting_admission"})
+
+
+def reconcile_reference_time(status: Optional[str], updated_at, data: Optional[dict]):
+    """The moment a stale row's reconcile window is measured from — the ONE definition both the SQL
+    adapter and the in-memory fake read.
+
+    ``updated_at``, except for a PRE-ACTIVE row whose bot was spawned to wait for a join time
+    (``data.join_at``, ADR-0052): such a pod is quiet BY DESIGN until it opens the meeting, so its
+    window starts at the join time, whichever is later. ``updated_at`` must be tz-aware; an unreadable
+    ``join_at`` is ignored (the row falls back to ``updated_at``)."""
+    from datetime import datetime, timezone
+
+    if status not in PRE_ACTIVE_MEETING_STATUSES or not isinstance(data, dict):
+        return updated_at
+    raw = data.get("join_at")
+    if not isinstance(raw, str) or not raw:
+        return updated_at
+    try:
+        join_at = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return updated_at
+    if join_at.tzinfo is None:
+        join_at = join_at.replace(tzinfo=timezone.utc)
+    return max(updated_at, join_at)
 
 
 def reconcile_grace_for_status(

@@ -642,6 +642,38 @@
    "targets": []
   },
   {
+   "key": "BOOKED_POD_LEAD_S",
+   "class": "defaulted",
+   "default": "600",
+   "description": "booked-bot pod lead (s, ADR-0052): a booked meeting's bot pod starts this long before the meeting and waits for its join time. The spawn path refuses a join time later than now + this lead + 60 s, so a waiting pod never holds its MeetingToken longer than that before joining",
+   "targets": []
+  },
+  {
+   "key": "BOOKED_JOIN_LEAD_S",
+   "class": "defaulted",
+   "default": "120",
+   "description": "booked-bot join lead (s, ADR-0052 \u00a72): a booked meeting's bot opens the meeting this long before it starts. The planned-row start route passes join_at = start - this to the bot; the meeting.planned.changed fact carries the computed join_at",
+   "targets": []
+  },
+  {
+   "key": "BOOKED_GRACE_S",
+   "class": "defaulted",
+   "default": "600",
+   "description": "booked-bot grace (s, ADR-0052 \u00a72): the last moment a booked meeting's bot may still be started is start + this. The start route answers 409 past_deadline after it; the meeting.planned.changed fact carries it as deadline",
+   "targets": []
+  },
+  {
+   "key": "BOOKED_MAX_PER_ACCOUNT",
+   "class": "defaulted",
+   "default": "500",
+   "description": "booking cap (ADR-0052 \u00a78, founder 1 Nov 2026): an account's future scheduled meetings with auto_join on, counted where every planned row is created. Over it POST /meetings answers 429 with the cap; calendar sync still mirrors the event with no bot and auto_join_error stamped. One value for the whole deployment (founder 3 Nov 2026), Helm meetingApi.bookedMaxPerAccount",
+   "targets": [
+    "compose",
+    "helm",
+    "lite"
+   ]
+  },
+  {
    "key": "MEETING_UNTRACKED_GRACE_SEC",
    "class": "defaulted",
    "default": "600",
