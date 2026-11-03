@@ -116,6 +116,44 @@ test("docs-current run through a symlink still runs the gate (usage error, not a
   }
 });
 
+test("a copy's source is not listed as removed (only a rename moves a file)", () => {
+  const api = (path) => (/\/files\?/.test(path) && path.endsWith("page=1") ? [{ filename: "docs/b.md", previous_filename: "docs/a.md", status: "copied" }] : []);
+  assert.deepEqual(prFiles(pr(1), { repo: "o/r", api, git: gitOf([]) }).map((f) => f.filename), ["docs/b.md"]);
+});
+
+// A stand-in for git that records every call, for what reaches argv and the environment.
+function recordingGit(headerOut) {
+  const calls = [];
+  const run = (cmd, args, o = {}) => {
+    calls.push({ args, env: o.env });
+    if (args[0] === "remote" && args[1] === "get-url") return "https://github.com/o/r.git\n";
+    if (args[0] === "config" && args.includes("--get-regexp")) return headerOut;
+    if (args[0] === "rev-parse") return "/repo\n";
+    return args.includes("diff") ? "M\0core/x.py\0" : "";
+  };
+  return { run, calls };
+}
+
+test("the checkout token reaches the fetch through the environment, never argv", () => {
+  const SECRET = "AUTHORIZATION: basic c2VudGluZWw=";
+  const { run, calls } = recordingGit(`http.https://github.com/.extraheader\n${SECRET}\0`);
+  assert.deepEqual(gitDiffFiles(BASE, HEAD, { cwd: "/repo", run }), [{ filename: "core/x.py", status: "modified" }]);
+  assert.equal(calls.some((c) => c.args.some((a) => String(a).includes("c2VudGluZWw"))), false, "the token is on no command line");
+  const fetch = calls.find((c) => c.args.includes("fetch"));
+  assert.equal(fetch.env.GIT_CONFIG_COUNT, "1");
+  assert.equal(fetch.env.GIT_CONFIG_KEY_0, "http.https://github.com/.extraheader");
+  assert.equal(fetch.env.GIT_CONFIG_VALUE_0, SECRET);
+});
+
+test("a header value spanning lines stays one value; nothing else is set from it", () => {
+  const { run, calls } = recordingGit("http.https://github.com/.extraheader\nX-A: 1\ncore.sshCommand evil\0");
+  gitDiffFiles(BASE, HEAD, { cwd: "/repo", run });
+  const env = calls.find((c) => c.args.includes("fetch")).env;
+  assert.equal(env.GIT_CONFIG_COUNT, "1");
+  assert.equal(env.GIT_CONFIG_VALUE_0, "X-A: 1\ncore.sshCommand evil");
+  assert.equal(calls.some((c) => c.args.includes("core.sshCommand")), false);
+});
+
 // The git path itself, against a real repository: shallow, blob-less, renames as remove + add.
 test("gitDiffFiles reads names and statuses from a blob-less shallow fetch, outside the caller's clone", () => {
   const dir = mkdtempSync(join(tmpdir(), "pr-files-"));
@@ -140,6 +178,11 @@ test("gitDiffFiles reads names and statuses from a blob-less shallow fetch, outs
     renameSync(join(origin, "core/mv.py"), join(origin, "other/mv.py"));
     git(origin, "add", "-A"); git(origin, "commit", "-q", "-m", "head");
     const head = git(origin, "rev-parse", "HEAD");
+
+    // a clone whose remote is a plain path (as a local mirror or a test fixture has)
+    const byPath = join(dir, "by-path");
+    execFileSync("git", ["clone", "-q", origin, byPath], { env });
+    assert.equal(gitDiffFiles(base, head, { cwd: byPath }).length, 5);
 
     const clone = join(dir, "clone");
     execFileSync("git", ["clone", "-q", `file://${origin}`, clone], { env });

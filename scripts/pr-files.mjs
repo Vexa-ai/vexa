@@ -15,31 +15,34 @@
 // a surface counts as touching it, whether the PR has 2 files or 5,000.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 export const API_FILE_CAP = 3000;   // GitHub's documented maximum for pulls/{n}/files
 const PER_PAGE = 100;
 
 // Names and statuses of every file changed between two commits. The fetch goes into a throwaway
 // bare repository, never into the caller's clone (a shallow fetch there would cut its history and
-// turn it into a partial clone). Only the remote's URL and any http extraheader (the Actions
-// checkout token) are copied from `cwd`, into the throwaway's own config, never onto argv.
+// turn it into a partial clone). From `cwd` only the remote's URL and any http extraheader (the
+// Actions checkout token) are taken. The headers reach the fetch through GIT_CONFIG_* environment
+// variables: never argv (other users on a shared host can read a command line), never a file.
 export function gitDiffFiles(base, head, { cwd = process.cwd(), remote = "origin", run = execFileSync } = {}) {
   const opts = { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 * 1024 * 1024 };
-  const url = run("git", ["remote", "get-url", remote], { cwd, ...opts }).trim();
-  let headers = "";
-  try { headers = run("git", ["config", "--get-regexp", "^http\\..*extraheader$"], { cwd, ...opts }); } catch { /* none set */ }
+  const url = remoteUrl(run("git", ["remote", "get-url", remote], { cwd, ...opts }).trim(), cwd, run, opts);
+  let raw = "";
+  try { raw = run("git", ["config", "-z", "--get-regexp", "^http\\..*extraheader$"], { cwd, ...opts }); } catch { /* none set */ }
+  // -z: entries end in NUL, key and value split at the first newline, so a value spanning lines
+  // stays one value.
+  const headers = raw.split("\0").filter(Boolean).map((e) => { const nl = e.indexOf("\n"); return nl < 0 ? [e, ""] : [e.slice(0, nl), e.slice(nl + 1)]; });
+  const env = { ...process.env, GIT_CONFIG_COUNT: String(headers.length) };
+  headers.forEach(([k, v], i) => { env[`GIT_CONFIG_KEY_${i}`] = k; env[`GIT_CONFIG_VALUE_${i}`] = v; });
   const dir = mkdtempSync(join(tmpdir(), "pr-files-"));
   try {
-    const git = (args) => run("git", ["--git-dir", dir, ...args], opts);
+    const git = (args, extra = {}) => run("git", ["--git-dir", dir, ...args], { ...opts, ...extra });
     git(["init", "--quiet", "--bare"]);
-    for (const line of headers.split("\n").filter(Boolean)) {
-      const sp = line.indexOf(" ");
-      git(["config", "--add", line.slice(0, sp), line.slice(sp + 1)]);
-    }
-    git(["fetch", "--no-tags", "--quiet", "--depth=1", "--filter=blob:none", url, base, head]);
+    git(["remote", "add", "origin", url]);
+    git(["fetch", "--no-tags", "--quiet", "--depth=1", "--filter=blob:none", "origin", base, head], { env });
     const out = git(["diff", "--no-renames", "--name-status", "-z", base, head]);
     const parts = out.split("\0").filter(Boolean);
     const files = [];
@@ -50,6 +53,16 @@ export function gitDiffFiles(base, head, { cwd = process.cwd(), remote = "origin
   }
 }
 const STATUS = { A: "added", D: "removed", M: "modified", T: "changed" };
+
+// A remote given as a local path (absolute, or relative to the caller's repository) becomes a
+// file:// URL, so the throwaway resolves it the same way the caller does.
+function remoteUrl(url, cwd, run, opts) {
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(url) || /^[^/\s]+@[^/\s]+:/.test(url)) return url;
+  let root = cwd;
+  try { root = run("git", ["rev-parse", "--show-toplevel"], { cwd, ...opts }).trim() || cwd; } catch { /* bare: cwd */ }
+  const path = isAbsolute(url) ? url : resolve(root, url);
+  return existsSync(path) ? `file://${path}` : url;
+}
 
 // Every changed file of `pr` (the pulls/{n} object), as [{ filename, status }].
 //   api(path) → parsed JSON of a GitHub REST GET (the gate's own reader, injectable for tests)
@@ -63,7 +76,7 @@ export function prFiles(pr, { repo, api, git = gitDiffFiles } = {}) {
     rows += batch.length;
     for (const f of batch) {
       listed.push({ filename: f.filename, status: f.status });
-      if (f.previous_filename) listed.push({ filename: f.previous_filename, status: "removed" });
+      if (f.status === "renamed" && f.previous_filename) listed.push({ filename: f.previous_filename, status: "removed" });
     }
     if (batch.length < PER_PAGE) break;
   }
