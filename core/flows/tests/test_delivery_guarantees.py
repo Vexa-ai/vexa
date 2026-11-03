@@ -52,6 +52,8 @@ from flows.loop import BACKOFF_S, LEASE_S, MAX_ATTEMPTS
 
 from test_link_loop import FakeChannel, FakeScaffolds, _StubDB
 
+pytestmark = pytest.mark.usefixtures("meetings_hold_no_row")
+
 
 # ── the rig ──────────────────────────────────────────────────────────────────────────────────
 class _Flow:
@@ -404,13 +406,13 @@ def test_a_confirmed_receipt_is_never_re_marked_failed():
 
 # R-B21 · the meeting's stamp is computed ONCE per reaction.
 def test_the_note_path_is_stamped_once_even_when_the_row_lookup_recovers(monkeypatch):
-    """`_meeting_stamp` falls back to the wall clock when there is no `refs.start` and the row
-    lookup fails — the documented case for a `meeting.completed` admitted through `POST /events`.
+    """`_meeting_stamp` falls back to the wall clock when there is no `refs.start` and the
+    row has none — the documented case for a `meeting.completed` admitted through `POST /events`.
     The path is then computed at THREE moments (the scaffold's mint, the drop, the frontmatter),
     and the mail's path and the desk's path differ: the Minutes tab resolves to a file nothing
     wrote and shows "No page here yet" (F58, on a second route)."""
     monkeypatch.setattr(production, "setting", lambda uid, key: "")
-    answers = [None, 1_700_090_000.0]      # agent-api was down, then it came back
+    answers = [None, 1_700_090_000.0]      # the row had no start yet, then it did
 
     def flaky_start(uid, mid, native=None):
         return answers.pop(0) if answers else 1_700_090_000.0

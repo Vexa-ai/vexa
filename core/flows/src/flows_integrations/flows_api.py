@@ -78,6 +78,7 @@ fine"). The intakes no longer park facts and the operator verbs no longer refuse
 unwritten; the company layer is optional."""
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import re
@@ -95,7 +96,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
-from flows import Registry, SystemClock, admit, cancel, db_from_url, resume, retry, wake  # noqa: E402
+from flows import (Registry, StepError, SystemClock, admit, cancel, db_from_url,  # noqa: E402
+                   resume, retry, wake)
 from flows import tickets  # noqa: E402 — subject tickets a request presents on its door calls
 from flows_steps import subject_ticket  # noqa: E402 — subject-ticket.v1 (carried, never minted)
 from flows import fact_envelope  # noqa: E402 — event.v2: the sealed fact envelope (D8)
@@ -2143,6 +2145,21 @@ def signal_reaction(reaction_id: str, verb: str, subject: str = "",
     return {verb: True}
 
 
+#: What `_subject_tag` MACs ahead of the subject. The flows key also signs grants and tokens, so a
+#: log tag must never be a MAC over a message one of those could be.
+SUBJECT_TAG_DOMAIN = b"vexa-flows/log-subject-tag/v1\x00"
+
+
+def _subject_tag(subject: str) -> str:
+    """A subject as a log line may carry it: an HMAC under the flows key, so the same person reads
+    as the same tag across lines and nobody holding the user list can reverse it (an unkeyed hash
+    of a uid or an address can be). `-` when this process holds no key."""
+    key = (DOOR_KEY or "").encode()
+    if not key:
+        return "-"
+    return hmac.new(key, SUBJECT_TAG_DOMAIN + str(subject).encode(), hashlib.sha256).hexdigest()[:16]
+
+
 @app.get("/timeline")
 def timeline(subject: str = "", since: str = "", until: str = "", limit: int = 20,
              meetings: bool = True, format: str = "json",
@@ -2193,10 +2210,21 @@ def timeline(subject: str = "", since: str = "", until: str = "", limit: int = 2
     # database's own rows, which is the offline shape `meetings=false` already serves and already
     # tests. A person's own credential and the operator key are unchanged.
     want_meetings = bool(meetings) and not caller.is_timeline
-    out = build_timeline(db, subj, since=since or None, until=until or None,
-                         limit=max(1, min(int(limit or 20), 200)),
-                         meetings=fetch_meetings if want_meetings else None,
-                         identity=_as_me(caller))
+    try:
+        out = build_timeline(db, subj, since=since or None, until=until or None,
+                             limit=max(1, min(int(limit or 20), 200)),
+                             meetings=fetch_meetings if want_meetings else None,
+                             identity=_as_me(caller))
+    except StepError as e:
+        # THE MEETINGS HALF COULD NOT BE READ (brain:card/4310908cf3b3). Answered as an outage, not
+        # as a day with no meetings in it. The operator gets the status and the path in the log,
+        # never the subject nor the upstream's body; the caller gets the class, and
+        # `meetings=false` still answers from this database alone.
+        logger.warning("timeline: meetings door unavailable status=%s path=%s subject=%s",
+                       getattr(e, "status", None) or type(e).__name__, getattr(e, "path", "") or "-",
+                       _subject_tag(subj))
+        raise HTTPException(status_code=503, detail=(
+            "the meetings half of the timeline could not be read right now; try again"))
     if out.get("unresolved"):
         raise HTTPException(status_code=404, detail=f"nobody answers to {subj!r}")
     shape = (format or "json").strip().lower()

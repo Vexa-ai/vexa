@@ -352,6 +352,20 @@ turns it off. Upgrade with no meeting in flight. See
     the services' connection, which is safe only where every person on the instance trusts every
     other. Any other value stops both services at boot.
 
+### Flows runs in every profile
+
+- **Hits:** Helm installs that left `flows.enabled` at its old default (`false`) or set it, and every
+  Vexa Lite. Booked bots start from Flows' clock, so it is required.
+- **If you skip it:** a values file that still sets `flows.enabled: false` stops the render with
+  `flows.enabled: false is no longer supported`. On a default install there is nothing to skip: the
+  chart renders flows-api and flows-worker and generates both their keys (the service key and the
+  operator key, `flows.apiKey`), keeping them across upgrades. Lite runs both in its container.
+- **Do:** on Helm, remove `flows.enabled` from your values. When a GitOps tool renders the chart with
+  `helm template`, set `flows.apiKey` (or `flows.existingSecret`) and `secrets.flowsServiceKey`, since
+  a render cannot read the release's Secret. If your database user may not create tables in the main
+  database, read [Flows database](/deployment-kubernetes#flows-database) first. On Lite, keep the
+  `vexa-lite-state` volume: Flows' keys are kept there.
+
 ### Flows database with `sslmode=verify-ca`
 
 - **Hits:** installs whose `VEXA_FLOWS_DB_URL` uses `sslmode=verify-ca` without `sslrootcert`, or

@@ -224,7 +224,9 @@ scrubbed of credential-shaped text. The MCP serves it as `friction_list` to the
 SELECT flow, step, status, attempt, reason FROM reaction;
 ```
 
-`admitted → running → done`, with `retrying` (backoff via `next_run_at`), `blocked` (waiting on a
+`admitted → running → done`, with `retrying` (backoff via `next_run_at`; a service answering
+5xx or 429 is waited on without spending an attempt, for up to six hours, with the cause as the
+reason), `blocked` (waiting on a
 human — resumable by signal, escalated by deadline), `failed` (typed, with reason, operator-
 retryable as a **new attempt causally linked** — history is never mutated) and `cancelled`.
 Receipts carry each effect's provider reference: the SMTP message-id, the git commit, the bot

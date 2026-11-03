@@ -2,17 +2,23 @@
 behavior of the engine lives on this screen."""
 from __future__ import annotations
 
+import random
 from typing import Optional
 
 from . import receipts, tickets
 from .clock import Clock
 from .db import DB, dumps, loads
-from .model import Block, Done, NotPresent, Reaction, StepCtx, StepError, Wait
+from .model import Block, Done, NotPresent, Reaction, StepCtx, StepError, Unavailable, Wait
 from .registry import Registry
 
 LEASE_S = 90.0
 BACKOFF_S = (5.0, 30.0, 120.0, 600.0)
 MAX_ATTEMPTS = 6
+#: The scratch key under which a step's first `Unavailable` is remembered, per step.
+UNAVAILABLE_SINCE = "_unavailable_since:"
+#: How far an `Unavailable` wait is spread around its `wait_s`, so a fleet parked on one outage
+#: does not come back to the door in the same second.
+UNAVAILABLE_JITTER = 0.2
 
 def _row_to_reaction(row: tuple):
     (rid, sid, et, refs, flow, ver, step, status, attempt,
@@ -161,10 +167,17 @@ def tick(db: DB, registry: Registry, clock: Clock, *, emit=None, present=None) -
             {"lease": clock.now() + LEASE_S, "now": clock.now(), "rid": r.reaction_id})
 
     ctx.checkpoint = _checkpoint
+    since_key = UNAVAILABLE_SINCE + r.step
     try:
         with tickets.presenting(tickets.union(tickets.of(r.subject_refs), _grant_of(db, flow))):
             out = registry.steps[r.step](ctx)
+        ctx.scratch.pop(since_key, None)
         _save_scratch()
+    except Unavailable as e:
+        since = float(ctx.scratch.setdefault(since_key, clock.now()))
+        _save_scratch()
+        _unavailable(db, r, clock, e, since)
+        return True
     except StepError as e:
         _save_scratch()
         _retry_or_fail(db, r, clock, str(e), retryable=e.retryable)
@@ -305,9 +318,44 @@ def _advance(db: DB, r: Reaction, flow, clock: Clock) -> None:
 
 def _fail(db: DB, r: Reaction, clock: Clock, why: str) -> None:
     db.execute(
-        """UPDATE reaction SET status = 'failed', reason = :why,
+        """UPDATE reaction SET status = 'failed', reason = :why, scratch = :s,
                   lease_until = NULL, updated_at = :now WHERE reaction_id = :rid""",
-        {"why": why, "now": clock.now(), "rid": r.reaction_id})
+        {"why": why, "s": _scratch_without_outage_clocks(db, r.reaction_id), "now": clock.now(),
+         "rid": r.reaction_id})
+
+
+def _unavailable(db: DB, r: Reaction, clock: Clock, e: Unavailable, since: float) -> None:
+    """A service the step reads had a moment: wait like a `Wait`, no attempt burned, with the cause
+    as the reason, until `e.deadline_s` after `since`; past it, fail with that cause."""
+    waited = clock.now() - since
+    if waited >= e.deadline_s:
+        _retry_or_fail(db, r, clock, f"{e} — still, after {int(waited)}s; gave up at "
+                                     f"{int(e.deadline_s)}s", retryable=False)
+        return
+    wait = e.wait_s * random.uniform(1 - UNAVAILABLE_JITTER, 1 + UNAVAILABLE_JITTER)
+    db.execute(
+        """UPDATE reaction SET status = 'retrying', attempt = attempt - 1,
+                  next_run_at = :due, reason = :why, lease_until = NULL, updated_at = :now
+           WHERE reaction_id = :rid""",
+        {"due": clock.now() + wait, "why": f"{e} — waiting, {int(waited)}s so far",
+         "now": clock.now(), "rid": r.reaction_id})
+
+
+def without_outage_clocks(scratch: dict) -> dict:
+    """A reaction's scratch with every outage clock (`UNAVAILABLE_SINCE`) dropped. A failed reaction
+    keeps none and a retried one starts its own: an operator retrying after a 7 h outage must not
+    be failed on the first read because six hours had already passed.
+
+    It is written IN THE SAME UPDATE that flips the status (`_fail`, `_retry_or_fail`,
+    `signals.retry`), never in a second write after it. A retry made due and cleaned afterwards let
+    a worker claim it in between and read the old clock; a fail cleaned afterwards could wipe the
+    clock a retried attempt had just started (Factory re-review of #1997, A1)."""
+    return {k: v for k, v in (scratch or {}).items() if not str(k).startswith(UNAVAILABLE_SINCE)}
+
+
+def _scratch_without_outage_clocks(db: DB, reaction_id: str) -> str:
+    rows = db.execute("SELECT scratch FROM reaction WHERE reaction_id = :rid", {"rid": reaction_id})
+    return dumps(without_outage_clocks(loads(rows[0][0]) if rows else {}))
 
 
 def _retry_or_fail(db: DB, r: Reaction, clock: Clock, why: str, *, retryable: bool) -> None:
@@ -325,6 +373,7 @@ def _retry_or_fail(db: DB, r: Reaction, clock: Clock, why: str, *, retryable: bo
         # as a report still on its way — the exact claim that module exists to make impossible.
         receipts.fail(db, effect_key(r), why, clock)
         db.execute(
-            """UPDATE reaction SET status = 'failed', reason = :why,
+            """UPDATE reaction SET status = 'failed', reason = :why, scratch = :s,
                       lease_until = NULL, updated_at = :now WHERE reaction_id = :rid""",
-            {"why": why, "now": clock.now(), "rid": r.reaction_id})
+            {"why": why, "s": _scratch_without_outage_clocks(db, r.reaction_id),
+             "now": clock.now(), "rid": r.reaction_id})

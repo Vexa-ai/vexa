@@ -553,6 +553,8 @@ def email_attendees(ctx: StepCtx):
                 provenance={"flow": "post_meeting", "step": "email_attendees",
                             "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
                             "minted_by": str(ctx.refs["uid"])})
+        except Unavailable:
+            raise           # the meetings door had a moment: it keeps its own longer wait
         except StepError as e:
             pending = [x for x in who if x not in sent]
             raise StepError(
