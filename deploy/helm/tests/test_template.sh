@@ -1098,6 +1098,14 @@ if cal_env deployment-meeting-api.yaml VEXA_AUTO_JOIN_BLOCK --set calendar.autoJ
    && [ "$(cal_env deployment-meeting-api.yaml VEXA_AUTO_JOIN_BLOCK)" = '              value: ""' ]; then
   echo "  OK: meeting-api VEXA_AUTO_JOIN_BLOCK empty by default, carries calendar.autoJoinBlock"
 else echo "  FAIL: meeting-api VEXA_AUTO_JOIN_BLOCK plumbing"; fail=1; fi
+# The booking cap (ADR-0052 §8): 500 by default; meetingApi.bookedMaxPerAccount sets it, 0 included.
+if [ "$(cal_env deployment-meeting-api.yaml BOOKED_MAX_PER_ACCOUNT)" = '              value: "500"' ] \
+   && cal_env deployment-meeting-api.yaml BOOKED_MAX_PER_ACCOUNT --set meetingApi.bookedMaxPerAccount=600 \
+     | has 'value: "600"' \
+   && cal_env deployment-meeting-api.yaml BOOKED_MAX_PER_ACCOUNT --set meetingApi.bookedMaxPerAccount=0 \
+     | has 'value: "0"'; then
+  echo "  OK: meeting-api BOOKED_MAX_PER_ACCOUNT 500 by default, carries meetingApi.bookedMaxPerAccount"
+else echo "  FAIL: meeting-api BOOKED_MAX_PER_ACCOUNT plumbing"; fail=1; fi
 if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" | has 'VEXA_CALENDAR_FEED_ALLOW' \
    && ! helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" -s templates/deployment-gateway.yaml \
         | has 'VEXA_CALENDAR_FEED_ALLOW'; then
