@@ -47,7 +47,12 @@ def start_booked_bot(ctx: StepCtx):
     * 409 `too_early`, 429, 503, 402, a transport error → wait `Retry-After` (default 15 s) and call
       again, until the fact's `deadline` (start + `BOOKED_GRACE_S`); past it → done, with the last
       reason meeting-api gave (it is also stamped on the row, `auto_join_error`);
-    * 403 `blocked`, 422 `meeting_host_refused` → done with that reason (asking again changes nothing).
+    * 403 `blocked`, 422 `meeting_host_refused` → done with that reason (asking again changes nothing);
+    * the gateway's service door refusing the call ITSELF (its body says ``service door: <reason>``:
+      a wrong or rotated service key, the route off its allow-list, an unknown subject, meetings not
+      deployed) → the step FAILS (not retryable). meeting-api never saw the call, so nothing is
+      stamped on the row and nothing else would ever say why the bot did not come; a configuration
+      fault is loud, never "nothing to do".
 
     Reads: refs.meeting_id, refs.uid, refs.deadline. Result: {meeting_id, code, http, join_at?}."""
     from flows import triggers
@@ -75,6 +80,9 @@ def start_booked_bot(ctx: StepCtx):
     code = str(body.get("code") or "") if isinstance(body, dict) else ""
     detail = str(body.get("detail") or "")[:300] if isinstance(body, dict) else str(body)[:300]
     ctx.scratch["last"] = {"http": st, "code": code, "detail": detail}
+    if not 200 <= st < 300 and detail.startswith(DOOR_REFUSAL):
+        raise StepError(f"the service door refused the start of meeting {mid} ({st}: {detail})",
+                        retryable=False)
     if st == 201:
         return Done({"meeting_id": mid, "code": "started", "http": st,
                      "join_at": body.get("join_at") if isinstance(body, dict) else None},
