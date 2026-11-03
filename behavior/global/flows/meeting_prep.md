@@ -61,10 +61,13 @@ def prepare_meeting(ctx: StepCtx):
     start = ctx.refs.get("start")
     started = bool(start) and ctx.clock_now >= float(start)
     # The wait on a meetings door that had a moment ends at the start even when the door is
-    # back by then: the attempt that finds it up must not mail a meeting already running.
+    # back by then: the attempt that finds it up must not mail a meeting already running. The
+    # reason says only what is known: the door had been unavailable on an earlier attempt, and
+    # a later failure's backoff may be what carried the step past the start.
     if started and UNAVAILABLE_SINCE + "prepare_meeting" in (ctx.scratch or {}):
-        return Done({"skipped": "the meeting started while the meetings door was "
-                                "unavailable; a prepare mail after the start prepares nobody"})
+        return Done({"skipped": "the meeting started before the prepare mail could go out (the "
+                                "meetings door had been unavailable); a prepare mail after the "
+                                "start prepares nobody"})
     to = ctx.refs.get("person") or ctx.refs["organizer"]
     # `person` is set when this fires for somebody other than the organiser. Only mail them if
     # they ALREADY have an account: ensure_platform_user would create one, and a prepare mail
