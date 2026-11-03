@@ -27,6 +27,10 @@ ADR-0052 §7 (a guarantee is built on this, so it must not lose a fire quietly):
   is marked `retired`;
 * the ceilings count per flow: a person's rows of one flow never use up another flow's share. A
   flow registered in code with `share: account` has the per-person share only, no company total.
+
+ADR-0052 §4: a trigger registered in code may name a `revision` (e.g. `payload.revision`, the
+producer's monotonic counter). A fact whose revision is OLDER than the one the row last saw neither
+arms, moves nor cancels it, so a redelivered older fact can never undo a newer one.
 """
 from __future__ import annotations
 
@@ -128,6 +132,29 @@ def upsert(db: DB, clock: Clock, flow: Flow, *, key: str, fire_at: float, event_
                 "et": event_type, "now": now, "dl": dl, "sc": flow.scope, "f": flow.name,
                 "k": key})
     return "rearmed" if status == "fired" else "moved"
+
+
+def stored_revision(db: DB, flow: Flow, *, key: str, path: str) -> "float | None":
+    """The revision the row for ``key`` last saw (``path`` read from its stored payload, e.g.
+    ``revision`` for ``payload.revision``), or None when there is no row or no revision on it."""
+    rows = db.execute("SELECT payload FROM keyed_schedule WHERE scope = :sc AND flow = :f AND key = :k",
+                      {"sc": flow.scope, "f": flow.name, "k": key})
+    if not rows or not rows[0][0]:
+        return None
+    value = loads(rows[0][0]) or {}
+    for part in path.split("."):
+        value = value.get(part) if isinstance(value, dict) else None
+    try:
+        return None if value is None or isinstance(value, bool) else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def note_payload(db: DB, flow: Flow, *, key: str, payload: dict) -> None:
+    """Keep the newest fact's payload on a row that is not (re)armed by it — a cancel — so its
+    revision is remembered and an older fact delivered again later is recognised as older."""
+    db.execute("UPDATE keyed_schedule SET payload = :p WHERE scope = :sc AND flow = :f AND key = :k",
+               {"p": dumps(payload), "sc": flow.scope, "f": flow.name, "k": key})
 
 
 def cancel(db: DB, clock: Clock, flow: Flow, *, key: str) -> bool:

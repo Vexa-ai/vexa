@@ -93,6 +93,18 @@ INVITE = EventType("invite.received")
 #: the catch-up rule still serves. The 10-minute lead and its deadline arrive with `booked_bot`.
 INVITE_JOIN_TRIGGER = {"kind": "relative", "filter": "payload.url exists",
                        "at": "payload.start - 60s", "key": "payload.event_key"}
+#: `booked_bot`'s trigger (ADR-0052 §6): meeting-api's `meeting.planned.changed` fact (its outbox,
+#: §4) arms ONE keyed row per planned meeting at `pod_at` (start − BOOKED_POD_LEAD_S), missed only
+#: past `deadline` (start + BOOKED_GRACE_S); a fact that is not a scheduled booking with auto-join on
+#: (cancelled, deleted, toggled off, claimed) disarms it; an older revision changes nothing. Its
+#: share is per account and has no company total (§7): the account ceiling is the bound. meeting-api
+#: owns the times and puts them in the fact; Flows reads no setting of its own for them.
+PLANNED = EventType("meeting.planned.changed")
+BOOKED_BOT_TRIGGER = {"kind": "relative",
+                      "filter": 'payload.status == "scheduled" and payload.auto_join == true',
+                      "at": "payload.pod_at", "deadline": "payload.deadline",
+                      "key": "payload.meeting_id", "share": "account",
+                      "revision": "payload.revision"}
 ONB_PERSON = EventType("onboarding.person.needed")
 ONB_GROUP = EventType("onboarding.group.needed")
 COMPLETED = EventType("meeting.completed")
@@ -1473,7 +1485,7 @@ def build(reg: Registry, db) -> None:
     # the reaction ends there, carrying the reason. Declared at registration rather than checked in
     # the body, for the reason `Registry.step` gives: a body that has to remember to ask cannot be
     # enumerated, and the next step somebody adds will not remember.
-    for _fn in (mt.await_start, mt.dispatch_bot, mt.run_meeting):
+    for _fn in (mt.await_start, mt.dispatch_bot, mt.run_meeting, mt.start_booked_bot):
         reg.step(needs=("meetings",))(_fn)
 
     @reg.step
@@ -3232,6 +3244,13 @@ def build(reg: Registry, db) -> None:
              steps=[s["ensure_user"], s["dispatch_bot"], s["emit_started"], s["run_meeting"],
                     s["emit_completed"]],
              params={"_trigger": INVITE_JOIN_TRIGGER})
+    # THE BOOKED BOT (ADR-0052 §6, decided 2026-11-01): Flows owns the one clock (ADR-0046). A
+    # booking reaches it durably as `meeting.planned.changed` (meeting-api's outbox, §4); at `pod_at`
+    # the bot is started for THAT planned row id, through the start route meeting-api guards (§5).
+    # Instance-scoped: no person's daily run cap applies (`admissible` counts owned flows only); the
+    # account's concurrency ceiling is the bound. Registered in code so it changes with the code.
+    reg.flow(name="booked_bot", version=1, on=PLANNED,
+             steps=[s["start_booked_bot"]], params={"_trigger": BOOKED_BOT_TRIGGER})
     # `onboard_person` and `onboard_group` are RETIRED (decision 29) — the email conversations that
     # chased a person until they finished setup. They are not declared, so nothing reacts to
     # `onboarding.*.needed` any more, and `spawn_onboardings` no longer emits it either. Their
