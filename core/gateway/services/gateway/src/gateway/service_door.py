@@ -267,6 +267,10 @@ def _json(status: int, body: Mapping[str, Any]) -> Response:
     return Response(content=json.dumps(body), status_code=status, media_type="application/json")
 
 
+class IdentityUnavailable(Exception):
+    """The person lookup got no answer from identity: a network error, a timeout or a 5xx."""
+
+
 def _refuse(status: int, reason: str, method: str, path: str, **extra) -> Response:
     log_event("service_door_refused", audience="system", level="warning", span="auth",
               fields={"reason": reason, "method": method, "path": path, **extra})
@@ -327,15 +331,19 @@ def create_door_app(*, flows_key: str, internal_secret: str, upstreams: Mapping[
         return Response(content=resp.content, status_code=resp.status_code, headers=out)
 
     async def _subject_identity(uid: str) -> Optional[dict]:
-        """The subject's identity as identity answers it for the door, or None (refused)."""
+        """The subject's identity as identity answers it for the door, or None (refused). No answer
+        at all (a network error, a timeout, a 5xx) raises `IdentityUnavailable`: it says nothing
+        about the person (ADR-0052 decided item 6). A 404 is an answer: the person is unknown."""
         base = bases.get("identity", "")
         if not base:
             return None
         try:
             r = await http.get(f"{base}/internal/users/{uid}/identity",
                                headers={"X-Internal-Secret": internal_secret})
-        except httpx.RequestError:
-            return None
+        except httpx.RequestError as e:      # a timeout is one too (httpx.TimeoutException)
+            raise IdentityUnavailable(type(e).__name__) from e
+        if r.status_code >= 500:
+            raise IdentityUnavailable(f"HTTP {r.status_code}")
         if r.status_code != 200:
             return None
         body = r.json()
@@ -517,7 +525,15 @@ def create_door_app(*, flows_key: str, internal_secret: str, upstreams: Mapping[
             uid = str(headers.pop("x-user-id", "") or "").strip()
             if not uid.isdigit():
                 return _refuse(400, "subject_required", method, target, domain=domain)
-            user = await _subject_identity(uid)
+            try:
+                user = await _subject_identity(uid)
+            except IdentityUnavailable as e:
+                # Flaky, not a refusal: a 503 the caller retries (Flows' booked_bot does). Not
+                # `_refuse`: Flows fails an answer whose detail begins "service door:" loudly.
+                log_event("service_door_identity_unavailable", audience="system", level="error",
+                          span="auth", fields={"method": method, "path": target, "error": str(e)})
+                return _json(503, {"detail": f"identity unavailable: {e}",
+                                   "reason": "identity_unavailable", "domain": domain})
             if user is None:
                 return _refuse(403, "subject_unknown", method, target, domain=domain)
             user = {**user, "scopes": list(DOOR_SCOPES)}
