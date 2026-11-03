@@ -354,22 +354,25 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
         cur = 'failed';
         const unreachableDetail =
           `${CONTROL_PLANE_UNREACHABLE}: control plane unreachable at boot (${unreachable.join(', ')}); refused to join`;
-        await deps.lifecycle.emit({
-          ...base,
-          status: 'failed',
-          timestamp: eventTime(),
-          failure_stage: 'requested',
-          completion_reason: 'join_failure',
-          infra_fault: CONTROL_PLANE_UNREACHABLE,
-          unreachable_channels: unreachable,
-          reason: unreachableDetail,
-          exit_code: CONTROL_PLANE_UNREACHABLE_EXIT,
-          // Ours, unambiguously — the bot never reached the meeting page because OUR control plane
-          // was down. `control_plane_unreachable` is a navigation marker, so this classifies
-          // `navigation_failure` → `system_fault` and lands in the gate metric where it belongs.
-          ...joinEvidenceFor('error', 'requested', { reachedLobby: false }, unreachableDetail),
-        }).catch(() => { /* the channel that would carry this is the one that is down */ });
-        unsubscribe();
+        try {
+          await deps.lifecycle.emit({
+            ...base,
+            status: 'failed',
+            timestamp: eventTime(),
+            failure_stage: 'requested',
+            completion_reason: 'join_failure',
+            infra_fault: CONTROL_PLANE_UNREACHABLE,
+            unreachable_channels: unreachable,
+            reason: unreachableDetail,
+            exit_code: CONTROL_PLANE_UNREACHABLE_EXIT,
+            // Ours, unambiguously — the bot never reached the meeting page because OUR control plane
+            // was down. `control_plane_unreachable` is a navigation marker, so this classifies
+            // `navigation_failure` → `system_fault` and lands in the gate metric where it belongs.
+            ...joinEvidenceFor('error', 'requested', { reachedLobby: false }, unreachableDetail),
+          }).catch(() => { /* the channel that would carry this is the one that is down */ });
+        } finally {
+          unsubscribe();   // an emit that throws must not leave the bot listening on its channel
+        }
         return { exitCode: CONTROL_PLANE_UNREACHABLE_EXIT, status: 'failed', completionReason: 'join_failure' };
       }
     }

@@ -637,6 +637,45 @@ async function main(): Promise<void> {
     check('joinAt stop, emit throws: unsubscribed anyway', unsubscribed === 1, `unsubscribed=${unsubscribed}`);
   }
 
+  // ── a lobby stop whose terminal emit throws still unsubscribes, exactly once (the join's own catch
+  //    unsubscribes: a second unsubscribe in a finally here would double it) ──
+  {
+    let unsubscribed = 0;
+    const acts: ActsSource = { subscribe() { return () => { unsubscribed++; }; } };
+    const lobby = lobbyBlockingJoin();
+    const failingTerminal: LifecycleSink = {
+      async emit(e) { if (e.status === 'failed') throw new Error('lifecycle sink down'); },
+    };
+    const o = createOrchestrator(inv(), {
+      lifecycle: failingTerminal, join: lobby.driver, pipeline: noopPipeline(), acts, aloneness: noopAloneness(),
+    });
+    const runP = o.run();
+    setTimeout(() => o.stop('stopped'), 20);
+    let threw: unknown;
+    try { await runP; } catch (e) { threw = e; }
+    check('lobby stop, emit throws: the failure surfaces', threw instanceof Error && /lifecycle sink down/.test(threw.message), String(threw));
+    check('lobby stop, emit throws: withdrew first', lobby.calls.withdraw === 1, `withdraw=${lobby.calls.withdraw}`);
+    check('lobby stop, emit throws: unsubscribed anyway', unsubscribed === 1, `unsubscribed=${unsubscribed}`);
+  }
+
+  // ── both channels down and the raw sink throws as it is called: still unsubscribes ──
+  {
+    let unsubscribed = 0;
+    const acts: ActsSource = { subscribe() { return () => { unsubscribed++; }; } };
+    const syncThrowing: LifecycleSink = {
+      async emitReachable(): Promise<PrimaryReachability> { return 'unreachable'; },
+      emit(): Promise<void> { throw new Error('raw sink threw'); },
+    };
+    const o = createOrchestrator(inv(), {
+      lifecycle: syncThrowing, join: mockJoin('admitted'), pipeline: noopPipeline(), acts, aloneness: noopAloneness(),
+      reachability: { async probeSecondary() { return false; } },
+    });
+    let threw: unknown;
+    try { await o.run(); } catch (e) { threw = e; }
+    check('gate both-down, emit throws: the failure surfaces', threw instanceof Error && /raw sink threw/.test(threw.message), String(threw));
+    check('gate both-down, emit throws: unsubscribed anyway', unsubscribed === 1, `unsubscribed=${unsubscribed}`);
+  }
+
   // ── ADR-0052 s1: a joinAt that does not read as a time is refused, never joined at once ──
   {
     check('msUntilJoinAt: absent ⇒ 0', msUntilJoinAt(undefined, Date.now()) === 0);
