@@ -354,16 +354,48 @@ function gateContractVersion() {
 // result, run the WHOLE population every time, then fail once naming every red package — so one
 // `pnpm gate:python` run shows the real blast radius instead of red → fix → push → discover the
 // next one.
+//
+// SELECTION, for CI's parallel legs only. Run in series the population took 29-46 min in one job
+// (gates runs 41794533276, 41803777655), past the merge queue's 30-minute check window, and core/agent
+// alone was 1150 s of it (run 41804646751). So the `python` matrix in .github/workflows/gates.yml
+// splits it: each leg runs `node scripts/gates.mjs python <selector>...`, where a selector is a package
+// dir relative to the root (the whole package, the same `uv run pytest -q`), or `<dir>@<k>/<n>` (shard k
+// of n of that package's own collection: scripts/pytest-shard/pytest_shard.py). With no selector the
+// gate is exactly what it always was: every package, in series. scripts/python-matrix.test.mjs holds the
+// matrix to `pythonPackages()`: every package in exactly one leg, every shard set complete.
+const pythonPackages = () => walkDirs().filter((d) => existsSync(join(d, "pyproject.toml")) && existsSync(join(d, "tests")));
+const SHARD_PLUGIN_DIR = join(ROOT, "scripts", "pytest-shard");
 function gatePython() {
-  const pkgs = walkDirs().filter((d) => existsSync(join(d, "pyproject.toml")) && existsSync(join(d, "tests")));
+  const pkgs = pythonPackages();
   if (!pkgs.length) { console.log("  ✓ gate:python — no Python packages yet (green-on-empty)"); return true; }
-  const failures = [];
-  for (const d of pkgs) {
-    try { execSync("uv run pytest -q", { cwd: d, stdio: "pipe" }); }
-    catch (e) { failures.push(`pytest ${rel(d)}:\n${errText(e)}`); }
+  const selectors = process.argv.slice(3);
+  let runs = pkgs.map((d) => ({ dir: d, label: rel(d), shard: null }));
+  if (selectors.length) {
+    const byRel = new Map(pkgs.map((d) => [rel(d), d]));
+    const bad = [];
+    runs = [];
+    for (const s of selectors) {
+      const m = s.match(/^([^@]+?)\/?(?:@([1-9]\d*)\/([1-9]\d*))?$/);
+      const dir = m && byRel.get(m[1]);
+      if (!dir) bad.push(`${s}: not a package gate:python covers (\`node scripts/gates.mjs python-packages\` lists them)`);
+      else if (m[2] && Number(m[2]) > Number(m[3])) bad.push(`${s}: there is no shard ${m[2]} of ${m[3]}`);
+      else runs.push({ dir, label: s, shard: m[2] ? `${m[2]}/${m[3]}` : null });
+    }
+    if (bad.length) return fail(["gate:python — the selection names what the gate does not run:", ...bad]);
   }
-  if (failures.length) return fail([`${failures.length}/${pkgs.length} package(s) failed pytest:`, ...failures]);
-  console.log(`  ✓ gate:python — ${pkgs.length} package(s) · pytest green`);
+  const failures = [];
+  for (const r of runs) {
+    try {
+      if (!r.shard) execSync("uv run pytest -q", { cwd: r.dir, stdio: "pipe" });
+      else execFileSync("uv", ["run", "pytest", "-q", "-p", "pytest_shard", `--vexa-shard=${r.shard}`], {
+        cwd: r.dir, stdio: "pipe",
+        env: { ...process.env, PYTHONPATH: [SHARD_PLUGIN_DIR, process.env.PYTHONPATH].filter(Boolean).join(":") },
+      });
+    } catch (e) { failures.push(`pytest ${r.label}:\n${errText(e)}`); }
+  }
+  if (failures.length) return fail([`${failures.length}/${runs.length} package(s) failed pytest:`, ...failures]);
+  if (selectors.length) console.log(`  ✓ gate:python — ${selectors.join(" ")} (selected from ${pkgs.length} package(s)) · pytest green`);
+  else console.log(`  ✓ gate:python — ${pkgs.length} package(s) · pytest green`);
   return true;
 }
 
@@ -2001,6 +2033,12 @@ if (which === "seal-arch") {
   console.log(`sealed architecture.calm.json (${h.slice(0, 12)}…) → ${rel(ARCH_SEAL)}`);
   // Regenerate the concise DSL projection from the same baseline so it never lags the seal.
   execSync("node scripts/arch-dsl.mjs --write", { cwd: ROOT, stdio: "inherit" });
+  process.exit(0);
+}
+// `python-packages` (not a gate) — the population gate:python runs, as a JSON array of root-relative
+// dirs. scripts/python-matrix.test.mjs holds the gates.yml `python` matrix to it.
+if (which === "python-packages") {
+  console.log(JSON.stringify(pythonPackages().map(rel)));
   process.exit(0);
 }
 const run = which === "all" ? Object.keys(GATES) : [which];
