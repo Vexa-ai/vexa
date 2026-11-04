@@ -9,12 +9,20 @@ Two flows, both carrying references and never account fields:
 
 A fact grants no record access. With no CRM deployed (``VEXA_FLOWS_CRM_API_URL`` unset) the second
 flow ends ``not_present`` rather than knocking on a missing door.
+
+* ``business_<kind>`` (one per kind in ``BUSINESS_EVENTS``) keeps a business event a sensor read
+  (``business.registered|paid|bot|support|stage``, from the generic ``reading`` sensor kind) as
+  one reaction: the event's durable row, with its ``_evidence`` (connection, reading, path,
+  read_at). The step that writes the reading onto the CRM record follows once the CRM has a door
+  for it.
 """
 import flows_config
 from flows import Done, EventType, NotPresent, StepError
 
 CRM_URL_ENV = "VEXA_FLOWS_CRM_API_URL"
 SNAPSHOT_KEYS = ("workspace", "commit", "committed_at", "references")
+#: The business events a sensor may emit; each gets a flow that keeps it.
+BUSINESS_EVENTS = ("registered", "paid", "bot", "support", "stage")
 
 
 def build(reg, db):
@@ -46,6 +54,17 @@ def build(reg, db):
                          'status': answer.get('status'), 'references': answer.get('references')})
         raise StepError(f'the CRM answered {code} to a references snapshot', retryable=code >= 500 or code == 0)
 
+    @reg.step
+    def record_business_event(ctx):
+        """Keep a business event a sensor read, with where it came from. Needs its evidence."""
+        ev = ctx.refs.get('_evidence')
+        if not isinstance(ev, dict) or not ev.get('reading'):
+            raise StepError('a business event carries _evidence with its reading', retryable=False)
+        return Done({'reading': ev['reading'], 'read_at': ev.get('read_at')})
+
+    for kind in BUSINESS_EVENTS:
+        reg.flow(name=f'business_{kind}', version=1, on=EventType(f'business.{kind}'),
+                 steps=[reg.steps['record_business_event']])
     reg.flow(name='crm_change_log', version=1, on=EventType('crm.record.changed'),
              steps=[reg.steps['record_crm_change']])
     reg.flow(name='crm_references', version=1, on=EventType('workspace.references.changed'),
