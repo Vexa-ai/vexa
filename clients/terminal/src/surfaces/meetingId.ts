@@ -18,6 +18,20 @@ const ZOOM_ID = /\d{9,11}/;
 // back into the construct-URL template, so the encoded form is the id.
 const JITSI_ROOM = /^[^/?#\s]+$/;
 
+/** Percent-decode `s` without ever throwing — as lenient as the server parser's
+ *  `urllib.parse.unquote`: a stray `%` or a truncated `%2` stays verbatim, and an escape run that is not valid UTF-8 still decodes
+ *  its ASCII escapes (`%3a` → `:`, `%40` → `@`). `decodeURIComponent` throws a URIError on any
+ *  of those instead, so a link cut off mid-query would fail the whole parse. */
+function lenientDecode(s: string): string {
+  return s.replace(/(?:%[0-9a-f]{2})+/gi, (run) => {
+    try {
+      return decodeURIComponent(run);
+    } catch {
+      return run.replace(/%[0-7][0-9a-f]/gi, (escape) => decodeURIComponent(escape));
+    }
+  });
+}
+
 /** True if `id` is a valid native id for `platform`. */
 export function isValidMeetingId(platform: Platform, id: string): boolean {
   const v = id.trim();
@@ -60,7 +74,7 @@ export function parseMeetingInput(raw: string, jitsiHosts: readonly string[] = [
     }
     if (host.includes("teams.microsoft.com") || host.includes("teams.live.com")) {
       // Classic deep link carries the thread id (…/l/meetup-join/19:meeting_…@thread.v2).
-      const decoded = decodeURIComponent(input);
+      const decoded = lenientDecode(input);
       const thread = decoded.match(/19:meeting_[^@%\s/]+@thread\.v2/i);
       if (thread) return { platform: "teams", native_meeting_id: thread[0] };
       // New short meeting link: teams.microsoft.com/meet/<id>?p=<passcode> — the native id is the path
