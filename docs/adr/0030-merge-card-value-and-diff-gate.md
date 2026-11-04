@@ -136,3 +136,29 @@ verdict, or a run still pending or absent after the #655 wait budget, stays red.
 has no value-fsm leg and passes the row. A non-author live validation is optional, credited in the
 release notes, and never a step before merge. The label-actor authorization open item above is
 moot. The diff, acceptance and pass rows are unchanged; the diff review is the human gate.
+
+## Amendment 2026-11-03 — a pass into main cites its review
+
+**Decision.** On a PR whose base is `main`, a `verdict=pass` marker also carries
+`review=<review id>`, the id of the recorded review the pass rests on, as a uuid:
+
+```
+<!-- vexa-pass:architecture sha=<full head sha> verdict=pass review=<review id> -->
+<!-- vexa-pass:security sha=<full head sha> verdict=pass review=<review id> -->
+```
+
+- If the newest maintainer marker for the head is a pass with no `review=`, or with one that is
+  not a uuid (8-4-4-4-12 hex digits; the all-zero uuid does not count), the row fails and says
+  which. Like `waived-by=`, the field is read only from its own marker.
+- `verdict=waived` needs no `review=`: a waiver records that no review was done and names who
+  waived it.
+- On every other base the field is optional and the marker format is unchanged. A PR whose base
+  cannot be read is held to `main`'s rule.
+
+**Why.** A marker recorded a verdict, and nothing tied it to a review: a pass could be posted
+before any review had run, and the card could not tell.
+
+**Known limit.** The card cannot reach where reviews are recorded, so it checks that the field is
+present and well-formed, not that the review exists or covers this head. What the field buys is a
+pass that names its evidence: a reader can follow it, and an audit can find a pass whose review
+does not exist.
