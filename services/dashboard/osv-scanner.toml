@@ -9,4 +9,4 @@ reason = "braces 3.0.3, stack exhaustion on deeply nested patterns; no fixed rel
 [[IgnoredVulns]]
 id = "GHSA-g3hv-75wg-m249"
 ignoreUntil = 2026-11-18
-reason = "minimatch 3.1.5 (dev): the advisory's code, firstPhasePreProcess() at optimizationLevel >= 2, does not exist in 3.x, and no 3.x release is fixed (the fix is 11.0.1). Reached through eslint 9 and eslint-plugin-import, -jsx-a11y and -react, whose latest releases still ask for ^3.1.2, at lint time over the repository's own globs; not in the dashboard image."
+reason = "minimatch 3.1.5 (dev): the advisory's code, firstPhasePreProcess() at optimizationLevel >= 2, does not exist in 3.x, and no 3.x release is fixed (the fix is 11.0.1). Reached through eslint 9 and eslint-plugin-import, -jsx-a11y and -react, whose latest releases still ask for ^3.1.2, at lint time over the repository's own globs; not in the dashboard image. OSV ignores an advisory for every version, so this entry also covers any other minimatch copy in this lockfile: it relies on #2029, which moves the 10.2.6 copy to 11.0.4."
