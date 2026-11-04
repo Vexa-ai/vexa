@@ -13,6 +13,7 @@
 
 import { detectMeeting, isMixedHost, MeetingRef } from './meeting';
 import { resolveEndpoints } from './endpoints';
+import { ingestSocket } from './ingest-socket';
 import { encodeAudioFrame, encodeEvent, encodeRecordingChunk } from '@vexa/capture-codec';
 import { type CaptureStatus, isActive, onFrameObserved, noSignalCheck } from './capture-liveness';
 
@@ -142,16 +143,11 @@ async function startCaptureForTab(tabId: number, url: string, meetingRef?: Meeti
   state.error = null;
   broadcastStatus();
 
-  const qs = new URLSearchParams({
-    platform: meeting.platform,
-    native_meeting_id: meeting.nativeMeetingId,
-    api_key: apiKey,
-    language,
-  });
-  const fullUrl = `${ingestUrl}?${qs.toString()}`;
+  // The key rides the subprotocol list (ws.v1 § Connect), never the URL: see ingest-socket.ts.
+  const sock = ingestSocket(ingestUrl, meeting, language, apiKey);
 
   try {
-    ws = new WebSocket(fullUrl);
+    ws = sock.protocols.length ? new WebSocket(sock.url, sock.protocols) : new WebSocket(sock.url);
   } catch (err: any) {
     state.status = 'error'; state.error = `WS open failed: ${err.message}`; broadcastStatus(); return;
   }

@@ -15,6 +15,19 @@ export function onHost(hostname: string, domain: string): boolean {
   return hostname === domain || hostname.endsWith('.' + domain);
 }
 
+/** meeting-api's `_TEAMS_THREAD` (collector/meeting_link.py), source for source: a Teams thread id,
+ *  the repeat bounded so a scan over caller-supplied text stays linear. */
+const TEAMS_THREAD = /19:meeting_[^@%\s/]{1,256}@thread\.v2/i;
+
+/** Python's `urllib.parse.unquote` for what a Teams URL holds: decode %XX, leave a bad escape as is. */
+function percentDecode(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s.replace(/%([0-9a-f]{2})/gi, (_m, h: string) => String.fromCharCode(parseInt(h, 16)));
+  }
+}
+
 export function detectMeeting(url: string): MeetingRef | null {
   let u: URL;
   try {
@@ -72,6 +85,12 @@ export function detectMeeting(url: string): MeetingRef | null {
     onHost(u.hostname, 'teams.microsoft.com') ||
     u.hostname === 'teams.cloud.microsoft'
   ) {
+    // The classic deep link carries the thread id (…/l/meetup-join/19:meeting_…@thread.v2), and
+    // meeting-api keys it by that id (collector/meeting_link.py: searched in the percent-decoded
+    // URL, first). Same pattern, same order, so both sides key the meeting alike
+    // (vectors: teams-native-id-vectors.json).
+    const thread = percentDecode(url).match(TEAMS_THREAD);
+    if (thread) return { platform: 'teams', nativeMeetingId: thread[0] };
     // /meet/<10-17 digits> on the path (personal + enterprise short URL) — the lengths meeting-api
     // and the MCP's link parser accept, so a link the server takes is one this recognises…
     let m = u.pathname.match(/^\/meet\/(\d{10,17})\/?$/);

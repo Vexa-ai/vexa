@@ -147,3 +147,74 @@ def test_the_per_user_rate_limit_applies_when_the_socket_opens():
             ws.receive_json()
     assert e.value.code == 4429
     assert len(dialer.calls) == 1
+
+
+# ---- ws.v1 § Connect's subprotocol form (card 43b4c8e3423f) ----
+# A browser WebSocket cannot set x-api-key, so it offers ["vexa.v1", "vexa.key.<key>"]; the relay reads
+# it with ws_auth.ws_credential (the parser /ws and the vnc relay use) and answers "vexa.v1".
+
+def _subprotocols(key):
+    return ["vexa.v1", f"vexa.key.{key}"]
+
+
+def test_a_browser_key_in_the_subprotocol_list_opens_the_relay_answered_vexa_v1():
+    dialer = FakeDialer()
+    with _client(dialer).websocket_connect(PATH, subprotocols=_subprotocols(VALID_KEY)) as ws:
+        assert ws.accepted_subprotocol == "vexa.v1"     # never the entry that carries the key
+        assert ws.receive_json() == {"type": "ready"}
+        ws.send_text(json.dumps({"type": "stop"}))
+        assert ws.receive_json() == {"type": "stopped"}
+    url, headers = dialer.calls[0]
+    assert url == "ws://meeting-api:8080/voice-notes/vn-abc/stream"
+    assert headers["x-user-id"] == str(VALID_USER["user_id"])
+    assert VALID_KEY not in repr(headers)               # neither the key nor its entry goes upstream
+
+
+def test_a_wrong_key_in_the_subprotocol_list_is_refused_before_any_dial():
+    dialer = FakeDialer()
+    with _client(dialer).websocket_connect(PATH, subprotocols=_subprotocols("nope")) as ws:
+        assert ws.receive_json() == {"type": "error", "error": "invalid_api_key"}
+        with pytest.raises(WebSocketDisconnect) as e:
+            ws.receive_json()
+    assert e.value.code == 4401
+    assert dialer.calls == []
+
+
+def test_the_header_and_bearer_forms_still_open_the_relay():
+    for headers in ({"x-api-key": VALID_KEY}, {"authorization": f"Bearer {VALID_KEY}"}):
+        dialer = FakeDialer()
+        with _client(dialer).websocket_connect(PATH, headers=headers) as ws:
+            assert ws.receive_json() == {"type": "ready"}
+            ws.send_text(json.dumps({"type": "stop"}))
+            assert ws.receive_json() == {"type": "stopped"}
+        assert len(dialer.calls) == 1
+
+
+def test_a_key_in_the_url_is_not_a_credential_on_the_relay():
+    dialer = FakeDialer()
+    with _client(dialer).websocket_connect(f"{PATH}?api_key={VALID_KEY}") as ws:
+        assert ws.receive_json() == {"type": "error", "error": "missing_api_key"}
+        with pytest.raises(WebSocketDisconnect) as e:
+            ws.receive_json()
+    assert e.value.code == 4401
+    assert dialer.calls == []
+
+
+def test_the_subprotocol_key_is_never_logged(monkeypatch, caplog):
+    from gateway import voice_relay
+
+    events = []
+    real = voice_relay.log_event
+    monkeypatch.setattr(voice_relay, "log_event", lambda name, **kw: (events.append((name, kw)), real(name, **kw)))
+    caplog.set_level("DEBUG")
+    for key in (VALID_KEY, "nope"):
+        dialer = FakeDialer()
+        with _client(dialer).websocket_connect(PATH, subprotocols=_subprotocols(key)) as ws:
+            first = ws.receive_json()
+            if first == {"type": "ready"}:
+                ws.send_text(json.dumps({"type": "stop"}))
+                ws.receive_json()
+    assert any(name == "request_accepted" for name, _ in events)
+    for key in (VALID_KEY, "vexa.key.nope"):
+        assert key not in repr(events)
+        assert key not in caplog.text

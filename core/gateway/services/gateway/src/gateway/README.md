@@ -32,7 +32,7 @@ The production edge logic, injectable. Modules:
   `vexa.key.<key>` subprotocol entry (a browser; the edge answers `vexa.v1`), else, deprecated until
   `changed.COMPAT_REMOVED_IN`, the `?api_key=` parameter (`/ws` logs `ws_query_key_deprecated` with a
   running count). The VNC relay refuses any request that carries `?api_key=`, whatever else it
-  carries, with `api_key_query_removed` and close `4401` (logged `ws_query_key_refused`). ws.v1's own subprotocol entries never travel upstream.
+  carries, with `api_key_query_removed` and close `4401` (logged `ws_query_key_refused`). ws.v1's own subprotocol entries never travel upstream. The voice-note relay (`voice_relay.py`) takes the header, a bearer token, or the subprotocol entry through the same `ws_credential`, and ignores a URL key.
 - **`changed.py`** — the refusal an old-style call gets (`{type, error, changed_in, do_instead, docs}`),
   the boot line (`config_key_removed`) for a configuration key the gateway no longer reads, and
   `COMPAT_REMOVED_IN` (0.13.6), the release that turns off the `/ws` URL key. Each use is counted

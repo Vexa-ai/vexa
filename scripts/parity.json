@@ -1797,6 +1797,23 @@
       ]
     },
     {
+      "id": "teams-native-id-vectors",
+      "fact": "the Teams meeting URLs meeting-api's link parser and the browser extension must key alike (platform, native_meeting_id), with each divergence named",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/meetings/services/meeting-api/tests/fixtures/teams-native-id-vectors.json",
+      "how_to_agree": "edit the meeting-api copy and copy it VERBATIM over the extension's; the meeting-api and extension suites must stay green",
+      "why": "The extension keys a Teams tab's session by the id it reads from the URL, and meeting-api keys the same meeting from a pasted link; a URL the two key differently splits one meeting in two. Python and TypeScript share no module, so both suites read one vector table (the meeting-url-redaction-vectors pattern) and this fact keeps the copies one table.",
+      "sites": [
+        {
+          "path": "core/meetings/services/meeting-api/tests/fixtures/teams-native-id-vectors.json"
+        },
+        {
+          "path": "clients/extension/src/teams-native-id-vectors.json"
+        }
+      ]
+    },
+    {
       "id": "agent-forward-mapping",
       "fact": "where the gateway fronts the agent domain: /agent/<path> onto agent-api's /api/<path>",
       "kind": "prose",
