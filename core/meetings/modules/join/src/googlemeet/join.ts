@@ -14,7 +14,8 @@ import {
 import { HumanizedInteractor, MOCAP_LIBRARY } from "./humanized";
 import { AdmissionError } from "../shared/admission";
 import { PINNED_UI_LOCALE, checkUiLocale } from "../shared/ui-locale";
-import { redactMeetingUrl, rethrowRedacted } from "../shared/url-redaction";
+import { redactMeetingUrl } from "../shared/url-redaction";
+import { gotoMeetingPage } from "../shared/navigation";
 import { watchGoogleJoinRefusal, throwIfGoogleJoinRefused } from "./refusal";
 
 /** Thrown when authenticated mode detects a signed-out browser profile. Extends AdmissionError so
@@ -328,7 +329,7 @@ export async function joinGoogleMeeting(
   watchGoogleJoinRefusal(page);
   const refused = (stage: string) => () => throwIfGoogleJoinRefused(page, stage);
   const navUrl = withPinnedMeetLocale(meetingUrl, PINNED_UI_LOCALE);
-  await page.goto(navUrl, { waitUntil: "domcontentloaded" }).catch(rethrowRedacted);
+  await gotoMeetingPage(page, navUrl, { waitUntil: "domcontentloaded" });
   await page.bringToFront();
 
   // Take screenshot after navigation
