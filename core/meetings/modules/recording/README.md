@@ -38,6 +38,8 @@ does NOT extend the ESM `tsconfig.base`). Tests (`pnpm --filter @vexa/recording 
 byte-for-byte (the same vectors meeting-api's Python is tested against — a pass on both proves the two
 implementations are in sync); [`src/assemble.smoke.test.ts`](src/assemble.smoke.test.ts) pins
 `buildRecordingMaster` in isolation (WAV header-strip + payload-concat + size-correction, fmt-mismatch
-throws; WebM byte-concat). The live acquire/deliver paths (parecord, ffmpeg, MediaRecorder, HTTP upload)
+throws; WebM byte-concat). [`src/chunk-retry.test.ts`](src/chunk-retry.test.ts) pins `uploadChunk`'s retry over a
+local HTTP receiver: a chunk produced while meeting-api restarts (refused, then back; 5xx, then 200) lands;
+a 4xx stays permanent; a receiver that never returns is given up after the time budget. The live acquire/deliver paths (parecord, ffmpeg, MediaRecorder, HTTP upload)
 need an **integration env** (meeting-api + PulseAudio/Xvfb). Covered by `gate:node`, `gate:isolation`,
 `gate:exports`, `gate:readme`.
