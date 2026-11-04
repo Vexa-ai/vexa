@@ -4,16 +4,20 @@
 // #2008 regression: the PR changes 5,143 files, 475 of them docs pages past the 2,000th. The REST
 // list stops at 3,000 files and docs-current paged only 2,000, so it reported "changes no docs/**"
 // on a PR that changes 475 docs files. A gate must judge every changed file or fail, never a part.
+//
+// The same class in merge-card and release-value: both paged the list to 1,000 files, so a PR whose
+// runtime files sit past the 1,000th was judged non-runtime, and value-fsm was never asked.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { prFiles, gitDiffFiles, API_FILE_CAP } from "./pr-files.mjs";
 import { card as docsCard } from "./docs-current-gate.mjs";
+import { card as mergeCard, renderCard as renderMergeCard } from "./merge-card-gate.mjs";
 import { guardTree } from "./test-tree.mjs";
 
 guardTree();
@@ -218,4 +222,124 @@ test("gitDiffFiles reads names and statuses from a blob-less shallow fetch, outs
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ── merge-card and release-value judge runtime on every changed file ────────────────────────────
+
+const VALUE_FSM_RED = { check_runs: [{ name: "value-fsm", status: "completed", conclusion: "failure", started_at: "2026-11-03T14:00:00Z" }] };
+// The merge card's other reads: the author holds the commit bit, no reviews, no comments.
+const cardReads = (path) => {
+  if (/\/collaborators\/[^/]+\/permission$/.test(path)) return { permission: "write" };
+  if (/\/pulls\/\d+\/reviews/.test(path)) return [];
+  if (/\/issues\/\d+\/comments\?/.test(path)) return [];
+  if (/\/commits\/[^/]+\/check-runs/.test(path)) return VALUE_FSM_RED;
+  return undefined;
+};
+const signedPr = (changed) => pr(changed, { labels: [{ name: "state: value-signed" }] });
+// `n` docs files, with `file` in position `at` (0-based).
+const withAt = (n, at, file) => { const all = names(n, "docs"); all[at] = file; return all; };
+const readsValueFsm = (api) => api.calls.some((p) => p.includes("/check-runs"));
+
+test("merge-card: a runtime file past the 1,000th makes the PR runtime, so value-fsm gates the Value row", async () => {
+  const api = fakeApi(signedPr(1200), withAt(1200, 1150, "core/meetings/x.py"), cardReads);
+  const c = await mergeCard(2008, { api, git: gitOf([]), readClosing: () => [] });
+  assert.equal(api.calls.filter((p) => p.includes("/files?")).length, 13, "every page is read, not the first ten");
+  assert.ok(readsValueFsm(api), "value-fsm is read: the PR is runtime");
+  assert.equal(c.valueOk, false);
+  assert.match(c.valueWhy, /value-fsm is failure/);
+});
+
+test("merge-card: the same 1,200 files with no runtime file stay non-runtime (the gate is not tightened)", async () => {
+  const api = fakeApi(signedPr(1200), names(1200, "docs"), cardReads);
+  const c = await mergeCard(2008, { api, git: gitOf([]), readClosing: () => [] });
+  assert.equal(readsValueFsm(api), false);
+  assert.equal(c.valueOk, true);
+});
+
+test("merge-card: past the API's 3,000-file cap the rest is read from git, and a runtime file there counts", async () => {
+  const all = withAt(5143, 4000, "libs/shared/y.ts");
+  const git = gitOf(all);
+  const api = fakeApi(signedPr(5143), all, cardReads);
+  const c = await mergeCard(2008, { api, git, readClosing: () => [] });
+  assert.deepEqual(git.calls, [[MB, HEAD]]);
+  assert.ok(readsValueFsm(api));
+  assert.equal(c.valueOk, false);
+});
+
+test("merge-card: a list that cannot be read whole fails the Value row, says why, and renders on the card", async () => {
+  const all = names(4000, "docs");
+  const api = fakeApi(signedPr(4000), all, cardReads);
+  const c = await mergeCard(2008, { api, git: gitOf(all.slice(0, 3500)), readClosing: () => [] });
+  assert.equal(c.ok, false);
+  assert.equal(c.valueOk, false);
+  assert.match(c.valueWhy, /^could not read every file this PR changes/);
+  assert.match(c.valueWhy, /git lists 3500 files .* the PR says 4000/);
+  assert.match(renderMergeCard(c), /\| \*\*Value\*\* \| ❌ \| could not read every file this PR changes/);
+});
+
+test("merge-card: a failed read puts only its first line on the card, with pipes and backslashes escaped", async () => {
+  const inner = fakeApi(signedPr(250), names(250, "docs"), cardReads);
+  const api = (path) => { if (/\/files\?.*page=2$/.test(path)) throw new Error("Command failed: gh api x | y \\\nstderr detail"); return inner(path); };
+  const c = await mergeCard(2008, { api, git: gitOf([]), readClosing: () => [] });
+  assert.equal(c.valueOk, false);
+  assert.ok(c.valueWhy.endsWith("(Command failed: gh api x \\| y \\\\)"), c.valueWhy);
+  assert.doesNotMatch(c.valueWhy, /stderr detail/);
+});
+
+// release-value-gate runs as a command (it exits). It runs here with a stand-in `gh` on PATH that
+// answers from a fixture map, in a directory that is not a git checkout.
+function runReleaseValue(fixtures) {
+  const dir = mkdtempSync(join(tmpdir(), "release-value-"));
+  try {
+    writeFileSync(join(dir, "fixtures.json"), JSON.stringify(fixtures));
+    writeFileSync(join(dir, "gh"), [
+      "#!/usr/bin/env node",
+      'const fs = require("fs"), path = require("path");',
+      'const fx = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures.json"), "utf8"));',
+      "const p = process.argv[3];",
+      'if (process.argv[2] !== "api" || !(p in fx)) { process.stderr.write(`no fixture for ${p}\\n`); process.exit(1); }',
+      "process.stdout.write(JSON.stringify(fx[p]));",
+    ].join("\n"));
+    chmodSync(join(dir, "gh"), 0o755);
+    const gate = fileURLToPath(new URL("./release-value-gate.mjs", import.meta.url));
+    const env = { ...process.env, PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", RELEASE_VERSION: "v1.1.0" };
+    try { return { code: 0, out: execFileSync(process.execPath, [gate], { cwd: dir, env, encoding: "utf8", stdio: "pipe" }) }; }
+    catch (e) { return { code: e.status, out: `${e.stdout}${e.stderr}` }; }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// A release v1.0.0 → v1.1.0 of one merged PR, #77, with no value-fsm run on its head. The files
+// API serves `files` as the real one does: 100 a page, nothing past 3,000.
+function releaseOf(files, { changed = files.length, mergeBase = MB } = {}) {
+  const fx = {
+    "repos/o/r/tags?per_page=100&page=1": [{ name: "v1.1.0" }, { name: "v1.0.0" }],
+    "repos/o/r/compare/v1.0.0...v1.1.0?per_page=100&page=1": { commits: [{ sha: "c".repeat(40), commit: { message: "a change (#77)" }, parents: [{}] }] },
+    "repos/o/r/pulls/77": { number: 77, changed_files: changed, base: { sha: BASE }, head: { sha: HEAD }, labels: [] },
+    [`repos/o/r/commits/${HEAD}/check-runs?per_page=100`]: { check_runs: [] },
+    [`repos/o/r/compare/${BASE}...${HEAD}?per_page=1`]: mergeBase ? { merge_base_commit: { sha: mergeBase } } : {},
+  };
+  for (let page = 1; page <= API_FILE_CAP / 100; page++)
+    fx[`repos/o/r/pulls/77/files?per_page=100&page=${page}`] = files.slice((page - 1) * 100, Math.min(page * 100, API_FILE_CAP)).map((filename) => ({ filename, status: "modified" }));
+  return fx;
+}
+
+test("release-value: a runtime file past the 1,000th makes the PR runtime; with no value-fsm run it is unaccepted (exit 1)", () => {
+  const r = runReleaseValue(releaseOf(withAt(1200, 1150, "deploy/compose/x.yml")));
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /\| #77 \| UNACCEPTED \| runtime PR with no value-fsm run/);
+});
+
+test("release-value: the same 1,200 files with no runtime file are accepted as non-runtime (exit 0)", () => {
+  const r = runReleaseValue(releaseOf(names(1200, "docs")));
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /\| #77 \| ACCEPTED \| non-runtime/);
+});
+
+test("release-value: a list that cannot be read whole is unverifiable, never accepted (exit 3)", () => {
+  const r = runReleaseValue(releaseOf(names(4000, "docs"), { mergeBase: null }));
+  assert.equal(r.code, 3, r.out);
+  assert.match(r.out, /\| #77 \| UNVERIFIABLE \| could not read every changed file, so runtime or not is unknown — #77: the API listed 3000 of 4000 changed files/);
+  assert.doesNotMatch(r.out, /\| #77 \| ACCEPTED/);
 });
