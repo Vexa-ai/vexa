@@ -117,7 +117,9 @@ FROM vexa/meet-join-env:dev AS runtime
 # A rebuild reuses the upgrade layer below from cache, and with it the archive as it stood when that
 # layer was first built: vexa-bot v0.13.4-rc.2-respawn.1 (built 2 Nov 2026) ran the 10 Oct upgrade and
 # missed Ubuntu's 26 Oct brotli fix. ADD keys the cache on the security pocket's index, so the layer
-# rebuilds whenever Ubuntu publishes a security update, and takes it.
+# rebuilds whenever Ubuntu publishes a security update, and takes it. The upgrade also takes
+# NodeSource's nodejs 22.x (the base ships 22.20.0; the builder stage keeps it). The AWS CLI is pinned
+# to a version and the SHA-256 of AWS's signed zip, so a rebuild does not move it.
 ADD https://security.ubuntu.com/ubuntu/dists/noble-security/InRelease /var/lib/apt/noble-security.InRelease
 RUN export DEBIAN_FRONTEND=noninteractive \
     && apt-get update \
@@ -129,7 +131,12 @@ RUN export DEBIAN_FRONTEND=noninteractive \
        ca-certificates \
        curl \
        unzip \
-    && curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip \
+    && case "$(uname -m)" in \
+         x86_64)  AWSCLI_SHA256=14cb35809ad7547dd3c69fa9899a3975fbd850b6a6791f3fe264856490cd9a63 ;; \
+         aarch64) AWSCLI_SHA256=f6eb845fbacb11bee87de3f5fbe8043773cbe89d0414607b44b71e216eb9226b ;; \
+       esac \
+    && curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m)-2.39.3.zip" -o /tmp/awscliv2.zip \
+    && echo "${AWSCLI_SHA256:-unknown-arch}  /tmp/awscliv2.zip" | sha256sum -c - \
     && unzip -q /tmp/awscliv2.zip -d /tmp \
     && /tmp/aws/install \
     && rm -rf /tmp/aws /tmp/awscliv2.zip \
