@@ -46,10 +46,10 @@ from .ports import (
 )
 from .invocation import SPAWNABLE_PLATFORMS
 from .transcription_language import LanguageRefused, legacy_spawn_language
+from ..limits import from_header as limits_from_header
 from .service import (
     VOICE_NOTE_PLATFORM,
     CALL_PLATFORM,
-    SEAT_COOLDOWN_S,
     DuplicateMeeting,
     construct_meeting_url,
     request_bot,
@@ -313,6 +313,9 @@ def build_router(
     ):
         user_id = _resolve_user_id(x_user_id)
         max_concurrent = _resolve_max_concurrent(x_user_limits)
+        # The rest of the account's limits ride the same header (limits.py); today it carries the
+        # cap alone, so the others are their defaults.
+        account_limits = limits_from_header(x_user_limits)
         # A ROOM'S BOT IS KEYED TO ITS PAYER (int-s1, D2): a workspace principal's own account owns
         # nothing and may run no bot (`max_concurrent_bots` 0), so the bot — its row, its concurrency
         # count and its spend — is the account the principal bills to (`x-user-bills-to`, signed by
@@ -675,7 +678,7 @@ def build_router(
                     continue_meeting=bool(body.get("continue_meeting", False)),
                     workspace_id=workspace_id,
                     max_concurrent=max_concurrent,
-                    seat_cooldown_s=SEAT_COOLDOWN_S,
+                    seat_cooldown_s=account_limits.seat_cooldown_s,
                     webhook_url=x_user_webhook_url,
                     webhook_secret=x_user_webhook_secret,
                     webhook_events=webhook_events,

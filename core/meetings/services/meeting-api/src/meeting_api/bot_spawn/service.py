@@ -106,9 +106,6 @@ def lobby_budget_ms() -> int:
 
 # Non-terminal statuses (parent's active set) — a prior meeting in one of these blocks a new spawn.
 _ACTIVE_STATUSES = ("requested", "queued", "joining", "awaiting_admission", "active", "stopping")
-
-#: How long a user-stopped ad-hoc bot keeps its seat (founder, 4 Nov 2026), applied by POST /bots.
-SEAT_COOLDOWN_S = 60
 _TERMINAL_STATUSES = ("completed", "failed")
 
 # How stale an `stt` probe verdict may be and still refuse a spawn (#511 C3). Matches the probe's
