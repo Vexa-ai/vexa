@@ -5,7 +5,8 @@ transport we fully control (chosen status / raised timeout / connection error /
 recover-after-N) and a real `fakeredis`-backed `RetryQueue`:
 
   (a) the backoff delays follow the documented exponential schedule + cap;
-  (b) 5xx / 429 / timeout / connection-refused retry, but a 4xx (non-429) does NOT;
+  (b) 5xx / 429 / timeout / connection-refused retry, but a 4xx (non-429) does NOT — and when it
+      answers a retry, the envelope is dead-lettered rather than dropped;
   (c) after the schedule is exhausted the envelope is dropped (not infinite-looped);
   (d) the HMAC signature is computed over `<ts>.<body>` and verifies with the secret;
   (e) only the per-client's configured events are delivered (others suppressed);
@@ -617,6 +618,53 @@ async def test_dead_letter_on_age_expiry(fake_redis, capsys):
         e.get("event") == "webhook_dead_lettered" and e["fields"]["reason"] == "max_age_exceeded"
         for e in lines
     ), "expected a webhook_dead_lettered log for the age-expired entry"
+
+
+@pytest.mark.parametrize("code", [301, 400, 401, 403, 404, 410, 422])
+async def test_dead_letter_on_permanent_refusal_during_retry(code, fake_redis, capsys):
+    """A queued delivery the receiver permanently refuses on a retry (a non-429 4xx / 3xx — e.g. the
+    endpoint was removed after a 5xx) is dead-lettered after that ONE attempt: never re-queued, and
+    never acked as if it had been delivered."""
+    queue = RetryQueue(fake_redis)
+    t = ScriptedTransport(script=[code])
+    base = 63_000_000_000.0
+    await queue.enqueue(url=URL, envelope=build_envelope("meeting.completed", {"m": 5}),
+                        webhook_secret=SECRET, now=base, label="meeting:5")
+    processed = await drain_retry_queue(fake_redis, t, now=base + BACKOFF_SCHEDULE[0] + 1)
+
+    assert processed == 1 and t.calls == 1, "exactly one delivery attempt"
+    assert await queue.depth() == 0, f"HTTP {code} on a retry must not be re-queued"
+    assert await fake_redis.llen(PROCESSING_KEY) == 0, "the in-flight claim must be released"
+    assert await fake_redis.llen(DEAD_LETTER_KEY) == 1, (
+        f"HTTP {code} on a retry must land in the dead-letter queue, not vanish"
+    )
+    record = json.loads(await fake_redis.lindex(DEAD_LETTER_KEY, 0))
+    assert record["reason"] == "non_retryable_status"
+    assert record["last_status_code"] == code
+    assert record["last_error"] == f"HTTP {code}"
+    assert record["label"] == "meeting:5"
+    assert record["payload"]["data"] == {"m": 5}
+
+    lines = [json.loads(l) for l in capsys.readouterr().out.splitlines() if l.strip().startswith("{")]
+    dl_logs = [e for e in lines if e.get("event") == "webhook_dead_lettered"]
+    assert len(dl_logs) == 1, "expected exactly one webhook_dead_lettered log event"
+    assert dl_logs[0]["fields"]["reason"] == "non_retryable_status"
+    assert dl_logs[0]["fields"]["last_status_code"] == code
+
+
+async def test_retry_delivered_is_acked_not_dead_lettered(fake_redis):
+    """Negative control for the permanent-refusal dead-letter: a 2xx on a retry is an ack only."""
+    queue = RetryQueue(fake_redis)
+    t = ScriptedTransport(script=[204])
+    base = 64_000_000_000.0
+    await queue.enqueue(url=URL, envelope=build_envelope("meeting.completed", {"m": 6}),
+                        webhook_secret=SECRET, now=base)
+    await drain_retry_queue(fake_redis, t, now=base + BACKOFF_SCHEDULE[0] + 1)
+
+    assert t.calls == 1
+    assert await queue.depth() == 0
+    assert await fake_redis.llen(PROCESSING_KEY) == 0
+    assert await fake_redis.llen(DEAD_LETTER_KEY) == 0, "a delivered entry is never dead-lettered"
 
 
 async def test_transport_exception_text_is_never_logged_or_dead_lettered(
