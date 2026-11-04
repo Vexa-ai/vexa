@@ -467,7 +467,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     if (reason === 'left_alone') aloneHook?.();
     else orchestrator.stop('stopped');
   };
-  const releaseSignals = installSignalHandlers({ stop: (reason) => orchestrator.stop(reason) });
+  const releaseSignals = installSignalHandlers({ stop: (reason, opts) => orchestrator.stop(reason, opts) });
   try {
     const maxActiveMs = isVoiceNote ? voiceNoteMaxActiveMs(inv)
       : isCall ? callMaxActiveMs(inv) : deriveMaxActiveMs(inv, aloneSilenceWindowMs, env);

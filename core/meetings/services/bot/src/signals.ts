@@ -39,7 +39,7 @@ export interface SignalTarget {
 
 export interface SignalOptions {
   /** The graceful end — the orchestrator's `stop` (resolves run() → completed(stopped) → exit 0). */
-  stop: (reason: 'stopped') => void;
+  stop: (reason: 'stopped', opts: { bySignal: true }) => void;
   /** Force-exit bound in ms; defaults to BOT_SIGTERM_GRACE_MS / 20s. */
   graceMs?: number;
   /** Injectable process stand-in (tests); defaults to the real `process`. */
@@ -60,7 +60,7 @@ export function installSignalHandlers(opts: SignalOptions): () => void {
   const onSignal = () => {
     log(`[bot] termination signal — triggering graceful leave (force-exit watchdog ${graceMs}ms)`);
     try {
-      opts.stop('stopped');
+      opts.stop('stopped', { bySignal: true });
     } finally {
       if (watchdog == null) {
         watchdog = setTimeout(() => {

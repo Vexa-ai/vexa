@@ -36,6 +36,10 @@ export type FailureStage = 'requested' | 'joining' | 'awaiting_admission' | 'act
 
 /** One lifecycle.v1 status report. `connection_id` + `status` always; the rest are
  *  state-dependent terminal forensics. Mirrors `#/$defs/LifecycleEvent`. */
+/** What ended a run that ends `stopped`, when it was not a command: a termination signal. */
+export type EndedBy = 'termination_signal';
+export const TERMINATION_SIGNAL: EndedBy = 'termination_signal';
+
 export interface LifecycleEvent {
   connection_id: string;
   container_id?: string;
@@ -58,6 +62,11 @@ export interface LifecycleEvent {
   /** The control-plane channels found unreachable when `infra_fault` is set (e.g. the
    *  meeting-api callback and/or redis). Additive; same liberal-ingestion rationale. */
   unreachable_channels?: string[];
+  /** On a terminal a termination signal (SIGTERM/SIGINT) caused, rather than a `leave` command:
+   *  `termination_signal`. The completion reason is `stopped` either way; this says which, so the
+   *  control plane can tell a user's Stop from a bot the cluster preempted, evicted or drained.
+   *  Additive; same liberal-ingestion rationale. */
+  ended_by?: EndedBy;
   /** TYPED join-failure evidence on a pre-active `failed` terminal (#1059, #1058): what happened,
    *  who it belongs to, the stage timings, and the platform's own signal. See `join-evidence.ts`.
    *  Additive on lifecycle.v1 exactly as `infra_fault`/`stt_fault` are — the sealed contract
