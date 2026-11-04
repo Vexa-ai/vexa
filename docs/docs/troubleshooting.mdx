@@ -25,7 +25,9 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
 - **Waiting room / admission** — on Meet and Teams the bot may be parked in a lobby until a host admits
   it. Admit it like any guest. A run that ended in the lobby says so:
   [`awaiting_admission_timeout` or `awaiting_admission_rejected`](/troubleshooting/completion-reasons),
-  and `automatic_leave.max_wait_for_admission` sets how long it waits.
+  and `automatic_leave.max_wait_for_admission` sets how long it waits. Google Meet ends a request
+  nobody answers after about 10 minutes; the bot then asks to join again while that wait lasts, and
+  the run's reason text (`data.reason`) lists each request and when it was open.
 - **Google Meet refuses the join (`google_meet_join_refused`)**: Meet sometimes refuses a guest
   join by itself. You'll see "You can't join this video call", or HTTP 403 from
   `ResolveMeetingSpace` or `CreateMeetingDevice`. No host was asked, so admitting the bot can't
