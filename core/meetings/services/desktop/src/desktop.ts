@@ -84,11 +84,15 @@ export function upsertSegment(segments: TranscriptSegment[], seg: TranscriptSegm
   const i = segments.findIndex((x) => x.segment_id === seg.segment_id);
   if (i >= 0) segments[i] = seg; else segments.push(seg);
 }
-export interface DesktopOptions { ingestPort?: number; gatewayPort?: number; txUrl?: string; txToken?: string; quiet?: boolean; recordingsDir?: string; noSignalMs?: number; canAccess?: CanAccess; }
-export interface Desktop { ingestPort: number; gatewayPort: number; recordingsDir: string; close(): Promise<void>; }
+export interface DesktopOptions { ingestPort?: number; gatewayPort?: number; txUrl?: string; txToken?: string; quiet?: boolean; recordingsDir?: string; noSignalMs?: number; canAccess?: CanAccess;
+  /** Interface both servers bind. Default `VEXA_DESKTOP_HOST`, else 127.0.0.1 (loopback only:
+   *  /ingest has no auth and the default canAccess is allow-all). '0.0.0.0' exposes them on the LAN. */
+  host?: string; }
+export interface Desktop { host: string; ingestPort: number; gatewayPort: number; recordingsDir: string; close(): Promise<void>; }
 
 export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> {
   const log = opts.quiet ? (_m: string) => { /* */ } : (m: string) => console.log(m);
+  const host = opts.host ?? process.env.VEXA_DESKTOP_HOST ?? '127.0.0.1';
   const TX_URL = opts.txUrl ?? process.env.TRANSCRIPTION_SERVICE_URL ?? '';
   const TX_TOKEN = opts.txToken ?? process.env.TRANSCRIPTION_SERVICE_TOKEN ?? '';
   const txClient = TX_URL ? new TranscriptionClient({ serviceUrl: TX_URL, apiToken: TX_TOKEN, sampleRate: SAMPLE_RATE, maxSpeechDurationSec: 15 }) : null;
@@ -337,11 +341,11 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
     } } catch { /* */ } });
     ws.on('close', () => liveClients.delete(ws));
   });
-  await new Promise<void>((r) => gateway.listen(opts.gatewayPort ?? 8056, () => r()));
+  await new Promise<void>((r) => gateway.listen(opts.gatewayPort ?? 8056, host, () => r()));
   const gatewayPort = (gateway.address() as { port: number }).port;
 
   // ── ingest (capture.v1 → gmeet-pipeline → broadcast) ──
-  const ingest = new WebSocketServer({ port: opts.ingestPort ?? 9099 });
+  const ingest = new WebSocketServer({ host, port: opts.ingestPort ?? 9099 });
   await new Promise<void>((r) => ingest.on('listening', () => r()));
   const ingestPort = (ingest.address() as { port: number }).port;
   ingest.on('connection', async (ws, req) => {
@@ -482,9 +486,9 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
     ws.on('error', finish);
   });
 
-  log(`[desktop] ingest ws://localhost:${ingestPort}/ingest · gateway http://localhost:${gatewayPort} · STT ${TX_URL || 'NONE'} · recordings ${recordingsDir}`);
+  log(`[desktop] bind ${host} · ingest ws://${host}:${ingestPort}/ingest · gateway http://${host}:${gatewayPort} · STT ${TX_URL || 'NONE'} · recordings ${recordingsDir}`);
   return {
-    ingestPort, gatewayPort, recordingsDir,
+    host, ingestPort, gatewayPort, recordingsDir,
     close: async () => {
       for (const c of wss.clients) c.terminate();
       wss.close();
