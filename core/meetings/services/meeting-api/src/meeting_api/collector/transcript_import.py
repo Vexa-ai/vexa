@@ -163,5 +163,5 @@ def occurrence_window(
 # (`completed`/`failed`) is NOT here — a finished row may be re-imported (idempotently), and the
 # intent statuses (`idle`/`scheduled`) are the normal case: a planned row that has now happened.
 IN_FLIGHT_STATUSES = frozenset({
-    "requested", "joining", "awaiting_admission", "needs_help", "active", "stopping",
+    "requested", "queued", "joining", "awaiting_admission", "needs_help", "active", "stopping",
 })

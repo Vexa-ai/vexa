@@ -105,7 +105,7 @@ def lobby_budget_ms() -> int:
     return int(seconds * 1000)
 
 # Non-terminal statuses (parent's active set) — a prior meeting in one of these blocks a new spawn.
-_ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active", "stopping")
+_ACTIVE_STATUSES = ("requested", "queued", "joining", "awaiting_admission", "active", "stopping")
 _TERMINAL_STATUSES = ("completed", "failed")
 
 # How stale an `stt` probe verdict may be and still refuse a spawn (#511 C3). Matches the probe's
@@ -350,6 +350,7 @@ def _meeting_response(row: dict, *, sessions: Optional[list] = None) -> dict:
     1: the signing secret, the share grants, the session userdata path, and anything else
     credential-SHAPED, which is dropped on name shape before anyone has thought to name it."""
     from ..collector.projection import project_response_data
+    from ..lifecycle.queue import status_reason_of
 
     data = project_response_data(row.get("data"), viewer_is_owner=True)
     if sessions is not None:
@@ -366,6 +367,7 @@ def _meeting_response(row: dict, *, sessions: Optional[list] = None) -> dict:
         "end_time": row.get("end_time"),
         "completion_reason": data.get("completion_reason"),
         "failure_stage": data.get("failure_stage"),
+        "status_reason": status_reason_of(row.get("status"), row.get("data")),
         "data": data,
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
@@ -418,7 +420,7 @@ async def _terminalize_as_stopped(
                 if fenced_before_spawn
                 else "stopped by the user while the bot workload was being created"
             ),
-            failure_stage=status if status in ("requested", "joining", "awaiting_admission") else "requested",
+            failure_stage=status if status in ("joining", "awaiting_admission") else "requested",
             completion_reason="stopped",
             data={"stop_requested": True},
         )

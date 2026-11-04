@@ -47,6 +47,9 @@ class CompletionReason(str, Enum):
     # 403, "You can't join this video call"), on every bot pod tried. Ours to absorb (founder, 1 Nov
     # 2026): graded system_fault, never a host decision.
     PLATFORM_JOIN_REFUSED = "platform_join_refused"
+    # The bot's Pod waited in the capacity queue (lifecycle/queue.py) past the wait the founder set
+    # (4 Nov 2026: 30 minutes) and never got a seat; no bot ran, nothing is billed.
+    CLUSTER_AT_CAPACITY = "cluster_at_capacity"
     JOIN_FAILURE = "join_failure"
     AUTH_SESSION_MISSING = "auth_session_missing"
     VALIDATION_ERROR = "validation_error"
@@ -98,6 +101,9 @@ class TransitionSource(str, Enum):
     """
 
     CREATION = "creation"
+    # The capacity queue (lifecycle/queue.py): entering ``queued``, its late notice, and the queue
+    # wait running out — server-side transitions driven by the runtime's placement facts.
+    CAPACITY_QUEUE = "capacity_queue"
     BOT_CALLBACK = "bot_callback"
     USER_STOP = "user_stop"
     SCHEDULER_TIMEOUT = "scheduler_timeout"
@@ -136,6 +142,8 @@ _TERMINAL = frozenset({BotStatus.COMPLETED, BotStatus.FAILED})
 # status, a superset of the bot's domain `BotStatus`: `requested`/`stopping` are not bot states.
 #   * `requested` → None (the FSM's pre-`joining` entry — the bot's first event must still be
 #     `joining`, and None→JOINING is the only legal first edge).
+#   * `queued` → None too: the bot's Pod is waiting for a seat (lifecycle/queue.py), so no bot has
+#     run yet. When the seat frees the bot boots and sends `joining`, which None→JOINING admits.
 #   * `stopping` → ACTIVE: `stopping` is the user-stop in-flight state (not a BotStatus); treating it
 #     as ACTIVE keeps active/stopping → completed a LEGAL transition (the bot's terminal lands). This
 #     is sound because the stop path writes `stopping` ONLY over a status in which the bot reached the
@@ -144,6 +152,7 @@ _TERMINAL = frozenset({BotStatus.COMPLETED, BotStatus.FAILED})
 # Anything unrecognized maps to None (safe: forces the genuine-illegality check after reconciliation).
 _PERSISTED_STATUS_TO_BOTSTATUS: Dict[str, Optional[BotStatus]] = {
     "requested": None,
+    "queued": None,
     "joining": BotStatus.JOINING,
     "awaiting_admission": BotStatus.AWAITING_ADMISSION,
     "needs_help": BotStatus.NEEDS_HELP,
@@ -560,8 +569,10 @@ class LifecycleSink:
     ) -> StatusChange:
         """Advance the FSM for `event`, returning the resulting `StatusChange`.
 
-        `force_terminal_on_destroy` (only ever set by the runtime-destroy synthetic-terminal path,
-        `TransitionSource.RUNTIME_DESTROY`) permits the terminal edge (`completed`/`failed`) from ANY
+        `force_terminal_on_destroy` (set only after a CONFIRMED teardown: the runtime-destroy
+        synthetic-terminal path and the reconcile sweeps, `TransitionSource.RUNTIME_DESTROY`, and the
+        capacity queue's timeout, `TransitionSource.CAPACITY_QUEUE`, which deletes the waiting Pod
+        first) permits the terminal edge (`completed`/`failed`) from ANY
         non-terminal FSM state — including one from which a bot-driven terminal would be illegal (e.g.
         `joining → completed`, when the store still reads `joining` because the bot was stopped/killed
         in the waiting room before it could report `active`, while the DB user-stop already moved the

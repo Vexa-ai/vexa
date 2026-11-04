@@ -69,6 +69,98 @@ def k8s_label_value(raw: str) -> str:
         return raw
     return k8s_name(raw)
 
+# ── placement facts for a Pod that is not running yet (runtime.v1 ``Pending``) ─────────────────────
+# The cluster autoscaler (upstream kubernetes/autoscaler, which LKE runs as its managed autoscaler)
+# records its verdict on every unschedulable Pod it considered as an Event ON THAT POD:
+# ``TriggeredScaleUp`` (it is adding a node for it) or ``NotTriggerScaleUp`` (no node group can be
+# grown for it — max node group size reached, a resource limit, a scale-up in backoff). The latest
+# of the two is the autoscaler's current answer. Reported as facts; the control plane decides what
+# they mean for its workload (meeting-api: lifecycle/queue.py).
+AUTOSCALER_COMPONENT = "cluster-autoscaler"
+_AUTOSCALER_VERDICTS = {"TriggeredScaleUp": "scale_up", "NotTriggerScaleUp": "no_scale_up"}
+#: Container waiting reasons that mean the image cannot be pulled (yet).
+_IMAGE_PULL_WAITING = frozenset({"ErrImagePull", "ImagePullBackOff", "ErrImageNeverPull",
+                                 "InvalidImageName", "RegistryUnavailable"})
+_PENDING_DETAIL_MAX = 300
+#: How long a Pod read by ``exit_code`` may stand in for a fresh read in ``pending`` (one ``get``).
+_POD_READ_REUSE_S = 5.0
+
+
+def _event_time(event: dict) -> str:
+    """An Event's latest observation time (ISO strings compare in time order)."""
+    series = event.get("series") or {}
+    return str(series.get("lastObservedTime") or event.get("lastTimestamp") or event.get("eventTime")
+               or (event.get("metadata") or {}).get("creationTimestamp") or "")
+
+
+def autoscaler_verdict(events: list) -> tuple[Optional[str], Optional[str]]:
+    """The cluster autoscaler's latest verdict among a Pod's Events: ``(verdict, message)``."""
+    latest: Optional[dict] = None
+    for e in events or ():
+        if not isinstance(e, dict) or e.get("reason") not in _AUTOSCALER_VERDICTS:
+            continue
+        source = (e.get("source") or {}).get("component") or e.get("reportingComponent")
+        if source != AUTOSCALER_COMPONENT:
+            continue
+        if latest is None or _event_time(e) >= _event_time(latest):
+            latest = e
+    if latest is None:
+        return None, None
+    return _AUTOSCALER_VERDICTS[latest["reason"]], latest.get("message")
+
+
+def is_unschedulable(pod: dict) -> bool:
+    status = pod.get("status") or {}
+    if status.get("phase") != "Pending":
+        return False
+    return any(c.get("type") == "PodScheduled" and c.get("status") == "False"
+               and c.get("reason") == "Unschedulable"
+               for c in status.get("conditions") or () if isinstance(c, dict))
+
+
+def pending_from_pod(pod: dict, events: list = ()) -> Optional[dict]:
+    """The runtime.v1 ``Pending`` facts of a Pod, or None when it is not Pending. Pure.
+
+    * ``unschedulable`` — ``PodScheduled=False`` with reason ``Unschedulable``: no node can take it
+      now. ``since`` is when it became so; ``nominated`` says the scheduler nominated a node for it
+      (a preemption in progress: a lower-priority Pod is making room); ``autoscaler`` is the cluster
+      autoscaler's latest verdict on it, absent when it gave none; ``detail`` its message, else the
+      scheduler's.
+    * ``image_pull`` — placed, and a container waits on its image (ErrImagePull, ImagePullBackOff…).
+    * ``starting`` — anything else still Pending: not yet looked at, image pulling, container being
+      created (e.g. waiting for its env Secret)."""
+    status = pod.get("status") or {}
+    if status.get("phase") != "Pending":
+        return None
+    conditions = {c.get("type"): c for c in status.get("conditions") or () if isinstance(c, dict)}
+    scheduled = conditions.get("PodScheduled") or {}
+    created = (pod.get("metadata") or {}).get("creationTimestamp")
+    if is_unschedulable(pod):
+        out: dict = {"reason": "unschedulable", "nominated": bool(status.get("nominatedNodeName"))}
+        since = scheduled.get("lastTransitionTime") or created
+        if since:
+            out["since"] = since
+        verdict, message = autoscaler_verdict(list(events or ()))
+        if verdict:
+            out["autoscaler"] = verdict
+        detail = message or scheduled.get("message")
+        if detail:
+            out["detail"] = str(detail)[:_PENDING_DETAIL_MAX]
+        return out
+    since = scheduled.get("lastTransitionTime") or created
+    for cs in [*(status.get("initContainerStatuses") or ()), *(status.get("containerStatuses") or ())]:
+        waiting = ((cs or {}).get("state") or {}).get("waiting") or {}
+        if waiting.get("reason") in _IMAGE_PULL_WAITING:
+            out = {"reason": "image_pull", "detail": str(waiting.get("message") or waiting["reason"])[:_PENDING_DETAIL_MAX]}
+            if since:
+                out["since"] = since
+            return out
+    out = {"reason": "starting"}
+    if since:
+        out["since"] = since
+    return out
+
+
 # The extended-resource name a GPU request carries. Kubernetes requires extended resources on the
 # LIMITS side; the request is set equal to the limit automatically, and a requests-side entry that
 # differs is rejected — so runtime.v1's single `gpu` count maps to limits only.
@@ -565,6 +657,11 @@ class K8sBackend:
         self._ns = namespace
         # Exit codes of Pods this backend removed once their exit was observed (name → code).
         self._exited: dict[str, int] = {}
+        # The last Pod object ``exit_code`` read (name → (monotonic time, pod)), so the kernel's
+        # ``pending`` call in the same ``get`` does not read the Pod twice.
+        self._last_read: dict[str, tuple[float, dict]] = {}
+        # Whether reading Pod Events has been refused (RBAC); said once, loudly, not every read.
+        self._events_refused_logged = False
         # Which runtime this is (the Helm release). Every Pod it spawns carries it, and adoption
         # selects on it.
         self._instance = (instance if instance is not None else os.environ.get(INSTANCE_ENV, "")).strip() or "default"
@@ -782,11 +879,15 @@ class K8sBackend:
             return self._exited[name]
         r = _kubectl("get", "pod", name, "-o", "json", *self._ns_args(), check=False)
         if r.returncode != 0:
+            self._last_read.pop(name, None)
             return 0                                     # gone (deleted/never-found) → no longer running
-        status = json.loads(r.stdout).get("status", {})
+        pod = json.loads(r.stdout)
+        status = pod.get("status", {})
         phase = status.get("phase")
         if phase not in TERMINAL_PHASES:
+            self._last_read[name] = (time.monotonic(), pod)
             return None                                  # still scheduling / running
+        self._last_read.pop(name, None)
         code = 0
         if phase == "Failed":
             code = 1
@@ -800,6 +901,44 @@ class K8sBackend:
         self._exited[name] = code
         _kubectl("delete", "pod", name, "--ignore-not-found", "--wait=false", *self._ns_args(), check=False)
         return code
+
+    def pending(self, h: WorkloadHandle) -> Optional[dict]:
+        """runtime.v1 ``Pending`` facts while the Pod is not running yet, else None. Reuses the Pod
+        ``exit_code`` just read; reads the Pod's Events (this incarnation's, by uid) only when it is
+        Unschedulable — the one case where the autoscaler has a verdict to give."""
+        name = h._impl  # type: ignore[attr-defined]
+        seen = self._last_read.get(name)
+        if seen is not None and time.monotonic() - seen[0] <= _POD_READ_REUSE_S:
+            pod = seen[1]
+        else:
+            pod = self._pod(name)
+        if not pod:
+            return None
+        events: list = []
+        if is_unschedulable(pod):
+            events = self._pod_events(name, ((pod.get("metadata") or {}).get("uid")) or "")
+        return pending_from_pod(pod, events)
+
+    def _pod_events(self, name: str, uid: str) -> list:
+        selector = f"involvedObject.kind=Pod,involvedObject.name={name}"
+        if uid:
+            selector += f",involvedObject.uid={uid}"
+        r = _kubectl("get", "events", "--field-selector", selector, "-o", "json", *self._ns_args(),
+                     check=False)
+        if r.returncode != 0:
+            if not self._events_refused_logged:
+                self._events_refused_logged = True
+                from .obs import log_event
+
+                log_event("pod_events_unreadable", audience="system", level="warning",
+                          span="k8s.pending", fields={"error": (r.stderr or "").strip()[:300],
+                                  "effect": "no autoscaler verdict: an unschedulable Pod is reported "
+                                            "without one"})
+            return []
+        try:
+            return list(json.loads(r.stdout or "{}").get("items") or [])
+        except ValueError:
+            return []
 
     def terminate(self, h: WorkloadHandle) -> None:      # graceful: SIGTERM + grace, then SIGKILL
         _kubectl("delete", "pod", h._impl, f"--grace-period={_stop_grace_sec()}", "--wait=false",

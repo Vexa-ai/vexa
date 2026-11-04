@@ -99,10 +99,12 @@ async def reconcile_stale_stopping_sweep(
 # Statuses where the bot NEVER reported `active` — a hung row here means the bot never started/joined
 # and never will, so it reconciles to `failed` (attributed to the stage it died in). `active`/`stopping`
 # (the bot WAS live) reconcile to `completed`.
-_PRE_ACTIVE_NONTERMINAL = frozenset({"requested", "joining", "awaiting_admission", "needs_help"})
+_PRE_ACTIVE_NONTERMINAL = frozenset({"requested", "queued", "joining", "awaiting_admission", "needs_help"})
 
 # Statuses where a BOT MAY BE ALIVE and legitimately QUIET — either in the meeting (`active`/
-# `needs_help`) or on its way in (`requested`/`joining`/`awaiting_admission`). Silence does NOT mean
+# `needs_help`) or on its way in (`requested`/`queued`/`joining`/`awaiting_admission`; a `queued`
+# bot's Pod waits for a seat with nothing to report, and lifecycle/queue.py owns its deadline, so
+# the wait is never counted against it here). Silence does NOT mean
 # the bot is gone: an ACTIVE bot stops bumping `updated_at` through a silent room, and a bot parked in
 # a waiting room reports `awaiting_admission` ONCE and then polls for up to the lobby budget the
 # control plane itself handed it (``bot_spawn.service.LOBBY_BUDGET_MS``) — there is no heartbeat on
@@ -110,7 +112,7 @@ _PRE_ACTIVE_NONTERMINAL = frozenset({"requested", "joining", "awaiting_admission
 # longer alive (runtime liveness), NOT on `updated_at`/segment staleness. `stopping` is EXCLUDED: a
 # stop was requested, so it reaps on its short grace regardless (its bot SHOULD be leaving).
 _LIVENESS_GATED = frozenset(
-    {"requested", "joining", "awaiting_admission", "needs_help", "active"}
+    {"requested", "queued", "joining", "awaiting_admission", "needs_help", "active"}
 )
 
 # runtime.v1 workload states that mean the bot is STILL ALIVE in the meeting (the workload exists and is
@@ -206,6 +208,12 @@ def _untracked_window_elapsed(
     return (now - first) > grace
 
 
+def _lifecycle_stage(status: Optional[str]) -> Optional[str]:
+    """The lifecycle.v1 ``FailureStage`` a meeting status stands for. ``queued`` is the server-side
+    wait for a seat before any bot ran, so a bot lost there is lost at ``requested``."""
+    return "requested" if status == "queued" else status
+
+
 def _reconcile_join_evidence(
     *,
     status: Optional[str],
@@ -228,6 +236,7 @@ def _reconcile_join_evidence(
     try:
         from .join_evidence import build_join_evidence, classify_join_failure
 
+        status = _lifecycle_stage(status)
         reason = classify_join_failure(
             completion_reason=completion_reason,
             stage=status,
@@ -265,7 +274,7 @@ async def _escalate_untracked_zombie(
         "runtime restart or external removal"
     )
     pre_active = status in _PRE_ACTIVE_STATUSES
-    stage = status if pre_active else "active"
+    stage = _lifecycle_stage(status) if pre_active else "active"
     completion_reason = (
         _pre_active_completion_reason(status, stop_requested) if pre_active else "left_alone"
     )
@@ -503,7 +512,7 @@ TERMINAL_WORKLOAD_STATES = frozenset({"destroyed", "failed", "exited", "crashed"
 # Meeting statuses where the bot has NOT yet reported `active` — a terminal workload here means the bot
 # never started and never will (image-pull fail, OOM, crash on boot), so it can be classed `failed`
 # unambiguously.
-_PRE_ACTIVE_STATUSES = frozenset({"requested", "joining", "awaiting_admission"})
+_PRE_ACTIVE_STATUSES = frozenset({"requested", "queued", "joining", "awaiting_admission"})
 # Meeting statuses where a bot WAS (or is being) live in the meeting — a `stopping` row is a user-stop
 # in flight, and `active`/`needs_help` mean the bot reported live. `stopping` belongs here because the
 # stop path writes it ONLY over a status the bot reached the meeting in; a stop against a pre-active
@@ -597,7 +606,7 @@ async def synthesize_terminal_for_dead_workload(
         body = {
             "connection_id": info["session_uid"],
             "status": "failed",
-            "failure_stage": status,                    # the stage the bot died IN (requested/joining/…)
+            "failure_stage": _lifecycle_stage(status),  # the stage the bot died IN (requested/joining/…)
             "completion_reason": _pre_active_completion_reason(status, stop_requested),
             "reason": (
                 f"stopped by the user at {status} (never admitted)"

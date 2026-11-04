@@ -19,8 +19,12 @@ tale — it must be reconciled to the shapes below).
   `MeetingListResponse`, `TranscriptionResponse`, `TranscriptionSegment`,
   `BotStatusResponse`. One additive field since the capture: `MeetingResponse.data.artifact_deletion`
   (`ArtifactDeletion`, `state: pending | completed`) — the stamp meeting-api writes when the owner
-  deletes a meeting's transcript and recordings, which agent-api and the terminal read. Canonical `MeetingStatus` enum =
-  `[requested, joining, awaiting_admission, active, needs_human_help, stopping, completed, failed]`.
+  deletes a meeting's transcript and recordings, which agent-api and the terminal read. Since then,
+  additively (4 Nov 2026): the status **`queued`** (a bot waiting for a seat when the cluster is full,
+  between `requested` and `joining`), **`MeetingResponse.status_reason`** (`MeetingStatusReason`:
+  `cluster_at_capacity` · `will_join_late`, set only while `queued`), and the completion reason
+  **`cluster_at_capacity`** (a queued bot whose wait ran out). Canonical `MeetingStatus` enum =
+  `[requested, queued, joining, awaiting_admission, active, needs_human_help, stopping, completed, failed]`.
 
 ## The seam (what conforms to this)
 | Consumer | How |

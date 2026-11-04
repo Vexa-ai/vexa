@@ -92,7 +92,29 @@
         "exitCode": { "type": "integer" },
         "stopReason": { "$ref": "#/$defs/StopReason" },
         "backend": { "$ref": "#/$defs/Backend" },
-        "node": { "type": "string", "description": "host / pod the workload runs on" }
+        "node": { "type": "string", "description": "host / pod the workload runs on" },
+        "pending": { "$ref": "#/$defs/Pending" }
+      }
+    },
+    "PendingReason": {
+      "description": "Why a workload the backend accepted is not running yet: no node can take it now (unschedulable), its image cannot be pulled yet (image_pull), or it is placed or about to be and starting (starting).",
+      "enum": ["unschedulable", "image_pull", "starting"]
+    },
+    "AutoscalerVerdict": {
+      "description": "The cluster autoscaler's latest verdict on an unschedulable workload: a node is being added for it (scale_up, k8s TriggeredScaleUp) or no node group can be grown for it (no_scale_up, k8s NotTriggerScaleUp).",
+      "enum": ["scale_up", "no_scale_up"]
+    },
+    "Pending": {
+      "description": "The substrate's placement facts while a running workload still waits for it (k8s: the Pod is Pending). Present only then; only the k8s backend reports it. Facts, never a verdict: the caller decides what they mean for its workload.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason"],
+      "properties": {
+        "reason": { "$ref": "#/$defs/PendingReason" },
+        "since": { "type": "string", "format": "date-time", "description": "when the substrate entered this state (k8s: the PodScheduled condition's lastTransitionTime)" },
+        "nominated": { "type": "boolean", "description": "unschedulable only: the scheduler nominated a node for it (a preemption is freeing room)" },
+        "autoscaler": { "$ref": "#/$defs/AutoscalerVerdict" },
+        "detail": { "type": "string", "maxLength": 300, "description": "the autoscaler's or the scheduler's own message" }
       }
     },
     "RuntimeEvent": {

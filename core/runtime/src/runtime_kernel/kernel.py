@@ -20,7 +20,7 @@ from typing import Callable, Optional
 
 from .backend import Backend, WorkloadHandle
 from .clock import Clock, SystemClock
-from .models import RuntimeEvent, RuntimeState, StopReason, WorkloadSpec, WorkloadStatus
+from .models import Pending, RuntimeEvent, RuntimeState, StopReason, WorkloadSpec, WorkloadStatus
 from .process_backend import ProcessBackend
 from .profiles import Profile, ProfileRegistry, Runnable, default_registry
 from .workload_env import StoreConfig, workload_env
@@ -253,7 +253,23 @@ class Runtime:
                 status.stopReason = StopReason.completed if code == 0 else StopReason.failed
                 self._persist(record.spec, status)
                 self._emit(workload_id, RuntimeState.stopped, exitCode=code, stopReason=status.stopReason)
+            else:
+                return self._with_pending(status, handle)
         return status
+
+    def _with_pending(self, status: WorkloadStatus, handle: WorkloadHandle) -> WorkloadStatus:
+        """The status as answered, carrying the backend's placement facts while the workload still
+        waits for its substrate (``Backend.pending``, k8s only). Never persisted: it describes this
+        moment, and a backend fault here leaves the answer as it was, without the facts."""
+        probe = getattr(self.backend, "pending", None)
+        if probe is None:
+            return status
+        try:
+            raw = probe(handle)
+            pending = Pending(**raw) if raw else None
+        except Exception:  # noqa: BLE001 — placement facts are an addition, never a failure
+            return status
+        return status.model_copy(update={"pending": pending}) if pending is not None else status
 
     def list(self) -> list[WorkloadStatus]:
         return [self.get(r.spec.workloadId) for r in self.store.list()]

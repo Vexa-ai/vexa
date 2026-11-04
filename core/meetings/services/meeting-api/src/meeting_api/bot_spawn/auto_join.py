@@ -133,7 +133,7 @@ def due_rows(rows: list[dict], *, now: datetime,
 # one of these on ANOTHER row must never spawn: two Vexa bots in one meeting is customer-visible
 # and never correct, however the two rows came to exist.
 LIVE_STATUSES = (
-    "requested", "joining", "awaiting_admission", "active",
+    "requested", "queued", "joining", "awaiting_admission", "active",
     "needs_help", "needs_human_help", "stopping",
 )
 

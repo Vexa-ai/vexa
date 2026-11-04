@@ -76,7 +76,7 @@ def _resolve_user_id(x_user_id: Optional[str]) -> int:
 # fire-and-forget leave below can be LOST (the POST→immediate-DELETE orphan). For these we ALSO tear the
 # workload down directly. An `active`/`needs_help` bot IS listening → trust the graceful leave (so it
 # finalizes its recording cleanly); the reconcile loop is the backstop if it never completes.
-_BOOTING_STATUSES = {"requested", "joining", "awaiting_admission"}
+_BOOTING_STATUSES = {"requested", "queued", "joining", "awaiting_admission"}
 
 # PLANNED statuses: a row that has a TIME but no bot — no workload, no session, nothing listening on
 # a command channel. A stop here is a CANCELLATION, and it must land the row on a terminal state

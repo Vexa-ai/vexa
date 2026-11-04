@@ -118,6 +118,10 @@ MATRIX: list[Cell] = [
          stage="joining", expect=SERVED,
          why="Meet refused every bot pod meeting-api already tried (meet_respawn.py); the sweep "
              "sending more minutes later repeats what just failed, as awaiting_admission_rejected did"),
+    Cell("failed/cluster_at_capacity", status="failed", reason="cluster_at_capacity",
+         stage="requested", expect=SERVED,
+         why="it waited the whole queue wait for a seat (lifecycle/queue.py); PERMANENT in retry.py "
+             "— a re-dispatch into the same full cluster only waits again"),
     Cell("failed/auth_session_missing", status="failed", reason="auth_session_missing",
          stage="joining", expect=SERVED,
          why="signed-out profile; a re-spawn hits the same dead cookie jar"),

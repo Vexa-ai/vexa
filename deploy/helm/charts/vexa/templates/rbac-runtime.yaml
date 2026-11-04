@@ -20,6 +20,12 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  # A Pending Pod's Events carry the cluster autoscaler's verdict on it (TriggeredScaleUp /
+  # NotTriggerScaleUp): the runtime reports it in WorkloadStatus.pending, and meeting-api queues a
+  # bot the cluster cannot add room for. Read-only.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
   # A spawned Pod's credential env rides a Secret of its own, owned by the Pod (collected with it)
   # and named per incarnation: the runtime creates it and never reads, lists or deletes a Secret.
   - apiGroups: [""]

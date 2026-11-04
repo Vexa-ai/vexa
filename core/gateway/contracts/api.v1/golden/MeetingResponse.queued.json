@@ -1,0 +1,24 @@
+{
+  "id": 35840,
+  "user_id": 7,
+  "platform": "google_meet",
+  "native_meeting_id": "abc-defg-hij",
+  "constructed_meeting_url": "https://meet.google.com/abc-defg-hij",
+  "status": "queued",
+  "status_reason": "will_join_late",
+  "bot_container_id": "mtg-35840-1f2e3d4c",
+  "start_time": null,
+  "end_time": null,
+  "completion_reason": null,
+  "failure_stage": null,
+  "data": {
+    "queue": {
+      "queued_at": "2026-11-04T10:00:17Z",
+      "status_reason": "will_join_late",
+      "late_at": "2026-11-04T10:00:17Z",
+      "detail": "pod didn't trigger scale-up: 1 max node group size reached"
+    }
+  },
+  "created_at": "2026-11-04T10:00:01Z",
+  "updated_at": "2026-11-04T10:00:17Z"
+}

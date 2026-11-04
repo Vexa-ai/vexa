@@ -20,6 +20,15 @@ join). The machine-checked
 `canTransition` lives in the **runtime/bot implementation** (Stage 2) — the contract documents it; the
 impl enforces it (lean: no separate harness, B8).
 
+## Before the bot runs: `requested`, `queued`
+The meeting statuses before `joining` are server-side and never emitted by the bot. `queued` (meeting-api
+`lifecycle/queue.py`) is a bot whose Pod waits for a seat the cluster cannot add; the machine treats it
+as the pre-`joining` entry, so the bot's first event is still `joining` once a seat frees. A queued bot
+whose wait runs out never ran: meeting-api deletes its Pod and drives the terminal `failed` itself with
+`completion_reason` **`cluster_at_capacity`** (`failure_stage` `requested`). It is PERMANENT for retry
+(`lifecycle/retry.py`), attributed `system_fault` in `join_evidence`, and its service provenance reads
+`bot_outcome: never_admitted`.
+
 ## Shape
 `LifecycleEvent` (`$defs`): `connection_id` + `status` always; the shipping producer also stamps
 `timestamp`, the UTC time it observed the transition, before transport retries. That producer time

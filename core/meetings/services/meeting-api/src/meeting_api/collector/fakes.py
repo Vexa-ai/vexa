@@ -268,6 +268,8 @@ class InMemoryTranscriptStore:
                 rows = rows[:limit]
             has_more = False
 
+        from ..lifecycle.queue import status_reason_of
+
         def _row(mid, m):
             # One ownership decision per row, feeding both `shared` and the projection's viewer tier
             # (mirrors the real store's `_row`).
@@ -285,6 +287,7 @@ class InMemoryTranscriptStore:
                 # api.v1 MeetingResponse declares these at top level; the values live in `data`.
                 "completion_reason": (m.get("data") or {}).get("completion_reason") if isinstance(m.get("data"), dict) else None,
                 "failure_stage": (m.get("data") or {}).get("failure_stage") if isinstance(m.get("data"), dict) else None,
+                "status_reason": status_reason_of(m["status"], m.get("data")),
                 "shared": not is_owner,
                 "created_at": m["created_at"],
                 "updated_at": m["updated_at"],

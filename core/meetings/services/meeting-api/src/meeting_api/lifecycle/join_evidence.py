@@ -112,12 +112,15 @@ class JoinFailureReason(str, Enum):
     * :attr:`PLATFORM_JOIN_REFUSED` — the platform refused the bot before any host saw a request
       (Google Meet: CreateMeetingDevice 403, "You can't join this video call"), on every bot pod
       meeting-api tried (lifecycle/meet_respawn.py). Owner: us (founder ruling, 1 Nov 2026).
+    * :attr:`CLUSTER_AT_CAPACITY` — the bot's Pod waited for a seat the cluster could not add, past
+      the queue wait (lifecycle/queue.py); no bot ever ran. Owner: us — capacity is ours to provide.
     * :attr:`UNKNOWN` — the signals do not support any of the above. ``detail`` carries whatever the
       producer did observe. Never a synonym for "probably X".
     """
 
     AWAITING_ADMISSION_REJECTED = "awaiting_admission_rejected"
     PLATFORM_JOIN_REFUSED = "platform_join_refused"
+    CLUSTER_AT_CAPACITY = "cluster_at_capacity"
     AWAITING_ADMISSION_TIMEOUT = "awaiting_admission_timeout"
     AUTH_SESSION_MISSING = "auth_session_missing"
     NEVER_REACHED_LOBBY = "never_reached_lobby"
@@ -185,6 +188,7 @@ _REASON_BY_COMPLETION_REASON: Dict[str, JoinFailureReason] = {
     "auth_session_missing": JoinFailureReason.AUTH_SESSION_MISSING,
     "awaiting_admission_rejected": JoinFailureReason.AWAITING_ADMISSION_REJECTED,
     "platform_join_refused": JoinFailureReason.PLATFORM_JOIN_REFUSED,
+    "cluster_at_capacity": JoinFailureReason.CLUSTER_AT_CAPACITY,
     "awaiting_admission_timeout": JoinFailureReason.AWAITING_ADMISSION_TIMEOUT,
     # A pre-active `stopped` is the USER ending the run while the bot was still knocking (the
     # orchestrator's withdraw branch, and `reconcile._pre_active_completion_reason` under
@@ -202,6 +206,8 @@ _ATTRIBUTION_BY_REASON: Dict[JoinFailureReason, JoinFailureAttribution] = {
     JoinFailureReason.AWAITING_ADMISSION_REJECTED: JoinFailureAttribution.HOST_ACTION,
     # The platform refused every bot pod before a host saw a request. Ours (founder, 1 Nov 2026).
     JoinFailureReason.PLATFORM_JOIN_REFUSED: JoinFailureAttribution.SYSTEM_FAULT,
+    # No seat for the bot within the queue wait. Ours: the cluster is ours to size.
+    JoinFailureReason.CLUSTER_AT_CAPACITY: JoinFailureAttribution.SYSTEM_FAULT,
     # Nobody answered the knock. The host's call — unless the evidence says our admission flow is
     # what broke, which is detected below.
     JoinFailureReason.AWAITING_ADMISSION_TIMEOUT: JoinFailureAttribution.HOST_ACTION,

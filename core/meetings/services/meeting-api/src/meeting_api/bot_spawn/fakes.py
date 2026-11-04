@@ -31,7 +31,7 @@ from .ports import (
     reconcile_grace_for_status,
 )
 
-_ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active")
+_ACTIVE_STATUSES = ("requested", "queued", "joining", "awaiting_admission", "active")
 _TERMINAL_STATUSES = ("completed", "failed")
 
 
@@ -374,6 +374,56 @@ class InMemoryMeetingRepo:
             row["data"][k] = v
         return dict(row)
 
+    async def set_queue_status(
+        self, *, session_uid, expected, status_reason, queue_patch, trail_entry
+    ) -> Optional[dict]:
+        """Mirror of the SQL adapter: lands only on the meeting's LATEST session while the row is in
+        ``expected`` and no stop was asked for; entering the queue starts a fresh ``data.queue``."""
+        sess = next((s for s in self.sessions if s["session_uid"] == session_uid), None)
+        if sess is None:
+            return None
+        latest = next(
+            (s["session_uid"] for s in reversed(self.sessions) if s["meeting_id"] == sess["meeting_id"]),
+            None,
+        )
+        row = self._meetings.get(sess["meeting_id"])
+        if row is None or latest != session_uid or row["status"] not in tuple(expected):
+            return None
+        data = row.setdefault("data", {})
+        if data.get("stop_requested"):
+            return None
+        queue = dict(data.get("queue") or {}) if row["status"] == "queued" else {}
+        queue.update(queue_patch or {})
+        data["queue"] = queue
+        data["status_transition"] = list(data.get("status_transition") or []) + [dict(trail_entry)]
+        row["status"] = "queued"
+        return dict(row)
+
+    async def list_queue_candidates(self) -> list:
+        """Mirror of the SQL adapter: rows whose bot may be waiting for a seat (lifecycle/queue.py)."""
+        from ..lifecycle.queue import WATCHED_STATUSES, QUEUE_EXCLUDED_PLATFORMS
+
+        out: dict = {}
+        for s in reversed(self.sessions):
+            mid = s["meeting_id"]
+            if mid in out:
+                continue
+            row = self._meetings.get(mid)
+            if (row is None or row["status"] not in WATCHED_STATUSES or not row.get("bot_container_id")
+                    or row.get("platform") in QUEUE_EXCLUDED_PLATFORMS):
+                continue
+            data = row.get("data") or {}
+            out[mid] = {
+                "meeting_id": mid,
+                "status": row["status"],
+                "session_uid": s["session_uid"],
+                "bot_container_id": row.get("bot_container_id"),
+                "queue": dict(data["queue"]) if isinstance(data.get("queue"), dict) else None,
+                "scheduled_at": data.get("scheduled_at"),
+                "stop_requested": bool(data.get("stop_requested")),
+            }
+        return list(out.values())
+
     async def count_active_bots(self, *, user_id, exclude_meeting_id=None) -> int:
         return sum(
             1 for m in self._meetings.values()
@@ -537,7 +587,7 @@ class InMemoryMeetingRepo:
         from datetime import datetime, timezone
 
         non_terminal = {
-            "requested", "joining", "awaiting_admission", "needs_help", "active", "stopping",
+            "requested", "queued", "joining", "awaiting_admission", "needs_help", "active", "stopping",
         }
         now = datetime.now(timezone.utc)
         out: dict = {}

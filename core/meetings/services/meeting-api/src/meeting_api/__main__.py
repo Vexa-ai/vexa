@@ -507,6 +507,10 @@ def _attach_background_loops(
     service_authority_interval = float(
         os.getenv("SERVICE_AUTHORITY_SWEEP_INTERVAL_S", "15")
     )
+    # The capacity queue (lifecycle/queue.py): a bot whose Pod waits for a seat the cluster cannot
+    # add goes `queued`, gets its late notice, and fails `cluster_at_capacity` once its wait
+    # (VEXA_QUEUE_MAX_WAIT_S) runs out. This is how often the runtime's placement facts are read.
+    capacity_queue_interval = float(os.getenv("VEXA_QUEUE_SWEEP_INTERVAL_S", "15"))
 
     # #527: per-loop liveness heartbeats. A loop hung inside an await stops stamping, so /health can
     # SEE a dead consumer that would otherwise look alive (live WS keeps flowing on a SEPARATE path —
@@ -733,6 +737,40 @@ def _attach_background_loops(
                 log.exception("service-authority sweep failed")
             ticks["service-authority"] = _time.monotonic()
             await asyncio.sleep(service_authority_interval)
+
+    async def _capacity_queue_loop() -> None:
+        if meeting_repo is None or runtime is None or not hasattr(meeting_repo, "list_queue_candidates"):
+            return
+        from .lifecycle.machine import TransitionSource as _TS
+        from .lifecycle.queue import capacity_queue_sweep
+
+        apply_queue_transition = app.state.apply_queue_transition
+        apply_lifecycle_event = app.state.apply_lifecycle_event
+
+        async def _time_out(body: dict):
+            # The sweep confirmed the waiting Pod's deletion first: a teardown-evidenced terminal,
+            # so the edge from the FSM's pre-`joining` entry is forced (no bot ever ran to send one).
+            status_code, _content = await apply_lifecycle_event(
+                body, transition_source=_TS.CAPACITY_QUEUE, force_terminal_on_destroy=True,
+            )
+            return status_code
+
+        async def _tick():
+            counts = await capacity_queue_sweep(
+                meeting_repo, runtime, enter=apply_queue_transition, time_out=_time_out, log=log,
+            )
+            if any(counts.values()):
+                log.info("capacity-queue sweep: %s", counts)
+
+        while True:
+            try:
+                await _guarded("capacity-queue", _tick)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("capacity-queue sweep failed")
+            ticks["capacity-queue"] = _time.monotonic()
+            await asyncio.sleep(capacity_queue_interval)
 
     # Auto-join: "scheduled" means the bot joins. The sweep spawns a bot for every scheduled row
     # whose data.scheduled_at arrived (lead window) and whose auto_join toggle is on, through the
@@ -983,6 +1021,7 @@ def _attach_background_loops(
                 _service_authority_loop(),
                 name="service-authority",
             ),
+            asyncio.create_task(_capacity_queue_loop(), name="capacity-queue"),
             asyncio.create_task(_auto_join_loop(), name="auto-join"),
             asyncio.create_task(_meet_respawn_loop(), name="meet-respawn"),
             asyncio.create_task(_calendar_sync_loop(), name="calendar-sync"),

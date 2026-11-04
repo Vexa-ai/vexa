@@ -1370,6 +1370,10 @@ if grep -A1 'resources: \["secrets"\]' <<< "$role" | has 'verbs: \["create"\]$' 
    && [ "$(grep -ci 'secret' <<< "$role")" -eq 1 ]; then
   echo "  OK: the runtime may create Secrets (a spawned Pod's credential env) and nothing more"
 else echo "  FAIL: the runtime's Role over Secrets is not create-only"; fail=1; fi
+# The runtime reads a Pending Pod's Events (the cluster autoscaler's verdict) and may not write them.
+if grep -A1 'resources: \["events"\]' <<< "$role" | has 'verbs: \["get", "list"\]$'; then
+  echo "  OK: the runtime may read Events (get, list) and nothing more"
+else echo "  FAIL: the runtime's Role over Events is not get/list"; fail=1; fi
 
 # N-7: the namespace default-deny, both directions, with explicit allows for the chart's Pods.
 np_doc() { awk -v n="name: $1" '$0 ~ "^  "n"$"{f=1} f{print} f&&/^---/{exit}' <<< "$RENDER"; }

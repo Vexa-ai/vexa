@@ -70,7 +70,7 @@ _INTENT_STATUSES = frozenset({"idle", "scheduled"})
 # FSM-owned values the intent endpoint MUST reject (422) — the bot lifecycle owns everything from
 # `requested` onward (machine.py); the user cannot set these directly.
 _FSM_OWNED_STATUSES = frozenset({
-    "requested", "joining", "awaiting_admission", "needs_help",
+    "requested", "queued", "joining", "awaiting_admission", "needs_help",
     "active", "stopping", "completed", "failed",
 })
 
@@ -368,7 +368,7 @@ def build_router(
     # Keep the set explicit so list pagination can exclude plans in SQL rather than making
     # clients discard rows after a page has already been cut.
     _NON_PLANNED_STATUSES = (
-        "requested", "joining", "awaiting_admission", "active", "needs_human_help",
+        "requested", "queued", "joining", "awaiting_admission", "active", "needs_human_help",
         "stopping", "completed", "failed",
     )
 
@@ -441,9 +441,9 @@ def build_router(
         return JSONResponse(content={"meetings": meetings, "has_more": has_more})
 
     # --- GET /bots/status → the caller's currently-running bots (api/meetings.mdx "Running bots").
-    # Running == any non-terminal FSM status (requested·joining·awaiting_admission·active·stopping);
-    # terminal (completed·failed) rows are excluded. Owner-scoped via X-User-Id. ---
-    _RUNNING_STATUSES = ("requested", "joining", "awaiting_admission", "active", "stopping")
+    # Running == any non-terminal bot status (requested·queued·joining·awaiting_admission·active·
+    # stopping); terminal (completed·failed) rows are excluded. Owner-scoped via X-User-Id. ---
+    _RUNNING_STATUSES = ("requested", "queued", "joining", "awaiting_admission", "active", "stopping")
 
     @router.get("/bots/status")
     async def bots_status(

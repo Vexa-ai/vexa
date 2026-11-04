@@ -171,6 +171,11 @@ DEFAULT_LIST_LIMIT = 50
 LIST_PIN_STATUSES = frozenset({
     "scheduled", "requested", "joining", "awaiting_admission", "active", "stopping",
 })
+# A live status outside the pin set: the pin is an INDEX expression (ix_meeting_*_event_order), so
+# widening it is a migration. `queued` (a bot waiting for a seat, lifecycle/queue.py) therefore ranks
+# by its event time like `needs_help`, and a status filter that names it reaches it through the status
+# index beside the pin prefix (adapters.list_meetings).
+UNPINNED_LIVE_STATUSES = frozenset({"queued"})
 
 
 def _event_ts(value: Any) -> Optional[str]:

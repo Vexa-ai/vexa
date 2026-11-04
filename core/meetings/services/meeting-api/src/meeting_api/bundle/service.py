@@ -38,7 +38,7 @@ from .codec import (
 # (the same discrimination the transcript read applies — ``collector.adapters._fill_absolute_times``).
 _EPOCH_THRESHOLD_S = 1_000_000_000
 # The meeting statuses with a bot in flight: there is no finished meeting to export yet.
-_LIVE_STATUSES = frozenset({"requested", "joining", "awaiting_admission", "needs_help", "active", "stopping"})
+_LIVE_STATUSES = frozenset({"requested", "queued", "joining", "awaiting_admission", "needs_help", "active", "stopping"})
 #: The annotation key the duplicate check reads: flat, so a containment filter finds it on any store.
 BUNDLE_ID_KEY = "imported_bundle_id"
 PROVENANCE_KEY = "imported_from"

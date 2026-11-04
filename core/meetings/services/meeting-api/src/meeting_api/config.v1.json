@@ -642,6 +642,27 @@
    "targets": []
   },
   {
+   "key": "VEXA_QUEUE_MAX_WAIT_S",
+   "class": "defaulted",
+   "default": "1800",
+   "description": "how long a queued bot (its Pod waiting for a seat the cluster cannot add) waits once it is late — at once for an ad-hoc bot, from scheduled_at for a booked one — before its Pod is deleted and the meeting fails with completion_reason cluster_at_capacity (founder, 4 Nov 2026: 30 minutes)",
+   "targets": []
+  },
+  {
+   "key": "VEXA_QUEUE_SCALE_UP_WINDOW_S",
+   "class": "defaulted",
+   "default": "300",
+   "description": "how long a bot Pod may stay Unschedulable with no cluster-autoscaler verdict before the cluster is taken to be unable to grow and the bot goes queued (about twice a new node's p90 of 150 s); an autoscaler NotTriggerScaleUp on the Pod queues it at once",
+   "targets": []
+  },
+  {
+   "key": "VEXA_QUEUE_SWEEP_INTERVAL_S",
+   "class": "defaulted",
+   "default": "15",
+   "description": "interval (s) of the capacity-queue sweep that reads the runtime's placement facts for requested/queued bots",
+   "targets": []
+  },
+  {
    "key": "MEETING_UNTRACKED_GRACE_SEC",
    "class": "defaulted",
    "default": "600",

@@ -98,7 +98,7 @@ class SqlAlchemyMeetingRepo:
                     Meeting.user_id == user_id,
                     Meeting.platform == platform,
                     Meeting.platform_specific_id == native_meeting_id,
-                    Meeting.status.in_(["requested", "joining", "awaiting_admission", "active"]),
+                    Meeting.status.in_(["requested", "queued", "joining", "awaiting_admission", "active"]),
                 )
                 .order_by(Meeting.created_at.desc())
             )
@@ -178,7 +178,7 @@ class SqlAlchemyMeetingRepo:
             stmt = (
                 select(Meeting)
                 .where(
-                    Meeting.status.in_(["requested", "joining", "awaiting_admission", "active", "stopping"]),
+                    Meeting.status.in_(["requested", "queued", "joining", "awaiting_admission", "active", "stopping"]),
                     Meeting.data["auth_userdata_path"].astext == userdata_s3_path,
                 )
                 .order_by(Meeting.created_at.desc())
@@ -418,6 +418,95 @@ class SqlAlchemyMeetingRepo:
             # meeting.data (and the stop route gets a clean dict) without a second query.
             return _row_to_dict(m)
 
+    async def set_queue_status(
+        self, *, session_uid, expected, status_reason, queue_patch, trail_entry
+    ) -> Optional[dict]:
+        """Conditionally move a meeting into (or along) the capacity queue (lifecycle/queue.py).
+
+        Row-locked (FOR UPDATE, like every read-modify-write of ``data``) and CONDITIONAL, because
+        the bot races it: a Pod that got its seat a moment ago sends ``joining`` through the FSM, and
+        a ``queued`` written over that would regress a booting bot. So it lands only on the meeting's
+        LATEST session, while the status is still in ``expected``, and never over a user stop.
+        Entering the queue starts a fresh ``data.queue`` block (a reopened row may carry a past
+        run's); the late notice merges into the current one."""
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from ..sessions.models import Meeting, MeetingSession
+
+        async with self._session_factory() as db:
+            sess = (
+                await db.execute(select(MeetingSession).where(MeetingSession.session_uid == session_uid))
+            ).scalars().first()
+            if sess is None:
+                return None
+            latest = (
+                await db.execute(
+                    select(MeetingSession.session_uid)
+                    .where(MeetingSession.meeting_id == sess.meeting_id)
+                    .order_by(MeetingSession.id.desc())
+                )
+            ).scalars().first()
+            if latest != session_uid:
+                return None
+            m = (
+                await db.execute(select(Meeting).where(Meeting.id == sess.meeting_id).with_for_update())
+            ).scalars().first()
+            if m is None or m.status not in tuple(expected):
+                return None
+            data = dict(m.data) if isinstance(m.data, dict) else {}
+            if data.get("stop_requested"):
+                return None
+            queue = dict(data.get("queue") or {}) if m.status == "queued" else {}
+            queue.update(queue_patch or {})
+            data["queue"] = queue
+            data["status_transition"] = list(data.get("status_transition") or []) + [dict(trail_entry)]
+            m.status = "queued"
+            m.data = data
+            flag_modified(m, "data")
+            await db.commit()
+            await db.refresh(m)
+            return _row_to_dict(m)
+
+    async def list_queue_candidates(self) -> list[dict]:
+        """Meetings whose bot may be waiting for a seat (``requested``/``queued`` with a workload),
+        latest session each. Reads three JSON paths, never the whole ``data`` (a row's ``data`` can
+        hold megabytes of bot logs, and this runs every sweep)."""
+        from sqlalchemy import select
+
+        from ..lifecycle.queue import QUEUE_EXCLUDED_PLATFORMS, WATCHED_STATUSES
+        from ..sessions.models import Meeting, MeetingSession
+
+        async with self._session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(Meeting.id, Meeting.status, Meeting.bot_container_id,
+                           Meeting.data["queue"], Meeting.data["scheduled_at"],
+                           Meeting.data["stop_requested"], MeetingSession.session_uid)
+                    .join(MeetingSession, MeetingSession.meeting_id == Meeting.id)
+                    .where(
+                        Meeting.status.in_(WATCHED_STATUSES),
+                        Meeting.bot_container_id.isnot(None),
+                        Meeting.platform.notin_(QUEUE_EXCLUDED_PLATFORMS),
+                    )
+                    .order_by(MeetingSession.id.desc())
+                )
+            ).all()
+        out: dict[int, dict] = {}
+        for mid, status, bcid, queue, scheduled_at, stop_requested, sid in rows:
+            if mid in out or not sid:
+                continue
+            out[mid] = {
+                "meeting_id": mid,
+                "status": status,
+                "session_uid": sid,
+                "bot_container_id": bcid,
+                "queue": queue if isinstance(queue, dict) else None,
+                "scheduled_at": scheduled_at if isinstance(scheduled_at, str) else None,
+                "stop_requested": bool(stop_requested),
+            }
+        return list(out.values())
+
     async def count_active_bots(self, *, user_id, exclude_meeting_id=None) -> int:
         from sqlalchemy import func, select
 
@@ -429,7 +518,7 @@ class SqlAlchemyMeetingRepo:
                 .select_from(Meeting)
                 .where(
                     Meeting.user_id == user_id,
-                    Meeting.status.in_(["requested", "joining", "awaiting_admission", "active"]),
+                    Meeting.status.in_(["requested", "queued", "joining", "awaiting_admission", "active"]),
                     Meeting.platform != "browser_session",  # infra excluded (parent meetings.py:1091)
                 )
             )
@@ -494,7 +583,7 @@ class SqlAlchemyMeetingRepo:
         from ..sessions.models import Meeting, MeetingSession
 
         non_terminal = [
-            "requested", "joining", "awaiting_admission", "needs_help", "active", "stopping",
+            "requested", "queued", "joining", "awaiting_admission", "needs_help", "active", "stopping",
         ]
         async with self._session_factory() as db:
             rows = (
@@ -557,7 +646,7 @@ class SqlAlchemyMeetingRepo:
         if max_concurrent is not None and max_concurrent <= 0:
             raise MaxBotsExceeded(user_id, max_concurrent)
 
-        active = ["requested", "joining", "awaiting_admission", "active"]
+        active = ["requested", "queued", "joining", "awaiting_admission", "active"]
         async with self._session_factory() as db:
             # Per-user serialization: hold the advisory lock for the whole transaction. asyncpg needs a
             # bound int param (not a literal-format string), so bind it explicitly.

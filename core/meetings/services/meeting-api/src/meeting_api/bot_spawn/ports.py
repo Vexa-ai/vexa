@@ -260,6 +260,28 @@ class MeetingRepo(Protocol):
         in-process ``MeetingStore``."""
         ...
 
+    async def set_queue_status(
+        self,
+        *,
+        session_uid: str,
+        expected: tuple,
+        status_reason: str,
+        queue_patch: dict,
+        trail_entry: dict,
+    ) -> Optional[dict]:
+        """Move a meeting into (or along) the capacity queue (``lifecycle/queue.py``): status
+        ``queued``, ``queue_patch`` merged into ``meeting.data.queue`` (a fresh block when the row
+        enters the queue), ``trail_entry`` appended to ``data.status_transition``. Row-locked and
+        CONDITIONAL: lands only on the meeting's latest session, while its status is in
+        ``expected`` and no stop was asked for. Returns the updated row, or ``None`` (nothing moved)."""
+        ...
+
+    async def list_queue_candidates(self) -> list:
+        """Meetings whose bot may be waiting for a seat: status ``requested``/``queued`` with a
+        workload, latest session each — ``[{meeting_id, status, session_uid, bot_container_id,
+        queue, scheduled_at, stop_requested}]``. Reads those JSON paths only, never whole ``data``."""
+        ...
+
 
 @runtime_checkable
 class RuntimeClient(Protocol):
@@ -427,7 +449,7 @@ class DuplicateMeeting(Exception):
 # Statuses in which the bot has NOT yet reached the meeting. Their row goes quiet by DESIGN — a bot
 # parked in a waiting room reports `awaiting_admission` once and then polls silently for the whole
 # lobby budget the control plane handed it — so they carry their OWN (longer) reconcile window.
-PRE_ACTIVE_MEETING_STATUSES = frozenset({"requested", "joining", "awaiting_admission"})
+PRE_ACTIVE_MEETING_STATUSES = frozenset({"requested", "queued", "joining", "awaiting_admission"})
 
 
 def reconcile_grace_for_status(

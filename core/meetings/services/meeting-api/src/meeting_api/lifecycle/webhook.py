@@ -114,6 +114,46 @@ def build_status_change_envelope(
     return envelope
 
 
+def build_queue_status_envelope(
+    *,
+    connection_id: str,
+    old_status: Optional[str],
+    status_reason: str,
+    meeting: Dict[str, Any],
+    created_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    """The ``meeting.status_change`` envelope of a capacity-queue transition (lifecycle/queue.py):
+    ``new_status`` is ``queued`` and ``status_change.status_reason`` says why — ``cluster_at_capacity``
+    on entry, ``will_join_late`` for the late notice. The same event type and ``data`` shape as an
+    FSM advance (webhook.v1 ``data`` is open; no new event type).
+
+    The two notices of one queued run are distinct logical events, so the reason is part of the
+    ``event_id`` identity (``new_status`` ``queued:<status_reason>``): a receiver deduping on
+    ``event_id`` keeps both, and still drops a redelivery of either."""
+    from .queue import QUEUED
+
+    envelope = {
+        "event_id": derive_event_id(connection_id, "meeting.status_change",
+                                    f"{QUEUED}:{status_reason}"),
+        "event_type": "meeting.status_change",
+        "api_version": WEBHOOK_API_VERSION,
+        "created_at": created_at
+        or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "data": {
+            "meeting": meeting,
+            "status_change": {
+                "old_status": old_status,
+                "new_status": QUEUED,
+                "reason": status_reason,
+                "status_reason": status_reason,
+                "transition_source": "capacity_queue",
+            },
+        },
+    }
+    _conforms(envelope, "Envelope")
+    return envelope
+
+
 def _minimal_meeting_projection(change: StatusChange) -> Dict[str, Any]:
     """The DB-free meeting block: `{connection_id, status, completion_reason, failure_stage, data}`
     built from the FSM record, so the eval can drive the builders with no DB."""

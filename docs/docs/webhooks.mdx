@@ -61,6 +61,16 @@ the exact inversion of [#815](https://github.com/Vexa-ai/vexa/issues/815), where
 
 The typed events are additive: `meeting.status_change` still fires for the same transition.
 
+### Queued bots
+
+A bot that waits for a seat ([queued](/api/meetings#queued-waiting-for-a-seat)) emits
+`meeting.status_change` with `new_status: "queued"` and `status_change.status_reason`:
+`cluster_at_capacity` when it enters the queue, then `will_join_late` when its meeting starts with
+the bot still waiting (at once for an ad-hoc bot). `data.meeting.status_reason` carries the same
+value. The two notices have different `event_id`s. When a seat frees, the next `status_change` is
+the bot's `joining`; when the wait runs out, the run ends `failed` with `completion_reason`
+`cluster_at_capacity` (and `bot.failed`).
+
 ## Signature
 
 Each delivery carries `Content-Type: application/json` and, when a secret is set:
