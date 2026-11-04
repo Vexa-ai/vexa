@@ -15,7 +15,7 @@ import {
 // teams) throws the SAME typed error the JoinDriver maps, without one platform depending on another.
 import { AdmissionError } from "../shared/admission";
 import { redactMeetingUrl } from "../shared/url-redaction";
-import { throwIfGoogleJoinRefused, checkForGoogleJoinRefused } from "./refusal";
+import { throwIfGoogleJoinRefused, checkForGoogleJoinRefused, GoogleKnockExpiredError } from "./refusal";
 
 // A LIVE reCAPTCHA challenge is a VISIBLE, challenge-sized `iframe[src*="recaptcha"]` —
 // the "I'm not a robot" anchor or the opened bframe. Frame-URL presence is NOT a
@@ -373,7 +373,8 @@ async function throwIfGoogleAdmissionRejected(page: Page, context: string): Prom
 
 // Meet ended the knock itself: the "No one responded" screen, or the page already left
 // meet.google.com for workspace.google.com (where that screen sends the bot after its 60 s countdown). Either way the host
-// never admitted the bot, so the wait is a lobby timeout, never "no meeting indicators found".
+// never admitted the bot, so the wait is a lobby timeout, never "no meeting indicators found", and a typed one:
+// the knock loop asks again while our own budget has room (refusal.ts).
 export async function checkForGoogleKnockExpired(page: Page): Promise<string | null> {
   try {
     const url = typeof (page as any).url === "function" ? page.url() : "";
@@ -395,7 +396,7 @@ async function throwIfGoogleKnockExpired(page: Page, context: string): Promise<v
   const why = await checkForGoogleKnockExpired(page);
   if (why) {
     log(`⌛ Google Meet ended the join request unanswered (${why}, ${context})`);
-    throw new AdmissionError("lobby_timeout", `Google Meet ended the join request, nobody admitted the bot: ${why}`);
+    throw new GoogleKnockExpiredError(why);
   }
 }
 

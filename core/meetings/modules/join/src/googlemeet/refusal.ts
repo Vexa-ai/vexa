@@ -207,11 +207,55 @@ export async function throwIfGoogleJoinRefused(page: Page, context: string): Pro
 }
 
 /**
+ * Meet ended a request the host never answered: "No one responded to your request to join the call",
+ * or the redirect off Meet that follows it (admission.ts). A lobby timeout on Meet's clock, not ours:
+ * on prod every such bot had spent 598-603 s in the lobby of a 900 s budget (3-4 Nov 2026), so
+ * knockUntilGoogleAccepts asks again while the budget has room. The message keeps the words join
+ * evidence reads as Meet's own expiry ("Google Meet ended the join request").
+ */
+export class GoogleKnockExpiredError extends AdmissionError {
+  readonly why: string;
+  constructor(why: string) {
+    super("lobby_timeout", `Google Meet ended the join request, nobody admitted the bot: ${why}`);
+    this.name = "GoogleKnockExpiredError";
+    this.why = why;
+  }
+}
+
+/** Requests per join that may reach the host, the first included. At Meet's ~10 min a 900 s budget
+ *  holds two; the bound keeps a longer budget from asking indefinitely. */
+export const GOOGLE_MEET_MAX_REQUESTS = 3;
+/** A new request is made only with at least this much of the lobby budget left. */
+export const GOOGLE_MEET_REQUEST_MIN_BUDGET_MS = 60_000;
+/** … and only after Meet kept the ended request open at least this long. A request Meet ends sooner
+ *  is not its 10-minute expiry, and asking again on it could loop. */
+export const GOOGLE_MEET_REQUEST_MIN_OPEN_MS = 120_000;
+
+/** One request the host could see: from its knock to the moment it ended, and how it ended. */
+interface JoinRequest { from: number; to: number; end: string }
+
+const clockTime = (ms: number) => `${new Date(ms).toISOString().slice(11, 19)}Z`;
+
+/** "2 join requests: 1) 10:00:05Z–10:10:21Z ended by Meet, 2) 10:10:21Z–10:15:05Z lobby budget ran out" */
+function describeRequests(requests: JoinRequest[]): string {
+  return `${requests.length} join request${requests.length === 1 ? "" : "s"}: ` +
+    requests.map((r, i) => `${i + 1}) ${clockTime(r.from)}–${clockTime(r.to)} ${r.end}`).join(", ");
+}
+
+function howItEnded(e: AdmissionError): string {
+  return e.outcome === "lobby_timeout" ? "lobby budget ran out" : e.outcome === "denial" ? "denied" : e.outcome;
+}
+
+/**
  * Run one knock (`knock` = join click + admission wait) and knock again while Meet refuses it, up to
  * GOOGLE_JOIN_MAX_KNOCKS, waiting GOOGLE_JOIN_REKNOCK_BACKOFF_MS before each re-knock and, for an
- * anonymous bot, starting it from a fresh Google state. Any other outcome — admitted, denied by the
- * host, a lobby timeout, a crash — ends the loop as it is. `knock` receives the lobby budget still
- * left, so neither the waits nor the re-knocks extend the wait the control plane issued.
+ * anonymous bot, starting it from a fresh Google state. When Meet ends a request nobody answered, ask
+ * again while the budget has room (up to GOOGLE_MEET_MAX_REQUESTS, see the bounds above). Any other
+ * outcome — admitted, denied by the host or a captcha, a lobby timeout of our own budget, a crash —
+ * ends the loop as it is; after an ended request, a plain AdmissionError's message also names when
+ * each request was open, so the join evidence shows how many requests the host saw. `knock` receives
+ * the lobby budget still left, so neither the waits nor the re-knocks extend the wait the control
+ * plane issued.
  */
 export async function knockUntilGoogleAccepts(
   page: Page,
@@ -222,21 +266,50 @@ export async function knockUntilGoogleAccepts(
 ): Promise<boolean> {
   const sleep = opts.sleep ?? sleepFor;
   const freshenState = opts.freshenState ?? freshenGoogleGuestState;
+  const backoff = opts.backoffMs ?? GOOGLE_JOIN_REKNOCK_BACKOFF_MS;
+  const maxKnocks = opts.maxKnocks ?? GOOGLE_JOIN_MAX_KNOCKS;
   const deadline = now() + timeoutMs;
-  for (let attempt = 1; ; attempt++) {
+  const ended: JoinRequest[] = [];
+  let refusals = 0;
+  for (;;) {
     resetGoogleJoinRefusal(page);
+    const knockedAt = now();
     try {
-      return await knock(Math.max(deadline - now(), 0));
+      return await knock(Math.max(deadline - knockedAt, 0));
     } catch (e) {
-      if (!(e instanceof GoogleJoinRefusedError)) throw e;
-      const backoff = opts.backoffMs ?? GOOGLE_JOIN_REKNOCK_BACKOFF_MS;
-      const wait = backoff.length ? backoff[Math.min(attempt - 1, backoff.length - 1)] : 0;
-      const maxKnocks = opts.maxKnocks ?? GOOGLE_JOIN_MAX_KNOCKS;
-      // A wait that would use up the budget leaves no time to knock: report the refusal now.
-      if (attempt >= maxKnocks || deadline - now() <= wait) {
-        throw new GoogleJoinRefusedError(e.evidence, attempt);
+      const at = now();
+      if (e instanceof GoogleKnockExpiredError) {
+        ended.push({ from: knockedAt, to: at, end: "ended by Meet" });
+        const left = deadline - at;
+        const stop = ended.length >= GOOGLE_MEET_MAX_REQUESTS ? `${ended.length} requests made`
+          : left < GOOGLE_MEET_REQUEST_MIN_BUDGET_MS ? `${Math.round(Math.max(left, 0) / 1000)} s of the lobby budget left`
+          : at - knockedAt < GOOGLE_MEET_REQUEST_MIN_OPEN_MS ? `Meet ended it after ${Math.round((at - knockedAt) / 1000)} s`
+          : null;
+        if (stop) throw new AdmissionError("lobby_timeout", `${e.message}; ${describeRequests(ended)}; not asking again: ${stop}`);
+        log(`🔁 Google Meet ended join request ${ended.length} unanswered after ${Math.round((at - knockedAt) / 1000)} s (${e.why}); asking again with ${Math.round(left / 1000)} s of the lobby budget left`);
+        continue;
       }
-      log(`🔁 Google Meet refused knock ${attempt} of ${maxKnocks} (${e.evidence}); knocking again${wait ? ` in ${Math.round(wait / 1000)} s` : ""}${opts.freshen ? " as a fresh guest" : ""}`);
+      if (!(e instanceof GoogleJoinRefusedError)) {
+        // Typed subclasses (a signed-out profile, a page in another language) are checked by type
+        // upstream, so only a plain AdmissionError is reworded.
+        if (ended.length && e instanceof AdmissionError && e.constructor === AdmissionError) {
+          throw new AdmissionError(e.outcome, `${e.message}; ${describeRequests([...ended, { from: knockedAt, to: at, end: howItEnded(e) }])}`);
+        }
+        throw e;
+      }
+      refusals++;
+      const wait = backoff.length ? backoff[Math.min(refusals - 1, backoff.length - 1)] : 0;
+      // A wait that would use up the budget leaves no time to knock: report the refusal now.
+      if (refusals >= maxKnocks || deadline - now() <= wait) {
+        // The host already saw a request and let it expire: that, not the refusal, is the verdict.
+        if (ended.length) {
+          throw new AdmissionError("lobby_timeout",
+            `Google Meet ended the join request, nobody admitted the bot; ${describeRequests(ended)}; ` +
+            `then Meet refused ${refusals} knock${refusals === 1 ? "" : "s"} (${e.evidence})`);
+        }
+        throw new GoogleJoinRefusedError(e.evidence, refusals);
+      }
+      log(`🔁 Google Meet refused knock ${refusals} of ${maxKnocks} (${e.evidence}); knocking again${wait ? ` in ${Math.round(wait / 1000)} s` : ""}${opts.freshen ? " as a fresh guest" : ""}`);
       if (wait > 0) await sleep(wait);
       if (opts.freshen) await freshenState(page);
     }

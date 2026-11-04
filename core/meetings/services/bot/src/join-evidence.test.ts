@@ -251,6 +251,23 @@ check(
   'control: the same early exit WITHOUT that evidence still reads as the platform refusing (#1058)',
   classifyJoinFailure('timeout', { reachedLobby: true, timeInLobbyMs: 602_000, lobbyBudgetMs: 900_000 }) === 'awaiting_admission_rejected',
 );
+// @vexa/join asks again after Meet ends a request (googlemeet/refusal.ts): the verdicts that follow
+// name each request, and still read as the host not admitting.
+check(
+  'asked again, then our own budget ran out: a timeout that stays with the host',
+  classifyJoinFailure('timeout', { reachedLobby: true, timeInLobbyMs: 895_000, lobbyBudgetMs: 900_000, detail: 'Bot is still in the Google Meet waiting room after timeout — host did not admit; 2 join requests: 1) 10:00:05Z–10:10:05Z ended by Meet, 2) 10:10:05Z–10:15:20Z lobby budget ran out' }) === 'awaiting_admission_timeout'
+    && attributeJoinFailure('awaiting_admission_timeout', 'Bot is still in the Google Meet waiting room after timeout — host did not admit; 2 join requests: 1) 10:00:05Z–10:10:05Z ended by Meet, 2) 10:10:05Z–10:15:20Z lobby budget ran out') === 'host_action',
+);
+check(
+  'Meet refusing the re-ask after the host let request 1 expire: the host\'s timeout, never a platform refusal',
+  classifyJoinFailure('timeout', { reachedLobby: true, timeInLobbyMs: 650_000, lobbyBudgetMs: 900_000, detail: 'Google Meet ended the join request, nobody admitted the bot; 1 join request: 1) 10:00:05Z–10:10:05Z ended by Meet; then Meet refused 5 knocks (CreateMeetingDevice answered HTTP 403)' }) === 'awaiting_admission_timeout'
+    && attributeJoinFailure('awaiting_admission_timeout', 'Google Meet ended the join request, nobody admitted the bot; 1 join request: 1) 10:00:05Z–10:10:05Z ended by Meet; then Meet refused 5 knocks (CreateMeetingDevice answered HTTP 403)') === 'host_action',
+);
+check(
+  'a host denial of the second request is still the host\'s rejection',
+  classifyJoinFailure('rejected', { reachedLobby: true, detail: 'Bot admission was rejected by meeting admin; 2 join requests: 1) 10:00:05Z–10:10:05Z ended by Meet, 2) 10:10:05Z–10:11:00Z denied' }) === 'awaiting_admission_rejected'
+    && attributeJoinFailure('awaiting_admission_rejected', 'Bot admission was rejected by meeting admin; 2 join requests: 1) 10:00:05Z–10:10:05Z ended by Meet, 2) 10:10:05Z–10:11:00Z denied') === 'host_action',
+);
 check(
   'the override is scoped: the same admission-flow words do not move a REJECTION',
   attributeJoinFailure('awaiting_admission_rejected', 'no meeting indicators found') === 'host_action',
