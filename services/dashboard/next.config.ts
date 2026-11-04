@@ -58,6 +58,20 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  // #1969: anti-framing headers on every dashboard page and API route.
+  // NOT the /b/ proxy: the dashboard frames its own noVNC page there
+  // (withBasePath("/b/...")) when the runtime apiUrl is empty.
+  // Next prefixes these sources with basePath on its own.
+  async headers() {
+    const antiFraming = [
+      { key: "X-Frame-Options", value: "DENY" },
+      { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+    ];
+    return [
+      { source: "/", headers: antiFraming },
+      { source: "/:path((?!b(?:/|$)).*)", headers: antiFraming },
+    ];
+  },
   // v0.10.5.3 Pack D-2: redirect dashboard's internal /docs/* to canonical
   // docs.vexa.ai. Anyone landing on dashboard.vexa.ai/docs (typed in URL bar
   // or external link) goes to the unified docs site. The internal docs pages
