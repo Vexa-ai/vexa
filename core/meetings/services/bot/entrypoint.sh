@@ -50,15 +50,25 @@ echo "[entrypoint] Starting @vexa/bot worker (node dist/index.js, DISPLAY=${DISP
 # bot's graceful leave (leave meeting → flush recording → terminal lifecycle callback → exit 0,
 # bounded <25s by its own watchdog) never ran. Run the worker in the background and FORWARD
 # TERM/INT to it; wait() resumes on the trap (128+N) so loop until the worker really exits.
-node "${BOT_WORKER_ENTRY:-dist/index.js}" &
-WORKER_PID=$!
-trap 'kill -TERM "${WORKER_PID}" 2>/dev/null' TERM
-trap 'kill -INT "${WORKER_PID}" 2>/dev/null' INT
-wait "${WORKER_PID}"
-EXIT_CODE=$?
-while kill -0 "${WORKER_PID}" 2>/dev/null; do
+#
+# Exit 75 asks for a fresh worker (Google Meet refused the join, orchestrator.ts JOIN_RESTART_EXIT)
+# unless a stop arrived; the worker decides from BOT_STARTED_AT_MS when to stop asking.
+export BOT_STARTED_AT_MS="$(($(date +%s) * 1000))"
+STOPPING=
+WORKER_PID=
+trap 'STOPPING=1; kill -TERM "${WORKER_PID}" 2>/dev/null' TERM
+trap 'STOPPING=1; kill -INT "${WORKER_PID}" 2>/dev/null' INT
+while :; do
+  node "${BOT_WORKER_ENTRY:-dist/index.js}" &
+  WORKER_PID=$!
   wait "${WORKER_PID}"
   EXIT_CODE=$?
+  while kill -0 "${WORKER_PID}" 2>/dev/null; do
+    wait "${WORKER_PID}"
+    EXIT_CODE=$?
+  done
+  echo "[entrypoint] @vexa/bot worker exited with code ${EXIT_CODE}"
+  [ "${EXIT_CODE}" -eq 75 ] || break
+  [ -z "${STOPPING}" ] || exit 0
 done
-echo "[entrypoint] @vexa/bot worker exited with code ${EXIT_CODE}"
 exit ${EXIT_CODE}

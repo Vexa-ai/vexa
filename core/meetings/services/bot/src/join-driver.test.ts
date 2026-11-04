@@ -7,8 +7,8 @@
  *
  * Run: tsx src/join-driver.test.ts
  */
-import { AdmissionError, AuthSessionError, TeamsJoinRedirectError, TEAMS_AUTH_REDIRECT } from '@vexa/join';
-import { admissionOutcomeToJoinOutcome } from './join-driver.js';
+import { AdmissionError, AuthSessionError, GOOGLE_JOIN_REFUSED, TeamsJoinRedirectError, TEAMS_AUTH_REDIRECT } from '@vexa/join';
+import { admissionOutcomeToJoinOutcome, JOIN_RESTART_WINDOW_MS, shouldRestartJoin } from './join-driver.js';
 import type { JoinOutcome } from './ports.js';
 
 let passed = 0, failed = 0;
@@ -58,6 +58,13 @@ check('TeamsJoinRedirectError is NOT an AdmissionError (driver re-raises → mes
   !(teamsRedirect instanceof AdmissionError));
 check('TeamsJoinRedirectError carries the typed reasonCode in its message',
   teamsRedirect.message.startsWith(`${TEAMS_AUTH_REDIRECT}:`));
+
+console.log('\n=== join-driver: a refused Meet join restarts inside the window ===');
+check('refused, inside the window → restart', shouldRestartJoin(`${GOOGLE_JOIN_REFUSED}: refused`, 0, JOIN_RESTART_WINDOW_MS - 1));
+check('refused, window over → no restart', !shouldRestartJoin(`${GOOGLE_JOIN_REFUSED}: refused`, 0, JOIN_RESTART_WINDOW_MS));
+check('any other reason → no restart', !shouldRestartJoin('host denied', 0, 0));
+check('no reason → no restart', !shouldRestartJoin(undefined, 0, 0));
+check('no entrypoint start time → no restart', !shouldRestartJoin(`${GOOGLE_JOIN_REFUSED}: refused`, Number(undefined), 0));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

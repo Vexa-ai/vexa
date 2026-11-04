@@ -16,7 +16,7 @@ import addFormats from 'ajv-formats';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createOrchestrator, CONTROL_PLANE_UNREACHABLE, CONTROL_PLANE_UNREACHABLE_EXIT, type MeetingResult } from './orchestrator.js';
+import { createOrchestrator, CONTROL_PLANE_UNREACHABLE, CONTROL_PLANE_UNREACHABLE_EXIT, JOIN_RESTART_EXIT, type MeetingResult } from './orchestrator.js';
 import { createLivePipeline } from './pipeline.js';
 import { canTransition, type Act, type BotStatus, type LifecycleEvent, type TranscriptSegment } from './contracts.js';
 import type { ActsSource, JoinDriver, JoinOutcome, LifecycleSink, TranscriptSink, PrimaryReachability } from './ports.js';
@@ -168,6 +168,17 @@ async function main(): Promise<void> {
       String(last(lc.events).reason ?? '').includes('navigation failed'));
     check('join-error: no active emitted', !seq(lc.events).includes('active'));
     check('join-error: events conform', allConform(lc.events));
+  }
+
+  // ── a restartable refusal → exit for a fresh worker, no terminal; otherwise the terminal stands ──
+  {
+    const lc = recordingSink();
+    const res = await createOrchestrator(inv(), { lifecycle: lc, join: mockJoin('rejected'), pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness(), restartJoin: () => true }).run();
+    check('restart: exit code asks for a fresh worker', res.exitCode === JOIN_RESTART_EXIT);
+    check('restart: no terminal event', !lc.events.some((e) => e.status === 'failed'));
+    const lc2 = recordingSink();
+    const res2 = await createOrchestrator(inv(), { lifecycle: lc2, join: mockJoin('rejected'), pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness(), restartJoin: () => false }).run();
+    check('no restart: failed terminal', res2.status === 'failed' && last(lc2.events).status === 'failed');
   }
 
   // ── admission rejected → failed(awaiting_admission/awaiting_admission_rejected) ──

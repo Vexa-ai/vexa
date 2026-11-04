@@ -14,7 +14,7 @@
  * The writer is a port: the local file writer here is the dev/self-host default; an S3
  * chunked writer plugs in behind the same SignalWriter shape without touching the sink.
  */
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { appendFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { isMixedLanePlatform, type Invocation } from './config.js';
@@ -416,8 +416,9 @@ export function createCaptureSignalRecorder(inv: Invocation, opts: RecorderOptio
       flushing = writer.append(headerLine).catch((e) => log(`header write failed: ${String(e)}`));
     } else {
       mkdirSync(dir, { recursive: true });
-      // Header lands synchronously so even a zero-frame session leaves an attributable file.
-      appendFileSync(path, headerLine, 'utf8');
+      // Header lands synchronously so even a zero-frame session leaves an attributable file. A
+      // restarted worker (entrypoint.sh) continues the same tape, which already has one.
+      if (!existsSync(path)) appendFileSync(path, headerLine, 'utf8');
       writer = fileSignalWriter(path);
     }
   } catch (e) {

@@ -30,7 +30,7 @@ import { createOrchestrator } from './orchestrator.js';
 import { createHttpLifecycleSink } from './adapters/lifecycle-http.js';
 import { createRedisTranscriptSink, redisClientFrom } from './adapters/transcript-redis.js';
 import { createRedisActsSource, redisActsClientFrom } from './adapters/acts-redis.js';
-import { createBrowserJoinDriver } from './join-driver.js';
+import { createBrowserJoinDriver, shouldRestartJoin } from './join-driver.js';
 import { createSpeakerIds, turnsWithSpeakerIds, withSpeakerIds } from './speaker-ids.js';
 import { createBotPipeline, createLivePipeline, createTranscribe, liveEngineForUrl, serr, type BotPipeline } from './pipeline.js';
 import { createBotRecordingSink } from './recording.js';
@@ -319,7 +319,10 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     ? { probeSecondary: () => pingRedis(inv.redisUrl) }
     : undefined;
 
+  // Set by entrypoint.sh; without it (no entrypoint to restart the worker) the check is always false.
+  const startedAtMs = Number(env.BOT_STARTED_AT_MS);
   const orchestrator = createOrchestrator(inv, {
+    restartJoin: (reason) => shouldRestartJoin(reason, startedAtMs, Date.now()),
     lifecycle,
     join,
     pipeline,

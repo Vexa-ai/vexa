@@ -9,6 +9,7 @@ import type { Page } from '@vexa/remote-browser';
 import {
   joinMeeting,
   AdmissionError,
+  GOOGLE_JOIN_REFUSED,
   leaveGoogleMeet, leaveMicrosoftTeams, leaveZoomMeeting, leaveJitsiMeeting,
   startGoogleRemovalMonitor, startTeamsRemovalMonitor, startZoomRemovalMonitor, startJitsiRemovalMonitor,
   type JoinState, type Platform as JoinPlatform, type AdmissionOutcome,
@@ -17,6 +18,15 @@ import type { BotStatus } from './contracts.js';
 import type { Invocation } from './config.js';
 import type { JoinDriver, JoinOutcome, JoinResult } from './ports.js';
 import { wantsVirtualCamera } from './virtual-camera.js';
+
+/** How long after the container started a refused Google Meet join may still restart the worker:
+ *  bots start about 2 minutes before the meeting, so this covers its first 10 minutes. */
+export const JOIN_RESTART_WINDOW_MS = 12 * 60_000;
+
+/** A join Meet kept refusing restarts with a fresh browser: live, fresh bots got through where more knocks didn't. */
+export function shouldRestartJoin(reason: string | undefined, startedAtMs: number, nowMs: number): boolean {
+  return !!reason?.startsWith(GOOGLE_JOIN_REFUSED) && nowMs - startedAtMs < JOIN_RESTART_WINDOW_MS;
+}
 
 /**
  * Map @vexa/join's typed AdmissionError `outcome` → a JoinOutcome (G1).

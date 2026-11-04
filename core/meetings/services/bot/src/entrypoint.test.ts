@@ -99,7 +99,23 @@ console.log('WORKER-READY');
 process.exit(7);
 `;
 
+// Asks for a fresh worker once, and proves the second one is a new process with the same start time.
+const RESTART_WORKER = `
+const fs = require('node:fs');
+console.log('WORKER-READY started=' + process.env.BOT_STARTED_AT_MS);
+if (fs.existsSync('restarted')) { console.log('WORKER-SECOND'); process.exit(0); }
+fs.writeFileSync('restarted', '');
+process.exit(75);
+`;
+
 const main = async () => {
+  {
+    const r = await runEntrypoint(RESTART_WORKER);
+    const starts = [...r.stdout.matchAll(/WORKER-READY started=(\d+)/g)].map((m) => m[1]);
+    check('exit 75 → a fresh worker runs', r.stdout.includes('WORKER-SECOND'), r.stdout.slice(-400));
+    check('both workers share one start time', starts.length === 2 && starts[0] === starts[1], starts.join(','));
+    check('the fresh worker\'s exit code is the container\'s', r.code === 0, `exit=${r.code}`);
+  }
   {
     const r = await runEntrypoint(GRACEFUL_WORKER, { sigtermAfterMs: 50 });
     check('SIGTERM to the entrypoint is FORWARDED to the worker',

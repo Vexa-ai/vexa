@@ -60,7 +60,12 @@ export interface OrchestratorDeps {
   /** Producer clock for lifecycle facts. Injected by tests; each logical event is stamped once
    *  before the lifecycle adapter performs any HTTP retry. */
   now?: () => string;
+  /** Optional — whether this non-admitted verdict ends in a fresh worker instead of a terminal. */
+  restartJoin?: (reason: string | undefined) => boolean;
 }
+
+/** Exit code that asks entrypoint.sh for a fresh worker in this container; no terminal was sent. */
+export const JOIN_RESTART_EXIT = 75;
 
 /** The dedicated non-zero exit code for a pre-join control-plane-unreachable abort (#530). On
  *  k8s each bot is a bare Pod (`--restart=Never`, `k8s_backend.py`) — the terminal exit code IS
@@ -281,6 +286,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     if (outcome !== 'admitted') {
       const reason = OUTCOME_FAIL[outcome];
       unsubscribe();
+      if (deps.restartJoin?.(joinReason)) return { exitCode: JOIN_RESTART_EXIT, status: cur };
       // ALWAYS stamp a human `reason` text (#926). A non-admitted verdict carries a completion_reason
       // enum, but the terminal row also needs the human cause or meeting-api synthesizes the
       // uninformative "Bot exited with code 1; reason: None". Prefer the driver's own message
