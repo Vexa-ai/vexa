@@ -6,9 +6,12 @@
 // claude[bot]), the generated-by footer, or a PR opened by @claude or claude[bot].
 //
 //   node scripts/human-authors.mjs BASE HEAD [--event PATH]
+//   node scripts/human-authors.mjs --event PATH        (PATH holds a merge_group event)
 //
 // PATH is the GitHub event payload (GITHUB_EVENT_PATH); its pull_request title, body and user are
-// checked too. Text inside closed code fences and inline code spans is a quoted example, not a
+// checked too. On a merge_group event the range is the commits the queued pull request adds, read
+// as dco-range and dco-no-override read them: the queue commit is a squash GitHub writes, so the
+// pull request's own commits are judged instead, from the queue base to refs/pull/<number>/head. Text inside closed code fences and inline code spans is a quoted example, not a
 // mark. Commits are read raw (git cat-file); a commit that cannot be read exactly (a NUL, an
 // encoding other than UTF-8, invalid UTF-8, a missing author or committer) is a hard error.
 // Exit 0 when clean, 1 on any finding, 2 when the range cannot be read. Needs no secrets.
@@ -435,6 +438,46 @@ export function readCommits(base, head, cwd = process.cwd()) {
   return shas.map((sha) => parseCommit(sha, git(["cat-file", "commit", sha], cwd)));
 }
 
+export class UnreadableQueue extends Error {}
+
+// GitHub names the queue branch gh-readonly-queue/<base branch>/pr-<number>-<base sha>.
+const QUEUE_REF = /^(?:refs\/heads\/)?gh-readonly-queue\/.+\/pr-(\d+)-([0-9a-f]{40})$/;
+const SHA = /^[0-9a-f]{40}$/;
+
+/** merge_group event \u2192 {number, base, queue}: the queued pull request, the queue base (the queue
+ *  commit's first parent) and the queue commit. */
+export function queuedPullRequest(event) {
+  const group = event?.merge_group ?? {};
+  const m = QUEUE_REF.exec(group.head_ref ?? "");
+  if (!m) throw new UnreadableQueue(`cannot read a pull request from the merge-queue ref ${JSON.stringify(group.head_ref ?? null)}`);
+  if (group.base_sha !== m[2]) throw new UnreadableQueue(`merge_group.base_sha ${group.base_sha} is not the queue ref's base ${m[2]}`);
+  if (!SHA.test(group.head_sha ?? "")) throw new UnreadableQueue(`merge_group.head_sha ${group.head_sha} is not a commit sha`);
+  return { number: Number(m[1]), base: m[2], queue: group.head_sha };
+}
+
+const hasCommit = (rev, cwd) => {
+  try { git(["cat-file", "-e", `${rev}^{commit}`], cwd); return true; } catch { return false; }
+};
+
+/** The range a merge_group run judges: the queue base to the queued pull request's head, fetched
+ *  from refs/pull/<number>/head. The queue commit must sit on the queue base. */
+export function mergeGroupRange(event, cwd = process.cwd()) {
+  const { number, base, queue } = queuedPullRequest(event);
+  for (const sha of [base, queue]) if (!hasCommit(sha, cwd)) git(["fetch", "--no-tags", "--quiet", "origin", sha], cwd);
+  const parent = git(["rev-parse", `${queue}^1`], cwd).toString("utf8").trim();
+  if (parent !== base) {
+    throw new UnreadableQueue(`queue commit ${queue.slice(0, 12)} sits on ${parent.slice(0, 12)}, not on the queue base ${base.slice(0, 12)}`);
+  }
+  const ref = `refs/human-authors/pr-${number}`;
+  git(["fetch", "--no-tags", "--quiet", "origin", `+refs/pull/${number}/head:${ref}`], cwd);
+  const head = git(["rev-parse", `${ref}^{commit}`], cwd).toString("utf8").trim();
+  // A queued pull request adds at least one commit; an empty range means the wrong head or base.
+  if (git(["rev-list", "--count", `${base}..${head}`], cwd).toString("utf8").trim() === "0") {
+    throw new UnreadableQueue(`#${number} adds no commits in ${base.slice(0, 12)}..${head.slice(0, 12)}`);
+  }
+  return { number, base, head, queue };
+}
+
 /** A finding line with its control characters escaped, so a CR cannot hide it in a log. */
 const printable = (s) => s.replace(/[\x00-\x08\x0a-\x1f\x7f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`);
 
@@ -443,13 +486,22 @@ function main(argv) {
   let event = null;
   const i = args.indexOf("--event");
   if (i >= 0) { event = JSON.parse(readFileSync(args[i + 1], "utf8")); args.splice(i, 2); }
-  if (args.length !== 2) { console.error("usage: human-authors.mjs BASE HEAD [--event PATH]"); return 2; }
-  const [base, head] = args;
+  const queued = args.length === 0 && event?.merge_group;
+  if (args.length !== 2 && !queued) {
+    console.error("usage: human-authors.mjs BASE HEAD [--event PATH] | --event MERGE_GROUP_EVENT_PATH");
+    return 2;
+  }
+  let [base, head] = args;
   let commits;
   try {
+    if (queued) {
+      const q = mergeGroupRange(event);
+      console.log(`human-authors: merge-queue commit ${q.queue.slice(0, 12)} for #${q.number}; judging the commits the pull request adds`);
+      ({ base, head } = q);
+    }
     commits = readCommits(base, head);
   } catch (e) {
-    if (!(e instanceof UnreadableCommit || e instanceof GitFailed)) throw e;
+    if (!(e instanceof UnreadableCommit || e instanceof GitFailed || e instanceof UnreadableQueue)) throw e;
     console.error(`human-authors: ${e.message}`);
     return 2;
   }
