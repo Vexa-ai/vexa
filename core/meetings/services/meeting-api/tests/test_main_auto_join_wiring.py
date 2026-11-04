@@ -7,13 +7,16 @@ through `__main__._planned_start_deps`, which Flows' booked_bot calls for every 
 drives that REAL builder — not a reimplementation — and proves its `publish_status` publishes a
 `meeting.status` frame on the owner's channel, best-effort, exactly as the sweep's closure did.
 
-It also pins that the sweep is gone: no `_auto_join_loop`, no `auto_join` module, so nothing but the
-route can start a booked meeting's bot.
+It also carries the gate on the scheduling half of the Meetings↔Flows contract (ADR-0052, revised
+4 Nov 2026): every BOOKED start goes through ``POST /internal/meetings/{meeting_id}/start``. Its
+inverse — the ad hoc and live paths make no call to Flows — is ``test_flows_edges.py``.
 """
 from __future__ import annotations
 
 import importlib.util
 import json
+
+from _source_calls import tree_sites
 
 import meeting_api.__main__ as main_mod
 
@@ -53,8 +56,50 @@ async def test_the_start_routes_publish_status_is_wired_and_publishes():
         user_id=1, meeting_id=1, native_id="x", status="scheduled", when=None)
 
 
-def test_there_is_no_auto_join_sweep_left():
-    """ADR-0052 §3: one clock. Flows' booked_bot is the only thing that starts a booked bot."""
+SPAWN = "meeting_api.bot_spawn"
+#: What makes a start a BOOKED start: the planned row it claims by id, and the join time it waits for.
+BOOKED_KEYWORDS = {"planned_meeting_id", "join_at"}
+
+
+def _named(site, name: str) -> bool:
+    return site.target.endswith(f".{name}") and site.target.startswith(SPAWN)
+
+
+def test_every_booked_start_goes_through_the_start_route():
+    """ADR-0052 §3 and "The contract between Meetings and Flows": every booked start goes through
+    ``POST /internal/meetings/{meeting_id}/start``, the one call Flows makes into meetings.
+
+    * meeting-api keeps no clock of its own: no auto-join sweep, no ``_auto_join_loop`` /
+      ``auto_join_tick``;
+    * the route's handler is ``start_router``'s, and only it calls ``start_planned_meeting``;
+    * only ``planned_start`` starts a bot for a booked row — claiming the row by id with its
+      ``join_at`` (``start_row``, ``request_bot(planned_meeting_id=…, join_at=…)``); every other
+      ``request_bot`` call (``POST /bots``, the Meet respawn) passes neither."""
+    from meeting_api.bot_spawn.start_router import START_PATH
+    from meeting_api.lifecycle.meet_respawn import SPAWN_FIELDS
+
     assert importlib.util.find_spec("meeting_api.bot_spawn.auto_join") is None
     source = open(main_mod.__file__).read()
     assert "_auto_join_loop" not in source and "auto_join_tick" not in source
+    assert START_PATH == "/internal/meetings/{meeting_id}/start"
+    from fastapi.testclient import TestClient
+
+    from meeting_api import create_app
+
+    # mounted on the one app, answered by start_router's handler (its own refusal of no subject)
+    r = TestClient(create_app()).post("/internal/meetings/1/start")
+    assert (r.status_code, r.json().get("detail")) == (401, "Missing user identity"), r.text
+
+    sites = tree_sites()
+    starters = {s.rel for s in sites if _named(s, "start_planned_meeting")}
+    assert starters == {"bot_spawn/start_router.py"}, starters
+    assert {s.rel for s in sites if _named(s, "start_row")} == {"bot_spawn/planned_start.py"}
+    spawns = [s for s in sites if _named(s, "request_bot")]
+    assert {s.rel for s in spawns} == {"bot_spawn/router.py", "bot_spawn/planned_start.py",
+                                       "lifecycle/meet_respawn.py"}
+    for s in spawns:
+        if s.rel == "bot_spawn/planned_start.py":
+            continue
+        assert not (s.keywords & BOOKED_KEYWORDS), f"{s.rel}:{s.line} starts a booked bot"
+        assert not s.splat or s.rel == "lifecycle/meet_respawn.py", f"{s.rel}:{s.line} splats"
+    assert not (set(SPAWN_FIELDS) & BOOKED_KEYWORDS), "the Meet respawn carries a booked start's keys"
