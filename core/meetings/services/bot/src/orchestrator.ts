@@ -22,7 +22,6 @@ import {
   type Act,
   canTransition,
   isTerminal,
-  TERMINATION_SIGNAL,
 } from './contracts.js';
 import { buildJoinEvidence } from './join-evidence.js';
 import { redactUrlsIn } from '@vexa/join/url-redaction';
@@ -250,12 +249,6 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
 
   // The end signal: a `leave` act, host removal, or a timeout all resolve the active phase.
   let signalEnd: ((r: CompletionReason) => void) | null = null;
-  // Who called `stop()` FIRST: a termination signal or a command (the `leave` act, a voice note's
-  // end). Only the first counts — a SIGTERM that follows a user's Stop (the runtime tearing the bot
-  // down) must not relabel that Stop. Read only for a run that ends `stopped`.
-  let stopTrigger: 'signal' | 'command' | null = null;
-  const endedBySignal = (reason: CompletionReason): Partial<LifecycleEvent> =>
-    (reason === 'stopped' && stopTrigger === 'signal' ? { ended_by: TERMINATION_SIGNAL } : {});
   const ended = new Promise<CompletionReason>((res) => { signalEnd = res; });
 
   // The PRE-ACTIVE abort signal (Bug 2 — the waiting-room-orphan fix): a stop/SIGTERM that arrives
@@ -361,7 +354,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
         const abortDetail = 'stopped while awaiting admission (withdrew the join request)';
         await emit('failed', {
           failure_stage: stage, completion_reason: 'stopped',
-          reason: abortDetail, exit_code: 0, ...endedBySignal('stopped'),
+          reason: abortDetail, exit_code: 0,
           // `stopped_while_joining` → attribution `user_action`. This row shares its `failed`
           // status with real defects, and counting it as one is precisely how a raw failed-status
           // rate stops meaning anything: the user ended this run themselves.
@@ -449,7 +442,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
 
     console.error(`[bot] orchestrator: emitting completed (reason=${reason}, from=${cur})`);
     try {
-      await emit('completed', { completion_reason: reason, exit_code: 0, ...endedBySignal(reason) });
+      await emit('completed', { completion_reason: reason, exit_code: 0 });
       console.error('[bot] orchestrator: completed emitted + flushed');
     } catch (e) {
       console.error(`[bot] orchestrator: completed emit THREW: ${String(e)}`);
@@ -463,8 +456,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
    *  completed). If it is still PRE-ACTIVE (`joining`/`awaiting_admission`, blocked in the lobby),
    *  it instead aborts the join so `run()` WITHDRAWS the waiting-room request rather than being
    *  SIGKILLed into a lobby orphan (Bug 2). After the run ended both are no-ops (resolvers fired). */
-  function stop(reason: CompletionReason = 'stopped', opts: { bySignal?: boolean } = {}): void {
-    stopTrigger ??= opts.bySignal ? 'signal' : 'command';
+  function stop(reason: CompletionReason = 'stopped'): void {
     if (cur === 'active') {
       signalEnd?.(reason);
     } else {

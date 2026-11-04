@@ -17,8 +17,6 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from . import bot_termination as _bot_termination
-
 
 # Cap forensics so a runaway ring-buffer can't bloat meeting.data (parent callbacks.py caps
 # bot_logs at 50 KiB, trimming the OLDEST lines first). 50 * 1024 bytes.
@@ -57,9 +55,6 @@ class CompletionReason(str, Enum):
 
 # The one terminal reason a user stop resolves to, at EVERY stage.
 USER_STOP_REASON = CompletionReason.STOPPED.value
-# The stages before admission in which a bot's own `stopped` with no stop requested is a termination
-# from outside Vexa (`unasked_stop`). `needs_help` is an escalation inside the same wait.
-_UNASKED_STOP_STAGES = frozenset({BotStatus.JOINING, BotStatus.AWAITING_ADMISSION, BotStatus.NEEDS_HELP})
 
 
 def dominant_completion_reason(reason: Any, *, stop_requested: bool) -> Any:
@@ -83,27 +78,6 @@ def dominant_completion_reason(reason: Any, *, stop_requested: bool) -> Any:
     that never looks at the flag.
     """
     return USER_STOP_REASON if stop_requested else reason
-
-
-def unasked_stop(reason: Any, *, stop_requested: bool, stage: "Optional[BotStatus]",
-                 ended_by: Any = None) -> bool:
-    """A ``stopped`` the user never asked for, from a bot still joining or in the lobby.
-
-    The rule of Vexa-ai/vexa#1993's ``unasked_stop`` (there: the booked bot's waiting stage, the
-    record's first event), for the two stages before admission. A bot SIGTERM'd there (Kubernetes
-    preemption, an eviction, a node drain) aborts its join and reports ``failed`` / ``stopped`` with
-    its own ``stopped_while_joining`` / ``user_action`` evidence: it cannot tell the signal from the
-    user's Stop. The row can: the stop route and the service-authority teardown write
-    ``stop_requested`` before the bot is told to go. Without it the run failed to join: it is
-    recorded ``join_failure`` (retryable), with evidence derived here and attributed
-    ``system_fault`` — never read as the user's stop.
-
-    Here the bot's own marker is required too (``ended_by: termination_signal``, which a run that a
-    signal ended carries): a ``stopped`` from a ``leave`` act carries none and stays the user's even
-    if the row's flag could not be read, and an unmarked lobby ``stopped`` keeps its recorded meaning
-    (the tape ``user-stopped-in-the-lobby``)."""
-    return (reason == USER_STOP_REASON and not stop_requested and stage in _UNASKED_STOP_STAGES
-            and ended_by == _bot_termination.TERMINATION_SIGNAL)
 
 
 class FailureStage(str, Enum):
@@ -230,43 +204,6 @@ def _trim_bot_logs(lines: List[str]) -> tuple[List[str], bool]:
 _PRE_LOBBY_STAGES = frozenset({FailureStage.REQUESTED, FailureStage.JOINING})
 
 
-def _unasked_stop_evidence(rec: "MeetingRecord", event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """The join evidence for an ``unasked_stop``: derived here, ``system_fault``. The bot's verdict
-    (``stopped_while_joining`` / ``user_action``) says the user ended it; nobody did. What the bot
-    MEASURED is kept (its stage timings, the node, the screenshot); its words go into the detail. The
-    typed reason is ``unknown``: no join step failed, a signal ended the run. NEVER raises."""
-    try:
-        from .join_evidence import (
-            JoinFailureAttribution,
-            JoinFailureReason,
-            build_join_evidence,
-            normalize_evidence,
-        )
-
-        stage = rec.failure_stage.value if rec.failure_stage is not None else None
-        bot = normalize_evidence(event.get("join_evidence"), default_stage=stage) or {}
-        timings = bot.get("timings") or {}
-        said = event.get("reason")
-        detail = (f"ended at {stage} by a stop nobody asked for: no stop was requested, so a "
-                  f"termination signal from outside Vexa ended the run (Kubernetes preemption, "
-                  f"eviction, node drain or shutdown)" + (f"; the bot reported: {said}" if said else ""))
-        return build_join_evidence(
-            reason=JoinFailureReason.UNKNOWN,
-            attribution=JoinFailureAttribution.SYSTEM_FAULT,
-            stage=stage,
-            source="derived",
-            detail=detail,
-            time_to_lobby_ms=timings.get("time_to_lobby_ms"),
-            time_in_lobby_ms=timings.get("time_in_lobby_ms"),
-            total_ms=timings.get("total_ms"),
-            lobby_budget_ms=bot.get("lobby_budget_ms"),
-            node=bot.get("node"),
-            screenshot_key=bot.get("screenshot_key"),
-        )
-    except Exception:  # noqa: BLE001 — evidence is a report about a finished run; never fail on it
-        return None
-
-
 def _capture_join_evidence(
     rec: "MeetingRecord", event: Dict[str, Any], frm: Optional[BotStatus]
 ) -> Optional[Dict[str, Any]]:
@@ -362,9 +299,6 @@ class MeetingRecord:
     #: speaker?, reason}]``, epoch seconds. Persisted at ``meeting.data.transcript_gaps`` — and kept
     #: OFF every response edge unless a reader asks (``collector.projection.OPT_IN_KEYS``).
     transcript_gaps: Optional[List[Dict[str, Any]]] = None
-    #: A bot that was in the meeting and was ended under it by the cluster (lifecycle/
-    #: bot_termination.py): ``{cause, attribution, source, detail}``. Set on a terminal only.
-    bot_termination: Optional[Dict[str, Any]] = None
     #: WHY a pre-active run never reached the meeting (#1059/#1058) — the typed
     #: `join_evidence.JoinFailureReason` plus the stage, the stage timings, and the platform's own
     #: signal. Set on a `failed` terminal only; see `data` below for how it lands in the JSONB.
@@ -427,8 +361,6 @@ class MeetingRecord:
             d["stt_fault"] = dict(self.stt_fault)
         if self.transcript_gaps:
             d["transcript_gaps"] = [dict(g) for g in self.transcript_gaps]
-        if self.bot_termination is not None:
-            d[_bot_termination.KEY] = dict(self.bot_termination)
         return d
 
 
@@ -608,18 +540,14 @@ class LifecycleSink:
 
     @staticmethod
     def _terminal_reason(
-        rec: MeetingRecord, event: Dict[str, Any], *, stage: Optional[BotStatus] = None
+        rec: MeetingRecord, event: Dict[str, Any]
     ) -> Optional[CompletionReason]:
         """The reason to record on a terminal advance — the bot's, unless the USER stopped it.
 
         The bot reports what IT saw (it was killed mid-join → ``join_failure``). When the record
         carries the user's stop intent, that intent is the truth about why the run ended, and it
-        wins here at the WRITE — see ``dominant_completion_reason``. When it does not, a joining or
-        waiting bot's ``stopped`` is not the user's either — see ``unasked_stop``."""
+        wins here at the WRITE — see ``dominant_completion_reason``."""
         raw = event.get("completion_reason")
-        if unasked_stop(raw, stop_requested=rec.stop_requested, stage=stage,
-                        ended_by=event.get(_bot_termination.ENDED_BY)):
-            raw = CompletionReason.JOIN_FAILURE.value
         raw = dominant_completion_reason(raw, stop_requested=rec.stop_requested)
         return CompletionReason(raw) if raw else None
 
@@ -696,7 +624,7 @@ class LifecycleSink:
         elif to is BotStatus.FAILED:
             # FM-003: derive failure_stage from the stage we were IN, not the payload.
             rec.failure_stage = _STATUS_TO_FAILURE_STAGE.get(frm, FailureStage.ACTIVE)
-            rec.completion_reason = self._terminal_reason(rec, event, stage=frm)
+            rec.completion_reason = self._terminal_reason(rec, event)
             # The parent builds an `error_details` string on a failed exit when none supplied.
             if rec.error_details is None and (rec.exit_code is not None or rec.reason):
                 rec.error_details = (
@@ -709,11 +637,7 @@ class LifecycleSink:
             # record when it sent none, so a reconcile-driven or runtime-destroy terminal is
             # evidenced too. FAIL-OPEN by contract: this is a REPORT about a run that has already
             # ended, and no fault in it may alter the terminal the FSM is recording.
-            if unasked_stop(event.get("completion_reason"), stop_requested=rec.stop_requested,
-                            stage=frm, ended_by=event.get(_bot_termination.ENDED_BY)):
-                rec.join_evidence = _unasked_stop_evidence(rec, event)
-            else:
-                rec.join_evidence = _capture_join_evidence(rec, event, frm)
+            rec.join_evidence = _capture_join_evidence(rec, event, frm)
 
         # Terminal forensics → record.data (parent caps bot_logs, trims oldest-first).
         if to in _TERMINAL:
@@ -727,11 +651,6 @@ class LifecycleSink:
             # lifecycle.v1 (additionalProperties: true), same as infra_fault.
             if event.get("stt_fault"):
                 rec.stt_fault = dict(event["stt_fault"])
-            # WHO ended a bot that was in the meeting, when it was the cluster (bot_termination.py).
-            # Additive on lifecycle.v1 like stt_fault; a malformed block is dropped, never persisted.
-            termination = _bot_termination.sanitize(event.get(_bot_termination.KEY))
-            if termination is not None:
-                rec.bot_termination = termination
             # WHAT of the meeting was never transcribed (prod-cutover R4): the bot's lanes record
             # every lost window as a range and report them here, so a gap is part of the meeting's
             # record instead of a silent hole. Additive, like stt_fault. Malformed entries are

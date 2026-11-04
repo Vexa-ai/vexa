@@ -13,7 +13,7 @@ them drive:
 """
 from __future__ import annotations
 
-from . import bot_termination, meet_respawn
+from . import meet_respawn
 
 from collections import deque
 from typing import TYPE_CHECKING, Optional
@@ -779,10 +779,6 @@ def mount_lifecycle(
                       span="lifecycle.callback", fields={"reason": refusal})
             return JSONResponse(status_code=401,
                                 content={"status": "error", "detail": "bot session credential required"})
-        # Only meeting-api writes `bot_termination` (lifecycle/bot_termination.py): a block a bot sends
-        # on its own callback, whatever source it claims, is dropped before anything reads the event.
-        if isinstance(body, dict) and bot_termination.KEY in body:
-            body = {k: v for k, v in body.items() if k != bot_termination.KEY}
         # GOOGLE MEET REFUSED THIS BOT and the meeting has pods left (lifecycle/meet_respawn.py): the
         # meeting stays `joining` and the next bot is due. The terminal is acknowledged, not applied.
         if isinstance(body, dict) and meet_respawn.is_meet_refusal(body):
@@ -800,27 +796,6 @@ def mount_lifecycle(
                 })
             # The last pod, or a meeting with none left: the refusal is the meeting's terminal, typed.
             body = meet_respawn.as_final_refusal(body)
-        # A bot IN THE MEETING whose run a termination signal ended (its own marker) with no stop
-        # requested was terminated from outside Vexa (lifecycle/bot_termination.py): the row says so
-        # instead of reading as a user stop. Best-effort: any fault here applies the event as sent.
-        if (isinstance(body, dict) and body.get("status") == "completed"
-                and body.get("completion_reason") == "stopped"
-                and body.get(bot_termination.ENDED_BY) == bot_termination.TERMINATION_SIGNAL
-                and meeting_repo is not None
-                and hasattr(meeting_repo, "get_meeting_by_session")):
-            try:
-                row = await meeting_repo.get_meeting_by_session(session_uid=body.get("connection_id"))
-                relabelled = bot_termination.relabel_bot_terminal(body, row)
-            except Exception as e:  # noqa: BLE001 — naming the cause never blocks the terminal
-                relabelled = None
-                log_event("bot_termination_lookup_failed", audience="system", level="warning",
-                          span="lifecycle.callback", fields={"error": type(e).__name__})
-            if relabelled is not None:
-                log_event("bot_terminated_externally", audience="system", level="warning",
-                          span="lifecycle.callback", meeting_id=str((row or {}).get("id")),
-                          fields={"cause": bot_termination.TERMINATED_EXTERNALLY,
-                                  "platform": (row or {}).get("platform")})
-                body = relabelled
         status_code, content = await _apply_lifecycle_event(
             body, transition_source=TransitionSource.BOT_CALLBACK
         )
@@ -905,8 +880,6 @@ def mount_lifecycle(
             await synthesize_terminal_for_dead_workload(
                 meeting_repo, workload_id, state, _drive_terminal,
                 event_at=body.get("at"),
-                exit_code=body.get("exitCode"),
-                stop_reason=body.get("stopReason"),
                 log=_logging.getLogger("meeting_api.runtime.callback"),
             )
         except Exception as e:  # noqa: BLE001 — the runtime ACK must never fail on the terminal backstop

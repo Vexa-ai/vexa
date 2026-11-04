@@ -29,7 +29,6 @@ from datetime import datetime
 from typing import Any, Awaitable, Callable, Optional
 
 from ..bot_spawn.ports import WorkloadUnknown
-from . import bot_termination
 from .machine import dominant_completion_reason
 
 
@@ -409,21 +408,7 @@ async def reconcile_stale_nonterminal_sweep(
             continue
         terminal = "failed" if status in _PRE_ACTIVE_NONTERMINAL else "completed"
         body: dict[str, Any] = {"connection_id": session_uid, "status": terminal}
-        # A bot that was in the meeting, whose workload the runtime reports ended by a kill (a
-        # non-zero exit, or `oom`), with no stop requested: named, not `left_alone`.
-        killed = (
-            bot_termination.from_dead_workload(
-                workload_id=bot_container_id, state=probe_info.get("state"),
-                exit_code=probe_info.get("exitCode", probe_info.get("exit_code")),
-                stop_reason=probe_info.get("stopReason") or probe_info.get("stop_reason"),
-            )
-            if terminal == "completed" and not stop_requested and status in bot_termination.IN_MEETING
-            and probe_info
-            else None
-        )
-        if killed is not None:
-            body = bot_termination.was_active_terminal(session_uid, killed)
-        elif terminal == "completed":
+        if terminal == "completed":
             body["completion_reason"] = dominant_completion_reason(
                 "left_alone", stop_requested=stop_requested
             )
@@ -565,8 +550,6 @@ async def synthesize_terminal_for_dead_workload(
     drive_terminal: Callable[[dict], Awaitable[Any]],
     *,
     event_at: Optional[str] = None,
-    exit_code: Any = None,
-    stop_reason: Optional[str] = None,
     log: Any,
 ) -> bool:
     """Consume a runtime-confirmed TERMINAL workload callback (``destroyed``/``exited``/…) as EVIDENCE the
@@ -638,14 +621,6 @@ async def synthesize_terminal_for_dead_workload(
             body["join_evidence"] = evidence
         if stop_requested:
             body["data"] = {"stop_requested": True}
-    elif status in _WAS_ACTIVE_STATUSES and status != "stopping" and not stop_requested and (
-        killed := bot_termination.from_dead_workload(
-            workload_id=workload_id, state=state, exit_code=exit_code, stop_reason=stop_reason)
-    ) is not None:
-        # It reached the meeting and the runtime reports its workload KILLED (a non-zero exit, or
-        # `oom`), with no terminal report from the bot and no stop requested: the cluster ended it
-        # under the meeting (bot_termination.py). Named — not `left_alone`, which it was not.
-        body = bot_termination.was_active_terminal(info["session_uid"], killed)
     elif status in _WAS_ACTIVE_STATUSES:
         # It reached the meeting and its workload is now runtime-confirmed gone with no terminal callback
         # of its own — complete it (it WAS active). `completion_reason=stopped` when the stop was in
