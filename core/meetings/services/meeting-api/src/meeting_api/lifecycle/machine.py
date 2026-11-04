@@ -80,6 +80,21 @@ def dominant_completion_reason(reason: Any, *, stop_requested: bool) -> Any:
     return USER_STOP_REASON if stop_requested else reason
 
 
+def unasked_stop(reason: Any, *, stop_requested: bool, pre_active: bool) -> bool:
+    """A ``stopped`` the user never asked for, on a run that never reached the meeting.
+
+    Vexa-ai/vexa#1993's rule (there: the booked bot's waiting stage, the record's first event),
+    widened to every stage before admission (seam audit, 4 Nov 2026): requested, joining,
+    awaiting_admission, and needs_help, an escalation inside that wait. A bot ends ``failed`` /
+    ``stopped`` on ANY termination signal: a preemption, an eviction, a node drain, a self-host
+    restart. The bot cannot tell those from the user's stop; the row can: the stop route and the
+    service-authority teardown write ``stop_requested`` before the bot is told to go. Without it the
+    run failed to join: recorded ``join_failure``, so the occurrence stays retryable, never read as
+    the user's stop. An admitted bot's ``stopped`` is not this rule's.
+    """
+    return pre_active and reason == USER_STOP_REASON and not stop_requested
+
+
 class FailureStage(str, Enum):
     """lifecycle.v1 `FailureStage` — furthest stage reached, for `failed` attribution."""
 
@@ -130,6 +145,8 @@ LEGAL_TRANSITIONS: Dict[Optional[BotStatus], frozenset[BotStatus]] = {
 }
 
 _TERMINAL = frozenset({BotStatus.COMPLETED, BotStatus.FAILED})
+# The FSM stages a run is in before admission (`None` = `requested`: the bot has not reported).
+_PRE_ACTIVE = frozenset({None, BotStatus.JOINING, BotStatus.AWAITING_ADMISSION, BotStatus.NEEDS_HELP})
 
 # The persisted (DB) meeting status string → the in-memory FSM BotStatus, used to REHYDRATE a
 # record after a meeting-api restart (LIFECYCLE-409 fix). The DB carries the SERVER-SIDE meeting
@@ -202,6 +219,43 @@ def _trim_bot_logs(lines: List[str]) -> tuple[List[str], bool]:
 #: "did it ever reach the lobby?" from the FSM's own history — the single most load-bearing
 #: discriminator in the taxonomy (#1058: lobby expiry vs never-got-there).
 _PRE_LOBBY_STAGES = frozenset({FailureStage.REQUESTED, FailureStage.JOINING})
+
+
+def _unasked_stop_evidence(rec: "MeetingRecord", event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The join evidence of an ``unasked_stop``, derived here: ``system_fault``. The bot's verdict
+    (``stopped_while_joining`` / ``user_action``) says the user ended the run, and nobody did. What the
+    bot MEASURED is kept (stage timings, node, screenshot) and its words go into the detail. The typed
+    reason is ``unknown``: no join step failed, a signal ended the run. NEVER raises."""
+    try:
+        from .join_evidence import (
+            JoinFailureAttribution,
+            JoinFailureReason,
+            build_join_evidence,
+            normalize_evidence,
+        )
+
+        stage = rec.failure_stage.value if rec.failure_stage is not None else None
+        bot = normalize_evidence(event.get("join_evidence"), default_stage=stage) or {}
+        timings = bot.get("timings") or {}
+        said = event.get("reason")
+        detail = (f"ended at {stage} with a stop nobody asked for: no stop was requested, so a "
+                  f"termination signal from outside Vexa ended the run (Kubernetes preemption, "
+                  f"eviction, node drain or shutdown)" + (f"; the bot reported: {said}" if said else ""))
+        return build_join_evidence(
+            reason=JoinFailureReason.UNKNOWN,
+            attribution=JoinFailureAttribution.SYSTEM_FAULT,
+            stage=stage,
+            source="derived",
+            detail=detail,
+            time_to_lobby_ms=timings.get("time_to_lobby_ms"),
+            time_in_lobby_ms=timings.get("time_in_lobby_ms"),
+            total_ms=timings.get("total_ms"),
+            lobby_budget_ms=bot.get("lobby_budget_ms"),
+            node=bot.get("node"),
+            screenshot_key=bot.get("screenshot_key"),
+        )
+    except Exception:  # noqa: BLE001 — evidence is a report about a finished run; never fail on it
+        return None
 
 
 def _capture_join_evidence(
@@ -540,14 +594,17 @@ class LifecycleSink:
 
     @staticmethod
     def _terminal_reason(
-        rec: MeetingRecord, event: Dict[str, Any]
+        rec: MeetingRecord, event: Dict[str, Any], *, pre_active: bool = False
     ) -> Optional[CompletionReason]:
         """The reason to record on a terminal advance — the bot's, unless the USER stopped it.
 
         The bot reports what IT saw (it was killed mid-join → ``join_failure``). When the record
         carries the user's stop intent, that intent is the truth about why the run ended, and it
-        wins here at the WRITE — see ``dominant_completion_reason``."""
+        wins here at the WRITE — see ``dominant_completion_reason``. When it does not, a bot's
+        ``stopped`` before admission is not the user's either — see ``unasked_stop``."""
         raw = event.get("completion_reason")
+        if unasked_stop(raw, stop_requested=rec.stop_requested, pre_active=pre_active):
+            raw = CompletionReason.JOIN_FAILURE.value
         raw = dominant_completion_reason(raw, stop_requested=rec.stop_requested)
         return CompletionReason(raw) if raw else None
 
@@ -624,7 +681,7 @@ class LifecycleSink:
         elif to is BotStatus.FAILED:
             # FM-003: derive failure_stage from the stage we were IN, not the payload.
             rec.failure_stage = _STATUS_TO_FAILURE_STAGE.get(frm, FailureStage.ACTIVE)
-            rec.completion_reason = self._terminal_reason(rec, event)
+            rec.completion_reason = self._terminal_reason(rec, event, pre_active=frm in _PRE_ACTIVE)
             # The parent builds an `error_details` string on a failed exit when none supplied.
             if rec.error_details is None and (rec.exit_code is not None or rec.reason):
                 rec.error_details = (
@@ -637,7 +694,12 @@ class LifecycleSink:
             # record when it sent none, so a reconcile-driven or runtime-destroy terminal is
             # evidenced too. FAIL-OPEN by contract: this is a REPORT about a run that has already
             # ended, and no fault in it may alter the terminal the FSM is recording.
-            rec.join_evidence = _capture_join_evidence(rec, event, frm)
+            if unasked_stop(event.get("completion_reason"), stop_requested=rec.stop_requested,
+                            pre_active=frm in _PRE_ACTIVE):
+                # The bot's own verdict says the user ended it (`user_action`); nobody did.
+                rec.join_evidence = _unasked_stop_evidence(rec, event)
+            else:
+                rec.join_evidence = _capture_join_evidence(rec, event, frm)
 
         # Terminal forensics → record.data (parent caps bot_logs, trims oldest-first).
         if to in _TERMINAL:

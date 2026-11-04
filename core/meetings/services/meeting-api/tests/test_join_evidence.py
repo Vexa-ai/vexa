@@ -641,6 +641,11 @@ _FIXTURES = [
     ),
 ]
 
+# What the row carries before a tape's terminal lands. A user's Stop writes `stop_requested` before
+# the bot is told to go (stop route, service authority); without it a lobby `stopped` is a stop
+# nobody asked for, recorded `join_failure` / `system_fault` (machine.unasked_stop).
+_ROW_DATA = {"user-stopped-in-the-lobby": {"stop_requested": True}}
+
 # The control-plane-unreachable abort (#530) has no HTTP fixture ON PURPOSE: that terminal is emitted
 # precisely when the callback channel is down, so it can never be replayed through the callback. Its
 # classification is pinned at the unit level instead (see the `_CLASSIFY_CASES` row), and end to end
@@ -665,6 +670,7 @@ def test_control_plane_unreachable_abort_is_a_system_fault():
 def test_failure_class_fixture_replays_deterministically(name, prefix, terminal, expected):
     expected_reason, expected_attribution = expected
     repo, meeting = _repo_with_meeting()
+    repo._meetings[meeting["id"]]["data"].update(_ROW_DATA.get(name, {}))
     client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     events = [{"connection_id": "sess-evidence", "status": s} for s in prefix]
     # A bot that never emitted `joining` (the control-plane-unreachable abort) still has to land its
