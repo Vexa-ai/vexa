@@ -86,6 +86,13 @@ guarantees:
   meeting (`auto_join_error`) instead of silently not showing up. See
   [Troubleshooting](/troubleshooting#a-scheduled-meeting-didnt-auto-join).
 
+Booked bots are started by the deployment's scheduler, Flows, and that is all meetings depend on it
+for. Without one (`VEXA_FLOWS_API_URL` unset on meeting-api), a booking with auto-join is refused by
+name rather than accepted and never served, and calendar events import with auto-join off. With
+Flows down, a booking whose start window closes before it returns reads
+`auto_join_error: "not started: scheduler unavailable"`. Ad hoc bots, live transcripts and webhooks
+run the same either way.
+
 ### Capture
 
 The bot joins natively, in real time, with no plugins or host configuration — it attends like any

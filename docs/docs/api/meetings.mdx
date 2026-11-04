@@ -124,7 +124,7 @@ just a title, and the link can be attached later.
 <ParamField body="scheduled_at" type="string">ISO-8601 start time. Present → status `scheduled` (and [auto-join](#auto-join) arms); absent → `idle`.</ParamField>
 <ParamField body="meeting_url" type="string">A Meet/Zoom/Teams link — parsed server-side into `platform` + `native_meeting_id`. Unrecognized links are rejected with `422`.</ParamField>
 <ParamField body="workspace_id" type="string">Bind the meeting to a shared workspace — its members then see the meeting, its live feed, and the transcript. You must be a member (`403` otherwise). `personal` keeps the meeting yours alone. Omitted, a bot an agent worker sends belongs to the shared workspace its chat is working in, when you are a member of it; any other caller's meeting stays private.</ParamField>
-<ParamField body="auto_join" type="boolean">Send the bot automatically at start time. Default `true`.</ParamField>
+<ParamField body="auto_join" type="boolean">Send the bot automatically at start time. Default `true`. A deployment with no scheduler refuses it with `422` `scheduling_not_deployed` (see [Auto-join](#auto-join)).</ParamField>
 
 ```bash POST /meetings
 curl -X POST "$API_BASE/meetings" \
@@ -291,6 +291,22 @@ A `scheduled` meeting **with a link** is joined automatically: a background swee
 late). Opt out per meeting with `auto_join: false`. Failures are loud: a concurrency-cap or spawn
 failure stamps `auto_join_error` into the meeting's `data` and retries after a backoff. Timing is
 tunable on a self-host — see [Configuration](/configuration).
+
+Booked bots are started by the deployment's scheduler, Flows. On a deployment without one
+(`VEXA_FLOWS_API_URL` unset on meeting-api), a booking with `auto_join` on is refused by name:
+`POST /meetings`, and a `PATCH /meetings/{id}` or `PUT /meetings/{platform}/{id}/intent` that makes
+a plan a booking, answer `422`:
+
+```json
+{"detail": "scheduling not deployed: this deployment runs no scheduler, so a meeting booked with auto_join would never get its bot. Set VEXA_FLOWS_API_URL on meeting-api to the Flows API, or book with \"auto_join\": false",
+ "code": "scheduling_not_deployed", "key": "VEXA_FLOWS_API_URL"}
+```
+
+Calendar sync still imports the event, with `auto_join` off and
+`auto_join_error: "scheduling not deployed"`. Plans with `auto_join: false`, ad hoc bots
+(`POST /bots`), transcripts and webhooks need no scheduler. When the scheduler is down past a
+booking's start window (10 min after its start), no bot comes and the meeting reads
+`auto_join_error: "not started: scheduler unavailable"`.
 
 ## Calendar sync
 

@@ -357,7 +357,9 @@ turns it off. Upgrade with no meeting in flight. See
 ### Flows runs in every profile
 
 - **Hits:** Helm installs that left `flows.enabled` at its old default (`false`) or set it, and every
-  Vexa Lite. Booked bots start from Flows' clock, so it is required.
+  Vexa Lite. Flows is the scheduler booked bots start from. Meetings depend on it for that only: a
+  deployment whose meeting-api has no `VEXA_FLOWS_API_URL` refuses a booking with `auto_join` by
+  name (`422 scheduling_not_deployed`), and runs everything else the same.
 - **If you skip it:** a values file that still sets `flows.enabled: false` stops the render with
   `flows.enabled: false is no longer supported`. On a default install there is nothing to skip: the
   chart renders flows-api and flows-worker and generates both their keys (the service key and the

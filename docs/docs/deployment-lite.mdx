@@ -141,7 +141,8 @@ To run agents on a Codex subscription, mount your `auth.json` into the container
 runtime copies the file into each worker's private home as `~/.codex/auth.json`, where the harness and
 the Codex CLI read it.
 
-Flows runs in every Lite container: booked bots start from its clock. The entrypoint keeps its two
+Flows runs in every Lite container: it is the scheduler booked bots start from, and meetings depend
+on it for that only (ad hoc bots, transcripts and webhooks run the same while it is down). The entrypoint keeps its two
 keys in `/var/lib/vexa/state` (`flows-api-key`, `flows-service-key`), or takes `VEXA_FLOWS_API_KEY`
 and `VEXA_FLOWS_SERVICE_KEY` from `.env`. Its tables live in the Lite database; the DSN is built from
 the `DB_*` settings unless you set `VEXA_FLOWS_DB_URL`. Invitations by email (the bot mailbox) are not

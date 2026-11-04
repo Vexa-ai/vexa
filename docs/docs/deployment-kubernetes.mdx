@@ -87,7 +87,10 @@ a CNI that enforces NetworkPolicy; without one they have no effect.
 
 ### Flows database
 
-Flows is required (`flows.enabled: false` is refused at render): booked bots start from its clock.
+The chart always renders Flows (`flows.enabled: false` is refused at render): it is the scheduler
+booked bots start from. Meetings depend on it for that only. Ad hoc bots, live transcripts and
+webhooks run the same while Flows is down, and a booking whose start window closes before Flows
+comes back reads `auto_join_error: "not started: scheduler unavailable"`.
 The chart generates its service key and operator key when you set none, and keeps them across
 upgrades. Flows keeps its tables in the
 main database (`database.name`), as Compose and Lite do, so a backup of that database covers it. Vexa never creates a database. To keep flows in a
