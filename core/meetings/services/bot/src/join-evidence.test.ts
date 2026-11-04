@@ -269,6 +269,16 @@ check(
     && attributeJoinFailure('awaiting_admission_rejected', 'Bot admission was rejected by meeting admin; 2 join requests: 1) 10:00:05Z–10:10:05Z ended by Meet, 2) 10:10:05Z–10:11:00Z denied') === 'host_action',
 );
 check(
+  'a meeting that does not admit browser guests: platform_join_refused, exogenous',
+  classifyJoinFailure('rejected', { reachedLobby: false, detail: 'Google Meet refused the join: this meeting does not admit guests joining from a browser (ResolveMeetingSpace answered HTTP 403: The requester cannot resolve this meeting due to the client they are joining from); the host never received a request to admit the bot' }) === 'platform_join_refused'
+    && attributeJoinFailure('platform_join_refused', 'Google Meet refused the join: this meeting does not admit guests joining from a browser (ResolveMeetingSpace answered HTTP 403: The requester cannot resolve this meeting due to the client they are joining from); the host never received a request to admit the bot') === 'exogenous_platform',
+);
+check(
+  'control: the flaky refusal with its body keeps its verdict (rejected, exogenous, respawned by meeting-api)',
+  classifyJoinFailure('rejected', { reachedLobby: false, detail: 'google_meet_join_refused: Google Meet refused the join on 5 of 5 knocks (CreateMeetingDevice answered HTTP 403: The caller does not have permission); the host never received a request to admit the bot' }) === 'awaiting_admission_rejected'
+    && attributeJoinFailure('awaiting_admission_rejected', 'google_meet_join_refused: Google Meet refused the join on 5 of 5 knocks (CreateMeetingDevice answered HTTP 403: The caller does not have permission); the host never received a request to admit the bot') === 'exogenous_platform',
+);
+check(
   'the override is scoped: the same admission-flow words do not move a REJECTION',
   attributeJoinFailure('awaiting_admission_rejected', 'no meeting indicators found') === 'host_action',
 );

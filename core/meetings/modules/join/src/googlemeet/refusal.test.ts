@@ -11,6 +11,7 @@
 import {
   knockUntilGoogleAccepts, GoogleJoinRefusedError, GOOGLE_JOIN_MAX_KNOCKS, GOOGLE_JOIN_REFUSED,
   GOOGLE_JOIN_REKNOCK_BACKOFF_MS, googleKnockConfig, GoogleKnockExpiredError, GOOGLE_MEET_MAX_REQUESTS,
+  GOOGLE_GUEST_BLOCKED, refusalMessage,
 } from './refusal';
 import { AdmissionError } from '../shared/admission';
 import { waitForAnySelector, waitForLobbyCta } from './join';
@@ -20,6 +21,14 @@ function check(name: string, ok: boolean, detail?: string) {
   if (ok) { console.log(`  \x1b[32mPASS\x1b[0m  ${name}`); passed++; }
   else { console.log(`  \x1b[31mFAIL\x1b[0m  ${name}${detail ? ` (${detail})` : ''}`); failed++; }
 }
+
+// A google.rpc.Status as Meet sends it: code (field 1), message (field 2), details (field 3).
+const statusBody = (code: number, message: string, typeUrl?: string): Buffer => {
+  const str = (field: number, b: Buffer) => Buffer.concat([Buffer.from([(field << 3) | 2, b.length]), b]);
+  const parts = [Buffer.from([0x08, code]), str(2, Buffer.from(message))];
+  if (typeUrl) parts.push(str(3, Buffer.concat([str(1, Buffer.from(typeUrl)), str(2, Buffer.from([0x10, 0x0b]))])));
+  return Buffer.concat(parts);
+};
 
 const page: any = {};
 const refused = () => new GoogleJoinRefusedError('CreateMeetingDevice answered HTTP 403');
@@ -303,6 +312,37 @@ const fast = { sleep: async () => {} };
       return true;
     }, () => clock, fast);
     check('refused, expired, admitted → admitted on knock 3', got === true && seen.join(',') === 'refused,expired,admitted', seen.join(','));
+  }
+
+  console.log('\n=== The 403 body: a meeting that does not admit browser guests (bbb, 4 Nov 2026) ===');
+
+  // Meet's 403 bodies as captured on bbb: a protobuf with the message and an ErrorDetails type URL.
+  const policyBody = statusBody(7, 'The requester cannot resolve this meeting due to the client they are joining from', 'type.googleapis.com/google.rtc.meetings.v1.ErrorDetails');
+  const flakyBody = statusBody(7, 'The caller does not have permission');
+  check('policy body → its message, without the type URL', refusalMessage(policyBody) === 'The requester cannot resolve this meeting due to the client they are joining from', String(refusalMessage(policyBody)));
+  check('flaky body → its message', refusalMessage(flakyBody) === 'The caller does not have permission', String(refusalMessage(flakyBody)));
+  check('no message field → null', refusalMessage(Buffer.from([0x08, 0x07])) === null);
+  check('a truncated body → null, never a throw', refusalMessage(Buffer.from([0x08, 0x07, 0x12, 0x40, 0x41])) === null);
+  check('not protobuf (an HTML error page) → null', refusalMessage(Buffer.from('<html>403</html>')) === null);
+
+  const blocked = () => new GoogleJoinRefusedError(`ResolveMeetingSpace answered HTTP 403: ${refusalMessage(policyBody)}`);
+  {
+    const e = blocked();
+    check('guest-blocked refusal is flagged', e.guestBlocked === true && e.outcome === 'denial');
+    check('… its message names the meeting\'s setting and the body', /^Google Meet refused the join: this meeting does not admit guests joining from a browser \(ResolveMeetingSpace answered HTTP 403: The requester cannot resolve this meeting due to the client they are joining from\); the host never received a request to admit the bot$/.test(e.message), e.message);
+    check('… and leaves out the respawn marker, so meeting-api starts no new pod', !e.message.includes(GOOGLE_JOIN_REFUSED) && e.message.includes(GOOGLE_GUEST_BLOCKED));
+    check('flaky refusal with its body: not guest-blocked, marker kept', !new GoogleJoinRefusedError('CreateMeetingDevice answered HTTP 403: The caller does not have permission').guestBlocked
+      && new GoogleJoinRefusedError('CreateMeetingDevice answered HTTP 403: The caller does not have permission').message.startsWith(GOOGLE_JOIN_REFUSED));
+  }
+  {
+    let knocks = 0;
+    const err = await knockUntilGoogleAccepts(page, 900_000, async () => { knocks++; throw blocked(); }, Date.now, fast).catch((e) => e);
+    check('guest-blocked on knock 1 → no second knock', knocks === 1 && err instanceof GoogleJoinRefusedError && err.guestBlocked, `knocks=${knocks}`);
+  }
+  {
+    let knocks = 0;
+    const err = await knockUntilGoogleAccepts(page, 900_000, async () => { knocks++; throw knocks < 3 ? refused() : blocked(); }, Date.now, fast).catch((e) => e);
+    check('flaky, flaky, then guest-blocked → stops on knock 3', knocks === 3 && err?.guestBlocked === true, `knocks=${knocks}`);
   }
 
   console.log(`\n=== summary: ${passed} passed, ${failed} failed ===`);
