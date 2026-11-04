@@ -2,18 +2,23 @@
 # (ruling authors-humans-only-1103). Fails on a Claude/Anthropic co-author trailer,
 # an anthropic.com or "Claude" author/committer, or the generated-by footer, in any
 # commit of base..head or in the PR title or body. Needs no secrets.
+# On a merge-queue commit it judges the commits the queued pull request adds (the queue
+# commit is a squash GitHub writes), so it can be a required check on a queued branch.
 # The script's tests also run in gates.yml's `gate script tests` step (scripts/*.test.mjs).
 name: human-authors
 
 on:
   pull_request:
     types: [opened, synchronize, edited, reopened]
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
 
+# One group per pull request and one per queue commit, so a queue run never cancels another.
 concurrency:
-  group: human-authors-${{ github.event.pull_request.number }}
+  group: human-authors-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.merge_group.head_sha }}
   cancel-in-progress: true
 
 jobs:
@@ -30,7 +35,11 @@ jobs:
       - name: script tests
         run: node --test scripts/human-authors.test.mjs
       - name: check commits, title and body
+        if: github.event_name == 'pull_request'
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: node scripts/human-authors.mjs "$BASE" "$HEAD" --event "$GITHUB_EVENT_PATH"
+      - name: check the commits the queued pull request adds
+        if: github.event_name == 'merge_group'
+        run: node scripts/human-authors.mjs --event "$GITHUB_EVENT_PATH"
