@@ -93,6 +93,19 @@ for (const [what, wf, rx] of [
   ["the aggregate accepting anything but failure", () => plant('[ "$R_PYTHON" = "success" ]', '[ "$R_PYTHON" != "failure" ]'), /does not require needs\.python\.result == success/],
   ["the aggregate not reading the python result", () => plant(/^ +R_PYTHON: \$\{\{ needs\.python\.result \}\}\n/m, ""), /R_PYTHON: \$\{\{ needs\.python\.result \}\}/],
   ["the aggregate swallowing its own failure", () => plant('or was cancelled"; exit 1; }', 'or was cancelled"; exit 1; } || true'), /`\|\| true`/],
+  // a skipped python result, with the success text still present on the line
+  ["the aggregate also accepting a skipped python result", () => plant('[ "$R_PYTHON" = "success" ]', '{ [ "$R_PYTHON" = "success" ] || [ "$R_PYTHON" = "skipped" ]; }'), /does not require needs\.python\.result == success/],
+  ["the aggregate accepting anything but a failed node leg", () => plant('[ "$R_NODE" = "success" ]', '[ "$R_NODE" != "failure" ]'), /does not require .*needs\.node\.result == success/],
+  ["the aggregate accepting anything but a failed static leg", () => plant('[ "$R_STATIC" = "success" ]', '[ "$R_STATIC" != "failure" ]'), /does not require .*needs\.static\.result == success/],
+  ["the aggregate overwriting the python result first", () => plant(/^( {10}echo "static=)/m, '          R_PYTHON=success\n$1'), /does not require needs\.python\.result == success/],
+  ["a shell override on the aggregate step", () => plant(/^( {6}- name: All legs green\?\n)/m, '$1        shell: "true {0}"\n'), /`gates` job carries `shell:/],
+  // a leg that runs the gate and collects without running a test
+  ["env on the python job", () => plant(PY_JOB, '$1    env: { PYTEST_ADDOPTS: "--collect-only" }\n'), /`python` job carries `env:/],
+  ["env on the gate step", () => plant(GATE_STEP, '$1        env: { PYTEST_ADDOPTS: "--collect-only" }\n'), /gate step carries `env:/],
+  ["a shell override on the gate step", () => plant(GATE_STEP, '$1        shell: "true {0}"\n'), /gate step carries `shell:/],
+  ["a default shell on the python job", () => plant(PY_JOB, '$1    defaults: { run: { shell: "true {0}" } }\n'), /`python` job carries `defaults:/],
+  ["an earlier step writing $GITHUB_ENV", () => plant(GATE_STEP, '      - run: echo "PYTEST_ADDOPTS=--collect-only" >> "$GITHUB_ENV"\n$1'), /writes \$GITHUB_ENV/],
+  ["a workflow-level env", () => plant(/^(permissions:\n {2}contents: read\n)/m, "$1env:\n  PYTEST_ADDOPTS: --collect-only\n"), /workflow-level `env:/],
 ]) {
   test(`RED: ${what} is named`, () => {
     const errs = gatingErrors(wf());
