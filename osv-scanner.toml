@@ -16,3 +16,8 @@ reason = "katex 0.16.47 (LOW): a trust bypass that needs prototype pollution to 
 id = "GHSA-gcqx-w48m-w2h4"
 ignoreUntil = 2026-12-31
 reason = "deepmerge 4.3.1, prototype poisoning in mergeObject(); no fixed release exists. Reached only through puppeteer-extra-plugin-user-preferences <- puppeteer-extra-plugin-stealth in the join and remote-browser bots, which merges the stealth plugins' own fixed Chrome preferences; Vexa passes no userPrefs, so no request data reaches it."
+
+[[IgnoredVulns]]
+id = "GHSA-g3hv-75wg-m249"
+ignoreUntil = 2026-11-18
+reason = "minimatch 3.1.5: the advisory's code, firstPhasePreProcess() at optimizationLevel >= 2, does not exist in 3.x, and no 3.x release is fixed (the fix is 11.0.1). Reached only through rimraf 3 <- puppeteer-extra-plugin-user-data-dir in the join and remote-browser bots, which deletes its own temporary profile directory; no pattern comes from a request."

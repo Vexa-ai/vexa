@@ -5,3 +5,8 @@
 id = "GHSA-vfj7-8cjw-p6xm"
 ignoreUntil = 2026-12-31
 reason = "braces 3.0.3, stack exhaustion on deeply nested patterns; no fixed release exists. A dev dependency only (eslint-config-next -> @next/eslint-plugin-next -> fast-glob -> micromatch), run at lint time over the repository's own globs; it is not in the dashboard image."
+
+[[IgnoredVulns]]
+id = "GHSA-g3hv-75wg-m249"
+ignoreUntil = 2026-11-18
+reason = "minimatch 3.1.5 (dev): the advisory's code, firstPhasePreProcess() at optimizationLevel >= 2, does not exist in 3.x, and no 3.x release is fixed (the fix is 11.0.1). Reached through eslint 9 and eslint-plugin-import, -jsx-a11y and -react, whose latest releases still ask for ^3.1.2, at lint time over the repository's own globs; not in the dashboard image."

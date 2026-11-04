@@ -684,3 +684,9 @@ vulnerabilities:
       - "pkg:pypi/filelock@3.32.7"
     statement: "litellm/litellm v1.108.0 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). filelock 3.32.7 inside LiteLLM's own image; the fix is filelock 4.2.1, a major no LiteLLM release ships (v1.103.10, v1.106.7 and v1.108.0 scanned 2026-11-04 carry 3.x). The advisory is ReadWriteLock reopening its SQLite files by name, which needs a local user with rename rights in the lock's directory; nothing in the image uses ReadWriteLock."
     expired_at: 2026-11-18
+  - id: CVE-2026-111497
+    purls:
+      - "pkg:deb/ubuntu/libbrotli1@1.1.0-2build2?arch=amd64&distro=ubuntu-24.04"
+      - "pkg:deb/ubuntu/libbrotli1@1.0.9-2build6?arch=amd64&distro=ubuntu-22.04"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). Ubuntu published the brotli fix on 2026-10-26 and Microsoft has not rebuilt the tag; both images take it through apt-get upgrade, which rebuilds whenever the noble-security index changes. Moving the base moves the browser the bot joins meetings with. fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (last push 2025-01-07); replacing the sidecar is a separate change."
+    expired_at: 2026-11-18
