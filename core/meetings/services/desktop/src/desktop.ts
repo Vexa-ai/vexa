@@ -21,7 +21,7 @@
  */
 import * as http from 'node:http';
 import { createWriteStream, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve as resolvePath, sep } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { TranscriptionClient } from '@vexa/transcribe-whisper';
 import { createGmeetPipeline, type TranscriptSegment } from '@vexa/gmeet-pipeline';
@@ -84,11 +84,15 @@ export function upsertSegment(segments: TranscriptSegment[], seg: TranscriptSegm
   const i = segments.findIndex((x) => x.segment_id === seg.segment_id);
   if (i >= 0) segments[i] = seg; else segments.push(seg);
 }
-export interface DesktopOptions { ingestPort?: number; gatewayPort?: number; txUrl?: string; txToken?: string; quiet?: boolean; recordingsDir?: string; noSignalMs?: number; canAccess?: CanAccess; }
-export interface Desktop { ingestPort: number; gatewayPort: number; recordingsDir: string; close(): Promise<void>; }
+export interface DesktopOptions { ingestPort?: number; gatewayPort?: number; txUrl?: string; txToken?: string; quiet?: boolean; recordingsDir?: string; noSignalMs?: number; canAccess?: CanAccess;
+  /** Interface both servers bind. Default `VEXA_DESKTOP_HOST`, else 127.0.0.1 (loopback only:
+   *  /ingest has no auth and the default canAccess is allow-all). '0.0.0.0' exposes them on the LAN. */
+  host?: string; }
+export interface Desktop { host: string; ingestPort: number; gatewayPort: number; recordingsDir: string; close(): Promise<void>; }
 
 export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> {
   const log = opts.quiet ? (_m: string) => { /* */ } : (m: string) => console.log(m);
+  const host = opts.host ?? process.env.VEXA_DESKTOP_HOST ?? '127.0.0.1';
   const TX_URL = opts.txUrl ?? process.env.TRANSCRIPTION_SERVICE_URL ?? '';
   const TX_TOKEN = opts.txToken ?? process.env.TRANSCRIPTION_SERVICE_TOKEN ?? '';
   const txClient = TX_URL ? new TranscriptionClient({ serviceUrl: TX_URL, apiToken: TX_TOKEN, sampleRate: SAMPLE_RATE, maxSpeechDurationSec: 15 }) : null;
@@ -337,11 +341,11 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
     } } catch { /* */ } });
     ws.on('close', () => liveClients.delete(ws));
   });
-  await new Promise<void>((r) => gateway.listen(opts.gatewayPort ?? 8056, () => r()));
+  await new Promise<void>((r) => gateway.listen(opts.gatewayPort ?? 8056, host, () => r()));
   const gatewayPort = (gateway.address() as { port: number }).port;
 
   // ── ingest (capture.v1 → gmeet-pipeline → broadcast) ──
-  const ingest = new WebSocketServer({ port: opts.ingestPort ?? 9099 });
+  const ingest = new WebSocketServer({ host, port: opts.ingestPort ?? 9099 });
   await new Promise<void>((r) => ingest.on('listening', () => r()));
   const ingestPort = (ingest.address() as { port: number }).port;
   ingest.on('connection', async (ws, req) => {
@@ -364,17 +368,27 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
     let tape: ReturnType<typeof createWriteStream> | null = null;
     if (process.env.VEXA_RECORD_TAPE) {
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const tapePath = `${process.env.VEXA_RECORD_TAPE}/tape-${platform}-${native}-${stamp}.jsonl`;
-      tape = createWriteStream(tapePath);
-      tape.write(JSON.stringify({ v: 1, platform, native, language: lang ?? null, startedAt: new Date().toISOString() }) + '\n');
-      const tape0 = Date.now();
-      ws.on('message', (data: any, isBinary: boolean) => {
-        if (!tape) return;
-        const t = Date.now() - tape0;
-        if (isBinary) { const b = Buffer.from(data); tape.write(JSON.stringify({ t, bin: true, d: b.toString('base64') }) + '\n'); }
-        else tape.write(JSON.stringify({ t, bin: false, d: data.toString() }) + '\n');
-      });
-      log(`[desktop] ⏺ recording raw tape → ${tapePath}`);
+      // platform / native_meeting_id are raw query values: keep [A-Za-z0-9_-] only, and refuse
+      // any path that still resolves outside the tape dir (the session itself continues).
+      const safe = (x: string) => x.replace(/[^A-Za-z0-9_-]/g, '_');
+      const tapeDir = resolvePath(process.env.VEXA_RECORD_TAPE);
+      const tapePath = resolvePath(tapeDir, `tape-${safe(platform)}-${safe(native)}-${stamp}.jsonl`);
+      if (!tapePath.startsWith(tapeDir + sep)) {
+        log(`[desktop] tape refused: path outside ${tapeDir}`);
+      } else {
+        tape = createWriteStream(tapePath);
+        // A failed open/write must never take the host down (no 'error' listener = uncaught).
+        tape.on('error', (e) => { log(`[desktop] tape write failed (${(e as Error).message}); tape off for ${key}`); tape = null; });
+        tape.write(JSON.stringify({ v: 1, platform, native, language: lang ?? null, startedAt: new Date().toISOString() }) + '\n');
+        const tape0 = Date.now();
+        ws.on('message', (data: any, isBinary: boolean) => {
+          if (!tape) return;
+          const t = Date.now() - tape0;
+          if (isBinary) { const b = Buffer.from(data); tape.write(JSON.stringify({ t, bin: true, d: b.toString('base64') }) + '\n'); }
+          else tape.write(JSON.stringify({ t, bin: false, d: data.toString() }) + '\n');
+        });
+        log(`[desktop] ⏺ recording raw tape → ${tapePath}`);
+      }
     }
 
     // ── MIXED lane (zoom/teams/youtube): one mixed remote stream (ch 999) + the local "You" mic
@@ -482,9 +496,9 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
     ws.on('error', finish);
   });
 
-  log(`[desktop] ingest ws://localhost:${ingestPort}/ingest · gateway http://localhost:${gatewayPort} · STT ${TX_URL || 'NONE'} · recordings ${recordingsDir}`);
+  log(`[desktop] bind ${host} · ingest ws://${host}:${ingestPort}/ingest · gateway http://${host}:${gatewayPort} · STT ${TX_URL || 'NONE'} · recordings ${recordingsDir}`);
   return {
-    ingestPort, gatewayPort, recordingsDir,
+    host, ingestPort, gatewayPort, recordingsDir,
     close: async () => {
       for (const c of wss.clients) c.terminate();
       wss.close();

@@ -27,12 +27,17 @@ the `@vexa/capture-codec`, `@vexa/recording`, and `@vexa/transcribe-whisper` pac
 by the meetings `contracts/` registry. Access is mediated through one `canAccess` seam (`access.ts`,
 P20 / ADR-0012; default `ownerOnly` = allow-all on single-user localhost).
 
+**Bind:** the gateway (`:8056`) and the ingest WS (`:9099`) listen on `127.0.0.1` only, because `/ingest`
+has no auth and `ownerOnly` allows all. To expose them on the LAN, pass `startDesktop({ host: "0.0.0.0" })`
+or set `VEXA_DESKTOP_HOST=0.0.0.0` (the option wins over the env).
+
 ## Isolated evaluation
 
 Tests live alongside the source in `src/*.test.ts`. Run with `pnpm test` (the package's `test` script
 runs each via `tsx`):
 
 - **L2 unit** — `recording-sink.test.ts`, `transcript-store.test.ts`, `health.test.ts`, `access.test.ts`
+- **L3 bind/tape** — `bind.test.ts` (loopback-only by default; `host`/`VEXA_DESKTOP_HOST` opt-in), `tape.test.ts` (`VEXA_RECORD_TAPE` path stays inside its dir)
 - **L3 integration** — `recording-e2e.test.ts` (synthetic `recording.v1` over the real ingest WS → real file on disk → served by the gateway; no live meeting)
 - **L4 live** — `desktop-e2e.live.test.ts` (real STT; skips without `VEXA_TX_KEY` + `EVAL_CACHE`)
 
