@@ -244,6 +244,26 @@ class InMemoryMeetingRepo:
             and m["platform"] not in (None, "", "unknown")
         ]
 
+    @staticmethod
+    def _untouched(m) -> bool:
+        data = m.get("data") if isinstance(m.get("data"), dict) else {}
+        return (m["status"] == "scheduled" and "auto_join_error" not in data
+                and "auto_join_last_attempt" not in data)
+
+    async def list_unstarted_bookings(self) -> list:
+        return [{"id": m["id"], "user_id": m["user_id"],
+                 "scheduled_at": (m.get("data") or {}).get("scheduled_at"),
+                 "auto_join": (m.get("data") or {}).get("auto_join"),
+                 "stop_requested": (m.get("data") or {}).get("stop_requested")}
+                for m in self._meetings.values() if self._untouched(m)]
+
+    async def stamp_unstarted_booking(self, meeting_id, message) -> bool:
+        m = self._meetings.get(meeting_id)
+        if m is None or not self._untouched(m):
+            return False
+        m["data"]["auto_join_error"] = message
+        return True
+
     async def get_meeting_by_session(self, *, session_uid) -> Optional[dict]:
         sess = next((s for s in self.sessions if s["session_uid"] == session_uid), None)
         if sess is None:

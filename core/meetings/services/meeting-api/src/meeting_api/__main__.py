@@ -670,6 +670,7 @@ def _attach_background_loops(
         from .lifecycle.reconcile import (
             reconcile_stale_nonterminal_sweep,
             reconcile_stale_stopping_sweep,
+            stamp_unstarted_bookings,
         )
 
         # Drive the sweep's synthetic terminals through the in-process lifecycle entry — NOT an httpx
@@ -703,6 +704,9 @@ def _attach_background_loops(
             await reconcile_stale_stopping_sweep(
                 meeting_repo, runtime, _post_lifecycle, stop_grace=stop_grace, log=log,
             )
+            # A booking whose deadline passed with no start call says so (ADR-0052 §3): no call to
+            # Flows, nothing started — the row's own bookkeeping.
+            await stamp_unstarted_bookings(meeting_repo, log=log)
 
         while True:
             try:
@@ -752,7 +756,8 @@ def _attach_background_loops(
     # at start − BOOKED_POD_LEAD_S, through POST /internal/meetings/{id}/start (bot_spawn/
     # start_router.py), which runs every safeguard the sweep ran (bot_spawn/planned_start.py). Each
     # planned row reaches Flows through the outbox below. The sweep's settings are named in
-    # removed_config.py.
+    # removed_config.py. There is no second clock here: a booking that no start call reached by its
+    # deadline is stamped "not started: scheduler unavailable" by the reconcile pass above.
 
     # Google Meet respawn (lifecycle/meet_respawn.py): start the next bot pod for every meeting whose
     # last bot Meet refused, once its wait is over. The row's `next_at` is the schedule; this sweep,

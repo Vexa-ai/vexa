@@ -712,6 +712,45 @@ class SqlAlchemyMeetingRepo:
             )).scalars().all()
             return [_row_to_dict(m) for m in rows]
 
+    async def list_unstarted_bookings(self) -> list[dict]:
+        """``scheduled`` rows no start call has touched — no ``auto_join_last_attempt``, no
+        ``auto_join_error`` — as ``{id, user_id, scheduled_at, auto_join, stop_requested}``: the
+        candidates of the reconciler's past-deadline stamp (``lifecycle/reconcile.py``). Reads those
+        keys only, never the whole ``data``."""
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            rows = (await db.execute(
+                select(Meeting.id, Meeting.user_id, Meeting.data["scheduled_at"].astext,
+                       Meeting.data["auto_join"], Meeting.data["stop_requested"])
+                .where(
+                    Meeting.status == "scheduled",
+                    ~Meeting.data.has_key("auto_join_error"),
+                    ~Meeting.data.has_key("auto_join_last_attempt"),
+                )
+            )).all()
+        return [{"id": mid, "user_id": uid, "scheduled_at": at, "auto_join": aj,
+                 "stop_requested": stop} for mid, uid, at, aj, stop in rows]
+
+    async def stamp_unstarted_booking(self, meeting_id, message: str) -> bool:
+        """Stamp ``data.auto_join_error`` = ``message`` on a row that is still ``scheduled`` and that no
+        start call has touched. One conditional UPDATE, so a start call that stamped first wins and a
+        second stamp matches nothing. A statement, not an ORM write: the planned-row outbox's flush
+        hook does not see it, and it owes Flows nothing (``auto_join_error`` is not in the fact).
+        True when the row was stamped."""
+        from sqlalchemy import bindparam, text
+
+        async with self._session_factory() as db:
+            result = await db.execute(text(
+                "UPDATE meetings SET data = data || jsonb_build_object('auto_join_error', "
+                "CAST(:message AS text)) WHERE id = :meeting_id AND status = 'scheduled' "
+                "AND data -> 'auto_join_error' IS NULL AND data -> 'auto_join_last_attempt' IS NULL"
+            ).bindparams(bindparam("message", message), bindparam("meeting_id", int(meeting_id))))
+            await db.commit()
+        return (result.rowcount or 0) == 1
+
     async def get_meeting_by_session(self, *, session_uid) -> Optional[dict]:
         """The meeting a session belongs to, plus its LATEST session uid (``latest_session_uid``) — the
         Meet respawn decision (lifecycle/meet_respawn.py) acts only on the newest bot's report."""
