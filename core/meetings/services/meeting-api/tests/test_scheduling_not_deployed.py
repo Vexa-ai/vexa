@@ -138,3 +138,39 @@ async def test_a_row_armed_again_once_a_scheduler_is_configured_drops_the_stamp(
     monkeypatch.setenv("VEXA_FLOWS_API_URL", "http://flows-api:8200")
     again = await store.update_planned_meeting(USER, row["id"], {"auto_join": True})
     assert again["data"]["auto_join"] is True and "auto_join_error" not in again["data"]
+
+
+async def test_calendar_rows_rearm_once_a_scheduler_is_configured(monkeypatch):
+    """Factory review of #2037, L3: the next sync after ``VEXA_FLOWS_API_URL`` is set arms every row
+    it mirrored with no bot for want of a scheduler, as the calendar's policy says, even when the
+    feed did not change — except a row whose auto-join the person set themselves."""
+    from meeting_api.calendar_sync import parse_ics, sync_user
+
+    now = datetime.now(timezone.utc)
+    start = (now + timedelta(hours=3)).strftime("%Y%m%dT%H%M%SZ")
+    events = "".join(
+        "BEGIN:VEVENT\r\n"
+        f"UID:{uid}\r\nDTSTAMP:20261101T000000Z\r\nDTSTART:{start}\r\nSUMMARY:Sync\r\n"
+        f"LOCATION:https://meet.google.com/{native}\r\nEND:VEVENT\r\n"
+        for uid, native in (("rearm-1", "cal-rarm-one"), ("rearm-2", "cal-rarm-two")))
+    feed = f"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//t//EN\r\n{events}END:VCALENDAR\r\n"
+    store = InMemoryTranscriptStore()
+
+    async def sync():
+        await sync_user(store, USER, parse_ics(feed, now=now), calendar_id="work",
+                        calendar_name="Work", bot_name="Bot A")
+        return {m["native_meeting_id"]: m for m in await store.list_meetings(USER)}
+
+    monkeypatch.delenv("VEXA_FLOWS_API_URL", raising=False)
+    rows = await sync()
+    assert all(r["data"]["auto_join"] is False for r in rows.values())
+    kept_off = rows["cal-rarm-two"]["id"]
+    assert "error" not in await store.update_planned_meeting(
+        USER, kept_off, {"auto_join": False, "auto_join_user_set": True})
+
+    assert (await sync())["cal-rarm-one"]["data"]["auto_join"] is False, "no scheduler: stays off"
+    monkeypatch.setenv("VEXA_FLOWS_API_URL", "http://flows-api:8200")
+    rows = await sync()
+    armed = rows["cal-rarm-one"]["data"]
+    assert armed["auto_join"] is True and "auto_join_error" not in armed
+    assert rows["cal-rarm-two"]["data"]["auto_join"] is False, "the person's own choice stands"

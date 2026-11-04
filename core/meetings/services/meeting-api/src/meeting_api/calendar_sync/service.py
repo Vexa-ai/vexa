@@ -347,6 +347,22 @@ def _source_updates(sources: list[dict], *, user_set: bool = False) -> dict:
     return updates
 
 
+def _rearm_after_scheduling(data: dict, sources: list[dict], auto_join_default: bool) -> bool:
+    """Does this row get its bot back now (ADR-0052 §3): it was mirrored with ``auto_join`` off and
+    "scheduling not deployed" because no scheduler was configured, one is configured now, the person
+    did not set the row's auto-join themselves, and the calendars' policy (``sources``, or the
+    single feed's default) wants a bot. True re-arms it on this pass, whatever else the feed says."""
+    from ..collector.booking import SCHEDULING_NOT_DEPLOYED, scheduler_configured
+
+    if data.get("auto_join") is not False or data.get("auto_join_error") != SCHEDULING_NOT_DEPLOYED:
+        return False
+    if _auto_join_user_set(data) or not scheduler_configured():
+        return False
+    if sources:
+        return any(bool(source.get("auto_join", True)) for source in sources)
+    return bool(auto_join_default)
+
+
 def _replace_source(sources: list[dict], source: dict) -> list[dict]:
     replaced = False
     out = []
@@ -604,6 +620,9 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
                     updates.update(_source_updates(
                         next_sources, user_set=_auto_join_user_set(data),
                     ))
+            if _rearm_after_scheduling(data, _calendar_sources(data) if not calendar_id
+                                       else next_sources, auto_join_default):
+                updates["auto_join"] = True
             if (data.get("title") or None) != ev["title"] and ev["title"]:
                 updates["title"] = ev["title"]
             if data.get("scheduled_at") != ev["scheduled_at"]:
