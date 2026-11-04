@@ -27,8 +27,15 @@ import { log } from "../_host";
 import { AdmissionError } from "../shared/admission";
 import { googleJoinRefusedIndicators } from "./selectors";
 
-/** Reason code at the head of every refusal message; join evidence reads it as a platform refusal. */
+/** Reason code at the head of every refusal message but the guest-block one (below); join evidence
+ *  reads it as a platform refusal, and meeting-api starts a new bot pod on it (meet_respawn.py). */
 export const GOOGLE_JOIN_REFUSED = "google_meet_join_refused";
+
+/** Meet's 403 message when the meeting itself does not admit a guest from a browser (bbb, 4 Nov 2026:
+ *  a room whose owner allows only its own app refused 10 of 10 knocks with it; the flaky refusal says
+ *  only "The caller does not have permission"). Every knock gets the same answer, so the bot does not
+ *  knock again, and the message leaves out GOOGLE_JOIN_REFUSED so no new pod is started either. */
+export const GOOGLE_GUEST_BLOCKED = "cannot resolve this meeting due to the client";
 
 /** Knocks per join, the first included, when nothing is configured. Meet's refusal is independent per
  *  knock (bbb join matrix, 2 Nov 2026: ~48% of knocks refused on bbb, ~64% in prod, no difference by
@@ -138,11 +145,43 @@ const sleepFor = (ms: number) => new Promise<void>((resolve) => setTimeout(resol
 // The two calls whose 403 is Meet refusing this join. Group 1 names the call in the evidence.
 const REFUSING_RPC = /(MeetingSpaceService\/ResolveMeetingSpace|MeetingDeviceService\/CreateMeetingDevice)/;
 
-// Per page: the refused call of the CURRENT knock ("<call> answered HTTP 403"), and whether the
-// response listener is already attached. WeakMap/WeakSet so nothing outlives the page.
+// Per page: the refused call of the CURRENT knock ("<call> answered HTTP 403"), the message in its
+// response body (read as it arrives), and whether the response listener is already attached.
+// WeakMap/WeakSet so nothing outlives the page.
 const refusedCall = new WeakMap<object, string>();
+const refusedMessage = new WeakMap<object, Promise<string | null>>();
 const watched = new WeakSet<object>();
 
+/** How long a refusal check waits for the refused call's body before reporting without it. */
+const REFUSAL_BODY_WAIT_MS = 2_000;
+
+/** The message of a 403 body. Meet answers with a protobuf google.rpc.Status: field 1 the code,
+ *  field 2 the message, field 3 the error details. Returns field 2, at most 200 chars, or null. */
+export function refusalMessage(body: Buffer): string | null {
+  let i = 0;
+  const varint = (): number => {
+    let value = 0;
+    for (let shift = 0; i < body.length && shift < 35; shift += 7) {
+      const b = body[i++];
+      value += (b & 0x7f) * 2 ** shift;
+      if (!(b & 0x80)) return value;
+    }
+    return -1;
+  };
+  while (i < body.length) {
+    const tag = varint();
+    if (tag < 0) return null;
+    const type = tag & 7;
+    if (type === 0) { if (varint() < 0) return null; continue; }
+    if (type !== 2) return null;
+    const len = varint();
+    if (len < 0 || i + len > body.length) return null;
+    const bytes = body.subarray(i, i + len);
+    i += len;
+    if (tag >>> 3 === 2) return bytes.toString("utf8").trim().slice(0, 200) || null;
+  }
+  return null;
+}
 /**
  * Listen for Meet refusing the join. Idempotent per page; call it before navigating to the meeting
  * (ResolveMeetingSpace answers during the lobby load). The network answer is the primary signal: it does not depend on the UI language and
@@ -158,6 +197,9 @@ export function watchGoogleJoinRefusal(page: Page): void {
       if (call) {
         const what = `${call.split("/")[1]} answered HTTP 403`;
         refusedCall.set(key, what);
+        refusedMessage.set(key, typeof (response as any).body === "function"
+          ? response.body().then(refusalMessage).catch(() => null)
+          : Promise.resolve(null));
         log(`🚫 Google Meet refused the join: ${what}`);
       }
     } catch { /* a response we cannot read is not evidence */ }
@@ -167,13 +209,22 @@ export function watchGoogleJoinRefusal(page: Page): void {
 /** Forget the previous knock's refusal before knocking again on the same page. */
 export function resetGoogleJoinRefusal(page: Page): void {
   refusedCall.delete(page as unknown as object);
+  refusedMessage.delete(page as unknown as object);
 }
 
 /** What shows Meet refused this knock, or null. Either signal alone is enough. */
 export async function checkForGoogleJoinRefused(page: Page): Promise<string | null> {
   const evidence: string[] = [];
   const call = refusedCall.get(page as unknown as object);
-  if (call) evidence.push(call);
+  if (call) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const message = await Promise.race([
+      refusedMessage.get(page as unknown as object) ?? Promise.resolve(null),
+      new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), REFUSAL_BODY_WAIT_MS); }),
+    ]);
+    clearTimeout(timer);
+    evidence.push(message ? `${call}: ${message}` : call);
+  }
   for (const selector of googleJoinRefusedIndicators) {
     const visible = await page.locator(selector).first().isVisible().catch(() => false);
     if (visible) {
@@ -187,14 +238,21 @@ export async function checkForGoogleJoinRefused(page: Page): Promise<string | nu
 /** One refused knock. A typed `denial`: Meet said no, and no host was ever asked. */
 export class GoogleJoinRefusedError extends AdmissionError {
   readonly evidence: string;
+  /** The meeting does not admit a guest from a browser (GOOGLE_GUEST_BLOCKED): no knock can pass. */
+  readonly guestBlocked: boolean;
   constructor(evidence: string, knocks = 1) {
+    const guestBlocked = evidence.includes(GOOGLE_GUEST_BLOCKED);
     super(
       "denial",
-      `${GOOGLE_JOIN_REFUSED}: Google Meet refused the join on ${knocks} of ${knocks} knock${knocks === 1 ? "" : "s"} (${evidence}); ` +
-        `the host never received a request to admit the bot`,
+      guestBlocked
+        ? `Google Meet refused the join: this meeting does not admit guests joining from a browser (${evidence}); ` +
+          `the host never received a request to admit the bot`
+        : `${GOOGLE_JOIN_REFUSED}: Google Meet refused the join on ${knocks} of ${knocks} knock${knocks === 1 ? "" : "s"} (${evidence}); ` +
+          `the host never received a request to admit the bot`,
     );
     this.name = "GoogleJoinRefusedError";
     this.evidence = evidence;
+    this.guestBlocked = guestBlocked;
   }
 }
 
@@ -299,8 +357,9 @@ export async function knockUntilGoogleAccepts(
       }
       refusals++;
       const wait = backoff.length ? backoff[Math.min(refusals - 1, backoff.length - 1)] : 0;
-      // A wait that would use up the budget leaves no time to knock: report the refusal now.
-      if (refusals >= maxKnocks || deadline - now() <= wait) {
+      // A wait that would use up the budget leaves no time to knock, and a meeting that does not
+      // admit browser guests refuses every knock: report the refusal now.
+      if (e.guestBlocked || refusals >= maxKnocks || deadline - now() <= wait) {
         // The host already saw a request and let it expire: that, not the refusal, is the verdict.
         if (ended.length) {
           throw new AdmissionError("lobby_timeout",
