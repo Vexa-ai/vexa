@@ -119,6 +119,14 @@ function mockPage(visible: string[], captcha: CaptchaMode = false, participantLa
   };
 }
 
+// A google.rpc.Status as Meet sends it: code (field 1), message (field 2), details (field 3).
+const statusBody = (code: number, message: string, typeUrl?: string): Buffer => {
+  const str = (field: number, b: Buffer) => Buffer.concat([Buffer.from([(field << 3) | 2, b.length]), b]);
+  const parts = [Buffer.from([0x08, code]), str(2, Buffer.from(message))];
+  if (typeUrl) parts.push(str(3, Buffer.concat([str(1, Buffer.from(typeUrl)), str(2, Buffer.from([0x10, 0x0b]))])));
+  return Buffer.concat(parts);
+};
+
 let passed = 0, failed = 0;
 async function check(name: string, actual: boolean, expected: boolean, detail?: string) {
   if (actual === expected) { console.log(`  \x1b[32mPASS\x1b[0m  ${name}`); passed++; }
@@ -501,6 +509,30 @@ async function outcomeOf(run: Promise<unknown>, watchdogMs = 10_000): Promise<st
     for (const fn of listeners) fn({ status: () => 200, url: () => 'https://meet.google.com/$rpc/google.rtc.meetings.v1.MeetingDeviceService/CreateMeetingDevice' });
     for (const fn of listeners) fn({ status: () => 403, url: () => 'https://meet.google.com/$rpc/google.rtc.meetings.v1.SomethingElse/Get' });
     await check('normal lobby + CreateMeetingDevice 200 + an unrelated 403 → not refused (control)', (await checkForGoogleJoinRefused(page)) === null, true);
+  }
+
+  console.log('\n=== The refused call\'s body rides the refusal evidence ===');
+  {
+    const listeners: ((r: any) => void)[] = [];
+    const page = mockPage([]);
+    page.on = (ev: string, fn: (r: any) => void) => { if (ev === 'response') listeners.push(fn); };
+    watchGoogleJoinRefusal(page);
+    const body = statusBody(7, 'The requester cannot resolve this meeting due to the client they are joining from', 'type.googleapis.com/google.rtc.meetings.v1.ErrorDetails');
+    for (const fn of listeners) fn({ status: () => 403, url: () => 'https://meet.google.com/$rpc/google.rtc.meetings.v1.MeetingSpaceService/ResolveMeetingSpace', body: async () => body });
+    const evidence = await checkForGoogleJoinRefused(page);
+    check('ResolveMeetingSpace 403 with a body → the evidence carries its message', evidence === 'ResolveMeetingSpace answered HTTP 403: The requester cannot resolve this meeting due to the client they are joining from', true, String(evidence));
+    const err = await waitForGoogleMeetingAdmission(page, 20_000, {} as any).catch((e) => e);
+    check('… the admission wait ends guest-blocked', err instanceof GoogleJoinRefusedError && err.guestBlocked === true, true, `${err?.name} ${err?.message}`);
+  }
+  {
+    const listeners: ((r: any) => void)[] = [];
+    const page = mockPage([]);
+    page.on = (ev: string, fn: (r: any) => void) => { if (ev === 'response') listeners.push(fn); };
+    watchGoogleJoinRefusal(page);
+    for (const fn of listeners) fn({ status: () => 403, url: () => 'https://meet.google.com/$rpc/google.rtc.meetings.v1.MeetingDeviceService/CreateMeetingDevice', body: () => new Promise(() => {}) });
+    const t = Date.now();
+    const evidence = await checkForGoogleJoinRefused(page);
+    check('a body that never arrives → the call alone, after at most ~2 s', evidence === 'CreateMeetingDevice answered HTTP 403' && Date.now() - t < 3_000, true, `${evidence} ${Date.now() - t} ms`);
   }
 
   console.log('\n=== Fixture: Meet ends request 1 unanswered, the bot asks again (prod 3-4 Nov 2026) ===');
