@@ -196,6 +196,8 @@ spec:
             {{- $worker := get $placement "agentWorker" | default dict }}
             - name: RUNTIME_K8S_BOT_NODE_SELECTOR
               value: {{ $bot.nodeSelector | default dict | toJson | quote }}
+            - name: RUNTIME_K8S_BOT_NODE_AFFINITY
+              value: {{ $bot.nodeAffinity | default list | toJson | quote }}
             - name: RUNTIME_K8S_BOT_TOLERATIONS
               value: {{ $bot.tolerations | default list | toJson | quote }}
             - name: RUNTIME_K8S_BOT_PRIORITY_CLASS_NAME
@@ -204,6 +206,8 @@ spec:
               value: {{ $bot.imagePullSecrets | default list | toJson | quote }}
             - name: RUNTIME_K8S_AGENT_WORKER_NODE_SELECTOR
               value: {{ $worker.nodeSelector | default dict | toJson | quote }}
+            - name: RUNTIME_K8S_AGENT_WORKER_NODE_AFFINITY
+              value: {{ $worker.nodeAffinity | default list | toJson | quote }}
             - name: RUNTIME_K8S_AGENT_WORKER_TOLERATIONS
               value: {{ $worker.tolerations | default list | toJson | quote }}
             - name: RUNTIME_K8S_AGENT_WORKER_PRIORITY_CLASS_NAME

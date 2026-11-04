@@ -136,16 +136,16 @@ fi
 envval() { grep -A1 -E "name: $1\$" <<< "$2" | grep 'value:' | sed -E 's/^[[:space:]]*value: //'; }
 placement_ok=1
 for class in BOT AGENT_WORKER; do
-  for pair in 'NODE_SELECTOR="{}"' 'TOLERATIONS="[]"' 'PRIORITY_CLASS_NAME=""' 'IMAGE_PULL_SECRETS="[]"'; do
+  for pair in 'NODE_SELECTOR="{}"' 'NODE_AFFINITY="[]"' 'TOLERATIONS="[]"' 'PRIORITY_CLASS_NAME=""' 'IMAGE_PULL_SECRETS="[]"'; do
     key="RUNTIME_K8S_${class}_${pair%%=*}"; want="${pair#*=}"
     got="$(envval "$key" "$RENDER")"
     if [ "$got" != "$want" ]; then echo "  FAIL: $key default — want $want got '${got}'"; placement_ok=0; fi
   done
 done
-[ "$placement_ok" -eq 1 ] && echo "  OK: per-class placement keys render empty by default (8)" || fail=1
+[ "$placement_ok" -eq 1 ] && echo "  OK: per-class placement keys render empty by default (10)" || fail=1
 RENDER_PLACE="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
   --set-json 'global.nodeSelector={"vexa.ai/pool":"main"}' \
-  --set-json 'runtime.workloadScheduling.meetingBot={"nodeSelector":{"vexa.ai/pool":"stealth"},"tolerations":[{"key":"vexa.ai/pool","operator":"Equal","value":"stealth","effect":"NoSchedule"}],"priorityClassName":"vexa-stealth","imagePullSecrets":["regcred"]}' \
+  --set-json 'runtime.workloadScheduling.meetingBot={"nodeSelector":{"vexa.ai/pool":"stealth"},"nodeAffinity":[{"key":"vexa.ai/role","operator":"NotIn","values":["system-host"]}],"tolerations":[{"key":"vexa.ai/pool","operator":"Equal","value":"stealth","effect":"NoSchedule"}],"priorityClassName":"vexa-stealth","imagePullSecrets":["regcred"]}' \
   --set runtime.workloadScheduling.agentWorker.priorityClassName=vexa-stealth-worker \
   --set-json 'runtime.workloadScheduling.agentWorker.imagePullSecrets=[{"name":"worker-reg"}]')"
 place_ok=1
@@ -154,6 +154,8 @@ check_place() {  # check_place <key> <expected value line>
   if [ "$got" != "$2" ]; then echo "  FAIL: $1 — want $2 got '${got}'"; place_ok=0; fi
 }
 check_place RUNTIME_K8S_BOT_NODE_SELECTOR '"{\"vexa.ai/pool\":\"stealth\"}"'
+check_place RUNTIME_K8S_BOT_NODE_AFFINITY '"[{\"key\":\"vexa.ai/role\",\"operator\":\"NotIn\",\"values\":[\"system-host\"]}]"'
+check_place RUNTIME_K8S_AGENT_WORKER_NODE_AFFINITY '"[]"'
 check_place RUNTIME_K8S_BOT_TOLERATIONS '"[{\"effect\":\"NoSchedule\",\"key\":\"vexa.ai/pool\",\"operator\":\"Equal\",\"value\":\"stealth\"}]"'
 check_place RUNTIME_K8S_BOT_PRIORITY_CLASS_NAME '"vexa-stealth"'
 check_place RUNTIME_K8S_BOT_IMAGE_PULL_SECRETS '"[\"regcred\"]"'

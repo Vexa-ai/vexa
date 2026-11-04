@@ -236,6 +236,15 @@
       ]
     },
     {
+      "key": "RUNTIME_K8S_BOT_NODE_AFFINITY",
+      "class": "defaulted",
+      "default": "(unset \u2014 no required node affinity on meeting-bot Pods)",
+      "description": "k8s backend: JSON array of node selector requirements ({key, operator In|NotIn|Exists|DoesNotExist, values}) every SPAWNED meeting-bot Pod must satisfy, rendered as ONE required node-affinity term (all of them ANDed). Where a node selector says where the class may go, this can say where it must never go, e.g. [{\"key\":\"vexa.ai/role\",\"operator\":\"NotIn\",\"values\":[\"system-host\"]}] keeps the class off the nodes the cluster's own services run on. A join retry's preferred anti-affinity (avoidNodes) is added beside it. Validated at boot; malformed is fatal at boot. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
       "key": "RUNTIME_K8S_BOT_TOLERATIONS",
       "class": "defaulted",
       "default": "(unset — meeting-bot Pods take the runtime-wide RUNTIME_K8S_TOLERATIONS)",
@@ -267,6 +276,15 @@
       "class": "defaulted",
       "default": "(unset — agent-worker Pods take the runtime-wide RUNTIME_K8S_NODE_SELECTOR)",
       "description": "k8s backend: JSON object of node labels every SPAWNED agent-worker Pod selects. When set it replaces the runtime-wide RUNTIME_K8S_NODE_SELECTOR for this class only. Validated at boot; malformed is fatal at boot. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_AGENT_WORKER_NODE_AFFINITY",
+      "class": "defaulted",
+      "default": "(unset \u2014 no required node affinity on agent-worker Pods)",
+      "description": "k8s backend: JSON array of node selector requirements ({key, operator In|NotIn|Exists|DoesNotExist, values}) every SPAWNED agent-worker Pod must satisfy, rendered as ONE required node-affinity term (all of them ANDed). Where a node selector says where the class may go, this can say where it must never go, e.g. [{\"key\":\"vexa.ai/role\",\"operator\":\"NotIn\",\"values\":[\"system-host\"]}] keeps the class off the nodes the cluster's own services run on. A join retry's preferred anti-affinity (avoidNodes) is added beside it. Validated at boot; malformed is fatal at boot. Never taken from a workload spec",
       "targets": [
         "helm"
       ]

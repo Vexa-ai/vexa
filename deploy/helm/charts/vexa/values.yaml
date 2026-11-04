@@ -810,6 +810,11 @@ runtime:
     allowBroadTolerations: false
     meetingBot:
       nodeSelector: {}
+      # Node selector requirements ({key, operator, values}) the class's Pods MUST satisfy: one
+      # required node-affinity term. Where nodeSelector says where bots may go, this says where they
+      # must never go, e.g. off the nodes the cluster's own services run on:
+      #   [{key: vexa.ai/role, operator: NotIn, values: [system-host]}]
+      nodeAffinity: []
       tolerations: []
       priorityClassName: ""
       imagePullSecrets: []
@@ -818,6 +823,7 @@ runtime:
       capabilities: null
     agentWorker:
       nodeSelector: {}
+      nodeAffinity: []
       tolerations: []
       priorityClassName: ""
       imagePullSecrets: []

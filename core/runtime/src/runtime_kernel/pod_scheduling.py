@@ -11,6 +11,15 @@ They are the runtime's own configuration, never the caller's:
 * carried on the profile's ``Runnable``. A spec cannot reach them: ``WorkloadSpec`` has no such
   field, and a spec env key under ``RUNTIME_K8S_`` is dropped (``workload_env``).
 
+``<prefix>NODE_AFFINITY`` is the one REQUIRED placement rule a class can carry: a JSON array of node
+selector requirements (``{"key", "operator", "values"}``, operators ``In``/``NotIn``/``Exists``/
+``DoesNotExist``), rendered as one required node-affinity term that the node must satisfy in full. A
+node selector can only say where a Pod may go; this can also say where it must never go. The case it
+exists for: ``[{"key": "vexa.ai/role", "operator": "NotIn", "values": ["system-host"]}]`` keeps meeting
+bots off the nodes the cluster's own services live on, so a system Pod that needs room there finds it
+without preempting a bot that is in a live meeting (a coredns replica preempted one on 4 Nov 2026). A
+node the autoscaler has yet to add carries no such label, so ``NotIn`` still lets a scale-up count it.
+
 A toleration with no key (it tolerates every taint) or for a control-plane or system taint
 (``node-role.kubernetes.io/control-plane``, ``…/master``, ``CriticalAddonsOnly``) is refused unless
 the operator sets ``RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS=true``; the runtime-wide settings are held to
@@ -39,12 +48,14 @@ from typing import Mapping, Optional
 
 #: Suffixes of the settings, after the profile's prefix (``RUNTIME_K8S_BOT_`` …).
 NODE_SELECTOR = "NODE_SELECTOR"
+NODE_AFFINITY = "NODE_AFFINITY"
 TOLERATIONS = "TOLERATIONS"
 PRIORITY_CLASS_NAME = "PRIORITY_CLASS_NAME"
 IMAGE_PULL_SECRETS = "IMAGE_PULL_SECRETS"
 CAPABILITIES = "CAPABILITIES"
 SECCOMP_PROFILE = "SECCOMP_PROFILE"
-SUFFIXES = (NODE_SELECTOR, TOLERATIONS, PRIORITY_CLASS_NAME, IMAGE_PULL_SECRETS, CAPABILITIES, SECCOMP_PROFILE)
+SUFFIXES = (NODE_SELECTOR, NODE_AFFINITY, TOLERATIONS, PRIORITY_CLASS_NAME, IMAGE_PULL_SECRETS, CAPABILITIES,
+            SECCOMP_PROFILE)
 #: The runtime-wide settings, validated at boot by the same rules as a profile's own.
 RUNTIME_WIDE_PREFIX = "RUNTIME_K8S_"
 #: The operator's explicit opt-in to tolerations that reach any node or the cluster's own nodes.
@@ -64,6 +75,11 @@ _QUALIFIED_NAME_PART = re.compile(r"^([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]$")
 _TOLERATION_FIELDS = frozenset({"key", "operator", "value", "effect", "tolerationSeconds"})
 _TOLERATION_OPERATORS = frozenset({"Equal", "Exists"})
 _TAINT_EFFECTS = frozenset({"", "NoSchedule", "PreferNoSchedule", "NoExecute"})
+#: A node selector requirement's operators (Gt/Lt compare integers; no placement rule here needs them).
+_NODE_SELECTOR_OPERATORS = frozenset({"In", "NotIn", "Exists", "DoesNotExist"})
+#: Bounds on one class's required term: far above any real rule, well inside the API server's own.
+MAX_NODE_AFFINITY_REQUIREMENTS = 10
+MAX_NODE_AFFINITY_VALUES = 32
 #: How many nodes one spec may ask to avoid: a meeting's join attempts are bounded far below this.
 MAX_AVOID_NODES = 10
 #: The node label a preferred anti-affinity keys on (set by the kubelet on every node).
@@ -78,6 +94,9 @@ class PodScheduling:
     """One profile's Pod placement. Every field empty ⇒ the profile adds nothing to its Pods."""
 
     node_selector: Mapping[str, str] = field(default_factory=dict)
+    #: Node selector requirements every Pod of the class must satisfy: ONE required node-affinity
+    #: term, all of them ANDed. Empty ⇒ no required node affinity.
+    node_affinity: tuple[Mapping[str, object], ...] = ()
     tolerations: tuple[Mapping[str, object], ...] = ()
     priority_class_name: str = ""
     image_pull_secrets: tuple[str, ...] = ()
@@ -96,12 +115,25 @@ class PodScheduling:
         the spec as it is."""
         if self.node_selector:
             pod_spec["nodeSelector"] = dict(self.node_selector)
+        if self.node_affinity:
+            # The only writer of the REQUIRED half. A join retry's avoidNodes adds a PREFERRED term
+            # beside it (apply_avoid_nodes, laid on after this) and never touches this one.
+            node_affinity = pod_spec.setdefault("affinity", {}).setdefault("nodeAffinity", {})
+            node_affinity["requiredDuringSchedulingIgnoredDuringExecution"] = {
+                "nodeSelectorTerms": [{"matchExpressions": [_copy_requirement(r) for r in self.node_affinity]}]}
         if self.tolerations:
             pod_spec["tolerations"] = [dict(t) for t in self.tolerations]
         if self.priority_class_name:
             pod_spec["priorityClassName"] = self.priority_class_name
         if self.image_pull_secrets:
             pod_spec["imagePullSecrets"] = [{"name": n} for n in self.image_pull_secrets]
+
+
+def _copy_requirement(r: Mapping[str, object]) -> dict:
+    out = dict(r)
+    if "values" in out:
+        out["values"] = list(out["values"])  # type: ignore[call-overload]
+    return out
 
 
 def _dns1123_subdomain(value: object) -> bool:
@@ -173,6 +205,44 @@ def _node_selector(env: Mapping[str, str], key: str) -> dict[str, str]:
         if not _label_value(wanted):
             raise ValueError(f"{key}: the value for {label!r} is not a valid label value")
     return dict(value)
+
+
+def _node_affinity(env: Mapping[str, str], key: str) -> tuple[dict, ...]:
+    """``<prefix>NODE_AFFINITY``: a JSON array of node selector requirements, the class's one
+    required node-affinity term. Each is ``{"key", "operator", "values"}`` under Kubernetes' own
+    rules: ``In``/``NotIn`` take a non-empty list of label values, ``Exists``/``DoesNotExist`` none."""
+    value = _json(env, key, list) or []
+    if len(value) > MAX_NODE_AFFINITY_REQUIREMENTS:
+        raise ValueError(f"{key} has {len(value)} requirements; at most "
+                         f"{MAX_NODE_AFFINITY_REQUIREMENTS} are allowed")
+    out: list[dict] = []
+    for i, r in enumerate(value):
+        where = f"{key}[{i}]"
+        if not isinstance(r, dict):
+            raise ValueError(f"{where} must be a node selector requirement object")
+        unknown = sorted(set(r) - {"key", "operator", "values"})
+        if unknown:
+            raise ValueError(f"{where} has unknown field(s) {unknown}")
+        if not _qualified_name(r.get("key")):
+            raise ValueError(f"{where}.key is not a valid label key")
+        operator = r.get("operator")
+        if operator not in _NODE_SELECTOR_OPERATORS:
+            raise ValueError(f"{where}.operator must be one of In, NotIn, Exists, DoesNotExist")
+        values = r.get("values")
+        if operator in ("In", "NotIn"):
+            if not isinstance(values, list) or not values:
+                raise ValueError(f"{where}: operator {operator} needs a non-empty values list")
+            if len(values) > MAX_NODE_AFFINITY_VALUES:
+                raise ValueError(f"{where} has {len(values)} values; at most "
+                                 f"{MAX_NODE_AFFINITY_VALUES} are allowed")
+            if not all(_label_value(v) for v in values):
+                raise ValueError(f"{where}.values holds a value that is not a valid label value")
+            out.append({"key": r["key"], "operator": operator, "values": list(dict.fromkeys(values))})
+        else:
+            if values not in (None, []):
+                raise ValueError(f"{where}: operator {operator} takes no values")
+            out.append({"key": r["key"], "operator": operator})
+    return tuple(out)
 
 
 def _toleration(key: str, i: int, t: object, allow_broad: bool = False) -> dict:
@@ -275,11 +345,12 @@ def _pull_secrets(env: Mapping[str, str], key: str) -> tuple[str, ...]:
 
 
 def from_env(prefix: str, env: Mapping[str, str]) -> PodScheduling:
-    """The placement the settings ``<prefix>NODE_SELECTOR`` … ``<prefix>IMAGE_PULL_SECRETS`` in
+    """The placement the settings ``<prefix>NODE_SELECTOR`` … ``<prefix>SECCOMP_PROFILE`` in
     ``env`` describe. Unset or empty ⇒ that field is empty. Anything malformed raises
     :class:`ValueError` naming the setting (and never echoing a whole value back)."""
     return PodScheduling(
         node_selector=_node_selector(env, prefix + NODE_SELECTOR),
+        node_affinity=_node_affinity(env, prefix + NODE_AFFINITY),
         tolerations=_tolerations(env, prefix + TOLERATIONS),
         priority_class_name=_priority_class(env, prefix + PRIORITY_CLASS_NAME),
         image_pull_secrets=_pull_secrets(env, prefix + IMAGE_PULL_SECRETS),

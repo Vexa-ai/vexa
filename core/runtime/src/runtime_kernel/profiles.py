@@ -264,7 +264,8 @@ def _profile_resources(profile: str) -> Optional[Resources]:
 
 # Per-profile Pod placement on Kubernetes, read from the runtime's OWN env at boot (the chart renders
 # it from runtime.workloadScheduling.<class>) and validated there: <prefix>NODE_SELECTOR,
-# <prefix>TOLERATIONS, <prefix>PRIORITY_CLASS_NAME, <prefix>IMAGE_PULL_SECRETS. The prefix sits under
+# <prefix>NODE_AFFINITY (one REQUIRED node-affinity term), <prefix>TOLERATIONS,
+# <prefix>PRIORITY_CLASS_NAME, <prefix>IMAGE_PULL_SECRETS. The prefix sits under
 # RUNTIME_K8S_, which a spec's env can never set (workload_env.RUNTIME_OWNED_PREFIXES).
 _SCHEDULING_ENV_PREFIX = {
     "meeting-bot": "RUNTIME_K8S_BOT_",
