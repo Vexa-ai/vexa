@@ -331,6 +331,17 @@ class MaxBotsExceeded(Exception):
         super().__init__(f"User has reached the maximum concurrent bot limit ({cap}).")
 
 
+class SeatCooldown(MaxBotsExceeded):
+    """The cap is reached only because a bot the user just stopped still holds its seat (the seat
+    cooldown). A 429 of its own, with the wait (``retry_after_s``)."""
+
+    def __init__(self, user_id: int, cap: int, retry_after_s: int):
+        super().__init__(user_id, cap)
+        self.retry_after_s = max(1, int(retry_after_s))
+        Exception.__init__(self, f"A bot you stopped still holds its seat for {self.retry_after_s} s "
+                                 f"(limit {cap} concurrent bots).")
+
+
 class AuthSessionNotConfigured(Exception):
     """``BOT_AUTHENTICATED=true`` without a complete userdata store config — HTTP 503.
 

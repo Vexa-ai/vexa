@@ -78,27 +78,41 @@ class AccountLimits:
         return json.dumps(body, sort_keys=True, separators=(",", ":"))
 
 
-def _count(value: Any) -> Optional[int]:
-    """A non-negative integer limit, or None (bool is not a number here)."""
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+def _number(value: Any) -> Optional[float]:
+    """A finite number, or None: bool, NaN and infinity are not limits."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         return None
-    return value
+    return float(value)
+
+
+def _count(value: Any) -> Optional[int]:
+    """A whole-number limit. A negative one is 0 (nothing allowed), never "no limit"; a fraction is
+    not a count and is ignored, so the next level applies."""
+    n = _number(value)
+    if n is None or not n.is_integer():
+        return None
+    return max(0, int(n))
 
 
 def _seconds(value: Any) -> Optional[int]:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+    """A non-negative duration, a fraction rounded UP (a limit never shortens by rounding)."""
+    n = _number(value)
+    if n is None or n < 0:
         return None
-    return int(value)
+    return int(math.ceil(n))
 
 
 def _rate(value: Any) -> Optional[TokenRate]:
     if not isinstance(value, Mapping):
         return None
-    burst, per_minute = _count(value.get("burst")), value.get("per_minute")
-    if burst is None or burst < 1 or isinstance(per_minute, bool) \
-            or not isinstance(per_minute, (int, float)) or per_minute < 0:
+    burst, per_minute = _count(value.get("burst")), _number(value.get("per_minute"))
+    if burst is None or burst < 1 or per_minute is None or per_minute < 0:
         return None
-    return TokenRate(burst=burst, per_minute=float(per_minute))
+    return TokenRate(burst=burst, per_minute=per_minute)
+
+
+def _reject_constant(name: str):
+    raise ValueError(f"{name} is not a limit")
 
 
 _FIELDS = {
@@ -153,7 +167,7 @@ def from_header(x_user_limits: Optional[str]) -> AccountLimits:
     except ValueError:
         pass
     try:
-        obj = json.loads(raw)
+        obj = json.loads(raw, parse_constant=_reject_constant)
     except ValueError:
         return AccountLimits()
     if not isinstance(obj, Mapping):

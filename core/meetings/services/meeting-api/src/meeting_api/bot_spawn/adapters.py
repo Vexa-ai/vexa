@@ -19,6 +19,7 @@ from ..sessions import new_session
 from .ports import (
     DuplicateMeeting,
     MaxBotsExceeded,
+    SeatCooldown,
     MeetingStopped,
     QuotaExceeded,
     SpawnFailed,
@@ -85,12 +86,18 @@ def _seat_held(Meeting, active, cooldown_s: float = 0):
     if not cooldown_s:
         return held
     cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=cooldown_s)
-    return or_(held, and_(
+    # A bot on its way out (`stopping`) still holds its seat; its cooldown starts when it ends.
+    return or_(held, Meeting.status == "stopping", and_(
         Meeting.status.in_(("completed", "failed")),
         Meeting.end_time >= cutoff,
         Meeting.data.contains({"stop_requested": True}),
         not_(Meeting.data.has_key("scheduled_at")),
     ))
+
+
+def _queue_timing_out(data) -> bool:
+    queue = (data or {}).get("queue") if isinstance(data, dict) else None
+    return bool(isinstance(queue, dict) and queue.get("timing_out"))
 
 
 def _respawn_retired(data, workload_id) -> bool:
@@ -376,6 +383,7 @@ class SqlAlchemyMeetingRepo:
                 "session_uid": sid,
                 "stop_requested": bool((data or {}).get("stop_requested")),
                 "respawn_retired": _respawn_retired(data, bot_container_id),
+                "queue_timing_out": _queue_timing_out(data),
             }
 
     async def update_meeting_status(
@@ -502,7 +510,8 @@ class SqlAlchemyMeetingRepo:
                 await db.execute(
                     select(Meeting.id, Meeting.status, Meeting.bot_container_id,
                            Meeting.data["queue"], Meeting.data["scheduled_at"],
-                           Meeting.data["stop_requested"], MeetingSession.session_uid)
+                           Meeting.data["stop_requested"], MeetingSession.session_uid,
+                           Meeting.data["queue_wait_s"])
                     .join(MeetingSession, MeetingSession.meeting_id == Meeting.id)
                     .where(
                         Meeting.status.in_(WATCHED_STATUSES),
@@ -513,7 +522,7 @@ class SqlAlchemyMeetingRepo:
                 )
             ).all()
         out: dict[int, dict] = {}
-        for mid, status, bcid, queue, scheduled_at, stop_requested, sid in rows:
+        for mid, status, bcid, queue, scheduled_at, stop_requested, sid, wait in rows:
             if mid in out or not sid:
                 continue
             out[mid] = {
@@ -524,8 +533,19 @@ class SqlAlchemyMeetingRepo:
                 "queue": queue if isinstance(queue, dict) else None,
                 "scheduled_at": scheduled_at if isinstance(scheduled_at, str) else None,
                 "stop_requested": bool(stop_requested),
+                "queue_wait_s": wait if isinstance(wait, (int, float)) and not isinstance(wait, bool) else None,
             }
         return list(out.values())
+
+    async def get_queue_block(self, meeting_id) -> Optional[dict]:
+        """``meeting.data.queue`` alone (the reaper asks whether a queued bot was timing out)."""
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            block = (await db.execute(select(Meeting.data["queue"]).where(Meeting.id == meeting_id))).scalar()
+        return block if isinstance(block, dict) else None
 
     async def bot_run_stop_counts(self, *, window_s: float, quick_stop_s: float) -> list[dict]:
         """Per account, over the bot runs that started in the last ``window_s``: how many runs, and
@@ -734,6 +754,14 @@ class SqlAlchemyMeetingRepo:
                     count_stmt = count_stmt.where(Meeting.id != exclude_meeting_id)
                 n_active = int((await db.execute(count_stmt)).scalar() or 0)
                 if n_active >= max_concurrent:
+                    if cooldown_s:
+                        running_stmt = select(func.count()).select_from(Meeting).where(
+                            Meeting.user_id == user_id, Meeting.status.in_(active),
+                            Meeting.platform != "browser_session")
+                        if exclude_meeting_id is not None:
+                            running_stmt = running_stmt.where(Meeting.id != exclude_meeting_id)
+                        if int((await db.execute(running_stmt)).scalar() or 0) < max_concurrent:
+                            raise SeatCooldown(user_id, max_concurrent, int(cooldown_s))
                     raise MaxBotsExceeded(user_id, max_concurrent)
             # 2b. claim — a PLANNED row (intent status `idle`/`scheduled`, created by POST /meetings
             #     or calendar sync) for the SAME (user, platform, native) is UPGRADED in place instead

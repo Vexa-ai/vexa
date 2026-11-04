@@ -190,7 +190,7 @@ async def capacity_queue_sweep(
         return counts
     for row in rows:
         try:
-            await _sweep_one(row, runtime, enter=enter, time_out=time_out, log=log, now=now,
+            await _sweep_one(row, repo, runtime, enter=enter, time_out=time_out, log=log, now=now,
                              max_wait=max_wait, window=window, counts=counts,
                              workload_unknown=WorkloadUnknown)
         except Exception:  # noqa: BLE001 — one meeting never stops the pass
@@ -198,7 +198,13 @@ async def capacity_queue_sweep(
     return counts
 
 
-async def _sweep_one(row, runtime, *, enter, time_out, log, now, max_wait, window, counts,
+def timeout_reason(max_wait: float, detail: Any = None) -> str:
+    reason = (f"no seat for the bot within {int(round(max_wait / 60))} min: "
+              "the cluster stayed at capacity")
+    return f"{reason} ({detail})" if detail else reason
+
+
+async def _sweep_one(row, repo, runtime, *, enter, time_out, log, now, max_wait, window, counts,
                      workload_unknown) -> None:
     status = row.get("status")
     session_uid = row.get("session_uid")
@@ -213,10 +219,20 @@ async def _sweep_one(row, runtime, *, enter, time_out, log, now, max_wait, windo
         log.warning("capacity-queue: get_workload(%s) failed; leaving meeting %s",
                     workload_id, row.get("meeting_id"))
         return
+    queue = dict(row.get("queue") or {}) if isinstance(row.get("queue"), dict) else {}
+    wait = row.get("queue_wait_s")
+    max_wait = float(wait) if isinstance(wait, (int, float)) and not isinstance(wait, bool) and wait > 0 \
+        else max_wait
     if not isinstance(info, dict) or info.get("state") not in _ALIVE_STATES:
+        if status == QUEUED and queue.get("timing_out") and isinstance(info, dict):
+            # Its Pod is gone and we were the ones deleting it: finish what the last pass began
+            # (a restart between the delete and the terminal write).
+            await time_out({"connection_id": session_uid, "status": "failed",
+                            "completion_reason": COMPLETION_REASON,
+                            "reason": timeout_reason(max_wait, queue.get("detail"))})
+            counts["timed_out"] += 1
         return                             # untracked or gone: the reconcile sweep owns it
     pending = info.get("pending")
-    queue = dict(row.get("queue") or {}) if isinstance(row.get("queue"), dict) else {}
 
     if status == "requested":
         if not waits_for_capacity(pending, now=now, scale_up_window=window):
@@ -235,8 +251,14 @@ async def _sweep_one(row, runtime, *, enter, time_out, log, now, max_wait, windo
     if deadline is None:
         return
     if now >= deadline:
-        if not (isinstance(pending, dict) and pending.get("reason") == "unschedulable"):
-            return                         # it has a seat now: the bot is starting, let it join
+        if not (isinstance(pending, dict) and pending.get("reason") == "unschedulable"
+                and not pending.get("nominated") and pending.get("autoscaler") != "scale_up"):
+            return                         # a seat is coming (placed, preempting, a node on its way)
+        # Stamp the timeout BEFORE the delete: the runtime reports the destroyed Pod to
+        # /runtime/callback while the delete is still in flight, and that callback (or a restart
+        # between the delete and the write below) must end the run as this timeout, not as a crash.
+        if hasattr(repo, "merge_meeting_data") and row.get("meeting_id") is not None:
+            await repo.merge_meeting_data(row["meeting_id"], {"queue": {**queue, "timing_out": _iso(now)}})
         try:
             await runtime.delete_workload(workload_id)
         except workload_unknown:
@@ -247,10 +269,7 @@ async def _sweep_one(row, runtime, *, enter, time_out, log, now, max_wait, windo
             log.warning("capacity-queue: deleting workload %s failed; retried next pass", workload_id)
             return
         minutes = int(round(max_wait / 60))
-        reason = f"no seat for the bot within {minutes} min: the cluster stayed at capacity"
-        detail = queue.get("detail")
-        if detail:
-            reason = f"{reason} ({detail})"
+        reason = timeout_reason(max_wait, queue.get("detail"))
         await time_out({
             "connection_id": session_uid,
             "status": "failed",

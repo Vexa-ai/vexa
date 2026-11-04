@@ -67,7 +67,8 @@ def test_queue_writes_are_conditional_and_listing_reads_paths_only():
         (cand,) = await repo.list_queue_candidates()
         assert cand == {"meeting_id": mid, "status": "requested", "session_uid": "s-1",
                         "bot_container_id": "w-1", "queue": None,
-                        "scheduled_at": "2026-11-04T10:00:00Z", "stop_requested": False}
+                        "scheduled_at": "2026-11-04T10:00:00Z", "stop_requested": False,
+                        "queue_wait_s": None}
         entry = {"from": "requested", "to": "queued", "source": "capacity_queue"}
         row = await repo.set_queue_status(session_uid="s-1", expected=("requested",),
                                           status_reason="cluster_at_capacity",

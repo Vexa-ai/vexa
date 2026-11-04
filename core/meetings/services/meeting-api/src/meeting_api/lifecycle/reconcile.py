@@ -208,6 +208,20 @@ def _untracked_window_elapsed(
     return (now - first) > grace
 
 
+async def _queue_timed_out(repo: Any, meeting_id: Any) -> bool:
+    """Whether the capacity queue stamped this meeting's timeout (lifecycle/queue.py) before it
+    deleted the Pod: a reaped queued row then ends ``cluster_at_capacity``, never a re-spawnable
+    ``join_failure``."""
+    getter = getattr(repo, "get_queue_block", None)
+    if getter is None:
+        return False
+    try:
+        block = await getter(meeting_id)
+    except Exception:  # noqa: BLE001 — no answer is no stamp
+        return False
+    return bool(isinstance(block, dict) and block.get("timing_out"))
+
+
 def _lifecycle_stage(status: Optional[str]) -> Optional[str]:
     """The lifecycle.v1 ``FailureStage`` a meeting status stands for. ``queued`` is the server-side
     wait for a seat before any bot ran, so a bot lost there is lost at ``requested``."""
@@ -261,6 +275,7 @@ async def _escalate_untracked_zombie(
     grace: float,
     log: Any,
     stop_requested: bool = False,
+    repo: Any = None,
 ) -> bool:
     """Advance a continuously-untracked meeting to ``failed`` — through the bot's OWN lifecycle
     callback, with the evidence note as the transition's reason. WARN, not error: this is the
@@ -278,6 +293,9 @@ async def _escalate_untracked_zombie(
     completion_reason = (
         _pre_active_completion_reason(status, stop_requested) if pre_active else "left_alone"
     )
+    if status == "queued" and repo is not None and await _queue_timed_out(repo, meeting_id):
+        completion_reason = dominant_completion_reason("cluster_at_capacity",
+                                                       stop_requested=stop_requested)
     body = {
         "connection_id": session_uid,
         "status": "failed",
@@ -380,6 +398,7 @@ async def reconcile_stale_nonterminal_sweep(
                 ) and await _escalate_untracked_zombie(
                     meeting_id, status, session_uid, bot_container_id, post_lifecycle,
                     tracker, grace=untracked_grace, log=log, stop_requested=stop_requested,
+                    repo=repo,
                 ):
                     reconciled += 1
                 continue
@@ -411,7 +430,7 @@ async def reconcile_stale_nonterminal_sweep(
                 tracker, meeting_id, seen_untracked, grace=esc_grace, now=now
             ) and await _escalate_untracked_zombie(
                 meeting_id, status, session_uid, bot_container_id, post_lifecycle,
-                tracker, grace=esc_grace, log=log, stop_requested=stop_requested,
+                tracker, grace=esc_grace, log=log, stop_requested=stop_requested, repo=repo,
             ):
                 reconciled += 1
             continue
@@ -430,6 +449,9 @@ async def reconcile_stale_nonterminal_sweep(
             # with no evidence behind it (the sweep issued the delete itself), and `left_alone` is
             # `_PERMANENT` in ``retry.py``, so it would also cancel the legitimate re-spawn.
             body["completion_reason"] = _pre_active_completion_reason(status, stop_requested)
+            if status == "queued" and await _queue_timed_out(repo, meeting_id):
+                body["completion_reason"] = dominant_completion_reason(
+                    "cluster_at_capacity", stop_requested=stop_requested)
             body["reason"] = (
                 f"{_workload_evidence(bot_container_id, probe_info)}; "
                 f"reconciled to failed at {status} (never reached active)"
@@ -602,7 +624,16 @@ async def synthesize_terminal_for_dead_workload(
         return False
     status = info.get("status")
     stop_requested = bool(info.get("stop_requested"))
-    if status in _PRE_ACTIVE_STATUSES:
+    if status == "queued" and info.get("queue_timing_out"):
+        # The capacity queue's timeout deleted this Pod (lifecycle/queue.py stamps it first): the
+        # destroy is that timeout, not a crash, and must not be re-spawned as one.
+        from .queue import COMPLETION_REASON, timeout_reason, max_wait_s
+
+        body = {"connection_id": info["session_uid"], "status": "failed",
+                "completion_reason": dominant_completion_reason(COMPLETION_REASON,
+                                                                stop_requested=stop_requested),
+                "reason": timeout_reason(max_wait_s())}
+    elif status in _PRE_ACTIVE_STATUSES:
         body = {
             "connection_id": info["session_uid"],
             "status": "failed",

@@ -23,6 +23,7 @@ from .ports import (
     DuplicateMeeting,
     MaxBotsExceeded,
     MeetingStopped,
+    SeatCooldown,
     QuotaExceeded,
     SpawnFailed,
     WorkloadUnknown,
@@ -40,6 +41,8 @@ def _holds_seat(m: dict, cooldown_s: float = 0) -> bool:
     end) an ad-hoc bot the user stopped. ``end_time`` is an ISO string here."""
     if m["status"] in _ACTIVE_STATUSES:
         return True
+    if cooldown_s and m["status"] == "stopping":
+        return True                        # on its way out: its cooldown starts when it ends
     if not cooldown_s or m["status"] not in _TERMINAL_STATUSES or not m.get("end_time"):
         return False
     data = m.get("data") or {}
@@ -183,6 +186,11 @@ class InMemoryMeetingRepo:
                 and m["id"] != exclude_meeting_id
             )
             if active >= max_concurrent:
+                running = sum(1 for m in self._meetings.values()
+                              if m["user_id"] == user_id and m["status"] in _ACTIVE_STATUSES
+                              and m["platform"] != "browser_session" and m["id"] != exclude_meeting_id)
+                if cooldown_s and running < max_concurrent:
+                    raise SeatCooldown(user_id, max_concurrent, int(cooldown_s))
                 raise MaxBotsExceeded(user_id, max_concurrent)
         # 2b. claim — a PLANNED row (intent status) for the same (user, platform, native) is
         #     UPGRADED in place, mirroring the real adapter: spawn keys merge OVER the planned
@@ -371,6 +379,7 @@ class InMemoryMeetingRepo:
             "session_uid": sid,
             "stop_requested": bool((row.get("data") or {}).get("stop_requested")),
             "respawn_retired": _respawn_retired(row.get("data"), bot_container_id),
+            "queue_timing_out": bool(((row.get("data") or {}).get("queue") or {}).get("timing_out")),
         }
 
     async def update_meeting_status(
@@ -438,8 +447,14 @@ class InMemoryMeetingRepo:
                 "queue": dict(data["queue"]) if isinstance(data.get("queue"), dict) else None,
                 "scheduled_at": data.get("scheduled_at"),
                 "stop_requested": bool(data.get("stop_requested")),
+                "queue_wait_s": data.get("queue_wait_s"),
             }
         return list(out.values())
+
+    async def get_queue_block(self, meeting_id) -> Optional[dict]:
+        row = self._meetings.get(meeting_id)
+        block = ((row or {}).get("data") or {}).get("queue")
+        return dict(block) if isinstance(block, dict) else None
 
     async def bot_run_stop_counts(self, *, window_s: float, quick_stop_s: float) -> list[dict]:
         """Mirror of the SQL adapter. A session's start is its ``started_at`` (ISO), set by a test."""

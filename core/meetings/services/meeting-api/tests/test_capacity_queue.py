@@ -434,3 +434,92 @@ def test_get_meetings_and_bots_carry_queued_with_its_status_reason():
             assert_api_conforms("MeetingResponse", {k: v for k, v in m.items() if k != "shared"})
     running = client.get("/bots/status", headers=headers).json()["running"]
     assert {m["id"] for m in running} == {41, 42}
+
+
+# ── 8. review fixes (#2034, factory review at 2f013fa0) ──────────────────────────────────────────
+
+class _CallsBackOnDelete(FakeRuntimeClient):
+    """As the real runtime does: DELETE /workloads posts `destroyed` to /runtime/callback BEFORE it
+    answers (kernel.destroy → _emit → the callback queue's first attempt)."""
+
+    def __init__(self, app, repo, workloads):
+        super().__init__(workloads=workloads)
+        self.app, self.repo = app, repo
+
+    async def delete_workload(self, workload_id):
+        from meeting_api.lifecycle.reconcile import synthesize_terminal_for_dead_workload
+
+        await super().delete_workload(workload_id)
+
+        async def drive(body):
+            code, _ = await self.app.state.apply_lifecycle_event(
+                body, transition_source=TransitionSource.RUNTIME_DESTROY, force_terminal_on_destroy=True)
+            return code
+
+        await synthesize_terminal_for_dead_workload(self.repo, workload_id, "destroyed", drive, log=_Log())
+
+
+def test_the_runtimes_synchronous_destroy_callback_ends_the_run_as_the_queue_timeout():
+    repo, meeting, fake, sink, app = _world(pending=_unschedulable())
+    runtime = _CallsBackOnDelete(app, repo, fake._workloads)
+    _sweep(app, repo, runtime, now=T0)
+    _sweep(app, repo, runtime, now=T0 + timedelta(minutes=30))
+    data = _row(repo, meeting)["data"]
+    assert _row(repo, meeting)["status"] == "failed"
+    assert data["completion_reason"] == "cluster_at_capacity", "not a re-spawnable join_failure"
+    assert data["queue"]["timing_out"] == _iso(T0 + timedelta(minutes=30))
+
+
+def test_a_restart_between_the_delete_and_the_write_still_ends_cluster_at_capacity():
+    repo, meeting, runtime, sink, app = _world(pending=_unschedulable())
+    _sweep(app, repo, runtime, now=T0)
+
+    async def crash(body):
+        raise RuntimeError("meeting-api restarted")
+
+    asyncio.run(capacity_queue_sweep(repo, runtime, enter=app.state.apply_queue_transition,
+                                     time_out=crash, log=_Log(), now=T0 + timedelta(minutes=30),
+                                     max_wait=1800, scale_up_window=300))
+    assert _row(repo, meeting)["status"] == "queued" and runtime.deleted == [WORKLOAD]
+    runtime._workloads[WORKLOAD] = {"workloadId": WORKLOAD, "state": "destroyed"}   # gone, tracked
+    posted: list[dict] = []
+
+    async def post(body):
+        posted.append(body)
+        return 200
+
+    asyncio.run(reconcile_stale_nonterminal_sweep(repo, runtime, post, stop_grace=45, active_grace=300,
+                                                  preactive_grace=960, log=_Log(), untracked_since={}))
+    assert [b["completion_reason"] for b in posted] == ["cluster_at_capacity"]
+
+
+def test_after_a_restart_the_queue_sweep_finishes_a_timeout_it_began():
+    repo, meeting, runtime, sink, app = _world(pending=_unschedulable())
+    _sweep(app, repo, runtime, now=T0)
+
+    async def crash(body):
+        raise RuntimeError("meeting-api restarted")
+
+    asyncio.run(capacity_queue_sweep(repo, runtime, enter=app.state.apply_queue_transition,
+                                     time_out=crash, log=_Log(), now=T0 + timedelta(minutes=30),
+                                     max_wait=1800, scale_up_window=300))
+    runtime._workloads[WORKLOAD] = {"workloadId": WORKLOAD, "state": "destroyed"}   # gone, tracked
+    _sweep(app, repo, runtime, now=T0 + timedelta(minutes=30, seconds=15))
+    row = _row(repo, meeting)
+    assert row["status"] == "failed" and row["data"]["completion_reason"] == "cluster_at_capacity"
+
+
+@pytest.mark.parametrize("pending", [_unschedulable(nominated=True), _unschedulable(autoscaler="scale_up")])
+def test_at_the_deadline_a_pod_whose_seat_is_coming_is_not_failed(pending):
+    repo, meeting, runtime, sink, app = _world(pending=_unschedulable())
+    _sweep(app, repo, runtime, now=T0)
+    runtime._workloads[WORKLOAD]["pending"] = pending
+    _sweep(app, repo, runtime, now=T0 + timedelta(minutes=31))
+    assert _row(repo, meeting)["status"] == "queued" and runtime.deleted == []
+
+
+def test_the_accounts_queue_wait_stamped_at_spawn_is_the_one_applied():
+    repo, meeting, runtime, sink, app = _world(pending=_unschedulable(), data={"queue_wait_s": 600})
+    _sweep(app, repo, runtime, now=T0)
+    _sweep(app, repo, runtime, now=T0 + timedelta(minutes=10))
+    assert _row(repo, meeting)["status"] == "failed"

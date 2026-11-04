@@ -48,7 +48,9 @@ def test_an_unknown_plan_or_no_settings_gives_the_defaults():
 
 
 def test_an_invalid_value_never_lifts_a_limit():
-    for bad in ({"max_scheduled_bots": -1}, {"max_scheduled_bots": "lots"},
+    for bad in ({"max_scheduled_bots": 2.5}, {"max_scheduled_bots": "lots"},
+                {"max_scheduled_bots": float("nan")}, {"seat_cooldown_s": float("inf")},
+                {"bot_start_rate": {"burst": 5, "per_minute": float("nan")}},
                 {"max_scheduled_bots": True}, {"bot_start_rate": {"burst": 0, "per_minute": 1}},
                 {"bot_start_rate": {"burst": 5}}, {"seat_cooldown_s": -5}, "not an object"):
         limits = resolve(max_concurrent_bots=3, plan="welcome", plan_settings=PLANS, override=bad)
@@ -74,3 +76,18 @@ def test_retry_after_is_the_time_to_one_token():
     assert DEFAULT_BOT_START_RATE.retry_after_s() == 120
     assert DEFAULT_BOOKING_RATE.retry_after_s() == 360
     assert TokenRate(burst=1, per_minute=0).retry_after_s() == 3600
+
+
+def test_a_negative_limit_allows_nothing_and_never_means_no_limit():
+    assert from_header("-1").max_concurrent_bots == 0
+    assert from_header(json.dumps({"max_concurrent_bots": -3})).max_concurrent_bots == 0
+    assert resolve(max_concurrent_bots=3, override={"max_scheduled_bots": -1}).max_scheduled_bots == 0
+
+
+def test_numbers_that_are_not_limits_are_refused_and_fractions_are_explicit():
+    assert from_header('{"max_concurrent_bots": NaN}') == AccountLimits()
+    assert from_header('{"max_concurrent_bots": Infinity}') == AccountLimits()
+    assert resolve(max_concurrent_bots=3.0).max_concurrent_bots == 3, "a whole float is a count"
+    assert resolve(max_concurrent_bots=2.5).max_concurrent_bots is None, "a fraction is not a count"
+    assert resolve(max_concurrent_bots=1, override={"seat_cooldown_s": 59.2}).seat_cooldown_s == 60, \
+        "a duration rounds up, never shortening the limit"

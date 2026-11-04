@@ -46,6 +46,7 @@ from .ports import (
     AuthSessionBusy,
     DuplicateMeeting,
     MaxBotsExceeded,
+    SeatCooldown,
     MeetingRepo,
     MeetingStopped,
     QuotaExceeded,
@@ -465,6 +466,8 @@ async def request_bot(
     # the user stopped still holds its seat in ``max_concurrent``. POST /bots passes it; the
     # auto-join sweep (booked bots) does not, so a booked start is never held back by it.
     seat_cooldown_s: Optional[float] = None,
+    # The account's queue wait (limits.queue_wait_s), stamped on the run for lifecycle/queue.py.
+    queue_wait_s: Optional[int] = None,
     redis_url: Optional[str] = None,
     meeting_api_url: Optional[str] = None,
     token_secret: Optional[str] = None,
@@ -831,6 +834,9 @@ async def request_bot(
                     span="bots.create", user_id=user_id,
                     fields={"active": active, "cap": max_concurrent},
                 )
+                if seat_cooldown_s and max_concurrent > 0 and await repo.count_active_bots(
+                        user_id=user_id, exclude_meeting_id=reused_row["id"]) < max_concurrent:
+                    raise SeatCooldown(user_id, max_concurrent, int(seat_cooldown_s))
                 raise MaxBotsExceeded(user_id, max_concurrent)
         reopen_patch: dict[str, Any] = {
             "transcription_language": transcription_language,
@@ -889,6 +895,8 @@ async def request_bot(
         # never served to anyone (SENSITIVE_OMIT_KEYS); `webhook_url`/`webhook_events` are served to
         # the OWNER — the v0.10 REST contract reads them back off the meeting row — and stripped for
         # a share/workspace reader (OWNER_ONLY_KEYS).
+        if queue_wait_s:
+            meeting_data["queue_wait_s"] = int(queue_wait_s)
         if webhook_url:
             meeting_data["webhook_url"] = webhook_url
             if webhook_secret:

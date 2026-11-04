@@ -97,3 +97,25 @@ async def test_billing_concurrency_counts_running_bots_only():
     _ended(repo, m["id"], ago_s=5)
     assert await repo.count_active_bots(user_id=USER) == 0
     assert await repo.count_active_bots(user_id=USER, cooldown_s=60) == 1
+
+
+def test_a_restart_while_the_old_bot_is_stopping_waits_for_its_seat_with_its_own_429(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    client = _client(repo, runtime)
+    headers = {"x-user-id": str(USER), "x-user-limits": "1"}
+    r1 = client.post("/bots", headers=headers, json={"platform": "google_meet", "native_meeting_id": "m-1"})
+    repo.set_status(r1.json()["id"], "stopping")
+    r2 = client.post("/bots", headers=headers, json={"platform": "google_meet", "native_meeting_id": "m-2"})
+    assert r2.status_code == 429
+    assert "still holds its seat" in r2.json()["detail"]
+    assert r2.headers["retry-after"] == "60"
+
+
+def test_a_plan_booked_for_now_is_an_ad_hoc_start():
+    from meeting_api.bot_spawn.auto_join import is_last_minute_booking
+
+    row = {"created_at": "2026-11-04T10:00:00Z", "data": {"scheduled_at": "2026-11-04T10:01:00Z"}}
+    assert is_last_minute_booking(row)
+    assert not is_last_minute_booking({"created_at": "2026-11-03T10:00:00Z",
+                                       "data": {"scheduled_at": "2026-11-04T10:00:00Z"}})

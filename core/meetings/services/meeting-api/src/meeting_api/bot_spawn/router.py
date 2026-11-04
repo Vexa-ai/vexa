@@ -37,6 +37,7 @@ from .ports import (
     AuthSessionBusy,
     AuthSessionNotConfigured,
     MaxBotsExceeded,
+    SeatCooldown,
     MeetingRepo,
     MeetingStopped,
     QuotaExceeded,
@@ -679,6 +680,7 @@ def build_router(
                     workspace_id=workspace_id,
                     max_concurrent=max_concurrent,
                     seat_cooldown_s=account_limits.seat_cooldown_s,
+                    queue_wait_s=account_limits.queue_wait_s,
                     webhook_url=x_user_webhook_url,
                     webhook_secret=x_user_webhook_secret,
                     webhook_events=webhook_events,
@@ -750,6 +752,9 @@ def build_router(
             raise HTTPException(status_code=409, detail=str(e))
         except DuplicateMeeting as e:
             raise HTTPException(status_code=409, detail=str(e))
+        except SeatCooldown as e:
+            raise HTTPException(status_code=429, detail=str(e),
+                                headers={"Retry-After": str(e.retry_after_s)})
         except (MaxBotsExceeded, QuotaExceeded) as e:
             raise HTTPException(status_code=429, detail=str(e) or "Bot concurrency limit reached")
         except SpawnFailed as e:

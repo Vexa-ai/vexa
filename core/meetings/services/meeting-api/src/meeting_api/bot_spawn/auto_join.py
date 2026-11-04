@@ -46,6 +46,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional
 
+from ..limits import DEFAULT_SEAT_COOLDOWN_S
 from ..obs import log_event
 from ..service_authority import (
     ServiceAuthorityDenied,
@@ -62,6 +63,17 @@ from .service import DuplicateMeeting, request_bot
 # — spawn, browser boot and the join flow all happen inside the lead. Two minutes early plus the
 # 15-minute lobby budget (``bot_spawn.service.lobby_budget_ms``) is the pair that makes "the bot is
 # already there" true for a host who joins late.
+#: A plan booked this close to its own start is an ad-hoc start in all but name: its bot gets the
+#: ad-hoc seat cooldown, so a plan made "for now" cannot sidestep it.
+LAST_MINUTE_BOOKING_S = 600
+
+
+def is_last_minute_booking(row: dict) -> bool:
+    data = row.get("data") if isinstance(row.get("data"), dict) else {}
+    at, created = _parse_iso(data.get("scheduled_at")), _parse_iso(row.get("created_at"))
+    return at is not None and created is not None and (at - created).total_seconds() < LAST_MINUTE_BOOKING_S
+
+
 DEFAULT_LEAD_S = 120         # AUTO_JOIN_LEAD_S — join this many seconds BEFORE scheduled_at
 DEFAULT_GRACE_S = 600        # AUTO_JOIN_GRACE_S — never join more than this AFTER scheduled_at
 DEFAULT_RETRY_BACKOFF_S = 300  # AUTO_JOIN_RETRY_BACKOFF_S — error-stamped rows wait this long
@@ -354,6 +366,7 @@ async def auto_join_tick(
                 recording_enabled=recording_enabled,
                 transcribe_enabled=transcribe_enabled,
                 max_concurrent=ctx.get("max_concurrent"),
+                seat_cooldown_s=DEFAULT_SEAT_COOLDOWN_S if is_last_minute_booking(row) else None,
                 webhook_url=ctx.get("webhook_url"),
                 webhook_secret=ctx.get("webhook_secret"),
                 webhook_events=ctx.get("webhook_events"),
