@@ -35,7 +35,8 @@ model_list:
       #     enable_thinking: false
 litellm_settings:
   drop_params: true          # a model that lacks a parameter should answer, not 400
-# NO master_key: setting one turns on LiteLLM's virtual-key management, which REQUIRES a database
-# ("No connected db") — a whole stateful component for a stateless translator. Security here is
-# topology instead: the port binds to loopback and the service is reachable only on the compose
-# network. NEVER expose this service publicly; it forwards to your model with your upstream key.
+# The master key comes from LITELLM_MASTER_KEY, which compose sets from LLM_SHIM_KEY; LiteLLM v1.104 and
+# later refuse to start without one. With no database the shim accepts that one key and refuses every
+# other ("No connected db"): no virtual keys, no stateful component. The port still binds to loopback
+# and the service is reachable only on the compose network. NEVER expose this service publicly; it
+# forwards to your model with your upstream key.

@@ -16,6 +16,7 @@ and skip this. Raw **vLLM / Ollama / llama.cpp / TGI** serve only OpenAI: use th
 ## Run it
 
 ```bash
+echo "LLM_SHIM_KEY=sk-$(openssl rand -hex 32)" >> .env   # the shim's own key
 docker compose --profile llm-shim up -d llm-shim
 ```
 
@@ -23,13 +24,15 @@ Then set the deployment's model config to the shim:
 
 ```
 base_url = http://llm-shim:4000     # from inside compose
-api_key  = (none needed)
+api_key  = $LLM_SHIM_KEY          # the same value as in .env
 model    = $LLM_SHIM_MODEL
 ```
 
-**The shim has no auth of its own, by design.** Enabling LiteLLM's key management pulls in a
-required database — a stateful component for a stateless translator. Instead it binds to loopback
-and lives on the compose network only. **Never expose this port publicly:** it forwards to your
+**The shim takes one key, `LLM_SHIM_KEY`, and no database.** LiteLLM v1.104 and later refuse to
+start without a key; with no database the shim accepts that key and refuses every other, so there
+are no virtual keys and no stateful component. It also binds to loopback and lives on the compose
+network only. If the shim exits at start and its log asks for `LITELLM_MASTER_KEY`, set `LLM_SHIM_KEY`:
+compose passes it as that variable. **Never expose this port publicly:** it forwards to your
 model carrying your upstream key.
 
 ## Configure
@@ -39,6 +42,7 @@ model carrying your upstream key.
 | `LLM_SHIM_UPSTREAM` | the OpenAI-compatible endpoint, **including `/v1`** |
 | `LLM_SHIM_MODEL` | the model id that endpoint serves |
 | `LLM_SHIM_UPSTREAM_KEY` | upstream key; `none` for a keyless local server |
+| `LLM_SHIM_KEY` | the shim's own key; the agent's model config sends it as `api_key`. Unset, the shim does not start |
 
 ### Server-specific fields — read this before blaming the model
 
@@ -63,7 +67,7 @@ would be a vendor assumption baked into a model-agnostic product.
 
 ## Pins, and why
 
-The image is pinned to `litellm/litellm:v1.103.9` (by digest) on **Docker Hub** — `ghcr.io/berriai` refuses
+The image is pinned to `litellm/litellm:v1.108.0` (by digest) on **Docker Hub** — `ghcr.io/berriai` refuses
 anonymous pulls, which would break a fresh deployment with an opaque `denied`. Inside the image the
 FastAPI pin is already correct; when running LiteLLM from source instead, `fastapi<0.116` is required: newer FastAPI removed `get_flat_dependant`, which
 LiteLLM imports — the proxy fails at startup. Both pins are ours to carry; that is the cost of this
