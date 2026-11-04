@@ -445,6 +445,7 @@ class MeetingStore:
         persisted_data: Optional[Dict[str, Any]] = None,
         *,
         replace_stale: bool = False,
+        catch_up: bool = False,
     ) -> MeetingRecord:
         """Seed (or reconcile) the in-memory record from the DB's CURRENT meeting status.
 
@@ -456,6 +457,14 @@ class MeetingStore:
         Ordinarily this seeds only an empty record, so a lagging DB read cannot regress live local
         state. ``replace_stale`` is reserved for the HTTP adapter after a local transition was proven
         illegal; there the durable row may represent progress committed by another API replica.
+
+        ``catch_up`` reconciles a record that is BEHIND the row: when the persisted trail is longer
+        than this record's, another replica has committed steps this one never saw, so the persisted
+        status and trail are taken before the event is applied. Without it a LEGAL edge from the stale
+        state (joining -> failed, awaiting_admission -> failed) is applied, and this record's shorter
+        trail is written over the row, dropping the other replica's steps (the lobby step, or the
+        producer-observed admission that is the billing clock). Monotonic: a row whose trail is not
+        longer (a lagging read, or this replica's own write still landing) never replaces the record.
         """
         rec = self.get_or_create(connection_id)
         # The user's stop intent is carried ALWAYS, outside the status guard, and only ever raised:
@@ -466,7 +475,11 @@ class MeetingStore:
         # terminal was written with the bot's own `join_failure`.
         if isinstance(persisted_data, dict) and persisted_data.get("stop_requested"):
             rec.stop_requested = True
-        if rec.status is None or replace_stale:
+        behind = False
+        if catch_up and isinstance(persisted_data, dict):
+            persisted_trail = persisted_data.get("status_transition")
+            behind = isinstance(persisted_trail, list) and len(persisted_trail) > len(rec.status_transition)
+        if rec.status is None or replace_stale or behind:
             seeded = bot_status_from_persisted(persisted_status)
             if seeded is not None:
                 rec.status = seeded
