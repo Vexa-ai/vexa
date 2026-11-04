@@ -369,6 +369,110 @@ test("rangeVerdict reads the pull request's commits from git, excluding the base
   assert.equal(unsigned.failing[0].sha, unsignedHead);
 });
 
+// The DCO App runs on the merge-queue commit too, where check_run.pull_requests is empty. Case: the
+// #2008 queue commit 089bdd61 (313 commits), where dco-no-override fell to "not an ordinary success".
+const queueBase = "e".repeat(40);
+function queueDcoEvent(summary, headBranch = `gh-readonly-queue/main/pr-2008-${queueBase}`) {
+  return {
+    repository: { full_name: "Vexa-ai/vexa" },
+    check_run: {
+      name: "DCO", app: { slug: "dco" }, head_sha: sha, conclusion: "failure", output: { summary },
+      pull_requests: [], check_suite: { head_branch: headBranch },
+    },
+  };
+}
+
+test("an incomplete DCO App list on a merge-queue commit is re-decided from the queued PR's range", async () => {
+  const seen = [];
+  const { ok, published } = await publishedFor(queueDcoEvent(incompleteSummary), (pr, head) => {
+    seen.push([pr, head]);
+    return { ok: true, checked: 288, merges: 27, failing: [] };
+  });
+  assert.equal(ok, true);
+  assert.deepEqual(seen, [[{ number: 2008, base: { sha: queueBase }, queue: true }, sha]]);
+  assert.equal(published.head_sha, sha);
+  assert.equal(published.conclusion, "success");
+  assert.match(published.output.summary, /288 commits checked, 27 merge commits skipped, 0 failing/);
+});
+
+test("a merge-queue commit with a failing range, a manual override, or no queue branch still fails", async () => {
+  const failing = [{ sha: "d".repeat(40), author: { name: "A", email: "a@example.test" }, detail: "no Signed-off-by" }];
+  const unsigned = await publishedFor(queueDcoEvent(incompleteSummary), () => ({ ok: false, checked: 1, merges: 0, failing }));
+  assert.equal(unsigned.ok, false);
+  assert.equal(unsigned.published.conclusion, "failure");
+
+  let called = false;
+  const recheck = () => { called = true; return allSigned; };
+  for (const event of [
+    queueDcoEvent("Commit sign-off was manually approved."),
+    queueDcoEvent(incompleteSummary, "main"),
+    queueDcoEvent(incompleteSummary, "gh-readonly-queue/main/pr-2008-notasha"),
+  ]) {
+    const { ok, published } = await publishedFor(event, recheck);
+    assert.equal(ok, false);
+    assert.equal(published.conclusion, "failure");
+  }
+  assert.equal(called, false);
+});
+
+// A line of `total` commits, of which the first `onMain` are already on main; the queue commit is a
+// GitHub-written squash on main's head. Returns the clone a trusted job would read.
+function queueFixture({ total, onMain, unsignedTip = false, unsignedOld = true }) {
+  const root = mkdtempSync(join(tmpdir(), "dco-queue-"));
+  const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const origin = join(root, "origin");
+  git(root, "init", "-q", "-b", "main", origin);
+  git(origin, "config", "user.name", "Ada");
+  git(origin, "config", "user.email", "ada@example.test");
+  git(origin, "commit", "-q", "--allow-empty", "-m", "root");
+  const tree = git(origin, "rev-parse", "HEAD^{tree}");
+  let tip = git(origin, "rev-parse", "HEAD");
+  const line = [];
+  for (let i = 1; i <= total; i += 1) {
+    const unsigned = (i <= onMain && unsignedOld && i % 50 === 0) || (unsignedTip && i === total);
+    const message = unsigned ? `commit ${i}` : `commit ${i}\n\nSigned-off-by: Ada <ada@example.test>`;
+    tip = git(origin, "commit-tree", tree, "-p", tip, "-m", message);
+    line.push(tip);
+  }
+  const base = onMain ? line[onMain - 1] : git(origin, "rev-parse", "main");
+  git(origin, "update-ref", "refs/heads/main", base);
+  git(origin, "update-ref", "refs/pull/9/head", tip);
+  const queue = git(origin, "commit-tree", tree, "-p", base, "-m", "squash written by GitHub (#9)");
+  git(origin, "update-ref", `refs/heads/gh-readonly-queue/main/pr-9-${base}`, queue);
+  const clone = join(root, "clone");
+  git(root, "clone", "-q", "--branch", "main", origin, clone);
+  return { clone, base, queue, line, git, origin };
+}
+
+test("rangeVerdict on a 313-commit queued line judges only the commits new since main's head", () => {
+  const { clone, base, queue } = queueFixture({ total: 313, onMain: 290 });
+  const verdict = rangeVerdict({ number: 9, base: { sha: base }, queue: true }, queue, clone);
+  // Commits 50..250 on main are unsigned; they passed main's gates already and are not judged again.
+  assert.equal(verdict.ok, true);
+  assert.equal(verdict.checked, 23);
+});
+
+test("rangeVerdict on a queued line fails a new commit without a sign-off", () => {
+  const { clone, base, queue, line } = queueFixture({ total: 313, onMain: 290, unsignedTip: true });
+  const verdict = rangeVerdict({ number: 9, base: { sha: base }, queue: true }, queue, clone);
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.checked, 23);
+  assert.deepEqual(verdict.failing.map((r) => r.sha), [line.at(-1)]);
+});
+
+test("rangeVerdict on a queued line with no new commits checks nothing and finds nothing uncertified", () => {
+  const { clone, base, queue } = queueFixture({ total: 5, onMain: 5, unsignedOld: false });
+  const verdict = rangeVerdict({ number: 9, base: { sha: base }, queue: true }, queue, clone);
+  assert.equal(verdict.ok, true);
+  assert.equal(verdict.checked, 0);
+  assert.deepEqual(verdict.failing, []);
+});
+
+test("rangeVerdict refuses a queue commit that does not sit on the queue base", () => {
+  const { clone, queue, line } = queueFixture({ total: 10, onMain: 8 });
+  assert.throws(() => rangeVerdict({ number: 9, base: { sha: line[2] }, queue: true }, queue, clone), /not on the queue base/);
+});
+
 test("merge-group run resolves its PR from the queue ref and publishes on the group head", async () => {
   const groupSha = "c".repeat(40);
   const event = {
