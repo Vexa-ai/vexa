@@ -45,6 +45,52 @@ export function readPythonMatrix(text) {
   return { entries, errs };
 }
 
+// The path from a red python leg to a red required check, with nothing on it that can turn red into
+// green: no `if:` or `continue-on-error` on the gate step or the python job, no `continue-on-error`
+// anywhere in that job, nothing in its matrix but `include:` (another axis multiplies or empties the
+// legs), and a `gates` aggregate that reads needs.python.result, fails unless it is exactly
+// `success`, and carries no condition but its own `if: always()`. Returns the list of errors.
+const GATE_STEP = /^ {6}- run: node scripts\/gates\.mjs python \$\{\{ matrix\.select \}\}\s*$/;
+const indentOf = (l) => l.match(/^\s*/)[0].length;
+export function gatingErrors(text) {
+  const errs = [];
+  const py = jobBlock(text, "python");
+  if (!py) return ["gates.yml has no `python` job"];
+  for (const l of py) {
+    if (/^ {4}(if|continue-on-error):/.test(l)) errs.push(`the \`python\` job carries \`${l.trim()}\`: a leg it skips or excuses no longer gates`);
+    else if (/^\s+continue-on-error:/.test(l)) errs.push(`a step of the \`python\` job carries \`${l.trim()}\`: a red step there reads as green`);
+  }
+  const at = py.findIndex((l) => GATE_STEP.test(l));
+  if (at < 0) errs.push("the `python` job has no gate step written as `- run: node scripts/gates.mjs python ${{ matrix.select }}`");
+  else {
+    for (const l of py.slice(at + 1)) {
+      if (!l.trim()) continue;
+      if (indentOf(l) <= 6) break;
+      if (/^\s+(if|continue-on-error):/.test(l)) errs.push(`the gate step carries \`${l.trim()}\`: a leg where it is skipped or excused passes without gating`);
+    }
+  }
+  const m = py.findIndex((l) => /^ {6}matrix:\s*$/.test(l));
+  if (m >= 0) {
+    for (const l of py.slice(m + 1)) {
+      if (!l.trim() || /^\s*#/.test(l)) continue;
+      if (indentOf(l) <= 6) break;
+      if (indentOf(l) === 8 && !/^ {8}include:\s*$/.test(l)) errs.push(`the \`python\` matrix holds \`${l.trim()}\` beside \`include:\`: another axis multiplies or empties the legs`);
+    }
+  }
+  const agg = jobBlock(text, "gates");
+  if (!agg) return [...errs, "gates.yml has no `gates` job"];
+  for (const l of agg) {
+    if (/^\s+continue-on-error:/.test(l)) errs.push(`the \`gates\` job carries \`${l.trim()}\`: the required check would pass over a red leg`);
+    else if (/^\s+if:/.test(l) && !/^ {4}if: always\(\)\s*$/.test(l)) errs.push(`the \`gates\` job carries \`${l.trim()}\`: its only condition may be the job's own \`if: always()\``);
+  }
+  const body = agg.join("\n");
+  if (!/^ +R_PYTHON: \$\{\{ needs\.python\.result \}\}\s*$/m.test(body)) errs.push("the `gates` job does not set `R_PYTHON: ${{ needs.python.result }}`");
+  if (!body.includes('[ "$R_PYTHON" = "success" ]')) errs.push("the `gates` job does not require needs.python.result == success (`[ \"$R_PYTHON\" = \"success\" ]`)");
+  if (!/exit 1\b/.test(body)) errs.push("the `gates` job never exits 1");
+  if (/\|\|\s*true\b|exit 0\b/.test(body)) errs.push("the `gates` job carries `|| true` or `exit 0`, which can swallow a red leg");
+  return errs;
+}
+
 // Every package in `packages` runs in exactly one place: whole in one group, or as shards 1..n of one
 // n, each shard in exactly one group. Every selector names a package. Returns the list of errors.
 export function checkPythonMatrix(packages, entries) {

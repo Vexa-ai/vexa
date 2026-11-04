@@ -14,7 +14,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { guardTree, REPO } from "./test-tree.mjs";
-import { jobBlock, readPythonMatrix, checkPythonMatrix } from "./python-matrix.mjs";
+import { jobBlock, readPythonMatrix, checkPythonMatrix, gatingErrors } from "./python-matrix.mjs";
 
 guardTree();
 
@@ -53,6 +53,53 @@ test("the required check is still `gates`: one job by that id, no display name, 
   assert.match(text, /^ {4}if: always\(\)\s*$/m, "without if: always() a failed leg SKIPS `gates`, and a skipped required check reads as satisfied");
   assert.match(text, /needs\.python\.result/, "`gates` does not read the python legs' result");
 });
+
+test("the docker fixture image is pulled in the one leg that runs core/runtime, and only there", () => {
+  const job = jobBlock(WORKFLOW, "python");
+  const at = job.findIndex((l) => /^\s+- run: docker pull alpine\s*$/.test(l));
+  assert.ok(at >= 0, "no `docker pull alpine` step: core/runtime's docker-backend test needs the image pre-pulled");
+  const rest = job.slice(at + 1);
+  const step = rest.slice(0, Math.max(0, rest.findIndex((l) => /^ {6}- /.test(l))));
+  const cond = step.find((l) => /^\s+if:/.test(l)) || "";
+  const group = (cond.match(/^\s+if: matrix\.group == '([a-z0-9-]+)'\s*$/) || [])[1];
+  assert.ok(group, `the docker pull step should run in one named leg (if: matrix.group == '<group>'), found: ${cond.trim() || "no condition"}`);
+  const { entries } = readPythonMatrix(WORKFLOW);
+  const holder = entries.find((e) => e.selectors.some((s) => s.replace(/@.*$/, "") === "core/runtime"));
+  assert.equal(holder?.group, group, "the docker pull runs in a different leg from core/runtime");
+});
+
+test("nothing between a python leg and the required check can let a red leg pass", () => {
+  assert.deepEqual(gatingErrors(WORKFLOW), []);
+});
+
+// Each row plants one way a leg could stop gating while every other row above stays green, into the
+// real gates.yml text, and requires gatingErrors to name it.
+const plant = (find, repl) => {
+  const out = WORKFLOW.replace(find, repl);
+  assert.notEqual(out, WORKFLOW, `fixture setup: ${find} not found in gates.yml, so the row would prove nothing`);
+  return out;
+};
+const GATE_STEP = /^( {6}- run: node scripts\/gates\.mjs python \$\{\{ matrix\.select \}\}\n)/m;
+const PY_JOB = /^( {2}python:\n)/m;
+for (const [what, wf, rx] of [
+  ["an `if:` under the gate step skips it in some legs", () => plant(GATE_STEP, "$1        if: matrix.group != 'services'\n"), /gate step carries `if:/],
+  ["continue-on-error on the gate step", () => plant(GATE_STEP, "$1        continue-on-error: true\n"), /gate step carries `continue-on-error:/],
+  ["continue-on-error on the python job", () => plant(PY_JOB, "$1    continue-on-error: true\n"), /`python` job carries `continue-on-error:/],
+  ["a job-level `if:` on the python job", () => plant(PY_JOB, "$1    if: github.event_name != 'merge_group'\n"), /`python` job carries `if:/],
+  ["the gate step written with its condition first", () => plant(GATE_STEP, "      - if: matrix.group != 'services'\n        run: node scripts/gates.mjs python ${{ matrix.select }}\n"), /no gate step/],
+  ["a second matrix axis beside include", () => plant(/^( {6}matrix:\n)/m, "$1        skip: []\n"), /matrix holds `skip:/],
+  ["continue-on-error on the gates aggregate", () => plant(/^( {2}gates:\n)/m, "$1    continue-on-error: true\n"), /`gates` job carries `continue-on-error:/],
+  ["a step-level `if:` in the gates aggregate", () => plant(/^( {6}- name: All legs green\?\n)/m, "$1        if: needs.python.result == 'success'\n"), /`gates` job carries `if: needs/],
+  ["the aggregate accepting anything but failure", () => plant('[ "$R_PYTHON" = "success" ]', '[ "$R_PYTHON" != "failure" ]'), /does not require needs\.python\.result == success/],
+  ["the aggregate not reading the python result", () => plant(/^ +R_PYTHON: \$\{\{ needs\.python\.result \}\}\n/m, ""), /R_PYTHON: \$\{\{ needs\.python\.result \}\}/],
+  ["the aggregate swallowing its own failure", () => plant('or was cancelled"; exit 1; }', 'or was cancelled"; exit 1; } || true'), /`\|\| true`/],
+]) {
+  test(`RED: ${what} is named`, () => {
+    const errs = gatingErrors(wf());
+    assert.ok(errs.length > 0, `gatingErrors saw nothing in a gates.yml where ${what}`);
+    assert.match(errs.join("\n"), rx);
+  });
+}
 
 // ── the rule, on planted matrices (each row fails if the rule stops seeing its defect) ────────────
 

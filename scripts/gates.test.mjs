@@ -551,6 +551,38 @@ test("gate:python GREEN: multiple passing planted packages do not red the gate",
   assert.equal(r.green, true, `two genuinely green planted packages reded the gate:\n${r.out}`);
 });
 
+// ── gate:python SELECTION (the CI matrix's legs: `node scripts/gates.mjs python <selector>...`) ──
+// Same planted trees, so the gate runs with a root that is NOT the checkout: the shard plugin has to
+// be found beside gates.mjs, never under the cwd.
+const runGateArgs = (args, cwd) => {
+  try { return { green: true, out: execFileSync("node", [join(ROOT, "scripts", "gates.mjs"), ...args], { cwd, encoding: "utf8" }) }; }
+  catch (e) { return { green: false, out: `${e.stdout || ""}${e.stderr || ""}` }; }
+};
+
+test("gate:python selection: runs only the named package and prints its collected and passed counts", () => {
+  // B is planted red: a green run proves B was not run, not merely not reported.
+  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: true }, { dir: PKG_B, pass: false }], (tree) => runGateArgs(["python", PKG_A], tree));
+  assert.equal(r.green, true, `selecting the green package ran something else, or reded:\n${r.out}`);
+  assert.match(r.out, new RegExp(`· ${rxPkg(PKG_A).source}: collected 1 · 1 passed`), `no collected/passed line for the selected package:\n${r.out}`);
+  assert.doesNotMatch(r.out, rxPkg(PKG_B), `the unselected package appears in the output:\n${r.out}`);
+});
+
+test("gate:python selection: the two shards of a one-file package run it once, and the shard that keeps nothing reds", () => {
+  const runs = withPlantedPyPkgs([{ dir: PKG_A, pass: true }], (tree) => [1, 2].map((k) => runGateArgs(["python", `${PKG_A}@${k}/2`], tree)));
+  const green = runs.filter((r) => r.green);
+  assert.equal(green.length, 1, `expected exactly one of the two shards to run the file:\n${runs.map((r) => r.out).join("\n----\n")}`);
+  assert.match(green[0].out, /collected 1 · 1 passed/, `the green shard did not report its counts:\n${green[0].out}`);
+  const red = runs.find((r) => !r.green);
+  assert.match(red.out, /1 deselected/, `the empty shard reded for another reason than keeping nothing:\n${red.out}`);
+});
+
+test("gate:python selection: a selector that names no package reds before anything runs", () => {
+  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: true }], (tree) => runGateArgs(["python", "zz-not-a-package", `${PKG_A}@3/2`], tree));
+  assert.equal(r.green, false, `an unknown selector was accepted:\n${r.out}`);
+  assert.match(r.out, /zz-not-a-package: not a package gate:python covers/);
+  assert.match(r.out, /there is no shard 3 of 2/);
+});
+
 // ── gate:licenses, Python half (scripts/check-python-licenses.mjs) ──────────────────────────────
 // Planted through the real gate: a Dockerfile, the licence index or the exception log is edited in
 // place and restored byte-for-byte, so each red is the one the committed tree would produce.

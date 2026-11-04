@@ -1,7 +1,7 @@
 """pytest_shard: run one shard of a package's own pytest population.
 
 gate:python loads this, and only for a `<dir>@<k>/<n>` selection (`node scripts/gates.mjs python
-core/agent@2/4`), which is how the `python` matrix in .github/workflows/gates.yml splits a package
+core/agent@2/3`), which is how the `python` matrix in .github/workflows/gates.yml splits a package
 too slow to run in one job. It is put on the path with PYTHONPATH=scripts/pytest-shard and loaded
 with `-p pytest_shard --vexa-shard=<k>/<n>`; no package declares it and nothing else imports it.
 

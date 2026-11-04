@@ -9,7 +9,8 @@
  *                                bank-profile|all]
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { execSync, execFileSync, spawnSync } from "node:child_process";
 // execFileSync, not execSync, wherever a command carries a PATH we computed (ROOT is
 // process.cwd(), so every such path is an environment value): an argv array is handed to
@@ -363,8 +364,20 @@ function gateContractVersion() {
 // of n of that package's own collection: scripts/pytest-shard/pytest_shard.py). With no selector the
 // gate is exactly what it always was: every package, in series. scripts/python-matrix.test.mjs holds the
 // matrix to `pythonPackages()`: every package in exactly one leg, every shard set complete.
+// Each selected run prints one line with its collected and passed counts and its wall time, so a leg's
+// log says what it ran and how long each part took. A run with no selection prints what it always did.
 const pythonPackages = () => walkDirs().filter((d) => existsSync(join(d, "pyproject.toml")) && existsSync(join(d, "tests")));
-const SHARD_PLUGIN_DIR = join(ROOT, "scripts", "pytest-shard");
+// Beside this script, not under ROOT: ROOT is the cwd, and a gate run over another tree (the planted
+// fixture trees in gates.test.mjs) still loads the plugin this checkout ships.
+const SHARD_PLUGIN_DIR = join(dirname(fileURLToPath(import.meta.url)), "pytest-shard");
+// pytest's closing summary ("1653 passed, 11 skipped, 6341 deselected, 5 warnings in 300.12s") and
+// the number of tests it accounts for: everything it counts except warnings.
+function pytestSummary(out) {
+  const line = String(out || "").split("\n").map((l) => l.replace(/^=+\s*|\s*=+$/g, "").trim())
+    .filter((l) => /\b\d+ (passed|failed|skipped|deselected|errors?|xfailed|xpassed)\b/.test(l)).pop() || "";
+  const collected = [...line.matchAll(/\b(\d+) (passed|failed|skipped|deselected|errors?|xfailed|xpassed)\b/g)].reduce((n, m) => n + Number(m[1]), 0);
+  return { line: line || "no pytest summary", collected };
+}
 function gatePython() {
   const pkgs = pythonPackages();
   if (!pkgs.length) { console.log("  ✓ gate:python — no Python packages yet (green-on-empty)"); return true; }
@@ -385,13 +398,19 @@ function gatePython() {
   }
   const failures = [];
   for (const r of runs) {
+    const t0 = Date.now();
+    let out, ok = true;
     try {
-      if (!r.shard) execSync("uv run pytest -q", { cwd: r.dir, stdio: "pipe" });
-      else execFileSync("uv", ["run", "pytest", "-q", "-p", "pytest_shard", `--vexa-shard=${r.shard}`], {
+      if (!r.shard) out = execSync("uv run pytest -q", { cwd: r.dir, stdio: "pipe" });
+      else out = execFileSync("uv", ["run", "pytest", "-q", "-p", "pytest_shard", `--vexa-shard=${r.shard}`], {
         cwd: r.dir, stdio: "pipe",
         env: { ...process.env, PYTHONPATH: [SHARD_PLUGIN_DIR, process.env.PYTHONPATH].filter(Boolean).join(":") },
       });
-    } catch (e) { failures.push(`pytest ${r.label}:\n${errText(e)}`); }
+    } catch (e) { ok = false; out = e.stdout; failures.push(`pytest ${r.label}:\n${errText(e)}`); }
+    if (selectors.length) {
+      const s = pytestSummary(out);
+      console.log(`  ${ok ? "·" : "✗"} ${r.label}: collected ${s.collected} · ${s.line} · ${((Date.now() - t0) / 1000).toFixed(1)} s wall, uv sync included`);
+    }
   }
   if (failures.length) return fail([`${failures.length}/${runs.length} package(s) failed pytest:`, ...failures]);
   if (selectors.length) console.log(`  ✓ gate:python — ${selectors.join(" ")} (selected from ${pkgs.length} package(s)) · pytest green`);
