@@ -4,7 +4,11 @@ contract (ADR-0052, "The contract between Meetings and Flows") are written over 
 ``sites(source, rel)`` lists every call in one module as a ``Site``: the dotted target it resolves
 to through that module's imports (``meeting_api.events.publish_meeting_started``), the functions it
 sits in, whether it is awaited, its keyword names, whether it passes ``**kwargs``, and its first
-positional argument's target. ``tree_sites()`` does it for every module under ``src/meeting_api``.
+positional argument's target. ``refs(source, rel)`` lists every NAME the module uses — called,
+passed, assigned or read — as a ``Ref`` with the same target and functions, so a function handed
+on without being called is seen too. ``constants(source, rel)`` lists its string constants with
+the functions they sit in. ``tree_sites()`` / ``tree_refs()`` do it for a whole tree, by default
+every module under ``src/meeting_api`` (``modules()``); a gate passes its own map to test a plant.
 A target the imports do not name resolves to ``<module>.<name>`` (a module-level function).
 """
 from __future__ import annotations
@@ -107,9 +111,71 @@ def sites(source: str, rel: str) -> list:
     return out
 
 
+@dataclass
+class Ref:
+    rel: str
+    target: str
+    functions: tuple
+    line: int
+
+
+def _parents(tree: ast.AST) -> dict:
+    parents: dict = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+    return parents
+
+
+def _functions(node: ast.AST, parents: dict) -> tuple:
+    chain, up = [], parents.get(node)
+    while up is not None:
+        if isinstance(up, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            chain.append(up.name)
+        up = parents.get(up)
+    return tuple(reversed(chain))
+
+
+def refs(source: str, rel: str) -> list:
+    """Every name used, outermost dotted form only (``events.publish`` once, not ``events`` too)."""
+    tree = ast.parse(source)
+    names, module, parents = _imports(tree, rel), _module_of(rel), _parents(tree)
+    out = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Name, ast.Attribute)):
+            continue
+        up = parents.get(node)
+        if isinstance(up, ast.Attribute) and up.value is node:
+            continue
+        target = _resolve(node, names, module)
+        if target is not None:
+            out.append(Ref(rel=rel, target=target, functions=_functions(node, parents),
+                           line=node.lineno))
+    return out
+
+
+def constants(source: str, rel: str) -> list:
+    """``(value, functions, line)`` for every string constant (docstrings included)."""
+    tree = ast.parse(source)
+    parents = _parents(tree)
+    return [(n.value, _functions(n, parents), n.lineno) for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+
+
 def modules() -> dict:
     return {str(p.relative_to(SRC)): p.read_text() for p in sorted(SRC.rglob("*.py"))}
 
 
-def tree_sites() -> list:
-    return [s for rel, src in modules().items() for s in sites(src, rel)]
+def tree_sites(mods: Optional[dict] = None) -> list:
+    return [s for rel, src in (mods or modules()).items() for s in sites(src, rel)]
+
+
+def tree_refs(mods: Optional[dict] = None) -> list:
+    return [r for rel, src in (mods or modules()).items() for r in refs(src, rel)]
+
+
+def planted(rel: str, code: str, mods: Optional[dict] = None) -> dict:
+    """The tree with ``code`` appended to module ``rel`` — a gate's negative control."""
+    out = dict(mods or modules())
+    out[rel] = out[rel] + "\n\n" + code.strip() + "\n"
+    return out

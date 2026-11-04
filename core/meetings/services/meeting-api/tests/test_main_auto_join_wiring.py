@@ -16,7 +16,7 @@ from __future__ import annotations
 import importlib.util
 import json
 
-from _source_calls import tree_sites
+from _source_calls import planted, tree_refs, tree_sites
 
 import meeting_api.__main__ as main_mod
 
@@ -59,22 +59,62 @@ async def test_the_start_routes_publish_status_is_wired_and_publishes():
 SPAWN = "meeting_api.bot_spawn"
 #: What makes a start a BOOKED start: the planned row it claims by id, and the join time it waits for.
 BOOKED_KEYWORDS = {"planned_meeting_id", "join_at"}
+PLANNED = "bot_spawn/planned_start.py"
+#: name → the (module, enclosing functions) each use of it sits in, exactly.
+USES = {
+    "start_planned_meeting": {("bot_spawn/start_router.py", ("build_start_router", "start_planned"))},
+    "start_row": {(PLANNED, ("start_planned_meeting",))},
+    "request_bot": {(PLANNED, ("start_row",)), ("bot_spawn/router.py", ("build_router", "create_bot")),
+                    ("lifecycle/meet_respawn.py", ("respawn_due",))},
+}
+#: the calls that pass a booked start's keys by name: the start route into ``start_row``, and
+#: ``request_bot`` handing ``join_at`` to the bot's invocation.
+BOOKED_CALLS = {(PLANNED, ("start_planned_meeting",), "start_row"),
+                ("bot_spawn/service.py", ("request_bot",), "build_invocation")}
+#: the ``request_bot`` calls that pass ``**kwargs``: the start route's own keys, and the Meet
+#: respawn's ``SPAWN_FIELDS`` (checked to carry no booked key).
+SPLATS = {(PLANNED, ("start_row",)), ("lifecycle/meet_respawn.py", ("respawn_due",))}
 
 
-def _named(site, name: str) -> bool:
-    return site.target.endswith(f".{name}") and site.target.startswith(SPAWN)
+def _named(target: str, name: str) -> bool:
+    return target.endswith(f".{name}") and target.startswith(SPAWN)
+
+
+def booked_start_violations(mods=None) -> list:
+    """Every way a bot could start for a booked row other than through the start route."""
+    out = []
+    for r in tree_refs(mods):
+        for name, allowed in USES.items():
+            if _named(r.target, name) and (r.rel, r.functions) not in allowed:
+                out.append(f"{r.rel}:{r.line} {'.'.join(r.functions) or '<module>'} → {name}")
+    for s in tree_sites(mods):
+        name = s.target.rsplit(".", 1)[-1]
+        if s.keywords & BOOKED_KEYWORDS and (s.rel, s.functions, name) not in BOOKED_CALLS:
+            out.append(f"{s.rel}:{s.line} {'.'.join(s.functions)} passes "
+                       f"{sorted(s.keywords & BOOKED_KEYWORDS)} to {name}")
+        if _named(s.target, "request_bot") and s.splat and (s.rel, s.functions) not in SPLATS:
+            out.append(f"{s.rel}:{s.line} {'.'.join(s.functions)} splats into request_bot")
+    return out
 
 
 def test_every_booked_start_goes_through_the_start_route():
     """ADR-0052 §3 and "The contract between Meetings and Flows": every booked start goes through
-    ``POST /internal/meetings/{meeting_id}/start``, the one call Flows makes into meetings.
+    ``POST /internal/meetings/{meeting_id}/start``. Checked by function, not by module:
 
     * meeting-api keeps no clock of its own: no auto-join sweep, no ``_auto_join_loop`` /
       ``auto_join_tick``;
-    * the route's handler is ``start_router``'s, and only it calls ``start_planned_meeting``;
-    * only ``planned_start`` starts a bot for a booked row — claiming the row by id with its
-      ``join_at`` (``start_row``, ``request_bot(planned_meeting_id=…, join_at=…)``); every other
-      ``request_bot`` call (``POST /bots``, the Meet respawn) passes neither."""
+    * the route is mounted and answered by ``start_router``'s handler ``start_planned``, the only
+      user of ``start_planned_meeting``; that is the only user of ``start_row``, the only place a
+      row is claimed by id with its ``join_at``; ``request_bot`` is used only there, by
+      ``POST /bots`` (``create_bot``) and by the Meet respawn (``respawn_due``), and neither of
+      those passes a booked start's keys, by name or through ``**kwargs``.
+
+    NOT covered, a known parallel path (ADR-0052 §6): ``POST /bots`` claims the room's newest
+    planned row, a booked one included, inside ``create_meeting_guarded``; a follow-up slice
+    closes it."""
+    from fastapi.testclient import TestClient
+
+    from meeting_api import create_app
     from meeting_api.bot_spawn.start_router import START_PATH
     from meeting_api.lifecycle.meet_respawn import SPAWN_FIELDS
 
@@ -82,24 +122,49 @@ def test_every_booked_start_goes_through_the_start_route():
     source = open(main_mod.__file__).read()
     assert "_auto_join_loop" not in source and "auto_join_tick" not in source
     assert START_PATH == "/internal/meetings/{meeting_id}/start"
-    from fastapi.testclient import TestClient
-
-    from meeting_api import create_app
-
     # mounted on the one app, answered by start_router's handler (its own refusal of no subject)
     r = TestClient(create_app()).post("/internal/meetings/1/start")
     assert (r.status_code, r.json().get("detail")) == (401, "Missing user identity"), r.text
-
-    sites = tree_sites()
-    starters = {s.rel for s in sites if _named(s, "start_planned_meeting")}
-    assert starters == {"bot_spawn/start_router.py"}, starters
-    assert {s.rel for s in sites if _named(s, "start_row")} == {"bot_spawn/planned_start.py"}
-    spawns = [s for s in sites if _named(s, "request_bot")]
-    assert {s.rel for s in spawns} == {"bot_spawn/router.py", "bot_spawn/planned_start.py",
-                                       "lifecycle/meet_respawn.py"}
-    for s in spawns:
-        if s.rel == "bot_spawn/planned_start.py":
-            continue
-        assert not (s.keywords & BOOKED_KEYWORDS), f"{s.rel}:{s.line} starts a booked bot"
-        assert not s.splat or s.rel == "lifecycle/meet_respawn.py", f"{s.rel}:{s.line} splats"
+    assert booked_start_violations() == []
     assert not (set(SPAWN_FIELDS) & BOOKED_KEYWORDS), "the Meet respawn carries a booked start's keys"
+    found = {(r.rel, r.functions) for r in tree_refs()}
+    for places in USES.values():
+        assert places <= found, f"listed but gone: {places - found}"
+
+
+def _caught(mods, needle):
+    found = booked_start_violations(mods)
+    assert any(needle in v for v in found), f"{needle!r} not caught: {found}"
+
+
+def test_a_start_row_sweep_beside_the_route_is_caught():
+    """The Factory review's plant: a second clock in the start route's own module."""
+    mods = planted(PLANNED, """
+async def sweep_due_bookings(repo, runtime, now):
+    for row in await repo.list_scheduled_meetings():
+        await start_row(row, repo=repo, runtime=runtime, get_context=None, now=now)
+""")
+    _caught(mods, "sweep_due_bookings → start_row")
+
+
+def test_another_caller_of_the_start_is_caught():
+    mods = planted("calendar_sync/service.py", """
+from ..bot_spawn.planned_start import start_planned_meeting
+
+
+async def _start_imported_now(row, repo, runtime):
+    await start_planned_meeting(row["id"], user_id=row["user_id"], repo=repo, runtime=runtime)
+""")
+    _caught(mods, "_start_imported_now → start_planned_meeting")
+
+
+def test_a_booked_spawn_by_another_path_is_caught():
+    mods = planted("bot_spawn/router.py", """
+async def create_bot_for_booking(repo, runtime, row, join_at, extra):
+    await request_bot(repo, runtime, user_id=row["user_id"], planned_meeting_id=row["id"],
+                      join_at=join_at)
+    await request_bot(repo, runtime, **extra)
+""")
+    _caught(mods, "create_bot_for_booking → request_bot")
+    _caught(mods, "passes ['join_at', 'planned_meeting_id'] to request_bot")
+    _caught(mods, "create_bot_for_booking splats into request_bot")
