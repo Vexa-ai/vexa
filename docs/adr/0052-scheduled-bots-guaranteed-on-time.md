@@ -96,14 +96,25 @@ only a booking with `auto_join` needs it.
   armed alarms fire when Flows returns, up to the deadline (§7). Back before `join_at`: the bot is on
   time. Back after `join_at`: late. Back after the deadline: no bot, and meeting-api's reconciler
   stamps `data.auto_join_error` "not started: scheduler unavailable" on a `scheduled` row with
-  `auto_join` on whose deadline passed with no start call (no `auto_join_last_attempt`, no
-  `auto_join_error` on the row). That stamp is meetings' own bookkeeping: idempotent, no call to
-  Flows, no outbox fact. There is no fallback clock in meetings (Q3 (a)): Flows' own uptime is the fix.
+  `auto_join` on whose deadline passed with nothing on the row from a start call: no
+  `auto_join_last_attempt` (the start route writes it before every spawn) and no `auto_join_error`.
+  The route stamps its reason on every refusal it answers after its own window checks, the 503s for
+  an identity that did not answer and a cap that cannot be read included (those with no hold,
+  since nothing was attempted); `too_early`, `backoff`, `not_scheduled`, `past_deadline` and 404
+  stamp nothing. So the stamp also lands on a row whose only calls came too early, or after its
+  deadline: in both the scheduler was not there in time. A start that is under way when the stamp
+  lands clears it when its bot starts. A row whose `scheduled_at` is not a time is stamped "not
+  started: no valid start time". The pass reads only rows past their deadline, earliest first, at
+  most 200 at a time. That stamp is meetings' own bookkeeping: idempotent, no call to Flows, no
+  outbox fact. There is no fallback clock in meetings (Q3 (a)): Flows' own uptime is the fix.
 - **Live and ad hoc meetings never wait on Flows.** `POST /bots` goes meeting-api → runtime. The
   `meeting.started` / `meeting.completed` publishes stay best-effort and run as background tasks off
-  the lifecycle callback's path (`events.publish_in_background`, bounded, held until they end), so a
+  the lifecycle callback's path (`events.publish_in_background`: each bounded, at most 256 in
+  flight, a fact past that dropped and counted as a metric, each task held until it ends), so a
   hung Flows adds nothing to a live meeting's callbacks. Post-meeting work (summaries) waits for
   Flows, because it is a Flows feature.
+- Calendar sync arms the rows it mirrored with "scheduling not deployed" again on its first pass
+  after `VEXA_FLOWS_API_URL` is set, unless the person set their auto-join themselves.
 - `meeting_api/events.py` says so: Flows schedules booked bots; without it a booking with `auto_join`
   is refused by name, and everything else runs the same.
 
@@ -166,18 +177,30 @@ Under the per-user advisory lock and a row lock it:
   loud refusal, never retried.
 - The flow is instance-scoped. Its fires are not subject to a person's daily run cap
   (`VEXA_FLOWS_USER_RUNS_PER_DAY`); the account ceiling is the bound.
-- `invite_join` stops spawning bots and arming its own alarm. It creates the planned row with
-  `POST /meetings` and moves it with `PATCH` when the invite is rescheduled, so invites run through
-  the same clock. It is registered in code like `booked_bot`, no longer a seed; a one-off migration
-  in the same release removes the stored seed copy (logged when the stored copy had been edited).
-- The planned row's id, returned by `POST /meetings`, is kept in Flows against the invite's calendar
-  UID: a reschedule `PATCH`es that row and a cancel `DELETE`s it. The invitees `post_meeting` needs
-  are read from Flows' own invite record by meeting id. No public contract changes (decided item 5).
-- Every **booked** start goes through `POST /internal/meetings/{id}/start`: there is no parallel
-  start path for a booking, and a gate fails the build if any code path starts a booked row's bot
-  outside it (s2d, reworded in s2f). The inverse gate fails the build if meeting-api's ad hoc and
-  live paths (`POST /bots`, the lifecycle callback, transcripts, webhooks) call Flows or wait on it
-  (s2f). An ad hoc bot (`POST /bots`) is not a booking: it starts without Flows and never waits on it.
+- `invite_join` is registered in code like `booked_bot`, no longer a seed; a one-off migration in the
+  same release removes the stored seed copy (logged when the stored copy had been edited) (s2a, s2d).
+- **Known gap: invites do not run through the booked clock yet.** At s2d (`64790526`) `invite_join`
+  keeps its ADR-0050 behaviour: its keyed alarm fires at start − 60 s, an invite update moves it and
+  `invite.cancelled` cancels it, and `dispatch_bot` sends the bot by URL with `POST /bots`
+  (`flows_steps/meeting.py:493`). It creates and moves no planned row, so an invited bot has no
+  10-minute lead, no `join_at` and none of the start route's safeguards. The gap closes in follow-up
+  slice **s2g**: `invite_join` creates the planned row with `POST /meetings`, keeps the row's id
+  against the invite's calendar UID, `PATCH`es that row on a reschedule and `DELETE`s it on a
+  cancel, and reads the invitees `post_meeting` needs from Flows' own invite record by meeting id.
+  No public contract changes (decided item 5).
+- Every **booked** start the scheduler makes goes through `POST /internal/meetings/{id}/start`, and a
+  gate fails the build if any meeting-api code starts a booked row's bot by any other function
+  (s2d, reworded in s2f; *The contract between Meetings and Flows*, Gates).
+- **Known parallel path: `POST /bots` claims a booked row.** Inside `create_meeting_guarded`
+  (`bot_spawn/adapters.py:637-656`), `POST /bots` with no row id claims the room's newest planned
+  row, `idle` or `scheduled`, a booked one included. An ad hoc bot sent to a room that has a
+  booking therefore takes the booking's row at once, without the start route's block lists, attempt
+  stamp or `join_at`; an invite's `POST /bots` (above) can do the same. The gate does not cover it.
+  It closes in follow-up slice **s2h**, which decides whether such a claim runs the start route's
+  safeguards or leaves the booked row alone.
+- The inverse gate fails the build if meeting-api's ad hoc and live paths (`POST /bots`, the
+  lifecycle callback, transcripts, webhooks) use Flows anywhere but the named edges (s2f). An ad hoc
+  bot (`POST /bots`) starts without Flows and never waits on it.
 
 ### The contract between Meetings and Flows
 
@@ -187,15 +210,24 @@ side owns its half.
 | Direction | What crosses | Carried by |
 |---|---|---|
 | Meetings → Flows | One fact: a booked meeting's times. `meeting.planned.changed` with `meeting_id`, `uid` (the owner, for the per-account share), `status`, `auto_join`, `pod_at`, `join_at`, `deadline`, `revision`; no URL, no passcode | meeting-api's durable outbox (§4), at least once, in revision order |
-| Flows → Meetings | One call: "start the pod for meeting X", `POST /internal/meetings/{id}/start` | the gateway's service door, as the row's owner (§5) |
+| Flows → Meetings, for a booking | One call: "start the pod for meeting X", `POST /internal/meetings/{id}/start` | the gateway's service door, as the row's owner (§5) |
+
+That is the only call scheduling needs, not the only call Flows makes. Flows also calls meetings as
+any client does: for its own features (meeting
+rows, transcripts, the post-meeting work) and, until s2g, for invites, whose bots it sends with
+`POST /bots` by URL (§6, known gap). That `POST /bots` can claim a booked row (§6, known parallel
+path, s2h). None of those calls is scheduling, and meetings depend on none of them.
 
 The start call's answers, and what Flows does with each:
 
 | Answer | Meaning | Flows |
 |---|---|---|
-| 201 `started` | the pod is starting; it opens the meeting at `join_at` | done |
-| 409 `not_scheduled` · `past_deadline` · `already_live`, 404, 403 `blocked`, 422 `meeting_host_refused` | nothing to start, ever; the reason is stamped on the row | done |
-| 429 `max_bots` · `backoff`, 503, 402 `service_denied`, 409 `too_early` | not now | call again after `Retry-After`, until the deadline |
+| 201 `started` | the pod is starting; it opens the meeting at `join_at`. Any `auto_join_error` the row carried is cleared | done |
+| 409 `not_scheduled` · `past_deadline`, 404 | nothing to start, ever: cancelled, toggled off, stopped, deleted, not the subject's, or past its window. Nothing is stamped | done |
+| 409 `already_live` | a bot owns the room: when it is another row's, the row is stamped with the holder's id; when the claim itself lost to a duplicate, nothing is stamped and the row keeps its attempt stamp | done |
+| 403 `blocked`, 422 `meeting_host_refused` | refused for good; the reason is stamped | done |
+| 429 `max_bots`, 402 `service_denied`, 503 `stt_unconfigured` · `authority_unavailable` · `spawn_failed` · `identity_unavailable` · `cap_unresolvable` | not now; the reason is stamped (`identity_unavailable` and `cap_unresolvable` with no hold: nothing was attempted) | call again after `Retry-After`, until the deadline |
+| 429 `backoff`, 409 `too_early` | not now: inside a hold an earlier answer earned, or before the pod may start. Nothing new is stamped | call again after `Retry-After`, until the deadline |
 | the service door's own refusal (`service door: …`) | a configuration fault; meeting-api never saw the call | the run fails loudly (§6) |
 
 - **Meetings owns** the times (`BOOKED_POD_LEAD_S`, `BOOKED_JOIN_LEAD_S`, `BOOKED_GRACE_S`, in
@@ -204,8 +236,9 @@ The start call's answers, and what Flows does with each:
 - **Not part of the contract:** the best-effort `meeting.started`, `meeting.completed` and
   `meeting.shared` facts. They feed Flows features (live and post-meeting flows, the share mail);
   losing one delays that feature, never a meeting. The lifecycle callback never waits on them (§3).
-- **Flows as a client:** `invite_join` creates and moves planned rows through the public
-  `POST`/`PATCH /meetings` (§6). That is Flows depending on Meetings, not the reverse.
+- **Flows as a client:** from s2g, `invite_join` creates and moves planned rows through the public
+  `POST`/`PATCH /meetings` (§6); until then it sends bots with `POST /bots`. Either is Flows
+  depending on Meetings, not the reverse.
 - **Without Flows** everything in meetings runs except a booking with `auto_join`, which is refused
   by name (§3). **With Flows down** bookings wait in the outbox and are started when Flows returns,
   up to their deadline; past it the row is stamped (§3).
@@ -213,9 +246,34 @@ The start call's answers, and what Flows does with each:
   node has room it is Pending and the cluster autoscaler adds one. A cold node took about 2 min to
   become Ready plus about 90 s of image pull (one prod measurement, Sep 2026, *Context*), inside the
   10-minute lead, so booked bots need no warm pool. The pool max (§11) is the ceiling of that scaling.
-- **Gates** (s2f): every booked start goes through the start route; meeting-api's ad hoc and live
-  paths make no call to Flows. The only meeting-api → Flows edges are the outbox drain, the
-  background `meeting.started` / `meeting.completed` publishes and the share mail.
+- **Gates** (s2f), read from meeting-api's source with `ast`, by function rather than by module,
+  each rule with negative controls (the four plants of the Factory review of #2037 among them):
+  - *Every booked start goes through the start route* (`tests/test_main_auto_join_wiring.py`):
+    meeting-api keeps no sweep (`_auto_join_loop`, `auto_join_tick` and `bot_spawn/auto_join.py`
+    are gone); the route is mounted and answered by `start_router`'s handler `start_planned`, the
+    only user of `start_planned_meeting`, which is the only user of `start_row`; `request_bot` is
+    used only by `start_row`, by `POST /bots` (`create_bot`) and by the Meet respawn
+    (`respawn_due`); only `start_row` passes a booked start's keys (`planned_meeting_id`,
+    `join_at`) into it, and the Meet respawn's `**kwargs` carry neither. It does not see the known
+    parallel path (§6): `POST /bots` claiming a booked row inside the repository.
+  - *Meeting-api uses Flows only on the named edges* (`tests/test_flows_edges.py`): every name
+    meeting-api uses from `events` or `planned_outbox`, outside those two modules, is an edge
+    allowed only at its listed module and enclosing function: `deliver` and `backfill` in
+    `__main__`'s outbox loop; `install` (the outbox's flush hook, a database write) where
+    `sessions/models.py` is imported; `publish_in_background` in the lifecycle callback
+    (`_apply_lifecycle_event`), given only `publish_meeting_started` or `publish_meeting_completed`,
+    which appear nowhere else and are never called or awaited there; `publish_meeting_shared` and
+    `share_mail_title` in `_mail_the_invite`, which only the share route
+    (`mint_transcript_share_by_id`) calls. Inside the two modules, only `publish` uses
+    `_flows_base`, `_flows_key` or `httpx`, only the three `publish_meeting_*` functions use
+    `publish`, and in `planned_outbox` only `deliver` uses `_flows` or `httpx`. `VEXA_FLOWS_API_URL`
+    and `VEXA_FLOWS_API_KEY` are spelled only in `_flows_base`, `_flows_key` and `_flows`, and the
+    URL also as `collector/booking.py`'s `SCHEDULER_ENV`, which only `scheduler_configured` and
+    `scheduling_refusal` use; `scheduler_configured` is used only by the booking bound and calendar
+    sync's re-arm. Every listed edge must still exist, so the lists cannot outlive the code.
+  - Not covered: Flows' own side (that `booked_bot` calls only the start route is
+    `core/flows/tests/test_booked_bot.py`'s), and code that would reach Flows without naming either
+    module, the address or the key.
 
 ### 7. Keyed-schedule fixes in Flows (needed before anything is guaranteed on top of it)
 
@@ -233,7 +291,8 @@ The start call's answers, and what Flows does with each:
 ### 8. Abuse bounds, cross-account included
 
 - **One booking cap, enforced where every booked row is created.** The repository function that
-  creates a planned row is the one path for `POST /meetings`, calendar sync and `invite_join`. In the
+  creates a planned row is the one path for `POST /meetings`, calendar sync and, from s2g,
+  `invite_join`. In the
   same transaction it validates `scheduled_at` as ISO-8601 (today any string passes) and counts the
   account's future `scheduled` rows with `auto_join` on against `BOOKED_MAX_PER_ACCOUNT` = 500,
   with no horizon on how far ahead (founder, 1 Nov 2026). Over the cap: `POST /meetings` answers 429 with the cap in the body;
@@ -323,8 +382,10 @@ The 31 Oct ramp curve; fair-share admission for ad-hoc bots; separate booked/ad-
 | **s2a keyed fixes** | vexa (flows) | `keyed.py`: `deadline` column and missed-from-deadline, re-upsert leaves `updated_at`, paging past skipped rows, retired rows marked, `held()` per flow, per-account share without the company total for `booked_bot`, `refused` returned to the caller | Flows down from fire time to deadline → still fires; unchanged re-upsert does not extend the window; 201 retired-flow rows do not stop a due fire; rows of one flow do not use another flow's share; 41 accounts at their share do not refuse a 42nd |
 | **s2b Flows in every profile** | vexa (deploy) | lite supervisord programs for Flows; Helm `flows.enabled: true`; bank profile; `meeting_api/events.py` wording | lite boots with Flows; Helm default renders Flows; bank profile renders Flows |
 | **s2c outbox + start route** (sweep still on) | vexa (meeting-api, gateway) | outbox table + drain on the CRM outbox pattern; `POST /internal/meetings/{id}/start` with the sweep's safeguards; planned-row creation path with ISO check and booking cap (API and calendar sync); ceiling counts `needs_help` / `needs_human_help`; gateway service-door allow-list | cancel-before-fire and cancel-during-fire → 409, no bot; door: identity lookup network error, timeout or 5xx → 503, retried by Flows; identity 404 → loud, no retry; wrong key → the run fails loudly; recurring link starts the right row; block lists, bot name, last-attempt stamp applied; outbox survives a Flows outage and delivers in revision order; cap refuses `POST /meetings` with 429 and calendar sync rows over the cap get no alarm |
-| **s2d switch the clock** | vexa (meeting-api, flows) | `booked_bot` flow; one-time backfill of facts for future `scheduled` rows; `_auto_join_loop` / `auto_join_tick` removed, keys to `removed_config.py`; `invite_join` registered in code, rewritten to `POST/PATCH /meetings`, stored seed removed by a one-off migration | a row booked before the upgrade is armed by the backfill and gets its bot; booked < 10 min and after `join_at`; ceiling full → starts when a slot frees; rescheduled invite moves the bot; cancelled invite deletes the row; invitees reach post_meeting; no meeting-api clock left and no booked start outside the start route (gate) |
+| **s2d switch the clock** | vexa (meeting-api, flows) | `booked_bot` flow; one-time backfill of facts for future `scheduled` rows; `_auto_join_loop` / `auto_join_tick` removed, keys to `removed_config.py`; `invite_join` registered in code, stored seed removed by a one-off migration (its rewrite to `POST/PATCH /meetings` is s2g) | a row booked before the upgrade is armed by the backfill and gets its bot; booked < 10 min and after `join_at`; ceiling full → starts when a slot frees; no meeting-api clock left and no booked start outside the start route (gate) |
 | **s2f scheduling only** | vexa (meeting-api, docs) | the s2d gate reworded to every booked start, plus the inverse gate; `POST /meetings` (and `PATCH`, `PUT …/intent`) refuse a booking with `auto_join` with `422 scheduling_not_deployed` where `VEXA_FLOWS_API_URL` is unset, calendar sync mirrors with `auto_join` off; the reconciler's "not started: scheduler unavailable" stamp past the deadline; `meeting.started/completed` published in the background; `events.py`, configuration, deployment and meetings docs wording | with Flows stopped and with Flows hung, `POST /bots` spawns, a lifecycle callback returns well under the 2 s publish bound and webhooks fire; the 422 and the calendar stamp; the stamp is idempotent and calls no Flows; gates catch a planted Flows call on a live path |
+| **s2g invites through the booked clock** (follow-up) | vexa (flows) | `invite_join` creates its planned row with `POST /meetings`, keeps its id against the invite's calendar UID, `PATCH`es it on a reschedule, `DELETE`s it on a cancel, reads the invitees from Flows' own invite record; no `POST /bots` | rescheduled invite moves the bot; cancelled invite deletes the row; invitees reach post_meeting; the invite's bot starts through the start route at `pod_at` |
+| **s2h `POST /bots` and a booked row** (follow-up) | vexa (meeting-api) | `create_meeting_guarded`'s claim of the room's newest planned row, for a row booked with `auto_join`: either through the start route's safeguards or leaving the booked row alone (the slice decides) | an ad hoc bot to a booked room never bypasses the block lists, the attempt stamp or `join_at`; the booked-start gate covers the claim |
 | **s3 cluster** | vexa-platform (+ vexa runtime knob) | main-pool autoscaler max 20 → 50 (`infra/main.tf`, lands or supersedes vexa-platform#561); controller replacing `deployment-capacity-reserve.yaml` + `cronjob-capacity-resize.yaml`; second scheduler Deployment, RBAC, config; bot PriorityClass at 0; `RUNTIME_K8S_BOT_SCHEDULER_NAME` in vexa runtime and chart | render tests for the chart; controller unit tests (placeholders not counted, draining nodes skipped, no bot moved); runtime test that the scheduler name reaches the pod spec; staging rehearsal: burst at :58 with booked pods started at :50 |
 | **s5 billing** | vexa + vexa-platform | platform rating dual acceptance, pod-start minutes, `ours` not billed, transcription split, account page and `/pricing` text, `bot_never_joined` reason retired for v2 rows; bot emits `pod_started_at`; meeting-api grading table + `outcome_class` at terminal transition + provenance fields + version bump; service-authority boundaries from pod start | rating fixtures for both versions; never-admitted v2 run billed from pod start; `ours` run not billed, `unknown` billed; transcription minutes unchanged by wait; after s1 + s2c: a waiting bot's minutes counted from pod start, and a zero-balance account's waiting bot is stopped |
 | **s4 docs** | vexa (`docs/docs/`) | `api/meetings.mdx` (auto-join section, `scheduled_at`, booking cap, PATCH 409 from start − 10 min, 429 counts waiting bots, the promise verbatim); `core/meetings.mdx:76-87`; `how-to/calendar-sync.mdx:102-103`; `configuration.mdx:314-332`; `deployment-kubernetes.mdx:366, 690-694` and lite/Helm pages (Flows schedules booked bots); `concepts.mdx:36`; troubleshooting "a scheduled meeting didn't auto-join"; ADR-0050 lead values; `quickstart.mdx:19` bot time defined from pod start; changelog entry (earlier pod start, wait and lobby billing, PATCH window) | `docs-current` gate; link check; the "~60 s" claim gone everywhere |
@@ -332,7 +393,7 @@ The 31 Oct ramp curve; fair-share admission for ad-hoc bots; separate booked/ad-
 Order:
 - After this design is signed, s1, s2a, s2b, s3 and s5 can start (s5's tests that need waiting bots
   run after s1 and s2c).
-- s2c after s1. s2d after s2a, s2b and s2c. s2f after s2d, stacked on it.
+- s2c after s1. s2d after s2a, s2b and s2c. s2f after s2d, stacked on it. s2g and s2h after s2f.
 - s4 after s2f, s3 and s5.
 - Within s5 the platform's dual acceptance lands on prod before meeting-api's version bump.
 - Release prerequisites: every slice above, and the Individual plan ceiling of 2 bots
