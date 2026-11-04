@@ -508,6 +508,13 @@ on the `workers` network (gateway, redis, flows-api, and the optional `llm-shim`
 - **If you skip it:** the bot or worker cannot resolve or reach that service.
 - **Do:** add that service to the `bots` or `workers` network.
 
+### Docker Compose: the llm-shim takes a key
+
+- **Hits:** Compose stacks that run the optional `llm-shim` profile.
+- **If you skip it:** the shim does not start: LiteLLM v1.104 and later refuse to run without a key.
+- **Do:** set `LLM_SHIM_KEY` in `deploy/compose/.env` to a long random value, and use the same value
+  as the `api_key` of the model config that points at `http://llm-shim:4000`.
+
 ### Authenticated bots
 
 - **Hits:** installs with `BOT_AUTHENTICATED` on.

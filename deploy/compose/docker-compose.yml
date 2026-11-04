@@ -2155,7 +2155,7 @@ services:
     profiles: ["llm-shim"]
     # PINNED, deliberately: this is a third-party compatibility surface we vouch for, and both
     # dialects move. Bump it on purpose, never implicitly.
-    image: ${LLM_SHIM_IMAGE:-litellm/litellm:v1.103.9@sha256:e5173d12ab1bbfaac623a499716d69a7a134f4732fa0faa527ee07861468f22f}
+    image: ${LLM_SHIM_IMAGE:-litellm/litellm:v1.108.0@sha256:c560d317136880ea92d62334d4367ab10955b1af189dd3ea24f6551290b1d6c1}
     networks: [vexa, workers]     # MUST match the stack: workers resolve it on `workers`
     ports:
       - "127.0.0.1:${LLM_SHIM_PORT:-14000}:4000"
@@ -2166,6 +2166,9 @@ services:
       - LLM_SHIM_MODEL=${LLM_SHIM_MODEL:-local-model}
       - LLM_SHIM_UPSTREAM=${LLM_SHIM_UPSTREAM:-http://host.docker.internal:8899/v1}
       - LLM_SHIM_UPSTREAM_KEY=${LLM_SHIM_UPSTREAM_KEY:-none}
+      # The shim's own key. LiteLLM v1.104 and later refuse to start without one; with no database it
+      # accepts this key and refuses every other. The agent's model config sends it as its api_key.
+      - LITELLM_MASTER_KEY=${LLM_SHIM_KEY:-}
       # A deployment may override the whole shim config with its own file:
       #   LLM_SHIM_CONFIG=./llm-shim/config.local.yaml docker compose --profile llm-shim up -d
       # Consumed only by that local file's fallback leg; empty (and unused) in a shipped deployment.
