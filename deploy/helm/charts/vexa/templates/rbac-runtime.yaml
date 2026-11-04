@@ -25,7 +25,7 @@ rules:
   # bot the cluster cannot add room for. Read-only.
   - apiGroups: [""]
     resources: ["events"]
-    verbs: ["get", "list"]
+    verbs: ["list"]
   # A spawned Pod's credential env rides a Secret of its own, owned by the Pod (collected with it)
   # and named per incarnation: the runtime creates it and never reads, lists or deletes a Secret.
   - apiGroups: [""]

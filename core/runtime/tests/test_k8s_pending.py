@@ -252,3 +252,14 @@ def test_a_backend_fault_in_pending_leaves_the_answer_as_it_was():
     rt.create(WorkloadSpec(workloadId="mtg-1-a1", profile="meeting-bot", env={}))
     status = rt.get("mtg-1-a1")
     assert status.state is RuntimeState.running and status.pending is None
+
+
+def test_a_torn_down_pod_leaves_no_cached_read(monkeypatch):
+    fake = FakeKubectl(_pod(unschedulable=True), [])
+    backend = _backend(monkeypatch, fake)
+    h = WorkloadHandle(id="mtg-1-a1", impl="vexa-mtg-1-a1")
+    for teardown in (backend.cleanup, backend.kill, backend.terminate):
+        backend.exit_code(h)
+        assert "vexa-mtg-1-a1" in backend._last_read
+        teardown(h)
+        assert "vexa-mtg-1-a1" not in backend._last_read, teardown.__name__

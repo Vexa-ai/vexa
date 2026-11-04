@@ -121,7 +121,7 @@ a `running` workload still waits for it — on k8s, while its Pod is Pending: `r
 scheduler `nominated` a node for it (a preemption freeing room) and the cluster `autoscaler`'s latest
 verdict on it (`scale_up` from a `TriggeredScaleUp` Event, `no_scale_up` from `NotTriggerScaleUp`),
 with the autoscaler's or scheduler's `detail`. Facts only: meeting-api decides from them that a bot
-waits for a seat the cluster cannot add (its `queued` status). Reading Pod Events needs `get`/`list`
+waits for a seat the cluster cannot add (its `queued` status). Reading Pod Events needs `list`
 on `events` in the runtime's namespace (the chart's runtime Role); without it the facts come without
 an autoscaler verdict. docker and process report no `pending`.
 

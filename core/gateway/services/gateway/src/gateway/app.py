@@ -54,7 +54,7 @@ from fastapi.routing import APIRoute
 from .obs import (TRACE_HEADER, TraceMiddleware, get_trace_id, log_event, session_of_validation,
                   set_session, set_user_id)
 from .ports import Authorizer, AuthUnavailable, DownstreamClient, RedisBus
-from .ratelimit import is_bot_start, retry_after_s
+from .ratelimit import bot_start_key, is_bot_start, retry_after_s
 
 # #495: the honest answer when the auth path itself is unreachable — a retryable 503, never a
 # 401 that blames the caller's (valid) key. Shared by /auth/me and the proxy authorizer. Also
@@ -519,8 +519,12 @@ def create_app(
 
         # The ad-hoc bot start, per account (ratelimit.BOT_START_PATH): a start-and-stop loop is
         # bounded here before it reaches the cluster. Only this edge's callers pass this point.
+        # A token is spent only when the start succeeds (``_forward``): a refused start (409, 429, any
+        # 4xx) costs nothing.
+        if bot_start_limiter is not None and is_bot_start(method, request.url.path):
+            request.state.bot_start_key = bot_start_key(user_data)
         if (bot_start_limiter is not None and is_bot_start(method, request.url.path)
-                and not bot_start_limiter.allow(str(user_id))):
+                and not bot_start_limiter.has_token(request.state.bot_start_key)):
             log_event("bot_start_rate_limited", audience="user", level="warning", span="auth",
                       user_id=user_id)
             return None, Response(
@@ -734,6 +738,9 @@ def create_app(
             for k in ("content-range", "accept-ranges", "content-disposition") + _MCP_HEADERS
             if k in resp_headers
         }
+        start_key = getattr(request.state, "bot_start_key", None)
+        if bot_start_limiter is not None and start_key and 200 <= resp.status_code < 300:
+            bot_start_limiter.debit(start_key)
         return Response(
             content=resp.content,
             status_code=resp.status_code,

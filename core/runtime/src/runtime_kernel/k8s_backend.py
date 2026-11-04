@@ -941,13 +941,16 @@ class K8sBackend:
             return []
 
     def terminate(self, h: WorkloadHandle) -> None:      # graceful: SIGTERM + grace, then SIGKILL
+        self._last_read.pop(h._impl, None)  # type: ignore[attr-defined]
         _kubectl("delete", "pod", h._impl, f"--grace-period={_stop_grace_sec()}", "--wait=false",
                  *self._ns_args(), check=False)  # type: ignore[attr-defined]
 
     def kill(self, h: WorkloadHandle) -> None:           # force: immediate SIGKILL + drop the object
+        self._last_read.pop(h._impl, None)  # type: ignore[attr-defined]
         _kubectl("delete", "pod", h._impl, "--grace-period=0", "--force", "--wait=false",
                  *self._ns_args(), check=False)  # type: ignore[attr-defined]
 
     def cleanup(self, h: WorkloadHandle) -> None:
+        self._last_read.pop(h._impl, None)  # type: ignore[attr-defined]
         _kubectl("delete", "pod", h._impl, "--ignore-not-found", "--grace-period=0", "--force",
                  "--wait=false", *self._ns_args(), check=False)  # type: ignore[attr-defined]

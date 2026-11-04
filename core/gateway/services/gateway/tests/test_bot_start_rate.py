@@ -70,3 +70,29 @@ def test_what_counts_as_a_bot_start():
     assert not is_bot_start("GET", "/bots")
     assert not is_bot_start("POST", "/bots/google_meet/abc/chat")
     assert not is_bot_start("DELETE", "/bots/google_meet/abc")
+
+
+def test_a_refused_start_costs_nothing():
+    limiter = PerUserRateLimiter(capacity=1, refill_per_sec=0, clock=lambda: 0.0)
+    for refused in (409, 429, 422, 403):
+        app = create_app(FakeAuthorizer(), FakeDownstream(status_code=refused, body={"detail": "no"}),
+                         FakeRedis(), bot_start_limiter=limiter)
+        assert TestClient(app).post("/bots", headers=AUTH, json=BOT).status_code == refused
+    assert _client(limiter).post("/bots", headers=AUTH, json=BOT).status_code == 201
+    assert _client(limiter).post("/bots", headers=AUTH, json=BOT).status_code == 429
+
+
+def test_principals_of_one_payer_share_its_bucket():
+    limiter = PerUserRateLimiter(capacity=1, refill_per_sec=0, clock=lambda: 0.0)
+
+    def principal(uid):
+        return FakeAuthorizer(user={"user_id": uid, "scopes": ["bot", "tx"], "max_concurrent": 3,
+                                    "email": f"p{uid}@example.com", "delegation": {"bills_to": 42}})
+
+    from gateway.ratelimit import bot_start_key
+
+    assert bot_start_key({"user_id": 101, "delegation": {"bills_to": 42}}) == "42"
+    assert bot_start_key({"user_id": 101}) == "101"
+    assert limiter.has_token("42")
+    limiter.debit("42")
+    assert not limiter.has_token("42"), "one payer, one bucket, whichever principal starts"

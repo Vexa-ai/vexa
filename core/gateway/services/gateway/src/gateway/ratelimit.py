@@ -50,6 +50,24 @@ class PerUserRateLimiter:
     def refill_per_sec(self) -> float:
         return self._refill
 
+    def _refilled(self, key: str) -> "_Bucket":
+        now = self._clock()
+        b = self._buckets.get(key)
+        if b is None:
+            b = self._buckets[key] = _Bucket(self._capacity, now)
+        b.tokens = min(self._capacity, b.tokens + (now - b.last) * self._refill)
+        b.last = now
+        return b
+
+    def has_token(self, key: str) -> bool:
+        """Whether ``key`` could spend a token now, without spending it."""
+        return self._refilled(key).tokens >= 1.0
+
+    def debit(self, key: str) -> None:
+        """Spend one token after the fact (a start that succeeded). Concurrent successes may take
+        the bucket below zero; it then refills from there, so the debt is paid, never forgiven."""
+        self._refilled(key).tokens -= 1.0
+
     def allow(self, key: str, cost: float = 1.0) -> bool:
         now = self._clock()
         b = self._buckets.get(key)
@@ -79,6 +97,16 @@ DEFAULT_BOT_START_PER_MIN = 0.5
 
 def is_bot_start(method: str, path: str) -> bool:
     return method.upper() == "POST" and (path.rstrip("/") or "/") == BOT_START_PATH
+
+
+def bot_start_key(user_data: dict) -> str:
+    """Whose bucket a start spends: the account that pays for the bot. A room's principal bills to
+    its payer (``delegation.bills_to``), so every principal of one payer shares one bucket."""
+    dlg = user_data.get("delegation") if isinstance(user_data.get("delegation"), dict) else {}
+    payer = dlg.get("bills_to")
+    if isinstance(payer, int) and not isinstance(payer, bool):
+        return str(payer)
+    return str(user_data["user_id"])
 
 
 def bot_start_from_env(getenv: Callable[[str, str], str] = None) -> Optional["PerUserRateLimiter"]:
