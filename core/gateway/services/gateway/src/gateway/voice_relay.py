@@ -8,6 +8,12 @@ row's scopes do not admit (the row is declared as the upgrade's ``GET`` in
 and sign the identity it resolved onto the hop (gateway-identity.v1). After that it relays frames
 both ways, verbatim, and passes either side's close code to the other.
 
+The key comes from the ``x-api-key`` header, else an ``Authorization: Bearer`` header, else — for a
+browser, whose ``WebSocket`` cannot set a header — the ws.v1 § Connect subprotocol list
+``["vexa.v1", "vexa.key.<key>"]``, read by ``ws_auth.ws_credential`` (the one parser every edge socket
+uses). The socket is answered ``vexa.v1`` when the client offered it, never the key's own entry, and
+no ws.v1 entry travels upstream. A key in the URL is not a credential here: it is ignored.
+
 Refusals mirror ``/ws``: the socket is accepted, an ``{"type": "error", "error": <code>}`` frame is
 sent, then the close — 4401 (no key, or a key this edge does not accept), 4403 (the key holds none
 of the row's scopes), 4429 (the caller's per-user request budget is spent — the same limiter every
@@ -28,6 +34,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from .delegation import is_delegated
 from .obs import log_event, set_user_id
 from .ports import AuthUnavailable, Authorizer
+from .ws_auth import accept, ws_credential
 
 PATH = "/voice-notes/{native_meeting_id}/stream"
 ROW = ("GET", PATH)
@@ -61,13 +68,16 @@ class SocketDialer(Protocol):
 
 
 def _client_key(ws: WebSocket) -> Optional[str]:
-    key = ws.headers.get("x-api-key")
-    if key:
-        return key
+    """The header key, else a bearer token, else the ws.v1 subprotocol key. Never the URL's."""
+    credential = ws_credential(ws)
+    if credential.source == "header":
+        return credential.key
     auth = (ws.headers.get("authorization") or "").strip()
     scheme, _, token = auth.partition(" ")
     if scheme.lower() == "bearer" and token.strip():
         return token.strip()
+    if credential.source == "subprotocol":
+        return credential.key
     return None
 
 
@@ -94,7 +104,7 @@ async def run_voice_note_relay(
     upstream_base: str,
     rate_limiter: Optional[Any] = None,
 ) -> None:
-    await ws.accept()
+    await accept(ws, ws_credential(ws).subprotocol)   # 'vexa.v1' when offered, never the key entry
     api_key = _client_key(ws)
     if not api_key:
         return await _refuse(ws, "missing_api_key", 4401)
