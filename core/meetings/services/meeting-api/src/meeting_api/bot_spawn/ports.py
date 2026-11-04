@@ -334,6 +334,13 @@ class AuthSessionBusy(Exception):
         )
 
 
+class JoinAtRefused(ValueError):
+    """A spawn asked for a join time it may not have (ADR-0052 §8): later than now +
+    ``BOOKED_POD_LEAD_S`` + 60 s, or on a bot with no meeting page (a voice note, a call). Refused
+    before any row or workload exists, so a pod never sits on its MeetingToken (5 h TTL) long before
+    it joins."""
+
+
 class SpawnFailed(Exception):
     """The runtime kernel could not start the workload (non-201, non-429) — meeting → failed.
 
@@ -428,6 +435,30 @@ class DuplicateMeeting(Exception):
 # parked in a waiting room reports `awaiting_admission` once and then polls silently for the whole
 # lobby budget the control plane handed it — so they carry their OWN (longer) reconcile window.
 PRE_ACTIVE_MEETING_STATUSES = frozenset({"requested", "joining", "awaiting_admission"})
+
+
+def reconcile_reference_time(status: Optional[str], updated_at, data: Optional[dict]):
+    """The moment a stale row's reconcile window is measured from — the ONE definition both the SQL
+    adapter and the in-memory fake read.
+
+    ``updated_at``, except for a PRE-ACTIVE row whose bot was spawned to wait for a join time
+    (``data.join_at``, ADR-0052): such a pod is quiet BY DESIGN until it opens the meeting, so its
+    window starts at the join time, whichever is later. ``updated_at`` must be tz-aware; an unreadable
+    ``join_at`` is ignored (the row falls back to ``updated_at``)."""
+    from datetime import datetime, timezone
+
+    if status not in PRE_ACTIVE_MEETING_STATUSES or not isinstance(data, dict):
+        return updated_at
+    raw = data.get("join_at")
+    if not isinstance(raw, str) or not raw:
+        return updated_at
+    try:
+        join_at = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return updated_at
+    if join_at.tzinfo is None:
+        join_at = join_at.replace(tzinfo=timezone.utc)
+    return max(updated_at, join_at)
 
 
 def reconcile_grace_for_status(

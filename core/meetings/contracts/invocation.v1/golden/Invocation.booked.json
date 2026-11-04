@@ -1,0 +1,11 @@
+{
+  "platform": "google_meet",
+  "meetingUrl": "https://meet.google.com/abc-defg-hij",
+  "botName": "Vexa",
+  "nativeMeetingId": "abc-defg-hij",
+  "joinAt": "2026-11-03T09:58:00Z",
+  "connectionId": "00000000-0000-4000-8000-000000000000",
+  "meeting_id": 42,
+  "redisUrl": "redis://<PLACEHOLDER>@redis:6379/0",
+  "meetingApiCallbackUrl": "http://meeting-api:8080/bots/internal/callback/lifecycle"
+}

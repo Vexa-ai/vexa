@@ -80,6 +80,18 @@ def dominant_completion_reason(reason: Any, *, stop_requested: bool) -> Any:
     return USER_STOP_REASON if stop_requested else reason
 
 
+def unasked_stop(reason: Any, *, stop_requested: bool, first_event: bool) -> bool:
+    """A ``stopped`` the user never asked for, on a run that never opened the meeting.
+
+    A booked bot waiting for its join time ends ``failed``/``stopped`` on ANY termination signal: a
+    node drain, an eviction, a self-host restart (Vexa-ai/vexa#1993 re-review at ffe34e7d). The bot
+    cannot tell those from the user's stop; the row can. Without ``stop_requested`` it is the run
+    failing to join: recorded ``join_failure``, so the occurrence stays retryable, never read as the
+    user's stop. Only the waiting stage (the record's first event); joining and lobby keep their rule.
+    """
+    return first_event and reason == USER_STOP_REASON and not stop_requested
+
+
 class FailureStage(str, Enum):
     """lifecycle.v1 `FailureStage` — furthest stage reached, for `failed` attribution."""
 
@@ -114,9 +126,11 @@ class TransitionSource(str, Enum):
 # The machine. Reduced from the parent's `get_valid_status_transitions` to the bot's
 # domain lifecycle: drop `requested`/`stopping` (server-side, not bot-emitted), keep the
 # escalation path (`needs_help`, parent's `needs_human_help`). The bot's first emitted
-# status is `joining`, so that is the machine's de-facto entry.
+# status is `joining`, so that is the machine's de-facto entry. The one other first event is a
+# `failed` at stage `requested` (``requested_stage_failure`` below), checked on the event because
+# the edge depends on its stage.
 LEGAL_TRANSITIONS: Dict[Optional[BotStatus], frozenset[BotStatus]] = {
-    None: frozenset({BotStatus.JOINING}),  # initial: a record's first event must be `joining`
+    None: frozenset({BotStatus.JOINING}),  # initial: `joining` (+ requested_stage_failure, on the event)
     BotStatus.JOINING: frozenset(
         {BotStatus.AWAITING_ADMISSION, BotStatus.ACTIVE, BotStatus.FAILED}
     ),
@@ -134,8 +148,9 @@ _TERMINAL = frozenset({BotStatus.COMPLETED, BotStatus.FAILED})
 # The persisted (DB) meeting status string → the in-memory FSM BotStatus, used to REHYDRATE a
 # record after a meeting-api restart (LIFECYCLE-409 fix). The DB carries the SERVER-SIDE meeting
 # status, a superset of the bot's domain `BotStatus`: `requested`/`stopping` are not bot states.
-#   * `requested` → None (the FSM's pre-`joining` entry — the bot's first event must still be
-#     `joining`, and None→JOINING is the only legal first edge).
+#   * `requested` → None (the FSM's pre-`joining` entry — None→JOINING is the table's only first
+#     edge; the one other first event, a `failed` at stage `requested`, is checked on the event by
+#     `requested_stage_failure`).
 #   * `stopping` → ACTIVE: `stopping` is the user-stop in-flight state (not a BotStatus); treating it
 #     as ACTIVE keeps active/stopping → completed a LEGAL transition (the bot's terminal lands). This
 #     is sound because the stop path writes `stopping` ONLY over a status in which the bot reached the
@@ -179,6 +194,21 @@ _STATUS_TO_FAILURE_STAGE: Dict[Optional[BotStatus], FailureStage] = {
 def can_transition(frm: Optional[BotStatus], to: BotStatus) -> bool:
     """Is `frm → to` a legal transition of the meeting FSM?"""
     return to in LEGAL_TRANSITIONS.get(frm, frozenset())
+
+
+def requested_stage_failure(frm: Optional[BotStatus], to: BotStatus, event: Dict[str, Any]) -> bool:
+    """Is this a bot's FIRST event, a `failed` at stage `requested`?
+
+    A bot that ends before it opens the meeting never sends `joining`: a booked bot stopped while it
+    waits for its join time, or refused for a joinAt it cannot read (ADR-0052). Its terminal is the
+    record's first event and carries ``failure_stage: requested``. That one first edge is legal;
+    every other first event must still be `joining`. The stage recorded is still derived server-side
+    (``None`` → ``requested``), so the payload's stage only gates the edge."""
+    return (
+        frm is None
+        and to is BotStatus.FAILED
+        and event.get("failure_stage") == FailureStage.REQUESTED.value
+    )
 
 
 def _trim_bot_logs(lines: List[str]) -> tuple[List[str], bool]:
@@ -540,14 +570,17 @@ class LifecycleSink:
 
     @staticmethod
     def _terminal_reason(
-        rec: MeetingRecord, event: Dict[str, Any]
+        rec: MeetingRecord, event: Dict[str, Any], *, first_event: bool = False
     ) -> Optional[CompletionReason]:
         """The reason to record on a terminal advance — the bot's, unless the USER stopped it.
 
         The bot reports what IT saw (it was killed mid-join → ``join_failure``). When the record
         carries the user's stop intent, that intent is the truth about why the run ended, and it
-        wins here at the WRITE — see ``dominant_completion_reason``."""
+        wins here at the WRITE — see ``dominant_completion_reason``. When it does not, a waiting
+        bot's ``stopped`` is not the user's either — see ``unasked_stop``."""
         raw = event.get("completion_reason")
+        if unasked_stop(raw, stop_requested=rec.stop_requested, first_event=first_event):
+            raw = CompletionReason.JOIN_FAILURE.value
         raw = dominant_completion_reason(raw, stop_requested=rec.stop_requested)
         return CompletionReason(raw) if raw else None
 
@@ -605,7 +638,7 @@ class LifecycleSink:
         # loop). Guarded: ONLY a terminal target, ONLY this source — never loosens bot-driven edges.
         if force_terminal_on_destroy and to in _TERMINAL:
             pass  # legal by teardown evidence; fall through to the advance
-        elif not can_transition(rec.status, to):
+        elif not (can_transition(rec.status, to) or requested_stage_failure(rec.status, to, event)):
             raise IllegalTransition(connection_id, rec.status, to)
 
         frm = rec.status
@@ -624,7 +657,7 @@ class LifecycleSink:
         elif to is BotStatus.FAILED:
             # FM-003: derive failure_stage from the stage we were IN, not the payload.
             rec.failure_stage = _STATUS_TO_FAILURE_STAGE.get(frm, FailureStage.ACTIVE)
-            rec.completion_reason = self._terminal_reason(rec, event)
+            rec.completion_reason = self._terminal_reason(rec, event, first_event=frm is None)
             # The parent builds an `error_details` string on a failed exit when none supplied.
             if rec.error_details is None and (rec.exit_code is not None or rec.reason):
                 rec.error_details = (
@@ -637,7 +670,14 @@ class LifecycleSink:
             # record when it sent none, so a reconcile-driven or runtime-destroy terminal is
             # evidenced too. FAIL-OPEN by contract: this is a REPORT about a run that has already
             # ended, and no fault in it may alter the terminal the FSM is recording.
-            rec.join_evidence = _capture_join_evidence(rec, event, frm)
+            evidence_event = event
+            if unasked_stop(event.get("completion_reason"), stop_requested=rec.stop_requested,
+                            first_event=frm is None):
+                # The bot's own verdict says the user ended it (`user_action`); nobody did. Derive
+                # the evidence from the reason recorded instead, the bot's words kept as its detail.
+                evidence_event = {**{k: v for k, v in event.items() if k != "join_evidence"},
+                                  "completion_reason": rec.completion_reason.value}
+            rec.join_evidence = _capture_join_evidence(rec, evidence_event, frm)
 
         # Terminal forensics → record.data (parent caps bot_logs, trims oldest-first).
         if to in _TERMINAL:

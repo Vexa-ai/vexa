@@ -15,8 +15,9 @@ import Ajv2020, { type ValidateFunction } from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { mock } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { createOrchestrator, CONTROL_PLANE_UNREACHABLE, CONTROL_PLANE_UNREACHABLE_EXIT, type MeetingResult } from './orchestrator.js';
+import { createOrchestrator, msUntilJoinAt, CONTROL_PLANE_UNREACHABLE, CONTROL_PLANE_UNREACHABLE_EXIT, type MeetingResult } from './orchestrator.js';
 import { createLivePipeline } from './pipeline.js';
 import { canTransition, type Act, type BotStatus, type LifecycleEvent, type TranscriptSegment } from './contracts.js';
 import type { ActsSource, JoinDriver, JoinOutcome, LifecycleSink, TranscriptSink, PrimaryReachability } from './ports.js';
@@ -522,6 +523,210 @@ async function main(): Promise<void> {
     const res = await runP;
     check('gate reachable: proceeded to completed', res.status === 'completed', JSON.stringify(res));
     check('gate reachable: secondary channel NEVER probed (fast path, zero added latency)', secondaryProbed === 0, `probed=${secondaryProbed}`);
+  }
+
+  // ── ADR-0052 s1: joinAt in the future — no `joining`, no navigation, no gate before it ──
+  {
+    const lc = recordingSink();
+    const t0 = Date.now();
+    let joinCalledAt = -1;
+    let probed = 0;
+    const join: JoinDriver = { ...mockJoin('admitted'), async join(report) { joinCalledAt = Date.now(); return mockJoin('admitted').join(report); } };
+    let fireLeave: (a: { action: 'leave' }) => void = () => {};
+    const o = createOrchestrator(inv({ joinAt: new Date(t0 + 400).toISOString() }), {
+      lifecycle: lc, join, pipeline: noopPipeline(), acts: noopActs((f) => { fireLeave = f; }), aloneness: noopAloneness(),
+      reachability: { async probeSecondary() { probed++; return true; } },
+    });
+    const runP = o.run();
+    await new Promise((r) => setTimeout(r, 200));
+    check('joinAt future: nothing emitted while waiting', lc.events.length === 0, JSON.stringify(seq(lc.events)));
+    check('joinAt future: the join driver (navigation) is not called while waiting', joinCalledAt === -1);
+    await new Promise((r) => setTimeout(r, 400));
+    fireLeave({ action: 'leave' });
+    const res = await runP;
+    check('joinAt future: join starts at joinAt, not before', joinCalledAt >= t0 + 390, `joined ${joinCalledAt - t0}ms after start`);
+    check('joinAt future: then the normal lifecycle', JSON.stringify(seq(lc.events)) === JSON.stringify(['joining', 'awaiting_admission', 'active', 'completed']), JSON.stringify(seq(lc.events)));
+    check('joinAt future: completed', res.status === 'completed');
+    check('joinAt future: gate not probed (callback reachable)', probed === 0);
+  }
+
+  // ── ADR-0052 s1: joinAt already past — joins at once ──
+  {
+    const lc = recordingSink();
+    const t0 = Date.now();
+    let joinCalledAt = -1;
+    const join: JoinDriver = { ...mockJoin('admitted'), async join(report) { joinCalledAt = Date.now(); return mockJoin('admitted').join(report); } };
+    let fireLeave: (a: { action: 'leave' }) => void = () => {};
+    const o = createOrchestrator(inv({ joinAt: new Date(t0 - 60_000).toISOString() }), {
+      lifecycle: lc, join, pipeline: noopPipeline(), acts: noopActs((f) => { fireLeave = f; }), aloneness: noopAloneness(),
+    });
+    const runP = o.run();
+    setTimeout(() => fireLeave({ action: 'leave' }), 5);
+    const res = await runP;
+    check('joinAt past: joins immediately', joinCalledAt >= 0 && joinCalledAt - t0 < 100, `joined ${joinCalledAt - t0}ms after start`);
+    check('joinAt past: completed', res.status === 'completed');
+  }
+
+  // ── ADR-0052 s1: a stop while waiting ends it at stage `requested`, never navigating ──
+  {
+    const lc = recordingSink();
+    let joinCalled = false;
+    let withdrawn = 0;
+    const join: JoinDriver = { ...mockJoin('admitted'), async join(report) { joinCalled = true; return mockJoin('admitted').join(report); }, async withdraw() { withdrawn++; } };
+    const o = createOrchestrator(inv({ joinAt: new Date(Date.now() + 60_000).toISOString() }), {
+      lifecycle: lc, join, pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness(),
+    });
+    const runP = o.run();
+    setTimeout(() => o.stop('stopped'), 20);
+    const res = await runP;
+    check('joinAt stop: run ends promptly as failed(stopped)', res.status === 'failed' && res.completionReason === 'stopped' && res.exitCode === 0, JSON.stringify(res));
+    check('joinAt stop: one terminal event, nothing before it', JSON.stringify(seq(lc.events)) === JSON.stringify(['failed']), JSON.stringify(seq(lc.events)));
+    check('joinAt stop: failure_stage requested', last(lc.events).failure_stage === 'requested');
+    check('joinAt stop: conforms to lifecycle.v1', allConform(lc.events), ajv.errorsText(validateLifecycle.errors));
+    check('joinAt stop: never navigated or withdrew', !joinCalled && withdrawn === 0);
+  }
+
+  // ── ADR-0052 s1: a `leave` on the command bus while waiting ends the bot (no teardown needed) ──
+  {
+    const lc = recordingSink();
+    let joinCalled = false;
+    let fireLeave: (a: { action: 'leave' }) => void = () => {};
+    let unsubscribed = 0;
+    const acts: ActsSource = { subscribe(h) { fireLeave = (a) => void h(a); return () => { unsubscribed++; }; } };
+    const join: JoinDriver = { ...mockJoin('admitted'), async join(report) { joinCalled = true; return mockJoin('admitted').join(report); } };
+    const o = createOrchestrator(inv({ joinAt: new Date(Date.now() + 60_000).toISOString() }), {
+      lifecycle: lc, join, pipeline: noopPipeline(), acts, aloneness: noopAloneness(),
+    });
+    const runP = o.run();
+    setTimeout(() => fireLeave({ action: 'leave' }), 20);
+    const res = await runP;
+    check('joinAt leave: subscribed before the wait, ends as failed(stopped)', res.status === 'failed' && res.completionReason === 'stopped', JSON.stringify(res));
+    check('joinAt leave: only the terminal event, stage requested', JSON.stringify(seq(lc.events)) === JSON.stringify(['failed']) && last(lc.events).failure_stage === 'requested', JSON.stringify(lc.events));
+    check('joinAt leave: never navigated', !joinCalled);
+    check('joinAt leave: unsubscribed on exit', unsubscribed === 1, `unsubscribed=${unsubscribed}`);
+  }
+
+  // ── ADR-0052 s1: the wait-stop terminal carries the attempt's node, like the other pre-active terminals ──
+  {
+    const lc = recordingSink();
+    const o = createOrchestrator(inv({ joinAt: new Date(Date.now() + 60_000).toISOString() }), {
+      lifecycle: lc, join: mockJoin('admitted'), pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness(),
+      nodeName: 'lke-pool-b7',
+    });
+    const runP = o.run();
+    setTimeout(() => o.stop('stopped'), 20);
+    await runP;
+    const ev = last(lc.events);
+    check('joinAt stop: join_evidence carries the node', ev?.join_evidence?.node === 'lke-pool-b7', JSON.stringify(ev?.join_evidence));
+    check('joinAt stop: still stopped_while_joining / user_action', ev?.join_evidence?.reason === 'stopped_while_joining' && ev?.join_evidence?.attribution === 'user_action', JSON.stringify(ev?.join_evidence));
+    check('joinAt stop (node): conforms to lifecycle.v1', allConform(lc.events), ajv.errorsText(validateLifecycle.errors));
+  }
+
+  // ── ADR-0052 s1: a wait-stop whose terminal emit throws still unsubscribes ──
+  {
+    let unsubscribed = 0;
+    const acts: ActsSource = { subscribe() { return () => { unsubscribed++; }; } };
+    const throwing: LifecycleSink = { async emit() { throw new Error('lifecycle sink down'); } };
+    const o = createOrchestrator(inv({ joinAt: new Date(Date.now() + 60_000).toISOString() }), {
+      lifecycle: throwing, join: mockJoin('admitted'), pipeline: noopPipeline(), acts, aloneness: noopAloneness(),
+    });
+    const runP = o.run();
+    setTimeout(() => o.stop('stopped'), 20);
+    let threw: unknown;
+    try { await runP; } catch (e) { threw = e; }
+    check('joinAt stop, emit throws: the failure surfaces', threw instanceof Error && /lifecycle sink down/.test(threw.message), String(threw));
+    check('joinAt stop, emit throws: unsubscribed anyway', unsubscribed === 1, `unsubscribed=${unsubscribed}`);
+  }
+
+  // ── a lobby stop whose terminal emit throws still unsubscribes, exactly once (the join's own catch
+  //    unsubscribes: a second unsubscribe in a finally here would double it) ──
+  {
+    let unsubscribed = 0;
+    const acts: ActsSource = { subscribe() { return () => { unsubscribed++; }; } };
+    const lobby = lobbyBlockingJoin();
+    const failingTerminal: LifecycleSink = {
+      async emit(e) { if (e.status === 'failed') throw new Error('lifecycle sink down'); },
+    };
+    const o = createOrchestrator(inv(), {
+      lifecycle: failingTerminal, join: lobby.driver, pipeline: noopPipeline(), acts, aloneness: noopAloneness(),
+    });
+    const runP = o.run();
+    setTimeout(() => o.stop('stopped'), 20);
+    let threw: unknown;
+    try { await runP; } catch (e) { threw = e; }
+    check('lobby stop, emit throws: the failure surfaces', threw instanceof Error && /lifecycle sink down/.test(threw.message), String(threw));
+    check('lobby stop, emit throws: withdrew first', lobby.calls.withdraw === 1, `withdraw=${lobby.calls.withdraw}`);
+    check('lobby stop, emit throws: unsubscribed anyway', unsubscribed === 1, `unsubscribed=${unsubscribed}`);
+  }
+
+  // ── both channels down and the raw sink throws as it is called: still unsubscribes ──
+  {
+    let unsubscribed = 0;
+    const acts: ActsSource = { subscribe() { return () => { unsubscribed++; }; } };
+    const syncThrowing: LifecycleSink = {
+      async emitReachable(): Promise<PrimaryReachability> { return 'unreachable'; },
+      emit(): Promise<void> { throw new Error('raw sink threw'); },
+    };
+    const o = createOrchestrator(inv(), {
+      lifecycle: syncThrowing, join: mockJoin('admitted'), pipeline: noopPipeline(), acts, aloneness: noopAloneness(),
+      reachability: { async probeSecondary() { return false; } },
+    });
+    let threw: unknown;
+    try { await o.run(); } catch (e) { threw = e; }
+    check('gate both-down, emit throws: the failure surfaces', threw instanceof Error && /raw sink threw/.test(threw.message), String(threw));
+    check('gate both-down, emit throws: unsubscribed anyway', unsubscribed === 1, `unsubscribed=${unsubscribed}`);
+  }
+
+  // ── ADR-0052 s1: a joinAt past setTimeout's ~24.8-day ceiling still waits (fake timers) ──
+  {
+    const DAY = 24 * 3600 * 1000;
+    const MAX_TIMER = 2 ** 31 - 1;
+    const T0 = Date.parse('2026-11-03T09:50:00Z');
+    const lc = recordingSink();
+    let joinCalled = false;
+    const join: JoinDriver = { ...mockJoin('rejected'), async join(report) { joinCalled = true; return mockJoin('rejected').join(report); } };
+    const flush = () => new Promise<void>((r) => setImmediate(r));
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      const o = createOrchestrator(inv({ joinAt: new Date(T0 + 25 * DAY).toISOString() }), {
+        lifecycle: lc, join, pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness(), nowMs: () => T0,
+      });
+      const runP = o.run();
+      mock.timers.tick(5); await flush();
+      check('joinAt +25 days: not joined after 5 ms', !joinCalled && lc.events.length === 0, JSON.stringify(seq(lc.events)));
+      mock.timers.tick(MAX_TIMER); await flush();
+      check('joinAt +25 days: still waiting after one full timer (~24.8 days)', !joinCalled && lc.events.length === 0, JSON.stringify(seq(lc.events)));
+      mock.timers.tick(25 * DAY - MAX_TIMER); await flush();
+      await runP;
+      check('joinAt +25 days: joins at joinAt', joinCalled && seq(lc.events)[0] === 'joining', JSON.stringify(seq(lc.events)));
+    } finally {
+      mock.timers.reset();
+    }
+  }
+
+  // ── ADR-0052 s1: a joinAt that does not read as a time is refused, never joined at once ──
+  {
+    check('msUntilJoinAt: absent ⇒ 0', msUntilJoinAt(undefined, Date.now()) === 0);
+    check('msUntilJoinAt: past ⇒ 0', msUntilJoinAt('2026-11-03T09:58:00Z', Date.parse('2026-11-03T10:00:00Z')) === 0);
+    check('msUntilJoinAt: future ⇒ the gap', msUntilJoinAt('2026-11-03T10:00:00Z', Date.parse('2026-11-03T09:58:00Z')) === 120_000);
+    let threw: unknown;
+    try { msUntilJoinAt('tomorrow at ten', Date.now()); } catch (e) { threw = e; }
+    check('msUntilJoinAt: unreadable ⇒ throws, naming joinAt', threw instanceof Error && /joinAt/.test(threw.message), String(threw));
+  }
+  {
+    // The invocation schema's date-time admits a leap second; Date.parse cannot read one.
+    const lc = recordingSink();
+    let joinCalled = false;
+    const join: JoinDriver = { ...mockJoin('rejected'), async join(report) { joinCalled = true; return mockJoin('rejected').join(report); } };
+    const o = createOrchestrator(inv({ joinAt: '2016-12-31T23:59:60Z' }), {
+      lifecycle: lc, join, pipeline: noopPipeline(), acts: noopActs(), aloneness: noopAloneness(),
+    });
+    const res = await o.run();
+    check('joinAt unreadable: refused as failed(validation_error), exit 1', res.status === 'failed' && res.completionReason === 'validation_error' && res.exitCode === 1, JSON.stringify(res));
+    check('joinAt unreadable: one terminal event at stage requested', JSON.stringify(seq(lc.events)) === JSON.stringify(['failed']) && last(lc.events).failure_stage === 'requested' && last(lc.events).completion_reason === 'validation_error', JSON.stringify(lc.events));
+    check('joinAt unreadable: the reason names joinAt', /joinAt/.test(String(last(lc.events)?.reason)), String(last(lc.events)?.reason));
+    check('joinAt unreadable: conforms to lifecycle.v1', allConform(lc.events), ajv.errorsText(validateLifecycle.errors));
+    check('joinAt unreadable: never navigated', !joinCalled);
   }
 
   // ── #865: missing required port fails loud with the port name (not a TypeError on .onAlone) ──

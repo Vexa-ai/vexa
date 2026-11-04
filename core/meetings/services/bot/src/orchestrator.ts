@@ -6,6 +6,7 @@
  * whole control flow is unit-testable offline (L2): inject fakes and assert the emitted
  * lifecycle.v1 sequence conforms to the schema + state machine.
  *
+ *   [wait until invocation.joinAt, if set] ─►
  *   joining ─► [join driver: awaiting_admission ─(needs_help)─► active] ─► pipeline.start
  *           ─► subscribe acts ─► await end ─► leave ─► completed
  *
@@ -70,7 +71,24 @@ export interface OrchestratorDeps {
   /** Producer clock for lifecycle facts. Injected by tests; each logical event is stamped once
    *  before the lifecycle adapter performs any HTTP retry. */
   now?: () => string;
+  /** Wall clock (epoch ms) the `joinAt` wait is measured against. Injected by tests. */
+  nowMs?: () => number;
 }
+
+/** How long (ms) the bot waits before it opens the meeting: until invocation.v1 `joinAt`, or 0 when
+ *  the field is absent or already past (ADR-0052). Throws on a joinAt that does not read as a time:
+ *  the schema's date-time admits one Date.parse cannot read (a leap second, 23:59:60), and a bad
+ *  invocation is refused, never joined at once. */
+export function msUntilJoinAt(joinAt: string | undefined, nowMs: number): number {
+  if (!joinAt) return 0;
+  const at = Date.parse(joinAt);
+  if (!Number.isFinite(at)) throw new Error(`invocation.v1: joinAt '${joinAt}' is not a readable date-time`);
+  return Math.max(0, at - nowMs);
+}
+
+/** setTimeout's longest delay, 2^31 − 1 ms (~24.8 days). Node clamps a longer one to 1 ms, so it would
+ *  fire at once; the joinAt wait re-arms in chunks of at most this. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 /** The dedicated non-zero exit code for a pre-join control-plane-unreachable abort (#530). On
  *  k8s each bot is a bare Pod (`--restart=Never`, `k8s_backend.py`) — the terminal exit code IS
@@ -271,6 +289,60 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
   }
 
   async function run(opts: RunOptions = {}): Promise<MeetingResult> {
+    // ── the join time (ADR-0052) — a booked bot's pod starts early and WAITS here ──
+    // The browser and capture pipeline are already up (the composition root built them); no meeting
+    // page is opened, no `joining` is sent and the reachability gate does not run before `joinAt`,
+    // so the row stays `requested` while it waits. A stop or SIGTERM during the wait ends the run
+    // at stage `requested` with nothing to withdraw.
+    // A joinAt the bot cannot read is a bad invocation: refused here, before the meeting is opened,
+    // with the terminal a malformed VEXA_BOT_CONFIG gets (failed / validation_error at `requested`).
+    let waitMs: number;
+    try {
+      waitMs = msUntilJoinAt(inv.joinAt, deps.nowMs?.() ?? Date.now());
+    } catch (e) {
+      const refusal = e instanceof Error ? e.message : String(e);
+      console.error(`[bot] FATAL ${refusal}`);
+      await emit('failed', {
+        failure_stage: 'requested', completion_reason: 'validation_error', reason: refusal, exit_code: 1,
+      });
+      return { exitCode: 1, status: 'failed', completionReason: 'validation_error' };
+    }
+    // Subscribe to the command bus FIRST — before the joinAt wait (ADR-0052) and the join race (#889). A user Stop is delivered as a `leave`
+    // command on the bot's channel; when it arrives while the bot waits for `joinAt` or is still knocking in the lobby, the
+    // orchestrator must ALREADY be listening (redis pub/sub has no backlog) — handle() then routes it
+    // through stop() → the pre-active abort (the wait ends; in the lobby, withdraw), so a Stop ends a waiting bot
+    // even if the workload teardown never lands. Subscribing only AFTER admission (the old
+    // placement) dropped every lobby-phase leave, so a Stop in the waiting room left the bot asking to
+    // join. `unsubscribe()` is called on every exit path (pre-active + active) below.
+    const unsubscribe = deps.acts.subscribe(handle);
+    if (waitMs > 0) {
+      console.log(`[bot] waiting ${Math.round(waitMs / 1000)}s until joinAt ${inv.joinAt} before opening the meeting`);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const stoppedWhileWaiting = await Promise.race([
+        new Promise<false>((resolve) => {
+          const arm = (left: number): void => {
+            const step = Math.min(left, MAX_TIMER_MS);
+            timer = setTimeout(() => (left > step ? arm(left - step) : resolve(false)), step);
+          };
+          arm(waitMs);
+        }),
+        aborted.then(() => true as const),
+      ]);
+      clearTimeout(timer);
+      if (stoppedWhileWaiting) {
+        const waitDetail = `stopped while waiting for joinAt ${inv.joinAt} (the meeting was never opened)`;
+        try {
+          await emit('failed', {
+            failure_stage: 'requested', completion_reason: 'stopped', reason: waitDetail, exit_code: 0,
+            ...withAttempt(joinEvidenceFor('stopped', 'requested', { reachedLobby: false }, waitDetail), deps.nodeName),
+          });
+        } finally {
+          unsubscribe();   // an emit that throws must not leave the bot listening on its channel
+        }
+        return { exitCode: 0, status: 'failed', completionReason: 'stopped' };
+      }
+    }
+
     // ── reachability gate (#530, P18) — the FIRST lifecycle emit is LOAD-BEARING ──
     // The `joining` event must be sent regardless; we consult its delivery verdict. Reachable ⇒
     // ZERO added latency (the secondary channel is never probed). Primary unreachable ⇒ probe the
@@ -292,21 +364,25 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
         cur = 'failed';
         const unreachableDetail =
           `${CONTROL_PLANE_UNREACHABLE}: control plane unreachable at boot (${unreachable.join(', ')}); refused to join`;
-        await deps.lifecycle.emit({
-          ...base,
-          status: 'failed',
-          timestamp: eventTime(),
-          failure_stage: 'requested',
-          completion_reason: 'join_failure',
-          infra_fault: CONTROL_PLANE_UNREACHABLE,
-          unreachable_channels: unreachable,
-          reason: unreachableDetail,
-          exit_code: CONTROL_PLANE_UNREACHABLE_EXIT,
-          // Ours, unambiguously — the bot never reached the meeting page because OUR control plane
-          // was down. `control_plane_unreachable` is a navigation marker, so this classifies
-          // `navigation_failure` → `system_fault` and lands in the gate metric where it belongs.
-          ...joinEvidenceFor('error', 'requested', { reachedLobby: false }, unreachableDetail),
-        }).catch(() => { /* the channel that would carry this is the one that is down */ });
+        try {
+          await deps.lifecycle.emit({
+            ...base,
+            status: 'failed',
+            timestamp: eventTime(),
+            failure_stage: 'requested',
+            completion_reason: 'join_failure',
+            infra_fault: CONTROL_PLANE_UNREACHABLE,
+            unreachable_channels: unreachable,
+            reason: unreachableDetail,
+            exit_code: CONTROL_PLANE_UNREACHABLE_EXIT,
+            // Ours, unambiguously — the bot never reached the meeting page because OUR control plane
+            // was down. `control_plane_unreachable` is a navigation marker, so this classifies
+            // `navigation_failure` → `system_fault` and lands in the gate metric where it belongs.
+            ...joinEvidenceFor('error', 'requested', { reachedLobby: false }, unreachableDetail),
+          }).catch(() => { /* the channel that would carry this is the one that is down */ });
+        } finally {
+          unsubscribe();   // an emit that throws must not leave the bot listening on its channel
+        }
         return { exitCode: CONTROL_PLANE_UNREACHABLE_EXIT, status: 'failed', completionReason: 'join_failure' };
       }
     }
@@ -322,13 +398,6 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
       });
       return reportChain;
     };
-    // Subscribe to the command bus BEFORE the join race (#889). A user Stop is delivered as a `leave`
-    // command on the bot's channel; when it arrives while the bot is still knocking in the lobby, the
-    // orchestrator must ALREADY be listening (redis pub/sub has no backlog) — handle() then routes it
-    // through stop() → the pre-active abort race → withdraw. Subscribing only AFTER admission (the old
-    // placement) dropped every lobby-phase leave, so a Stop in the waiting room left the bot asking to
-    // join. `unsubscribe()` is called on every exit path (pre-active + active) below.
-    const unsubscribe = deps.acts.subscribe(handle);
     let outcome: JoinOutcome;
     let joinReason: string | undefined;
     let joinSignals: JoinSignals | undefined;
