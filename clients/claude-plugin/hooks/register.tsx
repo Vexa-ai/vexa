@@ -23,6 +23,7 @@ import {
 } from './listener'
 import type { App, Labelled, Models, Row } from './listener'
 import { PAIR_CODE, VEXA_API, forwardable, recordable, resultText, rpcMessage } from './pairing'
+import { panelContextLine, panelEvents } from './panelContext'
 
 const EMPTY: Meeting = {
   connection: 'connecting', url: '', platform: '', nativeId: '', dbId: 0, attachedTo: '', offers: { calendar: false, workspaces: false, demo: false, requests: false, webPanel: false }, title: '', isDemo: false,
@@ -679,6 +680,18 @@ const parked = new Map<string, Seg[]>()
 async function logLink($: any, type: string, what: string, decision: string): Promise<void> {
   linkLog.push({ at: await $.clock.now(), type, what: what.slice(0, 120), decision })
   if (linkLog.length > 50) linkLog.splice(0, linkLog.length - 50)
+}
+
+// WHAT THE PERSON'S PANEL SHOWS (founder, 4 Nov 2026: «agent knows what we are selected to discuss»): the panel's
+// events for this chat, from the spool vexa-link writes, as the one line every message the person sends carries
+// (panelContext.ts: Selected, On screen, Last interactions; fenced, labelled as page data). '' when there are none.
+async function panelLine($: any): Promise<string> {
+  if (!mySession) return ''
+  try {
+    const spool = `${await linkDir($)}/events.jsonl`
+    if (!(await $.fs.exists(spool))) return ''
+    return panelContextLine(panelEvents(String(await $.fs.read(spool)), mySession, await $.clock.now()))
+  } catch { return '' }
 }
 
 // The text a press in the web panel reaches the chat as: one line, then the reference the agent acts on.
@@ -1819,8 +1832,8 @@ export const register: Register = (on) => {
     if (!fromPerson(kind, text, Boolean((e as any).isMeta))) return next(e)
     await markUsed($)
     if (e.command) return next(e)
-    const line = meetingContext(text)
-    return line ? next({ ...e, context: [...(e.context ?? []), line] }) : next(e)
+    const lines = [meetingContext(text), await panelLine($)].filter((x): x is string => !!x)
+    return lines.length ? next({ ...e, context: [...(e.context ?? []), ...lines] }) : next(e)
   }).catch(($, e, next) => next(e))
 
   on('turn.start', async ($, e, next) => {

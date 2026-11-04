@@ -13,7 +13,10 @@ lock = threading.Lock()
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def do_GET(self):
-        if "workspace/file" in self.path:
+        if "panel/context" in self.path:
+            code, body = 200, ('cursor 2\n{"type":"panel","seq":2,"chat":"s-me","ts_ms":1,"kind":"select","items":[{"key":"brain:card/aa11"}]}\n'
+                               '{"requests":[]}\n').encode()
+        elif "workspace/file" in self.path:
             code, body = int(page), json.dumps({"path": "asks/in-this-call.md", "content": "---\nlines: 6\nevery_s: 120\nsoon_s: 60\n---\n"}).encode()
         else:
             with lock:
@@ -44,6 +47,10 @@ run stray-refusal "401" 8 running
 run page "" 3 running
 grep -q 'every_s: 120' "$work/page/.vexa/link/in-this-call.json" \
   && echo "ok   page kept" || { echo "FAIL page not kept: $(cat "$work/page/.vexa/link/in-this-call.json" 2>&1)"; fail=1; }
+# The panel's events reach the spool beside the calls', and nothing else from that read does.
+grep -q '"type":"panel","seq":2' "$work/page/.vexa/link/events.jsonl" && ! grep -q '"requests"' "$work/page/.vexa/link/events.jsonl" \
+  && [ "$(cat "$work/page/.vexa/link/panel-cursor")" = 2 ] \
+  && echo "ok   panel events spooled" || { echo "FAIL panel events: $(cat "$work/page/.vexa/link/events.jsonl" 2>&1)"; fail=1; }
 run no-page "" 3 running 404
 grep -q '"error":"this Vexa has no _global asks/in-this-call.md (404)"' "$work/no-page/.vexa/link/in-this-call.json" \
   && echo "ok   no page said" || { echo "FAIL no page: $(cat "$work/no-page/.vexa/link/in-this-call.json" 2>&1)"; fail=1; }
