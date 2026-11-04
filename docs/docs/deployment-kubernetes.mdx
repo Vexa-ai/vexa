@@ -150,7 +150,8 @@ even with the default-deny off. It allows DNS, the gateway's service door (8002)
 The database is the in-chart postgres or, for an external database, `database.port` at
 `networkPolicy.flows.databaseEgress` when that is set. With `pgbouncer.enabled`, the policy also
 allows pgbouncer, which carries every query. The flows Pods still reach Postgres itself, for the
-schema migration's lock only (`VEXA_FLOWS_MIGRATION_DB_URL`). When
+schema migration only: its lock and what runs under it (`VEXA_FLOWS_MIGRATION_DB_URL`, the same
+database and role as the pooled URL). When
 `flows.mail.smtp.passwordRef` is set, the policy also allows the credential broker. Mail goes to
 `networkPolicy.flows.mailEgress`:
 

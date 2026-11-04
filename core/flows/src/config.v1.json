@@ -718,7 +718,7 @@
     {
       "key": "VEXA_FLOWS_MIGRATION_DB_URL",
       "class": "defaulted",
-      "description": "The direct, unpooled connection the schema migration holds its lock on, when VEXA_FLOWS_DB_URL goes through a transaction pooler (pgbouncer): a session advisory lock does not hold through one, so two processes would migrate at once and the lock would leak. Unset: the migration holds it on VEXA_FLOWS_DB_URL, which is then a direct connection. Helm sets it whenever pgbouncer.enabled.",
+      "description": "The direct, unpooled connection to the same database that the schema migration runs its lock session on, when VEXA_FLOWS_DB_URL goes through a transaction pooler (pgbouncer): a session advisory lock does not hold through one, so two processes would migrate at once and the lock would leak. The lock, the index builds, the constraint validation and the lock-holder reads run on it, so it names the same database as VEXA_FLOWS_DB_URL, with a role that can alter the flows tables. Unset: the migration runs them on VEXA_FLOWS_DB_URL, which is then a direct connection. Helm sets it whenever pgbouncer.enabled.",
       "default": "",
       "targets": [
         "helm"
