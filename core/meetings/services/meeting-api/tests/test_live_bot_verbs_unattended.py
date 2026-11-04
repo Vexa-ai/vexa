@@ -14,6 +14,7 @@ The person's own credential, the internal tier and a turn the person watches kee
 from __future__ import annotations
 
 import asyncio
+from functools import partial
 
 import pytest
 from fastapi.routing import APIRoute
@@ -64,15 +65,18 @@ def _signed(**delegation) -> dict:
 
 
 # What agent-api mints for each kind of turn (`dispatch.build_unit_env`, `delegation.mint_delegation`):
-# a mail turn and a signal turn run least-privilege (no grants), a routine runs autonomous.
-MAIL = _signed(regime="autonomous", workspaces=[], unit=f"{CHAT}-mail")
-SIGNAL = _signed(regime="autonomous", workspaces=[], unit=f"{CHAT}-signal")
-ROUTINE = _signed(regime="autonomous", workspaces=["7"], unit=f"{CHAT}-auto")
-GRANTED_ROUTINE = _signed(regime="autonomous", workspaces=["7"], unit=f"{CHAT}-auto",
+# a mail turn and a signal turn run least-privilege (no grants), a routine runs autonomous. Each is
+# signed when its request is sent (`_send`), never at import: a signed identity lives
+# `identity_token.DEFAULT_TTL_SEC` plus the allowed skew, less than the files collected ahead of this
+# one may take to run.
+MAIL = partial(_signed, regime="autonomous", workspaces=[], unit=f"{CHAT}-mail")
+SIGNAL = partial(_signed, regime="autonomous", workspaces=[], unit=f"{CHAT}-signal")
+ROUTINE = partial(_signed, regime="autonomous", workspaces=["7"], unit=f"{CHAT}-auto")
+GRANTED_ROUTINE = partial(_signed, regime="autonomous", workspaces=["7"], unit=f"{CHAT}-auto",
                           grants=["bot.request", "bot.stop", "flow.retire_self"],
                           flow="user:7/stop-at-1300")
-WATCHED = _signed(regime="human", workspaces="*", unit=CHAT)
-PERSON = _signed()
+WATCHED = partial(_signed, regime="human", workspaces="*", unit=CHAT)
+PERSON = partial(_signed)
 INTERNAL_TIER = {"X-User-Id": str(USER), "X-Internal-Secret": INTERNAL}
 
 UNATTENDED = {"mail": MAIL, "signal": SIGNAL, "routine": ROUTINE}
@@ -81,7 +85,8 @@ ATTENDED = {"watched_turn": WATCHED, "person": PERSON, "internal_tier": INTERNAL
 
 def _send(client, verb, headers):
     method, path, body = VERBS[verb]
-    return client.request(method, path, headers=headers, json=body)
+    return client.request(method, path, headers=headers() if callable(headers) else headers,
+                          json=body)
 
 
 @pytest.mark.parametrize("verb", sorted(VERBS))
@@ -159,5 +164,5 @@ def test_every_mutating_live_bot_route_refuses_a_mail_turn():
     for method, path in sorted(routes):
         url = path.replace("{platform}", PLAT).replace("{native_meeting_id}", NATIVE)
         url = url.replace("{request_id}", "r1")
-        r = client.request(method, url, headers=MAIL, json={"text": "x", "language": "en"})
+        r = client.request(method, url, headers=MAIL(), json={"text": "x", "language": "en"})
         assert r.status_code == 403 and r.json().get("detail") == REFUSAL, (method, path, r.text)
