@@ -29,6 +29,16 @@ def _stt_configured(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _scheduler_configured(monkeypatch):
+    """ADR-0052 §3 baseline: every profile ships Flows, the scheduler booked bots start from, so the
+    suite runs as a deployment WITH one configured — a booking with ``auto_join`` is accepted (not
+    422 ``scheduling_not_deployed``). The address refuses every connection at once (nothing listens
+    on port 9), so a background publish ends immediately and nothing reaches a network. A test for
+    the UNCONFIGURED case clears it explicitly (``monkeypatch.delenv``)."""
+    monkeypatch.setenv("VEXA_FLOWS_API_URL", "http://127.0.0.1:9")
+
+
+@pytest.fixture(autouse=True)
 def _meeting_hosts_resolve_publicly(monkeypatch):
     """No network: every meeting host resolves to one public address, so a spawn's meeting-host
     rule (bot_spawn.meeting_host) decides on the host name alone. A test of the DNS half sets its

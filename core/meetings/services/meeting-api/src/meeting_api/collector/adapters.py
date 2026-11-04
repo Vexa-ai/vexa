@@ -1263,11 +1263,14 @@ class SqlAlchemyTranscriptStore:
         ADR-0052 §8: a ``scheduled_at`` that is not ISO-8601 → ``{"error": "invalid_scheduled_at"}``;
         a row that BECOMES a future booking with a bot while the account's other future bookings
         are at ``BOOKED_MAX_PER_ACCOUNT`` → ``{"error": "booking_cap", "cap": N}``, nothing written.
-        Under the per-user advisory lock every planned-row writer takes, so the count is exact."""
+        Under the per-user advisory lock every planned-row writer takes, so the count is exact.
+        ADR-0052 §3: a row that BECOMES a booking with ``auto_join`` on where no scheduler is
+        configured → ``{"error": "scheduling_not_deployed"}``, nothing written."""
         from sqlalchemy import bindparam, select, text
         from sqlalchemy.orm.attributes import flag_modified
 
-        from .booking import cap_reached, future_bookings, is_future_booking, parse_scheduled_at
+        from .booking import (SCHEDULING_NOT_DEPLOYED_CODE, cap_reached, future_bookings,
+                              is_booking, is_future_booking, parse_scheduled_at, unscheduled)
         from .models import Meeting
 
         if status == "scheduled" and scheduled_at and parse_scheduled_at(scheduled_at) is None:
@@ -1300,6 +1303,9 @@ class SqlAlchemyTranscriptStore:
                 after["scheduled_at"] = new_at
             else:
                 after.pop("scheduled_at", None)
+            if unscheduled(status, after, was=is_booking(prev_status, data)):
+                await db.rollback()
+                return {"error": SCHEDULING_NOT_DEPLOYED_CODE}
             if is_future_booking(status, after) and not is_future_booking(prev_status, data):
                 held = future_bookings((await db.execute(
                     select(Meeting.data).where(Meeting.user_id == user_id,
@@ -1396,10 +1402,17 @@ class SqlAlchemyTranscriptStore:
             if key in ROOM_PLAN_KEYS and value:
                 data[key] = value
         status = "scheduled" if scheduled_at else "idle"
-        from .booking import booked_max_per_account, cap_message, future_bookings, parse_scheduled_at
+        from .booking import (SCHEDULING_NOT_DEPLOYED_CODE, booked_max_per_account, cap_message,
+                              future_bookings, parse_scheduled_at, stamp_unscheduled, unscheduled)
 
         if scheduled_at and parse_scheduled_at(scheduled_at) is None:
             return {"error": "invalid_scheduled_at"}
+        # ADR-0052 §3: no scheduler configured → a booking with a bot is refused by name; calendar
+        # sync (`over_cap="stamp"`) still mirrors the event, with no bot and the reason on the row.
+        if unscheduled(status, data):
+            if over_cap != "stamp":
+                return {"error": SCHEDULING_NOT_DEPLOYED_CODE}
+            stamp_unscheduled(data)
 
         async with self._session_factory() as db:
             await db.execute(
@@ -1696,13 +1709,17 @@ class SqlAlchemyTranscriptStore:
         the account's other future bookings are at the cap → ``{"error": "booking_cap", "cap": N}``
         and nothing written, or with ``over_cap="stamp"`` (calendar sync) the change is written with
         ``auto_join`` off and ``auto_join_error`` saying why. A row that already counted is never
-        refused."""
+        refused. ADR-0052 §3: a row that BECOMES a booking with ``auto_join`` on where no scheduler
+        is configured → ``{"error": "scheduling_not_deployed"}``, or with ``over_cap="stamp"`` it is
+        written with ``auto_join`` off and ``auto_join_error`` "scheduling not deployed"."""
         from sqlalchemy import bindparam, select, text
         from sqlalchemy.exc import IntegrityError
         from sqlalchemy.orm.attributes import flag_modified
 
-        from .booking import (cap_reached, clear_cap_stamp, future_bookings, is_future_booking,
-                              parse_scheduled_at, stamp_over_cap)
+        from .booking import (SCHEDULING_NOT_DEPLOYED_CODE, cap_reached, clear_cap_stamp,
+                              clear_unscheduled_stamp, future_bookings, is_booking,
+                              is_future_booking, parse_scheduled_at, stamp_over_cap,
+                              stamp_unscheduled, unscheduled)
         from .models import Meeting
 
         if updates.get("scheduled_at") and parse_scheduled_at(updates["scheduled_at"]) is None:
@@ -1728,6 +1745,7 @@ class SqlAlchemyTranscriptStore:
                                                 Meeting.status == "scheduled",
                                                 Meeting.id != meeting_id)
             was_booking = is_future_booking(meeting.status, data)
+            was_booked = is_booking(meeting.status, data)
             held = None
             if not was_booking and ("scheduled_at" in updates or "auto_join" in updates):
                 held = future_bookings((await db.execute(others)).scalars().all())
@@ -1817,6 +1835,11 @@ class SqlAlchemyTranscriptStore:
             if "calendar_managed" in updates:
                 data["calendar_managed"] = bool(updates["calendar_managed"])
 
+            if unscheduled(meeting.status, data, was=was_booked):
+                if over_cap != "stamp":
+                    await db.rollback()
+                    return {"error": SCHEDULING_NOT_DEPLOYED_CODE}
+                stamp_unscheduled(data)
             if is_future_booking(meeting.status, data) and not was_booking:
                 if held is None:
                     with db.no_autoflush:
@@ -1829,6 +1852,8 @@ class SqlAlchemyTranscriptStore:
                     stamp_over_cap(data, cap)
             if is_future_booking(meeting.status, data):
                 clear_cap_stamp(data)
+            if is_booking(meeting.status, data):
+                clear_unscheduled_stamp(data)
 
             meeting.data = data
             flag_modified(meeting, "data")

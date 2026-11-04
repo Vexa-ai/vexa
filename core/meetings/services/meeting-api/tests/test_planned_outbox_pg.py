@@ -256,8 +256,8 @@ async def test_delivery_survives_a_flows_outage_and_keeps_revision_order(sf):
 async def test_without_a_flows_address_rows_stay_pending(sf, monkeypatch):
     from meeting_api.planned_outbox import deliver
 
-    monkeypatch.delenv("VEXA_FLOWS_API_URL", raising=False)
     await _book(sf)
+    monkeypatch.delenv("VEXA_FLOWS_API_URL", raising=False)
     out = await deliver(sf)
     assert out["delivered"] == 0 and out["pending"]
     assert [d for _, _, d in await _facts(sf)] == [False]
@@ -443,3 +443,65 @@ async def test_a_booking_flows_would_not_arm_is_stamped_for_its_owner(sf):
     stored = await SqlAlchemyMeetingRepo(sf).get_meeting(row["id"])
     assert stored["data"]["auto_join_error"] == f"{FLOWS_REFUSED}: keyed_share_full"
     assert len(await _facts(sf)) == 1, "the stamp is not part of the fact: no new fact"
+
+
+# ── the past-deadline stamp (ADR-0052 §3, revised 4 Nov 2026) ───────────────────────────────────
+
+async def test_the_past_deadline_stamp_on_postgres_writes_no_fact_and_runs_once(sf):
+    """A booking whose deadline passed with no start call is stamped by one conditional UPDATE:
+    the outbox gets no fact (the stamp is not part of it), a second pass changes nothing, and a row a
+    start call already touched is never a candidate."""
+    import logging
+
+    from meeting_api.bot_spawn.adapters import SqlAlchemyMeetingRepo
+    from meeting_api.lifecycle.reconcile import NOT_STARTED, stamp_unstarted_bookings
+
+    missed = (await _book(sf, native="aaa-bbbb-ccc", minutes=-30))["id"]
+    started = (await _book(sf, native="ddd-eeee-fff", minutes=-30))["id"]
+    await _write(sf, started, data={"auto_join_last_attempt": _z(_at(-40))})
+    ahead = (await _book(sf, native="ggg-hhhh-iii", minutes=30))["id"]
+    facts_before = await _facts(sf)
+    repo, log = SqlAlchemyMeetingRepo(sf), logging.getLogger("test.unstarted")
+
+    assert await stamp_unstarted_bookings(repo, log=log) == 1
+    rows = {mid: await repo.get_meeting(mid) for mid in (missed, started, ahead)}
+    assert rows[missed]["data"]["auto_join_error"] == NOT_STARTED
+    assert rows[missed]["status"] == "scheduled"
+    assert "auto_join_error" not in rows[started]["data"]
+    assert "auto_join_error" not in rows[ahead]["data"]
+    assert await _facts(sf) == facts_before, "the stamp wrote an outbox fact"
+
+    assert await stamp_unstarted_bookings(repo, log=log) == 0
+    assert await repo.stamp_unstarted_booking(missed, "again") is False
+    assert (await repo.get_meeting(missed))["data"]["auto_join_error"] == NOT_STARTED
+
+
+async def test_no_scheduler_refuses_a_booking_on_every_writer_on_postgres(sf, monkeypatch):
+    """ADR-0052 §3, Q1 (a): with ``VEXA_FLOWS_API_URL`` unset, each SQL writer that would make a
+    booking with a bot refuses it (``scheduling_not_deployed``, nothing written), or with
+    ``over_cap="stamp"`` (calendar sync) writes it with no bot and the reason."""
+    from meeting_api.collector.adapters import SqlAlchemyTranscriptStore
+
+    monkeypatch.delenv("VEXA_FLOWS_API_URL", raising=False)
+    store = SqlAlchemyTranscriptStore(sf)
+    refused = {"error": "scheduling_not_deployed"}
+
+    assert await _book(sf, native="aaa-bbbb-ccc") == refused
+    assert await _facts(sf) == [], "a refused booking wrote a fact"
+    mirrored = await _book(sf, native="ddd-eeee-fff", over_cap="stamp")
+    assert mirrored["status"] == "scheduled"
+    assert mirrored["data"]["auto_join"] is False
+    assert mirrored["data"]["auto_join_error"] == "scheduling not deployed"
+
+    off = await _book(sf, native="ggg-hhhh-iii", auto_join=False)
+    assert "error" not in off
+    assert await store.update_planned_meeting(USER, off["id"], {"auto_join": True}) == refused
+    assert (await store.update_planned_meeting(USER, off["id"], {"title": "renamed"}))["data"][
+        "auto_join"] is False, "a refused write changed the row"
+    stamped = await store.update_planned_meeting(USER, off["id"], {"auto_join": True},
+                                                 over_cap="stamp")
+    assert stamped["data"]["auto_join_error"] == "scheduling not deployed"
+
+    await store.create_planned_meeting(USER, platform=PLAT, native_meeting_id="jjj-kkkk-lll")
+    assert await store.set_intent(USER, PLAT, "jjj-kkkk-lll", "scheduled",
+                                  scheduled_at=_at(60).isoformat()) == refused

@@ -497,7 +497,8 @@ class InMemoryTranscriptStore:
                                and mid != meeting_id)
 
     async def set_intent(self, user_id, platform, native_meeting_id, status, scheduled_at=None):
-        from .booking import cap_reached, is_future_booking, parse_scheduled_at
+        from .booking import (SCHEDULING_NOT_DEPLOYED_CODE, cap_reached, is_booking,
+                              is_future_booking, parse_scheduled_at, unscheduled)
 
         if status == "scheduled" and scheduled_at and parse_scheduled_at(scheduled_at) is None:
             return {"error": "invalid_scheduled_at"}
@@ -510,6 +511,8 @@ class InMemoryTranscriptStore:
         prev_at = data.get("scheduled_at")
         new_at = scheduled_at if status == "scheduled" else None
         after = {**data, "scheduled_at": new_at} if status == "scheduled" else data
+        if unscheduled(status, after, was=is_booking(prev_status, data)):
+            return {"error": SCHEDULING_NOT_DEPLOYED_CODE}
         if is_future_booking(status, after) and not is_future_booking(prev_status, data):
             cap = cap_reached(self._held_by_others(user_id, mid))
             if cap is not None:
@@ -570,10 +573,18 @@ class InMemoryTranscriptStore:
                                      auto_join_last_attempt=None,
                                      auto_join_error=None, room_plan=None,
                                      over_cap="refuse"):
-        from .booking import booked_max_per_account, cap_message, future_bookings, parse_scheduled_at
+        from .booking import (SCHEDULING_NOT_DEPLOYED, SCHEDULING_NOT_DEPLOYED_CODE,
+                              booked_max_per_account, cap_message, future_bookings,
+                              parse_scheduled_at, unscheduled)
 
         if scheduled_at and parse_scheduled_at(scheduled_at) is None:
             return {"error": "invalid_scheduled_at"}
+        # ADR-0052 §3: no scheduler configured → a booking with a bot is refused by name; calendar
+        # sync (`over_cap="stamp"`) still mirrors the event, with no bot and the reason on the row.
+        if unscheduled("scheduled" if scheduled_at else "idle", {"auto_join": bool(auto_join)}):
+            if over_cap != "stamp":
+                return {"error": SCHEDULING_NOT_DEPLOYED_CODE}
+            auto_join, auto_join_error = False, SCHEDULING_NOT_DEPLOYED
         if self._dup_non_terminal(user_id, platform, native_meeting_id):
             return {"error": "duplicate"}
         # ADR-0052 §8: the account's future bookings with a bot, against BOOKED_MAX_PER_ACCOUNT.
@@ -760,8 +771,9 @@ class InMemoryTranscriptStore:
     async def update_planned_meeting(self, user_id, meeting_id, updates, over_cap="refuse"):
         import copy
 
-        from .booking import (cap_reached, clear_cap_stamp, is_future_booking,
-                              parse_scheduled_at, stamp_over_cap)
+        from .booking import (SCHEDULING_NOT_DEPLOYED_CODE, cap_reached, clear_cap_stamp,
+                              clear_unscheduled_stamp, is_booking, is_future_booking,
+                              parse_scheduled_at, stamp_over_cap, stamp_unscheduled, unscheduled)
 
         if updates.get("scheduled_at") and parse_scheduled_at(updates["scheduled_at"]) is None:
             return {"error": "invalid_scheduled_at"}
@@ -772,6 +784,7 @@ class InMemoryTranscriptStore:
             return {"error": "conflict"}
         before = copy.deepcopy(m)
         was_booking = is_future_booking(m["status"], m["data"])
+        was_booked = is_booking(m["status"], m["data"])
         data = m["data"]
         if "native_meeting_id" in updates:
             new_platform = updates.get("platform") or m["platform"]
@@ -847,6 +860,11 @@ class InMemoryTranscriptStore:
                     data.pop(key, None)
         if "calendar_managed" in updates:
             data["calendar_managed"] = bool(updates["calendar_managed"])
+        if unscheduled(m["status"], data, was=was_booked):
+            if over_cap != "stamp":
+                self._meetings[meeting_id] = before     # nothing written
+                return {"error": SCHEDULING_NOT_DEPLOYED_CODE}
+            stamp_unscheduled(data)
         if is_future_booking(m["status"], data) and not was_booking:
             cap = cap_reached(self._held_by_others(m["user_id"], meeting_id))
             if cap is not None:
@@ -856,6 +874,8 @@ class InMemoryTranscriptStore:
                 stamp_over_cap(data, cap)
         if is_future_booking(m["status"], data):
             clear_cap_stamp(data)
+        if is_booking(m["status"], data):
+            clear_unscheduled_stamp(data)
         return self._planned_row(meeting_id)
 
     async def delete_planned_meeting(self, user_id, meeting_id):

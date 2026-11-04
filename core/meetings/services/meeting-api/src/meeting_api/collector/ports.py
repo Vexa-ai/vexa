@@ -334,7 +334,10 @@ class TranscriptStore(Protocol):
         ISO-8601 → ``{"error": "invalid_scheduled_at"}``; a scheduled row with ``auto_join`` on when
         the account already holds ``BOOKED_MAX_PER_ACCOUNT`` future bookings with a bot →
         ``{"error": "booking_cap", "cap": N}``, or with ``over_cap="stamp"`` (calendar sync) the row
-        is created with ``auto_join`` off and ``auto_join_error`` saying why.
+        is created with ``auto_join`` off and ``auto_join_error`` saying why. Where no scheduler is
+        configured (``VEXA_FLOWS_API_URL`` unset, ADR-0052 §3), a scheduled row with ``auto_join`` on
+        → ``{"error": "scheduling_not_deployed"}``, or with ``over_cap="stamp"`` it is created with
+        ``auto_join`` off and ``auto_join_error`` "scheduling not deployed".
 
         Serializes with concurrent spawns via the same per-user advisory lock
         ``create_meeting_guarded`` takes. Returns the created row (``list_meetings`` shape), or

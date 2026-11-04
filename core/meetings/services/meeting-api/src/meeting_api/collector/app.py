@@ -625,6 +625,11 @@ def build_router(
             )
         if isinstance(row, dict) and row.get("error") == "invalid_scheduled_at":
             raise HTTPException(status_code=422, detail="'scheduled_at' must be an ISO8601 string")
+        if isinstance(row, dict) and row.get("error") == "scheduling_not_deployed":
+            # ADR-0052 §3: no scheduler would ever start this booking's bot — refused by name.
+            from .booking import scheduling_refusal
+
+            return JSONResponse(status_code=422, content=scheduling_refusal())
         if isinstance(row, dict) and row.get("error") == "booking_cap":
             # ADR-0052 §8: the account's future bookings with a bot are capped.
             from .booking import cap_message
@@ -725,6 +730,11 @@ def build_router(
             raise HTTPException(status_code=404, detail="Meeting not found")
         if row.get("error") == "invalid_scheduled_at":
             raise HTTPException(status_code=422, detail="'scheduled_at' must be an ISO8601 string")
+        if row.get("error") == "scheduling_not_deployed":
+            # ADR-0052 §3: a plan that becomes a booking with a bot needs a scheduler too.
+            from .booking import scheduling_refusal
+
+            return JSONResponse(status_code=422, content=scheduling_refusal())
         if row.get("error") == "booking_cap":
             # ADR-0052 §8: a plan that becomes a booking with a bot counts like a new booking.
             from .booking import cap_message
@@ -1742,6 +1752,11 @@ def build_router(
             )
         if result.get("error") == "invalid_scheduled_at":
             raise HTTPException(status_code=422, detail="'at' must be an ISO8601 string")
+        if result.get("error") == "scheduling_not_deployed":
+            # ADR-0052 §3: scheduling a plan with a bot needs a scheduler.
+            from .booking import scheduling_refusal
+
+            return JSONResponse(status_code=422, content=scheduling_refusal())
         if result.get("error") == "booking_cap":
             # ADR-0052 §8: scheduling a plan with a bot counts like a new booking.
             from .booking import cap_message

@@ -1,4 +1,4 @@
-"""The booking bounds on a planned row (ADR-0052 §8) — one module, read by both repos' writers.
+"""The booking bounds on a planned row (ADR-0052 §3, §8) — one module, read by both repos' writers.
 
 Every booked row — ``POST /meetings``, calendar sync, and (from s2d) an invite — is created by the
 repo's ``create_planned_meeting``; a row can also BECOME a booking later — ``PATCH /meetings``
@@ -15,6 +15,13 @@ of those writers, in the same transaction, under the per-user lock:
 
 A write that leaves the row's own count where it was (moving an already-armed row, editing its
 title) is never refused, so an account over the cap from before it existed keeps what it has.
+
+The same writers refuse a booking no scheduler would ever start (ADR-0052 §3, Q1 (a), decided
+4 Nov 2026). Flows starts every booked meeting's bot, and meeting-api reaches it at
+``VEXA_FLOWS_API_URL``. Where that is unset, a row that BECOMES ``scheduled`` with ``auto_join`` on is
+refused by name — ``422`` ``scheduling_not_deployed`` naming the key — and calendar sync still
+mirrors the event, with ``auto_join`` off and ``auto_join_error`` "scheduling not deployed". A plan
+with ``auto_join`` off is never refused, and nothing else in meetings needs a scheduler.
 """
 from __future__ import annotations
 
@@ -26,6 +33,11 @@ from typing import Any, Iterable, Mapping, Optional
 BOOKED_MAX_ENV = "BOOKED_MAX_PER_ACCOUNT"
 DEFAULT_BOOKED_MAX_PER_ACCOUNT = 500
 CAP_REACHED = "booking cap reached"
+#: The scheduler's address on meeting-api: Flows, whose ``booked_bot`` starts booked bots.
+SCHEDULER_ENV = "VEXA_FLOWS_API_URL"
+SCHEDULING_NOT_DEPLOYED = "scheduling not deployed"
+#: The refusal's ``code`` — what a program branches on.
+SCHEDULING_NOT_DEPLOYED_CODE = "scheduling_not_deployed"
 
 
 def booked_max_per_account(env: Optional[Mapping[str, str]] = None) -> int:
@@ -84,6 +96,44 @@ def stamp_over_cap(data: dict, cap: int) -> None:
     """Mirror the row without a bot: ``auto_join`` off and the reason, for the owner to see."""
     data["auto_join"] = False
     data["auto_join_error"] = cap_message(cap)
+
+
+def scheduler_configured(env: Optional[Mapping[str, str]] = None) -> bool:
+    """Is a scheduler configured: ``VEXA_FLOWS_API_URL`` set to something other than blanks."""
+    raw = (os.environ if env is None else env).get(SCHEDULER_ENV)
+    return bool(raw and raw.strip())
+
+
+def is_booking(status: Any, data: Any) -> bool:
+    """A row a scheduler would start a bot for: ``scheduled``, ``auto_join`` not off, not stopped."""
+    return (status == "scheduled" and isinstance(data, dict)
+            and data.get("auto_join") is not False and not data.get("stop_requested"))
+
+
+def unscheduled(status: Any, data: Any, *, was: bool = False) -> bool:
+    """Does this write make a booking no scheduler will start: the row becomes a booking (it was
+    not one before, ``was``) on a deployment with no scheduler configured."""
+    return is_booking(status, data) and not was and not scheduler_configured()
+
+
+def scheduling_refusal() -> dict:
+    """The ``422`` body: ``detail`` (a sentence, like every 422 here), ``code`` and the ``key`` to set."""
+    return {"detail": (f"{SCHEDULING_NOT_DEPLOYED}: this deployment runs no scheduler, so a meeting "
+                       f"booked with auto_join would never get its bot. Set {SCHEDULER_ENV} on "
+                       f"meeting-api to the Flows API, or book with \"auto_join\": false"),
+            "code": SCHEDULING_NOT_DEPLOYED_CODE, "key": SCHEDULER_ENV}
+
+
+def stamp_unscheduled(data: dict) -> None:
+    """Mirror the row without a bot: ``auto_join`` off and the reason, for the owner to see."""
+    data["auto_join"] = False
+    data["auto_join_error"] = SCHEDULING_NOT_DEPLOYED
+
+
+def clear_unscheduled_stamp(data: dict) -> None:
+    """A row armed again once a scheduler is configured no longer carries that refusal."""
+    if data.get("auto_join_error") == SCHEDULING_NOT_DEPLOYED:
+        data.pop("auto_join_error", None)
 
 
 def clear_cap_stamp(data: dict) -> None:
