@@ -317,10 +317,15 @@ OOM_KILLED = "OOMKilled"
 
 
 def _oom_killed(status: dict) -> bool:
-    """True when a finished Pod's container was OOM-killed (its status says so; the exit code alone
-    cannot: 137 is any SIGKILL)."""
+    """True when a finished Pod's container was OOM-killed: its status says ``OOMKilled`` AND it
+    exited non-zero. The reason alone is not enough (a container that finished with 0 was not
+    killed), and neither is the code alone (137 is any SIGKILL)."""
     for cs in status.get("containerStatuses") or []:
-        if ((cs.get("state") or {}).get("terminated") or {}).get("reason") == OOM_KILLED:
+        term = (cs.get("state") or {}).get("terminated") or {}
+        if term.get("reason") != OOM_KILLED:
+            continue
+        code = term.get("exitCode")
+        if isinstance(code, int) and not isinstance(code, bool) and code != 0:
             return True
     return False
 

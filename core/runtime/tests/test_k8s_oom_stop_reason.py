@@ -5,7 +5,8 @@ it: every non-zero exit read ``failed``, so a bot OOM-killed mid-meeting (exit 1
 ``terminated.reason: OOMKilled``) reached meeting-api as an anonymous ``failed`` and its meeting row
 as ``completed / left_alone`` — a claim that the bot was left alone in the room. The Pod's own status
 names the cause; the kernel now passes it on, on the read that observes the exit and on boot
-re-adoption. Every other exit is unchanged: 0 → completed, anything else → failed.
+re-adoption. Every other exit is unchanged: 0 → completed, anything else → failed. An ``OOMKilled``
+reason on an exit code of 0 is not an OOM kill (the container finished), so it reads ``completed``.
 """
 from __future__ import annotations
 
@@ -69,6 +70,7 @@ def _runtime(events: list) -> Runtime:
     (137, "Error", StopReason.failed),       # a SIGKILL that is not the OOM killer stays failed
     (1, "Error", StopReason.failed),
     (0, "Completed", StopReason.completed),
+    (0, "OOMKilled", StopReason.completed),  # the reason alone, on a clean exit, is not a kill
 ])
 def test_the_read_that_observes_the_exit_names_the_oom_kill(cluster, code, reason, want):
     events: list = []
@@ -83,9 +85,10 @@ def test_the_read_that_observes_the_exit_names_the_oom_kill(cluster, code, reaso
     assert rt.get("mtg-9").stopReason is want
 
 
-def test_a_restarted_runtime_adopts_an_oom_killed_bot_as_oom(cluster):
-    cluster.status = _terminated(137, "OOMKilled")
+@pytest.mark.parametrize("code,want", [(137, StopReason.oom), (0, StopReason.completed)])
+def test_a_restarted_runtime_adopts_an_oom_killed_bot_as_oom(cluster, code, want):
+    cluster.status = _terminated(code, "OOMKilled")
     rt = _runtime([])
     assert rt.adopt() == 1
     status = rt.get("mtg-9")
-    assert (status.state, status.exitCode, status.stopReason) == (RuntimeState.stopped, 137, StopReason.oom)
+    assert (status.state, status.exitCode, status.stopReason) == (RuntimeState.stopped, code, want)

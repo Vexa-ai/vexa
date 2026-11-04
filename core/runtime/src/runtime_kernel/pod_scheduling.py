@@ -17,8 +17,15 @@ selector requirements (``{"key", "operator", "values"}``, operators ``In``/``Not
 node selector can only say where a Pod may go; this can also say where it must never go. The case it
 exists for: ``[{"key": "vexa.ai/role", "operator": "NotIn", "values": ["system-host"]}]`` keeps meeting
 bots off the nodes the cluster's own services live on, so a system Pod that needs room there finds it
-without preempting a bot that is in a live meeting (a coredns replica preempted one on 4 Nov 2026). A
-node the autoscaler has yet to add carries no such label, so ``NotIn`` still lets a scale-up count it.
+without preempting a bot that is in a live meeting (a coredns replica preempted one on 4 Nov 2026).
+
+The rule does NOT by itself keep scale-up working. The cluster autoscaler decides whether a new node
+would fit a Pending Pod from a template node; a provider that builds no template of its own makes it
+from an existing node of the group, with that node's labels. If the excluded nodes are in the same
+group as the class's other nodes (LKE: the two system-host nodes are the main pool's oldest, and the
+pool's minimum is 2), the template can carry the excluded label, the Pod is judged not to fit a new
+node, and the autoscaler does not scale up (``NotTriggerScaleUp``). Use it where the excluded nodes
+are a group of their own, or prove scale-up from the group's minimum first.
 
 A toleration with no key (it tolerates every taint) or for a control-plane or system taint
 (``node-role.kubernetes.io/control-plane``, ``…/master``, ``CriticalAddonsOnly``) is refused unless
