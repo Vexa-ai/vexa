@@ -71,7 +71,7 @@ class PerUserRateLimiter:
 #: Scheduled starts never pass here: meeting-api's auto-join sweep spawns in process, and Flows calls
 #: the service door, its own listener. Defaults sized from hosted prod's ad-hoc starts (30 days to
 #: 4 Nov 2026: an account's busiest minute held at most 4, its busiest 10 minutes 6, its busiest hour
-#: 13; this bucket would have refused none of 2,670) and equal to meeting-api ``limits.py``.
+#: 13; this bucket would have refused none of them) and equal to meeting-api ``limits.py``.
 BOT_START_PATH = "/bots"
 DEFAULT_BOT_START_BURST = 10
 DEFAULT_BOT_START_PER_MIN = 0.5
