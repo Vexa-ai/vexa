@@ -612,6 +612,15 @@ test("a merge_group run refuses a queue commit that does not sit on the queue ba
   } finally { q.done(); }
 });
 
+test("a merge_group run refuses a pull request that adds no commits", () => {
+  const q = queued({ commits: [] });
+  try {
+    const out = q.run();
+    assert.equal(out.status, 2, out.stdout + out.stderr);
+    assert.match(out.stderr, /#9 adds no commits/);
+  } finally { q.done(); }
+});
+
 const WORKFLOW = readFileSync(fileURLToPath(new URL("../.github/workflows/human-authors.yml", import.meta.url)), "utf8");
 test("the workflow runs on merge-queue commits, judging the queued pull request's commits", () => {
   assert.match(WORKFLOW, /^ {2}merge_group:\n {4}types: \[checks_requested\]$/m);
