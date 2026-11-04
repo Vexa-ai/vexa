@@ -303,10 +303,13 @@ a plan a booking, answer `422`:
 ```
 
 Calendar sync still imports the event, with `auto_join` off and
-`auto_join_error: "scheduling not deployed"`. Plans with `auto_join: false`, ad hoc bots
-(`POST /bots`), transcripts and webhooks need no scheduler. When the scheduler is down past a
-booking's start window (10 min after its start), no bot comes and the meeting reads
-`auto_join_error: "not started: scheduler unavailable"`.
+`auto_join_error: "scheduling not deployed"`; the first sync after `VEXA_FLOWS_API_URL` is set arms
+those meetings again, unless you turned their auto-join off yourself. Plans with `auto_join: false`,
+ad hoc bots (`POST /bots`), transcripts and webhooks need no scheduler. When the scheduler is down
+past a booking's start window (10 min after its start), no bot comes and the meeting reads
+`auto_join_error: "not started: scheduler unavailable"`. When the scheduler did ask but the bot
+could not start, the meeting reads that reason instead (for example the account's bot limit, or the
+account's settings not answering).
 
 ## Calendar sync
 
