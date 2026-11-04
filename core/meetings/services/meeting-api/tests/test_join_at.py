@@ -188,13 +188,16 @@ _UNREADABLE_JOIN_AT = {
 LIFECYCLE_CALLBACK = "/bots/internal/callback/lifecycle"
 
 
-def _waiting_row(repo):
-    """A booked bot's row while its pod waits: `requested`, with its join time, no event yet."""
+def _waiting_row(repo, *, stop_requested=False):
+    """A booked bot's row while its pod waits: `requested`, with its join time, no event yet (and,
+    with `stop_requested`, the user's stop already written by the stop path)."""
     import asyncio
 
+    data = {"join_at": "2026-11-03T09:58:00Z"}
+    if stop_requested:
+        data["stop_requested"] = True
     m = asyncio.run(repo.create_meeting(
-        user_id=USER, platform="google_meet", native_meeting_id="abc-defg-hij",
-        data={"join_at": "2026-11-03T09:58:00Z"},
+        user_id=USER, platform="google_meet", native_meeting_id="abc-defg-hij", data=data,
     ))
     asyncio.run(repo.create_session(meeting_id=m["id"], session_uid="sess-uid"))
     return m
@@ -208,7 +211,8 @@ def test_a_waiting_bots_terminal_is_accepted_as_the_rows_first_event(event):
     from meeting_api import create_app
 
     repo = InMemoryMeetingRepo()
-    m = _waiting_row(repo)
+    # the stop while waiting is the USER's here: the stop path wrote stop_requested first
+    m = _waiting_row(repo, stop_requested="join_evidence" in event)
     client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     r = client.post(LIFECYCLE_CALLBACK, json=event)
     assert r.status_code == 200, r.text
@@ -224,6 +228,51 @@ def test_a_waiting_bots_terminal_is_accepted_as_the_rows_first_event(event):
         assert data["join_evidence"]["node"] == "lke-pool-b7", "the attempt's node is kept"
         assert data["join_evidence"]["reason"] == "stopped_while_joining"
         assert data["join_evidence"]["attribution"] == "user_action"
+
+
+def test_a_stop_nobody_asked_for_while_waiting_is_a_join_failure_and_stays_retryable():
+    """Vexa-ai/vexa#1993 re-review at ffe34e7d: a termination signal while the pod waits (a node
+    drain, an eviction, a self-host restart) reaches meeting-api as the bot's `stopped`. With no
+    stop_requested on the row it is the run failing to join: `join_failure`, evidence derived by
+    meeting-api (`system_fault`, never the bot's `user_action`), the bot's words kept, and the
+    occurrence may be given another bot. The user's own stop stays `stopped` (test above)."""
+    from fastapi.testclient import TestClient
+
+    from meeting_api import create_app
+    from meeting_api.lifecycle.occurrence import Disposition, disposition
+
+    repo = InMemoryMeetingRepo()
+    m = _waiting_row(repo)
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
+    r = client.post(LIFECYCLE_CALLBACK, json=_STOPPED_WHILE_WAITING)
+    assert r.status_code == 200, r.text
+    row = repo._meetings[m["id"]]
+    data = row["data"]
+    assert row["status"] == "failed" and data["failure_stage"] == "requested"
+    assert data["completion_reason"] == "join_failure", "nobody pressed stop"
+    assert data["reason"] == _STOPPED_WHILE_WAITING["reason"], "the bot's own words are kept"
+    assert data["join_evidence"]["attribution"] == "system_fault", data["join_evidence"]
+    assert data["join_evidence"]["source"] == "derived", data["join_evidence"]
+    assert disposition(row) is Disposition.RETRY, "the occurrence is dispatched again"
+
+
+def test_the_users_stop_while_waiting_stays_the_users():
+    """Control for the test above: with the user's stop on the row, `stopped` / `user_action`, and
+    the occurrence is never dispatched again."""
+    from fastapi.testclient import TestClient
+
+    from meeting_api import create_app
+    from meeting_api.lifecycle.occurrence import Disposition, disposition
+
+    repo = InMemoryMeetingRepo()
+    m = _waiting_row(repo, stop_requested=True)
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
+    r = client.post(LIFECYCLE_CALLBACK, json=_STOPPED_WHILE_WAITING)
+    assert r.status_code == 200, r.text
+    row = repo._meetings[m["id"]]
+    assert row["data"]["completion_reason"] == "stopped"
+    assert row["data"]["join_evidence"]["attribution"] == "user_action"
+    assert disposition(row) is Disposition.USER_STOPPED
 
 
 @pytest.mark.parametrize("first", [
