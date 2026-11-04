@@ -386,8 +386,10 @@ function pytestSummary(out) {
 }
 function gatePython() {
   const pkgs = pythonPackages();
-  if (!pkgs.length) { console.log("  ✓ gate:python — no Python packages yet (green-on-empty)"); return true; }
   const selectors = process.argv.slice(3);
+  // Green-on-empty is for the whole population only. A selection names packages, so a tree that has
+  // none of them is red, never an empty green leg.
+  if (!pkgs.length && !selectors.length) { console.log("  ✓ gate:python — no Python packages yet (green-on-empty)"); return true; }
   let runs = pkgs.map((d) => ({ dir: d, label: rel(d), shard: null }));
   if (selectors.length) {
     const byRel = new Map(pkgs.map((d) => [rel(d), d]));

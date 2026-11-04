@@ -103,7 +103,8 @@ jobs:
   # gate script tests) fails when a package is in no group or two, or a shard set has a gap. No test is
   # skipped to buy the time. fail-fast is off so every leg reports its reds, as F209 requires of the
   # loop itself. A leg that grows past timeout-minutes fails by name instead of stalling the queue. The
-  # same test also fails on any `if:` or `continue-on-error` that would let a leg skip or excuse the gate.
+  # same test parses this file and refuses any key, step or value on this job, its gate step or the
+  # `gates` job that is not on its allow-list (scripts/python-matrix.mjs), in whatever YAML spelling.
   # core/agent runs as four shards, not three. With three, the slowest shard took 10.6-12.6 min of
   # pytest (runs 41821772078, 41824533705), against 9.0 min for the whole slowest leg with four (run
   # 41817284457). The shard legs' total runner time was the same either way (25.5 vs 24.0 min), so the

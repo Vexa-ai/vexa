@@ -14,11 +14,13 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { guardTree, REPO } from "./test-tree.mjs";
-import { jobBlock, readPythonMatrix, checkPythonMatrix, gatingErrors } from "./python-matrix.mjs";
+import { parse } from "yaml";
+import { readPythonMatrix, checkPythonMatrix, gatingErrors } from "./python-matrix.mjs";
 
 guardTree();
 
 const WORKFLOW = readFileSync(join(REPO, ".github", "workflows", "gates.yml"), "utf8");
+const WF = parse(WORKFLOW);
 const population = () => JSON.parse(execFileSync("node", [join(REPO, "scripts", "gates.mjs"), "python-packages"], { cwd: REPO, encoding: "utf8" }));
 
 // ── the real tree ────────────────────────────────────────────────────────────────────────────────
@@ -32,37 +34,28 @@ test("every package gate:python runs is in exactly one group of the gates.yml `p
 });
 
 test("each `python` matrix leg runs the gate on its own selection, every leg reports, and none outlives the queue window", () => {
-  const job = jobBlock(WORKFLOW, "python").join("\n");
-  assert.match(job, /^\s+- run: node scripts\/gates\.mjs python \$\{\{ matrix\.select \}\}\s*$/m,
+  const job = WF.jobs.python;
+  assert.ok(job.steps.some((s) => s.run === "node scripts/gates.mjs python ${{ matrix.select }}"),
     "the leg must hand its matrix selection to gate:python, or every leg runs the whole population (or nothing)");
-  assert.match(job, /^\s+fail-fast: false\s*$/m, "fail-fast would cancel the other legs at the first red one, hiding their reds (F209)");
-  const t = job.match(/^ {4}timeout-minutes: (\d+)\s*$/m);
-  assert.ok(t, "the `python` job carries no timeout-minutes: a leg that grows would stall the queue instead of failing by name");
-  assert.ok(Number(t[1]) < 30, `timeout-minutes ${t[1]} is not under the merge queue's 30-minute window`);
+  assert.equal(job.strategy["fail-fast"], false, "fail-fast would cancel the other legs at the first red one, hiding their reds (F209)");
+  assert.ok(Number.isInteger(job["timeout-minutes"]), "the `python` job carries no timeout-minutes: a leg that grows would stall the queue instead of failing by name");
+  assert.ok(job["timeout-minutes"] < 30, `timeout-minutes ${job["timeout-minutes"]} is not under the merge queue's 30-minute window`);
 });
 
 test("the required check is still `gates`: one job by that id, no display name, joining python with static and node", () => {
-  const job = jobBlock(WORKFLOW, "gates");
+  const job = WF.jobs.gates;
   assert.ok(job, "no `gates` job: branch protection and the merge queue require a `gates` check");
-  const text = job.join("\n");
-  assert.doesNotMatch(text, /^ {4}name:/m, "a job-level name would rename the check context branch protection requires");
-  const needs = text.match(/^ {4}needs: \[([^\]]*)\]\s*$/m);
-  assert.ok(needs, "the `gates` job has no one-line `needs: [...]`");
-  const legs = needs[1].split(",").map((s) => s.trim());
-  for (const leg of ["static", "python", "node"]) assert.ok(legs.includes(leg), `\`gates\` no longer needs ${leg}`);
-  assert.match(text, /^ {4}if: always\(\)\s*$/m, "without if: always() a failed leg SKIPS `gates`, and a skipped required check reads as satisfied");
-  assert.match(text, /needs\.python\.result/, "`gates` does not read the python legs' result");
+  assert.equal(job.name, undefined, "a job-level name would rename the check context branch protection requires");
+  for (const leg of ["static", "python", "node"]) assert.ok(job.needs.includes(leg), `\`gates\` no longer needs ${leg}`);
+  assert.equal(job.if, "always()", "without if: always() a failed leg SKIPS `gates`, and a skipped required check reads as satisfied");
+  assert.equal(job.steps[0].env.R_PYTHON, "${{ needs.python.result }}", "`gates` does not read the python legs' result");
 });
 
 test("the docker fixture image is pulled in the one leg that runs core/runtime, and only there", () => {
-  const job = jobBlock(WORKFLOW, "python");
-  const at = job.findIndex((l) => /^\s+- run: docker pull alpine\s*$/.test(l));
-  assert.ok(at >= 0, "no `docker pull alpine` step: core/runtime's docker-backend test needs the image pre-pulled");
-  const rest = job.slice(at + 1);
-  const step = rest.slice(0, Math.max(0, rest.findIndex((l) => /^ {6}- /.test(l))));
-  const cond = step.find((l) => /^\s+if:/.test(l)) || "";
-  const group = (cond.match(/^\s+if: matrix\.group == '([a-z0-9-]+)'\s*$/) || [])[1];
-  assert.ok(group, `the docker pull step should run in one named leg (if: matrix.group == '<group>'), found: ${cond.trim() || "no condition"}`);
+  const step = WF.jobs.python.steps.find((s) => s.run === "docker pull alpine");
+  assert.ok(step, "no `docker pull alpine` step: core/runtime's docker-backend test needs the image pre-pulled");
+  const group = (String(step.if || "").match(/^matrix\.group == '([a-z0-9-]+)'$/) || [])[1];
+  assert.ok(group, `the docker pull step should run in one named leg (if: matrix.group == '<group>'), found: ${step.if || "no condition"}`);
   const { entries } = readPythonMatrix(WORKFLOW);
   const holder = entries.find((e) => e.selectors.some((s) => s.replace(/@.*$/, "") === "core/runtime"));
   assert.equal(holder?.group, group, "the docker pull runs in a different leg from core/runtime");
@@ -86,7 +79,7 @@ for (const [what, wf, rx] of [
   ["continue-on-error on the gate step", () => plant(GATE_STEP, "$1        continue-on-error: true\n"), /gate step carries `continue-on-error:/],
   ["continue-on-error on the python job", () => plant(PY_JOB, "$1    continue-on-error: true\n"), /`python` job carries `continue-on-error:/],
   ["a job-level `if:` on the python job", () => plant(PY_JOB, "$1    if: github.event_name != 'merge_group'\n"), /`python` job carries `if:/],
-  ["the gate step written with its condition first", () => plant(GATE_STEP, "      - if: matrix.group != 'services'\n        run: node scripts/gates.mjs python ${{ matrix.select }}\n"), /no gate step/],
+  ["the gate step written with its condition first", () => plant(GATE_STEP, "      - if: matrix.group != 'services'\n        run: node scripts/gates.mjs python ${{ matrix.select }}\n"), /gate step carries `if:/],
   ["a second matrix axis beside include", () => plant(/^( {6}matrix:\n)/m, "$1        skip: []\n"), /matrix holds `skip:/],
   ["continue-on-error on the gates aggregate", () => plant(/^( {2}gates:\n)/m, "$1    continue-on-error: true\n"), /`gates` job carries `continue-on-error:/],
   ["a step-level `if:` in the gates aggregate", () => plant(/^( {6}- name: All legs green\?\n)/m, "$1        if: needs.python.result == 'success'\n"), /`gates` job carries `if: needs/],
@@ -106,6 +99,21 @@ for (const [what, wf, rx] of [
   ["a default shell on the python job", () => plant(PY_JOB, '$1    defaults: { run: { shell: "true {0}" } }\n'), /`python` job carries `defaults:/],
   ["an earlier step writing $GITHUB_ENV", () => plant(GATE_STEP, '      - run: echo "PYTEST_ADDOPTS=--collect-only" >> "$GITHUB_ENV"\n$1'), /writes \$GITHUB_ENV/],
   ["a workflow-level env", () => plant(/^(permissions:\n {2}contents: read\n)/m, "$1env:\n  PYTEST_ADDOPTS: --collect-only\n"), /workflow-level `env:/],
+  // the same keys in other YAML spellings, which GitHub reads as the real key (HIGH 1)
+  ["a quoted `\"if\"` on the gate step", () => plant(GATE_STEP, `$1        "if": matrix.group != 'services'\n`), /gate step carries `if:/],
+  ["a spaced `if :` on the gate step", () => plant(GATE_STEP, "$1        if : matrix.group != 'services'\n"), /gate step carries `if:/],
+  ["a quoted `'continue-on-error'` on the python job", () => plant(PY_JOB, "$1    'continue-on-error': true\n"), /`python` job carries `continue-on-error:/],
+  ["a quoted `\"continue-on-error\"` on the gates aggregate", () => plant(/^( {2}gates:\n)/m, '$1    "continue-on-error": true\n'), /`gates` job carries `continue-on-error: true`/],
+  ["the gate step's key written twice", () => plant(GATE_STEP, "$1        if: always()\n        if: matrix.group != 'services'\n"), /does not parse/],
+  ["working-directory on the gate step (HIGH 2)", () => plant(GATE_STEP, "$1        working-directory: deploy/storage\n"), /gate step carries `working-directory:/],
+  // a job that runs the gate somewhere its env or image is set (MED 1)
+  ["a container on the python job, with env", () => plant(PY_JOB, "$1    container: { image: 'python:3.12', env: { PYTEST_ADDOPTS: '-k smoke' } }\n"), /`python` job carries `container:/],
+  ["services on the python job", () => plant(PY_JOB, "$1    services: { pg: { image: postgres, env: { PYTEST_ADDOPTS: '-k smoke' } } }\n"), /`python` job carries `services:/],
+  // a step before the gate that sets its env in a spelling no text rule sees (MED 2)
+  ["a step writing $GITHUB_ENV split across quotes", () => plant(GATE_STEP, `      - run: echo "PYTEST_ADDOPTS=-k smoke" >> "$GITHUB_"ENV\n$1`), /is not on the allowed list/],
+  ["an action exporting a variable", () => plant(GATE_STEP, "      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea\n        with: { script: \"core.exportVariable('PYTEST_ADDOPTS', '-k smoke')\" }\n$1"), /is not on the allowed list/],
+  ["a python one-liner writing GITHUB_ENV", () => plant(GATE_STEP, `      - run: python3 -c "import os; open(os.environ['GITHUB_ENV'], 'a').write('PYTEST_ADDOPTS=-k smoke\\n')"\n$1`), /is not on the allowed list/],
+  ["an extra input on an allowed action", () => plant(/^( {8}with: \{ enable-cache: false \})\n/m, "        with: { enable-cache: false, python-version: '3.12' }\n"), /has `with: .*not the allowed/],
 ]) {
   test(`RED: ${what} is named`, () => {
     const errs = gatingErrors(wf());
@@ -149,12 +157,15 @@ test("RED: a selector naming no package, or a shard past its count, is named", (
 });
 
 test("RED: an include entry in another shape is an error, not a skipped group", () => {
+  // Any YAML spelling of { group, select } reads; an entry with another key or without `select` is an
+  // error, so no entry can sit in the matrix unchecked.
   const wf = ["jobs:", "  python:", "    strategy:", "      matrix:", "        include:",
-    '          - { group: a, select: "core/a" }', "          - group: b", '            select: "core/b"', "    steps: []", "  gates:", ""].join("\n");
+    '          - { group: a, select: "core/a" }', "          - group: b", '            select: "core/b"',
+    '          - { group: c, select: "core/c", skip: true }', "          - { group: d }", "    steps: []", "  gates: {}", ""].join("\n");
   const { entries, errs } = readPythonMatrix(wf);
-  assert.deepEqual(entries.map((e) => e.group), ["a"]);
+  assert.deepEqual(entries.map((e) => e.group), ["a", "b"]);
   assert.equal(errs.length, 2, errs.join("\n"));
-  assert.match(errs[0], /unreadable matrix entry/);
+  for (const e of errs) assert.match(e, /unreadable matrix entry/);
 });
 
 test("RED: a workflow whose `python` job has no matrix reads as an error (main before the split)", () => {

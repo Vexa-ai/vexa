@@ -612,6 +612,17 @@ test("gate:python selection: a leg that passes no test reds (every test skipped)
   assert.match(r.out, /passed no test/);
 });
 
+test("gate:python selection: a selector over a tree with no Python package reds instead of green-on-empty", () => {
+  const tree = mkdtempSync(join(tmpdir(), "vexa-gatepy-empty-"));
+  try {
+    const r = runGateArgs(["python", "core/agent@1/4"], tree);
+    assert.equal(r.green, false, `a selection that matched nothing passed as green-on-empty:\n${r.out}`);
+    assert.match(r.out, /core\/agent@1\/4: not a package gate:python covers/);
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
 test("gate:python selection: a leg that only collects reds (PYTEST_ADDOPTS=--collect-only)", () => {
   const r = withPlantedPyFiles(PKG_A, { "test_zz_planted.py": PY_TEST_PASS }, (tree) => runGateArgs(["python", PKG_A], tree, { PYTEST_ADDOPTS: "--collect-only" }));
   assert.equal(r.green, false, `a selection that ran no test (collect-only) passed the gate:\n${r.out}`);
