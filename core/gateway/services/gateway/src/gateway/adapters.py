@@ -297,6 +297,7 @@ def build_production_app(
         health_check_interval=30, retry_on_timeout=True,
     )
 
+    from .ratelimit import bot_start_from_env as _bot_start_from_env
     from .ratelimit import from_env as _rate_limiter_from_env
     from .taint import TaintMarker as _TaintMarker
 
@@ -315,6 +316,7 @@ def build_production_app(
         # D6: the privacy mark — a worker's session marked from the label on every private read.
         taint_marker=_TaintMarker(redis_client),
         rate_limiter=_rate_limiter_from_env(),  # WS-6: per-user DoS guard (generous defaults; env-tunable)
+        bot_start_limiter=_bot_start_from_env(),  # ad-hoc POST /bots per account (ratelimit.py)
     )
 
     # --- fastapi-guard: per-IP rate limiting, IP allow/deny + auto-ban (edge_guard.py) ---

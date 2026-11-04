@@ -106,6 +106,9 @@ def lobby_budget_ms() -> int:
 
 # Non-terminal statuses (parent's active set) — a prior meeting in one of these blocks a new spawn.
 _ACTIVE_STATUSES = ("requested", "queued", "joining", "awaiting_admission", "active", "stopping")
+
+#: How long a user-stopped ad-hoc bot keeps its seat (founder, 4 Nov 2026), applied by POST /bots.
+SEAT_COOLDOWN_S = 60
 _TERMINAL_STATUSES = ("completed", "failed")
 
 # How stale an `stt` probe verdict may be and still refuse a spawn (#511 C3). Matches the probe's
@@ -461,6 +464,10 @@ async def request_bot(
     automatic_leave: Optional[dict] = None,
     continue_meeting: bool = False,
     max_concurrent: Optional[int] = None,
+    # The seat cooldown (founder, 4 Nov 2026): within this many seconds of its end, an ad-hoc bot
+    # the user stopped still holds its seat in ``max_concurrent``. POST /bots passes it; the
+    # auto-join sweep (booked bots) does not, so a booked start is never held back by it.
+    seat_cooldown_s: Optional[float] = None,
     redis_url: Optional[str] = None,
     meeting_api_url: Optional[str] = None,
     token_secret: Optional[str] = None,
@@ -819,6 +826,7 @@ async def request_bot(
             if max_concurrent > 0:
                 active = await repo.count_active_bots(
                     user_id=user_id, exclude_meeting_id=reused_row["id"],
+                    **({"cooldown_s": seat_cooldown_s} if seat_cooldown_s else {}),
                 )
             if active >= max_concurrent:
                 log_event(
@@ -897,6 +905,7 @@ async def request_bot(
                 native_meeting_id=native_meeting_id,
                 data=meeting_data,
                 max_concurrent=max_concurrent,
+                **({"cooldown_s": seat_cooldown_s} if seat_cooldown_s else {}),
             )
         except MaxBotsExceeded:
             log_event(

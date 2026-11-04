@@ -54,6 +54,7 @@ from fastapi.routing import APIRoute
 from .obs import (TRACE_HEADER, TraceMiddleware, get_trace_id, log_event, session_of_validation,
                   set_session, set_user_id)
 from .ports import Authorizer, AuthUnavailable, DownstreamClient, RedisBus
+from .ratelimit import is_bot_start, retry_after_s
 
 # #495: the honest answer when the auth path itself is unreachable — a retryable 503, never a
 # 401 that blames the caller's (valid) key. Shared by /auth/me and the proxy authorizer. Also
@@ -306,6 +307,7 @@ def create_app(
     mcp_url: str = _DEFAULT_MCP_URL,
     identity_key=None,
     rate_limiter=None,
+    bot_start_limiter=None,
     voice_note_dialer=None,
     vnc_connect=None,
     agent_allow: Optional[str] = None,
@@ -513,6 +515,19 @@ def create_app(
                 status_code=429,
                 media_type="application/json",
                 headers={"Retry-After": "1"},
+            )
+
+        # The ad-hoc bot start, per account (ratelimit.BOT_START_PATH): a start-and-stop loop is
+        # bounded here before it reaches the cluster. Only this edge's callers pass this point.
+        if (bot_start_limiter is not None and is_bot_start(method, request.url.path)
+                and not bot_start_limiter.allow(str(user_id))):
+            log_event("bot_start_rate_limited", audience="user", level="warning", span="auth",
+                      user_id=user_id)
+            return None, Response(
+                content=json.dumps({"detail": "Bot start rate exceeded", "reason": "bot_start_rate"}),
+                status_code=429,
+                media_type="application/json",
+                headers={"Retry-After": str(retry_after_s(bot_start_limiter))},
             )
 
         if (is_delegated(client_key, user_data)

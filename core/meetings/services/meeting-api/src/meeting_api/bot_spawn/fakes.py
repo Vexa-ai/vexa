@@ -35,6 +35,23 @@ _ACTIVE_STATUSES = ("requested", "queued", "joining", "awaiting_admission", "act
 _TERMINAL_STATUSES = ("completed", "failed")
 
 
+def _holds_seat(m: dict, cooldown_s: float = 0) -> bool:
+    """Mirror of the SQL adapter's ``_seat_held``: an active bot, or (within ``cooldown_s`` of its
+    end) an ad-hoc bot the user stopped. ``end_time`` is an ISO string here."""
+    if m["status"] in _ACTIVE_STATUSES:
+        return True
+    if not cooldown_s or m["status"] not in _TERMINAL_STATUSES or not m.get("end_time"):
+        return False
+    data = m.get("data") or {}
+    if not data.get("stop_requested") or "scheduled_at" in data:
+        return False
+    from datetime import datetime, timezone
+
+    end = datetime.fromisoformat(str(m["end_time"]).replace("Z", "+00:00"))
+    end = end if end.tzinfo else end.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - end).total_seconds() <= cooldown_s
+
+
 def _respawn_retired(data, workload_id) -> bool:
     from ..lifecycle.meet_respawn import retired_workload
 
@@ -135,7 +152,7 @@ class InMemoryMeetingRepo:
 
     async def create_meeting_guarded(
         self, *, user_id, platform, native_meeting_id, data, max_concurrent=None,
-        exclude_meeting_id=None,
+        exclude_meeting_id=None, cooldown_s: float = 0,
     ) -> dict:
         """ATOMIC dedup + cap + insert (ROB1/ROB2). The check and the insert run with NO ``await``
         between them, so even ``SlowRepo`` (which adds ``await asyncio.sleep(0)`` inside the SEPARATE
@@ -161,7 +178,7 @@ class InMemoryMeetingRepo:
             active = sum(
                 1 for m in self._meetings.values()
                 if m["user_id"] == user_id
-                and m["status"] in _ACTIVE_STATUSES
+                and _holds_seat(m, cooldown_s)
                 and m["platform"] != "browser_session"
                 and m["id"] != exclude_meeting_id
             )
@@ -424,11 +441,32 @@ class InMemoryMeetingRepo:
             }
         return list(out.values())
 
-    async def count_active_bots(self, *, user_id, exclude_meeting_id=None) -> int:
+    async def bot_run_stop_counts(self, *, window_s: float, quick_stop_s: float) -> list[dict]:
+        """Mirror of the SQL adapter. A session's start is its ``started_at`` (ISO), set by a test."""
+        from datetime import datetime, timedelta, timezone
+
+        def _t(v):
+            d = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+            return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=window_s)
+        out: dict = {}
+        for s in self.sessions:
+            m = self._meetings.get(s["meeting_id"])
+            if m is None or not s.get("started_at") or _t(s["started_at"]) < cutoff:
+                continue
+            c = out.setdefault(m["user_id"], {"user_id": m["user_id"], "runs": 0, "quick_stops": 0})
+            c["runs"] += 1
+            if (m.get("end_time") and (m.get("data") or {}).get("stop_requested")
+                    and _t(m["end_time"]) <= _t(s["started_at"]) + timedelta(seconds=quick_stop_s)):
+                c["quick_stops"] += 1
+        return list(out.values())
+
+    async def count_active_bots(self, *, user_id, exclude_meeting_id=None, cooldown_s: float = 0) -> int:
         return sum(
             1 for m in self._meetings.values()
             if m["user_id"] == user_id
-            and m["status"] in _ACTIVE_STATUSES
+            and _holds_seat(m, cooldown_s)
             and m["platform"] != "browser_session"   # infra excluded (parent meetings.py:1091)
             and m["id"] != exclude_meeting_id
         )

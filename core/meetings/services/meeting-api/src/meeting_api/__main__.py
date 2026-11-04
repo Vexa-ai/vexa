@@ -683,7 +683,16 @@ def _attach_background_loops(
         # stopping sweep, but we keep the latter as the guaranteed orphan-kill backstop for `stopping`.
         has_general = hasattr(meeting_repo, "list_stale_nonterminal")
 
+        from .churn_alarm import INTERVAL_S as _CHURN_INTERVAL_S, churn_alarm
+        from .obs import log_event as _log_event
+
+        churn_last = [0.0]
+
         async def _tick():
+            # The start-and-stop alarm rides this loop, at most once an hour (churn_alarm.py).
+            if _time.monotonic() - churn_last[0] >= _CHURN_INTERVAL_S:
+                churn_last[0] = _time.monotonic()
+                await churn_alarm(meeting_repo, log_event=_log_event)
             if has_general:
                 await reconcile_stale_nonterminal_sweep(
                     meeting_repo, runtime, _post_lifecycle,

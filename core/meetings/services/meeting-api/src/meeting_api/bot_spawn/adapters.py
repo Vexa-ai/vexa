@@ -73,6 +73,26 @@ def _row_to_dict(m) -> dict:
     }
 
 
+def _seat_held(Meeting, active, cooldown_s: float = 0):
+    """The rows that hold one of an account's ad-hoc seats: every bot in ``active``, and, within
+    ``cooldown_s`` of its end, an ad-hoc bot the user stopped (the seat cooldown: a stop-and-restart
+    loop waits out the cooldown before the seat is free again). A booked bot's end holds no seat."""
+    from datetime import timedelta
+
+    from sqlalchemy import and_, not_, or_
+
+    held = Meeting.status.in_(active)
+    if not cooldown_s:
+        return held
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=cooldown_s)
+    return or_(held, and_(
+        Meeting.status.in_(("completed", "failed")),
+        Meeting.end_time >= cutoff,
+        Meeting.data.contains({"stop_requested": True}),
+        not_(Meeting.data.has_key("scheduled_at")),
+    ))
+
+
 def _respawn_retired(data, workload_id) -> bool:
     from ..lifecycle.meet_respawn import retired_workload
 
@@ -507,7 +527,36 @@ class SqlAlchemyMeetingRepo:
             }
         return list(out.values())
 
-    async def count_active_bots(self, *, user_id, exclude_meeting_id=None) -> int:
+    async def bot_run_stop_counts(self, *, window_s: float, quick_stop_s: float) -> list[dict]:
+        """Per account, over the bot runs that started in the last ``window_s``: how many runs, and
+        how many the user stopped within ``quick_stop_s`` of the run's start (churn_alarm.py). The
+        window is on ``meeting_sessions.session_start_time``; each run reads its meeting's
+        ``end_time`` and ``data.stop_requested`` only."""
+        from datetime import timedelta
+
+        from sqlalchemy import Integer, and_, case, func, select
+
+        from ..sessions.models import Meeting, MeetingSession
+
+        # session_start_time is timestamptz, end_time a naive UTC timestamp: compare in UTC.
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=window_s)
+        started_utc = func.timezone("UTC", MeetingSession.session_start_time)
+        quick = and_(
+            Meeting.end_time.isnot(None),
+            Meeting.end_time <= started_utc + timedelta(seconds=quick_stop_s),
+            Meeting.data.contains({"stop_requested": True}),
+        )
+        async with self._session_factory() as db:
+            rows = (await db.execute(
+                select(Meeting.user_id, func.count(),
+                       func.sum(case((quick, 1), else_=0)).cast(Integer))
+                .join(MeetingSession, MeetingSession.meeting_id == Meeting.id)
+                .where(MeetingSession.session_start_time >= cutoff)
+                .group_by(Meeting.user_id)
+            )).all()
+        return [{"user_id": uid, "runs": int(n), "quick_stops": int(q or 0)} for uid, n, q in rows]
+
+    async def count_active_bots(self, *, user_id, exclude_meeting_id=None, cooldown_s: float = 0) -> int:
         from sqlalchemy import func, select
 
         from ..sessions.models import Meeting
@@ -518,7 +567,8 @@ class SqlAlchemyMeetingRepo:
                 .select_from(Meeting)
                 .where(
                     Meeting.user_id == user_id,
-                    Meeting.status.in_(["requested", "queued", "joining", "awaiting_admission", "active"]),
+                    _seat_held(Meeting, ["requested", "queued", "joining", "awaiting_admission", "active"],
+                               cooldown_s),
                     Meeting.platform != "browser_session",  # infra excluded (parent meetings.py:1091)
                 )
             )
@@ -622,7 +672,7 @@ class SqlAlchemyMeetingRepo:
 
     async def create_meeting_guarded(
         self, *, user_id, platform, native_meeting_id, data, max_concurrent=None,
-        exclude_meeting_id=None,
+        exclude_meeting_id=None, cooldown_s: float = 0,
     ) -> dict:
         """ATOMIC dedup + cap + insert in ONE transaction (ROB1/ROB2).
 
@@ -676,7 +726,7 @@ class SqlAlchemyMeetingRepo:
                     .select_from(Meeting)
                     .where(
                         Meeting.user_id == user_id,
-                        Meeting.status.in_(active),
+                        _seat_held(Meeting, active, cooldown_s),
                         Meeting.platform != "browser_session",
                     )
                 )

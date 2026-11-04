@@ -384,7 +384,11 @@ curl -X POST "$API_BASE/bots" \
 If a **planned** meeting exists for the same link, the spawn **claims it**: the same record moves
 to `requested`, keeping its title, `scheduled_at`, and workspace binding. `409` when a bot is
 already active on that link; `429` past your concurrency limit — see the
-[concurrency-refusal divergence](/api/errors#by-surface), which answers `403` today.
+[concurrency-refusal divergence](/api/errors#by-surface), which answers `403` today. A bot you
+stopped keeps its seat in that limit for 60 seconds after it ends (a booked bot's does not). Ad-hoc
+starts are also paced per account: 10 at once, then one every 2 minutes; past that `POST /bots`
+answers `429` with `reason: bot_start_rate` and a `Retry-After`. The pace is counted per gateway
+replica.
 
 With transcription requested (the default) and STT unconfigured, the spawn is **refused loud** —
 `503` naming `TRANSCRIPTION_SERVICE_URL` / `TRANSCRIPTION_SERVICE_TOKEN`. Two ways out: set the

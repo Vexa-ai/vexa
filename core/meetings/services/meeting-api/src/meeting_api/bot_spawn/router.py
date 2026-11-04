@@ -49,6 +49,7 @@ from .transcription_language import LanguageRefused, legacy_spawn_language
 from .service import (
     VOICE_NOTE_PLATFORM,
     CALL_PLATFORM,
+    SEAT_COOLDOWN_S,
     DuplicateMeeting,
     construct_meeting_url,
     request_bot,
@@ -674,6 +675,7 @@ def build_router(
                     continue_meeting=bool(body.get("continue_meeting", False)),
                     workspace_id=workspace_id,
                     max_concurrent=max_concurrent,
+                    seat_cooldown_s=SEAT_COOLDOWN_S,
                     webhook_url=x_user_webhook_url,
                     webhook_secret=x_user_webhook_secret,
                     webhook_events=webhook_events,
