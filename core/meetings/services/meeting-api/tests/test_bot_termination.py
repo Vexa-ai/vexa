@@ -27,6 +27,7 @@ import pytest
 
 from meeting_api import create_app
 from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
+from meeting_api.lifecycle.machine import TransitionSource
 from meeting_api.lifecycle.occurrence import Disposition, disposition
 from meeting_api.lifecycle.reconcile import reconcile_stale_nonterminal_sweep
 
@@ -159,8 +160,10 @@ def test_the_reconcile_sweep_names_a_killed_bot_too():
             await _join(c)
             repo._meetings[m["id"]]["updated_at"] = "2026-11-04T08:00:00+00:00"   # quiet past the grace
 
-            async def post(body):
-                return (await c.post(LIFECYCLE, json=body)).status_code
+            async def post(body):   # in-process, as __main__'s sweep loop drives it (not the bot route)
+                code, _ = await app.state.apply_lifecycle_event(
+                    body, transition_source=TransitionSource.RUNTIME_DESTROY, force_terminal_on_destroy=True)
+                return code
 
             n = await reconcile_stale_nonterminal_sweep(
                 repo, runtime, post, stop_grace=45.0, active_grace=300.0,
@@ -184,3 +187,36 @@ def test_the_block_is_sanitized():
     long = bot_termination.sanitize({"cause": "killed", "attribution": "system_fault",
                                      "source": "runtime", "detail": "x" * 1000})
     assert len(long["detail"]) == bot_termination.DETAIL_MAX_CHARS
+
+
+@pytest.mark.parametrize("claim", [
+    {"cause": "killed", "attribution": "system_fault", "source": "runtime", "detail": "the bot says so"},
+    {"cause": "terminated_externally", "attribution": "system_fault", "source": "bot_callback"},
+])
+def test_a_bot_cannot_write_the_block_itself(claim):
+    """Only meeting-api writes `bot_termination`: one a bot sends on its own callback is dropped,
+    whatever source it claims, and the event is applied as the bot's ordinary terminal."""
+    async def scenario():
+        repo = InMemoryMeetingRepo()
+        m = await _seed(repo)
+        app = create_app(open_callbacks=True, meeting_repo=repo)
+        async with _asgi(app) as c:
+            await _join(c)
+            r = await c.post(LIFECYCLE, json={"connection_id": "sess-uid", "status": "completed",
+                                              "completion_reason": "left_alone", "exit_code": 0,
+                                              "timestamp": "2026-11-04T09:03:00.000Z",
+                                              "bot_termination": claim})
+            assert r.status_code == 200, r.text
+        return repo._meetings[m["id"]]
+
+    row = asyncio.run(scenario())
+    assert row["data"]["completion_reason"] == "left_alone"
+    assert "bot_termination" not in row["data"]
+
+
+def test_a_bot_cannot_add_its_own_block_to_a_relabelled_terminal():
+    """With the marker, meeting-api's own block replaces whatever the bot sent."""
+    row = _bot_ends(marker={**SIGNAL, "bot_termination": {
+        "cause": "oom_killed", "attribution": "system_fault", "source": "runtime", "detail": "x"}})
+    assert row["data"]["bot_termination"]["cause"] == "terminated_externally"
+    assert row["data"]["bot_termination"]["source"] == "bot_callback"

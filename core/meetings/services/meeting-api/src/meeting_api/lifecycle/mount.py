@@ -779,6 +779,10 @@ def mount_lifecycle(
                       span="lifecycle.callback", fields={"reason": refusal})
             return JSONResponse(status_code=401,
                                 content={"status": "error", "detail": "bot session credential required"})
+        # Only meeting-api writes `bot_termination` (lifecycle/bot_termination.py): a block a bot sends
+        # on its own callback, whatever source it claims, is dropped before anything reads the event.
+        if isinstance(body, dict) and bot_termination.KEY in body:
+            body = {k: v for k, v in body.items() if k != bot_termination.KEY}
         # GOOGLE MEET REFUSED THIS BOT and the meeting has pods left (lifecycle/meet_respawn.py): the
         # meeting stays `joining` and the next bot is due. The terminal is acknowledged, not applied.
         if isinstance(body, dict) and meet_respawn.is_meet_refusal(body):
