@@ -156,7 +156,8 @@ class Runtime:
                 status.state = RuntimeState.stopped
                 status.exitCode = code
                 status.stoppedAt = _now()
-                status.stopReason = StopReason.completed if code == 0 else StopReason.failed
+                status.stopReason = (StopReason.oom if info.get("oom")
+                                     else StopReason.completed if code == 0 else StopReason.failed)
             self._persist(spec, status)
             adopted += 1
         return adopted
@@ -250,10 +251,24 @@ class Runtime:
                 status.state = RuntimeState.stopped
                 status.exitCode = code
                 status.stoppedAt = _now()
-                status.stopReason = StopReason.completed if code == 0 else StopReason.failed
+                status.stopReason = self._exit_stop_reason(handle, code)
                 self._persist(record.spec, status)
                 self._emit(workload_id, RuntimeState.stopped, exitCode=code, stopReason=status.stopReason)
         return status
+
+    def _exit_stop_reason(self, handle: WorkloadHandle, code: int) -> StopReason:
+        """Why a workload that exited on its own stopped: the backend's own verdict when it has one
+        (k8s: ``oom`` for an OOM-killed Pod, which the code alone cannot tell from any SIGKILL),
+        else the code (0 completed, anything else failed)."""
+        probe = getattr(self.backend, "exit_reason", None)
+        if probe is not None:
+            try:
+                reason = probe(handle)
+            except Exception:  # noqa: BLE001 — a cause we cannot read leaves the code's verdict
+                reason = None
+            if isinstance(reason, StopReason):
+                return reason
+        return StopReason.completed if code == 0 else StopReason.failed
 
     def list(self) -> list[WorkloadStatus]:
         return [self.get(r.spec.workloadId) for r in self.store.list()]

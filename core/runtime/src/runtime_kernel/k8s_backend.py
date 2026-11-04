@@ -20,7 +20,7 @@ from typing import Optional
 
 from . import pod_scheduling, workload_env
 from .backend import WorkloadHandle
-from .models import Resources
+from .models import Resources, StopReason
 from .mounts import k8s_volume_mounts
 from .profiles import MODEL_ROUTE_ENV, ROUTE_SUBSCRIPTION, ProfileResources, Runnable
 from .workload_env import forwarded_env
@@ -311,6 +311,20 @@ def _secret_class(env: dict[str, str]) -> set[str]:
     return {k for k, v in env.items() if v and declared.get(k, True)}
 
 
+#: The container ``terminated.reason`` Kubernetes writes when the kernel's OOM killer ended it at its
+#: cgroup memory limit (exit 137). runtime.v1 names that end ``stopReason: oom``.
+OOM_KILLED = "OOMKilled"
+
+
+def _oom_killed(status: dict) -> bool:
+    """True when a finished Pod's container was OOM-killed (its status says so; the exit code alone
+    cannot: 137 is any SIGKILL)."""
+    for cs in status.get("containerStatuses") or []:
+        if ((cs.get("state") or {}).get("terminated") or {}).get("reason") == OOM_KILLED:
+            return True
+    return False
+
+
 def _stop_grace_sec() -> int:
     """Graceful-delete window (SIGTERM → SIGKILL). Same env knob as the Docker backend
     (RUNTIME_STOP_GRACE_SEC, default 30) so a live meeting bot can honour SIGTERM — leave the
@@ -565,6 +579,8 @@ class K8sBackend:
         self._ns = namespace
         # Exit codes of Pods this backend removed once their exit was observed (name → code).
         self._exited: dict[str, int] = {}
+        # Of those, the Pods whose container was OOM-killed (their status said so before removal).
+        self._oom: set[str] = set()
         # Which runtime this is (the Helm release). Every Pod it spawns carries it, and adoption
         # selects on it.
         self._instance = (instance if instance is not None else os.environ.get(INSTANCE_ENV, "")).strip() or "default"
@@ -625,6 +641,7 @@ class K8sBackend:
         )
         manifest = json.dumps(pod)
         self._exited.pop(name, None)
+        self._oom.discard(name)
         try:
             self._create(name, workload_id, manifest, secret_name, hidden)
             return WorkloadHandle(id=workload_id, impl=name)
@@ -771,6 +788,8 @@ class K8sBackend:
                     "name": meta.get("name", self._pname(wid)),
                     "running": running,
                     "exit_code": exit_code,
+                    # present only when true, so every other Pod's entry is what it always was
+                    **({"oom": True} if not running and _oom_killed(pod.get("status", {})) else {}),
                 })
             return out
         except Exception:  # noqa: BLE001 — discovery is a boot aid; it must never crash the boot
@@ -796,10 +815,18 @@ class K8sBackend:
                     code = int(term["exitCode"])
                     break
         # The exit is now observed (the kernel records it from this answer): the finished Pod is
-        # removed so finished workloads do not pile up, and its code is kept for later polls.
+        # removed so finished workloads do not pile up, and its code is kept for later polls — with
+        # the one cause its status names that the code cannot (an OOM kill), read before removal.
         self._exited[name] = code
+        if _oom_killed(status):
+            self._oom.add(name)
         _kubectl("delete", "pod", name, "--ignore-not-found", "--wait=false", *self._ns_args(), check=False)
         return code
+
+    def exit_reason(self, h: WorkloadHandle) -> Optional[StopReason]:
+        """The runtime.v1 stop reason an observed exit carries beyond its code: ``oom`` for a Pod
+        whose container was OOM-killed. None ⇒ the code decides (0 completed, else failed)."""
+        return StopReason.oom if h._impl in self._oom else None  # type: ignore[attr-defined]
 
     def terminate(self, h: WorkloadHandle) -> None:      # graceful: SIGTERM + grace, then SIGKILL
         _kubectl("delete", "pod", h._impl, f"--grace-period={_stop_grace_sec()}", "--wait=false",
