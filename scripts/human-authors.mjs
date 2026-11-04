@@ -471,6 +471,10 @@ export function mergeGroupRange(event, cwd = process.cwd()) {
   const ref = `refs/human-authors/pr-${number}`;
   git(["fetch", "--no-tags", "--quiet", "origin", `+refs/pull/${number}/head:${ref}`], cwd);
   const head = git(["rev-parse", `${ref}^{commit}`], cwd).toString("utf8").trim();
+  // A queued pull request adds at least one commit; an empty range means the wrong head or base.
+  if (git(["rev-list", "--count", `${base}..${head}`], cwd).toString("utf8").trim() === "0") {
+    throw new UnreadableQueue(`#${number} adds no commits in ${base.slice(0, 12)}..${head.slice(0, 12)}`);
+  }
   return { number, base, head, queue };
 }
 
