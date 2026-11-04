@@ -168,33 +168,34 @@ def mount_lifecycle(
         # must never fail the callback (we fall back to the in-process record as-is).
         connection_id = body.get("connection_id")
         if connection_id:
-            existing = sink.store.get(connection_id)
-            # A TERMINAL event also re-reads the row, even for a record this process already
-            # advanced. The user-stop flag is written to the DB by the stop path and NEVER through
-            # this FSM, so an in-process record that has seen `joining` has no way to know a DELETE
-            # landed — and it is exactly at the terminal edge that the difference is written down
-            # (F3, stage rev 193 row 26313: terminal recorded `join_failure` with
-            # `stop_requested=true` on the row). One extra read per meeting, at its last event.
-            terminal_event = body.get("status") in ("completed", "failed")
-            if (
-                existing is None
-                or existing.status is None
-                or (terminal_event and not existing.stop_requested)
-            ):
-                try:
-                    persisted = await meeting_repo.get_lifecycle_state_by_session(
-                        session_uid=connection_id
-                    )
-                except Exception as e:  # noqa: BLE001 — rehydration is best-effort
-                    persisted = None
-                    log_event("lifecycle_rehydrate_failed", audience="system", level="warning",
-                              span="lifecycle.callback", fields={"error": str(e)})
-                if persisted:
-                    sink.store.rehydrate(
-                        connection_id,
-                        persisted.get("status"),
-                        persisted.get("data"),
-                    )
+            # EVERY event re-reads the row, even for a record this process already advanced:
+            # - Prod runs several meeting-api replicas, each with its own in-memory store, and a
+            #   bot's events land on any of them. A replica that saw only `joining` can receive the
+            #   lobby-timeout `failed` after another replica persisted `awaiting_admission`;
+            #   joining -> failed is legal, so without catching up it writes its own shorter trail
+            #   over the row and derives failure_stage from the wrong stage (prod, 72 h to 4 Nov:
+            #   37 of 148 Meet lobby timeouts). `catch_up` takes the row only when its trail is
+            #   longer, so a lagging read never regresses the record.
+            # - The user-stop flag is written to the DB by the stop path and NEVER through this
+            #   FSM, so a record that has seen `joining` has no other way to know a DELETE landed
+            #   (F3, stage rev 193 row 26313: terminal recorded `join_failure` with
+            #   `stop_requested=true` on the row).
+            # One indexed read per lifecycle event (a handful per meeting).
+            try:
+                persisted = await meeting_repo.get_lifecycle_state_by_session(
+                    session_uid=connection_id
+                )
+            except Exception as e:  # noqa: BLE001 — rehydration is best-effort
+                persisted = None
+                log_event("lifecycle_rehydrate_failed", audience="system", level="warning",
+                          span="lifecycle.callback", fields={"error": str(e)})
+            if persisted:
+                sink.store.rehydrate(
+                    connection_id,
+                    persisted.get("status"),
+                    persisted.get("data"),
+                    catch_up=True,
+                )
         change = None
         try:
             change = sink.apply_change(
