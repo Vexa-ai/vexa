@@ -37,7 +37,7 @@ Tests live alongside the source in `src/*.test.ts`. Run with `pnpm test` (the pa
 runs each via `tsx`):
 
 - **L2 unit** — `recording-sink.test.ts`, `transcript-store.test.ts`, `health.test.ts`, `access.test.ts`
-- **L3 bind** — `bind.test.ts` (loopback-only by default; `host`/`VEXA_DESKTOP_HOST` opt-in)
+- **L3 bind/tape** — `bind.test.ts` (loopback-only by default; `host`/`VEXA_DESKTOP_HOST` opt-in), `tape.test.ts` (`VEXA_RECORD_TAPE` path stays inside its dir)
 - **L3 integration** — `recording-e2e.test.ts` (synthetic `recording.v1` over the real ingest WS → real file on disk → served by the gateway; no live meeting)
 - **L4 live** — `desktop-e2e.live.test.ts` (real STT; skips without `VEXA_TX_KEY` + `EVAL_CACHE`)
 

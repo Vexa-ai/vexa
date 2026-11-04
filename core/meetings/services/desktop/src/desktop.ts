@@ -21,7 +21,7 @@
  */
 import * as http from 'node:http';
 import { createWriteStream, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve as resolvePath, sep } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { TranscriptionClient } from '@vexa/transcribe-whisper';
 import { createGmeetPipeline, type TranscriptSegment } from '@vexa/gmeet-pipeline';
@@ -368,17 +368,27 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
     let tape: ReturnType<typeof createWriteStream> | null = null;
     if (process.env.VEXA_RECORD_TAPE) {
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const tapePath = `${process.env.VEXA_RECORD_TAPE}/tape-${platform}-${native}-${stamp}.jsonl`;
-      tape = createWriteStream(tapePath);
-      tape.write(JSON.stringify({ v: 1, platform, native, language: lang ?? null, startedAt: new Date().toISOString() }) + '\n');
-      const tape0 = Date.now();
-      ws.on('message', (data: any, isBinary: boolean) => {
-        if (!tape) return;
-        const t = Date.now() - tape0;
-        if (isBinary) { const b = Buffer.from(data); tape.write(JSON.stringify({ t, bin: true, d: b.toString('base64') }) + '\n'); }
-        else tape.write(JSON.stringify({ t, bin: false, d: data.toString() }) + '\n');
-      });
-      log(`[desktop] ⏺ recording raw tape → ${tapePath}`);
+      // platform / native_meeting_id are raw query values: keep [A-Za-z0-9_-] only, and refuse
+      // any path that still resolves outside the tape dir (the session itself continues).
+      const safe = (x: string) => x.replace(/[^A-Za-z0-9_-]/g, '_');
+      const tapeDir = resolvePath(process.env.VEXA_RECORD_TAPE);
+      const tapePath = resolvePath(tapeDir, `tape-${safe(platform)}-${safe(native)}-${stamp}.jsonl`);
+      if (!tapePath.startsWith(tapeDir + sep)) {
+        log(`[desktop] tape refused: path outside ${tapeDir}`);
+      } else {
+        tape = createWriteStream(tapePath);
+        // A failed open/write must never take the host down (no 'error' listener = uncaught).
+        tape.on('error', (e) => { log(`[desktop] tape write failed (${(e as Error).message}); tape off for ${key}`); tape = null; });
+        tape.write(JSON.stringify({ v: 1, platform, native, language: lang ?? null, startedAt: new Date().toISOString() }) + '\n');
+        const tape0 = Date.now();
+        ws.on('message', (data: any, isBinary: boolean) => {
+          if (!tape) return;
+          const t = Date.now() - tape0;
+          if (isBinary) { const b = Buffer.from(data); tape.write(JSON.stringify({ t, bin: true, d: b.toString('base64') }) + '\n'); }
+          else tape.write(JSON.stringify({ t, bin: false, d: data.toString() }) + '\n');
+        });
+        log(`[desktop] ⏺ recording raw tape → ${tapePath}`);
+      }
     }
 
     // ── MIXED lane (zoom/teams/youtube): one mixed remote stream (ch 999) + the local "You" mic
