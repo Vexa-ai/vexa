@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -499,4 +499,125 @@ test("a PR opened by claude[bot] fails the range", () => {
     assert.equal(out.status, 1);
     assert.match(out.stdout, /pr-user\topened-by-claude/);
   } finally { r.done(); }
+});
+
+// On a merge-queue commit the run judges the commits the pull request adds, as dco-range and
+// dco-no-override do (#2024): the queue commit is a squash GitHub writes on the queue base, so its
+// own range would hold that one GitHub commit and none of the pull request's.
+const QUEUE_BASE = "e".repeat(40);
+const QUEUE_HEAD = "f".repeat(40);
+const queueEvent = (headRef, baseSha = QUEUE_BASE) =>
+  ({ merge_group: { head_ref: headRef, head_sha: QUEUE_HEAD, base_sha: baseSha, base_ref: "refs/heads/main" } });
+
+test("a merge_group event names its pull request and queue base", () =>
+  assert.deepEqual(ha.queuedPullRequest(queueEvent(`refs/heads/gh-readonly-queue/main/pr-2025-${QUEUE_BASE}`)),
+    { number: 2025, base: QUEUE_BASE, queue: QUEUE_HEAD }));
+for (const ref of ["refs/heads/main", `refs/heads/gh-readonly-queue/main/pr-x-${QUEUE_BASE}`,
+  "refs/heads/gh-readonly-queue/main/pr-2025-notasha", null]) {
+  test(`a merge_group ref ${JSON.stringify(ref)} is refused`, () =>
+    assert.throws(() => ha.queuedPullRequest(queueEvent(ref)), /merge-queue ref/));
+}
+test("a merge_group whose base_sha is not the queue ref's base is refused", () =>
+  assert.throws(() => ha.queuedPullRequest(queueEvent(`refs/heads/gh-readonly-queue/main/pr-7-${QUEUE_BASE}`, "d".repeat(40))),
+    /base_sha/));
+
+// A queued pull request in a private origin: main's head is the queue base, the pull request's
+// commits (branched before it) are at refs/pull/9/head, and the queue branch holds the squash GitHub
+// writes, authored by the pull request's author and committed by GitHub. The run reads a clone, as
+// the job reads its checkout of the queue commit.
+function queued({ commits, queueMessage = "feat: x (#9)", offBase = false }) {
+  const root = mkdtempSync(join(tmpdir(), "human-authors-queue-"));
+  const origin = join(root, "origin"), clone = join(root, "clone");
+  const git = (cwd, args, env = {}) => execFileSync("git", ["-c", "core.hooksPath=/dev/null", ...args],
+    { cwd, encoding: "utf8", env: { ...process.env, ...env } }).trim();
+  git(root, ["init", "-q", "-b", "main", origin]);
+  const tree = git(origin, ["hash-object", "-t", "tree", "-w", "/dev/null"]);
+  const mk = (parent, { msg, an = "Jane", ae = "jane@example.com", cn = an, ce = ae }) =>
+    git(origin, ["commit-tree", tree, ...(parent ? ["-p", parent] : []), "-m", msg],
+      { GIT_AUTHOR_NAME: an, GIT_AUTHOR_EMAIL: ae, GIT_COMMITTER_NAME: cn, GIT_COMMITTER_EMAIL: ce });
+  const fork = mk(null, { msg: "root" });
+  const base = mk(fork, { msg: "main head" });
+  let tip = fork;
+  const prCommits = commits.map((c) => (tip = mk(tip, c)));
+  const queue = mk(offBase ? fork : base, { msg: queueMessage, cn: "GitHub", ce: "noreply@github.com" });
+  const headRef = `refs/heads/gh-readonly-queue/main/pr-9-${base}`;
+  git(origin, ["update-ref", "refs/heads/main", base]);
+  git(origin, ["update-ref", "refs/pull/9/head", tip]);
+  git(origin, ["update-ref", headRef, queue]);
+  git(root, ["clone", "-q", origin, clone]);
+  git(clone, ["checkout", "-q", "--detach", queue]);
+  const event = { merge_group: { head_ref: headRef, head_sha: queue, base_sha: base, base_ref: "refs/heads/main" } };
+  const eventPath = join(root, "event.json");
+  writeFileSync(eventPath, JSON.stringify(event));
+  const run = (...args) => spawnSync(process.execPath, [SCRIPT, ...args], { cwd: clone, encoding: "utf8" });
+  return {
+    base, queue, prCommits, event, cwd: clone,
+    run: () => run("--event", eventPath), runRange: (b, h) => run(b, h),
+    done: () => rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+test("a merge_group event resolves to exactly the pull request's commits", () => {
+  const q = queued({ commits: [{ msg: "feat: a" }, { msg: "feat: b" }, { msg: "feat: c" }] });
+  try {
+    const range = ha.mergeGroupRange(q.event, q.cwd);
+    assert.deepEqual(range, { number: 9, base: q.base, head: q.prCommits.at(-1), queue: q.queue });
+    assert.deepEqual(ha.readCommits(range.base, range.head, q.cwd).map((c) => c.sha).sort(), [...q.prCommits].sort());
+  } finally { q.done(); }
+});
+
+test("a merge_group run fails a Claude trailer in the queued pull request's commits", () => {
+  const q = queued({ commits: [{ msg: "feat: a" }, { msg: "feat: b\n\nCo-Authored-By: Claude <noreply@anthropic.com>" }, { msg: "feat: c" }] });
+  try {
+    const out = q.run();
+    assert.equal(out.status, 1, out.stdout + out.stderr);
+    assert.match(out.stdout, new RegExp(`${q.prCommits[1]}\\tco-authored-by-claude`));
+    assert.match(out.stdout, new RegExp(`3 commit\\(s\\) in ${q.base.slice(0, 12)}\\.\\.${q.prCommits.at(-1).slice(0, 12)}`));
+  } finally { q.done(); }
+});
+
+test("a merge_group run fails a Claude committer the squash does not carry", () => {
+  const q = queued({ commits: [{ msg: "feat: a", cn: "Claude", ce: "noreply@anthropic.com" }] });
+  try {
+    const out = q.run();
+    assert.equal(out.status, 1, out.stdout + out.stderr);
+    assert.match(out.stdout, new RegExp(`${q.prCommits[0]}\\tcommitter-email-anthropic`));
+    // The queue commit's own range is GitHub's squash alone, and it names a person and GitHub.
+    assert.equal(q.runRange(q.base, q.queue).status, 0);
+  } finally { q.done(); }
+});
+
+test("GitHub's queue commit is not judged on a merge_group run", () => {
+  // The squash carries the pull request's text, which may quote a mark in a code fence; that text
+  // is judged as PR text on the pull request, and the commit itself is GitHub's.
+  const q = queued({
+    commits: [{ msg: "feat: a" }, { msg: "feat: b\n\nCo-authored-by: Bob <bob@example.com>", an: "Bob", ae: "bob@example.com" }],
+    queueMessage: "ci: x (#9)\n\nThe check blocks:\n\n```\nCo-Authored-By: Claude <noreply@anthropic.com>\n```\n",
+  });
+  try {
+    const out = q.run();
+    assert.equal(out.status, 0, out.stdout + out.stderr);
+    assert.match(out.stdout, new RegExp(`merge-queue commit ${q.queue.slice(0, 12)} for #9`));
+    assert.match(out.stdout, /2 commit\(s\) in .*, 0 finding\(s\)/);
+    assert.equal(q.runRange(q.base, q.queue).status, 1);
+  } finally { q.done(); }
+});
+
+test("a merge_group run refuses a queue commit that does not sit on the queue base", () => {
+  const q = queued({ commits: [{ msg: "feat: a" }], offBase: true });
+  try {
+    const out = q.run();
+    assert.equal(out.status, 2, out.stdout + out.stderr);
+    assert.match(out.stderr, /not on the queue base/);
+  } finally { q.done(); }
+});
+
+const WORKFLOW = readFileSync(fileURLToPath(new URL("../.github/workflows/human-authors.yml", import.meta.url)), "utf8");
+test("the workflow runs on merge-queue commits, judging the queued pull request's commits", () => {
+  assert.match(WORKFLOW, /^ {2}merge_group:\n {4}types: \[checks_requested\]$/m);
+  assert.match(WORKFLOW, /if: github\.event_name == 'merge_group'\n(?: {8}.*\n)*? {8}run: node scripts\/human-authors\.mjs --event "\$GITHUB_EVENT_PATH"$/m);
+  assert.match(WORKFLOW, /if: github\.event_name == 'pull_request'\n(?: {8}.*\n)*? {8}run: node scripts\/human-authors\.mjs "\$BASE" "\$HEAD" --event "\$GITHUB_EVENT_PATH"$/m);
+  // One group per pull request and one per queue commit: a group shared by every queue run would
+  // cancel the run of the entry ahead.
+  assert.match(WORKFLOW, /group: human-authors-\$\{\{ github\.event_name \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.event\.merge_group\.head_sha \}\}/);
 });
