@@ -34,6 +34,18 @@ global:
   #       topologyKey: kubernetes.io/hostname
   #       whenUnsatisfiable: ScheduleAnyway
   topologySpreadConstraints: []
+  # How long a SYSTEM pod stays bound to a node that went NotReady/Unreachable before Kubernetes
+  # evicts it and schedules a replacement: the NoExecute tolerationSeconds for
+  # node.kubernetes.io/not-ready and node.kubernetes.io/unreachable, rendered by
+  # `vexa.systemTolerations` onto every component, stateful and Job pod after `tolerations` above.
+  # Empty (the default) leaves Kubernetes' own 300 s and renders nothing. Spawned bot and agent
+  # worker Pods never get it: their tolerations come from runtime.workloadScheduling /
+  # runtime.tolerations only, because a bot is one live meeting that a reschedule cannot resume.
+  # Example — leave a lost node after 30 s:
+  #   systemPods:
+  #     nodeLossTolerationSeconds: 30
+  systemPods:
+    nodeLossTolerationSeconds: ""
   # Every Pod the chart renders runs under the container runtime's default seccomp profile, which
   # Pod Security `restricted` requires (the requirements table, row K5). Third-party images
   # (postgres, redis, pgbouncer) take only this profile from here, never a uid. Set
@@ -1382,6 +1394,9 @@ flows:
     repository: vexaai/vexa-flows
     tag: ""                           # empty → v<appVersion>; global.imageTag wins when set
   workerReplicas: 2
+  # flows-worker spreads its replicas like every component Deployment: global.topologySpreadConstraints,
+  # or this override for flows-worker alone (same shape; omit labelSelector to get its own).
+  # topologySpreadConstraints: []
   # The database the flows tables live in. Empty (the default): the main database, database.name,
   # as Compose and Lite run it, and covered by any backup of that database. Vexa never creates a
   # database, so no role needs CREATEDB (requirements row D3). To keep flows in a database of its

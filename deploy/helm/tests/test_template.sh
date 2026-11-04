@@ -2580,4 +2580,66 @@ if command -v openssl >/dev/null 2>&1; then
   tb "a changed subjectTickets.agent.signingKey rolls agent-api and the gateway, not meeting-api or the flows Deployments" \
     'python3 -c "$CK_PY" moved "$ckf/A.yaml" "$ckf/TK.yaml" vexa-vexa-agent-api,vexa-vexa-gateway vexa-vexa-meeting-api,vexa-vexa-flows-worker,vexa-vexa-flows-mailbox,vexa-vexa-flows-api >/dev/null'
 fi
+# ── system pods leave a lost node; bots never do (global.systemPods.nodeLossTolerationSeconds) ──
+# Every system pod that carries global.tolerations also carries the NoExecute not-ready/unreachable
+# pair at the configured seconds; spawned bot / agent-worker Pods (the runtime's RUNTIME_K8S_*
+# tolerations env and the bot-seccomp DaemonSet) carry none; empty renders no tolerationSeconds at all.
+# flows-worker spreads with the shared topologySpreadConstraints helper, its own selector injected.
+echo "=== gate:helm — system pods tolerate node loss; bots never do ==="
+NL_ARGS=(--set flows.enabled=true --set flows.mail.address=minutes@example.com
+  --set livekit.enabled=true --set livekit.url=wss://calls.example --set dashboard.enabled=true
+  --set runtime.botSandbox.enabled=true --set runtime.botSandbox.installer.enabled=true
+  --set-json 'global.tolerations=[{"key":"pool","operator":"Equal","value":"main","effect":"NoSchedule"}]'
+  --set-json 'global.topologySpreadConstraints=[{"maxSkew":1,"topologyKey":"kubernetes.io/hostname","whenUnsatisfiable":"ScheduleAnyway"}]')
+nlf="$(mktemp -d)"
+helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" "${NL_ARGS[@]}" > "$nlf/off.yaml"
+helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" "${NL_ARGS[@]}" \
+  --set global.systemPods.nodeLossTolerationSeconds=30 > "$nlf/on.yaml"
+NL_PY='import json, sys, yaml
+NL = {"node.kubernetes.io/not-ready", "node.kubernetes.io/unreachable"}
+mode, path = sys.argv[1], sys.argv[2]
+docs = [d for d in yaml.safe_load_all(open(path)) if d and d.get("kind")]
+def spec(d):
+    s = d.get("spec") or {}
+    if d["kind"] == "CronJob": return s["jobTemplate"]["spec"]["template"]["spec"]
+    if d["kind"] in ("Deployment", "StatefulSet", "DaemonSet", "Job"): return s["template"]["spec"]
+bad, seen, bots = [], 0, 0
+for d in docs:
+    s = spec(d)
+    if s is None: continue
+    name, tols = d["metadata"]["name"], s.get("tolerations") or []
+    nl = {t["key"]: t for t in tols if t.get("key") in NL}
+    is_bot_ds = d["kind"] == "DaemonSet" and "seccomp" in name
+    for c in s.get("containers") or []:
+        for e in c.get("env") or []:
+            if e.get("name", "").startswith("RUNTIME_K8S_") and e.get("name", "").endswith("TOLERATIONS"):
+                bots += 1
+                if {t.get("key") for t in json.loads(e.get("value") or "[]") or []} & NL:
+                    bad.append("%s %s carries a node-loss key" % (name, e["name"]))
+    if is_bot_ds:
+        bots += 1
+        if nl: bad.append(name + " (bot node DaemonSet) carries a node-loss toleration")
+        continue
+    if mode == "off":
+        if any("tolerationSeconds" in t for t in tols): bad.append(name + " renders tolerationSeconds with the value empty")
+        continue
+    if not any(t.get("key") == "pool" for t in tols): continue   # not a global-scheduled pod
+    seen += 1
+    if set(nl) != NL or any(t.get("tolerationSeconds") != 30 or t.get("effect") != "NoExecute" or t.get("operator") != "Exists" for t in nl.values()):
+        bad.append(name + " lacks the node-loss pair at 30s")
+if mode == "on":
+    fw = [d for d in docs if d["kind"] == "Deployment" and d["metadata"]["name"].endswith("flows-worker")]
+    if not fw: bad.append("flows-worker not rendered")
+    for d in fw:
+        labels = d["spec"]["template"]["metadata"]["labels"]
+        tsc = spec(d).get("topologySpreadConstraints") or []
+        if not tsc or any(((c.get("labelSelector") or {}).get("matchLabels") or {}).items() - labels.items() for c in tsc):
+            bad.append("flows-worker has no spread whose selector matches its own pod labels")
+print(mode, "system pods:", seen, "bot surfaces:", bots, "bad:", bad)
+sys.exit(1 if bad or (mode == "on" and seen < 15) or bots < 4 else 0)'
+tb "value empty: no pod renders tolerationSeconds; bots carry no node-loss key" \
+  'python3 -c "$NL_PY" off "$nlf/off.yaml"'
+tb "value 30: every global-scheduled system pod carries both node-loss tolerations at 30s; bots none; flows-worker spreads" \
+  'python3 -c "$NL_PY" on "$nlf/on.yaml"'
+rm -rf "$nlf"
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

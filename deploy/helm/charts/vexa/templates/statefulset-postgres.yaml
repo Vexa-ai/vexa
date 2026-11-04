@@ -23,9 +23,9 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.global.tolerations }}
+      {{- with include "vexa.systemTolerations" $ }}
       tolerations:
-        {{- toYaml . | nindent 8 }}
+        {{- . | nindent 8 }}
       {{- end }}
       # v0.10.5 Pack I.s — stateful-pod anti-affinity (#272 iter-5). Linode LKE
       # g6-standard-* nodes cap attached block volumes at 7 per instance; a

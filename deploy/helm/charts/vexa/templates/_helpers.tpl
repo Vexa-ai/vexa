@@ -559,6 +559,48 @@ topologySpreadConstraints:
 {{- end -}}
 {{- end -}}
 
+{{/*
+vexa.systemTolerations — the tolerations of every SYSTEM pod the chart renders.
+
+  = global.tolerations
+  + node.kubernetes.io/not-ready and node.kubernetes.io/unreachable (NoExecute) with
+    tolerationSeconds = global.systemPods.nodeLossTolerationSeconds, when that is set.
+
+Without it Kubernetes injects 300 s for both keys, so a single-replica component on a node that
+died stays bound to it for the node-monitor grace plus 300 s before it is rescheduled. A node-loss
+entry already in global.tolerations is replaced, never duplicated. Renders a YAML list, or nothing
+when the result is empty (so `with` drops the field exactly as before).
+
+Call:  {{- with include "vexa.systemTolerations" $ }}
+       tolerations:
+         {{- . | nindent 8 }}
+       {{- end }}
+
+NEVER for spawned bot / agent-worker Pods: the runtime stamps those from
+runtime.workloadScheduling.<class>.tolerations, RUNTIME_K8S_TOLERATIONS (runtime.tolerations |
+default global.tolerations) and daemonset-bot-seccomp's own chain, none of which read this helper.
+gate:helm asserts both halves.
+*/}}
+{{- define "vexa.systemTolerations" -}}
+{{- $nodeLoss := list "node.kubernetes.io/not-ready" "node.kubernetes.io/unreachable" -}}
+{{- $seconds := (.Values.global.systemPods).nodeLossTolerationSeconds -}}
+{{- $out := list -}}
+{{- range .Values.global.tolerations -}}
+{{- if not (and $seconds (has .key $nodeLoss)) -}}
+{{- $out = append $out . -}}
+{{- end -}}
+{{- end -}}
+{{- if $seconds -}}
+{{- range $nodeLoss -}}
+{{- $out = append $out (dict "key" . "operator" "Exists" "effect" "NoExecute" "tolerationSeconds" (int $seconds)) -}}
+{{- end -}}
+{{- end -}}
+{{- if $out -}}
+{{- toYaml $out -}}
+{{- end -}}
+{{- end -}}
+
+
 {{- define "vexa.deploymentStrategy" -}}
 {{/*
 v0.10.5.3 Pack H — zero-downtime rolling update.
