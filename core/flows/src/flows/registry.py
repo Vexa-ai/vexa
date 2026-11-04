@@ -116,6 +116,12 @@ class Registry:
         # `config.v1`, which this engine core does not read. A row it refuses stops being chosen
         # within one refresh; the runs already admitted on it finish.
         self.row_check = None
+        # INSTANCE FLOWS THE CODE OWNS (ADR-0052 §6): a flow a guarantee rests on changes with the
+        # code, so no stored version of it is ever CHOSEN here, whatever its number. Its rows stay
+        # in `flow_version` for an image that still loads them (a rollback to one that seeded it);
+        # `refresh_from_db` says once per version that it is not run.
+        self.code_only: set[str] = set()
+        self._code_only_said: set[tuple[str, int]] = set()
 
     def step(self, fn: StepFn | None = None, *, needs: "tuple[str, ...] | list[str]" = (),
              absent: "str | dict[str, str] | None" = None, user_allowed: bool = False):
@@ -254,6 +260,13 @@ class Registry:
         refused: dict[str, int] = {}
         for scope, name, version, on_event, steps, params, cron, created_at in rows:
             key = (flow_ident(scope, name), version)
+            if (scope or INSTANCE) == INSTANCE and name in self.code_only:
+                if key not in self._code_only_said:
+                    self._code_only_said.add(key)
+                    _log.warning("flow %s@%d is active in the table and is not run: %s runs from the "
+                                 "code (ADR-0052 §6); the row is kept for an image that still loads "
+                                 "it", name, version, name)
+                continue
             if self.row_check is not None and str(scope or "").startswith("user:"):
                 try:
                     reason = self.row_check(scope, name, _j.loads(steps or "[]"), cron)

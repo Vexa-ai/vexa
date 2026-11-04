@@ -26,6 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 # SET, IMPORT, RESTORE — the env must not outlive this import.
@@ -99,3 +100,21 @@ def test_health_touches_no_database():
         assert TestClient(app).get("/health").json() == first
     finally:
         flows_api.db = saved_db
+
+
+@pytest.mark.parametrize("state,code", [("waiting", 503), ("migrating", 503),
+                                        ("failed: migration_lock_timeout", 503), ("ready", 200),
+                                        ("unapplied", 200)])
+def test_readiness_says_migrating_while_the_schema_waits_or_migrates(monkeypatch, state, code):
+    """`/ready` beside `/health` (second re-review): not ready while this process waits for, or
+    runs, the schema migration, or after one failed; `/health` stays liveness and does not change."""
+    from flows_integrations import flows_api
+
+    class _Db:
+        schema = state
+    live = TestClient(app).get("/health").json()
+    monkeypatch.setattr(flows_api, "db", _Db())
+    r = TestClient(app).get("/ready")
+    assert r.status_code == code and r.json()["schema"] == state
+    assert r.json()["ready"] is (code == 200)
+    assert TestClient(app).get("/health").json() == live

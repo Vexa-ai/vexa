@@ -353,6 +353,19 @@ def test_two_occurrences_of_one_series_are_two_events():
     assert invite_source_id({"ics_uid": "one-off", "occurrence": ""}) == "ics-one-off"
 
 
+def test_two_owners_of_one_uid_and_occurrence_are_two_events():
+    """A UID is the meeting's, not one person's (Vexa-ai/vexa#1996 review): the key names its owner,
+    the way a keyed row's person is named (the uid, else the authenticated organizer)."""
+    a = {"ics_uid": "u-1", "occurrence": "20300302T140000Z", "organizer": "alice@acme.test"}
+    b = {**a, "organizer": "mallory@acme.test"}
+    assert invite_source_id(a) != invite_source_id(b)
+    assert invite_source_id(a) == invite_source_id(dict(a)), "a redelivery still dedups"
+    assert invite_source_id(a) == "ics-alice@acme.test/u-1-20300302T140000Z"
+    assert invite_source_id({**a, "uid": "7"}) == "ics-7/u-1-20300302T140000Z"
+    assert invite_source_id({**a, "organizer": "a/b@acme.test"}) != invite_source_id(
+        {**a, "organizer": "a", "ics_uid": "b@acme.test/u-1"}), "an owner is one segment"
+
+
 def test_a_recurrence_id_beats_the_dtstart():
     """A modified single occurrence keeps the series DTSTART and carries its own RECURRENCE-ID."""
     from flows_integrations.mailbox import parse_ics

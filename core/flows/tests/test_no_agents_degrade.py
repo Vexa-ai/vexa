@@ -255,7 +255,7 @@ DONE_REFS = {"uid": "7", "meeting_id": 41, "native": "abc123", "title": "Weekly 
 def test_invite_intake_reaches_emit_completed_with_no_agent_domain(monkeypatch):
     """THE HEADLINE. Red before the fix: the reaction ends at `ack_by_email` and the receipts stop
     there — no bot, no meeting, no `meeting.completed`. Since ADR-0050 the intake ends at the prep and
-    the bot half is the company seed `invite_join`, fired by its keyed schedule; both halves run with
+    the bot half is `invite_join` (a seed until ADR-0052, code since), fired by its keyed schedule; both halves run with
     no agent domain."""
     reg, _sent = _production(monkeypatch)
     _forbid_the_agent_door(monkeypatch)
@@ -268,8 +268,8 @@ def test_invite_intake_reaches_emit_completed_with_no_agent_domain(monkeypatch):
     assert ack["result"]["skipped"] == "agent:not_present"
     assert [e[0] for e in emitted] == ["meeting.upcoming"]
     # the keyed half, as the worker fires it (`keyed.due`), with the invite's refs
-    seed = next(d for d in production.SEEDS if d["name"] == "invite_join")
-    reg.flow_by_names(name="invite_join", version=1, on_event="keyed.due", step_names=seed["steps"])
+    join = reg.get("invite_join", 1)            # registered in code since ADR-0052 §6
+    reg.flow_by_names(name="invite_join", version=1, on_event="keyed.due", step_names=list(join.steps))
     st, emitted = _run_flow(reg, "keyed.due", dict(INVITE_REFS), NO_AGENT)
     steps = [r["step"] for r in st["receipts"]]
     assert st["status"] == "done", f"{st['step']}: {st['reason']}"

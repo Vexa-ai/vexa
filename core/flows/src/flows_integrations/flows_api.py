@@ -93,7 +93,8 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request  # noqa: E402
+from fastapi import (Body, Depends, FastAPI, Header, HTTPException, Query, Request,  # noqa: E402
+                     Response)
 from pydantic import BaseModel, Field  # noqa: E402
 
 from flows import (Registry, StepError, SystemClock, admit, cancel, db_from_url,  # noqa: E402
@@ -107,7 +108,7 @@ import flows_config  # noqa: E402
 import flows_obs  # noqa: E402
 import flows_pages  # noqa: E402 — the page renderer `GET /flows/pages` serves (Vexa-ai/vexa#1639)
 from flows_defs import production  # noqa: E402
-from flows_steps.common import (db_url, require_service_key,  # noqa: E402
+from flows_steps.common import (db_options, db_url, require_service_key,  # noqa: E402
                                 service_key, setting)
 from flows_integrations import friction_dedup  # noqa: E402 — the repeat counter POST /friction keeps
 from flows_integrations.subject_auth import (REFUSAL, SHARED_REFUSAL, Caller,  # noqa: E402
@@ -284,7 +285,7 @@ logger = logging.getLogger(__name__)
 #: could be imported against a Postgres that is not up yet), so composing at import costs nothing
 #: and keeps ONE adapter object: `production.build` below closes over this value, so `boot()` must
 #: not quietly swap it for a second one. `None` is never served from — `boot()` refuses first.
-db = db_from_url(db_url()) if flows_config.get("VEXA_FLOWS_DB_URL") else None
+db = db_from_url(db_url(), **db_options()) if flows_config.get("VEXA_FLOWS_DB_URL") else None
 clock = SystemClock()
 vocab = Registry()
 production.build(vocab, db)
@@ -323,7 +324,7 @@ def boot() -> dict:
         # above refuses when it is still absent. Safe to compose here and nowhere else: the steps
         # `production.build` closed over run in the WORKER's process, never in this one (this
         # surface admits facts and steers reactions; it never ticks).
-        db = db_from_url(db_url())
+        db = db_from_url(db_url(), **db_options())
     return {"service": "flows-api", "steps": len(vocab.steps), "flows": len(vocab.flows)}
 
 
@@ -700,6 +701,24 @@ def health():
     """
     return {"status": "ok", "service": "flows-api",
             "flows": len(vocab.flows), "steps": len(vocab.steps)}
+
+
+#: Where this process's schema may be while it still serves: no migration waited for or running.
+_NOT_READY = ("waiting", "migrating")
+
+
+@app.get("/ready")
+def ready(response: Response):
+    """READINESS, beside liveness: 503 while this process is waiting for another process's schema
+    migration or running its own, or when its last one failed; 200 otherwise (second re-review:
+    a migration stalled behind an old snapshot must not read green). It reads the adapter's own
+    word for it (`postgres_db`'s `schema`) and dials nothing; a process that has not used the
+    database yet has nothing waiting and is ready. No credential, like `/health`."""
+    state = str(getattr(db, "schema", "") or "")
+    if state in _NOT_READY or state.startswith("failed"):
+        response.status_code = 503
+        return {"ready": False, "service": "flows-api", "schema": state}
+    return {"ready": True, "service": "flows-api", **({"schema": state} if state else {})}
 
 
 class FlowSubmission(BaseModel):
@@ -1652,12 +1671,36 @@ def set_flow_status(name: str, version: int, action: str, scope: str = "",
                 db.execute("UPDATE flow_version SET subject_grant=:g WHERE scope=:sc AND name=:n "
                            "AND version=:v", {"g": grant, "sc": target, "n": name, "v": version})
     else:
+        _refuse_unrunnable_rollback(target, name, version)
         rows = db.execute("UPDATE flow_version SET status=:s WHERE scope=:sc AND name=:n "
                           "AND version=:v RETURNING name", {"s": st, "sc": target, "n": name,
                                                             "v": version})
     if not rows:
         raise HTTPException(status_code=404, detail="flow version not found")
     return {"name": name, "scope": target, "version": version, "status": st}
+
+
+def _refuse_unrunnable_rollback(scope: str, name: str, version: int) -> None:
+    """THE LAST VERSION A ROLLBACK RUNS IS NOT RETIRED (Vexa-ai/vexa#1996 review, CEO 2026-11-03).
+    A flow the code owns (`Registry.code_only`, e.g. `invite_join`) never runs a stored version here,
+    but an image that still loads it from the table (a rollback) runs its newest active one, and
+    cannot seed one where rows exist. Retiring the only active one would leave that image no version
+    to run, silently; it is refused by name (`production.FORMER_SEED_UNRUNNABLE`), the same refusal
+    `drop_former_seeds` answers at the worker's boot."""
+    if scope != "instance" or name not in vocab.code_only:
+        return
+    active = [int(v) for v, st in db.execute(
+        "SELECT version, status FROM flow_version WHERE scope = 'instance' AND name = :n",
+        {"n": name}) if st == "active"]
+    if active != [int(version)]:
+        return
+    raise HTTPException(status_code=409, detail={
+        "refused": production.FORMER_SEED_UNRUNNABLE, "flow": name,
+        "why": (f"{name} v{version} is the only active stored version: this image runs {name} from "
+                f"the code and never runs it, but an image that still loads {name} from the table "
+                f"(a rollback) does, and with it retired that image has no version to run"),
+        "restore": (f"keep it active; to change what a rollback runs, activate another version of "
+                    f"{name} instead, which retires this one")})
 
 
 def _clear_pause(scope: str, name: str, version: int) -> None:

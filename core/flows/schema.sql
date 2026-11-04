@@ -146,8 +146,9 @@ CREATE TABLE IF NOT EXISTS keyed_schedule (
 	payload TEXT, 
 	fired_for DOUBLE PRECISION, 
 	updated_at DOUBLE PRECISION NOT NULL, 
-	PRIMARY KEY (scope, flow, key), 
-	CONSTRAINT keyed_status CHECK (status IN ('armed','fired','cancelled','missed'))
+	deadline DOUBLE PRECISION, 
+	PRIMARY KEY (scope, flow, key, person), 
+	CONSTRAINT keyed_status CHECK (status IN ('armed','fired','cancelled','missed','retired'))
 );
 
 CREATE INDEX IF NOT EXISTS keyed_due ON keyed_schedule (fire_at);

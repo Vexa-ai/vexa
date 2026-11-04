@@ -245,11 +245,14 @@ class FrictionOccurrence(Base):
 class KeyedSchedule(Base):
     """ONE PENDING FIRE PER KEY (ADR-0050 decision 3, flows-sensors phase A): "a bot 1 min before
     every calendar meeting, following reschedules". A `relative` trigger keeps a row per
-    (scope, flow, key) — the key is read off the event (`payload.event_id`). Each matching event
-    UPSERTS it: a new `fire_at` and `version + 1`, so a reschedule moves it; an event that no longer
+    (scope, flow, key, person) — the key is read off the event (`payload.event_id`), the person is
+    whom the event names, so two people's events with one key (two invitees of a meeting, or a
+    stranger who copied its UID) are two rows (Vexa-ai/vexa#1996). Each matching event UPSERTS its
+    person's row: a new `fire_at` and `version + 1`, so a reschedule moves it; an event that no longer
     passes the trigger's filter, or a `*.cancelled`, cancels it. The worker fires due rows into
-    reactions keyed `at:<scope>/<flow>/<key>:<fire_at>`, so a slot fires at most once by the reaction
-    table's constraint; a row moved after firing re-arms. ONE WRITER: flows (`flows.keyed`)."""
+    reactions keyed `at:<scope>/<flow>/[<person>/]<key>:<fire_at>`, so a slot fires at most once by
+    the reaction table's constraint; a row moved after firing re-arms. ONE WRITER: flows
+    (`flows.keyed`)."""
     __tablename__ = "keyed_schedule"
     scope: Mapped[str] = mapped_column(Text, primary_key=True)
     flow: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -259,13 +262,19 @@ class KeyedSchedule(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     event_type: Mapped[str] = mapped_column(Text, nullable=False)
     # whom the pending fire is for — the flow's owner, or for a company flow the person the event names
-    # (uid, else organizer): the per-person cap counts this, so one busy company flow starves nobody
-    person: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # (uid, else organizer): the per-person cap counts this, so one busy company flow starves nobody.
+    # Part of the key: a row is its person's, and no other person's event reaches it.
+    person: Mapped[str] = mapped_column(Text, primary_key=True, default="")
     payload: Mapped[str | None] = mapped_column(Text)
     fired_for: Mapped[float | None] = mapped_column(Double)
     updated_at: Mapped[float] = mapped_column(Double, nullable=False)
+    # ADR-0052 §7: the last moment this fire is still wanted (the trigger's `deadline`, e.g. the
+    # meeting's start + 10 min). Set: missed only past it. NULL: missed `CATCHUP_S` after the slot or
+    # the last real change. `retired`: the flow has no active version left to fire it.
+    deadline: Mapped[float | None] = mapped_column(Double)
     __table_args__ = (
-        CheckConstraint("status IN ('armed','fired','cancelled','missed')", name="keyed_status"),
+        CheckConstraint("status IN ('armed','fired','cancelled','missed','retired')",
+                        name="keyed_status"),
         Index("keyed_due", "fire_at"),
         Index("keyed_person", "scope", "person"),
     )

@@ -13,7 +13,7 @@ What a tick does — no model, ever:
   * KEEPS ONLY what Vexa acts on (`flows_integrations.mail_sensor.classify`):
       - a meeting invitation → `invite.received` {organizer, url, start, event_key, sequence, title,
         participants, workspace, workspace_invite_link, workspace_invite_token}, deduped by
-        UID+sequence — the contract the seeded `invite_join` flow follows (bot at start − 60 s);
+        organizer+UID+sequence — the contract `invite_join` follows (bot at start − 60 s);
       - a cancellation → `invite.cancelled` {event_key};
       - a reply to mail Vexa sent (In-Reply-To/References names a Vexa Message-ID) whose sender is
         that thread's own person → `mail.reply`.
@@ -50,8 +50,8 @@ _UID = re.compile(r"^UID:(.+)$", re.M)
 
 def _flows_db():
     from flows import postgres_db
-    from flows_steps.common import db_url
-    return postgres_db(db_url())
+    from flows_steps.common import db_options, db_url
+    return postgres_db(db_url(), **db_options())
 
 
 def _event_key(ics: str, ev: dict | None = None) -> str:
@@ -176,12 +176,21 @@ class MailboxSensor(SensorKind):
                     **{k: payload[k] for k in ("workspace_invite_link", "workspace_invite_token",
                                                "ics_uid", "occurrence", "share_opt_out", "group",
                                                "participant_names") if payload.get(k)}}
+            # THE CHANGE IS ITS OWNER'S (Vexa-ai/vexa#1996 review): one UID is the meeting's in every
+            # invitee's calendar, so the dedup key names whose invite this is (the authenticated
+            # organizer, `flows.keyed.person_named`), or a second person's invite would be deduped
+            # into the first one's intake run and its refs merged into it. A run admitted under the
+            # key before the owner was in it (`<event_key>:<sequence>`) is still its organizer's:
+            # `earlier` lets a resync after the upgrade dedup into it, not repeat RSVP, ack and prep.
+            from flows import keyed
+            change = f"{keyed.segment(keyed.person_named(refs))}/{key}:{seq}"
+            before = f"{key}:{seq}"
             if live:
                 # THE MAIL ISSUER VOUCHES FOR THE INVITE route() authenticated (subject-ticket.v1).
                 refs = mail_tickets.carrying(refs, mail_tickets.invite_ticket(
-                    payload, evt=f"{key}:{seq}", sub=_uid_or_blank(self._who, payload["organizer"]),
+                    payload, evt=change, sub=_uid_or_blank(self._who, payload["organizer"]),
                     now=self._clock()))
-            return Change("invite.received", f"{key}:{seq}", refs)
+            return Change("invite.received", change, refs, earlier=(before,))
         if kind == "invite_quarantine":
             if live:
                 mail_policy.quarantine(db, ext_id=ext, frm=msg.frm, kind=mail_policy.UNVERIFIED_INVITE,

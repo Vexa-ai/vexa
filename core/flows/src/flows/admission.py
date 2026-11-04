@@ -230,7 +230,8 @@ def admit(db: DB, registry: Registry, clock: Clock, *, source_event_id: str,
           max_hops: int = MAX_HOPS, runs_per_day: int = RUNS_PER_DAY,
           messages_per_day: int = MESSAGES_PER_DAY, refusals: "list | None" = None,
           light_runs_per_day: int = LIGHT_RUNS_PER_DAY,
-          keyed_per_user: "int | None" = None, sealed: "dict | None" = None) -> int:
+          keyed_per_user: "int | None" = None, sealed: "dict | None" = None,
+          earlier: "tuple[str, ...]" = ()) -> int:
     """Returns how many reactions were newly created (0 = duplicate, no matching flow, or every
     matching flow refused — see the module docstring). A flow whose trigger has a FILTER starts only
     for events that pass it; a RELATIVE trigger starts nothing here — it arms, moves or cancels its
@@ -238,7 +239,12 @@ def admit(db: DB, registry: Registry, clock: Clock, *, source_event_id: str,
 
     `sealed` is a VERIFIED event.v2 envelope (`fact_envelope.verify`'s answer). Only through it do
     `_audience`/`_owner`/`_visibility`/`_lifecycle` reach the refs; the same keys in
-    `subject_refs` are dropped first, whoever sent them (D8)."""
+    `subject_refs` are dropped first, whoever sent them (D8).
+
+    `earlier`: ids the same fact had under an earlier release (a producer that changed its id
+    scheme). A flow that already admitted it under one of them FOR THE SAME PERSON
+    (`keyed.person_named`) dedups into that run, so the change of scheme never runs it twice; a run
+    under that id that is another person's is not theirs, and the fact is admitted under its own."""
     from . import keyed, triggers
     subject_refs = strip_sealed(subject_refs)
     if sealed:
@@ -247,9 +253,12 @@ def admit(db: DB, registry: Registry, clock: Clock, *, source_event_id: str,
     for flow in registry.match(event_type):
         spec = triggers.spec_of(flow)
         if spec.get("kind") == "relative":
-            _keyed(db, clock, flow, spec, event_type, subject_refs, loop_limit=loop_limit,
-                   max_hops=max_hops, per_user=keyed.PER_USER if keyed_per_user is None
-                   else keyed_per_user)
+            did = _keyed(db, clock, flow, spec, event_type, subject_refs, loop_limit=loop_limit,
+                         max_hops=max_hops, per_user=keyed.PER_USER if keyed_per_user is None
+                         else keyed_per_user)
+            # A SHARE THAT IS FULL IS AN ANSWER, not a log line (ADR-0052 §8): the caller hears it.
+            if did == "refused":
+                _refuse("keyed_share_full", flow, event_type, refusals)
             continue
         if spec.get("filter") and not triggers.passes(spec["filter"], event_type, subject_refs):
             REFUSED["filtered"] += 1
@@ -263,7 +272,7 @@ def admit(db: DB, registry: Registry, clock: Clock, *, source_event_id: str,
         # on the same event admits independently while a redelivery of the same fact stays a no-op.
         # The instance's flows keep their bare name here, so every key written before scope
         # existed still deduplicates against its redelivery.
-        key = f"{source_event_id}::{flow.ident}"
+        key = _earlier_key(db, flow, earlier, subject_refs) or f"{source_event_id}::{flow.ident}"
         rows = insert(db, clock, flow, key=key, event_type=event_type, subject_refs=subject_refs)
         if rows:
             created += len(rows)
@@ -271,6 +280,19 @@ def admit(db: DB, registry: Registry, clock: Clock, *, source_event_id: str,
         _merge_into_admitted(db, clock, key=key, source_event_id=source_event_id,
                               incoming_refs=subject_refs)
     return created
+
+
+def _earlier_key(db: DB, flow: Flow, earlier, refs: dict) -> str:
+    """The reaction key `flow` already admitted this fact under, by an id from `earlier`, when that
+    run is the same person's; else "" (see `admit`)."""
+    from . import keyed
+    me = keyed.person_named(refs).lower()
+    for sid in earlier or ():
+        key = f"{sid}::{flow.ident}"
+        rows = db.execute("SELECT subject_refs FROM reaction WHERE source_event_id = :k", {"k": key})
+        if rows and keyed.person_named(loads(rows[0][0]) if rows[0][0] else {}).lower() == me:
+            return key
+    return ""
 
 
 def _keyed(db: DB, clock: Clock, flow: Flow, spec: dict, event_type: str, refs: dict, *,
@@ -292,10 +314,15 @@ def _keyed(db: DB, clock: Clock, flow: Flow, spec: dict, event_type: str, refs: 
     gone = event_type.endswith(".cancelled") or str(refs.get("status") or "") == "cancelled"
     passes = not spec.get("filter") or triggers.passes(spec["filter"], event_type, refs)
     if gone or not passes or at is None:
-        keyed.cancel(db, clock, flow, key=key)
+        # the person this event names cancels their own row only, never another's of the same key
+        keyed.cancel(db, clock, flow, key=key, person=keyed.person_of(flow, refs))
         return "cancelled"
+    # the last moment the fire is still wanted (ADR-0052 §7), when the trigger names one
+    deadline = triggers.fire_at(spec["deadline"], event_type, refs) if spec.get("deadline") else None
+    share = spec.get("share") if spec.get("share") in keyed.SHARES else "person"
     return keyed.upsert(db, clock, flow, key=key, fire_at=at, event_type=event_type,
-                        payload={k: v for k, v in refs.items() if k != ORIGIN}, per_user=per_user)
+                        payload={k: v for k, v in refs.items() if k != ORIGIN}, per_user=per_user,
+                        deadline=deadline, share=share)
 
 
 def _merge_into_admitted(db: DB, clock: Clock, *, key: str, source_event_id: str,

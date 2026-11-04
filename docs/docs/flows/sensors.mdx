@@ -38,7 +38,7 @@ next bots that are armed.
 
 ## Invitations to the shared mailbox
 
-When you invite Vexa (the shared mailbox) to a meeting, the company flow `invite_join` keeps one
+When you invite Vexa (the shared mailbox) to a meeting, the flow `invite_join` keeps one
 pending bot for that meeting:
 
 - an updated invitation moves the bot to the new time;
@@ -46,8 +46,9 @@ pending bot for that meeting:
 - one minute before the start, the bot joins and the meeting is attached to the workspace the
   invitation names (otherwise to the organiser's default).
 
-`invite_join` belongs to the company. The company account changes it from chat with `flows_submit`
-and `scope: instance`, using the same tools anyone uses for their own flows.
+`invite_join` is part of the product: it is registered in the code and changes with each release.
+Until 0.13.4 it was a company flow the company account could change from chat; the upgrade removes
+that stored copy (see below).
 
 ## What is on after an upgrade
 
@@ -70,9 +71,19 @@ and `scope: instance`, using the same tools anyone uses for their own flows.
   overwrites it. `invite_intake` becomes version 4 (account, RSVP, acknowledgement, prepare note),
   and `invite_join` sends the bot one minute before the start. Invitations admitted before the
   upgrade finish on version 3.
+- **`invite_join` runs from the code (0.13.4).** On its first start the flows worker removes the
+  stored copy of the company flow `invite_join` that earlier releases wrote (`created_by: seed`),
+  once, and no stored version of it runs any more. Versions the company account submitted on top of
+  it are kept: the newest active one stays active, so an earlier image you roll back to still runs
+  it, and older active ones are retired. A warning names them. When the stored copy is the active
+  version and the company retired all of its own, the worker refuses to remove it
+  (`former_seed_unrunnable`, at every start) and names the version to re-activate. A version
+  submitted after the upgrade is not touched.
 - **Two tables are added at startup**, `sensor` and `keyed_schedule` (`CREATE TABLE IF NOT EXISTS`).
-  A stack that ran the first cut of `keyed_schedule` gains its `person` column
-  (`flows/migrations.py`).
+  A stack that ran the first cut of `keyed_schedule` gains its `person` column; every stack gains
+  `deadline`, the `retired` status and a key that includes `person` (`flows/migrations.py`). The
+  status check is validated and the new key's index is built after the startup transaction, without
+  holding the table.
 
 ## How it works
 
@@ -84,19 +95,31 @@ and `scope: instance`, using the same tools anyone uses for their own flows.
   Each change passes the sensor's filter and is admitted as `calendar.event.created|updated|cancelled`.
   It is deduplicated by event id and version, so a replay emits nothing twice. After three failures
   in a row the sensor reads `degraded`, says why, and backs off.
-- **Keyed schedules.** A `relative` trigger keeps one pending fire per key (`keyed_schedule`). Every
-  matching event moves it, and a cancellation or an event that stops passing the filter removes it.
+- **Keyed schedules.** A `relative` trigger keeps one pending fire per key and person
+  (`keyed_schedule`): the person is the user the event names, else its organizer. Two people whose
+  events carry the same key, such as two people invited to one meeting, get a fire each. Every
+  matching event moves that person's fire, and a cancellation or an event that stops passing the
+  filter removes it; another person's event never touches it. For an invitation the key is the
+  calendar UID plus, for one instance of a recurring meeting, its `RECURRENCE-ID`.
   The worker fires a due row into one run, keyed by the slot, so it fires at most once. A row moved
   after it fired re-arms once.
 - **Light runs.** A flow made only of steps that call no model (`request_meeting_bot`) counts on its
   own daily budget, not the agent-run one.
-- **Late and missed fires.** A due row fires within ten minutes of its time, counted from the
-  slot or from when the row was armed or moved, whichever is later: an invitation that arrives after
-  its meeting started still sends the bot. A row the worker could have fired and did not (the worker
-  was down) is marked `missed` and logged, and sends nothing.
-- **Caps.** One person may hold 500 pending keyed fires in a scope, their own or their share of a
-  company flow, and a company flow holds at most 20,000 for everyone. A fire over the cap is refused
-  and logged.
+- **Late and missed fires.** A trigger may name a `deadline` (`payload.start + 600s`): its row
+  fires whenever the worker reaches it before that moment, however long the worker was down, and is
+  marked `missed` after it. A row without a deadline fires within ten minutes of its time, counted
+  from the slot or from when the row was armed or really moved, whichever is later: an invitation
+  that arrives after its meeting started still sends the bot. A repeated delivery that changes
+  nothing does not restart those ten minutes. A deadline lies at most an hour after the fire time; a
+  later one is held to that hour. A row the worker could have fired and did not is
+  marked `missed` and logged, and sends nothing.
+- **No row holds up another.** The worker reads due rows page by page past any it skips (a daily
+  cap that refuses one), so a later row still fires. Rows of a flow that has no active version left
+  are marked `retired`.
+- **Caps.** One person may hold 500 pending keyed fires per flow in a scope, their own or their
+  share of a company flow, and a company flow holds at most 20,000 for everyone. Rows of one company
+  flow never count against another's. A person's own flows share one total of 500 between them. A fire over the cap is refused, logged, and answered to whoever
+  sent the event (`refused: keyed_share_full` from `POST /events`).
 
 **Who owns which data.**
 

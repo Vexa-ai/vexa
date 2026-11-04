@@ -725,6 +725,25 @@
       ]
     },
     {
+      "key": "VEXA_FLOWS_MIGRATION_DB_URL",
+      "class": "defaulted",
+      "description": "The direct, unpooled connection to the same database that the schema migration runs its lock session on, when VEXA_FLOWS_DB_URL goes through a transaction pooler (pgbouncer): a session advisory lock does not hold through one, so two processes would migrate at once and the lock would leak. The lock, the index builds, the constraint validation and the lock-holder reads run on it, so it names the same database as VEXA_FLOWS_DB_URL, with a role that can alter the flows tables. Unset: the migration runs them on VEXA_FLOWS_DB_URL, which is then a direct connection. Helm sets it whenever pgbouncer.enabled.",
+      "default": "",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_MIGRATION_WAIT_S",
+      "class": "defaulted",
+      "description": "How many seconds a flows process's first use of the database waits for another process's schema migration before it fails with migration_lock_timeout, naming who holds the migration and the oldest open snapshot. Many times a CONCURRENTLY index build on a large table.",
+      "default": "3600",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
       "key": "VEXA_FLOWS_SCHEDULE_CATCHUP_S",
       "class": "defaulted",
       "description": "After downtime the worker fires a schedule flow's most recent missed slot once, if it is younger than this many seconds; older slots are skipped and counted (ADR-0046 decision 3).",
@@ -908,6 +927,14 @@
     {
       "key": "DB_PORT",
       "reason": "the port part of the composed VEXA_FLOWS_DB_URL (Helm only)."
+    },
+    {
+      "key": "DB_DIRECT_HOST",
+      "reason": "the host part of the composed VEXA_FLOWS_MIGRATION_DB_URL: Postgres itself, not pgbouncer (Helm, pgbouncer.enabled only)."
+    },
+    {
+      "key": "DB_DIRECT_PORT",
+      "reason": "the port part of the composed VEXA_FLOWS_MIGRATION_DB_URL (Helm, pgbouncer.enabled only)."
     },
     {
       "key": "DB_SSL_MODE",

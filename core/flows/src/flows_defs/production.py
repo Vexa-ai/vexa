@@ -88,6 +88,12 @@ from flows_steps import outbound
 from flows_timeline.model import concerns as _concerns
 
 INVITE = EventType("invite.received")
+#: `invite_join`'s trigger (ADR-0050): the bot one minute before the start, keyed by the meeting.
+#: No `deadline` (ADR-0052 §7) yet: with a fire one minute before the start it would move the missed
+#: moment by a minute and take the bot away from an invite forwarded into a running meeting, which
+#: the catch-up rule still serves. The 10-minute lead and its deadline arrive with `booked_bot`.
+INVITE_JOIN_TRIGGER = {"kind": "relative", "filter": "payload.url exists",
+                       "at": "payload.start - 60s", "key": "payload.event_key"}
 ONB_PERSON = EventType("onboarding.person.needed")
 ONB_GROUP = EventType("onboarding.group.needed")
 COMPLETED = EventType("meeting.completed")
@@ -3226,9 +3232,23 @@ def build(reg: Registry, db) -> None:
     # never saw an update: a moved meeting got its bot at the old time, a cancelled one got it anyway.
     reg.flow(name="invite_intake", version=4, on=INVITE,
              steps=[s["ensure_user"], s["rsvp_accept"], s["ack_by_email"], s["emit_prep"]])
-    # THE BOT FOLLOWS THE MEETING (`invite_join`) is NOT registered here: it is a SEED (`SEEDS`), a
-    # company flow the global account's agent owns, reads and changes from chat (founder 2026-10-14:
-    # "the global level is owned by the global user's agent"). The image carries its steps only.
+    # THE BOT FOLLOWS THE MEETING (ADR-0050): one keyed schedule per meeting and person — the row's
+    # key is its owner (the person the invite names, `keyed.person_of`) plus `event_key` (the
+    # calendar UID, plus RECURRENCE-ID, the original start of one instance of a series, so instances
+    # of one UID are rows of their own; never DTSTART, which is what a reschedule moves). Armed by
+    # `invite.received`, MOVED by every update, CANCELLED by `invite.cancelled`, each from that
+    # person only; one minute before the start it runs the steps invite_intake v3 ran after
+    # `await_start`, with the invite's refs (its `workspace` among them), so the meeting's record is
+    # the same and it lands in the invite's workspace.
+    # REGISTERED IN CODE, NOT A SEED (ADR-0052 §6, decided 2026-11-01): it carries the guarantee that
+    # a booked bot is on time, so it changes with the code, and no stored version of it is chosen
+    # here (`code_only`). It was a seed (a company flow the global account owned) until then;
+    # `drop_former_seeds` removes that stored copy once.
+    reg.flow(name="invite_join", version=1, on=EventType("invite.*"),
+             steps=[s["ensure_user"], s["dispatch_bot"], s["emit_started"], s["run_meeting"],
+                    s["emit_completed"]],
+             params={"_trigger": INVITE_JOIN_TRIGGER})
+    reg.code_only.update(FORMER_SEEDS)
     # `onboard_person` and `onboard_group` are RETIRED (decision 29) — the email conversations that
     # chased a person until they finished setup. They are not declared, so nothing reacts to
     # `onboarding.*.needed` any more, and `spawn_onboardings` no longer emits it either. Their
@@ -3310,15 +3330,6 @@ def build(reg: Registry, db) -> None:
 #: retire), and an upgrade that changes the seed does not overwrite it — the new seed is only a
 #: version the global agent may choose to submit. `created_by: seed` marks the copy.
 SEEDS = (
-    # THE BOT FOLLOWS THE MEETING (ADR-0050): one keyed schedule per meeting (`event_key`: UID, plus
-    # RECURRENCE-ID for one occurrence), armed by `invite.received`, MOVED by every update, CANCELLED
-    # by `invite.cancelled`; one minute before the start it runs the steps invite_intake v3 ran after
-    # `await_start`, with the invite's refs (its `workspace` among them), so the meeting's record is
-    # the same and it lands in the invite's workspace.
-    {"name": "invite_join", "on_event": "invite.*",
-     "steps": ["ensure_user", "dispatch_bot", "emit_started", "run_meeting", "emit_completed"],
-     "params": {"_trigger": {"kind": "relative", "filter": "payload.url exists",
-                             "at": "payload.start - 60s", "key": "payload.event_key"}}},
     # WHAT A MEETING SIGNAL DOES (transcript signals, 2026-10-15): the `signals` service posts one
     # `meeting.signal` when a live meeting's buffer is worth the agent's attention; this wakes the
     # meeting's agent in the meeting's chat with the buffer as data. A company changes the plan
@@ -3328,6 +3339,90 @@ SEEDS = (
     # …AND A ROOM'S (rooms, 2026-10-15): a room's sensor wakes the agent in the room itself.
     {"name": "room_signal", "on_event": "room.signal", "steps": ["wake_meeting_chat"], "params": {}},
 )
+
+
+#: Company flows that were seeds and are now registered in code (ADR-0052 §6). Their stored copy is
+#: removed once by `drop_former_seeds`, and no stored version of them is chosen (`Registry.code_only`),
+#: so no version in the table shadows the code's.
+FORMER_SEEDS = ("invite_join",)
+
+
+#: The refusal `drop_former_seeds` answers when removing a seed copy would leave a rollback with
+#: no version of the flow to run (CEO, 2026-11-03: fail loudly, ADR-0052 §6 unchanged).
+FORMER_SEED_UNRUNNABLE = "former_seed_unrunnable"
+
+
+def drop_former_seeds(db, refusals: "list | None" = None) -> list:
+    """THE ONE-OFF MIGRATION (ADR-0052 §6): for each flow in `FORMER_SEEDS` whose seed row is still
+    stored (`created_by = 'seed'`), delete that seed row (the copy Vexa wrote). Versions the company
+    account authored on top are kept, with their history, never deleted, and this image runs none of
+    them: the code's version runs (`Registry.code_only`).
+
+    A ROLLBACK STILL HAS THE FLOW (Vexa-ai/vexa#1996 review). The image before this one loads the
+    flow from the table: it runs the newest ACTIVE version, and writes the seed again only where the
+    table holds no version of it at all. So the company's newest active version — the one that image
+    ran — stays active, and only the company's older active versions, which no image runs, are
+    retired. With no company version the table is left empty and that image seeds it again at its
+    boot. Said at warning level when company versions existed.
+
+    ONE STATE IS REFUSED, BY NAME (`FORMER_SEED_UNRUNNABLE`). The seed copy is the active version and
+    every version the company submitted is retired: removing the copy would leave that image no
+    version to run and no room to seed one, so a rollback would send no bot to any invite, silently,
+    in code we cannot change any more. The copy is then NOT removed (this image does not run it
+    either way), the refusal is logged at error level and appended to `refusals` with how to restore
+    a version that image can run, and it is asked again on every boot until the company re-activates
+    one of its own. A flow whose seed copy is retired too was turned off by the company; it stays off.
+
+    Once the seed row is gone this does nothing, so a version submitted later is never touched.
+    Returns the names whose seed copy was removed."""
+    removed = []
+    for name in FORMER_SEEDS:
+        try:
+            rows = db.execute("SELECT version, status, created_by FROM flow_version "
+                              "WHERE scope = 'instance' AND name = :n", {"n": name})
+        except Exception:  # noqa: BLE001 — a store with no table (a stub) has nothing to remove
+            return removed
+        if not any(by == "seed" for _, _, by in rows):
+            continue
+        mine = [(int(v), st, by) for v, st, by in rows if by != "seed"]
+        authored = [f"v{v} ({st}, by {by or 'unknown'})" for v, st, by in mine]
+        kept = max((v for v, st, _ in mine if st == "active"), default=None)
+        if kept is None and mine and any(by == "seed" and st == "active" for _, st, by in rows):
+            newest = max(v for v, _, _ in mine)
+            why = (f"removing the seed copy of {name} would leave an image that still loads it from "
+                   f"the table (a rollback) no version to run: the company's own versions "
+                   f"{', '.join(authored)} are all retired, so the seed copy is kept until one is "
+                   f"active again (this image runs {name} from the code either way).")
+            restore = (f"re-activate one of the company's versions, e.g. the newest: "
+                       f"POST /flows/{name}/{newest}/activate with the operator key (or "
+                       f"flow_lifecycle, action activate, in the global account's chat), then "
+                       f"restart flows-worker.")
+            logger.error("REFUSED %s: %s To restore: %s", FORMER_SEED_UNRUNNABLE, why, restore)
+            if refusals is not None:
+                refusals.append({"refused": FORMER_SEED_UNRUNNABLE, "flow": name, "why": why,
+                                 "restore": restore})
+            continue
+        db.execute("DELETE FROM flow_version WHERE scope = 'instance' AND name = :n "
+                   "AND created_by = 'seed'", {"n": name})
+        if kept is not None:
+            # the one a rollback runs stays active; this image never chooses it (`code_only`)
+            gone = db.execute("UPDATE flow_version SET status = 'retired' WHERE scope = 'instance' "
+                              "AND name = :n AND status = 'active' AND version <> :keep "
+                              "RETURNING version", {"n": name, "keep": kept})
+            logger.warning("former seed %s: seed copy removed; the company's own versions %s are "
+                           "kept, %s retired, v%d left active for an image that still loads the "
+                           "flow (a rollback) — this image runs it from the code (ADR-0052)", name,
+                           ", ".join(authored),
+                           ", ".join(f"v{v}" for (v,) in sorted(gone or [])) or "none", kept)
+        elif mine:
+            logger.warning("former seed %s: seed copy removed; the company's own versions %s are "
+                           "kept, all retired, as the seed copy was: the company turned the flow "
+                           "off, and an image that still loads it from the table finds it off "
+                           "(this image runs it from the code, ADR-0052)", name, ", ".join(authored))
+        else:
+            logger.info("former seed %s: seed copy removed; the flow now runs from the code", name)
+        removed.append(name)
+    return removed
 
 
 def seed(db, now: "float | None" = None) -> list:

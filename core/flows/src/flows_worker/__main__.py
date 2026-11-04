@@ -20,7 +20,7 @@ from flows_steps import policies
 import flows_obs
 from flows_steps import common
 from flows_worker.unit import SERVICE, instrument, run_unit
-from flows_steps.common import db_url, require_service_key
+from flows_steps.common import db_options, db_url, require_service_key
 
 POLL_S = 1.0
 SLOW_STEP_S = 8.0
@@ -65,7 +65,8 @@ def admission_limits() -> dict:
 def keyed_pass(db, reg, clock, limits: "dict | None" = None) -> int:
     """KEYED SCHEDULES (ADR-0050): one pending fire per key — the bot one minute before a meeting,
     moved by every update, called off by a cancel — fired here like a slot. The daily cap is the
-    same admission check every other run takes."""
+    same admission check every other run takes; a row it refuses stays armed and the pass reads on
+    past it (ADR-0052 §7)."""
     limits = admission_limits() if limits is None else limits
     return keyed.fire_due(db, reg, clock, admissible=lambda f, refs: admissible(
         db, f, clock, event_type=keyed.KEYED_EVENT, subject_refs=refs, **limits))
@@ -101,10 +102,21 @@ def main() -> int:
     # of four placeholders in `flows_api.py` came to stand in for the declaration's seven.
     from config_preflight import preflight as contract_preflight
     contract_preflight()
-    db = postgres_db(db_url())
+    db = postgres_db(db_url(), **db_options())
     clock = SystemClock()
     reg = Registry()
     production.build(reg, db)
+    # A FLOW THAT WAS A SEED AND IS NOW CODE (ADR-0052 §6): its stored copy goes, once — unless
+    # removing it would leave a rollback nothing to run, which is refused by name on every boot
+    # until the company re-activates a version of its own.
+    refused: list = []
+    dropped = production.drop_former_seeds(db, refusals=refused)
+    if dropped:
+        print(f"former seed(s) now registered in code, stored copy removed: {', '.join(dropped)}",
+              flush=True)
+    for r in refused:
+        print(f"REFUSED {r['refused']} ({r['flow']}): {r['why']} To restore: {r['restore']}",
+              flush=True)
     # COMPANY FLOWS ARE THE GLOBAL ACCOUNT'S (seeds, written once, never overwritten).
     seeded = production.seed(db)
     if seeded:
@@ -119,9 +131,9 @@ def main() -> int:
     # says what it heard, instead of running its first steps under rules nobody wrote.
     policies.read_at_boot()
 
-    def emit(event_type: str, source_id: str, refs: dict) -> int:
+    def emit(event_type: str, source_id: str, refs: dict, earlier: tuple = ()) -> int:
         n = admit(db, reg, clock, source_event_id=source_id,
-                  event_type=event_type, subject_refs=refs, **admission_limits())
+                  event_type=event_type, subject_refs=refs, earlier=earlier, **admission_limits())
         # A ROOM'S PLANNED CALL FOLLOWS ITS CREATOR'S CALENDAR (PLAN-8H 8.4): a moved or cancelled
         # event is handed to agent-api's room door as its owner. Never stops the pass.
         if event_type.startswith("calendar.event.") and common.domain_present("agent"):

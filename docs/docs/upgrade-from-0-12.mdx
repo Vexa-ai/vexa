@@ -163,6 +163,10 @@ share. The tables admin-api and meeting-api own (`users`, `api_tokens`, `platfor
 | `flow_version` gains `scope` (`TEXT NOT NULL DEFAULT 'instance'`, so every existing flow is an instance flow) and `cron`, and its primary key changes from `(name, version)` to `(scope, name, version)` | flows | the first time a flows process (flows-api, flows-worker or flows-mailbox) uses the database, in one transaction; the key is swapped only while it lacks `scope` |
 | New table `friction_occurrence`, with index `friction_occurrence_by_id` | flows | the same moment |
 | `friction_occurrence` gains `admitted`; new tables `keyed_schedule` (gains `person` on a pre-release database), `sensor`, `mail_send` and `mail_test_send` | flows | the same moment (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`) |
+| `keyed_schedule` gains `deadline`, and its status check gains `retired` (swapped once, while the check lacks it, added `NOT VALID`) | flows | the same moment |
+| The `retired` check is validated, and `keyed_schedule`'s primary key changes from `(scope, flow, key)` to `(scope, flow, key, person)` on an index built `CONCURRENTLY` | flows | right after, outside that transaction, one statement at a time under an advisory lock; reads and writes go on |
+| The stored company flow `invite_join` (`created_by: seed`) is removed, once: the flow is registered in the code, and no stored version of it runs. Versions the company submitted on top of it are kept: the newest active one stays active, so an earlier image rolled back to still runs it, and older active ones are retired | flows-worker | its first start; a warning names the versions |
+| If the stored copy is the active `invite_join` and every version the company submitted is retired, flows-worker refuses to remove it (`REFUSED former_seed_unrunnable` at every start, naming the version to re-activate with `POST /flows/invite_join/<version>/activate`), because a rollback would otherwise find no `invite_join` to run; retiring the last active version is refused the same way | flows-worker, flows-api | every start until a company version is active again |
 
 There is no separate migration command for the schema: every step is idempotent and runs on each
 start.
@@ -568,7 +572,7 @@ If you start the Lite image with your own `docker run` instead of `make lite`:
 
 ### Mailbox invitations and calendar sensors
 
-A mailbox invitation now sends its bot from a keyed schedule one minute before the start (`invite_intake` v4 with the company flow `invite_join`), and the schedule moves with a reschedule and is removed on a cancellation. Sensors exist but run nothing until a person creates and enables one; the calendar kind needs the broker’s `sensors` key (Compose: re-run `connections-keys`). Details: [What is on after an upgrade](/flows/sensors#what-is-on-after-an-upgrade).
+A mailbox invitation now sends its bot from a keyed schedule one minute before the start (`invite_intake` v4 with the flow `invite_join`, registered in the code; a company copy stored by an earlier pre-release is removed at the first start), and the schedule moves with a reschedule and is removed on a cancellation. Sensors exist but run nothing until a person creates and enables one; the calendar kind needs the broker’s `sensors` key (Compose: re-run `connections-keys`). Details: [What is on after an upgrade](/flows/sensors#what-is-on-after-an-upgrade).
 
 ## After the upgrade, once
 

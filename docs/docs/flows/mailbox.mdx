@@ -205,7 +205,7 @@ What is sent, and in which words, is decided by the deployment's admin account. 
    cursor advances.
 6. `flows-worker` runs `invite_intake`: it makes sure the organizer has an account (admin-api)
    and sends the RSVP and the acknowledgement through the outbound path (step 8). The same fact
-   arms the company flow `invite_join`'s keyed schedule for that meeting (its `event_key`): an
+   arms the flow `invite_join`'s keyed schedule for that meeting (its `event_key`): an
    update moves it and a cancellation removes it. One minute before the start, `invite_join`
    creates the bot through the gateway's `POST /bots` ([Sensors and keyed
    schedules](/flows/sensors#invitations-to-the-shared-mailbox)).

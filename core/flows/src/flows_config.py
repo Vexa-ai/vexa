@@ -299,6 +299,12 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "defaulted", "120",
         "mail-triggered agent turns the whole deployment may run per window — the ceiling on what "
         "one inbox can cost, whoever sends it."),
+    "VEXA_FLOWS_MIGRATION_DB_URL": (
+        "defaulted", "",
+        "The direct, unpooled connection to the same database that the schema migration runs its lock session on, when VEXA_FLOWS_DB_URL goes through a transaction pooler (pgbouncer): a session advisory lock does not hold through one, so two processes would migrate at once and the lock would leak. The lock, the index builds, the constraint validation and the lock-holder reads run on it, so it names the same database as VEXA_FLOWS_DB_URL, with a role that can alter the flows tables. Unset: the migration runs them on VEXA_FLOWS_DB_URL, which is then a direct connection. Helm sets it whenever pgbouncer.enabled."),
+    "VEXA_FLOWS_MIGRATION_WAIT_S": (
+        "defaulted", "3600",
+        "How many seconds a flows process's first use of the database waits for another process's schema migration before it fails with migration_lock_timeout, naming who holds the migration and the oldest open snapshot. Many times a CONCURRENTLY index build on a large table."),
     "VEXA_FLOWS_SCHEDULE_CATCHUP_S": (
         "defaulted", "3600",
         "After downtime the worker fires a schedule flow's most recent missed slot once, if it is younger than this many seconds; older slots are skipped and counted (ADR-0046 decision 3)."),

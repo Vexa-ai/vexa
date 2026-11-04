@@ -40,13 +40,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import flows_config as cfg
 import flows_obs
-from flows import Registry, SystemClock, admit, postgres_db
+from flows import Registry, SystemClock, admit, keyed, postgres_db
 from flows_defs import production
 from flows_integrations import mail_policy, outlook
 from flows_integrations import mailbox_status
 from flows_integrations import mail_tickets
 from flows_integrations.inbox import get_inbox
-from flows_steps.common import db_url
+from flows_steps.common import db_options, db_url
 from flows_steps.mail_transport import MailTransportError
 
 
@@ -516,15 +516,33 @@ def invite_native(url: str) -> tuple[str, str]:
 
 
 def invite_source_id(ev: dict) -> str:
-    """The dedup key for one INVITE — the occurrence, never the series (R-B02).
+    """The dedup key for one INVITE — its owner's, and the occurrence, never the series (R-B02).
 
     `ics-<UID>` recorded a recurring meeting exactly once and then swallowed every later
     occurrence in silence. RFC 5545 repeats the `UID` for the whole series, so the key needs the
     occurrence too: `RECURRENCE-ID` when the sender sent one, else the occurrence's own `DTSTART`
     — which is what two per-occurrence invites actually differ by. An event with neither keeps the
-    old key exactly, so nothing that used to dedup stops deduping."""
+    old key exactly, so nothing that used to dedup stops deduping.
+
+    THE OWNER IS IN IT TOO (Vexa-ai/vexa#1996 review), named the way a keyed row's person is
+    (`flows.keyed.person_named`: the uid, else the authenticated organizer). A UID belongs to the
+    meeting, not to one person: two people invited to one meeting, or a stranger who copied its UID,
+    sent invites with one id, so the second was deduplicated into the first one's run (no RSVP, ack
+    or prep of its own) and its refs were merged into that run. A redelivery of the same invite has
+    the same owner and still dedups; an event that names nobody keeps the key it had."""
+    owner = keyed.person_named(ev)
+    return f"ics-{keyed.segment(owner)}/{_occurrence_of(ev)}" if owner else _invite_base_id(ev)
+
+
+def _occurrence_of(ev: dict) -> str:
+    """`<UID>[-<occurrence>]`: the meeting and the one occurrence of it an invite is for."""
     occ = str(ev.get("occurrence") or "").strip()
-    return f"ics-{ev['ics_uid']}-{occ}" if occ else f"ics-{ev['ics_uid']}"
+    return f"{ev['ics_uid']}-{occ}" if occ else f"{ev['ics_uid']}"
+
+
+def _invite_base_id(ev: dict) -> str:
+    """`ics-<UID>[-<occurrence>]`: an invite's id before the owner was in it."""
+    return f"ics-{_occurrence_of(ev)}"
 
 
 #: WHAT THE ELISION LOOKS LIKE when a body is longer than the cap. It is part of the text a reader
@@ -712,9 +730,14 @@ def handle(db, reg, clock, self_addr: str, msg, known_uid, is_scaffolded,
         ticket = mail_tickets.invite_ticket(payload, evt=sid, sub=_uid_or_blank(known_uid,
                                                                                 payload["organizer"]),
                                             now=now)
+        # AN INVITE ADMITTED BEFORE THE OWNER WAS IN ITS ID (`ics-<UID>[-<occurrence>]`, 0.12
+        # included): its own organizer's resend dedups into the run it already had (`admit`'s
+        # `earlier`), never into another person's.
+        old = _invite_base_id(payload)
         n = admit(db, reg, clock, source_event_id=sid,
                   event_type="invite.received",
-                  subject_refs=mail_tickets.carrying(payload, ticket))
+                  subject_refs=mail_tickets.carrying(payload, ticket),
+                  earlier=(old,) if old != sid else ())
         return ("invite", n)
     if kind == "invite_cancel":
         n = admit(db, reg, clock,
@@ -800,7 +823,7 @@ def process(db, reg, clock, self_addr: str, msg, known_uid, is_scaffolded,
 
 def main() -> int:
     flows_obs.set_service(SERVICE)
-    db = postgres_db(db_url())
+    db = postgres_db(db_url(), **db_options())
     clock = SystemClock()
     reg = Registry()
     production.build(reg, db)     # the matcher needs the flow triggers; steps unused here

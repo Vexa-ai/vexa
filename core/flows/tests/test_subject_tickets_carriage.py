@@ -373,7 +373,7 @@ def test_an_authenticated_invite_carries_a_mail_ticket(tmp_path, monkeypatch):
     assert c["once"] == ["bot.dispatch"]
     assert set(c["cls"]) == {"bot.dispatch", "transcript.read", "desk.write", "chat.autonomous"}
     assert c["exp"] - c["iat"] == st.MAX_LIFETIME[("mail", "event")], "capped: the meeting is far off"
-    assert c["evt"] == "ics-u-42-20300302T140000Z"
+    assert c["evt"] == "ics-boss@acme.test/u-42-20300302T140000Z"
 
 
 def test_an_invite_from_an_organizer_who_is_not_a_user_names_the_address_alone(tmp_path,

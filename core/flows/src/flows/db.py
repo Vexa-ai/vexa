@@ -16,7 +16,9 @@ exported from the product package (`flows.SqliteDB`) was importable by anything 
 `flows` at all. Tests construct it directly from the test tree; this module never sees it."""
 from __future__ import annotations
 
+import contextlib
 import json
+import threading
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
@@ -121,7 +123,8 @@ def pg_engine(url: str, **engine_kwargs):  # pragma: no cover — exercised agai
     return engine
 
 
-def postgres_db(url: str):  # pragma: no cover — production composition; lazy import by design
+def postgres_db(url: str, *,  # pragma: no cover — production composition; lazy import by design
+                migration_wait_s: "float | None" = None, migration_url: "str | None" = None):
     """The Postgres adapter. `create_engine` itself is already lazy (no connection until first
     query); what this function adds is making SCHEMA APPLICATION lazy too, behind a one-shot
     guard on first `execute`/`executescript` — it used to run at construction, which meant
@@ -129,7 +132,20 @@ def postgres_db(url: str):  # pragma: no cover — production composition; lazy 
     Postgres that was not reachable yet, and `/health` is answered by the in-memory step registry
     and never calls either method — so a flows-api that cannot reach Postgres still answers
     liveness. The first caller that actually touches the DB (a real request, the worker's first
-    claim) pays for the schema application once; every caller after it is free."""
+    claim) pays for the schema application once; every caller after it is free.
+
+    `migration_wait_s`: how long that first use waits for another process's migration
+    (`VEXA_FLOWS_MIGRATION_WAIT_S`, passed by the composition; `migrations.MIGRATION_WAIT_S` when
+    not). `schema` says where this process is: `unapplied`, `waiting` (for another process's
+    migration), `migrating`, `ready`, or `failed: <reason>`, and the next use tries again.
+
+    `migration_url`: where the migration's lock session connects (`VEXA_FLOWS_MIGRATION_DB_URL`),
+    when `url` goes through a transaction pooler. A session advisory lock lives on one server
+    connection, and pgbouncer in transaction mode hands each statement whichever one is free: the
+    lock is taken on one, released on another (which holds none), and stays on the first, idle in
+    the pool, until every later boot times out behind it (Vexa-ai/vexa#1996 re-review at 81f5c5d4,
+    Helm pgbouncer.enabled=true). So the lock session goes to Postgres itself; `schema.sql`,
+    `apply` and every query after go through `url` as before. None: `url` itself."""
     from sqlalchemy import text
 
     engine = pg_engine(url, pool_pre_ping=True)
@@ -139,19 +155,65 @@ def postgres_db(url: str):  # pragma: no cover — production composition; lazy 
 
         def __init__(self) -> None:
             self._schema_applied = False
+            self._schema_lock = threading.Lock()
+            self.schema = "unapplied"
 
         def _ensure_schema(self) -> None:
             if self._schema_applied:
                 return
-            self._schema_applied = True
-            self._run_script(SCHEMA)
-            # Columns added since a table was created (`migrations`): one transaction, so a
-            # half-swapped key is never what the next boot finds.
-            from . import migrations
+            with self._schema_lock:
+                if self._schema_applied:
+                    return
+                try:
+                    self._migrate()
+                except Exception as e:
+                    self.schema = f"failed: {getattr(e, 'code', type(e).__name__)}"
+                    raise
+                # only once it worked: a boot that failed half way tries again on the next use
+                self._schema_applied = True
+                self.schema = "ready"
+
+        @contextlib.contextmanager
+        def atomic(self):
+            """SEVERAL STATEMENTS, ONE TRANSACTION: yields an `execute` bound to it, committed when
+            the block ends (rolled back if it raises). For a check and the write it guards, which
+            must not interleave with another process's (`flows.keyed.upsert`)."""
+            self._ensure_schema()
             with engine.begin() as c:
-                migrations.apply(lambda sql, params=None: (
+                yield lambda sql, params=None: (
                     lambda res: [tuple(r) for r in res] if res.returns_rows else [])(
-                        c.execute(text(sql), params or {})))
+                        c.execute(text(sql), params or {}))
+
+        def _migrate(self) -> None:
+            """`schema.sql`, then the in-place changes (`migrations.migrate`), one process at a time.
+            The lock is held on a connection of its own, autocommit from the moment it opens: `after`
+            runs on it too, and CONCURRENTLY refuses a transaction, which a POOLED connection's
+            liveness ping leaves open under pg8000. It is closed after, and the lock goes with it
+            whatever happened. `apply` runs in one transaction of the pool, so a half-swapped key is
+            never what the next boot finds."""
+            import time as _time
+            from sqlalchemy.pool import NullPool
+            from . import migrations
+
+            def rows_of(c):
+                return lambda sql, params=None: (
+                    lambda res: [tuple(r) for r in res] if res.returns_rows else [])(
+                        c.execute(text(sql), params or {}))
+
+            def transaction(fn):
+                with engine.begin() as c:
+                    return fn(rows_of(c))
+
+            once = pg_engine(migration_url or url, isolation_level="AUTOCOMMIT", poolclass=NullPool)
+            try:
+                with once.connect() as held:
+                    migrations.migrate(
+                        rows_of(held), lambda: self._run_script(SCHEMA), transaction, _time.sleep,
+                        limit_s=(migrations.MIGRATION_WAIT_S if migration_wait_s is None
+                                 else float(migration_wait_s)),
+                        state=lambda word: setattr(self, "schema", word))
+            finally:
+                once.dispose()
 
         def _run_script(self, sql: str) -> None:
             # strip comment lines BEFORE splitting on ';' — comments legitimately contain
@@ -175,7 +237,7 @@ def postgres_db(url: str):  # pragma: no cover — production composition; lazy 
     return _Pg()
 
 
-def db_from_url(url: str):
+def db_from_url(url: str, **options):
     """The Postgres adapter the URL names — the ONE seam every composition site calls
     (`db_from_url(db_url())`), kept as a function rather than each site calling `postgres_db`
     directly so the choice of adapter stays a property of the CONFIGURATION, not the caller.
@@ -187,7 +249,7 @@ def db_from_url(url: str):
     rather than routing a `sqlite://` URL through here."""
     scheme = url.split("://", 1)[0] if "://" in url else url
     if scheme == "postgres" or scheme.startswith("postgresql"):
-        return postgres_db(url)
+        return postgres_db(url, **options)
     raise UnsupportedDialect(
         f"VEXA_FLOWS_DB_URL names the {scheme!r} scheme — this engine runs on Postgres only "
         "('postgres://' or 'postgresql[+driver]://'). The offline/storm dialect (SqliteDB) is "

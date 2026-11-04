@@ -194,7 +194,7 @@ overrides any of these values.
 | `flows.outbound.attendeeDomains`, `.dataStatement` | `VEXA_FLOWS_ATTENDEE_DOMAINS`, `VEXA_FLOWS_DATA_STATEMENT` |
 | `flows.jitsiHosts` | `VEXA_JITSI_HOSTS`. Use the value that meeting-api and the MCP service have |
 | `flows.nudges.enabled`, `.idleFloorMinutes`, `.budgetCeiling` | `VEXA_FLOWS_NUDGES`, `VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN`, `VEXA_FLOWS_NUDGE_BUDGET_CEILING` |
-| `flows.limits.*` | `VEXA_TIMELINE_SCAN_ROWS`, `VEXA_FLOWS_SCHEDULE_CATCHUP_S`, `VEXA_FLOWS_LOOP_LIMIT`, `VEXA_FLOWS_MAX_HOPS`, `VEXA_FLOWS_USER_*` |
+| `flows.limits.*` | `VEXA_TIMELINE_SCAN_ROWS`, `VEXA_FLOWS_SCHEDULE_CATCHUP_S`, `VEXA_FLOWS_MIGRATION_WAIT_S`, `VEXA_FLOWS_LOOP_LIMIT`, `VEXA_FLOWS_MAX_HOPS`, `VEXA_FLOWS_USER_*` |
 
 The chart runs no capture double. If you set `flows.mail.relay: capture` or `flows.mail.recipientAllow`,
 also set `flows.mail.captureSmtp`. Without it, flows sends diverted mail to `mailpit:1025`, which
