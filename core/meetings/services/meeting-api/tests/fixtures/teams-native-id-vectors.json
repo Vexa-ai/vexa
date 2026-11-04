@@ -1,0 +1,21 @@
+{
+  "table": "teams-native-id-vectors",
+  "what": "The Teams meeting URLs that must yield the same (platform, native_meeting_id) in meeting-api's link parser (collector/meeting_link.py parse_meeting_url, the server and the contract) and in the browser extension (clients/extension/src/meeting.ts detectMeeting). `server` and `extension` are each side's answer, null for not-a-meeting. A row whose two answers differ carries `gap`, naming the divergence; every other row must agree. Each suite reads its own copy; parity fact teams-native-id-vectors keeps the copies byte-identical.",
+  "vectors": [
+    {"url": "https://teams.live.com/meet/9361792952021?p=abc", "server": ["teams", "9361792952021"], "extension": ["teams", "9361792952021"]},
+    {"url": "https://teams.live.com/meet/9361792952021", "server": ["teams", "9361792952021"], "extension": ["teams", "9361792952021"]},
+    {"url": "https://teams.microsoft.com/meet/2345678901234?p=xyz", "server": ["teams", "2345678901234"], "extension": ["teams", "2345678901234"]},
+    {"url": "https://teams.microsoft.com/meet/2345678901/", "server": ["teams", "2345678901"], "extension": ["teams", "2345678901"]},
+    {"url": "https://teams.microsoft.com/meet/12345678901234567?p=xyz", "server": ["teams", "12345678901234567"], "extension": ["teams", "12345678901234567"]},
+    {"url": "https://contoso.teams.microsoft.com/meet/2345678901234?p=xyz", "server": ["teams", "2345678901234"], "extension": ["teams", "2345678901234"]},
+    {"url": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_NjQ3ZWU2ZTMtYjFkMy00ZGI3LWI2ZTQtMzE0YzM4Zjc1ZTFm%40thread.v2/0?context=%7b%22Tid%22%3a%22t-1%22%7d", "server": ["teams", "19:meeting_NjQ3ZWU2ZTMtYjFkMy00ZGI3LWI2ZTQtMzE0YzM4Zjc1ZTFm@thread.v2"], "extension": ["teams", "19:meeting_NjQ3ZWU2ZTMtYjFkMy00ZGI3LWI2ZTQtMzE0YzM4Zjc1ZTFm@thread.v2"]},
+    {"url": "https://teams.microsoft.com/l/meetup-join/19:meeting_ABCdef-123_xyz@thread.v2/0", "server": ["teams", "19:meeting_ABCdef-123_xyz@thread.v2"], "extension": ["teams", "19:meeting_ABCdef-123_xyz@thread.v2"]},
+    {"url": "https://teams.live.com/l/meetup-join/19%3AMEETING_Zm9vYmFy%40Thread.V2/0", "server": ["teams", "19:MEETING_Zm9vYmFy@Thread.V2"], "extension": ["teams", "19:MEETING_Zm9vYmFy@Thread.V2"]},
+    {"url": "https://teams.microsoft.com/_#/calendarv2", "server": null, "extension": null},
+    {"url": "https://teams.microsoft.com.evil.example/meet/2345678901234", "server": null, "extension": null},
+    {"url": "https://evilteams.microsoft.com/meet/2345678901234", "server": null, "extension": null},
+    {"url": "https://teams.microsoft.com/v2/?meetingjoin=true#/meet/2345678901234?p=abc", "server": null, "extension": ["teams", "2345678901234"], "gap": "the enterprise deep link keeps the id in the URL fragment; meeting-api's parse_meeting_url reads only the path (the MCP's parse_meeting_link does read the fragment)"},
+    {"url": "https://teams.cloud.microsoft/meet/2345678901234?p=abc", "server": null, "extension": ["teams", "2345678901234"], "gap": "teams.cloud.microsoft (the new Teams web app) is not a host meeting-api's parse_meeting_url or the MCP's parse_meeting_link claims"},
+    {"url": "https://teams.microsoft.com/meet/123456789", "server": ["teams", "123456789"], "extension": null, "gap": "parse_meeting_url takes any /meet/<segment>; bot_spawn's _TEAMS_SHORT_ID, the MCP and the extension take 10-17 digits (parity fact teams-meeting-id-length)"}
+  ]
+}

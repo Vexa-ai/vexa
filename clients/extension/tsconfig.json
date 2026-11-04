@@ -10,6 +10,7 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "isolatedModules": true,
+    "resolveJsonModule": true,
     "baseUrl": ".",
     "paths": {
       "@vexa/gmeet-capture": ["../../core/meetings/modules/gmeet-capture/src/index.ts"],
