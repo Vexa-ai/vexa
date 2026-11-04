@@ -679,7 +679,37 @@ def _attach_background_loops(
         # stopping sweep, but we keep the latter as the guaranteed orphan-kill backstop for `stopping`.
         has_general = hasattr(meeting_repo, "list_stale_nonterminal")
 
+        from .churn_alarm import INTERVAL_S as _CHURN_INTERVAL_S, churn_alarm
+        from .obs import log_event as _log_event
+
+        churn_last = [0.0]
+
+        # THE CAPACITY QUEUE is this pass's first phase (lifecycle/queue.py): a bot whose Pod waits for
+        # a seat the cluster cannot add goes `queued`, gets its late notice, and once the run's wait
+        # runs out its teardown is requested and carried through here, by the same owner of teardown
+        # as every other reaped run. Its terminal is teardown-evidenced, so the edge from the FSM's
+        # pre-`joining` entry is forced (no bot ever ran to send one).
+        has_queue = runtime is not None and hasattr(meeting_repo, "list_queue_candidates")
+        from .lifecycle.queue import capacity_queue_sweep
+
+        async def _queue_time_out(body: dict):
+            status_code, _content = await apply_lifecycle_event(
+                body, transition_source=_TS.CAPACITY_QUEUE, force_terminal_on_destroy=True,
+            )
+            return status_code
+
         async def _tick():
+            if has_queue:
+                counts = await capacity_queue_sweep(
+                    meeting_repo, runtime, enter=app.state.apply_queue_transition,
+                    time_out=_queue_time_out, log=log,
+                )
+                if any(counts.values()):
+                    log.info("capacity-queue phase: %s", counts)
+            # The start-and-stop alarm rides this loop, at most once an hour (churn_alarm.py).
+            if _time.monotonic() - churn_last[0] >= _CHURN_INTERVAL_S:
+                churn_last[0] = _time.monotonic()
+                await churn_alarm(meeting_repo, log_event=_log_event)
             if has_general:
                 await reconcile_stale_nonterminal_sweep(
                     meeting_repo, runtime, _post_lifecycle,
@@ -1028,8 +1058,9 @@ def _bot_context_fetcher(admin_api_url: str, internal_secret: str):
     `/internal/users/{id}/bot-context` TWICE: once here at 10s for the name, once inside
     `bot_spawn/service.request_bot` at 5s for the transcription backend and the capture-signal
     decision — up to +15s on a path a person is waiting on, for one string. `request_bot` reads the
-    name out of the context it already has. Both paths still resolve the same value from the same
-    door, which is what the founder ruling required; there is just one call per spawn.
+    name out of the context it already has. The sweep hands its answer to `request_bot`
+    (``bot_context=``), so a booked spawn reads its limits (bot-limits.v1) from the same answer its
+    cap check and block list did: one call, one answer per spawn.
     """
     if not admin_api_url or not internal_secret:
         return None

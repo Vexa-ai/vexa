@@ -53,3 +53,7 @@ class Backend(Protocol):
     def cleanup(self, h: WorkloadHandle) -> None:
         """Reclaim resources (destroy)."""
         ...
+
+    # Optional — ``pending(h) -> Optional[dict]``: the substrate's placement facts for a started
+    # workload that is not running yet (runtime.v1 ``Pending``), or None once it runs. Only the k8s
+    # backend has them; the kernel reads it with getattr, so a backend without it answers as before.

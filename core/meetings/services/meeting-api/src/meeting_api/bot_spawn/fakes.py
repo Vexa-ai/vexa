@@ -15,14 +15,17 @@ NO production logic — they only stand in for Postgres + the runtime kernel so 
 fully in-process.
 """
 from __future__ import annotations
+from ..lifecycle.machine import IN_FLIGHT_STATUSES, IN_MEETING_STATUSES, PLANNED_STATUSES, PRE_LOBBY_STATUSES, SEAT_HOLDING_STATUSES, TERMINAL_STATUSES
 
 from typing import Any, Optional
 
 from ..lifecycle.machine import dominant_completion_reason
 from .ports import (
     DuplicateMeeting,
+    BotStartRateExceeded,
     MaxBotsExceeded,
     MeetingStopped,
+    SeatCooldown,
     QuotaExceeded,
     SpawnFailed,
     WorkloadUnknown,
@@ -31,8 +34,27 @@ from .ports import (
     reconcile_grace_for_status,
 )
 
-_ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active")
-_TERMINAL_STATUSES = ("completed", "failed")
+_ACTIVE_STATUSES = SEAT_HOLDING_STATUSES
+_TERMINAL_STATUSES = TERMINAL_STATUSES
+
+
+def _holds_seat(m: dict, cooldown_s: float = 0) -> bool:
+    """Mirror of the SQL adapter's ``_seat_held``: an active bot, or (within ``cooldown_s`` of its
+    end) an ad-hoc bot the user stopped. ``end_time`` is an ISO string here."""
+    if m["status"] in _ACTIVE_STATUSES:
+        return True
+    if cooldown_s and m["status"] == "stopping":
+        return True                        # on its way out: its cooldown starts when it ends
+    if not cooldown_s or m["status"] not in _TERMINAL_STATUSES or not m.get("end_time"):
+        return False
+    data = m.get("data") or {}
+    if not data.get("stop_requested") or "scheduled_at" in data:
+        return False
+    from datetime import datetime, timezone
+
+    end = datetime.fromisoformat(str(m["end_time"]).replace("Z", "+00:00"))
+    end = end if end.tzinfo else end.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - end).total_seconds() <= cooldown_s
 
 
 def _respawn_retired(data, workload_id) -> bool:
@@ -67,7 +89,7 @@ class InMemoryMeetingRepo:
             if m["user_id"] == user_id
             and m["platform"] == platform
             and m["native_meeting_id"] == native_meeting_id
-            and m["status"] not in ("completed", "failed")
+            and m["status"] not in TERMINAL_STATUSES
         ]
         rows.sort(key=lambda m: m.get("id") or 0, reverse=True)   # newest first, as the SQL does
         return rows
@@ -78,7 +100,7 @@ class InMemoryMeetingRepo:
             dict(m) for m in self._meetings.values()
             if m["platform"] == platform
             and m["native_meeting_id"] == native_meeting_id
-            and m["status"] not in ("completed", "failed")
+            and m["status"] not in TERMINAL_STATUSES
             and (m.get("data") or {}).get("workspace_id") in wanted
         ]
         rows.sort(key=lambda m: m.get("id") or 0, reverse=True)
@@ -135,9 +157,9 @@ class InMemoryMeetingRepo:
 
     async def create_meeting_guarded(
         self, *, user_id, platform, native_meeting_id, data, max_concurrent=None,
-        exclude_meeting_id=None,
+        exclude_meeting_id=None, cooldown_s: float = 0, session_uid=None, start_rate=None,
     ) -> dict:
-        """ATOMIC dedup + cap + insert (ROB1/ROB2). The check and the insert run with NO ``await``
+        """ATOMIC dedup + cap + start rate + insert (ROB1/ROB2). The check and the insert run with NO ``await``
         between them, so even ``SlowRepo`` (which adds ``await asyncio.sleep(0)`` inside the SEPARATE
         ``count_active_bots`` / ``create_meeting`` methods) cannot interleave concurrent spawns here —
         modelling the real adapter's single-transaction guard (advisory lock + unique partial index)."""
@@ -161,12 +183,19 @@ class InMemoryMeetingRepo:
             active = sum(
                 1 for m in self._meetings.values()
                 if m["user_id"] == user_id
-                and m["status"] in _ACTIVE_STATUSES
+                and _holds_seat(m, cooldown_s)
                 and m["platform"] != "browser_session"
                 and m["id"] != exclude_meeting_id
             )
             if active >= max_concurrent:
+                running = sum(1 for m in self._meetings.values()
+                              if m["user_id"] == user_id and m["status"] in _ACTIVE_STATUSES
+                              and m["platform"] != "browser_session" and m["id"] != exclude_meeting_id)
+                if cooldown_s and running < max_concurrent:
+                    raise SeatCooldown(user_id, max_concurrent, int(cooldown_s))
                 raise MaxBotsExceeded(user_id, max_concurrent)
+        # 2a. start rate — mirrors the SQL adapter's ``_spend_bot_start``.
+        self._spend_bot_start(user_id, start_rate)
         # 2b. claim — a PLANNED row (intent status) for the same (user, platform, native) is
         #     UPGRADED in place, mirroring the real adapter: spawn keys merge OVER the planned
         #     data (title / scheduled_at / workspace_id / auto_join / calendar_uid survive).
@@ -175,7 +204,7 @@ class InMemoryMeetingRepo:
             if m["user_id"] == user_id
             and m["platform"] == platform
             and m["native_meeting_id"] == native_meeting_id
-            and m["status"] in ("idle", "scheduled")
+            and m["status"] in PLANNED_STATUSES
         ]
         if planned_rows:
             row = max(planned_rows, key=lambda m: m["id"])  # newest, like the real adapter
@@ -191,6 +220,7 @@ class InMemoryMeetingRepo:
             # at all — this only ever meets rows written by an older build.)
             planned.pop("stop_requested", None)
             row["data"] = {**planned, **dict(data or {})}
+            self._record_start(row["id"], session_uid)
             return dict(row)
         # 3. insert — NO await before this point since the dedup read, so the check+insert is atomic.
         mid = self._next_id
@@ -210,7 +240,27 @@ class InMemoryMeetingRepo:
             "updated_at": "2026-06-20T09:00:00Z",
         }
         self._meetings[mid] = row
+        self._record_start(mid, session_uid)
         return dict(row)
+
+    def _spend_bot_start(self, user_id, start_rate) -> None:
+        if start_rate is None:
+            return
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+        ages = [(now - s["started_at"]).total_seconds() for s in self.sessions
+                if (self._meetings.get(s["meeting_id"]) or {}).get("user_id") == user_id]
+        if not start_rate.allows(ages):
+            raise BotStartRateExceeded(user_id, start_rate.retry_after_s())
+
+    def _record_start(self, meeting_id, session_uid) -> None:
+        if session_uid and not any(s["meeting_id"] == meeting_id and s["session_uid"] == session_uid
+                                   for s in self.sessions):
+            from datetime import datetime, timezone
+
+            self.sessions.append({"meeting_id": meeting_id, "session_uid": session_uid,
+                                  "started_at": datetime.now(timezone.utc)})
 
     async def list_scheduled_meetings(self) -> list:
         return [
@@ -246,7 +296,7 @@ class InMemoryMeetingRepo:
         return [
             {"id": m["id"], "block": dict(m["data"]["meet_respawn"])}
             for m in self._meetings.values()
-            if m.get("platform") == "google_meet" and m["status"] in ("requested", "joining")
+            if m.get("platform") == "google_meet" and m["status"] in PRE_LOBBY_STATUSES
             and isinstance((m.get("data") or {}).get("meet_respawn"), dict)
         ]
 
@@ -267,7 +317,10 @@ class InMemoryMeetingRepo:
         # very race it exists to close).
         return dict(row) if row else None
 
-    async def reopen_meeting(self, *, meeting_id, data_patch=None) -> dict:
+    async def reopen_meeting(self, *, meeting_id, data_patch=None, user_id=None, session_uid=None,
+                             start_rate=None) -> dict:
+        if user_id is not None:
+            self._spend_bot_start(user_id, start_rate)
         row = self._meetings[meeting_id]
         data = row.get("data") or {}
         if data.get("stop_requested"):
@@ -276,7 +329,7 @@ class InMemoryMeetingRepo:
             r.get("deletion_pending") for r in (data.get("recordings") or [])
             if isinstance(r, dict)
         )
-        if row.get("status") not in ("completed", "failed") or deletion_pending:
+        if row.get("status") not in TERMINAL_STATUSES or deletion_pending:
             raise DuplicateMeeting("Terminal meeting is no longer reusable")
         row["status"] = "requested"
         row["end_time"] = None
@@ -290,10 +343,11 @@ class InMemoryMeetingRepo:
             else:
                 row["data"][key] = value
         self.reopened.append(meeting_id)
+        self._record_start(meeting_id, session_uid)
         return dict(row)
 
     async def create_session(self, *, meeting_id, session_uid) -> None:
-        self.sessions.append({"meeting_id": meeting_id, "session_uid": session_uid})
+        self._record_start(meeting_id, session_uid)   # idempotent, like the SQL adapter
 
     async def list_sessions(self, *, meeting_id) -> list:
         return [s["session_uid"] for s in self.sessions if s["meeting_id"] == meeting_id]
@@ -354,6 +408,8 @@ class InMemoryMeetingRepo:
             "session_uid": sid,
             "stop_requested": bool((row.get("data") or {}).get("stop_requested")),
             "respawn_retired": _respawn_retired(row.get("data"), bot_container_id),
+            "queue_facts": {k: v for k, v in (row.get("data") or {}).items()
+                            if k in ("queue", "queue_wait_s")},
         }
 
     async def update_meeting_status(
@@ -374,11 +430,87 @@ class InMemoryMeetingRepo:
             row["data"][k] = v
         return dict(row)
 
-    async def count_active_bots(self, *, user_id, exclude_meeting_id=None) -> int:
+    async def set_queue_status(
+        self, *, session_uid, expected, status_reason, queue_patch, trail_entry
+    ) -> Optional[dict]:
+        """Mirror of the SQL adapter: lands only on the meeting's LATEST session while the row is in
+        ``expected`` and no stop was asked for; entering the queue starts a fresh ``data.queue``."""
+        sess = next((s for s in self.sessions if s["session_uid"] == session_uid), None)
+        if sess is None:
+            return None
+        latest = next(
+            (s["session_uid"] for s in reversed(self.sessions) if s["meeting_id"] == sess["meeting_id"]),
+            None,
+        )
+        row = self._meetings.get(sess["meeting_id"])
+        if row is None or latest != session_uid or row["status"] not in tuple(expected):
+            return None
+        data = row.setdefault("data", {})
+        if data.get("stop_requested"):
+            return None
+        queue = dict(data.get("queue") or {}) if row["status"] == "queued" else {}
+        queue.update(queue_patch or {})
+        data["queue"] = queue
+        data["status_transition"] = list(data.get("status_transition") or []) + [dict(trail_entry)]
+        row["status"] = "queued"
+        return dict(row)
+
+    async def list_queue_candidates(self) -> list:
+        """Mirror of the SQL adapter: rows whose bot may be waiting for a seat (lifecycle/queue.py)."""
+        from ..lifecycle.queue import WATCHED_STATUSES, QUEUE_EXCLUDED_PLATFORMS
+
+        out: dict = {}
+        for s in reversed(self.sessions):
+            mid = s["meeting_id"]
+            if mid in out:
+                continue
+            row = self._meetings.get(mid)
+            if (row is None or row["status"] not in WATCHED_STATUSES or not row.get("bot_container_id")
+                    or row.get("platform") in QUEUE_EXCLUDED_PLATFORMS):
+                continue
+            data = row.get("data") or {}
+            out[mid] = {
+                "meeting_id": mid,
+                "status": row["status"],
+                "session_uid": s["session_uid"],
+                "bot_container_id": row.get("bot_container_id"),
+                "queue": dict(data["queue"]) if isinstance(data.get("queue"), dict) else None,
+                "scheduled_at": data.get("scheduled_at"),
+                "stop_requested": bool(data.get("stop_requested")),
+                "queue_wait_s": data.get("queue_wait_s"),
+            }
+        return list(out.values())
+
+    async def get_queue_facts(self, meeting_id) -> dict:
+        data = (self._meetings.get(meeting_id) or {}).get("data") or {}
+        return {k: v for k, v in data.items() if k in ("queue", "queue_wait_s")}
+
+    async def bot_run_stop_counts(self, *, window_s: float, quick_stop_s: float) -> list[dict]:
+        """Mirror of the SQL adapter. A session's start is its ``started_at`` (ISO), set by a test."""
+        from datetime import datetime, timedelta, timezone
+
+        def _t(v):
+            d = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+            return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=window_s)
+        out: dict = {}
+        for s in self.sessions:
+            m = self._meetings.get(s["meeting_id"])
+            if m is None or not s.get("started_at") or _t(s["started_at"]) < cutoff:
+                continue
+            c = out.setdefault(m["user_id"], {"user_id": m["user_id"], "runs": 0, "quick_stops": 0})
+            c["runs"] += 1
+            if (m.get("end_time") and (m.get("data") or {}).get("stop_requested")
+                    and _t(m["end_time"]) <= _t(s["started_at"]) + timedelta(seconds=quick_stop_s)):
+                c["quick_stops"] += 1
+        return list(out.values())
+
+    async def count_active_bots(self, *, user_id, exclude_meeting_id=None, cooldown_s: float = 0) -> int:
         return sum(
             1 for m in self._meetings.values()
             if m["user_id"] == user_id
-            and m["status"] in _ACTIVE_STATUSES
+            and _holds_seat(m, cooldown_s)
             and m["platform"] != "browser_session"   # infra excluded (parent meetings.py:1091)
             and m["id"] != exclude_meeting_id
         )
@@ -388,7 +520,7 @@ class InMemoryMeetingRepo:
         return [
             dict(m)
             for m in self._meetings.values()
-            if m["status"] in ("active", "needs_help")
+            if m["status"] in IN_MEETING_STATUSES
             and isinstance(m.get("data", {}).get("service_authority"), dict)
             and m["data"]["service_authority"].get("mode")
             in ("enforce", "observe")
@@ -536,9 +668,7 @@ class InMemoryMeetingRepo:
         stale; a row whose ``updated_at`` is recent is NOT listed."""
         from datetime import datetime, timezone
 
-        non_terminal = {
-            "requested", "joining", "awaiting_admission", "needs_help", "active", "stopping",
-        }
+        non_terminal = IN_FLIGHT_STATUSES
         now = datetime.now(timezone.utc)
         out: dict = {}
         # latest session per meeting (mirror the SQL adapter's MeetingSession.id desc)

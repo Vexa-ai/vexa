@@ -1,0 +1,7 @@
+{
+  "max_concurrent_bots": 10,
+  "is_admin_account": true,
+  "user_data": {},
+  "platform": { "default": { "seat_cooldown_s": 60 } },
+  "expect": { "version": 1, "max_concurrent_bots": 0, "seat_cooldown_s": 60 }
+}

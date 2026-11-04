@@ -1,5 +1,6 @@
 """Privacy-safe service facts derived at the meeting lifecycle boundary."""
 from __future__ import annotations
+from .machine import TERMINAL_STATUSES
 
 from typing import Any, Dict, Optional
 
@@ -54,7 +55,7 @@ def build_service_provenance(meeting: Dict[str, Any]) -> Optional[Dict[str, Any]
     terminal_status = meeting.get("status")
     terminal_transition = (
         _transition(transitions, terminal_status)
-        if terminal_status in ("completed", "failed")
+        if terminal_status in TERMINAL_STATUSES
         else None
     )
     departed_at = _producer_time(terminal_transition)

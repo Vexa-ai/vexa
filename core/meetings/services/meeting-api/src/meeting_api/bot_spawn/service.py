@@ -22,6 +22,8 @@ The flow (parent ``meetings.py`` lines ~1010-1403, reduced to the standard-bot b
   8. return the ``api.v1`` ``MeetingResponse`` (now listing its ``sessions``).
 """
 from __future__ import annotations
+from ..lifecycle.machine import (BOOTING_STATUSES, ENDING_STATUSES, REQUESTED, RUNNING_STATUSES,
+                                 TERMINAL_STATUSES, lifecycle_stage)
 
 import os
 import re
@@ -42,10 +44,14 @@ from .invocation import build_invocation, build_workload_spec, mint_meeting_toke
 from .meeting_host import TEAMS_HOST_SUFFIXES, allowance_entries, check_meeting_url_async
 from . import transcription_language as tlang
 from .workload_redis import voice_note_stream
+import dataclasses
+
+from .. import limits as account_limits
 from .ports import (
     AuthSessionBusy,
     DuplicateMeeting,
     MaxBotsExceeded,
+    SeatCooldown,
     MeetingRepo,
     MeetingStopped,
     QuotaExceeded,
@@ -105,8 +111,8 @@ def lobby_budget_ms() -> int:
     return int(seconds * 1000)
 
 # Non-terminal statuses (parent's active set) — a prior meeting in one of these blocks a new spawn.
-_ACTIVE_STATUSES = ("requested", "joining", "awaiting_admission", "active", "stopping")
-_TERMINAL_STATUSES = ("completed", "failed")
+_ACTIVE_STATUSES = RUNNING_STATUSES
+_TERMINAL_STATUSES = TERMINAL_STATUSES
 
 # How stale an `stt` probe verdict may be and still refuse a spawn (#511 C3). Matches the probe's
 # declared ttl_s: past it the cache holds no actionable opinion, so a spawn proceeds rather than
@@ -202,6 +208,11 @@ def _teams_url(native_meeting_id: str, teams_base_host: Optional[str]) -> str:
     if _TEAMS_SHORT_ID.match(native_meeting_id):
         return f"https://{host}/meet/{native_meeting_id}"
     return f"https://{host}/l/meetup-join/{native_meeting_id}"
+
+
+def _identity_configured() -> bool:
+    """Whether this deployment has the identity edge ``_fetch_bot_context`` reads."""
+    return bool((os.getenv("ADMIN_API_URL") or "").strip() and os.getenv("INTERNAL_API_SECRET"))
 
 
 async def _fetch_bot_context(user_id: int) -> dict:
@@ -350,6 +361,7 @@ def _meeting_response(row: dict, *, sessions: Optional[list] = None) -> dict:
     1: the signing secret, the share grants, the session userdata path, and anything else
     credential-SHAPED, which is dropped on name shape before anyone has thought to name it."""
     from ..collector.projection import project_response_data
+    from ..lifecycle.queue import status_reason_of
 
     data = project_response_data(row.get("data"), viewer_is_owner=True)
     if sessions is not None:
@@ -366,6 +378,7 @@ def _meeting_response(row: dict, *, sessions: Optional[list] = None) -> dict:
         "end_time": row.get("end_time"),
         "completion_reason": data.get("completion_reason"),
         "failure_stage": data.get("failure_stage"),
+        "status_reason": status_reason_of(row.get("status"), row.get("data")),
         "data": data,
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
@@ -418,7 +431,7 @@ async def _terminalize_as_stopped(
                 if fenced_before_spawn
                 else "stopped by the user while the bot workload was being created"
             ),
-            failure_stage=status if status in ("requested", "joining", "awaiting_admission") else "requested",
+            failure_stage=lifecycle_stage(status) if status in BOOTING_STATUSES else REQUESTED,
             completion_reason="stopped",
             data={"stop_requested": True},
         )
@@ -459,6 +472,14 @@ async def request_bot(
     automatic_leave: Optional[dict] = None,
     continue_meeting: bool = False,
     max_concurrent: Optional[int] = None,
+    # Whether the seat cooldown applies to this start (founder, 4 Nov 2026): within the account's
+    # ``seat_cooldown_s`` of its end, an ad-hoc bot the user stopped still holds its seat in the cap.
+    # POST /bots says yes; the auto-join sweep only for a plan booked for "now". The VALUE, like every
+    # limit, is the account's (limits.resolve over the bot-context answer below).
+    seat_cooldown: bool = False,
+    # The account's bot-context answer when the caller already holds it (the auto-join sweep reads it
+    # once per account per tick); otherwise this spawn asks identity for it. One answer per spawn.
+    bot_context: Optional[dict] = None,
     redis_url: Optional[str] = None,
     meeting_api_url: Optional[str] = None,
     token_secret: Optional[str] = None,
@@ -573,7 +594,8 @@ async def request_bot(
     transcription_service_url = os.getenv("TRANSCRIPTION_SERVICE_URL") or None
     transcription_service_token = os.getenv("TRANSCRIPTION_SERVICE_TOKEN") or None
     transcription_model = os.getenv("TRANSCRIPTION_MODEL") or None
-    bot_context = await _fetch_bot_context(user_id)
+    if bot_context is None:
+        bot_context = await _fetch_bot_context(user_id)
     configured = _transcription_from_context(bot_context)
     # O-TEL-1 fixture collection, resolved from the SAME best-effort lookup (one hop, two readers).
     # Default ON: only an explicit false from identity stops the tape.
@@ -584,6 +606,23 @@ async def request_bot(
     # without identity being consulted about it at all — the answer could not change anything.
     if not bot_name:
         bot_name = _bot_name_from_context(bot_context)
+    # THE ACCOUNT'S LIMITS — fifth reader of the same hop, and their ONE carrier (bot-limits.v1;
+    # limits.py is the one model and parser). Enforced in ONE place, the repo's guarded create /
+    # reopen, under the per-user lock. A configured identity that gives no readable answer refuses
+    # the start (LimitsUnavailable → 503); a deployment with no identity edge at all (the in-process
+    # harness) runs on the built-in defaults, which set no cap.
+    if respawn_of is not None:
+        # A Meet respawn spends no start and takes no seat: its meeting already holds one.
+        limits = account_limits.AccountLimits()
+    elif account_limits.CONTEXT_KEY in bot_context or _identity_configured():
+        limits = account_limits.resolve(bot_context.get(account_limits.CONTEXT_KEY))
+    else:
+        limits = account_limits.AccountLimits()
+    if max_concurrent is not None:
+        # An in-process caller's explicit cap (no service path passes one; tests do).
+        limits = dataclasses.replace(limits, max_concurrent_bots=max_concurrent)
+    max_concurrent = limits.max_concurrent_bots
+    seat_cooldown_s = limits.seat_cooldown_s if seat_cooldown else 0
     # THE LANGUAGE THE BOT TRANSCRIBES IN — fourth reader of the same hop. Whole-setting precedence:
     # this request, then this person's default, then the deployment's, then auto. Every spawn path
     # reaches here (POST /bots from the API, the terminal, the MCP and an invite-by-email flow; the
@@ -817,6 +856,7 @@ async def request_bot(
             if max_concurrent > 0:
                 active = await repo.count_active_bots(
                     user_id=user_id, exclude_meeting_id=reused_row["id"],
+                    **({"cooldown_s": seat_cooldown_s} if seat_cooldown_s else {}),
                 )
             if active >= max_concurrent:
                 log_event(
@@ -824,6 +864,9 @@ async def request_bot(
                     span="bots.create", user_id=user_id,
                     fields={"active": active, "cap": max_concurrent},
                 )
+                if seat_cooldown_s and max_concurrent > 0 and await repo.count_active_bots(
+                        user_id=user_id, exclude_meeting_id=reused_row["id"]) < max_concurrent:
+                    raise SeatCooldown(user_id, max_concurrent, int(seat_cooldown_s))
                 raise MaxBotsExceeded(user_id, max_concurrent)
         reopen_patch: dict[str, Any] = {
             "transcription_language": transcription_language,
@@ -831,6 +874,7 @@ async def request_bot(
             "recording_enabled": recording_enabled,
             "transcription_provider": transcription_provider,
             "service_authority": authority_record,
+            "queue_wait_s": limits.queue_wait_s,
         }
         # A continued run in authenticated mode is an authenticated run: it carries the identity key
         # the per-identity serialization and the session write-back both match on.
@@ -844,7 +888,9 @@ async def request_bot(
         reopen_patch["bot_account_id"] = bot_account_id
         # A continued run starts its own respawn budget; None clears a prior run's.
         reopen_patch[meet_respawn.KEY] = respawn_block
-        row = await repo.reopen_meeting(meeting_id=reused_row["id"], data_patch=reopen_patch)
+        row = await repo.reopen_meeting(meeting_id=reused_row["id"], data_patch=reopen_patch,
+                                        user_id=user_id, session_uid=connection_id,
+                                        start_rate=limits.bot_start_rate)
     else:
         meeting_data: dict[str, Any] = {}
         if constructed_url:
@@ -882,6 +928,8 @@ async def request_bot(
         # never served to anyone (SENSITIVE_OMIT_KEYS); `webhook_url`/`webhook_events` are served to
         # the OWNER — the v0.10 REST contract reads them back off the meeting row — and stripped for
         # a share/workspace reader (OWNER_ONLY_KEYS).
+        # The account's queue wait, the one value lifecycle/queue.py and the reaper apply to this run.
+        meeting_data["queue_wait_s"] = limits.queue_wait_s
         if webhook_url:
             meeting_data["webhook_url"] = webhook_url
             if webhook_secret:
@@ -895,6 +943,9 @@ async def request_bot(
                 native_meeting_id=native_meeting_id,
                 data=meeting_data,
                 max_concurrent=max_concurrent,
+                **({"cooldown_s": seat_cooldown_s} if seat_cooldown_s else {}),
+                session_uid=connection_id,
+                start_rate=limits.bot_start_rate,
             )
         except MaxBotsExceeded:
             log_event(
@@ -1128,7 +1179,7 @@ async def request_bot(
     raced = await repo.get_lifecycle_state_by_session(session_uid=connection_id)
     raced_status = (raced or {}).get("status")
     raced_stop = bool(((raced or {}).get("data") or {}).get("stop_requested"))
-    if raced_stop or raced_status in ("stopping", "completed", "failed"):
+    if raced_stop or raced_status in ENDING_STATUSES:
         try:
             await runtime.delete_workload(workload_id)
             log_event("bot_spawn_raced_stop_torn_down", audience="system", level="warning",

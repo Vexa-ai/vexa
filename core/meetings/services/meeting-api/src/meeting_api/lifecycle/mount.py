@@ -12,6 +12,7 @@ them drive:
 ``app.create_app`` calls :func:`mount_lifecycle`; nothing else mounts these routes.
 """
 from __future__ import annotations
+from .machine import TERMINAL_STATUSES
 
 from . import meet_respawn
 
@@ -108,6 +109,8 @@ def mount_lifecycle(
         """The parent's `_build_meeting_event_data` shape (webhooks.py) from a meeting row dict —
         the meeting block the typed webhooks carry (golden Envelope.meeting-completed.json).
         completion_reason/failure_stage are hoisted to top level; internal data keys stripped."""
+        from .queue import status_reason_of
+
         data = row.get("data") if isinstance(row.get("data"), dict) else {}
         return {
             "id": row.get("id"),
@@ -116,6 +119,7 @@ def mount_lifecycle(
             "native_meeting_id": row.get("native_meeting_id"),
             "constructed_meeting_url": row.get("constructed_meeting_url"),
             "status": row.get("status"),
+            "status_reason": status_reason_of(row.get("status"), data),
             "completion_reason": data.get("completion_reason"),
             "failure_stage": data.get("failure_stage"),
             "service_provenance": data.get("service_provenance"),
@@ -128,6 +132,179 @@ def mount_lifecycle(
 
     app.state.status_change_webhooks = deque(maxlen=_ENVELOPE_LOG_CAP)
     app.state.typed_webhooks = deque(maxlen=_ENVELOPE_LOG_CAP)
+
+    async def _deliver_user_webhooks(meeting_row: dict, envelopes) -> None:
+        """Deliver sealed webhook.v1 envelopes to the user's configured endpoint (per-user config
+        rides on meeting.data — set at spawn from identity via the gateway; NO users-table read). The
+        sink's per-user event filter (webhooks/delivery.py) suppresses unsubscribed event types before
+        any HTTP. Best-effort: a delivery hiccup never fails the transition that produced it (P3a)."""
+        if webhook_sink is None:
+            return
+        data = meeting_row.get("data") if isinstance(meeting_row.get("data"), dict) else {}
+        url = data.get("webhook_url")
+        if not url:
+            return
+        for env in envelopes:
+            if env is None:
+                continue
+            try:
+                result = await webhook_sink.deliver(
+                    url, env, data.get("webhook_secret"),
+                    events_config=data.get("webhook_events"),
+                    label=f"meeting:{meeting_row.get('id')}",
+                )
+                # EVERY outcome is reported (#815). `deliver` never raises — it returns
+                # delivered | suppressed | blocked | failed | queued — and the outcome used
+                # to be discarded, so a webhook the subscriber never received (unsubscribed
+                # event type, SSRF-blocked target, 4xx endpoint) was indistinguishable from
+                # one that arrived: "my webhooks stopped" was undiagnosable in production.
+                # The target is reported as host only — a webhook URL can carry a secret in
+                # its path or query, and logs are not a place to put one.
+                log_event(
+                    "webhook_delivery",
+                    audience="system",
+                    level="info" if result.status == "delivered" else "warning",
+                    span="lifecycle.callback",
+                    meeting_id=meeting_row.get("id"),
+                    fields={
+                        "outcome": result.status,
+                        "event_type": env.get("event_type"),
+                        "target_host": _webhook_target_host(url),
+                        "status_code": result.status_code,
+                        "error": result.error,
+                    },
+                )
+                # #841: ALSO record the outcome in the per-user delivery ledger — the
+                # queryable surface GET /webhooks/deliveries serves. Logs (above) rotate and
+                # are operator-facing; the ledger is the user's Delivery History. Host only,
+                # never the URL/secret (P14). Best-effort — a ledger hiccup never fails the
+                # callback, and a suppressed event is still worth recording (the user asked
+                # "why didn't my webhook fire?" — "suppressed: unsubscribed" is the answer).
+                if delivery_ledger is not None:
+                    from ..webhooks import build_delivery_record
+
+                    try:
+                        await delivery_ledger.record(
+                            meeting_row.get("user_id"),
+                            build_delivery_record(
+                                event_type=env.get("event_type"),
+                                event_id=env.get("event_id"),
+                                target_host=_webhook_target_host(url),
+                                outcome=result.status,
+                                status_code=result.status_code,
+                                meeting_id=meeting_row.get("id"),
+                            ),
+                        )
+                    except Exception as le:  # noqa: BLE001 — ledger is best-effort
+                        log_event("webhook_ledger_failed", audience="system",
+                                  level="warning", span="lifecycle.callback",
+                                  fields={"error": str(le)})
+            except Exception as e:  # noqa: BLE001 — delivery is best-effort
+                log_event("webhook_deliver_failed", audience="system", level="warning",
+                          span="lifecycle.callback", fields={"error": str(e)})
+
+    async def _publish_status_frames(meeting_row: dict, status: str) -> None:
+        """Publish a persisted status to bm:meeting:{id}:status in the canonical 0.10.6 WS contract
+        shape (the source of truth; api-gateway forwards the redis payload verbatim):
+          {type:"meeting.status", meeting:{id,platform,native_id}, payload:{status}, user_id, ts}
+        `status` is the raw meeting status (e.g. 'needs_help', 'queued'); clients translate to their
+        own vocabulary on THEIR side (the core emits the contract, never a client's naming).
+        Best-effort: never fails the transition."""
+        if redis is None:
+            return
+        meeting_id = meeting_row.get("id")
+        if meeting_id is None:
+            return
+        import json as _json
+        from datetime import datetime, timezone
+
+        frame = {
+            "type": "meeting.status",
+            "meeting": {
+                "id": meeting_id,
+                "platform": meeting_row.get("platform"),
+                "native_id": meeting_row.get("native_meeting_id"),
+            },
+            "payload": {"status": status},
+            "user_id": meeting_row.get("user_id"),
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            await redis.publish(f"bm:meeting:{meeting_id}:status", _json.dumps(frame))
+        except Exception as e:  # noqa: BLE001 — publish is best-effort
+            log_event("ws_status_publish_failed", audience="system", level="warning",
+                      span="lifecycle.callback", fields={"error": str(e)})
+        # ALSO publish the FLAT frame to the USER-scoped channel u:{user_id}:meetings so the
+        # terminal's list surface gets every transition over WS (superset of bm:; it also carries
+        # the pre-FSM idle/scheduled states). KEEP bm: above for the open-meeting tab.
+        #
+        # A meeting BOUND TO A WORKSPACE also goes to `w:{workspace_id}:meetings`, the channel
+        # every member's socket joins at connect. This is the transition members actually need
+        # — requested → joining → active is the bot arriving in THEIR call — and publishing it
+        # only to the owner is why a member's terminal showed nothing happening while the
+        # meeting ran.
+        user_id = meeting_row.get("user_id")
+        if user_id is None:
+            return
+        user_frame = {
+            "type": "meeting.status",
+            "meeting_id": meeting_id,
+            "native": meeting_row.get("native_meeting_id"),
+            "status": status,
+            "when": frame["ts"],
+        }
+        workspace_id = (meeting_row.get("data") or {}).get("workspace_id")
+        channels = [f"u:{user_id}:meetings"]
+        if workspace_id:
+            channels.append(f"w:{workspace_id}:meetings")
+        for channel in channels:
+            try:
+                await redis.publish(channel, _json.dumps(user_frame))
+            except Exception as e:  # noqa: BLE001 — publish is best-effort
+                log_event("user_meeting_status_publish_failed", audience="system",
+                          level="warning", span="lifecycle.callback",
+                          fields={"error": str(e), "channel": channel})
+
+    async def _apply_queue_transition(
+        *, session_uid: str, expected: tuple, status_reason: str, queue_patch: dict,
+    ) -> Optional[dict]:
+        """Move a meeting into (or along) the capacity queue — a SERVER-SIDE status, like
+        ``requested``, that the bot's FSM never sees (``machine._PERSISTED_STATUS_TO_BOTSTATUS``
+        maps it to the FSM's pre-``joining`` entry). The write is conditional: it lands only while
+        the row is still in ``expected`` (a bot that sent ``joining`` meanwhile, or a stop, wins).
+        A landed write emits ``meeting.status_change`` and the ws frames, exactly like an FSM
+        advance. Returns the updated row, or None when nothing moved."""
+        from .machine import QUEUED
+        from .queue import build_queue_trail_entry
+
+        before = await meeting_repo.get_lifecycle_state_by_session(session_uid=session_uid)
+        old_status = (before or {}).get("status")
+        entry = build_queue_trail_entry(old_status, status_reason)
+        row = await meeting_repo.set_queue_status(
+            session_uid=session_uid, expected=tuple(expected),
+            status_reason=status_reason, queue_patch=queue_patch, trail_entry=entry,
+        )
+        if not isinstance(row, dict):
+            return None
+        from .webhook import build_queue_status_envelope
+
+        envelope = build_queue_status_envelope(
+            connection_id=session_uid,
+            old_status=old_status,
+            status_reason=status_reason,
+            meeting=_meeting_projection_from_row(row),
+        )
+        app.state.status_change_webhooks.append(envelope)
+        await _deliver_user_webhooks(row, (envelope,))
+        await _publish_status_frames(row, QUEUED)
+        log_event(
+            "meeting_queued", audience="user", span="lifecycle.queue",
+            meeting_id=row.get("id"),
+            fields={"from": old_status, "status_reason": status_reason},
+        )
+        return row
+
+    app.state.apply_queue_transition = _apply_queue_transition
 
     async def _apply_lifecycle_event(
         body: dict,
@@ -175,7 +352,7 @@ def mount_lifecycle(
             # landed — and it is exactly at the terminal edge that the difference is written down
             # (F3, stage rev 193 row 26313: terminal recorded `join_failure` with
             # `stop_requested=true` on the row). One extra read per meeting, at its last event.
-            terminal_event = body.get("status") in ("completed", "failed")
+            terminal_event = body.get("status") in TERMINAL_STATUSES
             if (
                 existing is None
                 or existing.status is None
@@ -281,7 +458,7 @@ def mount_lifecycle(
         terminal_advanced = (
             not change.no_op
             and rec.status is not None
-            and rec.status.value in ("completed", "failed")
+            and rec.status.value in TERMINAL_STATUSES
             and isinstance(meeting_row, dict)
             and meeting_row.get("id") is not None
         )
@@ -540,126 +717,11 @@ def mount_lifecycle(
         # from identity via the gateway; NO users-table read). The sink's per-user event filter
         # (webhooks/delivery.py) suppresses unsubscribed event types before any HTTP.
         # Best-effort: a delivery hiccup must never fail the bot's lifecycle callback (P3a).
-        if webhook_sink is not None and isinstance(meeting_row, dict):
-            data = meeting_row.get("data") if isinstance(meeting_row.get("data"), dict) else {}
-            url = data.get("webhook_url")
-            if url:
-                for env in (envelope, typed_envelope):
-                    if env is None:
-                        continue
-                    try:
-                        result = await webhook_sink.deliver(
-                            url, env, data.get("webhook_secret"),
-                            events_config=data.get("webhook_events"),
-                            label=f"meeting:{meeting_row.get('id')}",
-                        )
-                        # EVERY outcome is reported (#815). `deliver` never raises — it returns
-                        # delivered | suppressed | blocked | failed | queued — and the outcome used
-                        # to be discarded, so a webhook the subscriber never received (unsubscribed
-                        # event type, SSRF-blocked target, 4xx endpoint) was indistinguishable from
-                        # one that arrived: "my webhooks stopped" was undiagnosable in production.
-                        # The target is reported as host only — a webhook URL can carry a secret in
-                        # its path or query, and logs are not a place to put one.
-                        log_event(
-                            "webhook_delivery",
-                            audience="system",
-                            level="info" if result.status == "delivered" else "warning",
-                            span="lifecycle.callback",
-                            meeting_id=meeting_row.get("id"),
-                            fields={
-                                "outcome": result.status,
-                                "event_type": env.get("event_type"),
-                                "target_host": _webhook_target_host(url),
-                                "status_code": result.status_code,
-                                "error": result.error,
-                            },
-                        )
-                        # #841: ALSO record the outcome in the per-user delivery ledger — the
-                        # queryable surface GET /webhooks/deliveries serves. Logs (above) rotate and
-                        # are operator-facing; the ledger is the user's Delivery History. Host only,
-                        # never the URL/secret (P14). Best-effort — a ledger hiccup never fails the
-                        # callback, and a suppressed event is still worth recording (the user asked
-                        # "why didn't my webhook fire?" — "suppressed: unsubscribed" is the answer).
-                        if delivery_ledger is not None:
-                            from ..webhooks import build_delivery_record
-
-                            try:
-                                await delivery_ledger.record(
-                                    meeting_row.get("user_id"),
-                                    build_delivery_record(
-                                        event_type=env.get("event_type"),
-                                        event_id=env.get("event_id"),
-                                        target_host=_webhook_target_host(url),
-                                        outcome=result.status,
-                                        status_code=result.status_code,
-                                        meeting_id=meeting_row.get("id"),
-                                    ),
-                                )
-                            except Exception as le:  # noqa: BLE001 — ledger is best-effort
-                                log_event("webhook_ledger_failed", audience="system",
-                                          level="warning", span="lifecycle.callback",
-                                          fields={"error": str(le)})
-                    except Exception as e:  # noqa: BLE001 — delivery is best-effort
-                        log_event("webhook_deliver_failed", audience="system", level="warning",
-                                  span="lifecycle.callback", fields={"error": str(e)})
-        # Publish each persisted FSM advance to bm:meeting:{id}:status in the canonical 0.10.6 WS
-        # contract shape (the source of truth; api-gateway forwards the redis payload verbatim):
-        #   {type:"meeting.status", meeting:{id,platform,native_id}, payload:{status}, user_id, ts}
-        # `status` is the raw BotStatus value (e.g. 'needs_help'); clients translate to their own
-        # vocabulary on THEIR side (the core emits the contract, never a client's naming). Skipped on
-        # a no-op advance (idempotent replay) / unknown session. Best-effort: never fail the callback.
-        if redis is not None and not change.no_op and isinstance(meeting_row, dict) and rec.status is not None:
-            meeting_id = meeting_row.get("id")
-            if meeting_id is not None:
-                import json as _json
-                from datetime import datetime, timezone
-
-                frame = {
-                    "type": "meeting.status",
-                    "meeting": {
-                        "id": meeting_id,
-                        "platform": meeting_row.get("platform"),
-                        "native_id": meeting_row.get("native_meeting_id"),
-                    },
-                    "payload": {"status": rec.status.value},
-                    "user_id": meeting_row.get("user_id"),
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                }
-                try:
-                    await redis.publish(f"bm:meeting:{meeting_id}:status", _json.dumps(frame))
-                except Exception as e:  # noqa: BLE001 — publish is best-effort
-                    log_event("ws_status_publish_failed", audience="system", level="warning",
-                              span="lifecycle.callback", fields={"error": str(e)})
-                # ALSO publish the FLAT frame to the USER-scoped channel u:{user_id}:meetings so the
-                # terminal's list surface gets every bot-FSM transition over WS (superset of bm:; it
-                # also carries the pre-FSM idle/scheduled states). KEEP bm: above for the open-meeting
-                # tab. Best-effort: never fail the lifecycle callback.
-                #
-                # A meeting BOUND TO A WORKSPACE also goes to `w:{workspace_id}:meetings`, the channel
-                # every member's socket joins at connect. This is the transition members actually need
-                # — requested → joining → active is the bot arriving in THEIR call — and publishing it
-                # only to the owner is why a member's terminal showed nothing happening while the
-                # meeting ran.
-                user_id = meeting_row.get("user_id")
-                if user_id is not None:
-                    user_frame = {
-                        "type": "meeting.status",
-                        "meeting_id": meeting_id,
-                        "native": meeting_row.get("native_meeting_id"),
-                        "status": rec.status.value,
-                        "when": frame["ts"],
-                    }
-                    workspace_id = (meeting_row.get("data") or {}).get("workspace_id")
-                    channels = [f"u:{user_id}:meetings"]
-                    if workspace_id:
-                        channels.append(f"w:{workspace_id}:meetings")
-                    for channel in channels:
-                        try:
-                            await redis.publish(channel, _json.dumps(user_frame))
-                        except Exception as e:  # noqa: BLE001 — publish is best-effort
-                            log_event("user_meeting_status_publish_failed", audience="system",
-                                      level="warning", span="lifecycle.callback",
-                                      fields={"error": str(e), "channel": channel})
+        if isinstance(meeting_row, dict):
+            await _deliver_user_webhooks(meeting_row, (envelope, typed_envelope))
+        # Publish each persisted FSM advance (skipped on a no-op replay / unknown session).
+        if not change.no_op and isinstance(meeting_row, dict) and rec.status is not None:
+            await _publish_status_frames(meeting_row, rec.status.value)
         # COPILOT REAP (Bug 3): the moment a meeting lands TERMINAL, emit the `session_end` marker onto
         # the meeting copilot transcript feed — the EXACT stream the meeting copilot worker
         # (agent worker/meeting.py, via VEXA_TRANSCRIPT_STREAM) blocks on. The worker reaps immediately
@@ -679,7 +741,7 @@ def mount_lifecycle(
             redis is not None
             and not change.no_op
             and rec.status is not None
-            and rec.status.value in ("completed", "failed")
+            and rec.status.value in TERMINAL_STATUSES
             and isinstance(meeting_row, dict)
             and hasattr(redis, "xadd")
         ):

@@ -14,6 +14,7 @@ Each is a ``typing.Protocol`` so the app depends on BEHAVIOR, not a concrete cli
 supplies the production implementations; the module's tests supply in-process fakes.
 """
 from __future__ import annotations
+from ..lifecycle.machine import BOOTING_STATUSES
 
 from datetime import datetime, timezone
 from typing import Any, Optional, Protocol, runtime_checkable
@@ -99,8 +100,15 @@ class MeetingRepo(Protocol):
         data: dict,
         max_concurrent: Optional[int] = None,
         exclude_meeting_id: Optional[int] = None,
+        cooldown_s: float = 0,
+        session_uid: Optional[str] = None,
+        start_rate: Optional[Any] = None,
     ) -> dict:
-        """ATOMIC dedup + cap-check + insert — the TOCTOU-safe spawn primitive (ROB1/ROB2).
+        """ATOMIC dedup + cap-check + start rate + insert — the TOCTOU-safe spawn primitive
+        (ROB1/ROB2), and the ONE point every bot start's limits are enforced. ``start_rate``
+        (limits.TokenRate) is counted from the account's recorded starts and spent by writing this
+        run's ``MeetingSession`` (``session_uid``) in the same transaction; past it,
+        ``BotStartRateExceeded``. Checked after dedup and cap, so a refused start costs nothing.
 
         A ``max_concurrent <= 0`` means the user's quota is DEPLETED (0 = no bots, never
         "unlimited"): raise ``MaxBotsExceeded`` immediately, before any of the steps below.
@@ -122,11 +130,14 @@ class MeetingRepo(Protocol):
         ...
 
     async def reopen_meeting(
-        self, *, meeting_id: int, data_patch: Optional[dict] = None
+        self, *, meeting_id: int, data_patch: Optional[dict] = None,
+        user_id: Optional[int] = None, session_uid: Optional[str] = None,
+        start_rate: Optional[Any] = None,
     ) -> dict:
         """Reset a TERMINAL meeting row back to ``requested`` for a continued run (``continue_meeting``):
         clear the prior terminal attribution, keep the row id (so transcripts/recordings keyed by it
-        survive), and freeze the new session's service-selection facts. Returns the updated row."""
+        survive), and freeze the new session's service-selection facts. Returns the updated row.
+        With ``user_id`` it takes the guard's per-user lock and spends ``start_rate`` the same way."""
         ...
 
     async def create_session(self, *, meeting_id: int, session_uid: str) -> None:
@@ -260,6 +271,28 @@ class MeetingRepo(Protocol):
         in-process ``MeetingStore``."""
         ...
 
+    async def set_queue_status(
+        self,
+        *,
+        session_uid: str,
+        expected: tuple,
+        status_reason: str,
+        queue_patch: dict,
+        trail_entry: dict,
+    ) -> Optional[dict]:
+        """Move a meeting into (or along) the capacity queue (``lifecycle/queue.py``): status
+        ``queued``, ``queue_patch`` merged into ``meeting.data.queue`` (a fresh block when the row
+        enters the queue), ``trail_entry`` appended to ``data.status_transition``. Row-locked and
+        CONDITIONAL: lands only on the meeting's latest session, while its status is in
+        ``expected`` and no stop was asked for. Returns the updated row, or ``None`` (nothing moved)."""
+        ...
+
+    async def list_queue_candidates(self) -> list:
+        """Meetings whose bot may be waiting for a seat: status ``requested``/``queued`` with a
+        workload, latest session each — ``[{meeting_id, status, session_uid, bot_container_id,
+        queue, scheduled_at, stop_requested}]``. Reads those JSON paths only, never whole ``data``."""
+        ...
+
 
 @runtime_checkable
 class RuntimeClient(Protocol):
@@ -307,6 +340,30 @@ class MaxBotsExceeded(Exception):
         self.user_id = user_id
         self.cap = cap
         super().__init__(f"User has reached the maximum concurrent bot limit ({cap}).")
+
+
+class SeatCooldown(MaxBotsExceeded):
+    """The cap is reached only because a bot the user just stopped still holds its seat (the seat
+    cooldown). A 429 of its own, with the wait (``retry_after_s``)."""
+
+    def __init__(self, user_id: int, cap: int, retry_after_s: int):
+        super().__init__(user_id, cap)
+        self.retry_after_s = max(1, int(retry_after_s))
+        Exception.__init__(self, f"A bot you stopped still holds its seat for {self.retry_after_s} s "
+                                 f"(limit {cap} concurrent bots).")
+
+
+class BotStartRateExceeded(Exception):
+    """The account started more bots than its start rate allows (limits.bot_start_rate) — HTTP 429
+    ``{"detail": "Bot start rate exceeded", "reason": "bot_start_rate"}`` with ``Retry-After``.
+    Checked and spent in ``create_meeting_guarded`` / ``reopen_meeting``, under the per-user lock."""
+
+    reason = "bot_start_rate"
+
+    def __init__(self, user_id: int, retry_after_s: int):
+        self.user_id = user_id
+        self.retry_after_s = max(1, int(retry_after_s))
+        super().__init__("Bot start rate exceeded")
 
 
 class AuthSessionNotConfigured(Exception):
@@ -427,7 +484,7 @@ class DuplicateMeeting(Exception):
 # Statuses in which the bot has NOT yet reached the meeting. Their row goes quiet by DESIGN — a bot
 # parked in a waiting room reports `awaiting_admission` once and then polls silently for the whole
 # lobby budget the control plane handed it — so they carry their OWN (longer) reconcile window.
-PRE_ACTIVE_MEETING_STATUSES = frozenset({"requested", "joining", "awaiting_admission"})
+PRE_ACTIVE_MEETING_STATUSES = frozenset(BOOTING_STATUSES)
 
 
 def reconcile_grace_for_status(

@@ -229,7 +229,7 @@ def test_internal_bot_context(client):
                    headers={"X-Internal-Secret": INTERNAL_SECRET})
     assert r.status_code == 200, r.text
     ctx = r.json()
-    assert ctx["max_concurrent"] == 4
+    assert ctx["bot_limits"]["max_concurrent_bots"] == 4
     assert ctx["webhook_url"] == "https://example.com/hook"
     assert ctx["webhook_secret"] == "shh"
 

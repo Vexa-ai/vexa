@@ -20,6 +20,11 @@ this shape.
 - **Do NOT key on the body or the signature.** `created_at` and the `X-Webhook-Timestamp` (hence the
   HMAC signature) legitimately differ across redeliveries — that is the replay-bounding design, not
   a new event. Only `event_id` is stable.
+- **A queued bot's two notices are two events.** A bot entering the capacity queue emits
+  `meeting.status_change` with `new_status: queued` and `status_change.status_reason:
+  cluster_at_capacity`; its late notice emits another with `status_reason: will_join_late` (same
+  `new_status`). The reason is part of their identity (`new_status` reads `queued:<status_reason>` in the
+  `event_id` derivation), so dedupe keeps both.
 - **Two events per FSM advance.** One advance (e.g. → `active`) emits both `meeting.status_change`
   and the typed `meeting.started`; these are DISTINCT logical events with DISTINCT `event_id`s
   (`event_type` is part of the identity).

@@ -12,7 +12,8 @@ transient/permanent split):
   * **TRANSIENT → retry**: ``awaiting_admission_timeout``, ``join_failure`` (network / transient error).
   * **PERMANENT → no retry → failed**: ``awaiting_admission_rejected``, ``evicted``,
     ``validation_error``, ``max_bot_time_exceeded``, ``auth_session_missing`` (a re-spawn hits the
-    same signed-out profile), and the user terminal ``stopped``.
+    same signed-out profile), ``cluster_at_capacity`` (the bot already waited the whole queue wait),
+    and the user terminal ``stopped``.
 
 Bounded to a few attempts (config, default 3). Each attempt is its OWN ``meeting_session`` (a fresh
 ``connectionId``) — the scheduler fires a ``POST /bots`` re-spawn request for the next attempt.
@@ -44,6 +45,7 @@ _PERMANENT: frozenset[CompletionReason] = frozenset(
     {
         CompletionReason.AWAITING_ADMISSION_REJECTED,
         CompletionReason.PLATFORM_JOIN_REFUSED,  # already retried on new pods (meet_respawn.py)
+        CompletionReason.CLUSTER_AT_CAPACITY,  # waited the whole queue wait; a re-spawn waits again
         CompletionReason.EVICTED,
         CompletionReason.VALIDATION_ERROR,
         CompletionReason.MAX_BOT_TIME_EXCEEDED,

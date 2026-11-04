@@ -40,6 +40,7 @@ fake (``fakes.py``) must share so they can never diverge: the heavy keys dropped
 two tiers of response omissions, and the default page size that bounds an otherwise-unbounded list.
 """
 from __future__ import annotations
+from ..lifecycle.machine import LIST_PIN_STATUSES as _PINNED, UNPINNED_RUNNING_STATUSES
 
 import json
 
@@ -168,10 +169,28 @@ DEFAULT_LIST_LIMIT = 50
 # `needs_help` is FSM-non-terminal but deliberately NOT pinned — the pin set is the issue's ruling
 # (scheduled/requested/joining/awaiting_admission/active/stopping), and a needs-help row still ranks
 # by its event time.
-LIST_PIN_STATUSES = frozenset({
-    "scheduled", "requested", "joining", "awaiting_admission", "active", "stopping",
-})
+LIST_PIN_STATUSES = frozenset(_PINNED)
+# A live status outside the pin set: the pin is an INDEX expression (ix_meeting_*_event_order), so
+# widening it is a migration. `queued` (a bot waiting for a seat, lifecycle/queue.py) therefore ranks
+# by its event time like `needs_help`, and a status filter that names it reaches it through the status
+# index beside the pin prefix (adapters.list_meetings).
+UNPINNED_LIVE_STATUSES = frozenset(UNPINNED_RUNNING_STATUSES)
 
+
+
+def set_scheduled_at(data: dict, value) -> None:
+    """THE writer of a plan's ``scheduled_at`` (the SQL store and the fake both call it): sets or
+    clears it, and stamps ``scheduled_at_set_at`` when it changes — when the start was last set,
+    which auto-join's last-minute-booking rule measures from (bot_spawn.auto_join)."""
+    from datetime import datetime, timezone
+
+    if not value:
+        data.pop("scheduled_at", None)
+        data.pop("scheduled_at_set_at", None)
+        return
+    if data.get("scheduled_at") != value or "scheduled_at_set_at" not in data:
+        data["scheduled_at_set_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    data["scheduled_at"] = value
 
 def _event_ts(value: Any) -> Optional[str]:
     """One timestamp → a lexicographically comparable naive-UTC ISO string, or None.

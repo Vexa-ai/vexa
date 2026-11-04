@@ -59,6 +59,9 @@ export type JoinFailureReason =
   /** The platform refused every bot pod before a host saw a request (Google Meet's 403). Typed by
    *  meeting-api on the meeting's final refusal (lifecycle/meet_respawn.py); the bot does not emit it. */
   | 'platform_join_refused'
+  /** The bot's Pod waited past the queue wait for a seat the cluster could not add; no bot ran.
+   *  Typed by meeting-api (lifecycle/queue.py); the bot does not emit it. */
+  | 'cluster_at_capacity'
   /** The signals do not support a verdict. `detail` carries what was observed. */
   | 'unknown';
 
@@ -165,6 +168,7 @@ const ATTRIBUTION_BY_REASON: Record<JoinFailureReason, JoinFailureAttribution> =
   ui_locale_mismatch: 'system_fault',
   stopped_while_joining: 'user_action',
   platform_join_refused: 'system_fault',
+  cluster_at_capacity: 'system_fault',
   unknown: 'unknown',
 };
 

@@ -1,0 +1,7 @@
+{
+  "connection_id": "sess-uid",
+  "status": "failed",
+  "timestamp": "2026-11-04T10:30:17.000Z",
+  "completion_reason": "cluster_at_capacity",
+  "reason": "no seat for the bot within 30 min: the cluster stayed at capacity (pod didn't trigger scale-up: 1 max node group size reached)"
+}

@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "max_concurrent_bots": 2,
+  "booked_max_per_account": 500
+}

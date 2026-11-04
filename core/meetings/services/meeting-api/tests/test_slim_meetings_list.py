@@ -312,7 +312,7 @@ async def test_internal_path_is_unbounded_and_keeps_data():
 
 
 _TERMINAL = ("completed", "failed")
-_RUNNING = ("requested", "joining", "awaiting_admission", "active", "stopping")
+_RUNNING = ("requested", "queued", "joining", "awaiting_admission", "active", "stopping")
 
 
 def _seed_history(store, *, running=_RUNNING, terminal_count=40):

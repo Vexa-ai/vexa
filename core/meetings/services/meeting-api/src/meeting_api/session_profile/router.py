@@ -23,6 +23,7 @@ storage credentials (``writer.S3SessionWriter``). ``include_in_schema=False``: i
 the gateway routes nothing here.
 """
 from __future__ import annotations
+from ..lifecycle.machine import TERMINAL_STATUSES
 
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
@@ -40,7 +41,7 @@ from .writer import S3SessionWriter, SessionWriter
 #: arrives after the meeting is terminal; past this, a token that outlived its bot writes nothing.
 WRITEBACK_GRACE_S = 600.0
 
-_TERMINAL = ("completed", "failed")
+_TERMINAL = TERMINAL_STATUSES
 
 
 def _bearer(authorization: Optional[str]) -> str:

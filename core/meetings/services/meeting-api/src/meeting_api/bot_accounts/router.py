@@ -23,6 +23,7 @@ any that arrives carrying a signed identity):
     GET  /internal/browser-session/{session_uid}                Bearer <MeetingToken> → WritebackBody
 """
 from __future__ import annotations
+from ..lifecycle.machine import TERMINAL_STATUSES
 
 import asyncio
 import base64
@@ -41,7 +42,7 @@ from . import sessions as S
 from .relay import VNC_PORT, view_path_refusal
 from .service import BotAccountRefused, BotAccounts, userdata_key
 
-_TERMINAL = ("completed", "failed")
+_TERMINAL = TERMINAL_STATUSES
 
 
 def _user(x_user_id: Optional[str]) -> int:

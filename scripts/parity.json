@@ -1500,7 +1500,7 @@
       "kind": "set",
       "enforced": false,
       "decision": "WHAT COUNTS AS A LIVE MEETING, AND WHERE THAT IS DECIDED. Six answers across fourteen production sites. Three of them are load-bearing disagreements, not spellings: (1) the SQL index predicate that four model files share includes `scheduled` and omits `needs_help`, so the index the live queries were built for covers a different set of rows than the application calls live; (2) the rig calls a `joining` meeting not-live, so a meeting the terminal is showing as starting is invisible to the MCP; (3) `auto_join.py` carries the parent-side alias `needs_human_help` that nothing else does. Making them agree means deciding what live MEANS and then serving it from meeting-api as a phase field, which is a product decision about an API and a database index — not something a gate may pick.",
-      "why": "Fourteen production declarations of one concept, in five packages and two languages, plus a shell script. Nothing compares them and the survey found six distinct memberships. DELIBERATELY EXCLUDED as different questions, not copies of this one: `reconcile._PRE_ACTIVE_STATUSES` and `flows_steps/meeting.py`'s pre-active branch (before-active, not live), `reconcile._LIVENESS_GATED` (which rows the liveness sweep may touch), `collector/app._FSM_OWNED_STATUSES` (includes terminals) and `meeting.tsx` BADGE_STATUSES (rendering). Naming the exclusions here is the point: a manifest that quietly folded them in would be asserting a unification nobody decided.",
+      "why": "Fourteen production declarations of one concept, in five packages and two languages, plus a shell script. Nothing compares them and the survey found six distinct memberships. DELIBERATELY EXCLUDED as different questions, not copies of this one: `reconcile._PRE_ACTIVE_STATUSES` and `flows_steps/meeting.py`'s pre-active branch (before-active, not live), `reconcile._LIVENESS_GATED` (which rows the liveness sweep may touch), `collector/app._FSM_OWNED_STATUSES` (includes terminals) and `meeting.tsx` BADGE_STATUSES (rendering). Naming the exclusions here is the point: a manifest that quietly folded them in would be asserting a unification nobody decided. meeting-api itself no longer writes the set more than once: every status set there is derived from lifecycle/machine.py (IN_FLIGHT_STATUSES, LIVE_STATUSES, RUNNING_STATUSES), and tests/test_bot_limits_seams.py fails on any hand-written status collection outside it, so its three former sites here are one definition.",
       "sites": [
         {
           "path": "core/agent/control_plane/meeting_steering.py",
@@ -1521,18 +1521,6 @@
         {
           "path": "clients/terminal/src/surfaces/liveMeetings.ts",
           "pattern": "LIVE_STATUSES = new Set\\(\\[([^\\]]*)\\]"
-        },
-        {
-          "path": "core/meetings/services/meeting-api/src/meeting_api/collector/transcript_import.py",
-          "pattern": "IN_FLIGHT_STATUSES = frozenset\\(\\{([^}]*)\\}"
-        },
-        {
-          "path": "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/auto_join.py",
-          "pattern": "LIVE_STATUSES = \\(([^)]*)\\)"
-        },
-        {
-          "path": "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/service.py",
-          "pattern": "_ACTIVE_STATUSES = \\(([^)]*)\\)"
         },
         {
           "path": "core/identity/services/admin-api/src/admin_api/schema/models.py",
@@ -1557,12 +1545,6 @@
       ],
       "answers": [
         {
-          "value": "active · awaiting_admission · joining · needs_help · needs_human_help · requested · stopping",
-          "sites": [
-            "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/auto_join.py"
-          ]
-        },
-        {
           "value": "active · awaiting_admission · joining · needs_help · requested · stopping",
           "sites": [
             "clients/terminal/src/surfaces/liveMeetings.ts",
@@ -1570,7 +1552,6 @@
             "core/agent/control_plane/meeting_steering.py",
             "core/agent/control_plane/scaffolds.py",
             "core/agent/control_plane/schedule_digest.py",
-            "core/meetings/services/meeting-api/src/meeting_api/collector/transcript_import.py",
             "deploy/dogfood/bin/blank-instance.sh",
             "deploy/dogfood/rehearse/doors.py"
           ]
@@ -1580,12 +1561,6 @@
           "sites": [
             "core/identity/services/admin-api/src/admin_api/schema/models.py",
             "core/meetings/services/meeting-api/src/meeting_api/sessions/models.py"
-          ]
-        },
-        {
-          "value": "active · awaiting_admission · joining · requested · stopping",
-          "sites": [
-            "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/service.py"
           ]
         }
       ]

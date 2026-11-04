@@ -87,5 +87,18 @@ for (const f of readdirSync(dir).filter((n) => n.endsWith(".json"))) {
   }
 }
 
+// ── 6) THE QUEUE — a queued meeting says why it waits, in the closed vocabulary ─────────────────
+// Clients branch on `status: queued` and its `status_reason`; a reason outside the enum, or a
+// completion reason the queue timeout does not write, must fail here, not in a client.
+{
+  const meeting = ajv.getSchema(`${BASE}#/components/schemas/MeetingResponse`);
+  const base = JSON.parse(readFileSync(join(dir, "MeetingResponse.queued.json"), "utf8"));
+  check("MeetingResponse refuses an unknown status_reason", !meeting({ ...base, status_reason: "busy" }));
+  check("MeetingResponse takes a null status_reason", meeting({ ...base, status: "active", status_reason: null }));
+  check("MeetingResponse takes the queue timeout's completion reason",
+    meeting({ ...base, status: "failed", status_reason: null, completion_reason: "cluster_at_capacity",
+              failure_stage: "requested" }));
+}
+
 console.log(failed ? `\napi.v1: ${failed} check(s) FAILED` : `\napi.v1: all checks pass`);
 process.exit(failed ? 1 : 0);

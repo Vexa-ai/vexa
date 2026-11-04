@@ -100,9 +100,11 @@ def test_a_blank_name_from_identity_is_not_a_name(monkeypatch):
     assert "DeploymentBot" in _spawned_name(runtime)
 
 
-def test_an_unreachable_identity_never_stops_a_bot_joining(monkeypatch):
-    """A name is a nicety; joining the call is the product. Failing the spawn because a preference
-    lookup timed out would trade the thing they asked for against the label on it.
+def test_an_unreachable_identity_refuses_the_start_on_the_limits_not_on_the_name(monkeypatch):
+    """A name is a nicety, and its lookup failing never fails a spawn on its own account. But the same
+    answer is the one carrier of the account's bot limits (bot-limits.v1), and a bot is never started
+    past limits nobody could read: the start is a retryable 503, and nothing reaches the cluster.
+    (Through the gateway an identity outage is already a 503 at /internal/validate, before here.)
 
     The REAL `_fetch_bot_context` against a dead address, not a stub: with one fetcher, the
     swallow-everything guarantee lives inside it and nowhere else, so that is what has to hold."""
@@ -115,8 +117,9 @@ def test_an_unreachable_identity_never_stops_a_bot_joining(monkeypatch):
     r = TestClient(app).post("/bots", headers=HEADERS,
                              json={"platform": "google_meet", "native_meeting_id": "abc-defg-hij",
                                    "meeting_url": URL})
-    assert r.status_code == 201, r.text
-    assert "DeploymentBot" in _spawned_name(runtime)
+    assert r.status_code == 503, r.text
+    assert r.headers["retry-after"] == "5"
+    assert runtime.specs == []
 
 
 # ── A21: exactly one bot-context fetch per spawn ───────────────────────────────────────────────

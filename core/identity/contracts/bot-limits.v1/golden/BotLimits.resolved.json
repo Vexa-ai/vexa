@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "max_concurrent_bots": 5,
+  "bot_start_rate": { "burst": 20, "per_minute": 1 },
+  "seat_cooldown_s": 300,
+  "queue_wait_s": 900,
+  "max_scheduled_bots": 10,
+  "booking_rate": { "burst": 200, "per_minute": 0.1667 }
+}

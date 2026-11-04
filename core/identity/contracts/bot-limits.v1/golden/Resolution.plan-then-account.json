@@ -1,0 +1,15 @@
+{
+  "max_concurrent_bots": 5,
+  "user_data": { "subscription_tier": "payg", "bot_limits": { "seat_cooldown_s": 300 } },
+  "platform": {
+    "default": { "seat_cooldown_s": 60, "queue_wait_s": 1800 },
+    "plans": { "payg": { "bot_start_rate": { "burst": 20, "per_minute": 1 }, "queue_wait_s": 900 } }
+  },
+  "expect": {
+    "version": 1,
+    "max_concurrent_bots": 5,
+    "seat_cooldown_s": 300,
+    "queue_wait_s": 900,
+    "bot_start_rate": { "burst": 20, "per_minute": 1 }
+  }
+}

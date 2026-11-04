@@ -147,9 +147,10 @@ def _client_with(monkeypatch, runtime):
     return client, rooms
 
 
-def test_a_call_over_the_bot_limit_leaves_no_room_behind(monkeypatch):
+def test_a_call_over_the_bot_limit_leaves_no_room_behind(monkeypatch, account_limits):
     client, rooms = _client_with(monkeypatch, FakeRuntimeClient())
-    resp = client.post("/bots", headers={**USER, "x-user-limits": "0"}, json={"platform": "vexa_call"})
+    account_limits(0)
+    resp = client.post("/bots", headers=USER, json={"platform": "vexa_call"})
     assert resp.status_code == 429, resp.text
     assert rooms.rooms == {}
     assert len(rooms.deleted) == 1

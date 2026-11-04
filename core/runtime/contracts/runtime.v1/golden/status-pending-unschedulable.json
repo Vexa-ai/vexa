@@ -1,0 +1,14 @@
+{
+  "workloadId": "mtg-35832-e82b7b2b",
+  "profile": "meeting-bot",
+  "state": "running",
+  "startedAt": "2026-11-04T10:00:02.000Z",
+  "backend": "k8s",
+  "pending": {
+    "reason": "unschedulable",
+    "since": "2026-11-04T10:00:02Z",
+    "nominated": false,
+    "autoscaler": "no_scale_up",
+    "detail": "pod didn't trigger scale-up: 1 max node group size reached"
+  }
+}

@@ -115,6 +115,16 @@ on `kubernetes.io/hostname` (never required, so a fully tried cluster still sche
 is not asked for a node). docker and process ignore it. Meeting bots get `VEXA_NODE_NAME` (the Pod's
 node, downward API) on k8s, so a failed attempt can report where it ran.
 
+`WorkloadStatus.pending` (optional, added 4 Nov 2026) carries the substrate's placement facts while
+a `running` workload still waits for it — on k8s, while its Pod is Pending: `reason`
+(`unschedulable` · `image_pull` · `starting`), `since`, and for an unschedulable Pod whether the
+scheduler `nominated` a node for it (a preemption freeing room) and the cluster `autoscaler`'s latest
+verdict on it (`scale_up` from a `TriggeredScaleUp` Event, `no_scale_up` from `NotTriggerScaleUp`),
+with the autoscaler's or scheduler's `detail`. Facts only: meeting-api decides from them that a bot
+waits for a seat the cluster cannot add (its `queued` status). Reading Pod Events needs `list`
+on `events` in the runtime's namespace (the chart's runtime Role); without it the facts come without
+an autoscaler verdict. docker and process report no `pending`.
+
 ## Status
 **Sealed** in `contracts.seal.json` (gate:contract-version). An additive change re-seals with
 `pnpm seal:contracts` in a `lane:contract` PR; a breaking one is `runtime.v2`.

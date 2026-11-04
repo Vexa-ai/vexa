@@ -17,6 +17,7 @@ Ownership is the rule on both sides:
   meeting's annotations (``imported_from``).
 """
 from __future__ import annotations
+from ..lifecycle.machine import ENDING_STATUSES, IN_FLIGHT_STATUSES
 
 import hmac
 import os
@@ -38,7 +39,7 @@ from .codec import (
 # (the same discrimination the transcript read applies — ``collector.adapters._fill_absolute_times``).
 _EPOCH_THRESHOLD_S = 1_000_000_000
 # The meeting statuses with a bot in flight: there is no finished meeting to export yet.
-_LIVE_STATUSES = frozenset({"requested", "joining", "awaiting_admission", "needs_help", "active", "stopping"})
+_LIVE_STATUSES = frozenset(IN_FLIGHT_STATUSES)
 #: The annotation key the duplicate check reads: flat, so a containment filter finds it on any store.
 BUNDLE_ID_KEY = "imported_bundle_id"
 PROVENANCE_KEY = "imported_from"
@@ -179,7 +180,7 @@ def _context(row: dict, data: dict, base: Optional[datetime], end: Optional[date
         "requested_at": _iso(_parse(row.get("created_at"))),
         "joined_at": _first_at(trail, ("joining",)),
         "admitted_at": _first_at(trail, ("active",)),
-        "left_at": _first_at(trail, ("stopping", "completed", "failed")),
+        "left_at": _first_at(trail, ENDING_STATUSES),
         "exit_reason": clean_text(data.get("completion_reason") or data.get("reason"), 64) or None,
     }
     return {

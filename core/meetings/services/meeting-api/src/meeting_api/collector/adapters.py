@@ -16,6 +16,8 @@ redis installed in the test venv — which is why ``pyproject.toml`` needs NO ``
 (SQLAlchemy-async is never imported during the gates).
 """
 from __future__ import annotations
+from .projection import set_scheduled_at
+from ..lifecycle.machine import PLANNED_STATUSES, TERMINAL_STATUSES
 
 import hashlib
 import json
@@ -529,11 +531,12 @@ class SqlAlchemyTranscriptStore:
                             member_workspaces=None, list_view=False, meeting_id=None, slim=False,
                             metadata_filter=None):
         from sqlalchemy import (Boolean, Integer, String, any_, bindparam, cast, func, literal,
-                                literal_column, select)
+                                literal_column, or_, select)
         from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 
         from .models import Meeting
-        from .projection import DEFAULT_LIST_LIMIT, LIST_PIN_STATUSES, project_list_data
+        from .projection import (DEFAULT_LIST_LIMIT, LIST_PIN_STATUSES, UNPINNED_LIVE_STATUSES,
+                                 project_list_data)
 
         async with self._session_factory() as db:
             # ACCESS = owner OR transcript-share viewer OR member of the bound workspace. Shared meetings
@@ -585,8 +588,11 @@ class SqlAlchemyTranscriptStore:
                         else frozenset([status]) if status else frozenset())
             # /bots/status: a status set inside the pinned ones makes the pin a no-op predicate that
             # lets the owner/workspace branch range-scan the (key, pin) prefix of the event-order index
-            # instead of visiting every row the account owns.
-            pin_prefix = bool(statuses) and statuses <= LIST_PIN_STATUSES
+            # instead of visiting every row the account owns. A live status the index does not pin
+            # (`queued`) rides beside it as `OR status IN (…)`, served by the status index: still no
+            # walk over the account's history, and no index change.
+            unpinned = statuses & UNPINNED_LIVE_STATUSES
+            pin_prefix = bool(statuses) and (statuses - unpinned) <= LIST_PIN_STATUSES
 
             def _branch(name, cond, with_room):
                 cols = [Meeting.id]
@@ -604,7 +610,8 @@ class SqlAlchemyTranscriptStore:
                         else Meeting.status == status
                     )
                     if pin_prefix and name != "viewer":
-                        s = s.where(pin_col)
+                        s = s.where(or_(pin_col, Meeting.status.in_(tuple(sorted(unpinned))))
+                                    if unpinned else pin_col)
                 if meeting_id is not None:
                     # Detail-by-id: `id = :mid` in EVERY branch, so it never enumerates the account
                     # (#803); the branches still decide WHETHER the caller may see it.
@@ -690,6 +697,8 @@ class SqlAlchemyTranscriptStore:
                 rows = rows[(offset or 0):]
                 has_more = False
 
+            from ..lifecycle.queue import status_reason_of
+
             def _row(m):
                 # The ONE ownership decision this row makes. `shared` (the api.v1 field) and the
                 # response projection's viewer tier both read it, so a row can never claim to be the
@@ -710,6 +719,8 @@ class SqlAlchemyTranscriptStore:
                     # (hoisted the same way as `_meeting_projection_from_row` in app.py).
                     "completion_reason": (m.data or {}).get("completion_reason") if isinstance(m.data, dict) else None,
                     "failure_stage": (m.data or {}).get("failure_stage") if isinstance(m.data, dict) else None,
+                    # Why a `queued` meeting waits (api.v1 MeetingStatusReason); null otherwise.
+                    "status_reason": status_reason_of(m.status, m.data),
                     "shared": not is_owner,   # surfaced via a share/membership, not owned by the caller
                     "created_at": _iso_utc(m.created_at),
                     "updated_at": _iso_utc(m.updated_at),
@@ -1285,9 +1296,9 @@ class SqlAlchemyTranscriptStore:
             new_at = scheduled_at if status == "scheduled" else None
             meeting.status = status
             if status == "scheduled":
-                data["scheduled_at"] = new_at
+                set_scheduled_at(data, new_at)
             else:
-                data.pop("scheduled_at", None)
+                set_scheduled_at(data, None)
             meeting.data = data
             flag_modified(meeting, "data")
             await db.commit()
@@ -1346,7 +1357,7 @@ class SqlAlchemyTranscriptStore:
         if title:
             data["title"] = title
         if scheduled_at:
-            data["scheduled_at"] = scheduled_at
+            set_scheduled_at(data, scheduled_at)
         if meeting_url:
             data["constructed_meeting_url"] = meeting_url
         if workspace_id:
@@ -1383,7 +1394,7 @@ class SqlAlchemyTranscriptStore:
                         Meeting.user_id == user_id,      # the active-row index is per account, room rows too
                         Meeting.platform == platform,
                         Meeting.platform_specific_id == native_meeting_id,
-                        Meeting.status.notin_(("completed", "failed")),
+                        Meeting.status.notin_(TERMINAL_STATUSES),
                     )
                 )).scalars().first()
                 if dup is not None:
@@ -1662,7 +1673,7 @@ class SqlAlchemyTranscriptStore:
             )).scalars().first()
             if meeting is None:
                 return None
-            if meeting.status not in ("idle", "scheduled"):
+            if meeting.status not in PLANNED_STATUSES:
                 return {"error": "conflict"}
             data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
 
@@ -1675,7 +1686,7 @@ class SqlAlchemyTranscriptStore:
                             _owned(Meeting, user_id),
                             Meeting.platform == new_platform,
                             Meeting.platform_specific_id == new_native,
-                            Meeting.status.notin_(("completed", "failed")),
+                            Meeting.status.notin_(TERMINAL_STATUSES),
                             Meeting.id != meeting_id,
                         )
                     )).scalars().first()
@@ -1695,10 +1706,10 @@ class SqlAlchemyTranscriptStore:
                     data.pop("title", None)
             if "scheduled_at" in updates:
                 if updates["scheduled_at"]:
-                    data["scheduled_at"] = updates["scheduled_at"]
+                    set_scheduled_at(data, updates["scheduled_at"])
                     meeting.status = "scheduled"
                 else:
-                    data.pop("scheduled_at", None)
+                    set_scheduled_at(data, None)
                     meeting.status = "idle"
             if "workspace_id" in updates:
                 if updates["workspace_id"]:
@@ -1773,7 +1784,7 @@ class SqlAlchemyTranscriptStore:
             )).scalars().first()
             if meeting is None:
                 return None
-            if meeting.status not in ("idle", "scheduled"):
+            if meeting.status not in PLANNED_STATUSES:
                 return False
             await db.delete(meeting)
             await db.commit()
@@ -1794,7 +1805,7 @@ class SqlAlchemyTranscriptStore:
             )).scalars().first()
             if meeting is None:
                 return None
-            if meeting.status not in ("completed", "failed"):
+            if meeting.status not in TERMINAL_STATUSES:
                 return {"error": "conflict"}
             data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
             prior = data.get("artifact_deletion") or {}
@@ -1830,7 +1841,7 @@ class SqlAlchemyTranscriptStore:
             )).scalars().first()
             if meeting is None:
                 return None
-            if meeting.status in ("completed", "failed"):
+            if meeting.status in TERMINAL_STATUSES:
                 return {"terminal": True}
             data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
             if not data.get(DELETE_WHEN_ENDED_FIELD):
@@ -1868,7 +1879,7 @@ class SqlAlchemyTranscriptStore:
             )).scalars().first()
             if meeting is None:
                 return None
-            if meeting.status not in ("completed", "failed"):
+            if meeting.status not in TERMINAL_STATUSES:
                 return False
             await db.execute(delete(Transcription).where(Transcription.meeting_id == meeting_id))
             data = dict(meeting.data) if isinstance(meeting.data, dict) else {}

@@ -642,6 +642,13 @@
    "targets": []
   },
   {
+   "key": "VEXA_QUEUE_SCALE_UP_WINDOW_S",
+   "class": "defaulted",
+   "default": "300",
+   "description": "how long a bot Pod may stay Unschedulable with no cluster-autoscaler verdict before the cluster is taken to be unable to grow and the bot goes queued (about twice a new node's p90 of 150 s); an autoscaler NotTriggerScaleUp on the Pod queues it at once",
+   "targets": []
+  },
+  {
    "key": "MEETING_UNTRACKED_GRACE_SEC",
    "class": "defaulted",
    "default": "600",

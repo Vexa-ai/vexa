@@ -33,6 +33,7 @@ There is no durable scheduler in prod (``scheduling/`` is eval-only), so ``next_
 the single-flight sweep IS the scheduler: a meeting-api restart loses nothing.
 """
 from __future__ import annotations
+from .machine import PRE_LOBBY_STATUSES
 
 import os
 from dataclasses import dataclass
@@ -48,7 +49,6 @@ PLATFORM = "google_meet"
 #: Row statuses a respawn may run from: the bot never reached the waiting room. A refused bot's row is
 #: `joining`; `awaiting_admission` means a host could see a request, and a new bot over it would be an
 #: illegal `joining` edge.
-PRE_LOBBY_STATUSES = frozenset({"requested", "joining"})
 
 RUNNING, PENDING, SPAWNING, EXHAUSTED, CANCELLED = "running", "pending", "spawning", "exhausted", "cancelled"
 #: States in which the row's current workload is a retired attempt (its death is not the meeting's end).

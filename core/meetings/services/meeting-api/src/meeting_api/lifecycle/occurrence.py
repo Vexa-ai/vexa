@@ -41,6 +41,7 @@ reason belongs to the active phase at all (``evicted``, ``left_alone``, ``startu
 ``max_bot_time_exceeded``) — in which case the bot was in the room whatever the stage says.
 """
 from __future__ import annotations
+from .machine import TERMINAL_STATUSES
 
 from enum import Enum
 from typing import Any, Optional
@@ -71,7 +72,7 @@ KNOWN_REASONS: frozenset[str] = frozenset(
 # The stage that means the bot was ADMITTED. A failed run attributed to it reached the meeting.
 ACTIVE_STAGE = "active"
 
-TERMINAL_STATUSES = ("completed", "failed")
+TERMINAL_STATUSES = TERMINAL_STATUSES
 
 
 class Disposition(str, Enum):

@@ -639,6 +639,17 @@ _FIXTURES = [
          "reason": "stopped while awaiting admission (withdrew the join request)"},
         ("stopped_while_joining", "user_action"),
     ),
+    (
+        # No bot ever ran: meeting-api itself drives this terminal (lifecycle/queue.py), after the
+        # runtime confirmed the waiting Pod's deletion — so it replays in process, not through the
+        # bot's callback (`_SERVER_TERMINAL`).
+        "queue-wait-ran-out",
+        [],
+        {"status": "failed", "completion_reason": "cluster_at_capacity", "_SERVER_TERMINAL": True,
+         "reason": "no seat for the bot within 30 min: the cluster stayed at capacity "
+                   "(pod didn't trigger scale-up: 1 max node group size reached)"},
+        ("cluster_at_capacity", "system_fault"),
+    ),
 ]
 
 # The control-plane-unreachable abort (#530) has no HTTP fixture ON PURPOSE: that terminal is emitted
@@ -663,14 +674,24 @@ def test_control_plane_unreachable_abort_is_a_system_fault():
     "name,prefix,terminal,expected", _FIXTURES, ids=[f[0] for f in _FIXTURES]
 )
 def test_failure_class_fixture_replays_deterministically(name, prefix, terminal, expected):
+    from meeting_api.lifecycle.machine import TransitionSource
+
     expected_reason, expected_attribution = expected
-    repo, meeting = _repo_with_meeting()
-    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
+    terminal = dict(terminal)
+    server_terminal = terminal.pop("_SERVER_TERMINAL", False)
+    repo, meeting = _repo_with_meeting("queued" if server_terminal else "requested")
+    app = create_app(open_callbacks=True, meeting_repo=repo)
+    client = TestClient(app)
     events = [{"connection_id": "sess-evidence", "status": s} for s in prefix]
     # A bot that never emitted `joining` (the control-plane-unreachable abort) still has to land its
     # terminal — the FSM's entry edge is None → joining, so this exercises the rehydrate path too.
     events.append({"connection_id": "sess-evidence", **terminal})
     for ev in events:
+        if server_terminal and ev is events[-1]:
+            code, _ = asyncio.run(app.state.apply_lifecycle_event(
+                ev, transition_source=TransitionSource.CAPACITY_QUEUE, force_terminal_on_destroy=True))
+            assert code == 200
+            continue
         r = client.post(ENDPOINT, json=ev)
         assert r.status_code in (200, 409), r.text
     data = _stored_data(repo, meeting["id"])

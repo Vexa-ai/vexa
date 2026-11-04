@@ -126,3 +126,21 @@ async def fake_redis():
     finally:
         await client.flushall()
         await client.aclose()
+
+
+@pytest.fixture
+def account_limits(monkeypatch):
+    """Answer identity's bot-context for every account with this bot-limits.v1 object — the one
+    carrier of an account's limits (core/identity/contracts/bot-limits.v1). ``account_limits(1)``
+    caps every account at one bot; keyword arguments are further limits."""
+    from meeting_api.bot_spawn import service as _spawn_service
+
+    def _set(max_concurrent_bots, **limits):
+        body = {"bot_limits": {"version": 1, "max_concurrent_bots": max_concurrent_bots, **limits}}
+
+        async def fetch(user_id):
+            return {k: dict(v) for k, v in body.items()}
+
+        monkeypatch.setattr(_spawn_service, "_fetch_bot_context", fetch)
+
+    return _set

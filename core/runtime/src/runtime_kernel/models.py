@@ -69,6 +69,30 @@ class WorkloadSpec(BaseModel):
         return None if value is None else validate_avoid_nodes(value)
 
 
+class PendingReason(str, Enum):
+    """Why a workload the backend accepted is not running yet (runtime.v1 ``PendingReason``)."""
+    unschedulable = "unschedulable"   # no node can take it now (k8s: PodScheduled=False/Unschedulable)
+    image_pull = "image_pull"         # placed, its image cannot be pulled yet (ErrImagePull/BackOff)
+    starting = "starting"             # placed or about to be: image pulling, container being created
+
+
+class AutoscalerVerdict(str, Enum):
+    """The cluster autoscaler's own latest verdict on an unschedulable workload."""
+    scale_up = "scale_up"             # TriggeredScaleUp: a node is being added for it
+    no_scale_up = "no_scale_up"       # NotTriggerScaleUp: no node group can be grown for it
+
+
+class Pending(BaseModel):
+    """The substrate's placement facts for a workload that is not running yet (k8s: a Pending Pod).
+    Facts only — what the scheduler and the autoscaler said — never a verdict on what it means."""
+    model_config = {"extra": "forbid"}
+    reason: PendingReason
+    since: Optional[str] = None
+    nominated: Optional[bool] = None
+    autoscaler: Optional[AutoscalerVerdict] = None
+    detail: Optional[str] = None
+
+
 class WorkloadStatus(BaseModel):
     model_config = {"extra": "forbid"}
     workloadId: str
@@ -81,6 +105,8 @@ class WorkloadStatus(BaseModel):
     exitCode: Optional[int] = None
     stopReason: Optional[StopReason] = None
     node: Optional[str] = None
+    #: Present while a running workload still waits for its substrate (k8s backend only).
+    pending: Optional[Pending] = None
 
 
 class RuntimeEvent(BaseModel):

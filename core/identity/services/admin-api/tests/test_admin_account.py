@@ -146,7 +146,7 @@ def test_the_named_account_is_created_as_the_admin_account_and_launches_no_bot(c
     assert who["admin_account"] is True and who["is_admin"] is False
     assert who["max_concurrent"] == 0
     assert client.get(f"/internal/users/{uid}/is-admin", headers=_h()).json()["admin_account"] is True
-    assert client.get(f"/internal/users/{uid}/bot-context", headers=_h()).json()["max_concurrent"] == 0
+    assert client.get(f"/internal/users/{uid}/bot-context", headers=_h()).json()["bot_limits"]["max_concurrent_bots"] == 0
     # an everyday account beside it is unchanged
     other = _who(client, _token(client, _mk(client, PERSON)))
     assert other["admin_account"] is False and other["max_concurrent"] > 0

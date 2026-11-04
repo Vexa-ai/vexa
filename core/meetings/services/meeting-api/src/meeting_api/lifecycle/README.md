@@ -54,6 +54,17 @@ parent's FM-003 discipline). `active → joining` (and any re-open of a terminal
   to the bot; `GET …/chat/{request_id}` reads the send's outcome (`queued` · `posted` · `failed` +
   the bot's reason · `unconfirmed` after `UNCONFIRMED_AFTER_SEC`), sender only, from the record
   `../chat_delivery.py` keeps and the collector settles from the bot's `chat_send_result`.
+- `queue.py` — the capacity queue: a bot whose Pod waits for a seat the cluster cannot add (the
+  runtime's `WorkloadStatus.pending`: Unschedulable, and the cluster autoscaler said `NotTriggerScaleUp`
+  or none spoke within `VEXA_QUEUE_SCALE_UP_WINDOW_S`) goes from `requested` to the server-side status
+  `queued` with `status_reason` `cluster_at_capacity`, then `will_join_late` once its meeting has
+  started; each is a `meeting.status_change`. `queued` rehydrates to the FSM's pre-`joining` entry, so
+  the bot's own `joining` ends the queue. After the run's `queue_wait_s` (the account's limit,
+  `limits.py`, stamped at spawn; default 30 min) late, its teardown is requested
+  (`data.queue.timing_out`), its Pod deleted (confirmed, retried every pass until gone) and it fails
+  `cluster_at_capacity` (PERMANENT, `never_admitted`). It is the first phase of the reconcile pass
+  (`__main__._stop_reconcile_loop`), so one owner tears every run down; its writes are conditional
+  (`MeetingRepo.set_queue_status`), so a bot that just got its seat is never put back.
 - `retry.py` (P3d) — `JoinRetryController` + the transient/permanent taxonomy
   (`classify_retry` / `is_transient`): on a TRANSIENT join-failure schedule a fresh re-spawn (a new
   `meeting_session`) through the runtime scheduler with bounded exponential backoff; a PERMANENT
@@ -70,7 +81,7 @@ webhook body `{old_status, new_status, reason, transition_source ∈ user_stop|b
 
 ## P3d taxonomy
 TRANSIENT → retry: `awaiting_admission_timeout`, `join_failure`. PERMANENT → no retry → failed:
-`awaiting_admission_rejected`, `evicted`, `validation_error`, `max_bot_time_exceeded`, user `stopped`
+`awaiting_admission_rejected`, `cluster_at_capacity`, `evicted`, `validation_error`, `max_bot_time_exceeded`, user `stopped`
 (+ `left_alone`/`startup_alone`, which are normal outcomes). Unknown/None → PERMANENT (fail-safe).
 
 ## Evals

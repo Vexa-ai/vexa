@@ -108,8 +108,28 @@ A meeting is **one record from plan to transcript**:
 | Phase | `status` values | Who owns it |
 |---|---|---|
 | Planned (intent) | `idle` (no time) · `scheduled` (time set) | you — freely editable |
-| Live (bot FSM) | `requested` · `joining` · `awaiting_admission` · `needs_help` · `active` · `stopping` | the bot lifecycle |
+| Live (bot FSM) | `requested` · `queued` · `joining` · `awaiting_admission` · `needs_help` · `active` · `stopping` | the bot lifecycle |
 | Terminal | `completed` · `failed` | — |
+
+### Queued: waiting for a seat
+
+When the cluster is full, a new bot is not refused: it waits, with `status` **`queued`** (between
+`requested` and `joining`) and a top-level **`status_reason`**, on `GET /bots`, `GET /meetings`,
+`GET /meetings/{id}` and the `meeting.status_change` [webhook](/webhooks#queued-bots):
+
+| `status_reason` | Meaning |
+|---|---|
+| `cluster_at_capacity` | The bot cannot be placed and the cluster cannot add room for it. |
+| `will_join_late` | Still queued when the meeting starts. An ad-hoc bot's meeting is already on, so this follows at once; a booked bot (`scheduled_at`) gets it at its start time. |
+
+`status_reason` is `null` for every other status. The bot leaves `queued` by itself when a seat
+frees: it moves on to `joining` as usual. A queued bot counts against your concurrent-bot limit like
+a `requested` one, so the `429` past that limit is unchanged.
+
+The wait is bounded: 30 minutes from the moment the bot is late. A bot that never got a seat then
+ends `failed` with `completion_reason` **`cluster_at_capacity`**; it is not retried, and since no bot
+ever ran, it is not billed (its [service provenance](#completion-service-provenance) reads
+`bot_outcome: never_admitted`).
 
 Sending a bot to a planned meeting (yours or auto-join's) **upgrades the same record in place** —
 its title, workspace binding, and transcript stay together. `PATCH`/`DELETE` work only while the
@@ -364,7 +384,13 @@ curl -X POST "$API_BASE/bots" \
 If a **planned** meeting exists for the same link, the spawn **claims it**: the same record moves
 to `requested`, keeping its title, `scheduled_at`, and workspace binding. `409` when a bot is
 already active on that link; `429` past your concurrency limit — see the
-[concurrency-refusal divergence](/api/errors#by-surface), which answers `403` today.
+[concurrency-refusal divergence](/api/errors#by-surface), which answers `403` today. A bot you
+stopped keeps its seat in that limit for 60 seconds after it ends (a booked bot's does not). Bot
+starts are also paced per account, whichever way they are made (the API, a routine, a calendar
+auto-join, a continued meeting): 10 at once, then one every 2 minutes; past that `POST /bots`
+answers `429` with `{"detail": "Bot start rate exceeded", "reason": "bot_start_rate"}` and a
+`Retry-After`. A start refused for another reason (`409`, the concurrency `429`) does not count.
+These are the defaults; a deployment can set them per plan and per account.
 
 With transcription requested (the default) and STT unconfigured, the spawn is **refused loud** —
 `503` naming `TRANSCRIPTION_SERVICE_URL` / `TRANSCRIPTION_SERVICE_TOKEN`. Two ways out: set the

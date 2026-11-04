@@ -45,6 +45,7 @@ empty planned sibling, and no row means nothing for the sweep to arm. Occurrence
 backoff (``OCCURRENCE_MATCH_S``), so next week's instance imports armed.
 """
 from __future__ import annotations
+from ..lifecycle.machine import PLANNED_STATUSES, TERMINAL_STATUSES
 
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Optional
@@ -64,8 +65,8 @@ DEFAULT_LOOKBACK_S = 900
 # plausible recurrence interval — the suppression this scopes must NEVER reach tomorrow's meeting.
 OCCURRENCE_MATCH_S = 300
 
-_INTENT = ("idle", "scheduled")
-_TERMINAL = ("completed", "failed")
+_INTENT = PLANNED_STATUSES
+_TERMINAL = TERMINAL_STATUSES
 
 
 def _as_utc(value: Any) -> Optional[datetime]:

@@ -1818,6 +1818,18 @@
    ]
   },
   {
+   "unique-id": "bot-limits.v1",
+   "node-type": "contract",
+   "name": "bot-limits.v1",
+   "description": "bot-limits.v1 — sealed contract (identity): an accounts resolved bot limits, the bot_limits field of admin-apis internal GET /internal/users/{id}/bot-context and the one carrier of them to meeting-api (the cap from users.max_concurrent_bots; the rest from users.data over platform_settings plan defaults); versioned, read by meeting-api limits.py",
+   "metadata": [
+    {
+     "path": "core/identity/contracts/bot-limits.v1",
+     "domain": "identity"
+    }
+   ]
+  },
+  {
    "unique-id": "delegation.v1",
    "node-type": "contract",
    "name": "delegation.v1",
@@ -2640,6 +2652,7 @@
       "signin.v1",
       "identity-db",
       "delegation.v1",
+      "bot-limits.v1",
       "signin-link-redeemed"
      ]
     }
