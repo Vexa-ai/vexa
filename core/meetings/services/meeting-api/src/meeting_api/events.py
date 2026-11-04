@@ -56,6 +56,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import Any, Callable, Optional
 
 EVENT_MEETING_STARTED = "meeting.started"
@@ -76,8 +77,12 @@ log = logging.getLogger("meeting_api.events")
 TIMEOUT_S = 2.0
 #: How many publishes may be in flight at once (``publish_in_background``). Each ends within
 #: ``TIMEOUT_S`` plus ``_GRACE_S``; past this many — flows hanging under a burst of lifecycle
-#: transitions — a new fact is dropped, said once at warning level until the backlog drains.
+#: transitions — a new fact is dropped and counted (the drop metric below).
 MAX_IN_FLIGHT = 256
+#: THE DROP METRIC. Every fact dropped past ``MAX_IN_FLIGHT`` is counted (``publish_backlog``), and
+#: the count is reported as one ``flows_publish_dropped`` logevent.v1 line — the facts dropped since
+#: the last line, and the total — at most once per this many seconds while drops are unreported.
+DROP_REPORT_S = 60.0
 #: Added to ``TIMEOUT_S`` for the whole of one background publish: httpx bounds each phase, this
 #: bounds their sum, so a task always ends.
 _GRACE_S = 1.0
@@ -85,7 +90,34 @@ _GRACE_S = 1.0
 #: The publishes in flight. The event loop keeps only a weak reference to a task, so a task nothing
 #: else holds can be garbage-collected before it has run; this set holds each one until it ends.
 _in_flight: "set[asyncio.Task]" = set()
-_saturated = False
+_dropped_total = 0
+_dropped_unreported = 0
+_last_report = float("-inf")
+_now = time.monotonic
+
+
+def publish_backlog() -> dict:
+    """The publishes in flight, the bound, and every fact dropped since this process started."""
+    return {"in_flight": len(_in_flight), "max_in_flight": MAX_IN_FLIGHT,
+            "dropped_total": _dropped_total}
+
+
+def _report_drops() -> None:
+    """One ``flows_publish_dropped`` metric line for the drops not yet reported, once a window has
+    passed since the last. Never raises (a counter must not break the publish it counts)."""
+    global _dropped_unreported, _last_report
+    now = _now()
+    if not _dropped_unreported or now - _last_report < DROP_REPORT_S:
+        return
+    try:
+        from .obs import log_event
+
+        log_event("flows_publish_dropped", audience="system", level="warning",
+                  span="meetings.flows_publish",
+                  fields={"dropped": _dropped_unreported, **publish_backlog()})
+    except Exception:  # noqa: BLE001
+        pass
+    _dropped_unreported, _last_report = 0, now
 
 
 def _flows_base() -> str:
@@ -147,22 +179,20 @@ def publish_in_background(publish_fn: Callable[..., Any], *args, **kwargs) -> "O
 
     Best-effort like ``publish``: the whole publish is bounded by ``TIMEOUT_S`` + ``_GRACE_S``, an
     exception is swallowed, and at most ``MAX_IN_FLIGHT`` publishes are in flight (past that the
-    fact is dropped and None returned). The task is held in ``_in_flight`` until it ends, so it is
-    never garbage-collected first. None, too, when no event loop is running."""
-    global _saturated
+    fact is dropped, counted, and None returned). The task is held in ``_in_flight`` until it ends,
+    so it is never garbage-collected first. None, too, when no event loop is running."""
+    global _dropped_total, _dropped_unreported
     name = getattr(publish_fn, "__name__", "publish")
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return None
     if len(_in_flight) >= MAX_IN_FLIGHT:
-        if not _saturated:
-            _saturated = True
-            log.warning("flows publish backlog full (%d in flight): %s and later facts are dropped "
-                        "until it drains", MAX_IN_FLIGHT, name)
+        _dropped_total += 1
+        _dropped_unreported += 1
+        _report_drops()
         return None
-    if len(_in_flight) < MAX_IN_FLIGHT // 2:
-        _saturated = False
+    _report_drops()
 
     async def _run() -> None:
         try:

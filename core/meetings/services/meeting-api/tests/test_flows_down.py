@@ -113,9 +113,12 @@ def test_the_live_transcript_reads_with_flows_down(flows_down):
 # ── the background publish itself ───────────────────────────────────────────────────────────────
 @pytest.fixture(autouse=False)
 def fresh_backlog(monkeypatch):
-    """This test's own in-flight set, so a task another test's event loop left behind is not counted."""
+    """This test's own in-flight set and drop counters, so a task another test's event loop left
+    behind is not counted."""
     monkeypatch.setattr(events_mod, "_in_flight", set())
-    monkeypatch.setattr(events_mod, "_saturated", False)
+    monkeypatch.setattr(events_mod, "_dropped_total", 0)
+    monkeypatch.setattr(events_mod, "_dropped_unreported", 0)
+    monkeypatch.setattr(events_mod, "_last_report", float("-inf"))
 
 
 async def test_a_background_publish_is_held_until_it_ends_and_the_caller_does_not_wait(
@@ -155,8 +158,27 @@ async def test_a_background_publish_is_bounded_and_swallows_its_failure(monkeypa
     assert not events_mod._in_flight
 
 
-async def test_past_the_in_flight_bound_a_fact_is_dropped(monkeypatch, fresh_backlog):
+def _drop_lines(capsys) -> list:
+    import json
+
+    lines = []
+    for line in capsys.readouterr().out.splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if entry.get("event") == "flows_publish_dropped":
+            lines.append(entry["fields"])
+    return lines
+
+
+async def test_past_the_in_flight_bound_drops_are_counted_as_a_metric(monkeypatch, fresh_backlog,
+                                                                      capsys):
+    """Every drop is counted (``publish_backlog``), and the count is reported as a metric line
+    (``flows_publish_dropped``) at most once per ``DROP_REPORT_S`` — not one warning per episode."""
     monkeypatch.setattr(events_mod, "MAX_IN_FLIGHT", 2)
+    clock = [1000.0]
+    monkeypatch.setattr(events_mod, "_now", lambda: clock[0])
     gate = asyncio.Event()
 
     async def waits(*args):
@@ -164,9 +186,16 @@ async def test_past_the_in_flight_bound_a_fact_is_dropped(monkeypatch, fresh_bac
 
     held = [events_mod.publish_in_background(waits) for _ in range(2)]
     assert all(t is not None for t in held)
-    assert events_mod.publish_in_background(waits) is None, "a third fact was taken past the bound"
+    assert [events_mod.publish_in_background(waits) for _ in range(5)] == [None] * 5
+    assert events_mod.publish_backlog() == {"in_flight": 2, "max_in_flight": 2, "dropped_total": 5}
+    assert [f["dropped"] for f in _drop_lines(capsys)] == [1], "one line per window, not per drop"
+
+    clock[0] += events_mod.DROP_REPORT_S + 1
     gate.set()
     await asyncio.gather(*held)
     again = events_mod.publish_in_background(waits)
     assert again is not None, "the bound did not free up once the backlog drained"
     await again
+    (line,) = _drop_lines(capsys)
+    assert (line["dropped"], line["dropped_total"]) == (4, 5), "the window's drops are reported"
+    assert events_mod.publish_backlog()["dropped_total"] == 5
