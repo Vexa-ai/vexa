@@ -66,6 +66,8 @@ _GUARD_EXCLUDE_PATHS = [
     "/favicon.ico",
     "/static",
     "/health",
+    "/status",  # #1964: the public maintenance read is polled like /health (prefix-safe: no
+                # other gateway route starts with /status; /bots/status starts with /bots)
 ]
 
 

@@ -7,7 +7,7 @@ flows + identity).
 
 What these tests hold down, in the order they matter:
 
-  1. the FULL profile is byte-for-byte what shipped — 150 scoped rows and 2 unscoped, and every one
+  1. the FULL profile is byte-for-byte what shipped — 150 scoped rows and 4 unscoped, and every one
      of them still matched to a route that exists;
   2. without the agent domain the table lacks EXACTLY its fifty rows and nothing else;
   3. an absent domain's routes are absent from the APP too, so a request 404s rather than 403s;
@@ -155,7 +155,7 @@ AGENT_ROWS = frozenset({
 #: What shipped. A count, not a copy of the table: a second copy of 188 rows is a second thing to
 #: keep in step, and `test_the_assembled_table_matches_the_app_exactly` is what proves the
 #: CONTENT — against the routes themselves, which is a stronger anchor than a literal.
-FULL_SCOPED, FULL_UNSCOPED = 214, 3   # + GET /transcription/languages, + POST /agent/connections/sensor-grant, GET …/sensor-grants, POST …/sensor-grant/revoke (08S-b), + POST /bots/{platform}/{native_meeting_id}/chat (#1089), + GET …/chat/{request_id} (the send's delivery status), + GET/POST /agent/workspace-store/* (WS-S3), + /internal/mcp/taint (D6), + POST /agent/workspace/policy/proposals (int-s1), + GET/PUT /user/notifications (S6), + POST /agent/rooms/call (call-person-1018), + GET /agent/rooms/list (held-label-rooms-1018)
+FULL_SCOPED, FULL_UNSCOPED = 214, 4   # + GET /transcription/languages, + POST /agent/connections/sensor-grant, GET …/sensor-grants, POST …/sensor-grant/revoke (08S-b), + POST /bots/{platform}/{native_meeting_id}/chat (#1089), + GET …/chat/{request_id} (the send's delivery status), + GET/POST /agent/workspace-store/* (WS-S3), + /internal/mcp/taint (D6), + POST /agent/workspace/policy/proposals (int-s1), + GET/PUT /user/notifications (S6), + POST /agent/rooms/call (call-person-1018), + GET /agent/rooms/list (held-label-rooms-1018); unscoped + GET /status (#1964)
 #: What THIS BUILD publishes — the full profile, less the agent rows when the build omits them.
 #: DERIVED, so the count stays exact in either build rather than softening to a range or a
 #: subset check.
@@ -235,9 +235,11 @@ def test_every_domain_declares_its_own_and_only_its_own():
     # 113-115 are calendar_sensor_grant, calendar_sensor_grants and calendar_sensor_grant_revoke (08S-b).
     # meetings 57 is POST /bots/{platform}/{native_meeting_id}/chat, the in-meeting chat send (#1089).
     # meetings 58 is GET /bots/{platform}/{native_meeting_id}/chat/{request_id}, whether that send posted.
-    assert a.domains == {"agent": 115, "gateway": 3, "identity": 28, "mcp": 12, "meetings": 59}
+    # gateway's 4th is the public GET /status (#1964), unscoped like /health.
+    assert a.domains == {"agent": 115, "gateway": 4, "identity": 28, "mcp": 12, "meetings": 59}
     assert {k for k, d in a.owner_of.items() if d == "agent"} == AGENT_ROWS
-    # The EDGE declares two routes and they are its own — /health and /auth/me forward nothing.
+    # The EDGE declares four routes and they are its own — /health, /status (#1964), /auth/me and
+    # /internal/mcp/taint forward nothing.
     assert {k for k, d in a.owner_of.items() if d == "gateway"} == set(UNSCOPED_ROUTES)
 
 

@@ -140,6 +140,7 @@
           "api/settings",
           "webhooks",
           "api/agent",
+          "api/status",
           "api/errors"
         ]
       },

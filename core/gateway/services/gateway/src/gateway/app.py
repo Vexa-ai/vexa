@@ -48,12 +48,13 @@ from .multiplex import run_multiplex
 from .vnc_relay import run_vnc_relay
 from .paths import (forwarded_param, forwarded_target_error, invalid_path_param_response,
                     path_segment, tail_path)
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.routing import APIRoute
 
+from .maintenance import MaintenanceCache, status_body
 from .obs import (TRACE_HEADER, TraceMiddleware, get_trace_id, log_event, session_of_validation,
                   set_session, set_user_id)
-from .ports import Authorizer, AuthUnavailable, DownstreamClient, RedisBus
+from .ports import Authorizer, AuthUnavailable, DownstreamClient, MaintenanceStore, RedisBus
 
 # #495: the honest answer when the auth path itself is unreachable — a retryable 503, never a
 # 401 that blames the caller's (valid) key. Shared by /auth/me and the proxy authorizer. Also
@@ -310,6 +311,7 @@ def create_app(
     vnc_connect=None,
     agent_allow: Optional[str] = None,
     taint_marker=None,
+    maintenance_store: Optional[MaintenanceStore] = None,
 ) -> FastAPI:
     """Build the gateway FastAPI app over the injected ports.
 
@@ -326,6 +328,8 @@ def create_app(
                       ``VEXA_AGENT_ALLOW`` from the environment.
     ``vnc_connect`` — opens the upstream websocket of a bot-account sign-in session's live view
                       (``vnc_relay.py``); ``None`` is the ``websockets`` client, a test injects a fake.
+    ``maintenance_store`` — where ``/status`` reads the maintenance record (#1964). ``None`` is a
+                      null store that never holds a record, so the harness and tests see no change.
     """
     # M7: a credential in a query string (`/ws?api_key=…`, refused) never reaches a log line.
     from . import log_scrub as _log_scrub  # noqa: PLC0415
@@ -376,6 +380,19 @@ def create_app(
     @app.get("/health")
     async def health():
         return {"status": "ok", "service": "gateway"}
+
+    # --- /status (#1964): the public maintenance/incident read. No auth, no downstream call;
+    # built from the in-process snapshot (one bounded Redis read per TTL). Public like /health
+    # and excluded from the edge guard the same way. ``apply_maintenance_header`` (adapters)
+    # finds the cache on ``app.state`` to stamp X-Vexa-Maintenance on every reply.
+    maintenance_cache = MaintenanceCache(maintenance_store)
+    app.state.maintenance_cache = maintenance_cache
+
+    @app.get("/status")
+    async def status():
+        state, record = await maintenance_cache.snapshot()
+        return JSONResponse(status_body(state, record, maintenance_cache.updated_at),
+                            headers={"Cache-Control": "max-age=15"})
 
     # --- /auth/me — caller identity from the API key (GET /auth/me with x-api-key →
     # user_id/email/scopes); the dashboard's login + session-validation resolve the user via this.
