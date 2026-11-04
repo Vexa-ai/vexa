@@ -341,7 +341,13 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
   const gatewayPort = (gateway.address() as { port: number }).port;
 
   // ── ingest (capture.v1 → gmeet-pipeline → broadcast) ──
-  const ingest = new WebSocketServer({ port: opts.ingestPort ?? 9099 });
+  // ws.v1 § Connect, as on /ws: a browser (the extension) sends its key in the subprotocol list
+  // (['vexa.v1', 'vexa.key.<key>']), never the URL. A browser fails the handshake unless the server
+  // answers one of the offered protocols, so /ingest answers 'vexa.v1' (never the key entry, which
+  // would echo the key into a response header). The key is not read or logged here: ingest's access
+  // seam is unchanged (access.ts governs the read paths).
+  const ingest = new WebSocketServer({ port: opts.ingestPort ?? 9099,
+    handleProtocols: (protocols) => (protocols.has('vexa.v1') ? 'vexa.v1' : false) });
   await new Promise<void>((r) => ingest.on('listening', () => r()));
   const ingestPort = (ingest.address() as { port: number }).port;
   ingest.on('connection', async (ws, req) => {

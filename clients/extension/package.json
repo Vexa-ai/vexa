@@ -8,7 +8,7 @@
     "build": "node build.mjs",
     "dev": "node build.mjs --watch",
     "typecheck": "tsc --noEmit",
-    "test": "tsx src/endpoints.test.ts && tsx src/capture-liveness.test.ts && tsx src/meeting.test.ts"
+    "test": "tsx src/endpoints.test.ts && tsx src/capture-liveness.test.ts && tsx src/meeting.test.ts && tsx src/ingest-socket.test.ts && node scripts/check-no-url-key.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.287",
