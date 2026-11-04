@@ -2,7 +2,7 @@ name: gates
 # push+pull_request unrestricted ran the suite TWICE per PR-branch push (both events
 # fire) — pure duplication. Push covers main + release tags; pull_request covers PRs.
 #
-# SPLIT INTO 3 PARALLEL JOBS (wall-clock law): static / python / node run concurrently
+# SPLIT INTO 3 PARALLEL JOBS (wall-clock law): static / python (itself a matrix of legs) / node run concurrently
 # (~5 min serial → ~2.5 min), joined by the `gates` job — the ONE required-check context
 # branch protection and the merge queue watch. The join fails if ANY leg is not success
 # (if:always() + explicit check, because a skipped required check would read as satisfied).
@@ -94,20 +94,55 @@ jobs:
       - name: gate script tests
         run: node --test scripts/*.test.mjs release/*.test.mjs
 
+  # THE PYTHON LEG, IN PARALLEL GROUPS. One job running every package's pytest in series took 29-46 min
+  # (runs 41794533276, 41798136966, 41803777655), past the merge queue's 30-minute check window, so any
+  # queued PR could time out; core/agent alone was 1150 s of it (run 41804646751). Each leg below runs
+  # `node scripts/gates.mjs python <selection>`: a package dir runs whole, `<dir>@<k>/<n>` runs shard k of
+  # n of that package's own collection (scripts/pytest-shard). Together the legs are exactly the
+  # population `pnpm gate:python` runs locally, and scripts/python-matrix.test.mjs (the `static` job's
+  # gate script tests) fails when a package is in no group or two, or a shard set has a gap. No test is
+  # skipped to buy the time. fail-fast is off so every leg reports its reds, as F209 requires of the
+  # loop itself. A leg that grows past timeout-minutes fails by name instead of stalling the queue. The
+  # same test parses this file and refuses any key, step or value on this job, its gate step or the
+  # `gates` job that is not on its allow-list (scripts/python-matrix.mjs), in whatever YAML spelling.
+  # core/agent runs as four shards, not three. With three, the slowest shard took 10.6-12.6 min of
+  # pytest (runs 41821772078, 41824533705), against 9.0 min for the whole slowest leg with four (run
+  # 41817284457). The shard legs' total runner time was the same either way (25.5 vs 24.0 min), so the
+  # fourth leg adds no runner time on the org's 20 concurrent job slots.
   python:
+    name: python (${{ matrix.group }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { group: agent-1, select: "core/agent@1/4" }
+          - { group: agent-2, select: "core/agent@2/4" }
+          - { group: agent-3, select: "core/agent@3/4" }
+          - { group: agent-4, select: "core/agent@4/4" }
+          - { group: services, select: "core/meetings/services/meeting-api core/identity/services/admin-api core/agent/services/credential-broker core/meetings/services/transcription core/seam/meeting-status-ws core/agent/services/agent-api" }
+          - { group: platform, select: "core/flows core/gateway/services/gateway core/gateway/services/mcp core/gateway/services/conformance core/runtime core/crm core/signals core/identity deploy/lite deploy/storage deploy/dogfood/rehearse clients/slim" }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: 22, cache: pnpm }
+      # No uv cache. A cold `uv sync --frozen` takes 0.3-1.5 s per package (bbb, empty cache), and
+      # setup-uv's default prune strips the downloaded wheels before saving: the per-leg caches saved
+      # 1.3 KB per agent shard and 10 MB for services (run 41817284457). With caching on and no
+      # suffix, the legs instead restored the 155 KB cache that `static` saves under the same key.
+      # Each leg's log line shows its wall time with uv sync included, next to pytest's own time.
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with: { enable-cache: false }
       - run: pnpm install --frozen-lockfile
         env: { ONNXRUNTIME_NODE_INSTALL: skip }
       # the runtime docker-backend lifecycle test creates containers via the docker socket API,
-      # which (unlike `docker run`) does NOT implicit-pull — pre-pull its fixture image
+      # which (unlike `docker run`) does NOT implicit-pull — pre-pull its fixture image, in the one
+      # leg that runs core/runtime (python-matrix.test.mjs holds the two together)
       - run: docker pull alpine
-      - run: pnpm gate:python
+        if: matrix.group == 'platform'
+      - run: node scripts/gates.mjs python ${{ matrix.select }}
 
   node:
     runs-on: ubuntu-latest
@@ -125,7 +160,8 @@ jobs:
       - run: pnpm build
       - run: pnpm test
 
-  # THE required check — branch protection + merge queue watch this single context.
+  # THE required check — branch protection + merge queue watch this single context. needs.python.result
+  # is the whole matrix: success only when every python leg succeeded.
   gates:
     needs: [static, python, node]
     if: always()

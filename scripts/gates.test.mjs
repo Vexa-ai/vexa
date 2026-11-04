@@ -551,6 +551,84 @@ test("gate:python GREEN: multiple passing planted packages do not red the gate",
   assert.equal(r.green, true, `two genuinely green planted packages reded the gate:\n${r.out}`);
 });
 
+// ── gate:python SELECTION (the CI matrix's legs: `node scripts/gates.mjs python <selector>...`) ──
+// Same planted trees, so the gate runs with a root that is NOT the checkout: the shard plugin has to
+// be found beside gates.mjs, never under the cwd.
+const runGateArgs = (args, cwd, env = {}) => {
+  try { return { green: true, out: execFileSync("node", [join(ROOT, "scripts", "gates.mjs"), ...args], { cwd, encoding: "utf8", env: { ...process.env, ...env } }) }; }
+  catch (e) { return { green: false, out: `${e.stdout || ""}${e.stderr || ""}` }; }
+};
+// One planted package with the given test files ({ "test_x.py": body }), in a fresh temp tree.
+function withPlantedPyFiles(dir, files, fn) {
+  const tree = mkdtempSync(join(tmpdir(), "vexa-gatepy-"));
+  try {
+    const abs = join(tree, dir);
+    mkdirSync(join(abs, "tests"), { recursive: true });
+    writeFileSync(join(abs, "pyproject.toml"), PY_PYPROJECT(dir.replace(/[^a-z0-9]+/gi, "-")));
+    for (const [name, body] of Object.entries(files)) writeFileSync(join(abs, "tests", name), body);
+    return fn(tree);
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
+}
+const PY_TEST_SKIPPED = "import pytest\n\n\n@pytest.mark.skip(reason=\"planted\")\ndef test_zz_planted():\n    pass\n";
+
+test("gate:python selection: runs only the named package and prints its collected and passed counts", () => {
+  // B is planted red: a green run proves B was not run, not merely not reported.
+  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: true }, { dir: PKG_B, pass: false }], (tree) => runGateArgs(["python", PKG_A], tree));
+  assert.equal(r.green, true, `selecting the green package ran something else, or reded:\n${r.out}`);
+  assert.match(r.out, new RegExp(`· ${rxPkg(PKG_A).source}: selected 1 of 1 collected · 1 passed`), `no collected/passed line for the selected package:\n${r.out}`);
+  assert.doesNotMatch(r.out, rxPkg(PKG_B), `the unselected package appears in the output:\n${r.out}`);
+});
+
+test("gate:python selection: the two shards of a one-file package run it once, and the shard that keeps nothing reds", () => {
+  const runs = withPlantedPyPkgs([{ dir: PKG_A, pass: true }], (tree) => [1, 2].map((k) => runGateArgs(["python", `${PKG_A}@${k}/2`], tree)));
+  const green = runs.filter((r) => r.green);
+  assert.equal(green.length, 1, `expected exactly one of the two shards to run the file:\n${runs.map((r) => r.out).join("\n----\n")}`);
+  assert.match(green[0].out, /selected 1 of 1 collected · 1 passed/, `the green shard did not report its counts:\n${green[0].out}`);
+  const red = runs.find((r) => !r.green);
+  assert.match(red.out, /1 deselected/, `the empty shard reded for another reason than keeping nothing:\n${red.out}`);
+});
+
+test("gate:python selection: a selector that names no package reds before anything runs", () => {
+  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: true }], (tree) => runGateArgs(["python", "zz-not-a-package", `${PKG_A}@3/2`], tree));
+  assert.equal(r.green, false, `an unknown selector was accepted:\n${r.out}`);
+  assert.match(r.out, /zz-not-a-package: not a package gate:python covers/);
+  assert.match(r.out, /there is no shard 3 of 2/);
+});
+
+test("gate:python selection: a shard's line counts the tests it selected, not the package's whole collection", () => {
+  const files = { "test_zz_one.py": PY_TEST_PASS, "test_zz_two.py": PY_TEST_PASS.replace("test_zz_planted", "test_zz_planted_two") };
+  const runs = withPlantedPyFiles(PKG_A, files, (tree) => [1, 2].map((k) => runGateArgs(["python", `${PKG_A}@${k}/2`], tree)));
+  const sel = runs.map((r) => r.out.match(/selected (\d+) of (\d+) collected/));
+  assert.ok(sel.every(Boolean), `a shard printed no selected count:\n${runs.map((r) => r.out).join("\n----\n")}`);
+  assert.deepEqual(sel.map((m) => m[2]), ["2", "2"], "each shard collects the package's two tests");
+  assert.equal(sel.reduce((n, m) => n + Number(m[1]), 0), 2, "the two shards together select each test once");
+});
+
+test("gate:python selection: a leg that passes no test reds (every test skipped)", () => {
+  const r = withPlantedPyFiles(PKG_A, { "test_zz_planted.py": PY_TEST_SKIPPED }, (tree) => runGateArgs(["python", PKG_A], tree));
+  assert.equal(r.green, false, `a selection whose only test was skipped passed the gate:\n${r.out}`);
+  assert.match(r.out, /passed no test/);
+});
+
+test("gate:python selection: a selector over a tree with no Python package reds instead of green-on-empty", () => {
+  const tree = mkdtempSync(join(tmpdir(), "vexa-gatepy-empty-"));
+  try {
+    const r = runGateArgs(["python", "core/agent@1/4"], tree);
+    assert.equal(r.green, false, `a selection that matched nothing passed as green-on-empty:\n${r.out}`);
+    assert.match(r.out, /core\/agent@1\/4: not a package gate:python covers/);
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("gate:python selection: a leg that only collects reds (PYTEST_ADDOPTS=--collect-only)", () => {
+  const r = withPlantedPyFiles(PKG_A, { "test_zz_planted.py": PY_TEST_PASS }, (tree) => runGateArgs(["python", PKG_A], tree, { PYTEST_ADDOPTS: "--collect-only" }));
+  assert.equal(r.green, false, `a selection that ran no test (collect-only) passed the gate:\n${r.out}`);
+  assert.match(r.out, /passed no test/);
+});
+
 // ── gate:licenses, Python half (scripts/check-python-licenses.mjs) ──────────────────────────────
 // Planted through the real gate: a Dockerfile, the licence index or the exception log is edited in
 // place and restored byte-for-byte, so each red is the one the committed tree would produce.
