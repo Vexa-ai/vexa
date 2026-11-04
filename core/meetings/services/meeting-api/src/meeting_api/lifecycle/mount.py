@@ -456,32 +456,33 @@ def mount_lifecycle(
         # `completed`; flows' own `emit_completed` only fires after its next poll tick), and
         # `process_meeting`'s room-read degrades to empty rather than to invite order — see the
         # filed issue for this deployment's disposition of that trade-off.
+        #
+        # OFF THE CALLBACK PATH (ADR-0052 §3): the publish runs as its own task
+        # (`events.publish_in_background`), so this callback — the one the bot's HTTP round trip is
+        # waiting on — returns without waiting on flows, whether flows answers, refuses the
+        # connection or hangs.
         if typed_envelope is not None and isinstance(meeting_row, dict):
             _meeting_block = (typed_envelope.get("data") or {}).get("meeting")
             if isinstance(_meeting_block, dict):
                 _et = typed_envelope.get("event_type")
                 _uid = _meeting_block.get("user_id")
                 if _uid is not None and _et == "meeting.started":
-                    try:
-                        await _flows_events.publish_meeting_started(
-                            _meeting_block.get("id"),
-                            _meeting_block.get("native_meeting_id"),
-                            _meeting_block.get("platform"),
-                            _uid,
-                        )
-                    except Exception:  # noqa: BLE001 — a publish edge is not a dependency
-                        pass
+                    _flows_events.publish_in_background(
+                        _flows_events.publish_meeting_started,
+                        _meeting_block.get("id"),
+                        _meeting_block.get("native_meeting_id"),
+                        _meeting_block.get("platform"),
+                        _uid,
+                    )
                 elif _uid is not None and _et == "meeting.completed":
-                    try:
-                        await _flows_events.publish_meeting_completed(
-                            _meeting_block.get("id"),
-                            _meeting_block.get("native_meeting_id"),
-                            _meeting_block.get("platform"),
-                            _uid,
-                            _meeting_block.get("completion_reason"),
-                        )
-                    except Exception:  # noqa: BLE001 — a publish edge is not a dependency
-                        pass
+                    _flows_events.publish_in_background(
+                        _flows_events.publish_meeting_completed,
+                        _meeting_block.get("id"),
+                        _meeting_block.get("native_meeting_id"),
+                        _meeting_block.get("platform"),
+                        _uid,
+                        _meeting_block.get("completion_reason"),
+                    )
         # The operator callback is a separate trust boundary from a customer's
         # webhook. It receives terminal service facts only, through a destination
         # frozen by deployment config. A transient failure is retained by the

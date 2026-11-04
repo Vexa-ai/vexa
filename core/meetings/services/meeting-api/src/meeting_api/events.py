@@ -13,14 +13,17 @@ A PUBLISH EDGE IS NOT A DEPENDENCY:
 
   * a DEPENDENCY is a call whose answer the caller needs. This module has none — nothing the
     lifecycle callback does branches on whether flows heard about it.
-  * a PUBLISH is a fact handed over. Best-effort, bounded, swallowed. A live meeting runs the same
-    whether flows heard about it or not, and so does one where flows is down or slow.
+  * a PUBLISH is a fact handed over. Best-effort, bounded, swallowed — and OFF the caller's path:
+    the lifecycle callback hands ``meeting.started`` / ``meeting.completed`` to
+    ``publish_in_background`` and returns without waiting on flows. A live meeting runs the same
+    whether flows heard about it or not, and so does one where flows is down or hangs.
 
-  * BUT FLOWS IS NO LONGER OPTIONAL (ADR-0052 §3): it owns the clock booked bots start from, and
-    every profile (Compose, Lite, Helm) runs it. A deployment without a flows domain does not run
-    PLANNED meetings the same — the auto-join sweep is gone (s2d), so nothing starts their bots. These
-    best-effort publishes stay best-effort; the planned-row facts flows needs travel through a
-    durable outbox instead (ADR-0052 §4).
+FLOWS SCHEDULES BOOKED BOTS, AND THAT IS ALL MEETINGS DEPENDS ON IT FOR (ADR-0052 §3). Its
+`booked_bot` starts a booked meeting's bot through ``POST /internal/meetings/{id}/start``, and the
+planned-row facts it needs travel through a durable outbox (``planned_outbox``, ADR-0052 §4), not
+through this module. A deployment without a flows domain (``VEXA_FLOWS_API_URL`` unset) refuses a
+booking with ``auto_join`` by name (``scheduling_not_deployed``, ``collector/booking.py``) and runs
+everything else the same: ad hoc bots, live transcripts, webhooks.
 
 So `VEXA_FLOWS_API_URL` / `VEXA_FLOWS_API_KEY` are declared as a `publish-edge` in `config.v1.json`,
 matching agent-api's own spelling of the URL key (identity's admin-api spelled it bare
@@ -49,10 +52,11 @@ not silently absorbed — see the filed issue.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
-from typing import Optional
+from typing import Any, Callable, Optional
 
 EVENT_MEETING_STARTED = "meeting.started"
 EVENT_MEETING_COMPLETED = "meeting.completed"
@@ -64,20 +68,24 @@ EVENT_MEETING_SHARED = "meeting.shared"
 
 log = logging.getLogger("meeting_api.events")
 
-#: Bounded on purpose. Both publishes run inside the lifecycle callback a bot's own HTTP round
-#: trip is waiting on, so the ceiling on how slow flows can make that callback is this number, not
-#: flows' own timeout.
-#:
-#: AND THE BOUND IS ONLY REAL BECAUSE THE CALL IS ASYNC. This used to be
-#: ``urllib.request.urlopen(req, timeout=TIMEOUT_S)`` — a BLOCKING call on the event loop inside
-#: ``async def _apply_lifecycle_event``, which is the same loop that runs the segment consumer, the
-#: db-writer, the live transcript reads and ``/health``. Two things were wrong with it and only one
-#: of them was the 2 s: urllib's ``timeout`` is a SOCKET timeout, so name resolution is not covered
-#: at all — an unresolvable ``VEXA_FLOWS_API_URL`` stalled the whole process for as long as the
-#: resolver took, not for two seconds. ``httpx.AsyncClient(timeout=…)`` bounds connect (DNS
-#: included), write, read and pool acquisition, and awaits instead of blocking, so a slow or dead
-#: flows costs THIS callback its bound and costs every other coroutine nothing.
+#: Bounded on purpose: how long one publish may hold its connection. ``httpx.AsyncClient(timeout=…)``
+#: bounds connect (DNS included), write, read and pool acquisition, and the call awaits rather than
+#: blocks, so a slow or dead flows costs the event loop nothing — the loop that also runs the
+#: segment consumer, the db-writer, the live transcript reads and ``/health``. The lifecycle
+#: callback does not wait on it at all (``publish_in_background``).
 TIMEOUT_S = 2.0
+#: How many publishes may be in flight at once (``publish_in_background``). Each ends within
+#: ``TIMEOUT_S`` plus ``_GRACE_S``; past this many — flows hanging under a burst of lifecycle
+#: transitions — a new fact is dropped, said once at warning level until the backlog drains.
+MAX_IN_FLIGHT = 256
+#: Added to ``TIMEOUT_S`` for the whole of one background publish: httpx bounds each phase, this
+#: bounds their sum, so a task always ends.
+_GRACE_S = 1.0
+
+#: The publishes in flight. The event loop keeps only a weak reference to a task, so a task nothing
+#: else holds can be garbage-collected before it has run; this set holds each one until it ends.
+_in_flight: "set[asyncio.Task]" = set()
+_saturated = False
 
 
 def _flows_base() -> str:
@@ -96,7 +104,8 @@ async def publish(event_type: str, source_event_id: str, refs: dict,
     there is no correct behaviour on a failed publish except to carry on, because the alternative
     is failing a bot's own lifecycle callback over a message it never asked us to send.
 
-    AWAITED, not blocking — see ``TIMEOUT_S``. The caller is ``async def _apply_lifecycle_event``.
+    AWAITED, not blocking — see ``TIMEOUT_S``. A caller on a request path that must not wait on
+    flows hands it to ``publish_in_background`` instead of awaiting it.
     """
     base = _flows_base()
     if not base:
@@ -130,6 +139,41 @@ async def publish(event_type: str, source_event_id: str, refs: dict,
         # warning level to be told so twice.
         log.debug("flows publish %s did not land (base=%s)", event_type, base, exc_info=True)
         return False
+
+
+def publish_in_background(publish_fn: Callable[..., Any], *args, **kwargs) -> "Optional[asyncio.Task]":
+    """Run ``publish_fn(*args, **kwargs)`` — one of this module's ``publish_*`` coroutines — as its own
+    task and return at once, so the caller (a bot's lifecycle callback) never waits on flows.
+
+    Best-effort like ``publish``: the whole publish is bounded by ``TIMEOUT_S`` + ``_GRACE_S``, an
+    exception is swallowed, and at most ``MAX_IN_FLIGHT`` publishes are in flight (past that the
+    fact is dropped and None returned). The task is held in ``_in_flight`` until it ends, so it is
+    never garbage-collected first. None, too, when no event loop is running."""
+    global _saturated
+    name = getattr(publish_fn, "__name__", "publish")
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    if len(_in_flight) >= MAX_IN_FLIGHT:
+        if not _saturated:
+            _saturated = True
+            log.warning("flows publish backlog full (%d in flight): %s and later facts are dropped "
+                        "until it drains", MAX_IN_FLIGHT, name)
+        return None
+    if len(_in_flight) < MAX_IN_FLIGHT // 2:
+        _saturated = False
+
+    async def _run() -> None:
+        try:
+            await asyncio.wait_for(publish_fn(*args, **kwargs), timeout=TIMEOUT_S + _GRACE_S)
+        except Exception:  # noqa: BLE001 — see the module docstring: a publish is not a dependency
+            log.debug("flows publish %s did not land", name, exc_info=True)
+
+    task = loop.create_task(_run(), name=f"flows-publish:{name}")
+    _in_flight.add(task)
+    task.add_done_callback(_in_flight.discard)
+    return task
 
 
 # ── the subject ticket each fact carries ────────────────────────────────────────────────────────
