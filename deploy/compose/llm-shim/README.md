@@ -31,7 +31,8 @@ model    = $LLM_SHIM_MODEL
 **The shim takes one key, `LLM_SHIM_KEY`, and no database.** LiteLLM v1.104 and later refuse to
 start without a key; with no database the shim accepts that key and refuses every other, so there
 are no virtual keys and no stateful component. It also binds to loopback and lives on the compose
-network only. **Never expose this port publicly:** it forwards to your
+network only. If the shim exits at start and its log asks for `LITELLM_MASTER_KEY`, set `LLM_SHIM_KEY`:
+compose passes it as that variable. **Never expose this port publicly:** it forwards to your
 model carrying your upstream key.
 
 ## Configure
