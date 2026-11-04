@@ -36,6 +36,7 @@ from .meeting_host import MeetingHostRefused, meeting_host_allowance
 from .ports import (
     AuthSessionBusy,
     AuthSessionNotConfigured,
+    BotStartRateExceeded,
     MaxBotsExceeded,
     SeatCooldown,
     MeetingRepo,
@@ -47,7 +48,7 @@ from .ports import (
 )
 from .invocation import SPAWNABLE_PLATFORMS
 from .transcription_language import LanguageRefused, legacy_spawn_language
-from ..limits import from_header as limits_from_header
+from ..limits import LimitsUnavailable
 from .service import (
     VOICE_NOTE_PLATFORM,
     CALL_PLATFORM,
@@ -232,32 +233,6 @@ def _resolve_user_id(x_user_id: Optional[str]) -> int:
         raise HTTPException(status_code=401, detail="Invalid user identity")
 
 
-def _resolve_max_concurrent(x_user_limits: Optional[str]) -> Optional[int]:
-    """Parse the gateway's ``X-User-Limits`` header → the per-user max-bots cap (P3e).
-
-    The gateway resolves the user via ``/internal/validate`` (identity.v1) and forwards the limit as
-    a header (the parent's ``auth.validate_request`` reads ``X-User-Limits`` as a bare int or a JSON
-    ``{"max_concurrent_bots"|"max_concurrent": …}``). Absent/unparseable → ``None`` (no pre-check).
-    ``0`` is a REAL value (quota depleted — every spawn rejected), not absence."""
-    if not x_user_limits:
-        return None
-    raw = x_user_limits.strip()
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        pass
-    try:
-        import json
-
-        obj = json.loads(raw)
-        if isinstance(obj, dict):
-            v = obj.get("max_concurrent_bots", obj.get("max_concurrent"))
-            return int(v) if v is not None else None
-    except Exception:
-        return None
-    return None
-
-
 def _passcode_from_url(meeting_url: str) -> Optional[str]:
     """The passcode a meeting URL itself carries — zoom's ``?pwd=`` / teams' ``?p=`` query param.
     Consulted only on the derive path (url-only body) and only when the body sent no explicit
@@ -301,7 +276,6 @@ def build_router(
     async def create_bot(
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
-        x_user_limits: Optional[str] = Header(default=None),
         # The caller's workspace memberships, injected by the gateway from identity. Read ONLY to
         # authorize a `workspace_id` — named in the body or defaulted below — against membership.
         x_user_workspaces: Optional[str] = Header(default=None),
@@ -313,10 +287,6 @@ def build_router(
         x_user_webhook_events: Optional[str] = Header(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
-        max_concurrent = _resolve_max_concurrent(x_user_limits)
-        # The rest of the account's limits ride the same header (limits.py); today it carries the
-        # cap alone, so the others are their defaults.
-        account_limits = limits_from_header(x_user_limits)
         # A ROOM'S BOT IS KEYED TO ITS PAYER (int-s1, D2): a workspace principal's own account owns
         # nothing and may run no bot (`max_concurrent_bots` 0), so the bot — its row, its concurrency
         # count and its spend — is the account the principal bills to (`x-user-bills-to`, signed by
@@ -678,9 +648,7 @@ def build_router(
                     # a public typed field needs a vN+1 (lane:contract) — see the bot_spawn README.
                     continue_meeting=bool(body.get("continue_meeting", False)),
                     workspace_id=workspace_id,
-                    max_concurrent=max_concurrent,
-                    seat_cooldown_s=account_limits.seat_cooldown_s,
-                    queue_wait_s=account_limits.queue_wait_s,
+                    seat_cooldown=True,
                     webhook_url=x_user_webhook_url,
                     webhook_secret=x_user_webhook_secret,
                     webhook_events=webhook_events,
@@ -752,6 +720,14 @@ def build_router(
             raise HTTPException(status_code=409, detail=str(e))
         except DuplicateMeeting as e:
             raise HTTPException(status_code=409, detail=str(e))
+        except LimitsUnavailable:
+            # The account's limits could not be read from identity (bot-limits.v1): never start a
+            # bot past a limit nobody read. Retryable.
+            raise HTTPException(status_code=503, detail="Bot limits unavailable; retry shortly",
+                                headers={"Retry-After": "5"})
+        except BotStartRateExceeded as e:
+            return JSONResponse(status_code=429, headers={"Retry-After": str(e.retry_after_s)},
+                                content={"detail": str(e), "reason": e.reason})
         except SeatCooldown as e:
             raise HTTPException(status_code=429, detail=str(e),
                                 headers={"Retry-After": str(e.retry_after_s)})

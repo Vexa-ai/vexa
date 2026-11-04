@@ -5,9 +5,6 @@ cycling bots through the cluster. Once an hour, over the last day of bot runs (`
 by start, joined to their meeting's end and stop flag — existing rows, no new table), every account
 with at least ``MIN_RUNS`` runs and more than ``QUICK_STOP_SHARE`` of them stopped within
 ``QUICK_STOP_S`` of starting is reported to ops as a ``bot_churn_suspected`` system error event.
-
-Measured on hosted prod (30 days to 4 Nov 2026, read-only): about 1.5% of bot runs were stopped
-within 30 s, and one account with 5 or more runs had more than half of them stopped that fast.
 """
 from __future__ import annotations
 

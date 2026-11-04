@@ -14,6 +14,8 @@ These carry NO production logic — they only stand in for Postgres + Redis so t
 run OFFLINE (no docker), exactly like the gateway lane's port-fakes.
 """
 from __future__ import annotations
+from .projection import set_scheduled_at
+from ..lifecycle.machine import PLANNED_STATUSES, TERMINAL_STATUSES
 
 import json
 from typing import Optional
@@ -503,9 +505,9 @@ class InMemoryTranscriptStore:
         new_at = scheduled_at if status == "scheduled" else None
         m["status"] = status
         if status == "scheduled":
-            data["scheduled_at"] = new_at
+            set_scheduled_at(data, new_at)
         else:
-            data.pop("scheduled_at", None)
+            set_scheduled_at(data, None)
         changed = (prev_status != status) or (prev_at != new_at)
         return {
             "id": mid,
@@ -544,7 +546,7 @@ class InMemoryTranscriptStore:
         return any(
             m["user_id"] == user_id and m["platform"] == platform
             and m["native_meeting_id"] == native_meeting_id
-            and m["status"] not in ("completed", "failed")
+            and m["status"] not in TERMINAL_STATUSES
             and mid != exclude_id
             for mid, m in self._meetings.items()
         )
@@ -562,7 +564,7 @@ class InMemoryTranscriptStore:
         if title:
             data["title"] = title
         if scheduled_at:
-            data["scheduled_at"] = scheduled_at
+            set_scheduled_at(data, scheduled_at)
         if meeting_url:
             data["constructed_meeting_url"] = meeting_url
         if workspace_id:
@@ -734,7 +736,7 @@ class InMemoryTranscriptStore:
         m = self._meetings.get(meeting_id)
         if m is None or not share_access.owns(m["user_id"], m.get("data"), user_id):
             return None
-        if m["status"] not in ("idle", "scheduled"):
+        if m["status"] not in PLANNED_STATUSES:
             return {"error": "conflict"}
         data = m["data"]
         if "native_meeting_id" in updates:
@@ -760,10 +762,10 @@ class InMemoryTranscriptStore:
                 data.pop("title", None)
         if "scheduled_at" in updates:
             if updates["scheduled_at"]:
-                data["scheduled_at"] = updates["scheduled_at"]
+                set_scheduled_at(data, updates["scheduled_at"])
                 m["status"] = "scheduled"
             else:
-                data.pop("scheduled_at", None)
+                set_scheduled_at(data, None)
                 m["status"] = "idle"
         if "workspace_id" in updates:
             if updates["workspace_id"]:
@@ -817,7 +819,7 @@ class InMemoryTranscriptStore:
         m = self._meetings.get(meeting_id)
         if m is None or not share_access.owns(m["user_id"], m.get("data"), user_id):
             return None
-        if m["status"] not in ("idle", "scheduled"):
+        if m["status"] not in PLANNED_STATUSES:
             return False
         del self._meetings[meeting_id]
         return True
@@ -828,7 +830,7 @@ class InMemoryTranscriptStore:
         m = self._meetings.get(meeting_id)
         if m is None or not share_access.owns(m["user_id"], m.get("data"), user_id):
             return None
-        if m["status"] not in ("completed", "failed"):
+        if m["status"] not in TERMINAL_STATUSES:
             return {"error": "conflict"}
         data = dict(m.get("data") or {})
         prior = data.get("artifact_deletion") or {}
@@ -851,7 +853,7 @@ class InMemoryTranscriptStore:
         m = self._meetings.get(meeting_id)
         if m is None or not share_access.owns(m["user_id"], m.get("data"), user_id):
             return None
-        if m["status"] in ("completed", "failed"):
+        if m["status"] in TERMINAL_STATUSES:
             return {"terminal": True}
         data = dict(m.get("data") or {})
         data.setdefault(DELETE_WHEN_ENDED_FIELD, {
@@ -871,7 +873,7 @@ class InMemoryTranscriptStore:
         m = self._meetings.get(meeting_id)
         if m is None or not share_access.owns(m["user_id"], m.get("data"), user_id):
             return None
-        if m["status"] not in ("completed", "failed"):
+        if m["status"] not in TERMINAL_STATUSES:
             return False
         m["segments"] = {}
         data = dict(m.get("data") or {})

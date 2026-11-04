@@ -28,6 +28,7 @@ The redis side is a port (``CommandPublisher``) so tests drive it with an in-mem
 injects the real ``redis_client.publish``.
 """
 from __future__ import annotations
+from .machine import BOOTING_STATUSES, PLANNED_STATUSES, TERMINAL_STATUSES
 
 from . import meet_respawn
 
@@ -76,7 +77,7 @@ def _resolve_user_id(x_user_id: Optional[str]) -> int:
 # fire-and-forget leave below can be LOST (the POST→immediate-DELETE orphan). For these we ALSO tear the
 # workload down directly. An `active`/`needs_help` bot IS listening → trust the graceful leave (so it
 # finalizes its recording cleanly); the reconcile loop is the backstop if it never completes.
-_BOOTING_STATUSES = {"requested", "queued", "joining", "awaiting_admission"}
+_BOOTING_STATUSES = BOOTING_STATUSES
 
 # PLANNED statuses: a row that has a TIME but no bot — no workload, no session, nothing listening on
 # a command channel. A stop here is a CANCELLATION, and it must land the row on a terminal state
@@ -84,11 +85,11 @@ _BOOTING_STATUSES = {"requested", "queued", "joining", "awaiting_admission"}
 # sweep's due-filter is a rate rule, `lifecycle.occurrence`'s eligibility rule only classifies
 # TERMINAL rows, and between the two a flagged-but-scheduled row was due exactly as before. That
 # zombie is F1 (stage rev 193 row 26306: stop accepted 200, pod spawned 02:52:16, bot joined).
-_PLANNED_STATUSES = {"scheduled", "idle"}
+_PLANNED_STATUSES = PLANNED_STATUSES
 
 # Where a stopped meeting ends (``machine._TERMINAL``): a stop that finds the room here has nothing
 # left to do and answers ``already_stopped``.
-_TERMINAL_STATUSES = frozenset({"completed", "failed"})
+_TERMINAL_STATUSES = frozenset(TERMINAL_STATUSES)
 
 # The terminal a cancelled plan lands on. `failed`, never `completed`: the FSM admits COMPLETED only
 # from ACTIVE (``machine.LEGAL_TRANSITIONS``), and every reader treats a `completed` row as positive

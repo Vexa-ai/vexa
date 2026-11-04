@@ -19,6 +19,7 @@ instead of doubling the transcript, which is what a hand-rolled ``INSERT … ON 
 NOTHING`` with a fresh uuid could never guarantee).
 """
 from __future__ import annotations
+from ..lifecycle.machine import IN_FLIGHT_STATUSES
 
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -162,6 +163,4 @@ def occurrence_window(
 # landing under a running bot would interleave two capture sources on one meeting. Terminal
 # (`completed`/`failed`) is NOT here — a finished row may be re-imported (idempotently), and the
 # intent statuses (`idle`/`scheduled`) are the normal case: a planned row that has now happened.
-IN_FLIGHT_STATUSES = frozenset({
-    "requested", "queued", "joining", "awaiting_admission", "needs_help", "active", "stopping",
-})
+IN_FLIGHT_STATUSES = frozenset(IN_FLIGHT_STATUSES)

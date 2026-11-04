@@ -12,6 +12,7 @@ them drive:
 ``app.create_app`` calls :func:`mount_lifecycle`; nothing else mounts these routes.
 """
 from __future__ import annotations
+from .machine import TERMINAL_STATUSES
 
 from . import meet_respawn
 
@@ -273,7 +274,8 @@ def mount_lifecycle(
         the row is still in ``expected`` (a bot that sent ``joining`` meanwhile, or a stop, wins).
         A landed write emits ``meeting.status_change`` and the ws frames, exactly like an FSM
         advance. Returns the updated row, or None when nothing moved."""
-        from .queue import QUEUED, build_queue_trail_entry
+        from .machine import QUEUED
+        from .queue import build_queue_trail_entry
 
         before = await meeting_repo.get_lifecycle_state_by_session(session_uid=session_uid)
         old_status = (before or {}).get("status")
@@ -350,7 +352,7 @@ def mount_lifecycle(
             # landed — and it is exactly at the terminal edge that the difference is written down
             # (F3, stage rev 193 row 26313: terminal recorded `join_failure` with
             # `stop_requested=true` on the row). One extra read per meeting, at its last event.
-            terminal_event = body.get("status") in ("completed", "failed")
+            terminal_event = body.get("status") in TERMINAL_STATUSES
             if (
                 existing is None
                 or existing.status is None
@@ -456,7 +458,7 @@ def mount_lifecycle(
         terminal_advanced = (
             not change.no_op
             and rec.status is not None
-            and rec.status.value in ("completed", "failed")
+            and rec.status.value in TERMINAL_STATUSES
             and isinstance(meeting_row, dict)
             and meeting_row.get("id") is not None
         )
@@ -739,7 +741,7 @@ def mount_lifecycle(
             redis is not None
             and not change.no_op
             and rec.status is not None
-            and rec.status.value in ("completed", "failed")
+            and rec.status.value in TERMINAL_STATUSES
             and isinstance(meeting_row, dict)
             and hasattr(redis, "xadd")
         ):

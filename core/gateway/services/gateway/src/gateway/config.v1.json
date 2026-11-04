@@ -226,27 +226,6 @@
       ]
     },
     {
-      "key": "GATEWAY_BOT_START_BURST",
-      "class": "defaulted",
-      "default": "10",
-      "description": "ad-hoc bot starts (POST /bots) an account may make at once before the bucket throttles it (429 bot_start_rate); per gateway replica, in memory",
-      "targets": []
-    },
-    {
-      "key": "GATEWAY_BOT_START_PER_MIN",
-      "class": "defaulted",
-      "default": "0.5",
-      "description": "refill of the per-account bot-start bucket, starts per minute",
-      "targets": []
-    },
-    {
-      "key": "GATEWAY_BOT_START_LIMIT_DISABLED",
-      "class": "defaulted",
-      "default": "false",
-      "description": "1/true turns the per-account bot-start bucket off",
-      "targets": []
-    },
-    {
       "key": "GUARD_AUTO_BAN_THRESHOLD",
       "class": "defaulted",
       "default": "10",

@@ -13,10 +13,12 @@ FSM's pre-``joining`` entry). The queue ends by itself when a seat frees — the
 boots and sends its normal ``joining``. A queued bot counts against the account's concurrent-bot
 cap like a ``requested`` one (founder, 4 Nov 2026: «for simplicity»).
 
-The wait is bounded: after ``VEXA_QUEUE_MAX_WAIT_S`` (default 30 minutes) from the moment the bot is
-late, a bot whose Pod still has no seat has its Pod deleted (the deletion confirmed by the runtime
-first) and ends ``failed`` with ``completion_reason`` ``cluster_at_capacity``. It is never retried,
-and since no bot was ever admitted its service provenance reads ``bot_outcome: never_admitted``,
+The wait is bounded: after the account's ``queue_wait_s`` (limits.py, default 30 minutes; stamped on
+the run at spawn, the one source) from the moment the bot is late, a bot whose Pod still has no seat
+has its teardown requested (``data.queue.timing_out``), its Pod deleted (the deletion confirmed by the
+runtime) and ends ``failed`` with ``completion_reason`` ``cluster_at_capacity``. A requested teardown
+is carried through on every pass until the workload is gone, whatever the Pod does meanwhile. It is
+never retried, and since no bot was ever admitted its service provenance reads ``bot_outcome: never_admitted``,
 which billing rates as not billable.
 
 WHAT "the cluster cannot grow" means here. The runtime reports the Pod's placement facts
@@ -39,21 +41,18 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional
 
-QUEUED = "queued"
-REASON_CLUSTER_AT_CAPACITY = "cluster_at_capacity"
-REASON_WILL_JOIN_LATE = "will_join_late"
-#: The api.v1 ``MeetingStatusReason`` values. A meeting carries a ``status_reason`` only while queued.
-STATUS_REASONS = frozenset({REASON_CLUSTER_AT_CAPACITY, REASON_WILL_JOIN_LATE})
-#: The lifecycle.v1 ``CompletionReason`` of a bot whose queue wait ran out.
-COMPLETION_REASON = "cluster_at_capacity"
+from ..limits import DEFAULT_QUEUE_WAIT_S
+from .machine import QUEUED, REQUESTED, CompletionReason, StatusReason
 
-MAX_WAIT_ENV = "VEXA_QUEUE_MAX_WAIT_S"
+#: The api.v1 ``MeetingStatusReason`` values. A meeting carries a ``status_reason`` only while queued.
+STATUS_REASONS = frozenset(r.value for r in StatusReason)
+_TIMED_OUT = CompletionReason.CLUSTER_AT_CAPACITY.value
+
 SCALE_UP_WINDOW_ENV = "VEXA_QUEUE_SCALE_UP_WINDOW_S"
-DEFAULT_MAX_WAIT_S = 1800.0
 DEFAULT_SCALE_UP_WINDOW_S = 300.0
 
-#: The statuses the queue sweep looks at: a bot whose Pod may still be waiting for a seat.
-WATCHED_STATUSES = ("requested", QUEUED)
+#: The statuses the queue phase looks at: a bot whose Pod may still be waiting for a seat.
+WATCHED_STATUSES = (REQUESTED, QUEUED)
 #: Workloads that are not meeting bots: a sign-in browser, a voice note, a call room's agent.
 QUEUE_EXCLUDED_PLATFORMS = ("browser_session", "voice_note", "vexa_call")
 #: runtime.v1 states in which the workload still exists.
@@ -72,9 +71,30 @@ def _env_seconds(name: str, default: float) -> float:
     return value if value > 0 else default
 
 
-def max_wait_s() -> float:
-    """How long a queued bot waits for a seat (``VEXA_QUEUE_MAX_WAIT_S``, default 1800)."""
-    return _env_seconds(MAX_WAIT_ENV, DEFAULT_MAX_WAIT_S)
+def wait_of(data: Any) -> float:
+    """How long this run waits for a seat: the account's ``queue_wait_s`` stamped on it at spawn, or
+    the built-in default (limits.DEFAULT_QUEUE_WAIT_S) for a run from before the stamp."""
+    wait = data.get("queue_wait_s") if isinstance(data, dict) else None
+    if isinstance(wait, (int, float)) and not isinstance(wait, bool) and wait > 0:
+        return float(wait)
+    return float(DEFAULT_QUEUE_WAIT_S)
+
+
+def teardown_requested(data: Any) -> bool:
+    """Whether the queue requested this run's teardown (``data.queue.timing_out``): from then on the
+    run ends ``cluster_at_capacity`` however its workload goes — the one reader of the stamp."""
+    queue = data.get("queue") if isinstance(data, dict) else None
+    return bool(isinstance(queue, dict) and queue.get("timing_out"))
+
+
+def timeout_body(session_uid: str, data: Any, *, stop_requested: bool = False) -> dict:
+    """The terminal a timed-out queue ends with (every path that ends one sends this)."""
+    from .machine import dominant_completion_reason
+
+    queue = data.get("queue") if isinstance(data, dict) else None
+    return {"connection_id": session_uid, "status": "failed",
+            "completion_reason": dominant_completion_reason(_TIMED_OUT, stop_requested=stop_requested),
+            "reason": timeout_reason(wait_of(data), (queue or {}).get("detail"))}
 
 
 def scale_up_window_s() -> float:
@@ -164,11 +184,10 @@ async def capacity_queue_sweep(
     time_out: Callable[[dict], Awaitable[Any]],
     log: Any,
     now: Optional[datetime] = None,
-    max_wait: Optional[float] = None,
     scale_up_window: Optional[float] = None,
 ) -> dict:
-    """ONE pass over the bots whose Pod may be waiting for a seat. Best-effort per meeting — never
-    raises. Returns counts ``{queued, late, timed_out}``.
+    """ONE pass over the bots whose Pod may be waiting for a seat: the reconcile pass's queue phase
+    (``__main__._stop_reconcile_loop``). Best-effort per meeting — never raises. Returns counts ``{queued, late, timed_out}``.
 
     ``enter`` is the conditional server-side transition (``app.state.apply_queue_transition``: it
     lands only while the row is still in the expected status, then emits the webhook and the ws
@@ -181,7 +200,6 @@ async def capacity_queue_sweep(
     if repo is None or runtime is None or not hasattr(repo, "list_queue_candidates"):
         return counts
     now = now or datetime.now(timezone.utc)
-    max_wait = max_wait_s() if max_wait is None else max_wait
     window = scale_up_window_s() if scale_up_window is None else scale_up_window
     try:
         rows = await repo.list_queue_candidates()
@@ -191,7 +209,7 @@ async def capacity_queue_sweep(
     for row in rows:
         try:
             await _sweep_one(row, repo, runtime, enter=enter, time_out=time_out, log=log, now=now,
-                             max_wait=max_wait, window=window, counts=counts,
+                             window=window, counts=counts,
                              workload_unknown=WorkloadUnknown)
         except Exception:  # noqa: BLE001 — one meeting never stops the pass
             log.exception("capacity-queue: meeting %s failed", row.get("meeting_id"))
@@ -204,7 +222,7 @@ def timeout_reason(max_wait: float, detail: Any = None) -> str:
     return f"{reason} ({detail})" if detail else reason
 
 
-async def _sweep_one(row, repo, runtime, *, enter, time_out, log, now, max_wait, window, counts,
+async def _sweep_one(row, repo, runtime, *, enter, time_out, log, now, window, counts,
                      workload_unknown) -> None:
     status = row.get("status")
     session_uid = row.get("session_uid")
@@ -220,29 +238,32 @@ async def _sweep_one(row, repo, runtime, *, enter, time_out, log, now, max_wait,
                     workload_id, row.get("meeting_id"))
         return
     queue = dict(row.get("queue") or {}) if isinstance(row.get("queue"), dict) else {}
-    wait = row.get("queue_wait_s")
-    max_wait = float(wait) if isinstance(wait, (int, float)) and not isinstance(wait, bool) and wait > 0 \
-        else max_wait
+    max_wait = wait_of(row)
+    requested_teardown = status == QUEUED and teardown_requested(row)
     if not isinstance(info, dict) or info.get("state") not in _ALIVE_STATES:
-        if status == QUEUED and queue.get("timing_out") and isinstance(info, dict):
+        if requested_teardown and isinstance(info, dict):
             # Its Pod is gone and we were the ones deleting it: finish what the last pass began
             # (a restart between the delete and the terminal write).
-            await time_out({"connection_id": session_uid, "status": "failed",
-                            "completion_reason": COMPLETION_REASON,
-                            "reason": timeout_reason(max_wait, queue.get("detail"))})
+            await time_out(timeout_body(session_uid, row))
             counts["timed_out"] += 1
-        return                             # untracked or gone: the reconcile sweep owns it
+        return                             # untracked or gone: the reconcile phase owns it
+    if requested_teardown:
+        # The teardown was requested on an earlier pass and its delete did not land: carry it through,
+        # whatever the Pod reports now (a seat arriving after the deadline does not undo the decision).
+        await _tear_down(row, repo, runtime, time_out=time_out, log=log, counts=counts,
+                         workload_unknown=workload_unknown)
+        return
     pending = info.get("pending")
 
-    if status == "requested":
+    if status == REQUESTED:
         if not waits_for_capacity(pending, now=now, scale_up_window=window):
             return
-        queue = {"queued_at": _iso(now), "status_reason": REASON_CLUSTER_AT_CAPACITY}
+        queue = {"queued_at": _iso(now), "status_reason": StatusReason.CLUSTER_AT_CAPACITY.value}
         detail = (pending or {}).get("detail")
         if isinstance(detail, str) and detail:
             queue["detail"] = detail[:_DETAIL_MAX]
-        moved = await enter(session_uid=session_uid, expected=("requested",),
-                            status_reason=REASON_CLUSTER_AT_CAPACITY, queue_patch=queue)
+        moved = await enter(session_uid=session_uid, expected=(REQUESTED,),
+                            status_reason=StatusReason.CLUSTER_AT_CAPACITY.value, queue_patch=queue)
         if not isinstance(moved, dict):
             return                         # the bot sent `joining`, or a stop landed, meanwhile
         counts["queued"] += 1
@@ -254,36 +275,38 @@ async def _sweep_one(row, repo, runtime, *, enter, time_out, log, now, max_wait,
         if not (isinstance(pending, dict) and pending.get("reason") == "unschedulable"
                 and not pending.get("nominated") and pending.get("autoscaler") != "scale_up"):
             return                         # a seat is coming (placed, preempting, a node on its way)
-        # Stamp the timeout BEFORE the delete: the runtime reports the destroyed Pod to
+        # Request the teardown BEFORE the delete: the runtime reports the destroyed Pod to
         # /runtime/callback while the delete is still in flight, and that callback (or a restart
         # between the delete and the write below) must end the run as this timeout, not as a crash.
+        queue = {**queue, "timing_out": _iso(now)}
         if hasattr(repo, "merge_meeting_data") and row.get("meeting_id") is not None:
-            await repo.merge_meeting_data(row["meeting_id"], {"queue": {**queue, "timing_out": _iso(now)}})
-        try:
-            await runtime.delete_workload(workload_id)
-        except workload_unknown:
-            log.error("capacity-queue: runtime does not know workload %s of meeting %s; not "
-                      "failing it on amnesia", workload_id, row.get("meeting_id"))
-            return
-        except Exception:  # noqa: BLE001 — teardown unconfirmed: retried on the next pass
-            log.warning("capacity-queue: deleting workload %s failed; retried next pass", workload_id)
-            return
-        minutes = int(round(max_wait / 60))
-        reason = timeout_reason(max_wait, queue.get("detail"))
-        await time_out({
-            "connection_id": session_uid,
-            "status": "failed",
-            "completion_reason": COMPLETION_REASON,
-            "reason": reason,
-        })
-        counts["timed_out"] += 1
-        log.info("capacity-queue: meeting %s failed %s after %s min queued",
-                 row.get("meeting_id"), COMPLETION_REASON, minutes)
+            await repo.merge_meeting_data(row["meeting_id"], {"queue": queue})
+        await _tear_down({**row, "queue": queue}, repo, runtime, time_out=time_out, log=log,
+                         counts=counts, workload_unknown=workload_unknown)
         return
     late = late_at(queue, row.get("scheduled_at"))
-    if late is not None and now >= late and queue.get("status_reason") != REASON_WILL_JOIN_LATE:
-        moved = await enter(session_uid=session_uid, expected=(QUEUED,),
-                            status_reason=REASON_WILL_JOIN_LATE,
-                            queue_patch={"status_reason": REASON_WILL_JOIN_LATE, "late_at": _iso(now)})
+    if late is not None and now >= late and queue.get("status_reason") != StatusReason.WILL_JOIN_LATE.value:
+        late_reason = StatusReason.WILL_JOIN_LATE.value
+        moved = await enter(session_uid=session_uid, expected=(QUEUED,), status_reason=late_reason,
+                            queue_patch={"status_reason": late_reason, "late_at": _iso(now)})
         if isinstance(moved, dict):
             counts["late"] += 1
+
+
+async def _tear_down(row, repo, runtime, *, time_out, log, counts, workload_unknown) -> None:
+    """Delete a timed-out run's workload and, once the runtime confirms it, end the run. A failed
+    delete leaves the request standing (``timing_out``): the next pass tries again."""
+    workload_id = row.get("bot_container_id")
+    try:
+        await runtime.delete_workload(workload_id)
+    except workload_unknown:
+        log.error("capacity-queue: runtime does not know workload %s of meeting %s; not "
+                  "failing it on amnesia", workload_id, row.get("meeting_id"))
+        return
+    except Exception:  # noqa: BLE001 — teardown unconfirmed: retried on the next pass
+        log.warning("capacity-queue: deleting workload %s failed; retried next pass", workload_id)
+        return
+    await time_out(timeout_body(row.get("session_uid"), row))
+    counts["timed_out"] += 1
+    log.info("capacity-queue: meeting %s failed %s after %s min queued",
+             row.get("meeting_id"), _TIMED_OUT, int(round(wait_of(row) / 60)))

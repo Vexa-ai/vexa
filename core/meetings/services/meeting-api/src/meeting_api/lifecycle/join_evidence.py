@@ -49,6 +49,7 @@ verdict when it is present and DERIVES one when it is not (a reconcile-driven te
 runtime-confirmed destroy, or a bot too old to send one). Either way the row gets evidence.
 """
 from __future__ import annotations
+from .machine import PRE_LOBBY_STATUSES
 
 import re
 
@@ -272,10 +273,9 @@ _NAVIGATION_MARKERS = (
 #: The reason code the bot's join layer stamps on a join that ended on a non-English page.
 _UI_LOCALE_MISMATCH_MARKER = "ui_locale_mismatch"
 
-#: Meeting statuses that mean the bot had NOT yet reported reaching the waiting room. Mirrors the
-#: pre-active set in ``reconcile.py``; duplicated as strings here so this module stays importable
-#: with no lifecycle dependencies (it is consumed by the FSM itself).
-_PRE_LOBBY_STAGES = frozenset({"requested", "joining"})
+#: Meeting statuses that mean the bot had NOT yet reported reaching the waiting room
+#: (machine.PRE_LOBBY_STATUSES; machine imports this module only inside a function).
+_PRE_LOBBY_STAGES = frozenset(PRE_LOBBY_STATUSES)
 
 
 def _clean_detail(detail: Any) -> Optional[str]:

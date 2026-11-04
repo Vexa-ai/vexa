@@ -22,6 +22,7 @@ meeting-api is the one writer of ``data.transcription_language``: at spawn (``bo
 and here.
 """
 from __future__ import annotations
+from .machine import RECONFIGURABLE_STATUSES
 
 import json
 import os
@@ -36,7 +37,7 @@ from .stop import leave_command_channel
 from .stop_router import CommandPublisher, _resolve_user_id
 
 #: Rows with a bot that may be listening. `stopping` is on its way out and planned rows have no bot.
-_RECONFIGURABLE = ("requested", "joining", "awaiting_admission", "active", "needs_human_help")
+_RECONFIGURABLE = RECONFIGURABLE_STATUSES
 
 #: The workspace roles that may change a meeting bound to the workspace.
 EDITOR_ROLES = frozenset({"owner", "contributor"})

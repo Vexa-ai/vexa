@@ -36,11 +36,12 @@ def _client(repo, runtime):
     return TestClient(app)
 
 
-def test_a_bot_stopped_seconds_ago_still_holds_its_seat(monkeypatch):
+def test_a_bot_stopped_seconds_ago_still_holds_its_seat(monkeypatch, account_limits):
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    account_limits(1)
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     client = _client(repo, runtime)
-    headers = {"x-user-id": str(USER), "x-user-limits": "1"}
+    headers = {"x-user-id": str(USER)}
     r1 = client.post("/bots", headers=headers, json={"platform": "google_meet", "native_meeting_id": "m-1"})
     assert r1.status_code == 201, r1.text
     _ended(repo, r1.json()["id"], ago_s=10)
@@ -50,11 +51,12 @@ def test_a_bot_stopped_seconds_ago_still_holds_its_seat(monkeypatch):
     assert r2.status_code == 429, r2.text
 
 
-def test_the_seat_frees_after_the_cooldown(monkeypatch):
+def test_the_seat_frees_after_the_cooldown(monkeypatch, account_limits):
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    account_limits(1)
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     client = _client(repo, runtime)
-    headers = {"x-user-id": str(USER), "x-user-limits": "1"}
+    headers = {"x-user-id": str(USER)}
     r1 = client.post("/bots", headers=headers, json={"platform": "google_meet", "native_meeting_id": "m-1"})
     _ended(repo, r1.json()["id"], ago_s=61)
     r2 = client.post("/bots", headers=headers, json={"platform": "google_meet", "native_meeting_id": "m-2"})
@@ -65,11 +67,12 @@ def test_the_seat_frees_after_the_cooldown(monkeypatch):
     (False, False, "a bot that ended by itself (left alone, failed) holds no seat"),
     (True, True, "a booked bot's end holds no seat"),
 ])
-def test_only_a_user_stopped_ad_hoc_bot_holds_a_seat(monkeypatch, stopped, booked, why):
+def test_only_a_user_stopped_ad_hoc_bot_holds_a_seat(monkeypatch, account_limits, stopped, booked, why):
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    account_limits(1)
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     client = _client(repo, runtime)
-    headers = {"x-user-id": str(USER), "x-user-limits": "1"}
+    headers = {"x-user-id": str(USER)}
     r1 = client.post("/bots", headers=headers, json={"platform": "google_meet", "native_meeting_id": "m-1"})
     _ended(repo, r1.json()["id"], ago_s=5, stopped=stopped, booked=booked)
     r2 = client.post("/bots", headers=headers, json={"platform": "google_meet", "native_meeting_id": "m-2"})
@@ -87,7 +90,7 @@ async def test_a_booked_start_is_not_held_back_by_the_cooldown():
     assert booked["status"] == "requested"
     with pytest.raises(MaxBotsExceeded):
         await request_bot(repo, runtime, user_id=USER, platform="google_meet",
-                          native_meeting_id="m-3", max_concurrent=2, seat_cooldown_s=60, **KW)
+                          native_meeting_id="m-3", max_concurrent=2, seat_cooldown=True, **KW)
 
 
 async def test_billing_concurrency_counts_running_bots_only():
@@ -99,11 +102,12 @@ async def test_billing_concurrency_counts_running_bots_only():
     assert await repo.count_active_bots(user_id=USER, cooldown_s=60) == 1
 
 
-def test_a_restart_while_the_old_bot_is_stopping_waits_for_its_seat_with_its_own_429(monkeypatch):
+def test_a_restart_while_the_old_bot_is_stopping_waits_for_its_seat_with_its_own_429(monkeypatch, account_limits):
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    account_limits(1)
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     client = _client(repo, runtime)
-    headers = {"x-user-id": str(USER), "x-user-limits": "1"}
+    headers = {"x-user-id": str(USER)}
     r1 = client.post("/bots", headers=headers, json={"platform": "google_meet", "native_meeting_id": "m-1"})
     repo.set_status(r1.json()["id"], "stopping")
     r2 = client.post("/bots", headers=headers, json={"platform": "google_meet", "native_meeting_id": "m-2"})

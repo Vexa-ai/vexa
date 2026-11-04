@@ -167,11 +167,12 @@ def _client(repo, runtime):
     return TestClient(app)
 
 
-def test_route_429_on_max_bots_precheck(monkeypatch):
+def test_route_429_on_max_bots_precheck(monkeypatch, account_limits):
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    account_limits(1)
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     client = _client(repo, runtime)
-    headers = {"x-user-id": str(USER), "x-user-limits": "1"}
+    headers = {"x-user-id": str(USER)}
     r1 = client.post("/bots", headers=headers, json={"platform": "google_meet", "native_meeting_id": "m-1"})
     assert r1.status_code == 201, r1.text
     repo.set_status(r1.json()["id"], "active")
@@ -184,24 +185,26 @@ def test_route_429_on_runtime_backstop(monkeypatch):
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient(quota_exceeded=True)
     client = _client(repo, runtime)
-    # no x-user-limits header → no pre-check; the kernel backstop still yields 429
+    # no identity edge → no cap pre-check; the kernel backstop still yields 429
     r = client.post("/bots", headers={"x-user-id": str(USER)},
                     json={"platform": "google_meet", "native_meeting_id": "m-1"})
     assert r.status_code == 429, r.text
 
 
-def test_route_429_on_cap_zero_and_cap_one_still_admits_one(monkeypatch):
-    """x-user-limits: 0 → the FIRST POST /bots is 429 (was 201/unlimited — the #456 bug); and the
-    fix must not over-reject: limits=1 still admits exactly one, then 429s the second."""
+def test_route_429_on_cap_zero_and_cap_one_still_admits_one(monkeypatch, account_limits):
+    """max_concurrent_bots 0 → the FIRST POST /bots is 429 (was 201/unlimited — the #456 bug); and
+    the fix must not over-reject: a cap of 1 still admits exactly one, then 429s the second."""
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    account_limits(0)
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     client = _client(repo, runtime)
-    depleted = {"x-user-id": str(USER), "x-user-limits": "0"}
+    depleted = {"x-user-id": str(USER)}
     r = client.post("/bots", headers=depleted, json={"platform": "google_meet", "native_meeting_id": "m-0"})
     assert r.status_code == 429, r.text
     assert len(runtime.specs) == 0  # no spawn reached the runtime
 
-    cap_one = {"x-user-id": str(USER), "x-user-limits": "1"}
+    account_limits(1)
+    cap_one = {"x-user-id": str(USER)}
     r1 = client.post("/bots", headers=cap_one, json={"platform": "google_meet", "native_meeting_id": "m-1"})
     assert r1.status_code == 201, r1.text
     repo.set_status(r1.json()["id"], "active")
@@ -209,24 +212,19 @@ def test_route_429_on_cap_zero_and_cap_one_still_admits_one(monkeypatch):
     assert r2.status_code == 429, r2.text
 
 
-def test_route_429_on_cap_zero_json_form(monkeypatch):
-    """The JSON header form must not lose 0 to falsiness: {"max_concurrent_bots": 0} → 429."""
+def test_the_x_user_limits_header_is_not_a_carrier(monkeypatch, account_limits):
+    """bot-limits.v1 is the one carrier of the cap: a forwarded X-User-Limits changes nothing."""
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    account_limits(1)
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     client = _client(repo, runtime)
-    headers = {"x-user-id": str(USER), "x-user-limits": '{"max_concurrent_bots": 0}'}
-    r = client.post("/bots", headers=headers, json={"platform": "google_meet", "native_meeting_id": "m-1"})
-    assert r.status_code == 429, r.text
-
-
-def test_route_limits_header_parsed_as_json(monkeypatch):
-    """The gateway may forward X-User-Limits as a JSON object — the route parses both forms."""
-    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
-    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
-    client = _client(repo, runtime)
-    headers = {"x-user-id": str(USER), "x-user-limits": '{"max_concurrent_bots": 1}'}
-    r1 = client.post("/bots", headers=headers, json={"platform": "google_meet", "native_meeting_id": "m-1"})
+    lifted = {"x-user-id": str(USER), "x-user-limits": "50"}
+    r1 = client.post("/bots", headers=lifted, json={"platform": "google_meet", "native_meeting_id": "m-1"})
     assert r1.status_code == 201
     repo.set_status(r1.json()["id"], "active")
-    r2 = client.post("/bots", headers=headers, json={"platform": "google_meet", "native_meeting_id": "m-2"})
+    r2 = client.post("/bots", headers=lifted, json={"platform": "google_meet", "native_meeting_id": "m-2"})
     assert r2.status_code == 429
+    zero = {"x-user-id": str(USER), "x-user-limits": "0"}
+    repo.set_status(r1.json()["id"], "completed")
+    assert client.post("/bots", headers=zero,
+                       json={"platform": "google_meet", "native_meeting_id": "m-3"}).status_code == 201

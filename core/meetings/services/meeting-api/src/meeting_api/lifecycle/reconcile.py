@@ -23,13 +23,14 @@ Pure + injectable: ``post_lifecycle`` is the callback poster (prod = httpx to th
 port (prod = HttpRuntimeClient; tests = FakeRuntimeClient). Best-effort per meeting — never raises.
 """
 from __future__ import annotations
+from .machine import BOOTING_STATUSES, LIVENESS_GATED_STATUSES, PRE_ACTIVE_NONTERMINAL_STATUSES, WAS_ACTIVE_STATUSES
 
 import time
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Optional
 
 from ..bot_spawn.ports import WorkloadUnknown
-from .machine import dominant_completion_reason
+from .machine import QUEUED, CompletionReason, dominant_completion_reason, lifecycle_stage
 
 
 async def _teardown_verdict(
@@ -99,7 +100,7 @@ async def reconcile_stale_stopping_sweep(
 # Statuses where the bot NEVER reported `active` — a hung row here means the bot never started/joined
 # and never will, so it reconciles to `failed` (attributed to the stage it died in). `active`/`stopping`
 # (the bot WAS live) reconcile to `completed`.
-_PRE_ACTIVE_NONTERMINAL = frozenset({"requested", "queued", "joining", "awaiting_admission", "needs_help"})
+_PRE_ACTIVE_NONTERMINAL = frozenset(PRE_ACTIVE_NONTERMINAL_STATUSES)
 
 # Statuses where a BOT MAY BE ALIVE and legitimately QUIET — either in the meeting (`active`/
 # `needs_help`) or on its way in (`requested`/`queued`/`joining`/`awaiting_admission`; a `queued`
@@ -112,7 +113,7 @@ _PRE_ACTIVE_NONTERMINAL = frozenset({"requested", "queued", "joining", "awaiting
 # longer alive (runtime liveness), NOT on `updated_at`/segment staleness. `stopping` is EXCLUDED: a
 # stop was requested, so it reaps on its short grace regardless (its bot SHOULD be leaving).
 _LIVENESS_GATED = frozenset(
-    {"requested", "queued", "joining", "awaiting_admission", "needs_help", "active"}
+    LIVENESS_GATED_STATUSES
 )
 
 # runtime.v1 workload states that mean the bot is STILL ALIVE in the meeting (the workload exists and is
@@ -209,23 +210,19 @@ def _untracked_window_elapsed(
 
 
 async def _queue_timed_out(repo: Any, meeting_id: Any) -> bool:
-    """Whether the capacity queue stamped this meeting's timeout (lifecycle/queue.py) before it
+    """Whether the capacity queue requested this meeting's teardown (lifecycle/queue.py) before it
     deleted the Pod: a reaped queued row then ends ``cluster_at_capacity``, never a re-spawnable
     ``join_failure``."""
-    getter = getattr(repo, "get_queue_block", None)
+    from .queue import teardown_requested
+
+    getter = getattr(repo, "get_queue_facts", None)
     if getter is None:
         return False
     try:
-        block = await getter(meeting_id)
+        facts = await getter(meeting_id)
     except Exception:  # noqa: BLE001 — no answer is no stamp
         return False
-    return bool(isinstance(block, dict) and block.get("timing_out"))
-
-
-def _lifecycle_stage(status: Optional[str]) -> Optional[str]:
-    """The lifecycle.v1 ``FailureStage`` a meeting status stands for. ``queued`` is the server-side
-    wait for a seat before any bot ran, so a bot lost there is lost at ``requested``."""
-    return "requested" if status == "queued" else status
+    return teardown_requested(facts)
 
 
 def _reconcile_join_evidence(
@@ -250,7 +247,7 @@ def _reconcile_join_evidence(
     try:
         from .join_evidence import build_join_evidence, classify_join_failure
 
-        status = _lifecycle_stage(status)
+        status = lifecycle_stage(status)
         reason = classify_join_failure(
             completion_reason=completion_reason,
             stage=status,
@@ -289,12 +286,12 @@ async def _escalate_untracked_zombie(
         "runtime restart or external removal"
     )
     pre_active = status in _PRE_ACTIVE_STATUSES
-    stage = _lifecycle_stage(status) if pre_active else "active"
+    stage = lifecycle_stage(status) if pre_active else "active"
     completion_reason = (
         _pre_active_completion_reason(status, stop_requested) if pre_active else "left_alone"
     )
-    if status == "queued" and repo is not None and await _queue_timed_out(repo, meeting_id):
-        completion_reason = dominant_completion_reason("cluster_at_capacity",
+    if status == QUEUED and repo is not None and await _queue_timed_out(repo, meeting_id):
+        completion_reason = dominant_completion_reason(CompletionReason.CLUSTER_AT_CAPACITY.value,
                                                        stop_requested=stop_requested)
     body = {
         "connection_id": session_uid,
@@ -449,9 +446,9 @@ async def reconcile_stale_nonterminal_sweep(
             # with no evidence behind it (the sweep issued the delete itself), and `left_alone` is
             # `_PERMANENT` in ``retry.py``, so it would also cancel the legitimate re-spawn.
             body["completion_reason"] = _pre_active_completion_reason(status, stop_requested)
-            if status == "queued" and await _queue_timed_out(repo, meeting_id):
+            if status == QUEUED and await _queue_timed_out(repo, meeting_id):
                 body["completion_reason"] = dominant_completion_reason(
-                    "cluster_at_capacity", stop_requested=stop_requested)
+                    CompletionReason.CLUSTER_AT_CAPACITY.value, stop_requested=stop_requested)
             body["reason"] = (
                 f"{_workload_evidence(bot_container_id, probe_info)}; "
                 f"reconciled to failed at {status} (never reached active)"
@@ -534,7 +531,7 @@ TERMINAL_WORKLOAD_STATES = frozenset({"destroyed", "failed", "exited", "crashed"
 # Meeting statuses where the bot has NOT yet reported `active` — a terminal workload here means the bot
 # never started and never will (image-pull fail, OOM, crash on boot), so it can be classed `failed`
 # unambiguously.
-_PRE_ACTIVE_STATUSES = frozenset({"requested", "queued", "joining", "awaiting_admission"})
+_PRE_ACTIVE_STATUSES = frozenset(BOOTING_STATUSES)
 # Meeting statuses where a bot WAS (or is being) live in the meeting — a `stopping` row is a user-stop
 # in flight, and `active`/`needs_help` mean the bot reported live. `stopping` belongs here because the
 # stop path writes it ONLY over a status the bot reached the meeting in; a stop against a pre-active
@@ -542,7 +539,7 @@ _PRE_ACTIVE_STATUSES = frozenset({"requested", "queued", "joining", "awaiting_ad
 # A runtime-confirmed TERMINAL workload for one of these is real terminal evidence the run is over → the
 # meeting completes (it reached active, so `completed`, not `failed`). See
 # ``synthesize_terminal_for_dead_workload``.
-_WAS_ACTIVE_STATUSES = frozenset({"stopping", "active", "needs_help"})
+_WAS_ACTIVE_STATUSES = frozenset(WAS_ACTIVE_STATUSES)
 
 
 def _runtime_event_timestamp(value: Any) -> Optional[str]:
@@ -624,20 +621,18 @@ async def synthesize_terminal_for_dead_workload(
         return False
     status = info.get("status")
     stop_requested = bool(info.get("stop_requested"))
-    if status == "queued" and info.get("queue_timing_out"):
-        # The capacity queue's timeout deleted this Pod (lifecycle/queue.py stamps it first): the
-        # destroy is that timeout, not a crash, and must not be re-spawned as one.
-        from .queue import COMPLETION_REASON, timeout_reason, max_wait_s
+    from .queue import teardown_requested, timeout_body
 
-        body = {"connection_id": info["session_uid"], "status": "failed",
-                "completion_reason": dominant_completion_reason(COMPLETION_REASON,
-                                                                stop_requested=stop_requested),
-                "reason": timeout_reason(max_wait_s())}
+    if status == QUEUED and teardown_requested(info.get("queue_facts")):
+        # The capacity queue's timeout deleted this Pod (lifecycle/queue.py requests the teardown
+        # first): the destroy is that timeout, not a crash, and must not be re-spawned as one.
+        body = timeout_body(info["session_uid"], info.get("queue_facts"),
+                            stop_requested=stop_requested)
     elif status in _PRE_ACTIVE_STATUSES:
         body = {
             "connection_id": info["session_uid"],
             "status": "failed",
-            "failure_stage": _lifecycle_stage(status),  # the stage the bot died IN (requested/joining/…)
+            "failure_stage": lifecycle_stage(status),  # the stage the bot died IN (requested/joining/…)
             "completion_reason": _pre_active_completion_reason(status, stop_requested),
             "reason": (
                 f"stopped by the user at {status} (never admitted)"

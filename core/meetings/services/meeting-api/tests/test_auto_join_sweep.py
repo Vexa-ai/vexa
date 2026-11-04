@@ -65,7 +65,7 @@ async def test_due_row_uses_user_calendar_bot_name():
     _seed(repo)
 
     async def ctx(_uid):
-        return {"max_concurrent": 4, "bot_name": "Dmitry's Notes"}
+        return {"bot_limits": {"version": 1, "max_concurrent_bots": 4}, "bot_name": "Dmitry's Notes"}
 
     counters = await _tick(repo, runtime, fetch_bot_context=ctx)
     assert counters["spawned"] == 1
@@ -80,7 +80,7 @@ async def test_due_row_prefers_bot_name_from_auto_joining_calendar_source():
     ]})
 
     async def ctx(_uid):
-        return {"max_concurrent": 4, "bot_name": "Legacy Default"}
+        return {"bot_limits": {"version": 1, "max_concurrent_bots": 4}, "bot_name": "Legacy Default"}
 
     counters = await _tick(repo, runtime, fetch_bot_context=ctx)
     assert counters["spawned"] == 1
@@ -172,7 +172,7 @@ async def test_cap_rejection_stamps_error_and_backoff():
         published.append(kw)
 
     async def ctx(_uid):
-        return {"max_concurrent": 1}
+        return {"bot_limits": {"version": 1, "max_concurrent_bots": 1}}
 
     counters = await _tick(repo, runtime, fetch_bot_context=ctx, publish_status=publish_status)
     assert counters["errors"] == 1

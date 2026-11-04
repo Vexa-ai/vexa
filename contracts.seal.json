@@ -22,6 +22,7 @@
   "core/gateway/contracts/routes.v1": "969426258713960ace763f22dd60c14462909ae000cb126d22ac3d1e310ee4db",
   "core/gateway/contracts/subject-ticket.v1": "432d7660e3f40e15ca6e0f8c014773beb50506265122b17ae78510ca16e80c0c",
   "core/gateway/contracts/ws.v1": "bc40735c1695057816841d885b1c7cab66363d34d4e3839b99e3f8c71fa12348",
+  "core/identity/contracts/bot-limits.v1": "f7c157729d1f29552b6e1bf1de625d52cd0ac2e445c2c200e47b2962cf167368",
   "core/identity/contracts/delegation.v1": "087b102c525ec9775f3515fa2fc7f5a4438445a964387b0440d97e20b090655d",
   "core/identity/contracts/identity.v1": "bf9dc370279d7eca50d48bf5554aa6fdbfe68fe3c7ebca9b27503b3bf6965565",
   "core/identity/contracts/signin.v1": "28540ac861b5a343512f8f87a0b645218fbe64fda9ec8d1677a78718ea24c73d",

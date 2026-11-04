@@ -41,12 +41,12 @@ The tick is a pure-ish function over injected ports (repo, runtime, context fetc
 entrypoint (``__main__``) wraps it in the standard poll loop; tests drive single ticks offline.
 """
 from __future__ import annotations
+from ..lifecycle.machine import LIVE_STATUSES
 
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional
 
-from ..limits import DEFAULT_SEAT_COOLDOWN_S
 from ..obs import log_event
 from ..service_authority import (
     ServiceAuthorityDenied,
@@ -54,7 +54,8 @@ from ..service_authority import (
 )
 from .auto_join_block import blocked_reason, parse_block
 from .env_flags import resolve_spawn_flag
-from .ports import MaxBotsExceeded, MeetingStopped, QuotaExceeded, SpawnFailed
+from ..limits import LimitsUnavailable
+from .ports import BotStartRateExceeded, MaxBotsExceeded, MeetingStopped, QuotaExceeded, SpawnFailed
 from .meeting_host import MeetingHostRefused
 from .service import DuplicateMeeting, request_bot
 
@@ -69,9 +70,14 @@ LAST_MINUTE_BOOKING_S = 600
 
 
 def is_last_minute_booking(row: dict) -> bool:
+    """Whether the plan's start was set less than ``LAST_MINUTE_BOOKING_S`` before it: measured from
+    when ``scheduled_at`` was last written (``data.scheduled_at_set_at``, stamped by every writer of
+    it), so a plan made days ago and moved to "now" counts. A row from before the stamp existed is
+    measured from ``created_at``."""
     data = row.get("data") if isinstance(row.get("data"), dict) else {}
-    at, created = _parse_iso(data.get("scheduled_at")), _parse_iso(row.get("created_at"))
-    return at is not None and created is not None and (at - created).total_seconds() < LAST_MINUTE_BOOKING_S
+    at = _parse_iso(data.get("scheduled_at"))
+    set_at = _parse_iso(data.get("scheduled_at_set_at")) or _parse_iso(row.get("created_at"))
+    return at is not None and set_at is not None and (at - set_at).total_seconds() < LAST_MINUTE_BOOKING_S
 
 
 DEFAULT_LEAD_S = 120         # AUTO_JOIN_LEAD_S — join this many seconds BEFORE scheduled_at
@@ -141,13 +147,9 @@ def due_rows(rows: list[dict], *, now: datetime,
     return due
 
 
-# Every status in which a bot OWNS the room. A due row whose (user, platform, native) is held by
-# one of these on ANOTHER row must never spawn: two Vexa bots in one meeting is customer-visible
-# and never correct, however the two rows came to exist.
-LIVE_STATUSES = (
-    "requested", "queued", "joining", "awaiting_admission", "active",
-    "needs_help", "needs_human_help", "stopping",
-)
+# LIVE_STATUSES (lifecycle/machine.py): every status in which a bot OWNS the room. A due row whose
+# (user, platform, native) is held by one of these on ANOTHER row must never spawn: two Vexa bots in
+# one meeting is customer-visible and never correct, however the two rows came to exist.
 
 
 def live_keys(rows: Optional[list]) -> dict[tuple, Any]:
@@ -365,8 +367,8 @@ async def auto_join_tick(
                 bot_name=_calendar_bot_name(data) or ctx.get("bot_name"),
                 recording_enabled=recording_enabled,
                 transcribe_enabled=transcribe_enabled,
-                max_concurrent=ctx.get("max_concurrent"),
-                seat_cooldown_s=DEFAULT_SEAT_COOLDOWN_S if is_last_minute_booking(row) else None,
+                seat_cooldown=is_last_minute_booking(row),
+                bot_context=ctx if fetch_bot_context is not None else None,
                 webhook_url=ctx.get("webhook_url"),
                 webhook_secret=ctx.get("webhook_secret"),
                 webhook_events=ctx.get("webhook_events"),
@@ -387,7 +389,7 @@ async def auto_join_tick(
                       user_id=user_id, meeting_id=str(row["id"]),
                       fields={"reason": "the user stopped this meeting while the bot was starting"})
             continue
-        except (MaxBotsExceeded, QuotaExceeded) as e:
+        except (MaxBotsExceeded, QuotaExceeded, BotStartRateExceeded, LimitsUnavailable) as e:
             await _stamp_error(row, str(e) or "bot concurrency limit reached")
             continue
         except ServiceAuthorityDenied as e:

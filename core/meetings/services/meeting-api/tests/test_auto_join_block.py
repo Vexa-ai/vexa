@@ -55,7 +55,7 @@ async def test_a_deployment_blocked_organiser_domain_is_never_auto_joined():
     # Deny: the old sweep spawned this bot (no block list existed).
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     mid = _seed(repo, organiser="Host@Gated.Example")
-    counters = await _tick(repo, runtime, ctx={"max_concurrent": 5},
+    counters = await _tick(repo, runtime, ctx={"bot_limits": {"version": 1, "max_concurrent_bots": 5}},
                            deployment=parse_block("gated.example"))
     assert runtime.specs == []
     assert counters["blocked"] == 1 and counters["spawned"] == 0
@@ -68,7 +68,7 @@ async def test_a_deployment_blocked_organiser_domain_is_never_auto_joined():
 async def test_an_owner_blocked_invitee_subdomain_is_never_auto_joined():
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     mid = _seed(repo, attendees=["me@vexa.example", "someone@dept.gated.example"])
-    counters = await _tick(repo, runtime, ctx={"max_concurrent": 5,
+    counters = await _tick(repo, runtime, ctx={"bot_limits": {"version": 1, "max_concurrent_bots": 5},
                                                "auto_join_block": ["gated.example"]})
     assert runtime.specs == [] and counters["blocked"] == 1
     assert "invitee" in repo._meetings[mid]["data"]["auto_join_error"]
@@ -77,7 +77,7 @@ async def test_an_owner_blocked_invitee_subdomain_is_never_auto_joined():
 async def test_a_blocked_meeting_link_host_is_never_auto_joined():
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     _seed(repo, platform="jitsi", native="Standup", url="https://meet.gated.example/Standup")
-    counters = await _tick(repo, runtime, ctx={"max_concurrent": 5},
+    counters = await _tick(repo, runtime, ctx={"bot_limits": {"version": 1, "max_concurrent_bots": 5}},
                            deployment=parse_block("gated.example"))
     assert runtime.specs == [] and counters["blocked"] == 1
 
@@ -86,7 +86,7 @@ async def test_an_exact_address_entry_blocks_only_that_address():
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     _seed(repo, mid=1, organiser="ceo@partner.example")
     _seed(repo, mid=2, organiser="other@partner.example", native="9999999999999")
-    counters = await _tick(repo, runtime, ctx={"max_concurrent": 5,
+    counters = await _tick(repo, runtime, ctx={"bot_limits": {"version": 1, "max_concurrent_bots": 5},
                                                "auto_join_block": ["ceo@partner.example"]})
     assert counters["blocked"] == 1 and counters["spawned"] == 1
     assert len(runtime.specs) == 1
@@ -97,7 +97,7 @@ async def test_an_unrelated_meeting_still_joins():
     # a domain is not matched as a substring (notgated.example is not gated.example).
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     _seed(repo, organiser="host@notgated.example", attendees=["a@partner.example"])
-    counters = await _tick(repo, runtime, ctx={"max_concurrent": 5,
+    counters = await _tick(repo, runtime, ctx={"bot_limits": {"version": 1, "max_concurrent_bots": 5},
                                                "auto_join_block": ["gated.example"]},
                            deployment=parse_block("gated.example"))
     assert counters["spawned"] == 1 and counters["blocked"] == 0
@@ -115,7 +115,7 @@ async def test_the_deployment_list_holds_even_without_an_admin_edge():
 async def test_an_unreadable_owner_list_refuses_instead_of_being_ignored():
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     mid = _seed(repo)
-    counters = await _tick(repo, runtime, ctx={"max_concurrent": 5,
+    counters = await _tick(repo, runtime, ctx={"bot_limits": {"version": 1, "max_concurrent_bots": 5},
                                                "auto_join_block": ["not a domain!"]})
     assert runtime.specs == [] and counters["blocked"] == 1
     assert "could not be read" in repo._meetings[mid]["data"]["auto_join_error"]

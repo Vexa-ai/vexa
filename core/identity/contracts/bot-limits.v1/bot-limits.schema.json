@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/bot-limits.v1",
+  "title": "bot-limits.v1",
+  "description": "An account's resolved bot limits: the ONE carrier of them from the identity domain to the meetings domain, as the `bot_limits` field of admin-api's internal `GET /internal/users/{id}/bot-context` answer. Identity resolves it (it owns the tables); meetings enforces it (meeting-api limits.py, the one parser). A key identity has no value for is absent and meetings applies its built-in default; a value meetings cannot read as a limit is ignored there the same way. A reader that does not know `version` refuses the whole object.",
+  "$defs": {
+    "Rate": {
+      "description": "A token bucket: `burst` events at once, refilled at `per_minute`.",
+      "type": "object",
+      "required": ["burst", "per_minute"],
+      "additionalProperties": false,
+      "properties": {
+        "burst": { "type": "integer", "minimum": 1 },
+        "per_minute": { "type": "number", "minimum": 0 }
+      }
+    },
+    "Limit": {
+      "description": "Any limit value: a count or a duration in seconds (a non-negative number), or a rate. A limit added later is a new key with one of these shapes, not a new carrier.",
+      "oneOf": [
+        { "type": "number", "minimum": 0 },
+        { "$ref": "#/$defs/Rate" }
+      ]
+    },
+    "BotLimits": {
+      "type": "object",
+      "required": ["version", "max_concurrent_bots"],
+      "properties": {
+        "version": { "const": 1 },
+        "max_concurrent_bots": {
+          "description": "Bots at once, queued ones counted: the account's `users.max_concurrent_bots` column (0 for the instance admin account, which launches no bot). 0 means no bot may start; never 'no limit'.",
+          "type": "integer", "minimum": 0
+        },
+        "bot_start_rate": { "$ref": "#/$defs/Rate", "description": "Bot starts, every path (built-in 10 at once, 0.5 a minute)." },
+        "seat_cooldown_s": { "type": "number", "minimum": 0, "description": "How long a user-stopped ad-hoc bot keeps its seat (built-in 60)." },
+        "queue_wait_s": { "type": "number", "minimum": 0, "description": "How long a queued bot waits for a seat once late (built-in 1800)." },
+        "max_scheduled_bots": { "type": "integer", "minimum": 0, "description": "Booked bots overlapping one slot (built-in 5; enforced at booking)." },
+        "booking_rate": { "$ref": "#/$defs/Rate", "description": "Planned rows an account creates (built-in 200 at once, 10 an hour; enforced at booking)." }
+      },
+      "additionalProperties": { "$ref": "#/$defs/Limit" }
+    },
+    "Resolution": {
+      "description": "A resolution vector: what identity holds for one account, and the BotLimits it must answer. `user_data` is the account's `users.data` (its `bot_limits` override and its `subscription_tier`); `platform` is the `platform_settings` row `bot_limits` (`default`, and `plans` keyed by subscription tier). Per key: the account's override, else its plan's, else the platform default.",
+      "type": "object",
+      "required": ["max_concurrent_bots", "user_data", "platform", "expect"],
+      "additionalProperties": false,
+      "properties": {
+        "max_concurrent_bots": { "type": "integer", "minimum": 0 },
+        "is_admin_account": { "type": "boolean" },
+        "user_data": { "type": "object" },
+        "platform": { "type": "object" },
+        "expect": { "$ref": "#/$defs/BotLimits" }
+      }
+    }
+  }
+}

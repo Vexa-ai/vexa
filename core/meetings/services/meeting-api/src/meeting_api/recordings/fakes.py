@@ -10,6 +10,7 @@ NO production logic — they only stand in for object storage + Postgres so reco
 in-process.
 """
 from __future__ import annotations
+from ..lifecycle.machine import TERMINAL_STATUSES
 
 from typing import Optional
 
@@ -157,7 +158,7 @@ class InMemoryRecordingRepo:
             )
             if recording is None:
                 continue
-            if meeting.get("status") not in ("completed", "failed"):
+            if meeting.get("status") not in TERMINAL_STATUSES:
                 return {"error": "conflict"}
             prepared = {**recording, "deletion_pending": True, "meeting_id": meeting_id}
             meeting["recordings"] = [

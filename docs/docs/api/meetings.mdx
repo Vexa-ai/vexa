@@ -385,10 +385,12 @@ If a **planned** meeting exists for the same link, the spawn **claims it**: the 
 to `requested`, keeping its title, `scheduled_at`, and workspace binding. `409` when a bot is
 already active on that link; `429` past your concurrency limit — see the
 [concurrency-refusal divergence](/api/errors#by-surface), which answers `403` today. A bot you
-stopped keeps its seat in that limit for 60 seconds after it ends (a booked bot's does not). Ad-hoc
-starts are also paced per account: 10 at once, then one every 2 minutes; past that `POST /bots`
-answers `429` with `reason: bot_start_rate` and a `Retry-After`. The pace is counted per gateway
-replica.
+stopped keeps its seat in that limit for 60 seconds after it ends (a booked bot's does not). Bot
+starts are also paced per account, whichever way they are made (the API, a routine, a calendar
+auto-join, a continued meeting): 10 at once, then one every 2 minutes; past that `POST /bots`
+answers `429` with `{"detail": "Bot start rate exceeded", "reason": "bot_start_rate"}` and a
+`Retry-After`. A start refused for another reason (`409`, the concurrency `429`) does not count.
+These are the defaults; a deployment can set them per plan and per account.
 
 With transcription requested (the default) and STT unconfigured, the spawn is **refused loud** —
 `503` naming `TRANSCRIPTION_SERVICE_URL` / `TRANSCRIPTION_SERVICE_TOKEN`. Two ways out: set the

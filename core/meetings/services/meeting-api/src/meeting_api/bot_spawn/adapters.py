@@ -9,6 +9,7 @@ package can be imported and unit-tested with the in-memory fakes without those r
 gate venv — which is why ``pyproject.toml`` needs no ``greenlet`` pin.
 """
 from __future__ import annotations
+from ..lifecycle.machine import IN_FLIGHT_STATUSES, IN_MEETING_STATUSES, PLANNED_STATUSES, PRE_LOBBY_STATUSES, RUNNING_STATUSES, SEAT_HOLDING_STATUSES, TERMINAL_STATUSES, WAS_ACTIVE_STATUSES
 
 import os
 from datetime import datetime, timezone
@@ -17,6 +18,7 @@ from typing import Optional
 from ..lifecycle.machine import dominant_completion_reason
 from ..sessions import new_session
 from .ports import (
+    BotStartRateExceeded,
     DuplicateMeeting,
     MaxBotsExceeded,
     SeatCooldown,
@@ -88,16 +90,43 @@ def _seat_held(Meeting, active, cooldown_s: float = 0):
     cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=cooldown_s)
     # A bot on its way out (`stopping`) still holds its seat; its cooldown starts when it ends.
     return or_(held, Meeting.status == "stopping", and_(
-        Meeting.status.in_(("completed", "failed")),
+        Meeting.status.in_(TERMINAL_STATUSES),
         Meeting.end_time >= cutoff,
         Meeting.data.contains({"stop_requested": True}),
         not_(Meeting.data.has_key("scheduled_at")),
     ))
 
 
-def _queue_timing_out(data) -> bool:
-    queue = (data or {}).get("queue") if isinstance(data, dict) else None
-    return bool(isinstance(queue, dict) and queue.get("timing_out"))
+async def _spend_bot_start(db, *, user_id, start_rate) -> None:
+    """THE bot-start rate (limits.bot_start_rate), checked inside the caller's transaction while it
+    holds the per-user advisory lock, so parallel starts of one account serialize here. Counted from
+    the starts already recorded: this account's ``meeting_sessions`` in the bucket's horizon (the
+    caller then records this start as its session in the same transaction, which is the spend). A
+    start refused for any other reason (dedup, cap, cooldown) commits nothing and costs nothing."""
+    if start_rate is None:
+        return
+    from datetime import timedelta
+
+    from sqlalchemy import func, select
+
+    from ..sessions.models import Meeting, MeetingSession
+
+    now = func.clock_timestamp()
+    age = func.extract("epoch", now - MeetingSession.session_start_time)
+    ages = (await db.execute(
+        select(age)
+        .join(Meeting, Meeting.id == MeetingSession.meeting_id)
+        .where(Meeting.user_id == user_id,
+               MeetingSession.session_start_time >= now - timedelta(seconds=start_rate.horizon_s()))
+    )).scalars().all()
+    if not start_rate.allows([max(0.0, float(a)) for a in ages]):
+        raise BotStartRateExceeded(user_id, start_rate.retry_after_s())
+
+
+def _queue_facts(data) -> dict:
+    """The capacity queue's facts on a run (lifecycle/queue.py reads them): its block and its wait."""
+    data = data if isinstance(data, dict) else {}
+    return {k: data[k] for k in ("queue", "queue_wait_s") if k in data}
 
 
 def _respawn_retired(data, workload_id) -> bool:
@@ -125,7 +154,7 @@ class SqlAlchemyMeetingRepo:
                     Meeting.user_id == user_id,
                     Meeting.platform == platform,
                     Meeting.platform_specific_id == native_meeting_id,
-                    Meeting.status.in_(["requested", "queued", "joining", "awaiting_admission", "active"]),
+                    Meeting.status.in_(SEAT_HOLDING_STATUSES),
                 )
                 .order_by(Meeting.created_at.desc())
             )
@@ -147,7 +176,7 @@ class SqlAlchemyMeetingRepo:
                     Meeting.user_id == user_id,
                     Meeting.platform == platform,
                     Meeting.platform_specific_id == native_meeting_id,
-                    Meeting.status.notin_(("completed", "failed")),
+                    Meeting.status.notin_(TERMINAL_STATUSES),
                 )
                 .order_by(Meeting.created_at.desc(), Meeting.id.desc())
             )
@@ -189,7 +218,7 @@ class SqlAlchemyMeetingRepo:
                 .where(
                     Meeting.platform == platform,
                     Meeting.platform_specific_id == native_meeting_id,
-                    Meeting.status.notin_(("completed", "failed")),
+                    Meeting.status.notin_(TERMINAL_STATUSES),
                     Meeting.data["workspace_id"].astext.in_(list(workspace_ids)),
                 )
                 .order_by(Meeting.created_at.desc(), Meeting.id.desc())
@@ -205,7 +234,7 @@ class SqlAlchemyMeetingRepo:
             stmt = (
                 select(Meeting)
                 .where(
-                    Meeting.status.in_(["requested", "queued", "joining", "awaiting_admission", "active", "stopping"]),
+                    Meeting.status.in_(RUNNING_STATUSES),
                     Meeting.data["auth_userdata_path"].astext == userdata_s3_path,
                 )
                 .order_by(Meeting.created_at.desc())
@@ -267,13 +296,19 @@ class SqlAlchemyMeetingRepo:
             ).scalars().first()
             return _row_to_dict(m) if m else None
 
-    async def reopen_meeting(self, *, meeting_id, data_patch=None) -> dict:
-        from sqlalchemy import select
+    async def reopen_meeting(self, *, meeting_id, data_patch=None, user_id=None, session_uid=None,
+                             start_rate=None) -> dict:
+        from sqlalchemy import bindparam, select, text
         from sqlalchemy.orm.attributes import flag_modified
 
         from ..sessions.models import Meeting
 
         async with self._session_factory() as db:
+            if user_id is not None:
+                # The per-user lock create_meeting_guarded takes: a continued run is a start too.
+                await db.execute(
+                    text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id)))
+                await _spend_bot_start(db, user_id=user_id, start_rate=start_rate)
             m = (
                 await db.execute(
                     select(Meeting).where(Meeting.id == meeting_id).with_for_update()
@@ -292,7 +327,7 @@ class SqlAlchemyMeetingRepo:
                 r.get("deletion_pending") for r in (data.get("recordings") or [])
                 if isinstance(r, dict)
             )
-            if m.status not in ("completed", "failed") or deletion_pending:
+            if m.status not in TERMINAL_STATUSES or deletion_pending:
                 raise DuplicateMeeting("Terminal meeting is no longer reusable")
             m.status = "requested"
             m.end_time = None
@@ -305,6 +340,8 @@ class SqlAlchemyMeetingRepo:
                     data[key] = value
             m.data = data
             flag_modified(m, "data")
+            if session_uid:
+                db.add(new_session(m.id, session_uid))     # the start, recorded under the lock
             # updated_at is set server-side by the column's onupdate=func.now() (main's pattern);
             # never write a tz-aware Python datetime into the naive column (asyncpg DataError).
             await db.commit()
@@ -383,7 +420,7 @@ class SqlAlchemyMeetingRepo:
                 "session_uid": sid,
                 "stop_requested": bool((data or {}).get("stop_requested")),
                 "respawn_retired": _respawn_retired(data, bot_container_id),
-                "queue_timing_out": _queue_timing_out(data),
+                "queue_facts": _queue_facts(data),
             }
 
     async def update_meeting_status(
@@ -415,7 +452,7 @@ class SqlAlchemyMeetingRepo:
                 merged["failure_stage"] = failure_stage
             for k, v in (data or {}).items():
                 merged[k] = v
-            if status in ("completed", "failed"):
+            if status in TERMINAL_STATUSES:
                 # Delivery marker (#807): `completed` alone means "the bot exited cleanly" — it says
                 # nothing about whether a transcript exists. Persisting the segment count at the
                 # terminal transition makes completed-but-empty meetings (roughly half of hosted
@@ -435,7 +472,7 @@ class SqlAlchemyMeetingRepo:
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             if status == "active" and m.start_time is None:
                 m.start_time = now
-            if status in ("completed", "failed") and m.end_time is None:
+            if status in TERMINAL_STATUSES and m.end_time is None:
                 m.end_time = now
             await db.commit()
             # Refresh BEFORE _row_to_dict: `updated_at` has a server-side onupdate, so it is expired
@@ -537,15 +574,19 @@ class SqlAlchemyMeetingRepo:
             }
         return list(out.values())
 
-    async def get_queue_block(self, meeting_id) -> Optional[dict]:
-        """``meeting.data.queue`` alone (the reaper asks whether a queued bot was timing out)."""
+    async def get_queue_facts(self, meeting_id) -> dict:
+        """``meeting.data.queue`` and ``queue_wait_s`` alone (the reaper asks whether a queued bot's
+        teardown was requested); two JSON paths, never the whole ``data``."""
         from sqlalchemy import select
 
         from ..sessions.models import Meeting
 
         async with self._session_factory() as db:
-            block = (await db.execute(select(Meeting.data["queue"]).where(Meeting.id == meeting_id))).scalar()
-        return block if isinstance(block, dict) else None
+            row = (await db.execute(select(Meeting.data["queue"], Meeting.data["queue_wait_s"])
+                                    .where(Meeting.id == meeting_id))).first()
+        if row is None:
+            return {}
+        return _queue_facts({"queue": row[0], "queue_wait_s": row[1]})
 
     async def bot_run_stop_counts(self, *, window_s: float, quick_stop_s: float) -> list[dict]:
         """Per account, over the bot runs that started in the last ``window_s``: how many runs, and
@@ -587,7 +628,7 @@ class SqlAlchemyMeetingRepo:
                 .select_from(Meeting)
                 .where(
                     Meeting.user_id == user_id,
-                    _seat_held(Meeting, ["requested", "queued", "joining", "awaiting_admission", "active"],
+                    _seat_held(Meeting, SEAT_HOLDING_STATUSES,
                                cooldown_s),
                     Meeting.platform != "browser_session",  # infra excluded (parent meetings.py:1091)
                 )
@@ -652,9 +693,7 @@ class SqlAlchemyMeetingRepo:
 
         from ..sessions.models import Meeting, MeetingSession
 
-        non_terminal = [
-            "requested", "queued", "joining", "awaiting_admission", "needs_help", "active", "stopping",
-        ]
+        non_terminal = IN_FLIGHT_STATUSES
         async with self._session_factory() as db:
             rows = (
                 await db.execute(
@@ -692,9 +731,13 @@ class SqlAlchemyMeetingRepo:
 
     async def create_meeting_guarded(
         self, *, user_id, platform, native_meeting_id, data, max_concurrent=None,
-        exclude_meeting_id=None, cooldown_s: float = 0,
+        exclude_meeting_id=None, cooldown_s: float = 0, session_uid=None, start_rate=None,
     ) -> dict:
-        """ATOMIC dedup + cap + insert in ONE transaction (ROB1/ROB2).
+        """ATOMIC dedup + cap + start rate + insert in ONE transaction (ROB1/ROB2).
+
+        With ``session_uid`` the run's ``MeetingSession`` is written in the same transaction: it is
+        the recorded start ``start_rate`` counts (``_spend_bot_start``), so check and spend are one
+        step under the lock.
 
         The TOCTOU-safe spawn primitive. Two layers guard it:
 
@@ -716,7 +759,7 @@ class SqlAlchemyMeetingRepo:
         if max_concurrent is not None and max_concurrent <= 0:
             raise MaxBotsExceeded(user_id, max_concurrent)
 
-        active = ["requested", "queued", "joining", "awaiting_admission", "active"]
+        active = SEAT_HOLDING_STATUSES
         async with self._session_factory() as db:
             # Per-user serialization: hold the advisory lock for the whole transaction. asyncpg needs a
             # bound int param (not a literal-format string), so bind it explicitly.
@@ -763,6 +806,8 @@ class SqlAlchemyMeetingRepo:
                         if int((await db.execute(running_stmt)).scalar() or 0) < max_concurrent:
                             raise SeatCooldown(user_id, max_concurrent, int(cooldown_s))
                     raise MaxBotsExceeded(user_id, max_concurrent)
+            # 2a. start rate — after the cap, so a start refused for a seat costs nothing.
+            await _spend_bot_start(db, user_id=user_id, start_rate=start_rate)
             # 2b. claim — a PLANNED row (intent status `idle`/`scheduled`, created by POST /meetings
             #     or calendar sync) for the SAME (user, platform, native) is UPGRADED in place instead
             #     of inserting a second row: without this, the unique partial index (which covers
@@ -777,7 +822,7 @@ class SqlAlchemyMeetingRepo:
                     Meeting.user_id == user_id,
                     Meeting.platform == platform,
                     Meeting.platform_specific_id == native_meeting_id,
-                    Meeting.status.in_(("idle", "scheduled")),
+                    Meeting.status.in_(PLANNED_STATUSES),
                 ).order_by(Meeting.created_at.desc()).limit(1).with_for_update()
             )).scalars().first()
             if claimable is not None:
@@ -793,6 +838,8 @@ class SqlAlchemyMeetingRepo:
                 claimable.bot_container_id = None
                 claimable.data = {**planned, **dict(data or {})}
                 flag_modified(claimable, "data")
+                if session_uid:
+                    db.add(new_session(claimable.id, session_uid))
                 await db.commit()
                 await db.refresh(claimable)
                 return _row_to_dict(claimable)
@@ -803,6 +850,9 @@ class SqlAlchemyMeetingRepo:
             )
             db.add(m)
             try:
+                if session_uid:
+                    await db.flush()
+                    db.add(new_session(m.id, session_uid))
                 await db.commit()
             except IntegrityError as e:
                 # The unique partial index backstop fired — a concurrent duplicate active row won the
@@ -889,7 +939,7 @@ class SqlAlchemyMeetingRepo:
                     select(Meeting.id, Meeting.data["meet_respawn"])
                     .where(
                         Meeting.platform == "google_meet",
-                        Meeting.status.in_(("requested", "joining")),
+                        Meeting.status.in_(PRE_LOBBY_STATUSES),
                         Meeting.data.has_key("meet_respawn"),
                     )
                 )
@@ -930,7 +980,7 @@ class SqlAlchemyMeetingRepo:
             rows = (
                 await db.execute(
                     select(Meeting).where(
-                        Meeting.status.in_(("active", "needs_help")),
+                        Meeting.status.in_(IN_MEETING_STATUSES),
                     )
                 )
             ).scalars().all()
@@ -1016,11 +1066,7 @@ class SqlAlchemyMeetingRepo:
             rows = (
                 await db.execute(
                     select(Meeting).where(
-                        Meeting.status.in_((
-                            "active",
-                            "needs_help",
-                            "stopping",
-                        )),
+                        Meeting.status.in_(WAS_ACTIVE_STATUSES),
                     )
                 )
             ).scalars().all()
@@ -1148,8 +1194,15 @@ class SqlAlchemyMeetingRepo:
             return True
 
     async def create_session(self, *, meeting_id, session_uid) -> None:
+        """Idempotent: a spawn's session is usually written by the guard that admitted it."""
+        from sqlalchemy.dialects.postgresql import insert
+
+        from ..sessions.models import MeetingSession
+
         async with self._session_factory() as db:
-            db.add(new_session(meeting_id, session_uid))
+            await db.execute(
+                insert(MeetingSession).values(meeting_id=meeting_id, session_uid=session_uid)
+                .on_conflict_do_nothing(constraint="_meeting_session_uc"))
             await db.commit()
 
     async def list_sessions(self, *, meeting_id) -> list:

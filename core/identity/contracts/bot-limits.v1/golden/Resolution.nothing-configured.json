@@ -1,0 +1,6 @@
+{
+  "max_concurrent_bots": 3,
+  "user_data": {},
+  "platform": {},
+  "expect": { "version": 1, "max_concurrent_bots": 3 }
+}

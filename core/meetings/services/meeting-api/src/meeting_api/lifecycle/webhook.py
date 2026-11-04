@@ -130,7 +130,7 @@ def build_queue_status_envelope(
     The two notices of one queued run are distinct logical events, so the reason is part of the
     ``event_id`` identity (``new_status`` ``queued:<status_reason>``): a receiver deduping on
     ``event_id`` keeps both, and still drops a redelivery of either."""
-    from .queue import QUEUED
+    from .machine import QUEUED
 
     envelope = {
         "event_id": derive_event_id(connection_id, "meeting.status_change",

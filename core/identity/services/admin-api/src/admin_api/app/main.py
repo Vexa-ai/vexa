@@ -521,6 +521,37 @@ def capture_signal_default(raw: Optional[str] = None) -> bool:
     return flag
 
 
+#: The account's bot limits: the bot-context field (core/identity/contracts/bot-limits.v1), and the
+#: ``platform_settings`` row and the ``users.data`` key it is resolved from.
+BOT_LIMITS_KEY = "bot_limits"
+BOT_LIMITS_VERSION = 1
+
+
+def _resolve_bot_limits(max_concurrent_bots: int, user_data: dict, platform_bot_limits: dict) -> dict:
+    """bot-limits.v1 ``BotLimits``, the one carrier of an account's limits to meetings.
+
+    ``max_concurrent_bots`` is the account's column, as it always was (the caller passes 0 for the
+    instance admin account); it is never taken from a JSON layer. Every other key: the account's
+    override (``users.data["bot_limits"]``), else its plan's (``platform_settings`` ``bot_limits``
+    ``plans[<users.data.subscription_tier>]``), else the platform default (``bot_limits``
+    ``default``). Values pass through as stored: meetings owns what a limit means and reads each
+    value (an invalid one falls to its built-in default there), so a limit added later needs no
+    change here. A key nobody set is absent."""
+    def _layer(value) -> dict:
+        return dict(value) if isinstance(value, dict) else {}
+
+    platform = _layer(platform_bot_limits)
+    tier = user_data.get("subscription_tier")
+    plan = _layer(_layer(platform.get("plans")).get(tier)) if isinstance(tier, str) else {}
+    resolved: dict = {}
+    for layer in (_layer(platform.get("default")), plan, _layer(user_data.get(BOT_LIMITS_KEY))):
+        resolved.update({k: v for k, v in layer.items() if v is not None})
+    resolved.pop("version", None)
+    resolved["max_concurrent_bots"] = int(max_concurrent_bots)
+    resolved["version"] = BOT_LIMITS_VERSION
+    return resolved
+
+
 def _resolve_capture_signal(user_data: dict, platform_diagnostics: dict,
                             deployment_default: Optional[bool] = None) -> bool:
     """Whether this user's bots tee the captured-signal tape: user > platform_settings > the
@@ -1856,19 +1887,23 @@ def create_app() -> FastAPI:
         }
 
 
-    # --- internal tier: per-user spawn context — the auto-join sweep's stand-in for the headers
-    #     the gateway injects on POST /bots (X-User-Limits + webhook config from /internal/validate).
-    #     Same shape /internal/validate returns for those fields, keyed by user id. ---
+    # --- internal tier: per-user spawn context, read by meetings on every bot spawn (bot_spawn's
+    #     request_bot, and the auto-join sweep). It is the ONE carrier of the account's bot limits
+    #     (`bot_limits`, core/identity/contracts/bot-limits.v1); the webhook fields are the same shape
+    #     /internal/validate returns for them, keyed by user id. ---
     @app.get("/internal/users/{user_id}/bot-context", include_in_schema=False)
     async def get_bot_context(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
         check_internal_no_dev_bypass(request)
         user = await _load_user(user_id, db)
         data = user.data if isinstance(user.data, dict) else {}
         resp: dict = {
-            # The admin account launches no bot, whatever its row says (app/admin_account.py).
-            "max_concurrent": (admin_account.MAX_CONCURRENT_BOTS
-                               if admin_account.is_admin_account(user.email, data)
-                               else user.max_concurrent_bots),
+            # THE ACCOUNT'S BOT LIMITS, the one carrier of them to meetings (bot-limits.v1; the
+            # concurrency cap is the users.max_concurrent_bots column, and the admin account
+            # launches no bot whatever its row says, app/admin_account.py).
+            BOT_LIMITS_KEY: _resolve_bot_limits(
+                admin_account.MAX_CONCURRENT_BOTS
+                if admin_account.is_admin_account(user.email, data) else user.max_concurrent_bots,
+                data, await read_platform_setting(BOT_LIMITS_KEY, db)),
             "bot_name": data.get("calendar_bot_name") or "Vexa",
             # The owner's auto-join block list, enforced by meeting-api's sweep. Always stated, so
             # the sweep never has to tell "no list" from "an older identity".
@@ -1881,6 +1916,7 @@ def create_app() -> FastAPI:
         resp["capture_signal"] = _resolve_capture_signal(
             data, await read_platform_setting("diagnostics", db)
         )
+
         if data.get("webhook_url"):
             resp["webhook_url"] = data["webhook_url"]
             if data.get("webhook_secret"):

@@ -25,17 +25,18 @@ from meeting_api.bot_spawn import build_router
 from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
 from meeting_api.bot_spawn.ports import WorkloadUnknown
 from meeting_api.collector.fakes import InMemoryTranscriptStore
-from meeting_api.lifecycle.machine import TransitionSource
+from meeting_api.lifecycle.machine import StatusReason, TransitionSource
 from meeting_api.lifecycle.provenance import build_service_provenance
 from meeting_api.lifecycle.queue import (
-    REASON_CLUSTER_AT_CAPACITY,
-    REASON_WILL_JOIN_LATE,
     capacity_queue_sweep,
     status_reason_of,
     waits_for_capacity,
 )
 from meeting_api.lifecycle.reconcile import reconcile_stale_nonterminal_sweep
 from meeting_api.webhooks.delivery import DeliveryResult
+
+REASON_CLUSTER_AT_CAPACITY = StatusReason.CLUSTER_AT_CAPACITY.value
+REASON_WILL_JOIN_LATE = StatusReason.WILL_JOIN_LATE.value
 
 T0 = datetime(2026, 11, 4, 10, 0, 0, tzinfo=timezone.utc)
 SESSION = "sess-queue"
@@ -108,7 +109,7 @@ def _world(*, pending=None, data=None, state="running", workloads=None):
 
 
 def _sweep(app, repo, runtime, *, now, log=None) -> dict:
-    """One capacity-queue pass, wired exactly as ``__main__._capacity_queue_loop`` wires it."""
+    """One capacity-queue pass, wired exactly as the reconcile pass (``__main__._stop_reconcile_loop``) wires its queue phase."""
     async def _time_out(body):
         code, _ = await app.state.apply_lifecycle_event(
             body, transition_source=TransitionSource.CAPACITY_QUEUE, force_terminal_on_destroy=True)
@@ -116,7 +117,7 @@ def _sweep(app, repo, runtime, *, now, log=None) -> dict:
 
     return asyncio.run(capacity_queue_sweep(
         repo, runtime, enter=app.state.apply_queue_transition, time_out=_time_out,
-        log=log or _Log(), now=now, max_wait=1800, scale_up_window=300,
+        log=log or _Log(), now=now, scale_up_window=300,
     ))
 
 
@@ -391,15 +392,16 @@ def test_the_reaper_still_watches_a_queued_bot_whose_pod_died():
 
 # ── 6. queued counts against the concurrent-bot cap: 429 at the cap ──────────────────────────────
 
-def test_a_queued_bot_holds_its_seat_in_the_account_cap(monkeypatch):
+def test_a_queued_bot_holds_its_seat_in_the_account_cap(monkeypatch, account_limits):
     from fastapi import FastAPI
 
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    account_limits(1)
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     app = FastAPI()
     app.include_router(build_router(repo, runtime))
     client = TestClient(app)
-    headers = {"x-user-id": str(USER), "x-user-limits": "1"}
+    headers = {"x-user-id": str(USER)}
     r1 = client.post("/bots", headers=headers, json={"platform": "google_meet", "native_meeting_id": "m-1"})
     assert r1.status_code == 201, r1.text
     repo.set_status(r1.json()["id"], "queued")
@@ -479,7 +481,7 @@ def test_a_restart_between_the_delete_and_the_write_still_ends_cluster_at_capaci
 
     asyncio.run(capacity_queue_sweep(repo, runtime, enter=app.state.apply_queue_transition,
                                      time_out=crash, log=_Log(), now=T0 + timedelta(minutes=30),
-                                     max_wait=1800, scale_up_window=300))
+                                     scale_up_window=300))
     assert _row(repo, meeting)["status"] == "queued" and runtime.deleted == [WORKLOAD]
     runtime._workloads[WORKLOAD] = {"workloadId": WORKLOAD, "state": "destroyed"}   # gone, tracked
     posted: list[dict] = []
@@ -502,7 +504,7 @@ def test_after_a_restart_the_queue_sweep_finishes_a_timeout_it_began():
 
     asyncio.run(capacity_queue_sweep(repo, runtime, enter=app.state.apply_queue_transition,
                                      time_out=crash, log=_Log(), now=T0 + timedelta(minutes=30),
-                                     max_wait=1800, scale_up_window=300))
+                                     scale_up_window=300))
     runtime._workloads[WORKLOAD] = {"workloadId": WORKLOAD, "state": "destroyed"}   # gone, tracked
     _sweep(app, repo, runtime, now=T0 + timedelta(minutes=30, seconds=15))
     row = _row(repo, meeting)

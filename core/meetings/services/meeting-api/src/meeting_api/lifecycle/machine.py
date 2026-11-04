@@ -56,6 +56,84 @@ class CompletionReason(str, Enum):
     MAX_BOT_TIME_EXCEEDED = "max_bot_time_exceeded"
 
 
+class StatusReason(str, Enum):
+    """api.v1 ``MeetingStatusReason`` — why a NON-terminal meeting waits. Set only while ``queued``
+    (lifecycle/queue.py). Its own field because ``completion_reason`` explains only a terminal run
+    and ``failure_stage`` only names a stage: nothing else says why a live bot is not in yet."""
+
+    CLUSTER_AT_CAPACITY = CompletionReason.CLUSTER_AT_CAPACITY.value
+    WILL_JOIN_LATE = "will_join_late"
+
+
+# ── THE MEETING-STATUS VOCABULARY (persisted ``meetings.status``; api.v1 ``MeetingStatus``) ───────
+# Defined here once. Every status set in meeting-api is derived from these names, so a status added
+# here reaches every set built from it (tests/test_bot_limits_seams.py holds the rule: no
+# hand-written status collection outside this module).
+IDLE, SCHEDULED = "idle", "scheduled"
+REQUESTED, QUEUED = "requested", "queued"
+JOINING, AWAITING_ADMISSION = BotStatus.JOINING.value, BotStatus.AWAITING_ADMISSION.value
+NEEDS_HELP, NEEDS_HUMAN_HELP = BotStatus.NEEDS_HELP.value, "needs_human_help"
+ACTIVE, STOPPING = BotStatus.ACTIVE.value, "stopping"
+COMPLETED, FAILED = BotStatus.COMPLETED.value, BotStatus.FAILED.value
+
+#: Lifecycle order: every set below is a tuple in this order (SQL ``IN`` and ``in`` both read it).
+ALL_STATUSES = (IDLE, SCHEDULED, REQUESTED, QUEUED, JOINING, AWAITING_ADMISSION, NEEDS_HELP,
+                NEEDS_HUMAN_HELP, ACTIVE, STOPPING, COMPLETED, FAILED)
+
+
+def _statuses(*groups) -> tuple:
+    members = {s for g in groups for s in ((g,) if isinstance(g, str) else g)}
+    return tuple(s for s in ALL_STATUSES if s in members)
+
+
+#: A row with a time and no bot (an intent the user set).
+PLANNED_STATUSES = _statuses(IDLE, SCHEDULED)
+TERMINAL_STATUSES = _statuses(COMPLETED, FAILED)
+#: A bot on its way in that has never reported reaching the meeting.
+BOOTING_STATUSES = _statuses(REQUESTED, QUEUED, JOINING, AWAITING_ADMISSION)
+#: The bot had not yet reported reaching the waiting room (a Meet respawn may run from here).
+PRE_LOBBY_STATUSES = _statuses(REQUESTED, JOINING)
+#: A bot that reported reaching the meeting and still listens there.
+IN_MEETING_STATUSES = _statuses(NEEDS_HELP, ACTIVE)
+#: A bot that reached the meeting (``stopping`` is written only over such a status).
+WAS_ACTIVE_STATUSES = _statuses(IN_MEETING_STATUSES, STOPPING)
+#: The bot has left or is leaving.
+ENDING_STATUSES = _statuses(STOPPING, TERMINAL_STATUSES)
+#: The rows that hold one of the account's concurrent-bot seats.
+SEAT_HOLDING_STATUSES = _statuses(BOOTING_STATUSES, ACTIVE)
+#: The account's running bots (``GET /bots/status``): seat holders and those leaving.
+RUNNING_STATUSES = _statuses(SEAT_HOLDING_STATUSES, STOPPING)
+#: A bot in flight, any stage from its request to its leaving.
+IN_FLIGHT_STATUSES = _statuses(BOOTING_STATUSES, WAS_ACTIVE_STATUSES)
+#: Every non-terminal bot status, the human-help escalation included (two bots in one room is never
+#: right while any of these holds).
+LIVE_STATUSES = _statuses(IN_FLIGHT_STATUSES, NEEDS_HUMAN_HELP)
+NON_TERMINAL_STATUSES = LIVE_STATUSES
+#: A bot that may be alive and legitimately quiet: reaped on runtime liveness, never on silence.
+LIVENESS_GATED_STATUSES = _statuses(BOOTING_STATUSES, IN_MEETING_STATUSES)
+#: A hung row here never reached ``active`` and reconciles to ``failed``.
+PRE_ACTIVE_NONTERMINAL_STATUSES = _statuses(BOOTING_STATUSES, NEEDS_HELP)
+#: The bot lifecycle owns these; the user cannot set them.
+FSM_OWNED_STATUSES = _statuses(IN_FLIGHT_STATUSES, TERMINAL_STATUSES)
+#: Every row that is not a plan.
+NON_PLANNED_STATUSES = _statuses(RUNNING_STATUSES, NEEDS_HUMAN_HELP, TERMINAL_STATUSES)
+#: A run whose bot may take a live config change.
+RECONFIGURABLE_STATUSES = _statuses(SEAT_HOLDING_STATUSES, NEEDS_HUMAN_HELP)
+
+#: The statuses the list's event-order index pins (``ix_meeting_*_event_order``,
+#: collector/projection.py). An INDEX expression: written out, never derived, because changing it is
+#: a migration. A live status outside it (``queued``) ranks by its event time.
+LIST_PIN_STATUSES = (SCHEDULED, REQUESTED, JOINING, AWAITING_ADMISSION, ACTIVE, STOPPING)
+#: Running statuses the index does not pin; a status filter reaches them through the status index.
+UNPINNED_RUNNING_STATUSES = tuple(s for s in RUNNING_STATUSES if s not in LIST_PIN_STATUSES)
+
+
+def lifecycle_stage(status):
+    """The lifecycle.v1 ``FailureStage`` a meeting status stands for: ``queued`` is the server-side
+    wait for a seat before any bot ran, so a bot lost there is lost at ``requested``."""
+    return REQUESTED if status == QUEUED else status
+
+
 # The one terminal reason a user stop resolves to, at EVERY stage.
 USER_STOP_REASON = CompletionReason.STOPPED.value
 

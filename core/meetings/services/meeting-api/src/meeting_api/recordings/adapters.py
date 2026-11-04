@@ -9,6 +9,7 @@ so the package imports + unit-tests with the in-memory fakes without those runti
 venv — which is why ``pyproject.toml`` needs no extra pins.
 """
 from __future__ import annotations
+from ..lifecycle.machine import TERMINAL_STATUSES
 
 import os
 from typing import Optional
@@ -234,7 +235,7 @@ class SqlAlchemyRecordingRepo:
                 recording = next((r for r in recordings if r.get("id") == recording_id), None)
                 if recording is None:
                     continue
-                if meeting.status not in ("completed", "failed"):
+                if meeting.status not in TERMINAL_STATUSES:
                     return {"error": "conflict"}
                 prepared = {
                     **recording, "deletion_pending": True, "meeting_id": meeting.id,

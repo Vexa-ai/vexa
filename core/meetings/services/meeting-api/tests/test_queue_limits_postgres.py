@@ -119,3 +119,51 @@ def test_the_seat_cooldown_and_the_churn_counts():
         assert counts == {"user_id": USER, "runs": 2, "quick_stops": 1}
 
     asyncio.run(_with_db(body))
+
+
+def test_parallel_starts_of_one_account_spend_the_rate_once_each_under_the_lock():
+    """Six starts of one account at once against a burst of 3: the advisory lock serializes them,
+    each counts the sessions the ones before it recorded, so exactly three start. A refused start
+    records nothing, and the service's later create_session of an admitted one is a no-op."""
+    from sqlalchemy import func, select
+
+    from meeting_api.bot_spawn.ports import BotStartRateExceeded
+    from meeting_api.limits import TokenRate
+    from meeting_api.sessions.models import MeetingSession
+
+    rate = TokenRate(burst=3, per_minute=0.5)
+
+    async def body(sf, repo, _store):
+        async def start(i):
+            return await repo.create_meeting_guarded(
+                user_id=USER, platform="google_meet", native_meeting_id=f"par-{i}", data={},
+                session_uid=f"s-{i}", start_rate=rate)
+
+        results = await asyncio.gather(*(start(i) for i in range(6)), return_exceptions=True)
+        started = [r for r in results if isinstance(r, dict)]
+        refused = [r for r in results if isinstance(r, BotStartRateExceeded)]
+        assert len(started) == 3 and len(refused) == 3, results
+        assert refused[0].retry_after_s == 120
+        for row in started:
+            native = row.get("native_meeting_id") or row.get("platform_specific_id")
+            await repo.create_session(meeting_id=row["id"], session_uid="s-" + native.split("-")[1])
+        async with sf() as db:
+            assert (await db.execute(select(func.count()).select_from(MeetingSession))).scalar() == 3
+
+        # A continued run is a start too: the reopen path takes the same lock and the same count.
+        done = started[0]["id"]
+        async with sf() as db:
+            from meeting_api.sessions.models import Meeting
+
+            m = await db.get(Meeting, done)
+            m.status = "completed"
+            await db.commit()
+        try:
+            await repo.reopen_meeting(meeting_id=done, data_patch={}, user_id=USER,
+                                      session_uid="s-again", start_rate=rate)
+        except BotStartRateExceeded:
+            pass
+        else:
+            raise AssertionError("the reopen spent a fourth start out of a burst of three")
+
+    asyncio.run(_with_db(body))
