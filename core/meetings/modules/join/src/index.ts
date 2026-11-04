@@ -154,7 +154,8 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
     } else if (platform === "google_meet") {
       // Meet can refuse a knock outright ("You can't join this video call"); that refusal is
       // flaky, so knock again within the same lobby budget, waiting longer each time and, for an
-      // anonymous bot, as a fresh guest (googlemeet/refusal.ts).
+      // anonymous bot, as a fresh guest. Meet also ends an unanswered request after ~10 min; then
+      // ask again while the budget has room (googlemeet/refusal.ts).
       const knock = googleKnockConfig();
       admitted = await knockUntilGoogleAccepts(page, botConfig.automaticLeave!.waitingRoomTimeout!, async (remainingMs) => {
         await joinGoogleMeeting(page, opts.meetingUrl, botConfig.botName!, botConfig);
@@ -191,6 +192,9 @@ export { AdmissionError } from "./shared/admission";
 // Meet refusing the knock itself ("You can't join this video call") — a typed `denial` whose message
 // starts with GOOGLE_JOIN_REFUSED, after GOOGLE_JOIN_MAX_KNOCKS knocks (googlemeet/refusal.ts).
 export { GoogleJoinRefusedError, GOOGLE_JOIN_REFUSED, GOOGLE_JOIN_MAX_KNOCKS, GOOGLE_JOIN_REKNOCK_BACKOFF_MS, googleKnockConfig } from "./googlemeet/refusal";
+// Meet ending an unanswered request on its own ~10 min clock — a typed `lobby_timeout` the knock loop
+// answers by asking again while the lobby budget has room (googlemeet/refusal.ts).
+export { GoogleKnockExpiredError, GOOGLE_MEET_MAX_REQUESTS } from "./googlemeet/refusal";
 export type { AdmissionOutcome } from "./shared/admission";
 export { AuthSessionError };
 // The English pin and its check (shared/ui-locale.ts): a meeting page rendered in another language

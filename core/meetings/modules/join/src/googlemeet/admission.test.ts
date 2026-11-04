@@ -54,6 +54,7 @@ const {
 } = admission;
 import {
   GoogleJoinRefusedError, GOOGLE_JOIN_REFUSED, watchGoogleJoinRefusal, checkForGoogleJoinRefused,
+  GoogleKnockExpiredError, knockUntilGoogleAccepts,
 } from './refusal';
 import { setHooks } from '../_host';
 const GRACE_MS: number = (admission as any).CAPTCHA_SOLVE_GRACE_MS ?? 120_000;
@@ -393,6 +394,8 @@ async function outcomeOf(run: Promise<unknown>, watchdogMs = 10_000): Promise<st
     const page = mockPage(['text=No one responded to your request to join', 'button:has-text("Return to home screen")']);
     const got = await outcomeOf(waitForGoogleMeetingAdmission(page, 20_000, {} as any));
     check('"No one responded" screen → AdmissionError(\'lobby_timeout\')', got === 'AdmissionError:lobby_timeout', true, got);
+    const err = await waitForGoogleMeetingAdmission(mockPage(['text=No one responded to your request to join']), 20_000, {} as any).catch((e) => e);
+    check('… typed GoogleKnockExpiredError, so the knock loop can ask again', err instanceof GoogleKnockExpiredError, true, `${err?.name}`);
   }
   {
     resetEscalation();
@@ -498,6 +501,71 @@ async function outcomeOf(run: Promise<unknown>, watchdogMs = 10_000): Promise<st
     for (const fn of listeners) fn({ status: () => 200, url: () => 'https://meet.google.com/$rpc/google.rtc.meetings.v1.MeetingDeviceService/CreateMeetingDevice' });
     for (const fn of listeners) fn({ status: () => 403, url: () => 'https://meet.google.com/$rpc/google.rtc.meetings.v1.SomethingElse/Get' });
     await check('normal lobby + CreateMeetingDevice 200 + an unrelated 403 → not refused (control)', (await checkForGoogleJoinRefused(page)) === null, true);
+  }
+
+  console.log('\n=== Fixture: Meet ends request 1 unanswered, the bot asks again (prod 3-4 Nov 2026) ===');
+
+  // The real admission wait inside the real knock loop. Request 1: the lobby, then after a few polls
+  // Meet's "No one responded" screen (at 600 s on the loop's clock). Request 2: the lobby, then either
+  // the host admits (a real participant tile) or the host denies.
+  const LOBBY = ['text=Asking to be let in', 'button:has-text("Return to home screen")'];
+  const expiringRequest = () => {
+    const visible = [...LOBBY];
+    const page = mockPage(visible);
+    let polls = 0;
+    page.waitForTimeout = async () => { if (++polls === 3) visible.splice(0, 1, 'text=No one responded to your request to join'); };
+    return page;
+  };
+  const answeredRequest = (answer: 'admit' | 'deny') => {
+    const visible = [...LOBBY];
+    const tiles: string[] = [];
+    const page = mockPage(visible, false, tiles);
+    let polls = 0;
+    page.waitForTimeout = async () => {
+      if (++polls !== 3) return;
+      if (answer === 'admit') { visible.length = 0; tiles.push('Dana Host'); } else visible.push('text=denied your request');
+    };
+    return page;
+  };
+  for (const answer of ['admit', 'deny'] as const) {
+    resetEscalation();
+    const states: string[] = [];
+    setHooks({ onState: (s) => { states.push(s); } });
+    const pages = [expiringRequest(), answeredRequest(answer)];
+    let clock = 0;
+    let knocks = 0;
+    const budgets: number[] = [];
+    const run = knockUntilGoogleAccepts(pages[0], 900_000, async (remaining) => {
+      budgets.push(remaining);
+      const page = pages[knocks++];
+      if (!page) throw new Error('a third request was made');
+      if (knocks === 1) clock += 600_000;
+      return waitForGoogleMeetingAdmission(page, remaining, {} as any);
+    }, () => clock, { sleep: async () => {} });
+    const got = await outcomeOf(run);
+    const err = await run.catch((e) => e);
+    setHooks({});
+    if (answer === 'admit') {
+      check('"No one responded", asked again, host admits → admitted on request 2', got === 'resolved' && knocks === 2, true, `${got} knocks=${knocks}`);
+      check('… request 2 waits the 300 s left of the 900 s budget', budgets[1] === 300_000, true, JSON.stringify(budgets));
+      check('… the host saw two requests (awaiting_admission reported for each)', states.filter((s) => s === 'awaiting_admission').length === 2, true, JSON.stringify(states));
+    } else {
+      check('"No one responded", asked again, host denies → denial, no third request', got === 'AdmissionError:denial' && knocks === 2, true, `${got} knocks=${knocks}`);
+      check('… the denial names both requests', /^Bot admission was rejected by meeting admin; 2 join requests: 1\) 00:00:00Z–00:10:00Z ended by Meet, 2\) 00:10:00Z–00:10:00Z denied$/.test(err?.message ?? ''), true, err?.message);
+    }
+  }
+
+  // The denial path is unchanged: a host denial on request 1 is never followed by a second request.
+  {
+    resetEscalation();
+    let knocks = 0;
+    const run = knockUntilGoogleAccepts(mockPage([]), 900_000, async (remaining) => {
+      knocks++;
+      return waitForGoogleMeetingAdmission(answeredRequest('deny'), remaining, {} as any);
+    }, Date.now, { sleep: async () => {} });
+    const got = await outcomeOf(run);
+    const err = await run.catch((e) => e);
+    check('host denies request 1 → denial on one request, message unchanged', got === 'AdmissionError:denial' && knocks === 1 && err?.message === 'Bot admission was rejected by meeting admin', true, `${got} knocks=${knocks} ${err?.message}`);
   }
 
   console.log(`\n=== summary: ${passed} passed, ${failed} failed ===`);
