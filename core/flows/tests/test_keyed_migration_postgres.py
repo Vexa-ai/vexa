@@ -13,6 +13,9 @@ Run it against a throwaway database, never a shared one: it DROPS and re-creates
 
     FLOWS_TEST_PG_URL=postgresql+pg8000://postgres:pw@127.0.0.1:55432/postgres \
         uv run pytest -q tests/test_keyed_migration_postgres.py
+
+With `FLOWS_TEST_PGBOUNCER_URL` naming a pgbouncer in transaction mode in front of that database
+(the chart's `pgbouncer.enabled` shape), it also boots through the pooler.
 """
 from __future__ import annotations
 
@@ -21,6 +24,7 @@ import os
 import pytest
 
 PG_URL = os.environ.get("FLOWS_TEST_PG_URL", "").strip()
+PGB_URL = os.environ.get("FLOWS_TEST_PGBOUNCER_URL", "").strip()
 pytestmark = pytest.mark.skipif(not PG_URL, reason="FLOWS_TEST_PG_URL not set — no real Postgres")
 
 OLD_TABLE = """CREATE TABLE keyed_schedule (
@@ -254,3 +258,26 @@ def test_a_boot_that_waits_past_its_limit_fails_named_with_the_holder_on_postgre
     assert db.schema == "failed: migration_lock_timeout"
     db.execute("SELECT 1")                                   # the lock is free: the next use migrates
     assert db.schema == "ready"
+
+
+@pytest.mark.skipif(not PGB_URL, reason="FLOWS_TEST_PGBOUNCER_URL not set — no pgbouncer in front")
+def test_through_pgbouncer_the_lock_session_goes_to_postgres_and_no_lock_is_left(old_table):
+    """Vexa-ai/vexa#1996 re-review at 81f5c5d4: through pgbouncer in transaction mode the session
+    advisory lock leaked in every trial and two boots migrated at once. With `migration_url` naming
+    Postgres itself, three boots at once through the pooler, five times over from the old table:
+    every one reaches `ready`, the table is migrated, and no advisory lock is left behind."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from flows.db import postgres_db
+
+    def boot(_):
+        db = postgres_db(PGB_URL, migration_wait_s=60, migration_url=PG_URL)
+        db.execute("SELECT 1")
+        return db.schema
+
+    for _ in range(5):
+        _reset(old_table)
+        with ThreadPoolExecutor(3) as pool:
+            assert list(pool.map(boot, range(3))) == ["ready"] * 3
+        assert _key_columns(old_table) == ["scope", "flow", "key", "person"]
+        assert _one(old_table, "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'") == [(0,)]

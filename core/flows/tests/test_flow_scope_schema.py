@@ -136,8 +136,8 @@ class _Boot:
     `transaction` runs `apply` in one transaction. Every call is written to one shared `log`, tagged
     with where it ran, so the order of the whole boot can be read back."""
 
-    def __init__(self, grant_after: int, key_has_person=False, unvalidated=True):
-        self.grant_after, self.tries, self.log = grant_after, 0, []
+    def __init__(self, grant_after: int, key_has_person=False, unvalidated=True, ours=True):
+        self.grant_after, self.tries, self.log, self.ours = grant_after, 0, [], ours
         self.cat = _Catalogue(key_has_person=key_has_person, unvalidated=unvalidated)
 
     def held(self, sql, params=None):
@@ -145,6 +145,8 @@ class _Boot:
         if "pg_try_advisory_lock" in sql:
             self.tries += 1
             return [(self.tries > self.grant_after,)]
+        if "pg_advisory_unlock" in sql:
+            return [(self.ours,)]                            # False: the lock was on another session
         return self.cat(sql, params)
 
     def script(self):
@@ -160,6 +162,9 @@ class _Boot:
 
     def wait(self, s):
         self.log.append(("wait", s))
+
+    def steps(self):
+        return self.held, self.script, self.transaction, self.wait
 
 
 def test_a_booting_process_tries_the_lock_and_holds_nothing_while_it_waits():
@@ -243,6 +248,34 @@ def test_a_process_waiting_for_the_migration_says_who_holds_it_and_gives_up_name
     assert "VEXA_FLOWS_MIGRATION_WAIT_S" in msg and 100.0 < stuck.t < 101.0
     assert ran == [] and stuck.states == ["waiting"]
     assert not any("pg_advisory_unlock" in q for q in stuck.sql), "nothing to release: never held"
+
+
+def test_an_unlock_that_finds_no_lock_of_this_sessions_says_so_by_name(caplog):
+    """Third re-review, at 81f5c5d4: through pgbouncer in transaction mode the unlock lands on a
+    server connection that holds no lock (Postgres answers false), and the lock taken stays held on
+    another, idle in the pool, until every later boot times out behind it. The process that lost it
+    says so at error, naming `migration_lock_lost` and the key that gives it a direct session."""
+    import logging
+    with caplog.at_level(logging.ERROR, logger="flows.migrations"):
+        migrations.migrate(*_Boot(grant_after=0, ours=False).steps())
+    lost = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(lost) == 1, [r.getMessage() for r in caplog.records]
+    msg = lost[0].getMessage()
+    assert migrations.LOCK_LOST in msg and "VEXA_FLOWS_MIGRATION_DB_URL" in msg, msg
+    caplog.clear()
+    with caplog.at_level(logging.ERROR, logger="flows.migrations"):
+        migrations.migrate(*_Boot(grant_after=0).steps())   # control: its own lock, released
+    assert not [r for r in caplog.records if r.levelno == logging.ERROR]
+
+
+def test_the_migration_lock_session_has_a_url_of_its_own(monkeypatch):
+    """`VEXA_FLOWS_MIGRATION_DB_URL` reaches the adapter as `migration_url` (where the lock session
+    connects, `flows.db.postgres_db`); unset, it is None and the lock session uses the one URL."""
+    from flows_steps.common import db_options
+    monkeypatch.delenv("VEXA_FLOWS_MIGRATION_DB_URL", raising=False)
+    assert db_options()["migration_url"] is None
+    monkeypatch.setenv("VEXA_FLOWS_MIGRATION_DB_URL", "postgresql+pg8000://u:p@postgres:5432/vexa")
+    assert db_options()["migration_url"] == "postgresql+pg8000://u:p@postgres:5432/vexa"
 
 
 def test_the_state_says_waiting_then_migrating():

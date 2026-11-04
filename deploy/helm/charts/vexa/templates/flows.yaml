@@ -112,6 +112,9 @@ stringData:
   {{- with $lim.scheduleCatchupSeconds }}
   VEXA_FLOWS_SCHEDULE_CATCHUP_S: {{ . | toString | quote }}
   {{- end }}
+  {{- with $lim.migrationWaitSeconds }}
+  VEXA_FLOWS_MIGRATION_WAIT_S: {{ . | toString | quote }}
+  {{- end }}
   {{- with $lim.loopLimit }}
   VEXA_FLOWS_LOOP_LIMIT: {{ . | toString | quote }}
   {{- end }}
@@ -197,6 +200,9 @@ spec:
           args:
             - |
               export VEXA_FLOWS_DB_URL="postgresql+pg8000://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
+              {{- if .Values.pgbouncer.enabled }}
+              export VEXA_FLOWS_MIGRATION_DB_URL="postgresql+pg8000://${DB_USER}:${DB_PASSWORD}@${DB_DIRECT_HOST}:${DB_DIRECT_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
+              {{- end }}
               exec python -m flows_worker
           envFrom:
             - secretRef:
@@ -225,6 +231,15 @@ spec:
               value: {{ include "vexa.dbHostEffective" . | quote }}
             - name: DB_PORT
               value: {{ include "vexa.dbPortEffective" . | quote }}
+            {{- if .Values.pgbouncer.enabled }}
+            {{- /* Postgres itself, for the schema migration's lock session only
+            (VEXA_FLOWS_MIGRATION_DB_URL): a session advisory lock does not hold through a
+            transaction pooler. Every other query goes through pgbouncer. */}}
+            - name: DB_DIRECT_HOST
+              value: {{ include "vexa.dbHost" . | quote }}
+            - name: DB_DIRECT_PORT
+              value: {{ .Values.database.port | quote }}
+            {{- end }}
             - name: DB_SSL_MODE
               value: {{ .Values.database.sslMode | quote }}
             - name: FLOWS_DB_NAME
@@ -362,6 +377,9 @@ spec:
           args:
             - |
               export VEXA_FLOWS_DB_URL="postgresql+pg8000://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
+              {{- if .Values.pgbouncer.enabled }}
+              export VEXA_FLOWS_MIGRATION_DB_URL="postgresql+pg8000://${DB_USER}:${DB_PASSWORD}@${DB_DIRECT_HOST}:${DB_DIRECT_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
+              {{- end }}
               exec python -m flows_integrations.mailbox
           envFrom:
             - secretRef:
@@ -396,6 +414,15 @@ spec:
               value: {{ include "vexa.dbHostEffective" . | quote }}
             - name: DB_PORT
               value: {{ include "vexa.dbPortEffective" . | quote }}
+            {{- if .Values.pgbouncer.enabled }}
+            {{- /* Postgres itself, for the schema migration's lock session only
+            (VEXA_FLOWS_MIGRATION_DB_URL): a session advisory lock does not hold through a
+            transaction pooler. Every other query goes through pgbouncer. */}}
+            - name: DB_DIRECT_HOST
+              value: {{ include "vexa.dbHost" . | quote }}
+            - name: DB_DIRECT_PORT
+              value: {{ .Values.database.port | quote }}
+            {{- end }}
             - name: DB_SSL_MODE
               value: {{ .Values.database.sslMode | quote }}
             - name: FLOWS_DB_NAME
@@ -532,6 +559,9 @@ spec:
           args:
             - |
               export VEXA_FLOWS_DB_URL="postgresql+pg8000://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
+              {{- if .Values.pgbouncer.enabled }}
+              export VEXA_FLOWS_MIGRATION_DB_URL="postgresql+pg8000://${DB_USER}:${DB_PASSWORD}@${DB_DIRECT_HOST}:${DB_DIRECT_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}"
+              {{- end }}
               exec python -m flows_integrations.flows_api
           ports:
             - containerPort: 18200
@@ -562,6 +592,15 @@ spec:
               value: {{ include "vexa.dbHostEffective" . | quote }}
             - name: DB_PORT
               value: {{ include "vexa.dbPortEffective" . | quote }}
+            {{- if .Values.pgbouncer.enabled }}
+            {{- /* Postgres itself, for the schema migration's lock session only
+            (VEXA_FLOWS_MIGRATION_DB_URL): a session advisory lock does not hold through a
+            transaction pooler. Every other query goes through pgbouncer. */}}
+            - name: DB_DIRECT_HOST
+              value: {{ include "vexa.dbHost" . | quote }}
+            - name: DB_DIRECT_PORT
+              value: {{ .Values.database.port | quote }}
+            {{- end }}
             - name: DB_SSL_MODE
               value: {{ .Values.database.sslMode | quote }}
             - name: FLOWS_DB_NAME

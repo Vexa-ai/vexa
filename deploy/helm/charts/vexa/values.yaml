@@ -1516,6 +1516,7 @@ flows:
   limits:
     timelineScanRows: ""              # VEXA_TIMELINE_SCAN_ROWS [2000]
     scheduleCatchupSeconds: ""        # VEXA_FLOWS_SCHEDULE_CATCHUP_S [3600]
+    migrationWaitSeconds: ""          # VEXA_FLOWS_MIGRATION_WAIT_S [3600]
     loopLimit: ""                     # VEXA_FLOWS_LOOP_LIMIT [1]
     maxHops: ""                       # VEXA_FLOWS_MAX_HOPS [8]
     userActiveFlows: ""               # VEXA_FLOWS_USER_ACTIVE_FLOWS [20]

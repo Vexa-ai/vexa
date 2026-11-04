@@ -2190,13 +2190,14 @@ tb "the chart's Secret renders a generated VEXA_FLOWS_SERVICE_KEY" '[ "$(grep -c
 # under the declared key; an unset one renders nothing, so the code default holds and flows.extraEnv
 # still overrides it.
 FDIALS_ON="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true \
-  --set flows.limits.maxHops=4 --set flows.mail.captureSmtp=capture.example:2525 --set flows.nudges.enabled=true \
+  --set flows.limits.maxHops=4 --set flows.limits.migrationWaitSeconds=7200 \
+  --set flows.mail.captureSmtp=capture.example:2525 --set flows.nudges.enabled=true \
   --set flows.timelineKey=tl-key-for-render-only --show-only templates/flows.yaml)"
 FDIALS_OFF="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --show-only templates/flows.yaml)"
 tb "flows dials: set values render as their declared keys in the flows Secret" \
-  'grep -qx "  VEXA_FLOWS_MAX_HOPS: \"4\"" <<< "$FDIALS_ON" && grep -qx "  VEXA_MAIL_CAPTURE_SMTP: \"capture.example:2525\"" <<< "$FDIALS_ON" && grep -qx "  VEXA_FLOWS_NUDGES: \"1\"" <<< "$FDIALS_ON" && grep -qx "  VEXA_FLOWS_TIMELINE_KEY: \"tl-key-for-render-only\"" <<< "$FDIALS_ON"'
+  'grep -qx "  VEXA_FLOWS_MAX_HOPS: \"4\"" <<< "$FDIALS_ON" && grep -qx "  VEXA_FLOWS_MIGRATION_WAIT_S: \"7200\"" <<< "$FDIALS_ON" && grep -qx "  VEXA_MAIL_CAPTURE_SMTP: \"capture.example:2525\"" <<< "$FDIALS_ON" && grep -qx "  VEXA_FLOWS_NUDGES: \"1\"" <<< "$FDIALS_ON" && grep -qx "  VEXA_FLOWS_TIMELINE_KEY: \"tl-key-for-render-only\"" <<< "$FDIALS_ON"'
 tb "flows dials (control): unset dials render no key at all" \
-  '! grep -qE "VEXA_(FLOWS_MAX_HOPS|MAIL_CAPTURE_SMTP|FLOWS_NUDGES|FLOWS_TIMELINE_KEY|MAIL_RELAY|GRAPH_CLIENT_SECRET):" <<< "$FDIALS_OFF"'
+  '! grep -qE "VEXA_(FLOWS_MAX_HOPS|FLOWS_MIGRATION_WAIT_S|MAIL_CAPTURE_SMTP|FLOWS_NUDGES|FLOWS_TIMELINE_KEY|MAIL_RELAY|GRAPH_CLIENT_SECRET):" <<< "$FDIALS_OFF"'
 # flows egress (car 45): the flows Pods reach DNS, the gateway's service door, their database, the
 # credential broker when the relay password is a reference, and the mail hosts, and nothing else.
 # admin-api and crm-api admit their callers, not every chart Pod.
@@ -2252,6 +2253,15 @@ elif mode == "extdb":
 elif mode == "extdb-open":
     rest = [r for r in rules() if r[0] != ("dns",)]
     assert (("cidr:0.0.0.0/0", "cidr:::/0"), ((6432, "TCP"),)) in rest, rest
+elif mode == "pgbouncer":
+    rest = [r for r in rules() if r[0] != ("dns",)]
+    assert (("pod:pgbouncer",), ((5432, "TCP"),)) in rest, rest
+    assert (("pod:postgres",), ((5432, "TCP"),)) in rest, rest
+elif mode == "pgbouncer-extdb":
+    rest = [r for r in rules() if r[0] != ("dns",)]
+    assert (("pod:pgbouncer",), ((5432, "TCP"),)) in rest, rest
+    assert (("cidr:10.20.0.5/32",), ((6432, "TCP"),)) in rest, rest
+    assert not any("pod:postgres" in p for p, _ in rest), rest
 elif mode == "broker":
     rest = [r for r in rules() if r[0] != ("dns",)]
     assert any(p == ("pod:credential-broker",) for p, _ in rest), rest
@@ -2286,6 +2296,37 @@ tb "flows egress: an external database is reached on database.port at networkPol
   'helm template vexa "$CHART" -n vexa "${FE[@]}" --set postgres.enabled=false --set database.host=db.example.internal --set database.port=6432 --set "networkPolicy.flows.databaseEgress[0].cidr=10.20.0.5/32" | fe_check extdb >/dev/null'
 tb "flows egress: an external database with no CIDR named is reached on database.port only" \
   'helm template vexa "$CHART" -n vexa "${FE[@]}" --set postgres.enabled=false --set database.host=db.example.internal --set database.port=6432 | fe_check extdb-open >/dev/null'
+tb "flows egress: with pgbouncer on, the flows Pods reach the pooler and Postgres itself (the schema migration's lock session, Vexa-ai/vexa#1996)" \
+  'helm template vexa "$CHART" -n vexa "${FE[@]}" --set pgbouncer.enabled=true | fe_check pgbouncer >/dev/null'
+tb "flows egress: with pgbouncer on and an external database, the flows Pods reach the pooler and the database on database.port at networkPolicy.flows.databaseEgress" \
+  'helm template vexa "$CHART" -n vexa "${FE[@]}" --set pgbouncer.enabled=true --set postgres.enabled=false --set database.host=db.example.internal --set database.port=6432 --set "networkPolicy.flows.databaseEgress[0].cidr=10.20.0.5/32" | fe_check pgbouncer-extdb >/dev/null'
+# the schema migration's lock session (Vexa-ai/vexa#1996 re-review at 81f5c5d4): a session advisory
+# lock does not hold through pgbouncer in transaction mode, so with the pooler on every flows
+# container composes VEXA_FLOWS_MIGRATION_DB_URL against Postgres itself, while VEXA_FLOWS_DB_URL
+# stays on the pooler; with it off, nothing of the kind renders.
+mig_check() { python3 -c '
+import sys, yaml
+mode = sys.argv[1]
+docs = [d for d in yaml.safe_load_all(sys.stdin) if d]
+flows = [d for d in docs if d["kind"] == "Deployment" and d["metadata"]["name"].startswith("vexa-vexa-flows-")]
+assert sorted(d["metadata"]["name"] for d in flows) == ["vexa-vexa-flows-api", "vexa-vexa-flows-mailbox", "vexa-vexa-flows-worker"], [d["metadata"]["name"] for d in flows]
+for d in flows:
+    for c in d["spec"]["template"]["spec"]["containers"]:
+        script = "\n".join(c.get("args") or [])
+        env = {e["name"]: e.get("value") for e in c.get("env") or []}
+        if mode == "on":
+            assert env["DB_HOST"] == "vexa-vexa-pgbouncer", (d["metadata"]["name"], env["DB_HOST"])
+            assert env["DB_DIRECT_HOST"] == "vexa-vexa-postgres" and env["DB_DIRECT_PORT"] == "5432", env
+            assert "export VEXA_FLOWS_MIGRATION_DB_URL=\"postgresql+pg8000://${DB_USER}:${DB_PASSWORD}@${DB_DIRECT_HOST}:${DB_DIRECT_PORT}/${FLOWS_DB_NAME}?sslmode=${DB_SSL_MODE}\"" in script, script
+            assert script.index("VEXA_FLOWS_MIGRATION_DB_URL") < script.index("exec python"), script
+        else:
+            assert "DB_DIRECT_HOST" not in env and "VEXA_FLOWS_MIGRATION_DB_URL" not in script, (d["metadata"]["name"], script)
+print("ok")
+' "$@"; }
+tb "flows with pgbouncer on: every flows container takes the migration lock on Postgres itself (VEXA_FLOWS_MIGRATION_DB_URL), every query through the pooler" \
+  'helm template vexa "$CHART" -n vexa "${FE[@]}" --set pgbouncer.enabled=true | mig_check on >/dev/null'
+tb "flows with pgbouncer off (control): no direct migration session renders" \
+  'helm template vexa "$CHART" -n vexa "${FE[@]}" | mig_check off >/dev/null'
 tb "flows egress: a relay password by reference adds the credential broker, and the broker admits the flows Pods" \
   'helm template vexa "$CHART" -n vexa "${FE[@]}" --set flows.mail.smtp.host=relay.example --set flows.mail.smtp.passwordRef=broker:mail/relay | fe_check broker >/dev/null'
 tb "flows egress (control): networkPolicy.flows.enabled=false renders no flows egress policy and control-plane egress covers the flows Pods again" \

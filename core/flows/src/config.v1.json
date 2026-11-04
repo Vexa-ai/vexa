@@ -716,11 +716,23 @@
       ]
     },
     {
+      "key": "VEXA_FLOWS_MIGRATION_DB_URL",
+      "class": "defaulted",
+      "description": "The direct, unpooled connection the schema migration holds its lock on, when VEXA_FLOWS_DB_URL goes through a transaction pooler (pgbouncer): a session advisory lock does not hold through one, so two processes would migrate at once and the lock would leak. Unset: the migration holds it on VEXA_FLOWS_DB_URL, which is then a direct connection. Helm sets it whenever pgbouncer.enabled.",
+      "default": "",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
       "key": "VEXA_FLOWS_MIGRATION_WAIT_S",
       "class": "defaulted",
       "description": "How many seconds a flows process's first use of the database waits for another process's schema migration before it fails with migration_lock_timeout, naming who holds the migration and the oldest open snapshot. Many times a CONCURRENTLY index build on a large table.",
       "default": "3600",
-      "targets": []
+      "targets": [
+        "compose",
+        "helm"
+      ]
     },
     {
       "key": "VEXA_FLOWS_SCHEDULE_CATCHUP_S",
@@ -906,6 +918,14 @@
     {
       "key": "DB_PORT",
       "reason": "the port part of the composed VEXA_FLOWS_DB_URL (Helm only)."
+    },
+    {
+      "key": "DB_DIRECT_HOST",
+      "reason": "the host part of the composed VEXA_FLOWS_MIGRATION_DB_URL: Postgres itself, not pgbouncer (Helm, pgbouncer.enabled only)."
+    },
+    {
+      "key": "DB_DIRECT_PORT",
+      "reason": "the port part of the composed VEXA_FLOWS_MIGRATION_DB_URL (Helm, pgbouncer.enabled only)."
     },
     {
       "key": "DB_SSL_MODE",

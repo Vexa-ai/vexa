@@ -124,7 +124,7 @@ def pg_engine(url: str, **engine_kwargs):  # pragma: no cover — exercised agai
 
 
 def postgres_db(url: str, *,  # pragma: no cover — production composition; lazy import by design
-                migration_wait_s: "float | None" = None):
+                migration_wait_s: "float | None" = None, migration_url: "str | None" = None):
     """The Postgres adapter. `create_engine` itself is already lazy (no connection until first
     query); what this function adds is making SCHEMA APPLICATION lazy too, behind a one-shot
     guard on first `execute`/`executescript` — it used to run at construction, which meant
@@ -137,7 +137,15 @@ def postgres_db(url: str, *,  # pragma: no cover — production composition; laz
     `migration_wait_s`: how long that first use waits for another process's migration
     (`VEXA_FLOWS_MIGRATION_WAIT_S`, passed by the composition; `migrations.MIGRATION_WAIT_S` when
     not). `schema` says where this process is: `unapplied`, `waiting` (for another process's
-    migration), `migrating`, `ready`, or `failed: <reason>`, and the next use tries again."""
+    migration), `migrating`, `ready`, or `failed: <reason>`, and the next use tries again.
+
+    `migration_url`: where the migration's lock session connects (`VEXA_FLOWS_MIGRATION_DB_URL`),
+    when `url` goes through a transaction pooler. A session advisory lock lives on one server
+    connection, and pgbouncer in transaction mode hands each statement whichever one is free: the
+    lock is taken on one, released on another (which holds none), and stays on the first, idle in
+    the pool, until every later boot times out behind it (Vexa-ai/vexa#1996 re-review at 81f5c5d4,
+    Helm pgbouncer.enabled=true). So the lock session goes to Postgres itself; `schema.sql`,
+    `apply` and every query after go through `url` as before. None: `url` itself."""
     from sqlalchemy import text
 
     engine = pg_engine(url, pool_pre_ping=True)
@@ -196,7 +204,7 @@ def postgres_db(url: str, *,  # pragma: no cover — production composition; laz
                 with engine.begin() as c:
                     return fn(rows_of(c))
 
-            once = pg_engine(url, isolation_level="AUTOCOMMIT", poolclass=NullPool)
+            once = pg_engine(migration_url or url, isolation_level="AUTOCOMMIT", poolclass=NullPool)
             try:
                 with once.connect() as held:
                     migrations.migrate(

@@ -191,7 +191,13 @@ def migrate(held: Callable, script: Callable, transaction: Callable, wait: Calla
     (an idle transaction, a backup) stalls the build under the lock, and every other process would
     wait for it in silence. Every `LOCK_SAY_EVERY_S` a waiting process logs who holds the lock and
     the oldest open snapshot; past `limit_s` it fails with `MigrationLockTimeout`, naming both and
-    what to do, instead of waiting forever."""
+    what to do, instead of waiting forever.
+
+    THE LOCK IS TAKEN ON A DIRECT SESSION (third re-review, at 81f5c5d4). Through a transaction
+    pooler `held`'s statements land on different server connections, so the unlock finds no lock and
+    the one taken stays held; the composition gives `held` a connection to Postgres itself
+    (`VEXA_FLOWS_MIGRATION_DB_URL`, `flows.db.postgres_db`). An unlock that finds no lock of this
+    session's is logged as `migration_lock_lost`, naming that key."""
     clock = now or time.monotonic
     started = clock()
     said = started
@@ -223,7 +229,17 @@ def migrate(held: Callable, script: Callable, transaction: Callable, wait: Calla
         did.update(after(held))
         return did
     finally:
-        held(f"SELECT pg_advisory_unlock({MIGRATION_LOCK})")
+        if not _granted(held(f"SELECT pg_advisory_unlock({MIGRATION_LOCK})")):
+            _log.error(
+                "schema migration: %s: the lock was not this session's to release, so it did not "
+                "hold while this process migrated, and it is still held where it was taken. The "
+                "session goes through a transaction pooler (pgbouncer): set "
+                "VEXA_FLOWS_MIGRATION_DB_URL to a direct connection to Postgres.",
+                LOCK_LOST)
+
+
+#: What an unlock that found no lock of this session's is logged as (`migrate`).
+LOCK_LOST = "migration_lock_lost"
 
 
 def _holder(held: Callable) -> str:
