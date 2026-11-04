@@ -455,9 +455,14 @@ async def reconcile_stale_nonterminal_sweep(
 
 #: What a booking whose bot was never started reads once its last moment has passed (ADR-0052 §3).
 NOT_STARTED = "not started: scheduler unavailable"
+#: The same for a row whose ``scheduled_at`` is not a time: no start call could ever serve it.
+NOT_STARTED_NO_TIME = "not started: no valid start time"
+#: The most rows one pass stamps; the rest wait for the next pass (every ``STOP_RECONCILE_INTERVAL_S``).
+UNSTARTED_STAMP_LIMIT = 200
 
 
-async def stamp_unstarted_bookings(repo: Any, *, log: Any, now: Optional[datetime] = None) -> int:
+async def stamp_unstarted_bookings(repo: Any, *, log: Any, now: Optional[datetime] = None,
+                                   limit: int = UNSTARTED_STAMP_LIMIT) -> int:
     """THE PAST-DEADLINE STAMP (ADR-0052 §3; no fallback clock, decided 4 Nov 2026). A booked
     meeting's bot is started only when the scheduler (Flows' ``booked_bot``) calls the start route.
     When that call never came — Flows down or unreachable from the booking's ``pod_at`` until past its
@@ -466,31 +471,35 @@ async def stamp_unstarted_bookings(repo: Any, *, log: Any, now: Optional[datetim
 
     "Never started" is read off the row's own fields: still ``scheduled`` with ``auto_join`` on, no
     ``auto_join_last_attempt`` (the start route stamps it before every spawn) and no
-    ``auto_join_error`` (it stamps every refusal; so do the booking bounds). Idempotent: a stamped row
-    carries an error and is never a candidate again, and the repo's write re-checks both fields, so
-    a start call that lands first wins. Meetings' own bookkeeping: no call to Flows, and the stamp
-    writes no outbox fact (``auto_join_error`` is not part of ``meeting.planned.changed``).
-    Best-effort per row — never raises. Returns the rows stamped."""
+    ``auto_join_error`` (the start route stamps every refusal it answers past the point where a bot
+    could start, the 503s for an unanswered identity or an unreadable cap included; so do the booking
+    bounds). Idempotent: a stamped row carries an error and is never a candidate again, and the repo's
+    write re-checks both fields, so a start call that lands first wins — and one that is under way
+    clears the stamp when its bot starts. Bounded: the repo lists only rows whose deadline passed,
+    earliest first, at most ``limit``, never a row without a bot; a row whose ``scheduled_at`` is not
+    a time is stamped "not started: no valid start time" so it leaves the list too. Meetings' own
+    bookkeeping: no call to Flows, and the stamp writes no outbox fact (``auto_join_error`` is not
+    part of ``meeting.planned.changed``). Best-effort per row — never raises. Returns the rows
+    stamped."""
     if repo is None or not hasattr(repo, "list_unstarted_bookings"):
         return 0
     from ..bot_spawn.planned_start import booked_grace_s, parse_iso
 
     now = now or datetime.now(timezone.utc)
-    grace = timedelta(seconds=booked_grace_s())
+    before = now - timedelta(seconds=booked_grace_s())
     try:
-        rows = await repo.list_unstarted_bookings()
+        rows = await repo.list_unstarted_bookings(before=before, limit=limit)
     except Exception:  # noqa: BLE001 — the stamp is bookkeeping; the next pass retries
         log.exception("unstarted-booking stamp: list_unstarted_bookings failed")
         return 0
     stamped = 0
     for row in rows:
         start = parse_iso(row.get("scheduled_at"))
-        if start is None or now <= start + grace:
-            continue
-        if row.get("auto_join") is False or row.get("stop_requested"):
+        if start is not None and start >= before:
             continue
         try:
-            if await repo.stamp_unstarted_booking(row["id"], NOT_STARTED):
+            if await repo.stamp_unstarted_booking(row["id"],
+                                                  NOT_STARTED if start else NOT_STARTED_NO_TIME):
                 stamped += 1
                 _log_unstarted_booking(row, start)
         except Exception:  # noqa: BLE001 — one row's failure never stops the pass
@@ -498,14 +507,15 @@ async def stamp_unstarted_bookings(repo: Any, *, log: Any, now: Optional[datetim
     return stamped
 
 
-def _log_unstarted_booking(row: dict, start: datetime) -> None:
+def _log_unstarted_booking(row: dict, start: Optional[datetime]) -> None:
     try:
         from ..obs import log_event
 
         log_event("auto_join_not_started", audience="user", level="warning",
                   span="meetings.auto_join", user_id=row.get("user_id"),
                   meeting_id=str(row.get("id")),
-                  fields={"error": NOT_STARTED, "scheduled_at": start.isoformat()})
+                  fields={"error": NOT_STARTED if start else NOT_STARTED_NO_TIME,
+                          "scheduled_at": start.isoformat() if start else row.get("scheduled_at")})
     except Exception:
         pass
 

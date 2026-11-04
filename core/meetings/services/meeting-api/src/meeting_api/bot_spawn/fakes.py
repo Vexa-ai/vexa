@@ -250,18 +250,28 @@ class InMemoryMeetingRepo:
         return (m["status"] == "scheduled" and "auto_join_error" not in data
                 and "auto_join_last_attempt" not in data)
 
-    async def list_unstarted_bookings(self) -> list:
+    async def list_unstarted_bookings(self, *, before, limit: int) -> list:
+        from .planned_start import parse_iso
+
+        def event_time(m):   # meeting_event_time(): scheduled_at, else the row's own times
+            data = m.get("data") or {}
+            return (parse_iso(data.get("scheduled_at")) or parse_iso(m.get("start_time"))
+                    or parse_iso(m.get("created_at")))
+
+        rows = [m for m in self._meetings.values() if self._untouched(m)
+                and (m.get("data") or {}).get("auto_join") is not False
+                and not (m.get("data") or {}).get("stop_requested")
+                and event_time(m) is not None and event_time(m) < before]
+        rows.sort(key=lambda m: (event_time(m), m["id"]))
         return [{"id": m["id"], "user_id": m["user_id"],
-                 "scheduled_at": (m.get("data") or {}).get("scheduled_at"),
-                 "auto_join": (m.get("data") or {}).get("auto_join"),
-                 "stop_requested": (m.get("data") or {}).get("stop_requested")}
-                for m in self._meetings.values() if self._untouched(m)]
+                 "scheduled_at": (m.get("data") or {}).get("scheduled_at")} for m in rows[:limit]]
 
     async def stamp_unstarted_booking(self, meeting_id, message) -> bool:
         m = self._meetings.get(meeting_id)
         if m is None or not self._untouched(m):
             return False
-        m["data"]["auto_join_error"] = message
+        # A new ``data``, as a row UPDATE writes: a reader holding the row from before keeps its copy.
+        m["data"] = {**m["data"], "auto_join_error": message}
         return True
 
     async def get_meeting_by_session(self, *, session_uid) -> Optional[dict]:

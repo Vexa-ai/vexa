@@ -20,7 +20,10 @@ The safeguards (moved here unchanged from the sweep, so nothing is reimplemented
    ``env_flags.resolve_spawn_flag``, the resolver POST /bots uses;
 7. credit, through ``request_bot``'s service-authority admission;
 8. every refusal or spawn failure stamped on the row (``data.auto_join_error`` +
-   ``data.auto_join_next_retry``) — the terminal shows it — and returned as a reason.
+   ``data.auto_join_next_retry``) — the terminal shows it — and returned as a reason; an identity
+   that did not answer and a cap that cannot be read stamp their reason with no hold, since
+   nothing was attempted. A start that succeeds clears whatever the row read before, the
+   reconciler's past-deadline stamp included (it can land while the owner's context is read).
 """
 from __future__ import annotations
 
@@ -199,12 +202,12 @@ async def start_row(
 
     async def _stamp(message: str, *, kind: str, code: str, http: int,
                      event: str = "auto_join_failed", retry_after: Optional[int] = None,
-                     extra: Optional[dict] = None) -> Outcome:
+                     extra: Optional[dict] = None, held: bool = True) -> Outcome:
         hold = retry_backoff_s if error_hold_s is None else error_hold_s
-        next_retry = (now + timedelta(seconds=hold)).isoformat()
+        next_retry = (now + timedelta(seconds=hold)).isoformat() if held else None
         await repo.merge_meeting_data(row["id"], {
             "auto_join_error": message,
-            "auto_join_next_retry": next_retry,
+            **({"auto_join_next_retry": next_retry} if held else {}),
         })
         log_event(event, audience="user", level="warning", span="meetings.auto_join",
                   user_id=user_id, meeting_id=str(row["id"]),
@@ -244,18 +247,18 @@ async def start_row(
         # No admin edge configured → the per-user cap is unresolvable. Fail closed: refuse to spawn
         # rather than spawn uncapped, unless the operator explicitly opted in.
         if not allow_uncapped:
-            return Outcome("skipped_uncapped", "cap_unresolvable", 503,
-                           "no identity edge is configured, so the account's bot limit cannot be "
-                           "read; set AUTO_JOIN_ALLOW_UNCAPPED=1 to start bots uncapped",
-                           retry_after=DEFAULT_RETRY_AFTER_S)
+            return await _stamp("no identity edge is configured, so the account's bot limit cannot "
+                                "be read; set AUTO_JOIN_ALLOW_UNCAPPED=1 to start bots uncapped",
+                                kind="skipped_uncapped", code="cap_unresolvable", http=503,
+                                retry_after=DEFAULT_RETRY_AFTER_S, held=False)
         ctx: dict = {}
     else:
         got = await get_context(user_id)
         if got is None:
             # identity configured but unreachable — try later rather than spawn uncapped
-            return Outcome("unavailable", "identity_unavailable", 503,
-                           "the account's spawn context could not be read",
-                           retry_after=DEFAULT_RETRY_AFTER_S)
+            return await _stamp("the account's spawn context could not be read", kind="unavailable",
+                                code="identity_unavailable", http=503,
+                                retry_after=DEFAULT_RETRY_AFTER_S, held=False)
         ctx = got
         # THE OWNER SAID NEVER. A list identity sent but this side cannot read is a refusal, never
         # "no list": ignoring it would send the bot exactly where the owner forbade.
@@ -349,8 +352,11 @@ async def start_row(
         # The link's host is not the platform's, or reaches inside the deployment's network.
         await _no_pod()
         return await _stamp(str(e), kind="errors", code="meeting_host_refused", http=422)
-    if data.get("auto_join_error"):
-        # a prior failure resolved — clear the stamp so the row reads clean
+    claimed = meeting.get("data") if isinstance(meeting.get("data"), dict) else {}
+    if data.get("auto_join_error") or claimed.get("auto_join_error"):
+        # A prior failure resolved, or a stamp landed during this start (the reconciler's
+        # past-deadline one can, while the owner's context is read): the claimed row — read under
+        # its lock — is what tells, so the started meeting never reads as not started.
         await repo.merge_meeting_data(row["id"], {
             "auto_join_error": None, "auto_join_next_retry": None,
         })

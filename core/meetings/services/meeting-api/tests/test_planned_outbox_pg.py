@@ -505,3 +505,48 @@ async def test_no_scheduler_refuses_a_booking_on_every_writer_on_postgres(sf, mo
     await store.create_planned_meeting(USER, platform=PLAT, native_meeting_id="jjj-kkkk-lll")
     assert await store.set_intent(USER, PLAT, "jjj-kkkk-lll", "scheduled",
                                   scheduled_at=_at(60).isoformat()) == refused
+
+
+async def test_the_unstarted_listing_is_past_the_deadline_bounded_and_skips_rows_without_a_bot(sf):
+    """Factory review of #2037, L5: the past-deadline pass reads only rows whose deadline passed,
+    earliest first, at most ``limit``, never a row with no bot (so none can hold every page)."""
+    from meeting_api.bot_spawn.adapters import SqlAlchemyMeetingRepo
+
+    three = (await _book(sf, native="aaa-bbbb-ccc", minutes=-180))["id"]
+    one = (await _book(sf, native="ddd-eeee-fff", minutes=-60))["id"]
+    two = (await _book(sf, native="ggg-hhhh-iii", minutes=-120))["id"]
+    await _book(sf, native="jjj-kkkk-lll", minutes=30)
+    await _book(sf, native="mmm-nnnn-ooo", minutes=-240, auto_join=False)
+    repo = SqlAlchemyMeetingRepo(sf)
+    before = datetime.now(timezone.utc) - timedelta(seconds=600)
+    rows = await repo.list_unstarted_bookings(before=before, limit=2)
+    assert [r["id"] for r in rows] == [three, two]
+    assert {r["id"] for r in await repo.list_unstarted_bookings(before=before, limit=10)} == {
+        three, two, one}
+
+
+async def test_a_stamp_landing_during_the_identity_fetch_is_cleared_on_postgres(sf, monkeypatch):
+    """Factory review of #2037, L1 (reproduced on Postgres): the reconciler stamps the row while the
+    start call reads the owner's spawn context; the bot starts (201), and the row must not then read
+    "not started"."""
+    from meeting_api.bot_spawn.adapters import SqlAlchemyMeetingRepo
+    from meeting_api.bot_spawn.fakes import FakeRuntimeClient
+    from meeting_api.bot_spawn.planned_start import start_planned_meeting
+    from meeting_api.lifecycle.reconcile import NOT_STARTED
+
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
+    row = await _book(sf, at=_at(10))
+    repo = SqlAlchemyMeetingRepo(sf)
+
+    async def ctx(_uid):
+        assert await repo.stamp_unstarted_booking(row["id"], NOT_STARTED)
+        return {"max_concurrent": 2}
+
+    out = await start_planned_meeting(row["id"], user_id=USER, repo=repo, runtime=FakeRuntimeClient(),
+                                      fetch_bot_context=ctx, transcribe_gate=lambda: None,
+                                      token_secret="s", redis_url="redis://r")
+    assert (out.code, out.http) == ("started", 201)
+    stored = await repo.get_meeting(row["id"])
+    assert stored["status"] == "requested"
+    assert "auto_join_error" not in stored["data"]

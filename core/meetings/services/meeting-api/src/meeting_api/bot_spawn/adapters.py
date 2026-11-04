@@ -712,27 +712,37 @@ class SqlAlchemyMeetingRepo:
             )).scalars().all()
             return [_row_to_dict(m) for m in rows]
 
-    async def list_unstarted_bookings(self) -> list[dict]:
-        """``scheduled`` rows no start call has touched — no ``auto_join_last_attempt``, no
-        ``auto_join_error`` — as ``{id, user_id, scheduled_at, auto_join, stop_requested}``: the
-        candidates of the reconciler's past-deadline stamp (``lifecycle/reconcile.py``). Reads those
-        keys only, never the whole ``data``."""
-        from sqlalchemy import select
+    async def list_unstarted_bookings(self, *, before, limit: int) -> list[dict]:
+        """The candidates of the reconciler's past-deadline stamp (``lifecycle/reconcile.py``): at most
+        ``limit`` ``scheduled`` rows with a bot (``auto_join`` not off, not stopped) that no start
+        call has touched — no ``auto_join_last_attempt``, no ``auto_join_error`` — and whose start
+        is before ``before`` (now − ``BOOKED_GRACE_S``), earliest first, as ``{id, user_id,
+        scheduled_at}``. The start is ``meeting_event_time()``, the schema's own reading of
+        ``data.scheduled_at`` (falling back to the row's times when it is not one). Reads those keys
+        only, never the whole ``data``."""
+        from datetime import timezone as _tz
+
+        from sqlalchemy import bindparam, literal_column, select
 
         from ..sessions.models import Meeting
 
+        event_time = literal_column("meeting_event_time(data, start_time, created_at)")
+        cutoff = before.astimezone(_tz.utc).replace(tzinfo=None)
         async with self._session_factory() as db:
             rows = (await db.execute(
-                select(Meeting.id, Meeting.user_id, Meeting.data["scheduled_at"].astext,
-                       Meeting.data["auto_join"], Meeting.data["stop_requested"])
+                select(Meeting.id, Meeting.user_id, Meeting.data["scheduled_at"].astext)
                 .where(
                     Meeting.status == "scheduled",
                     ~Meeting.data.has_key("auto_join_error"),
                     ~Meeting.data.has_key("auto_join_last_attempt"),
+                    Meeting.data["auto_join"].astext.is_distinct_from("false"),
+                    Meeting.data["stop_requested"].astext.is_distinct_from("true"),
+                    event_time < bindparam("cutoff", cutoff),
                 )
+                .order_by(event_time, Meeting.id)
+                .limit(int(limit))
             )).all()
-        return [{"id": mid, "user_id": uid, "scheduled_at": at, "auto_join": aj,
-                 "stop_requested": stop} for mid, uid, at, aj, stop in rows]
+        return [{"id": mid, "user_id": uid, "scheduled_at": at} for mid, uid, at in rows]
 
     async def stamp_unstarted_booking(self, meeting_id, message: str) -> bool:
         """Stamp ``data.auto_join_error`` = ``message`` on a row that is still ``scheduled`` and that no

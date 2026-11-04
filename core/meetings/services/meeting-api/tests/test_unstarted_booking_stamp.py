@@ -26,9 +26,9 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat().replace("+00:00", "Z")
 
 
-def _booking(repo, *, start, **data):
+def _booking(repo, *, start, native=None, **data):
     row = asyncio.run(repo.create_meeting(user_id=7, platform="google_meet",
-                                          native_meeting_id=f"n-{len(repo._meetings)}",
+                                          native_meeting_id=native or f"n-{len(repo._meetings)}",
                                           data={"auto_join": True, "scheduled_at": _iso(start),
                                                 **data}))
     repo._meetings[row["id"]]["status"] = "scheduled"
@@ -49,10 +49,10 @@ def no_flows_call(monkeypatch):
     monkeypatch.setenv("BOOKED_GRACE_S", "600")
 
 
-def _stamp(repo, now=NOW) -> int:
+def _stamp(repo, now=NOW, **kw) -> int:
     from meeting_api.lifecycle.reconcile import stamp_unstarted_bookings
 
-    return asyncio.run(stamp_unstarted_bookings(repo, log=log, now=now))
+    return asyncio.run(stamp_unstarted_bookings(repo, log=log, now=now, **kw))
 
 
 def test_a_booking_past_its_deadline_with_no_start_call_is_stamped_once():
@@ -103,6 +103,86 @@ def test_the_grace_is_meeting_apis_booked_grace(monkeypatch):
     mid = _booking(repo, start=NOW - timedelta(seconds=61))
     assert _stamp(repo) == 1
     assert repo._meetings[mid]["data"]["auto_join_error"] == STAMP
+
+
+# ── the candidates are bounded (Factory review of #2037, L5) ─────────────────────────────────────
+def test_the_candidates_are_only_rows_past_their_deadline_earliest_first_and_bounded():
+    repo = InMemoryMeetingRepo()
+    three, one, two = (_booking(repo, start=NOW - timedelta(hours=h)) for h in (3, 1, 2))
+    _booking(repo, start=NOW + timedelta(minutes=5))                       # ahead
+    _booking(repo, start=NOW - timedelta(hours=4), auto_join=False)       # no bot
+    _booking(repo, start=NOW - timedelta(hours=4), stop_requested=True)   # stopped
+    rows = asyncio.run(repo.list_unstarted_bookings(before=NOW - timedelta(seconds=600), limit=2))
+    assert [r["id"] for r in rows] == [three, two]
+    assert _stamp(repo, limit=2) == 2
+    assert _stamp(repo, limit=2) == 1 and repo._meetings[one]["data"]["auto_join_error"] == STAMP
+    assert _stamp(repo, limit=2) == 0
+
+
+def test_a_booking_with_no_valid_start_time_leaves_the_candidates_with_its_reason():
+    """Its event time falls back to the row's creation, so it is past; were it skipped, rows like it
+    would hold every page of the bounded pass."""
+    repo = InMemoryMeetingRepo()
+    mid = _booking(repo, start=NOW)
+    repo._meetings[mid]["data"]["scheduled_at"] = "tomorrow"
+    assert _stamp(repo) == 1
+    assert repo._meetings[mid]["data"]["auto_join_error"] == "not started: no valid start time"
+
+
+# ── a start call's own answers win (Factory review of #2037, L1 and L2) ──────────────────────────
+def _start(repo, mid, **kw):
+    from meeting_api.bot_spawn.fakes import FakeRuntimeClient
+    from meeting_api.bot_spawn.planned_start import start_planned_meeting
+
+    kw.setdefault("transcribe_gate", lambda: None)
+    return asyncio.run(start_planned_meeting(mid, user_id=7, repo=repo, runtime=FakeRuntimeClient(),
+                                             token_secret="s", redis_url="redis://r", **kw))
+
+
+def _soon():
+    """A booking whose pod may start now (the spawn bounds join_at against the real clock)."""
+    return datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=600)
+
+
+def test_a_stamp_landing_during_the_identity_fetch_is_cleared_when_the_bot_starts():
+    repo = InMemoryMeetingRepo()
+    mid = _booking(repo, start=_soon(), native="abc-defg-hij")
+
+    async def ctx(_uid):
+        assert await repo.stamp_unstarted_booking(mid, STAMP)   # the reconciler lands mid-fetch
+        return {"max_concurrent": 3}
+
+    out = _start(repo, mid, fetch_bot_context=ctx)
+    assert (out.code, out.http) == ("started", 201)
+    assert repo._meetings[mid]["status"] == "requested"
+    assert "auto_join_error" not in repo._meetings[mid]["data"], "a started bot reads not started"
+
+
+def test_an_unreachable_identity_stamps_its_own_reason():
+    repo = InMemoryMeetingRepo()
+    start = _soon()
+    mid = _booking(repo, start=start, native="abc-defg-hij")
+
+    async def ctx(_uid):
+        return None
+
+    out = _start(repo, mid, fetch_bot_context=ctx)
+    assert (out.code, out.http) == ("identity_unavailable", 503)
+    data = repo._meetings[mid]["data"]
+    assert data["auto_join_error"] == "the account's spawn context could not be read"
+    assert "auto_join_next_retry" not in data and "auto_join_last_attempt" not in data
+    assert _stamp(repo, now=start + timedelta(seconds=601)) == 0
+    assert data["auto_join_error"] == "the account's spawn context could not be read"
+
+
+def test_an_unresolvable_cap_stamps_its_own_reason_and_a_later_start_clears_it():
+    repo = InMemoryMeetingRepo()
+    mid = _booking(repo, start=_soon(), native="abc-defg-hij")
+    out = _start(repo, mid, fetch_bot_context=None)
+    assert (out.code, out.http) == ("cap_unresolvable", 503)
+    assert "AUTO_JOIN_ALLOW_UNCAPPED" in repo._meetings[mid]["data"]["auto_join_error"]
+    assert _start(repo, mid, fetch_bot_context=None, allow_uncapped=True).http == 201
+    assert "auto_join_error" not in repo._meetings[mid]["data"]
 
 
 def test_the_reconcile_loop_stamps_it(monkeypatch):

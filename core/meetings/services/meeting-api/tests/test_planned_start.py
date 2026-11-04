@@ -269,7 +269,7 @@ async def test_full_ceiling_is_429_and_retries_soon_without_a_hold(monkeypatch):
     assert "auto_join_error" not in repo._meetings[mid]["data"], "a resolved failure is cleared"
 
 
-async def test_unreachable_identity_defers_without_a_stamp():
+async def test_unreachable_identity_defers_with_its_reason_and_no_hold():
     repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
     mid = _seed(repo)
 
@@ -278,7 +278,9 @@ async def test_unreachable_identity_defers_without_a_stamp():
 
     out = await _start(repo, runtime, fetch_bot_context=ctx)
     assert (out.code, out.http) == ("identity_unavailable", 503) and out.retry_after
-    assert repo._meetings[mid]["data"].get("auto_join_last_attempt") is None
+    data = repo._meetings[mid]["data"]
+    assert data.get("auto_join_last_attempt") is None and data.get("auto_join_next_retry") is None
+    assert data["auto_join_error"] == "the account's spawn context could not be read"
 
 
 async def test_no_identity_edge_refuses_uncapped_unless_opted_in():
