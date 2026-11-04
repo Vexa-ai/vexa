@@ -101,6 +101,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 # (6.0.16, no XAUTOCLAIM, the #653 parity gap).
 # `apt-get upgrade` takes the Ubuntu archive's security updates (OpenSSL, GnuPG) since the Playwright
 # base's snapshot without moving the browser it pins.
+# A rebuild reuses the upgrade layer below from cache, and with it the archive as it stood when that
+# layer was first built: vexa-bot v0.13.4-rc.2-respawn.1 (built 2 Nov 2026) ran the 10 Oct upgrade and
+# missed Ubuntu's 26 Oct brotli fix. ADD keys the cache on the security pocket's index, so the layer
+# rebuilds whenever Ubuntu publishes a security update, and takes it.
+ADD https://security.ubuntu.com/ubuntu/dists/noble-security/InRelease /var/lib/apt/noble-security.InRelease
 RUN apt-get update && apt-get upgrade -y --no-install-recommends && apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv python3-dev build-essential \
       supervisor postgresql-client \

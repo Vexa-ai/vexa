@@ -114,6 +114,11 @@ FROM vexa/meet-join-env:dev AS runtime
 # installation candidate there, which broke this image the moment the base moved. AWS's
 # own v2 installer is the supported path on 24.04; it is the same binary the session
 # store shells out to, so nothing above this line changes.
+# A rebuild reuses the upgrade layer below from cache, and with it the archive as it stood when that
+# layer was first built: vexa-bot v0.13.4-rc.2-respawn.1 (built 2 Nov 2026) ran the 10 Oct upgrade and
+# missed Ubuntu's 26 Oct brotli fix. ADD keys the cache on the security pocket's index, so the layer
+# rebuilds whenever Ubuntu publishes a security update, and takes it.
+ADD https://security.ubuntu.com/ubuntu/dists/noble-security/InRelease /var/lib/apt/noble-security.InRelease
 RUN export DEBIAN_FRONTEND=noninteractive \
     && apt-get update \
     && apt-get upgrade -y --no-install-recommends \

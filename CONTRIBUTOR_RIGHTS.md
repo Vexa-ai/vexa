@@ -35,6 +35,9 @@ second required `dco-no-override` check rejects the app's write-user override an
 success result. The DCO App reads at most 250 commits, so a `dco-range` check
 (`scripts/dco-range.mjs`) also walks the pull request's whole range with git and lists every
 commit with its verdict; it applies the same rule and accepts the same remediation commits.
+When the DCO App reports that it could not read the full list, on a pull request or on its
+merge-queue commit, `dco-no-override` decides it again by the same rule over the commits the pull
+request adds since the target branch's previous head.
 
 ### Employer/client authorization required
 

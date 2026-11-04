@@ -1,0 +1,36 @@
+# human-authors: commits and pull requests in this repo have human authors only
+# (ruling authors-humans-only-1103). Fails on a Claude/Anthropic co-author trailer,
+# an anthropic.com or "Claude" author/committer, or the generated-by footer, in any
+# commit of base..head or in the PR title or body. Needs no secrets.
+# The script's tests also run in gates.yml's `gate script tests` step (scripts/*.test.mjs).
+name: human-authors
+
+on:
+  pull_request:
+    types: [opened, synchronize, edited, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: human-authors-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  human-authors:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with: { node-version: 22 }
+      - name: script tests
+        run: node --test scripts/human-authors.test.mjs
+      - name: check commits, title and body
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/human-authors.mjs "$BASE" "$HEAD" --event "$GITHUB_EVENT_PATH"
