@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from . import bot_termination as _bot_termination
+
 
 # Cap forensics so a runaway ring-buffer can't bloat meeting.data (parent callbacks.py caps
 # bot_logs at 50 KiB, trimming the OLDEST lines first). 50 * 1024 bytes.
@@ -299,6 +301,9 @@ class MeetingRecord:
     #: speaker?, reason}]``, epoch seconds. Persisted at ``meeting.data.transcript_gaps`` — and kept
     #: OFF every response edge unless a reader asks (``collector.projection.OPT_IN_KEYS``).
     transcript_gaps: Optional[List[Dict[str, Any]]] = None
+    #: A bot that was in the meeting and was ended under it by the cluster (lifecycle/
+    #: bot_termination.py): ``{cause, attribution, source, detail}``. Set on a terminal only.
+    bot_termination: Optional[Dict[str, Any]] = None
     #: WHY a pre-active run never reached the meeting (#1059/#1058) — the typed
     #: `join_evidence.JoinFailureReason` plus the stage, the stage timings, and the platform's own
     #: signal. Set on a `failed` terminal only; see `data` below for how it lands in the JSONB.
@@ -361,6 +366,8 @@ class MeetingRecord:
             d["stt_fault"] = dict(self.stt_fault)
         if self.transcript_gaps:
             d["transcript_gaps"] = [dict(g) for g in self.transcript_gaps]
+        if self.bot_termination is not None:
+            d[_bot_termination.KEY] = dict(self.bot_termination)
         return d
 
 
@@ -651,6 +658,11 @@ class LifecycleSink:
             # lifecycle.v1 (additionalProperties: true), same as infra_fault.
             if event.get("stt_fault"):
                 rec.stt_fault = dict(event["stt_fault"])
+            # WHO ended a bot that was in the meeting, when it was the cluster (bot_termination.py).
+            # Additive on lifecycle.v1 like stt_fault; a malformed block is dropped, never persisted.
+            termination = _bot_termination.sanitize(event.get(_bot_termination.KEY))
+            if termination is not None:
+                rec.bot_termination = termination
             # WHAT of the meeting was never transcribed (prod-cutover R4): the bot's lanes record
             # every lost window as a range and report them here, so a gap is part of the meeting's
             # record instead of a silent hole. Additive, like stt_fault. Malformed entries are
