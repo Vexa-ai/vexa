@@ -263,6 +263,15 @@
       ]
     },
     {
+      "key": "RUNTIME_K8S_BOT_SCHEDULER_NAME",
+      "class": "defaulted",
+      "default": "(unset — no schedulerName, the cluster's default-scheduler)",
+      "description": "k8s backend: the scheduler every SPAWNED meeting-bot Pod names (spec.schedulerName), e.g. an operator's own bin-packing scheduler. Validated at boot as a Kubernetes object name. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
       "key": "RUNTIME_K8S_AGENT_WORKER_NODE_SELECTOR",
       "class": "defaulted",
       "default": "(unset — agent-worker Pods take the runtime-wide RUNTIME_K8S_NODE_SELECTOR)",
@@ -294,6 +303,15 @@
       "class": "defaulted",
       "default": "(unset — no imagePullSecrets on the Pod; the namespace's default ServiceAccount still applies its own)",
       "description": "k8s backend: JSON array of Secret names (or {\"name\": …} objects) every SPAWNED agent-worker Pod pulls its image with. Validated at boot. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_K8S_AGENT_WORKER_SCHEDULER_NAME",
+      "class": "defaulted",
+      "default": "(unset — no schedulerName, the cluster's default-scheduler)",
+      "description": "k8s backend: the scheduler every SPAWNED agent-worker Pod names (spec.schedulerName), e.g. an operator's own bin-packing scheduler. Validated at boot as a Kubernetes object name. Never taken from a workload spec",
       "targets": [
         "helm"
       ]

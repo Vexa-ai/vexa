@@ -136,16 +136,16 @@ fi
 envval() { grep -A1 -E "name: $1\$" <<< "$2" | grep 'value:' | sed -E 's/^[[:space:]]*value: //'; }
 placement_ok=1
 for class in BOT AGENT_WORKER; do
-  for pair in 'NODE_SELECTOR="{}"' 'TOLERATIONS="[]"' 'PRIORITY_CLASS_NAME=""' 'IMAGE_PULL_SECRETS="[]"'; do
+  for pair in 'NODE_SELECTOR="{}"' 'TOLERATIONS="[]"' 'PRIORITY_CLASS_NAME=""' 'IMAGE_PULL_SECRETS="[]"' 'SCHEDULER_NAME=""'; do
     key="RUNTIME_K8S_${class}_${pair%%=*}"; want="${pair#*=}"
     got="$(envval "$key" "$RENDER")"
     if [ "$got" != "$want" ]; then echo "  FAIL: $key default — want $want got '${got}'"; placement_ok=0; fi
   done
 done
-[ "$placement_ok" -eq 1 ] && echo "  OK: per-class placement keys render empty by default (8)" || fail=1
+[ "$placement_ok" -eq 1 ] && echo "  OK: per-class placement keys render empty by default (10)" || fail=1
 RENDER_PLACE="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
   --set-json 'global.nodeSelector={"vexa.ai/pool":"main"}' \
-  --set-json 'runtime.workloadScheduling.meetingBot={"nodeSelector":{"vexa.ai/pool":"stealth"},"tolerations":[{"key":"vexa.ai/pool","operator":"Equal","value":"stealth","effect":"NoSchedule"}],"priorityClassName":"vexa-stealth","imagePullSecrets":["regcred"]}' \
+  --set-json 'runtime.workloadScheduling.meetingBot={"nodeSelector":{"vexa.ai/pool":"stealth"},"tolerations":[{"key":"vexa.ai/pool","operator":"Equal","value":"stealth","effect":"NoSchedule"}],"priorityClassName":"vexa-stealth","imagePullSecrets":["regcred"],"schedulerName":"vexa-packing"}' \
   --set runtime.workloadScheduling.agentWorker.priorityClassName=vexa-stealth-worker \
   --set-json 'runtime.workloadScheduling.agentWorker.imagePullSecrets=[{"name":"worker-reg"}]')"
 place_ok=1
@@ -157,12 +157,14 @@ check_place RUNTIME_K8S_BOT_NODE_SELECTOR '"{\"vexa.ai/pool\":\"stealth\"}"'
 check_place RUNTIME_K8S_BOT_TOLERATIONS '"[{\"effect\":\"NoSchedule\",\"key\":\"vexa.ai/pool\",\"operator\":\"Equal\",\"value\":\"stealth\"}]"'
 check_place RUNTIME_K8S_BOT_PRIORITY_CLASS_NAME '"vexa-stealth"'
 check_place RUNTIME_K8S_BOT_IMAGE_PULL_SECRETS '"[\"regcred\"]"'
+check_place RUNTIME_K8S_BOT_SCHEDULER_NAME '"vexa-packing"'
+check_place RUNTIME_K8S_AGENT_WORKER_SCHEDULER_NAME '""'
 check_place RUNTIME_K8S_AGENT_WORKER_NODE_SELECTOR '"{}"'
 check_place RUNTIME_K8S_AGENT_WORKER_TOLERATIONS '"[]"'
 check_place RUNTIME_K8S_AGENT_WORKER_PRIORITY_CLASS_NAME '"vexa-stealth-worker"'
 check_place RUNTIME_K8S_AGENT_WORKER_IMAGE_PULL_SECRETS '"[{\"name\":\"worker-reg\"}]"'
 check_place RUNTIME_K8S_NODE_SELECTOR '"{\"vexa.ai/pool\":\"main\"}"'
-if grep -qE '^[[:space:]]+priorityClassName: |regcred|worker-reg' <<< "$(grep -vE '^[[:space:]]+value: ' <<< "$RENDER_PLACE")"; then
+if grep -qE '^[[:space:]]+priorityClassName: |regcred|worker-reg|vexa-packing' <<< "$(grep -vE '^[[:space:]]+value: ' <<< "$RENDER_PLACE")"; then
   echo "  FAIL: per-class placement leaked onto the chart's own Pods"; place_ok=0
 fi
 [ "$place_ok" -eq 1 ] && echo "  OK: per-class placement reaches its own keys only, as JSON" || fail=1

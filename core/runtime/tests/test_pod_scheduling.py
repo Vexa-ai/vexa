@@ -31,7 +31,7 @@ from test_worker_image import _create_payload
 BOT = "RUNTIME_K8S_BOT_"
 WORKER = "RUNTIME_K8S_AGENT_WORKER_"
 STEALTH_TOLERATION = {"key": "vexa.ai/pool", "operator": "Equal", "value": "stealth", "effect": "NoSchedule"}
-PLACEMENT_FIELDS = ("nodeSelector", "tolerations", "priorityClassName", "imagePullSecrets")
+PLACEMENT_FIELDS = ("nodeSelector", "tolerations", "priorityClassName", "imagePullSecrets", "schedulerName")
 
 
 def _pods_into(submitted: list):
@@ -56,7 +56,8 @@ def _clean(monkeypatch):
     monkeypatch.setenv("BROWSER_IMAGE", "bot:test")
     monkeypatch.setenv("AGENT_IMAGE", "vexaai/vexa-agent-api:test")
     for prefix in (BOT, WORKER):
-        for suffix in ("NODE_SELECTOR", "TOLERATIONS", "PRIORITY_CLASS_NAME", "IMAGE_PULL_SECRETS"):
+        for suffix in ("NODE_SELECTOR", "TOLERATIONS", "PRIORITY_CLASS_NAME", "IMAGE_PULL_SECRETS",
+                       "SCHEDULER_NAME"):
             monkeypatch.delenv(prefix + suffix, raising=False)
     monkeypatch.delenv(k8s_backend.TOLERATIONS_ENV, raising=False)
     monkeypatch.delenv(k8s_backend.NODE_SELECTOR_ENV, raising=False)
@@ -86,6 +87,7 @@ def test_unset_or_empty_adds_nothing_to_the_pod(monkeypatch, profile, rendered_e
             monkeypatch.setenv(prefix + "TOLERATIONS", "[]")
             monkeypatch.setenv(prefix + "PRIORITY_CLASS_NAME", "")
             monkeypatch.setenv(prefix + "IMAGE_PULL_SECRETS", "[]")
+            monkeypatch.setenv(prefix + "SCHEDULER_NAME", "")
     assert default_registry().get(profile).runnable.scheduling == PodScheduling()
     spec = _pod(profile)["spec"]
     assert not any(f in spec for f in PLACEMENT_FIELDS)
@@ -155,6 +157,19 @@ def test_the_submitted_pod_carries_the_profiles_placement(monkeypatch):
     assert spec["nodeSelector"] == {"vexa.ai/pool": "stealth"}
 
 
+def test_the_scheduler_name_reaches_the_bot_pod_only(monkeypatch):
+    """ADR-0052 s3: the operator's packing scheduler places bots; the submitted bot Pod names it,
+    a worker without its own setting keeps the default scheduler."""
+    monkeypatch.setenv(BOT + "SCHEDULER_NAME", "vexa-packing-scheduler")
+    submitted = []
+    monkeypatch.setattr(k8s_backend, "_kubectl", _pods_into(submitted))
+    rt = Runtime(backend=K8sBackend(namespace="ns"), profiles=default_registry(), grace_sec=0.1,
+                 workspace_store=StoreConfig())
+    rt.create(WorkloadSpec(workloadId="mtg-3", profile="meeting-bot", env={"VEXA_BOT_CONFIG": "{}"}))
+    assert submitted[0]["spec"]["schedulerName"] == "vexa-packing-scheduler"
+    assert "schedulerName" not in _pod("agent")["spec"]
+
+
 # ── boot validation ──────────────────────────────────────────────────────────────────────────────
 
 MALFORMED = [
@@ -180,6 +195,8 @@ MALFORMED = [
     ("IMAGE_PULL_SECRETS", '["Reg_Cred"]'),
     ("IMAGE_PULL_SECRETS", '[{"name": "regcred", "namespace": "other"}]'),
     ("IMAGE_PULL_SECRETS", '[""]'),
+    ("SCHEDULER_NAME", "Vexa_Packing"),
+    ("SCHEDULER_NAME", "has space"),
 ]
 
 
@@ -216,13 +233,14 @@ def test_a_spec_env_cannot_place_the_pod(monkeypatch):
         BOT + "NODE_SELECTOR": json.dumps({"pool": "customer"}),
         BOT + "TOLERATIONS": json.dumps([{"operator": "Exists"}]),
         BOT + "IMAGE_PULL_SECRETS": json.dumps(["someone-elses"]),
+        BOT + "SCHEDULER_NAME": "someone-elses-scheduler",
         k8s_backend.NODE_SELECTOR_ENV: json.dumps({"pool": "customer"}),
         k8s_backend.TOLERATIONS_ENV: json.dumps([{"operator": "Exists"}]),
     }
     rt.create(WorkloadSpec(workloadId="mtg-2", profile="meeting-bot", env=hostile))
     pod = submitted[0]
     assert pod["spec"]["priorityClassName"] == "vexa-stealth"
-    assert not any(f in pod["spec"] for f in ("nodeSelector", "tolerations", "imagePullSecrets"))
+    assert not any(f in pod["spec"] for f in ("nodeSelector", "tolerations", "imagePullSecrets", "schedulerName"))
     names = {e["name"] for e in pod["spec"]["containers"][0]["env"]}
     assert not names & set(hostile)
 
