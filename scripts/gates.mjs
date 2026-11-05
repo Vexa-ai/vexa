@@ -559,7 +559,24 @@ function gateLicenses() {
   // in is a store that has never seen a newly-locked package (a worktree where `pnpm install` has
   // not run since the lockfile grew). "Cannot read the tree" is a FAILURE, not green-on-empty — the
   // gate has verified nothing.
-  if (data?.error) return fail([`\`pnpm licenses list\` could not read the dependency tree: ${data.error.message ?? data.error.code ?? "unknown error"}`]);
+  //
+  // SHAPE CHECK, before the npm-lockfile fold below writes into `data` (Vexa-ai/vexa#1906). A licence
+  // index is a plain object whose every value is a package list. Anything else (the error object, an
+  // array, null, a bare value, or an entry that is not a list) leaves the gate nothing to judge, so it
+  // fails with pnpm's own words and the step that fixes it, instead of crashing on
+  // `pkgs.map is not a function` or printing half of pnpm's message.
+  const INSTALL_HINT = "run `pnpm install` first";
+  if (data === null || typeof data !== "object" || Array.isArray(data) || "error" in data) {
+    const err = data && typeof data === "object" && !Array.isArray(data) ? data.error : undefined;
+    const said = err && typeof err === "object"
+      ? [err.code, err.message].filter(Boolean).join(": ")
+      : (typeof err === "string" ? err : "");
+    return fail([`\`pnpm licenses list --json\` failed: ${said || "unexpected output shape"} — ${INSTALL_HINT}`]);
+  }
+  const notLists = Object.entries(data).filter(([, pkgs]) => !Array.isArray(pkgs)).map(([lic]) => lic);
+  if (notLists.length) {
+    return fail(notLists.map((lic) => `licence entry "${lic}" from \`pnpm licenses list --json\` is not a package list — ${INSTALL_HINT}`));
+  }
   // THE npm PROJECTS OUTSIDE THE pnpm TREE (scripts/npm-locks.mjs). The terminal's images install from
   // clients/terminal/package-lock.json with `npm ci`, whose overrides differ from pnpm's, so the pnpm
   // index does not describe them (S73). Each such lock is folded into the same index and classified by
