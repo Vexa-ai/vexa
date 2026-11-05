@@ -382,7 +382,11 @@ def build_production_app():
 
     bot_accounts = build_bot_accounts_from_env(runtime_client, redis_client)
 
+    from .admission import build_observer
+
+    admission_observer = build_observer(meeting_repo, redis_client)
     app = create_app(
+        admission_observer=admission_observer,
         bot_accounts=bot_accounts,
         transcript_store=transcript_store,
         redis=segment_bus,
@@ -416,6 +420,7 @@ def build_production_app():
     _attach_background_loops(
         app, transcript_store, segment_bus, redis_client, meeting_repo, runtime_client,
         bot_redis=bot_redis,
+        admission_observer=admission_observer,
         service_authority=service_authority,
         system_webhook_sink=system_webhook_sink,
         session_factory=session_factory,
@@ -436,7 +441,7 @@ def _minio_endpoint_url() -> str:
 def _attach_background_loops(
     app, transcript_store, segment_bus, redis_client, meeting_repo=None, runtime=None,
     service_authority=None, system_webhook_sink=None, session_factory=None, storage=None,
-    bot_redis=None,
+    bot_redis=None, admission_observer=None,
 ) -> None:
     """Register the FastAPI lifespan that starts/stops the control-plane poll loops.
 
@@ -786,6 +791,7 @@ def _attach_background_loops(
                 token_secret=os.getenv("ADMIN_TOKEN") or None,
                 redis_url=os.getenv("REDIS_URL"),
                 redis_grant=bot_redis.grant if bot_redis is not None else None,
+                admission_observer=admission_observer,
                 allow_uncapped=auto_join_allow_uncapped,
                 deployment_block=auto_join_block,
             )
@@ -800,6 +806,27 @@ def _attach_background_loops(
             except Exception:
                 log.exception("auto-join tick failed")
             await asyncio.sleep(auto_join_interval)
+
+    # Bot limits, shadow only (admission/): recompute each account's prediction once a day. This loop
+    # exists only when BOT_ADMISSION_MODE=shadow; off means no query, no Redis write, no log line.
+    async def _admission_loop() -> None:
+        from .admission.shadow import FailOnce
+        from .admission.sweep import CHECK_EVERY_S, MeetingHistory, daily_tick
+
+        history = MeetingHistory(session_factory)
+        fail = FailOnce()
+
+        async def _tick():
+            await daily_tick(history, redis_client, fail)
+
+        while True:
+            try:
+                await _guarded("bot-admission", _tick)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                fail.failed("daily tick", exc)
+            await asyncio.sleep(CHECK_EVERY_S)
 
     # Google Meet respawn (lifecycle/meet_respawn.py): start the next bot pod for every meeting whose
     # last bot Meet refused, once its wait is over. The row's `next_at` is the schedule; this sweep,
@@ -991,6 +1018,8 @@ def _attach_background_loops(
               if bot_redis is not None else []),
             *([asyncio.create_task(_bot_accounts_reaper_loop(), name="bot-accounts-reaper")]
               if bot_accounts_live else []),
+            *([asyncio.create_task(_admission_loop(), name="bot-admission")]
+              if admission_observer is not None and session_factory is not None else []),
             asyncio.create_task(_ensure_fts_index_once(), name="ensure-fts-index"),
         ]
         log.info("meeting-api background loops started: %s", [t.get_name() for t in tasks])

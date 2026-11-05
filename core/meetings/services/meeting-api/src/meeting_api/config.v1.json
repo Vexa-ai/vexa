@@ -759,6 +759,13 @@
    ]
   },
   {
+   "key": "BOT_ADMISSION_MODE",
+   "class": "defaulted",
+   "default": "off",
+   "description": "per-account bot limits: `off` runs nothing (no query, no Redis write, no log line); `shadow` recomputes each account's limits daily and logs what they would say about every spawn, changing no answer and no spawn. Any other value is off",
+   "targets": []
+  },
+  {
    "key": "AUTO_JOIN_SWEEP_INTERVAL_S",
    "class": "defaulted",
    "default": "30",

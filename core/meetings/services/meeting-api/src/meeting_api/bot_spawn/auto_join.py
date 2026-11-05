@@ -201,6 +201,7 @@ async def auto_join_tick(
     token_secret: Optional[str] = None,
     redis_url: Optional[str] = None,
     redis_grant=None,
+    admission_observer=None,
     allow_uncapped: bool = False,
     deployment_block=None,
 ) -> dict:
@@ -360,6 +361,8 @@ async def auto_join_tick(
                 token_secret=token_secret,
                 redis_url=redis_url,
                 redis_grant=redis_grant,
+                admission_kind="scheduled",
+                admission_observer=admission_observer,
             )
         except DuplicateMeeting:
             # a manual "Send bot now" (or a racing sweep) already claimed it — success, not an error

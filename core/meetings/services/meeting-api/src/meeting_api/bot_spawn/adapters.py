@@ -437,6 +437,27 @@ class SqlAlchemyMeetingRepo:
                 stmt = stmt.where(Meeting.id != exclude_meeting_id)
             return int((await db.execute(stmt)).scalar() or 0)
 
+    async def count_active_bots_by_kind(self, *, user_id, exclude_meeting_id=None) -> dict:
+        from sqlalchemy import func, select
+
+        from ..sessions.models import Meeting
+
+        booked = Meeting.data["scheduled_at"].astext.isnot(None)
+        stmt = (
+            select(booked.label("booked"), func.count())
+            .where(
+                Meeting.user_id == user_id,
+                Meeting.status.in_(["requested", "joining", "awaiting_admission", "active"]),
+                Meeting.platform != "browser_session",
+            )
+            .group_by(booked)
+        )
+        if exclude_meeting_id is not None:
+            stmt = stmt.where(Meeting.id != exclude_meeting_id)
+        async with self._session_factory() as db:
+            counts = {bool(row[0]): int(row[1]) for row in (await db.execute(stmt)).all()}
+        return {"scheduled": counts.get(True, 0), "adhoc": counts.get(False, 0)}
+
     async def list_stale_stopping(
         self, *, older_than_seconds: float
     ) -> list[tuple[int, str, Optional[str]]]:

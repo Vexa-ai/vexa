@@ -176,6 +176,13 @@ class MeetingRepo(Protocol):
         changed under them."""
         ...
 
+    async def count_active_bots_by_kind(
+        self, *, user_id: int, exclude_meeting_id: Optional[int] = None,
+    ) -> dict:
+        """The same set as ``count_active_bots``, as ``{"scheduled": n, "adhoc": m}``: scheduled
+        when the row carries ``data.scheduled_at``. The bot-limit shadow's reading only."""
+        ...
+
     async def count_active_bots(self, *, user_id: int, exclude_meeting_id: Optional[int] = None) -> int:
         """Count the user's ACTIVE (non-terminal) bots for the max-bots quota (P3e).
 

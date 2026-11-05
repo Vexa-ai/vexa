@@ -488,6 +488,10 @@ async def request_bot(
     # carry a stale session_end → "Meeting ended" before the first word). Injected (redis-backed in
     # prod, None in tests/offline). NOT called on continue_meeting — that reuse KEEPS the stream.
     transcript_stream_purge: "Optional[Callable[[int], Awaitable[None]]]" = None,
+    # Bot limits, shadow only (admission/). `admission_kind` is scheduled when the auto-join sweep
+    # spawned this bot. No observer (BOT_ADMISSION_MODE off) means nothing runs.
+    admission_kind: str = "adhoc",
+    admission_observer: "Optional[Any]" = None,
     # A voice note (#1783): the name its words are attributed to. Read only when the platform is
     # voice_note.
     speaker_name: Optional[str] = None,
@@ -802,6 +806,13 @@ async def request_bot(
         if respawn_of is None and not no_page and meet_respawn.qualifies(platform, authenticated)
         else None
     )
+    # Bot limits, shadow only: logs what the limits would say. It can't raise and can't outlast its
+    # own short timeout, and nothing below reads it. A respawn is the same meeting, not one more bot.
+    if admission_observer is not None and respawn_of is None:
+        await admission_observer.observe(
+            user_id=user_id, kind=admission_kind, cap=max_concurrent,
+            exclude_meeting_id=reused_row["id"] if reused_row is not None else None,
+        )
     if respawn_of is not None:
         # The meeting already exists and is already counted: only this run's admission is new.
         await repo.merge_meeting_data(respawn_of["id"], {"service_authority": authority_record})

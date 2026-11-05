@@ -280,6 +280,7 @@ def build_router(
     redis_grant: "Optional[Callable[[str, int], Awaitable[str]]]" = None,
     calls=None,
     bot_accounts=None,
+    admission_observer=None,
 ) -> APIRouter:
     """The bot-spawn routes over the injected ``MeetingRepo`` + ``RuntimeClient`` + authority ports.
 
@@ -679,6 +680,7 @@ def build_router(
                     webhook_events=webhook_events,
                     transcript_stream_purge=transcript_stream_purge,
                     redis_grant=redis_grant,
+                    admission_observer=admission_observer,
                     speaker_name=speaker_name,
                     call_invocation=prepared_call.invocation if prepared_call else None,
                     call_data=prepared_call.data if prepared_call else None,

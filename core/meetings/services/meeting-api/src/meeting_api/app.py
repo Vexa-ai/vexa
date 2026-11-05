@@ -193,6 +193,9 @@ def create_app(
     # that user's URL and a terminal session removes it. None hands bots the service Redis URL — the
     # in-process harness, and a deployment's explicit REDIS_WORKLOAD_ACL=shared.
     bot_redis: Optional["object"] = None,
+    # Bot limits, shadow only (admission/): the per-spawn observer. None (BOT_ADMISSION_MODE off)
+    # means no observation and no reading route.
+    admission_observer: Optional["object"] = None,
     # The runtime caller credential: a /runtime/callback must carry the runtime's signature over its
     # event, keyed from it (runtime_signature). The production entrypoint always passes it.
     runtime_callback_token: Optional[str] = None,
@@ -383,7 +386,11 @@ def create_app(
         redis_grant=bot_redis.grant if bot_redis is not None else None,
         calls=calls,
         bot_accounts=bot_accounts,
+        admission_observer=admission_observer,
     ))
+    if admission_observer is not None:
+        from .admission.router import build_reading_router
+        app.include_router(build_reading_router(admission_observer, internal_secret=internal_secret or ""))
 
     # --- user-stop: DELETE /bots/{platform}/{native_meeting_id} (lifecycle/stop.py over redis) ---
     from .lifecycle.stop_router import InMemoryCommandPublisher, build_stop_router

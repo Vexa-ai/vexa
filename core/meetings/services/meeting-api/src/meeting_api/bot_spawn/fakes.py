@@ -374,6 +374,17 @@ class InMemoryMeetingRepo:
             row["data"][k] = v
         return dict(row)
 
+    async def count_active_bots_by_kind(self, *, user_id, exclude_meeting_id=None) -> dict:
+        rows = [
+            m for m in self._meetings.values()
+            if m["user_id"] == user_id
+            and m["status"] in _ACTIVE_STATUSES
+            and m["platform"] != "browser_session"
+            and m["id"] != exclude_meeting_id
+        ]
+        scheduled = sum(1 for m in rows if (m.get("data") or {}).get("scheduled_at") is not None)
+        return {"scheduled": scheduled, "adhoc": len(rows) - scheduled}
+
     async def count_active_bots(self, *, user_id, exclude_meeting_id=None) -> int:
         return sum(
             1 for m in self._meetings.values()
