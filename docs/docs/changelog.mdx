@@ -379,6 +379,15 @@ probe), not inferred from planning docs.
 
 ## 0.12.x maintenance fixes
 
+- **Webhooks: the dashboard's Delivery History reads the core ledger (#841).** The Webhooks
+  page's history now reads `GET /user/webhook/deliveries` with the signed-in user's own key, so
+  real deliveries appear within seconds with their named outcome (`delivered | queued |
+  suppressed | blocked | failed`) and status code, next to the Test button's rows (tagged
+  `test`). The per-meeting webhook section reads the same ledger. Rows carry the target host
+  only, never the URL or secret. When the ledger cannot be read the Webhooks page says so instead
+  of showing an empty list (the per-meeting section does not yet). A `queued` row is not updated by
+  a later retry. Module-tested; not yet run on a deployed dashboard.
+
 - **Compose: `BROWSER_IMAGE` pinned to the release tag (#659).** `deploy/compose` now pins
   `BROWSER_IMAGE` to the immutable release tag instead of a moving `:v012` tag, so `make all`
   deploys are reproducible. See [Deployment](/deployment).

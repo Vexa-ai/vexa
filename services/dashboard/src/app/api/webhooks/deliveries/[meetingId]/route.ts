@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { getAuthCookieName } from "@/lib/auth-cookies";
+import { fetchLedgerRows } from "@/lib/webhook-ledger";
 
 /**
  * GET /api/webhooks/deliveries/:meetingId
  *
- * Proxy for meeting-specific webhook delivery attempts, made with the
- * signed-in user's own token. Requests without a user session are refused.
+ * Webhook delivery attempts for one meeting, read from the core's per-user delivery
+ * ledger (GET /user/webhook/deliveries) with the signed-in user's own token and filtered
+ * by `meeting_id` (#841). Requests without a user session are refused.
  */
 export async function GET(
   _request: NextRequest,
@@ -23,32 +25,19 @@ export async function GET(
   }
   const { meetingId } = await params;
 
-  try {
-    const response = await fetch(
-      `${VEXA_API_URL}/admin/webhooks/deliveries/${encodeURIComponent(meetingId)}`,
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Key": userToken,
-        },
-        cache: "no-store",
-      }
-    );
+  const ledger = await fetchLedgerRows(VEXA_API_URL, userToken, 100);
+  const attempts = ledger.rows
+    .filter((row) => String(row.meeting_id ?? "") === String(meetingId))
+    .map((row) => ({
+      attempt: (typeof row.attempt === "number" ? row.attempt : 0) + 1,
+      timestamp: row.created_at || new Date(0).toISOString(),
+      endpoint_url: row.target_host || "",
+      response_status: typeof row.status_code === "number" ? row.status_code : null,
+      response_time_ms: null,
+      success: row.outcome === "delivered",
+      event: row.event_type || "unknown",
+      outcome: row.outcome || "failed",
+    }));
 
-    if (response.status === 404) {
-      return NextResponse.json({ attempts: [] });
-    }
-
-    if (!response.ok) {
-      return NextResponse.json(
-        { error: "Failed to fetch meeting webhook deliveries" },
-        { status: response.status }
-      );
-    }
-
-    const data = await response.json();
-    return NextResponse.json(data);
-  } catch {
-    return NextResponse.json({ attempts: [] });
-  }
+  return NextResponse.json({ attempts, ledger_unavailable: !ledger.ok });
 }

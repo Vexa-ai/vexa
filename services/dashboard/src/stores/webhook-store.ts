@@ -5,7 +5,7 @@ import { withBasePath } from "@/lib/base-path";
 // Webhook Types
 // ==========================================
 
-export type WebhookDeliveryStatus = "delivered" | "retrying" | "failed";
+export type WebhookDeliveryStatus = "delivered" | "retrying" | "failed" | "suppressed";
 
 export interface WebhookDelivery {
   id: string;
@@ -13,6 +13,10 @@ export interface WebhookDelivery {
   meeting_id: string;
   meeting_name: string;
   status: WebhookDeliveryStatus;
+  /** The named outcome from the core ledger (#817 taxonomy); absent on Test rows. */
+  outcome?: string;
+  /** "ledger" for real deliveries read from the core; "test" for the dashboard's Test button. */
+  source?: "ledger" | "test";
   attempts: number;
   max_attempts: number;
   response_status: number | null;
@@ -50,6 +54,8 @@ interface WebhookState {
   stats: WebhookStats;
   isLoading: boolean;
   error: string | null;
+  /** True when the core ledger could not be read; the list then holds Test rows only. */
+  ledgerUnavailable: boolean;
 
   // Meeting-specific deliveries
   meetingDeliveries: WebhookDeliveryAttempt[];
@@ -90,6 +96,7 @@ export const useWebhookStore = create<WebhookState>((set, get) => ({
   stats: { total: 0, delivered: 0, retrying: 0, failed: 0 },
   isLoading: false,
   error: null,
+  ledgerUnavailable: false,
   meetingDeliveries: [],
   isLoadingMeetingDeliveries: false,
   config: null,
@@ -123,6 +130,7 @@ export const useWebhookStore = create<WebhookState>((set, get) => ({
       set({
         deliveries: data.deliveries || [],
         stats: data.stats || { total: 0, delivered: 0, retrying: 0, failed: 0 },
+        ledgerUnavailable: data.ledger_unavailable === true,
         isLoading: false,
       });
     } catch (error) {
