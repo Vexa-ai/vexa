@@ -35,7 +35,7 @@ STATUS_ROUTES = (("GET", "/meetings"), ("GET", "/bots/status"))
 
 #: How often an open socket re-authorizes what it already streams (see `_reauthorize`). A reader the
 #: owner removed stops receiving that meeting within about this long.
-WS_REAUTH_INTERVAL_SEC = 15.0
+WS_REAUTH_INTERVAL_SEC = float(os.getenv("WS_REAUTH_INTERVAL_SEC", "15"))
 #: Consecutive failed authorize hops after which per-meeting subscriptions are dropped (fail closed).
 WS_REAUTH_MAX_FAILURES = 2
 
