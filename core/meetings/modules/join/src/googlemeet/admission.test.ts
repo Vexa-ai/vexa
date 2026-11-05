@@ -48,6 +48,7 @@ const {
   checkForWaitingRoomIndicators,
   checkForGoogleAdmissionIndicators,
   hasConsentPrompt,
+  acknowledgeJoinNotice,
   waitForGoogleMeetingAdmission,
 } = admission;
 import {
@@ -74,7 +75,7 @@ const GRACE_MS: number = (admission as any).CAPTCHA_SOLVE_GRACE_MS ?? 120_000;
 type CaptchaMode = false | 'invisible' | 'live';
 const RECAPTCHA_IFRAME = 'iframe[src*="recaptcha"]';
 
-function mockPage(visible: string[], captcha: CaptchaMode = false, participantLabels: string[] = [], url = 'https://meet.google.com/abc-defg-hij'): any {
+function mockPage(visible: string[], captcha: CaptchaMode = false, participantLabels: string[] = [], url = 'https://meet.google.com/abc-defg-hij', clicks: string[] = []): any {
   const captchaIframes: { visible: boolean; box: { x: number; y: number; width: number; height: number } | null }[] =
     captcha === 'live' ? [{ visible: true, box: { x: 300, y: 120, width: 400, height: 580 } }]
       : captcha === 'invisible' ? [{ visible: false, box: null }]
@@ -96,6 +97,11 @@ function mockPage(visible: string[], captcha: CaptchaMode = false, participantLa
         first: () => ({
           isVisible: async () => visible.includes(sel),
           getAttribute: async () => null,
+          // A click closes every dialog on the page, as "Join now" does on a join notice.
+          click: async () => {
+            clicks.push(sel);
+            for (let i = visible.length - 1; i >= 0; i--) if (/dialog|take notes/.test(visible[i])) visible.splice(i, 1);
+          },
         }),
         count: async () => (visible.includes(sel) ? 1 : 0),
         evaluateAll: async () => participantLabels,
@@ -366,6 +372,58 @@ async function outcomeOf(run: Promise<unknown>, watchdogMs = 10_000): Promise<st
     await checkForGoogleAdmissionIndicators(mockPage([], false, ['John Doe'])),
     true,
   );
+
+  console.log('\n=== Meet join notices: "Join now" (AIM-2719, Vexa-ai/vexa#1904) ===');
+
+  const GEMINI_NOTICE = '[role="dialog"]:has-text("taking notes")';
+  const GEMINI_JOIN = `${GEMINI_NOTICE} :is(button, [role="button"]):has-text("Join now")`;
+  const SHARED_NOTICE = '[role="dialog"]:has-text("will be shared with")';
+  const SHARED_JOIN = `${SHARED_NOTICE} :is(button, [role="button"]):has-text("Join now")`;
+
+  // 12a. "Gemini is taking notes" over the call: click "Join now", then the tiles read as admitted.
+  {
+    const clicks: string[] = [];
+    const page = mockPage([GEMINI_NOTICE, GEMINI_JOIN], false, ['John Doe'], undefined, clicks);
+    await check('Gemini notice + tiles → admitted after "Join now"', await checkForGoogleAdmissionIndicators(page), true);
+    await check('… the click was "Join now" inside the notice', clicks.length === 1 && clicks[0] === GEMINI_JOIN, true, JSON.stringify(clicks));
+  }
+  // 12b. Another notetaker's notice: "Your call audio and video will be shared with Read AI".
+  {
+    const clicks: string[] = [];
+    const page = mockPage([SHARED_NOTICE, SHARED_JOIN], false, ['John Doe'], undefined, clicks);
+    await check('"will be shared with" notice + tiles → admitted after "Join now"', await checkForGoogleAdmissionIndicators(page), true);
+    await check('… the click was "Join now" inside that notice', clicks.length === 1 && clicks[0] === SHARED_JOIN, true, JSON.stringify(clicks));
+  }
+  // 12c. CONTROL: "take notes for me" asks to START notes, has no "Join now", and stays a human's choice.
+  {
+    const clicks: string[] = [];
+    const page = mockPage(['text=take notes for me'], false, ['John Doe'], undefined, clicks);
+    await check('"take notes for me" → admission still suppressed', await checkForGoogleAdmissionIndicators(page), false);
+    await check('… nothing clicked', clicks.length === 0, true, JSON.stringify(clicks));
+  }
+  // 12d. CONTROL: the pre-join screen's own "Join now" is not inside a notice.
+  await check(
+    'pre-join "Join now" outside any notice → not a join notice',
+    await acknowledgeJoinNotice(mockPage(['button:has-text("Join now")'])),
+    false,
+  );
+  // 12e. CONTROL, our deviation from #1904: a "will be shared with" dialog with no "Join now" does not
+  //      hold the bot. Calls with a notetaker in them work today, so it must not start blocking them.
+  {
+    const clicks: string[] = [];
+    const page = mockPage([SHARED_NOTICE], false, ['John Doe'], undefined, clicks);
+    await check('"will be shared with" with no "Join now" → admitted, as today', await checkForGoogleAdmissionIndicators(page), true);
+    await check('… nothing clicked', clicks.length === 0, true, JSON.stringify(clicks));
+  }
+  // 12f. The waiting loop answers the notice too, then admits.
+  {
+    resetEscalation();
+    const clicks: string[] = [];
+    const page = mockPage([GEMINI_NOTICE, GEMINI_JOIN], false, ['John Doe'], undefined, clicks);
+    const got = await outcomeOf(waitForGoogleMeetingAdmission(page, 20_000, {} as any));
+    await check('wait loop with a Gemini notice → admitted', got === 'resolved', true, got);
+    await check('… clicked "Join now" once', clicks.length === 1, true, JSON.stringify(clicks));
+  }
 
   console.log('\n=== Meet refused the knock ("You can\'t join this video call", prod meeting 34824) ===');
 

@@ -7,6 +7,7 @@ import {
   googleWaitingRoomIndicators,
   googleRejectionIndicators,
   googleConsentPromptIndicators,
+  googleJoinNoticeJoinNowSelectors,
   googleKnockEndedIndicators
 } from "./selectors";
 
@@ -237,12 +238,13 @@ export async function checkForGoogleAdmissionIndicators(page: Page): Promise<boo
     return false;
   }
 
-  // 1b. NEGATIVE GUARD: a Gemini "take notes" consent prompt is a pre-admission
-  // consent gate. Meeting controls can be visible behind it, but the bot is not
-  // truly participating until a human accepts/declines — reporting admitted here
-  // yields "status active, 0 transcriptions" (Vexa-ai/vexa#429). Suppress admission.
-  const consentPending = await hasConsentPrompt(page);
-  if (consentPending) {
+  // 1b. A join notice is answered with its "Join now", as any participant does. Any other
+  // Gemini "take notes" prompt is a consent gate: meeting controls can be visible behind it,
+  // but the bot is not truly participating until a human accepts/declines — reporting
+  // admitted here yields "status active, 0 transcriptions" (Vexa-ai/vexa#429). Suppress admission.
+  if (await acknowledgeJoinNotice(page)) {
+    log(`✅ Meet join notice — clicked "Join now" to enter the meeting`);
+  } else if (await hasConsentPrompt(page)) {
     log(`⚠️ Gemini consent prompt visible — suppressing admission (consent pending; bot not truly in the call)`);
     return false;
   }
@@ -348,6 +350,22 @@ export async function hasConsentPrompt(page: Page): Promise<boolean> {
   return false;
 }
 
+// Click the "Join now" inside a Meet join notice, never "Leave". False when no notice has one.
+export async function acknowledgeJoinNotice(page: Page): Promise<boolean> {
+  for (const selector of googleJoinNoticeJoinNowSelectors) {
+    try {
+      const button = page.locator(selector).first();
+      if (await button.isVisible()) {
+        await button.click();
+        return true;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
 // Terminal admission verdicts carry an honest reason: a host denial says so, and an
 // unsolved captcha says THAT — both map to AdmissionError("denial") (PERMANENT, no
 // re-knock), which the JoinDriver records as `awaiting_admission_rejected`.
@@ -408,13 +426,16 @@ export async function waitForGoogleMeetingAdmission(
       return true;
     }
 
+    // A join notice is answered with its "Join now"; admission is re-checked on the next pass.
     // Consent gate: if Google's Gemini "take notes" consent prompt is present,
     // the bot is held behind a human decision (accept/decline) — not admitted.
     // Do NOT auto-click it; consent is the user's choice (Vexa-ai/vexa#429).
     // Summon a human via needs_human_help and keep polling, so admission
     // proceeds once consent is granted (mirrors the reCAPTCHA "stay for human
     // solve" handling).
-    if (await hasConsentPrompt(page)) {
+    if (await acknowledgeJoinNotice(page)) {
+      log(`✅ Meet join notice — clicked "Join now"; re-checking admission`);
+    } else if (await hasConsentPrompt(page)) {
       log("🧑‍⚖️ Gemini consent prompt detected — bot is behind a consent gate (not admitted). Escalating to needs_human_help; not auto-consenting.");
       await triggerEscalation(botConfig, "consent_required");
     }
