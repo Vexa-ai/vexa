@@ -14,7 +14,9 @@ Requests are serialized once and signed over
 responses. Contextual invariants apply across the two schema shapes: an
 admission decision cannot carry `stop_scope`, while a denied continuation must
 carry `stop_scope: "billable_service"`. A response that violates either rule is
-unavailable, never an advisory denial that leaves paid work running.
+unavailable: in enforce mode admission fails closed immediately and active service
+stops at the configured consecutive-unavailable boundary threshold, with any
+successful decision resetting the streak; observe mode records without stopping.
 
 `service-authority.schema.json` is sealed by `contracts.seal.json`. Goldens are
 the wire specification and are validated by `validate.mjs`.

@@ -11,3 +11,7 @@ The module may depend on Python's standard library, `httpx`, the published
 must not know about payment providers, prices, balances, customer records, or
 hosted plan policy. With no authority configured it uses the explicit
 allow-all adapter, preserving the OSS self-hosted behavior.
+
+Unavailable continuation boundaries accumulate a persisted streak; enforce mode
+creates a stop intent only at the configured threshold, and any successful
+decision resets the streak. Observe mode records outages without stopping.

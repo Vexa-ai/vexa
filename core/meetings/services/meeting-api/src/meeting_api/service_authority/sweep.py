@@ -1,8 +1,13 @@
-"""Durable one-minute continuation decisions and teardown application."""
+"""Durable continuation decisions with a consecutive-unavailable threshold.
+
+Carry unavailable_threshold on the decision to preserve the repository port.
+The recorder owns the streak and stop intent; the sweep reads the persisted
+intent before breaking, so below-threshold boundaries keep being processed.
+"""
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import uuid4
@@ -22,6 +27,7 @@ class ServiceAuthoritySweepObservation:
     decisions: int = 0
     teardowns_confirmed: int = 0
     faults: int = 0
+    unavailable_below_threshold: int = 0
 
 
 def _admitted_at(row: dict[str, Any]) -> Optional[datetime]:
@@ -45,8 +51,13 @@ def _admitted_at(row: dict[str, Any]) -> Optional[datetime]:
 def _unavailable_decision(
     request: ServiceAuthorityRequest,
     now: datetime,
+    *,
+    enforced: bool,
 ) -> ServiceAuthorityDecision:
-    digest = hashlib.sha256(request.to_json_bytes()).hexdigest()
+    # Keyed on request_id alone: the request bytes carry active_concurrency, which two sweep
+    # replicas can read differently at one boundary, and a differing decision_id for the same
+    # boundary is refused by the recorder.
+    digest = hashlib.sha256(request.request_id.encode("utf-8")).hexdigest()
     return ServiceAuthorityDecision(
         authority_version=AUTHORITY_VERSION,
         decision_id=f"service-authority:unavailable:{digest}",
@@ -56,6 +67,7 @@ def _unavailable_decision(
         reason="service_authority_unavailable",
         decided_at=now,
         stop_scope="billable_service",
+        enforced=enforced,
     )
 
 
@@ -80,6 +92,7 @@ async def run_service_authority_sweep(
     decisions = 0
     teardowns = 0
     faults = 0
+    unavailable_below_threshold = 0
 
     sessions = await repo.list_service_authority_sessions()
     for row in sessions:
@@ -140,16 +153,31 @@ async def run_service_authority_sweep(
             try:
                 decision = await authority.decide(request)
             except ServiceAuthorityUnavailable:
-                decision = _unavailable_decision(request, observed_at)
+                decision = _unavailable_decision(
+                    request, observed_at, enforced=authority.enforced,
+                )
                 faults += 1
+            decision = replace(
+                decision, unavailable_threshold=authority.unavailable_threshold,
+            )
             recorded = await repo.record_service_authority_decision(
                 meeting_id=row["id"],
                 request=request,
                 decision=decision,
             )
+            persisted = await repo.get_meeting(row["id"])
+            stop_requested = (
+                persisted is not None
+                and persisted.get("data", {}).get("stop_requested") is True
+            )
             if recorded:
                 decisions += 1
-            if decision.enforced and not decision.allow:
+                if (
+                    decision.reason == "service_authority_unavailable"
+                    and not stop_requested
+                ):
+                    unavailable_below_threshold += 1
+            if stop_requested:
                 break
             boundary += timedelta(minutes=1)
 
@@ -190,4 +218,5 @@ async def run_service_authority_sweep(
         decisions=decisions,
         teardowns_confirmed=teardowns,
         faults=faults,
+        unavailable_below_threshold=unavailable_below_threshold,
     )

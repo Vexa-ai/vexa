@@ -48,8 +48,11 @@ class RecordingAuthority:
         admit: ServiceAuthorityDecision | Exception | None = None,
         continuation: ServiceAuthorityDecision | Exception | None = None,
         mode: str = "enforce",
+        unavailable_threshold: int = ServiceAuthorityConfig.unavailable_threshold,
     ) -> None:
         self.mode = mode
+        self.enforced = mode == "enforce"
+        self.unavailable_threshold = unavailable_threshold
         self.admit = admit or _decision(allow=True, action="admit")
         self.continuation = continuation or _decision(
             allow=True,
@@ -532,9 +535,10 @@ async def test_active_boundary_untracked_workload_stays_pending_then_recovers() 
     assert row["data"]["service_authority"]["teardown_confirmed"] is True
 
 
-@pytest.mark.asyncio
-async def test_active_boundary_unavailable_fails_closed_and_stops() -> None:
+async def _active_outage(*, mode="enforce", threshold=ServiceAuthorityConfig.unavailable_threshold):
     authority = RecordingAuthority(
+        mode=mode,
+        unavailable_threshold=threshold,
         continuation=ServiceAuthorityUnavailable("fixture outage"),
     )
     repo, runtime, meeting = await _spawn(authority)
@@ -545,21 +549,166 @@ async def test_active_boundary_unavailable_fails_closed_and_stops() -> None:
         "timestamp": ADMITTED_AT.isoformat(),
         "timestamp_source": "producer",
     }]
+    return authority, repo, runtime, row
 
-    observed = await run_service_authority_sweep(
-        repo,
-        runtime,
-        authority,
-        now=ADMITTED_AT + timedelta(minutes=1, seconds=1),
+
+@pytest.mark.asyncio
+async def test_active_boundary_unavailable_fails_closed_and_stops() -> None:
+    authority, repo, runtime, row = await _active_outage()
+    observations = []
+    for minute in (1, 2, 3):
+        # Fresh workers recover the streak from the row, not process memory.
+        authority = RecordingAuthority(
+            continuation=ServiceAuthorityUnavailable("fixture outage"),
+        )
+        observed = await run_service_authority_sweep(
+            repo, runtime, authority,
+            now=ADMITTED_AT + timedelta(minutes=minute, seconds=1),
+        )
+        observations.append(observed)
+        persisted = row["data"]["service_authority"]
+        assert observed.decisions == 1
+        assert observed.faults == 1
+        assert persisted["unavailable_streak"] == minute
+        assert persisted["reason"] == "service_authority_unavailable"
+        assert persisted["stop_scope"] == "billable_service"
+        assert persisted["enforced"] is True
+        if minute < 3:
+            assert observed.teardowns_confirmed == 0
+            assert not row["data"].get("stop_requested")
+            assert row["status"] == "active"
+            assert runtime.deleted == []
+            assert await repo.list_service_authority_teardowns() == []
+            assert await repo.claim_service_authority_teardown(
+                meeting_id=row["id"], claim_id="below-threshold",
+                claimed_at=ADMITTED_AT + timedelta(minutes=minute), lease_seconds=60,
+            ) is None
+        else:
+            assert observed.teardowns_confirmed == 1
+            assert row["data"]["stop_requested"] is True
+            assert row["status"] == "stopping"
+            assert persisted["teardown_confirmed"] is True
+    assert sum(o.unavailable_below_threshold for o in observations) == 2
+    replay = await run_service_authority_sweep(
+        repo, runtime, authority, now=ADMITTED_AT + timedelta(minutes=5),
     )
+    assert replay.decisions == replay.teardowns_confirmed == 0
+    assert runtime.deleted == [row["bot_container_id"]]
 
-    persisted = row["data"]["service_authority"]
-    assert observed.decisions == 1
+
+@pytest.mark.asyncio
+async def test_observe_unavailable_never_stops_even_past_threshold() -> None:
+    authority, repo, runtime, row = await _active_outage(mode="observe")
+    observed = await run_service_authority_sweep(
+        repo, runtime, authority, now=ADMITTED_AT + timedelta(minutes=4),
+    )
+    assert observed.decisions == observed.unavailable_below_threshold == 4
+    assert observed.teardowns_confirmed == 0
+    assert row["data"]["service_authority"]["enforced"] is False
+    assert row["data"]["service_authority"]["unavailable_streak"] == 4
+    assert not row["data"].get("stop_requested")
+    assert row["status"] == "active"
+    assert runtime.deleted == []
+    assert await repo.list_service_authority_teardowns() == []
+
+
+@pytest.mark.asyncio
+async def test_unavailable_streak_resets_on_successful_decision() -> None:
+    authority, repo, runtime, row = await _active_outage()
+    for minute, result, streak in (
+        (1, ServiceAuthorityUnavailable("outage"), 1),
+        (2, _decision(allow=True, action="continue"), 0),
+        (3, ServiceAuthorityUnavailable("outage"), 1),
+    ):
+        authority.continuation = result
+        observed = await run_service_authority_sweep(
+            repo, runtime, authority, now=ADMITTED_AT + timedelta(minutes=minute),
+        )
+        assert observed.decisions == 1
+        assert row["data"]["service_authority"]["unavailable_streak"] == streak
+        assert not row["data"].get("stop_requested")
+        assert row["status"] == "active"
+    assert runtime.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_unavailable_threshold_one_stops_at_first_boundary() -> None:
+    authority, repo, runtime, row = await _active_outage(threshold=1)
+    observed = await run_service_authority_sweep(
+        repo, runtime, authority, now=ADMITTED_AT + timedelta(minutes=1),
+    )
+    assert observed.decisions == observed.teardowns_confirmed == observed.faults == 1
+    assert observed.unavailable_below_threshold == 0
+    assert row["data"]["service_authority"]["unavailable_streak"] == 1
+    assert row["data"]["service_authority"]["teardown_confirmed"] is True
+    assert row["data"]["stop_requested"] is True
+    assert runtime.deleted == [row["bot_container_id"]]
+
+
+@pytest.mark.asyncio
+async def test_unavailable_catchup_stops_only_at_threshold() -> None:
+    authority, repo, runtime, row = await _active_outage()
+    observed = await run_service_authority_sweep(
+        repo, runtime, authority, now=ADMITTED_AT + timedelta(minutes=5),
+    )
+    assert observed.decisions == observed.faults == 3
+    assert observed.unavailable_below_threshold == 2
     assert observed.teardowns_confirmed == 1
-    assert observed.faults == 1
-    assert persisted["reason"] == "service_authority_unavailable"
-    assert persisted["stop_scope"] == "billable_service"
-    assert persisted["teardown_confirmed"] is True
+    assert row["data"]["service_authority"]["last_boundary_at"] == (
+        ADMITTED_AT + timedelta(minutes=3)
+    ).isoformat()
+    assert runtime.deleted == [row["bot_container_id"]]
+
+
+@pytest.mark.asyncio
+async def test_unavailable_stop_intent_is_listed_and_claimable_only_at_threshold() -> None:
+    authority, repo, runtime, row = await _active_outage()
+    await run_service_authority_sweep(
+        repo, runtime, authority, now=ADMITTED_AT + timedelta(minutes=2),
+    )
+    assert row["data"]["service_authority"]["unavailable_streak"] == 2
+    assert await repo.list_service_authority_teardowns() == []
+    claim_args = dict(
+        meeting_id=row["id"], claim_id="first-worker",
+        claimed_at=ADMITTED_AT + timedelta(minutes=3), lease_seconds=60,
+    )
+    assert await repo.claim_service_authority_teardown(**claim_args) is None
+    identity = row["data"]["service_authority"]["service_identity"]
+    request = ServiceAuthorityRequest.continuation(
+        user_id=row["user_id"], request_id="third-boundary", service_identity=identity,
+        transcription_provider="none", active_concurrency=1,
+        admitted_at=ADMITTED_AT, boundary_at=ADMITTED_AT + timedelta(minutes=3),
+    )
+    decision = replace(
+        _decision(allow=False, action="continue", reason="service_authority_unavailable",
+                  stop_scope="billable_service"),
+        request_id=request.request_id, service_identity=identity,
+        unavailable_threshold=authority.unavailable_threshold,
+    )
+    assert await repo.record_service_authority_decision(
+        meeting_id=row["id"], request=request, decision=decision,
+    )
+    assert len(await repo.list_service_authority_teardowns()) == 1
+    assert await repo.claim_service_authority_teardown(**claim_args) is not None
+    assert await repo.claim_service_authority_teardown(
+        **{**claim_args, "claim_id": "second-worker"},
+    ) is None
+    assert row["data"]["service_authority"]["unavailable_streak"] == 3
+    assert not await repo.record_service_authority_decision(
+        meeting_id=row["id"], request=request, decision=decision,
+    )
+    # A stale worker cannot replace the persisted intent with a later allow.
+    assert not await repo.record_service_authority_decision(
+        meeting_id=row["id"],
+        request=replace(request, boundary_at=request.boundary_at + timedelta(minutes=1)),
+        decision=replace(decision, allow=True, reason="allowed", stop_scope=None),
+    )
+    await run_service_authority_sweep(
+        repo, runtime, authority, now=claim_args["claimed_at"] + timedelta(seconds=61),
+    )
+    assert runtime.deleted == [row["bot_container_id"]]
+    assert await repo.list_service_authority_teardowns() == []
+    assert await repo.claim_service_authority_teardown(**claim_args) is None
 
 
 @pytest.mark.asyncio
@@ -800,3 +949,57 @@ def test_config_is_explicit_and_fail_closed_when_enabled() -> None:
             }),
             "VEXA_SERVICE_AUTHORITY_SECRET": "fixture-secret",
         })
+
+
+def test_config_unavailable_threshold_defaults_and_override() -> None:
+    config = {"url": "https://authority.example.test/check"}
+    env = {"VEXA_SERVICE_AUTHORITY_SECRET": "fixture-secret"}
+    default = build_service_authority_from_env({
+        **env, "VEXA_SERVICE_AUTHORITY_CONFIG": json.dumps(config),
+    })
+    assert default.config.unavailable_threshold == 3
+    configured = build_service_authority_from_env({
+        **env, "VEXA_SERVICE_AUTHORITY_CONFIG": json.dumps({
+            **config, "unavailable_threshold": 2,
+        }),
+    })
+    assert configured.config.unavailable_threshold == 2
+    assert configured.unavailable_threshold == 2
+    assert configured.enforced is True
+
+
+@pytest.mark.parametrize("threshold", [0, "x", True, 1.5, None, -1])
+def test_config_rejects_invalid_unavailable_threshold(threshold) -> None:
+    with pytest.raises(ValueError, match="unavailable_threshold"):
+        build_service_authority_from_env({
+            "VEXA_SERVICE_AUTHORITY_SECRET": "fixture-secret",
+            "VEXA_SERVICE_AUTHORITY_CONFIG": json.dumps({
+                "url": "https://authority.example.test/check",
+                "unavailable_threshold": threshold,
+            }),
+        })
+
+
+@pytest.mark.asyncio
+async def test_http_observe_outage_uses_configured_enforcement_mode() -> None:
+    _, repo, runtime, row = await _active_outage(mode="observe")
+    config = ServiceAuthorityConfig(
+        url="https://authority.example.test/check", secret="fixture-secret",
+        timeout_seconds=2, response_max_age_seconds=30, mode="observe",
+        unavailable_threshold=1,
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("fixture outage", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        observation = await run_service_authority_sweep(
+            repo, runtime, HttpServiceAuthority(config, client=client),
+            now=ADMITTED_AT + timedelta(minutes=1),
+        )
+    assert observation.decisions == observation.unavailable_below_threshold == 1
+    assert row["data"]["service_authority"]["enforced"] is False
+    assert row["data"]["service_authority"]["reason"] == "service_authority_unavailable"
+    assert not row["data"].get("stop_requested")
+    assert row["status"] == "active"
+    assert runtime.deleted == []
