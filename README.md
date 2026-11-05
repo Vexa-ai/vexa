@@ -8,7 +8,7 @@
 
 A bot joins your Google Meet, Microsoft Teams, and Zoom calls and streams speaker-attributed
 transcripts in real time — through our API or one *you* host — then feeds sandboxed agents that build
-a Markdown knowledge base your team owns. Apache-2.0, air-gap-ready. (Jitsi: join + capture
+a Markdown knowledge base your team owns. Apache-2.0, runs self-hosted with no egress. (Jitsi: join + capture
 offline-proven, live validation pending — [#883](https://github.com/Vexa-ai/vexa/issues/883).)
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
@@ -27,6 +27,11 @@ Sandboxed knowledge agents are self-hosted only — [self-host Vexa](#-quickstar
 · **[Get an API key](https://vexa.ai/start?utm_source=github&utm_medium=readme)**
 · **[Talk to the founder](https://cal.com/dmitrygrankin/web)**
 
+**For regulated firms:** the firm keeps its conversations. Vexa runs inside your own infrastructure,
+on the model you choose. It is open source and
+[being contributed to FINOS](https://github.com/finos/technical-oversight-committee/pull/298), so the
+code stays if the vendor goes. [Security & compliance](https://docs.vexa.ai/security-compliance)
+
 ## Why Vexa
 
 Every meeting-AI tool you can buy sends your conversations to *their* cloud and rents you
@@ -44,8 +49,8 @@ No one else has all three:
    portable, diffable, greppable. Knowledge as code.
 
 3. **Agents work it, safely.** Sandboxed coding agents read and write that repo like
-   developers — isolated ephemeral containers, no egress, thousands in parallel, on Docker
-   or your Kubernetes.
+   developers — isolated ephemeral containers scoped to the workspaces they're granted, thousands
+   in parallel, on Docker or your Kubernetes.
 
 > **Only here for the transcription API?** It's a complete standalone product — send a bot,
 > read the stream, ignore the agent lane entirely.
@@ -75,8 +80,8 @@ Linux (Ubuntu 24.04) is the production target; a Mac with Docker Desktop works f
 evaluation — everything runs in containers either way.
 
 **Prerequisites** — `make`, **Docker engine ≥ v26** (`make all` checks), and transcription: a free token at
-[vexa.ai/account](https://vexa.ai/account), or self-host the (GPU) transcription unit for a fully
-air-gapped setup. By default `POST /bots` **requires** STT and answers **503** when it is missing
+[vexa.ai/account](https://vexa.ai/account), or self-host the (GPU) transcription unit for a setup
+with no egress. By default `POST /bots` **requires** STT and answers **503** when it is missing
 (`make all` warns when the credentials block in `.env` is empty). Capture-only is an explicit opt-out:
 `{"transcribe_enabled": false}` on the spawn (or set `TRANSCRIBE_ENABLED=false` for the deployment).
 
@@ -156,9 +161,10 @@ A CLI coding agent is just a process on Linux. The **runtime** makes that a mult
 sandboxed execution layer safe to point at real business data — the same engine that already
 spawns Vexa's meeting bots in production.
 
-- **Isolated.** Every dispatch gets its own container: no egress except brokered tools, and
-  only its granted workspaces exist in its filesystem — enforced by the substrate, not by the
-  agent. Agents never run in the control plane.
+- **Isolated.** Every dispatch gets its own container, and only its granted workspaces exist in
+  its filesystem — enforced by the substrate, not by the agent. Agents never run in the control
+  plane. Network egress is yours to restrict: the shipped Compose and Helm defaults don't
+  firewall agent containers.
 - **Ephemeral.** A container lives while it works and is reaped on idle; continuity is a
   session file in the workspace. Sub-second starts, thousands in parallel.
 - **Orchestration-agnostic.** One `runtime.v1` lifecycle, pluggable substrate — the same
@@ -321,7 +327,8 @@ container, bound to loopback:
   (faster-whisper, OpenAI-compatible) from `deploy/transcription` on any GPU box and point `.env` at it.
   Or use a free hosted token at [vexa.ai/account](https://vexa.ai/account) while testing.
 - **Bring your own inference** — point the agent at your own LLM endpoint; no inference leaves the network.
-- **Air-gapped** — everything in-VPC, **zero egress** — the posture the regulated verticals require.
+- **No egress** — with the transcription unit and your LLM endpoint self-hosted, the audio path never
+  calls out. Not a certified air gap: [Security & compliance](https://docs.vexa.ai/security-compliance#deployment-posture).
 - **Targets** — `make all` (pulls) · `make dev` (builds from this checkout) · `make lite` ·
   `make probe` (full-journey smoke) · `make down` · `make help`. Expose the Terminal via a TLS reverse proxy for
   production; full guide in the [docs](https://docs.vexa.ai).
@@ -362,7 +369,7 @@ honestly, trade-offs and all, in [How Vexa compares](https://docs.vexa.ai/compar
 ## 🏦 For regulated enterprises
 
 For banks, healthcare, government, and anyone in a regulated industry, the meeting-AI question
-isn't "which cloud" — it's "how do we get this **without** a cloud." Vexa is **air-gapped meeting
+isn't "which cloud" — it's "how do we get this **without** a cloud." Vexa is **self-hosted meeting
 intelligence** — the sovereign alternative to Microsoft Copilot — built for exactly that buyer.
 
 You don't compete with a notes app here — you replace **Microsoft 365 Copilot** and **Zoom AI
@@ -370,17 +377,17 @@ Companion** on the axes they structurally can't move:
 
 | | **Microsoft 365 Copilot / Zoom AI Companion** | **Vexa** |
 |---|---|---|
-| Deployment | Vendor cloud only | Your cloud, your VPC, or **fully air-gapped** |
+| Deployment | Vendor cloud only | Your cloud or your VPC, with **no egress** |
 | Models | Vendor-hosted, fixed | **Bring your own** — local or hosted LLMs |
 | Commercial model | Rented, per-seat subscription | **Owned** — Apache-2.0, no per-seat tax |
 | Adaptable | Generic; no custom vocabulary; vendor roadmap queue | **Your engineers extend it directly** — domain vocabulary, underserved languages, custom workflows |
 | Meeting platforms | Teams-only / Zoom-only | **Meet + Teams + Zoom** (+ Jitsi, live validation pending) |
-| Data control | Transits the vendor's cloud | **Never leaves your perimeter** |
+| Data control | Transits the vendor's cloud | **Stays in your perimeter** with self-hosted STT and your own LLM |
 | Extensibility | Closed black box | Open source, API-first |
 
 What that means in practice:
 
-- **Air-gapped** — fully offline, your infrastructure, your models. Nothing phones home.
+- **No egress** — your infrastructure, your models. Not a certified air gap.
 - **Adaptive** — your engineers implement requirements directly: domain vocabulary, underserved
   languages, custom workflows. No vendor feature queue.
 - **Owned, not rented** — deploy once, extend without asking permission. No per-seat tax.
@@ -399,7 +406,7 @@ What that means in practice:
 
 Full review page: [Security & compliance](https://docs.vexa.ai/security-compliance) in the docs.
 
-> Regulated banks and Fortune-500s run Vexa fully air-gapped on their own OpenShift and local LLMs today.
+> A bank in Europe runs Vexa self-hosted.
 
 ---
 
@@ -448,7 +455,7 @@ Honest state of the **0.12** line (mirrors the [status page](https://docs.vexa.a
 |---|---|
 | Bot joins **Meet / Teams / Zoom** | ✅ Production |
 | Bot joins **Jitsi Meet** (meet.jit.si + self-hosted) | 🆕 Built & offline-proven; live validation pending |
-| Real-time transcription (Whisper) + speaker attribution | ✅ Production — attribution is not guaranteed: the binder publishes an empty speaker rather than guessing (~4–7% of rows under heavy crosstalk) |
+| Real-time transcription (Whisper) + speaker attribution | ✅ Production — attribution is not guaranteed: the binder publishes an empty speaker rather than guessing |
 | Redis transcript streaming | ✅ Production |
 | Recordings to your own object storage (S3; versitygw in Lite and Compose) | ✅ Available |
 | **Runtime — Docker backend** (container per workload) | ✅ Production |
@@ -481,7 +488,7 @@ Honest state of the **0.12** line (mirrors the [status page](https://docs.vexa.a
 - **Issues & PRs** — welcome. See [`SECURITY.md`](SECURITY.md) to report vulnerabilities.
 - **Obsidian**: [obsidian-vexa-bridge](https://github.com/rennf93/obsidian-vexa-bridge) turns completed meetings into Obsidian notes or a knowledge graph, a third-party adapter; see [the docs](https://docs.vexa.ai/obsidian).
 
-Vexa is built in the open. If you self-host it, extend it, or run it air-gapped somewhere interesting,
+Vexa is built in the open. If you self-host it, extend it, or run it somewhere interesting,
 we'd love to hear about it.
 
 ---
