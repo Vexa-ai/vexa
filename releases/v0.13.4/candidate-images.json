@@ -1,0 +1,247 @@
+{
+  "schema_version": 4,
+  "release": "v0.13.4",
+  "stable_tag": "v0.13.4",
+  "candidate_tag": "v0.13.4-rc.2",
+  "build_source": "febe2c83ecb60c82166720d425ae46f38e975529",
+  "build_run": "https://github.com/Vexa-ai/vexa/actions/runs/41195993176",
+  "validation_source": "febe2c83ecb60c82166720d425ae46f38e975529",
+  "validation_run": "https://github.com/Vexa-ai/vexa/actions/runs/41195993176",
+  "images": {
+    "vexaai/vexa-admin-api": {
+      "class": "prod_deployed",
+      "digest": "sha256:3f14de81fa5e4c96bca8726f77f0dc1dadf6b217ea49d04e2131711dca27f955",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:d18e051ba4a688c23d56265eb6b7929baacef0cc403f077c94efc27af6a74676",
+          "config_digest": "sha256:bec03b29938b469c69390750978e2760d55e704bf336e44f4ac99a9db04ba345"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:e8b006c5fddebd5ae229ae7bfd671438f3aaede639157d454dcf0bd8f7cffe94",
+          "config_digest": "sha256:c56149d4cebd66d10946382e6778a77e4fc5bcc814b330ce4c02f588364b0f7d"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate build run 40768159179 at b96617fb (release-images workflow_dispatch v0.13.4-rc.1); registry identities read with docker buildx imagetools inspect after the run completed"
+    },
+    "vexaai/vexa-agent-api": {
+      "class": "oss_only",
+      "digest": "sha256:5c28f33c7c11f742bc767b68269dd664092303db4e93a7c7f843c094d7024e9b",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:109ab8ae866cc3d2c4947ef7cf894972bb91e804f562b89424e721be890c7009",
+          "config_digest": "sha256:970900ba989e5c784b698a014d7f2b9a62160442258bd7af43aa6005aec1056a"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:9a6b02208b34be1251790ddecc62f54ca73319f03f616f46c721d5ae7a7994d5",
+          "config_digest": "sha256:c0a0d9a838a90d43d2a53c1b50d2c2a856566172a20aea795a37352530e62dbd"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate build run 40768159179 at b96617fb (release-images workflow_dispatch v0.13.4-rc.1); registry identities read with docker buildx imagetools inspect after the run completed"
+    },
+    "vexaai/vexa-agent-worker": {
+      "class": "oss_only",
+      "digest": "sha256:c9cade1be12b67a2b38e03aef531ef83005e446964ef56dda6830e5b15969457",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:35cd6a677b651b0b9aec6a387b091bcebd11aed3dfded45fc34e18c9f235365a",
+          "config_digest": "sha256:e9fdd827feeca34bad65c6ebc629bfb6156a3723cf22c3adb27e004881cc20a0"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:839319fa33962d03f274fc0780b2072caddf8e951cb5ae78e5f1d9d5f19797f0",
+          "config_digest": "sha256:2b0871e7e8bc8ef9dcae77f7c76cb65eabba640492f98a2712ed80a25513dc8f"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate build run 40768159179 at b96617fb (release-images workflow_dispatch v0.13.4-rc.1); registry identities read with docker buildx imagetools inspect after the run completed"
+    },
+    "vexaai/vexa-bot": {
+      "class": "prod_deployed",
+      "digest": "sha256:7867250a5cc50d34fc745572cd3610e2b620ef2c9ecc7b4df59585abad9dc7b7",
+      "platforms": [
+        "linux/amd64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:adf6e903075354a3332cb8a7cc54f7fb5608bd93b9ea9f9af025e8c088eb80dc",
+          "config_digest": "sha256:2d05955d2c29331e40b765f7ca9d9e014021e4869694dd0c95ff58455b31dff9"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate build run 40768159179 at b96617fb (release-images workflow_dispatch v0.13.4-rc.1); registry identities read with docker buildx imagetools inspect after the run completed"
+    },
+    "vexaai/vexa-credential-broker": {
+      "class": "oss_only",
+      "digest": "sha256:1dda7f74423ba5f60dfe6f60a506e138d47959cfb5ff01432030980e703b0702",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:918df3cd9d45b084a61158e91b3fdf85a17d6726e6921e776d6ede6bc16af0f2",
+          "config_digest": "sha256:b23c7519ffb200bbd4f6f374510679a21b4cd2f4076921281d382b6a12cdab0b"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:dff93f31e3b9c24c2f321b952a1c5f75e55ab6f73d5d01aeae103063c3867813",
+          "config_digest": "sha256:15ba3d48e64c927d642dcf83c893cb89efc71d84b8a3b699a437aefbfae54a11"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate build run 40768159179 at b96617fb (release-images workflow_dispatch v0.13.4-rc.1); registry identities read with docker buildx imagetools inspect after the run completed"
+    },
+    "vexaai/vexa-flows": {
+      "class": "oss_only",
+      "digest": "sha256:4c4b43576fb5ebc52576cd8fcf1bdcfc74095e4391afe1d47db5d257bb56e06d",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:6761257f2f2c3d19faf0fc9c971fcaa967b5123280639fe5d8747c318330611a",
+          "config_digest": "sha256:476b1893db2171a59acb173313a0b0fbd61bb99d7494ebf8fa1074ec70183815"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:2d4f7bc9efdb5d6c078a4853f2349394de35fabf243ba7a9b036e7e96454f4f2",
+          "config_digest": "sha256:2347d50b976ed71928a467900f014de8813662c17eb82bcf146ecbabb9542aa8"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate build run 40768159179 at b96617fb (release-images workflow_dispatch v0.13.4-rc.1); registry identities read with docker buildx imagetools inspect after the run completed"
+    },
+    "vexaai/vexa-gateway": {
+      "class": "prod_deployed",
+      "digest": "sha256:c10e23db806003362d2eaee756045e7809a0d2528497c50266032e8bee188c03",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:b96818a54208fba39a109a5f1d0e12ec3d6015ca18beae7b03ecbbbded730a95",
+          "config_digest": "sha256:8927631aab06c9dc2fbdb84a3a4926842f9152dda7f3b82a9c9a6ff31a7aeae2"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:bc6f8dfd10fb9555b9aab53f740d30619fcd7c2eae570fb86c2dc026a78581a2",
+          "config_digest": "sha256:0d824fd1449f5fac02bee81fc0ea329d6c3e66e2311c87b94903250c306b77b6"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate build run 40768159179 at b96617fb (release-images workflow_dispatch v0.13.4-rc.1); registry identities read with docker buildx imagetools inspect after the run completed"
+    },
+    "vexaai/vexa-lite": {
+      "class": "oss_only",
+      "digest": "sha256:7bbcd7fbc0906a5662620205ce6a53c2757b9932d10a71b4022a86aedbe48041",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:8952917f95347e2029977c77813ba4bff6366c0bec151b531ec94a00818521be",
+          "config_digest": "sha256:6e88c0aa5603bd4d6c0f6ac6b7220c3c38c876e0432f07416ca07a99283f1885"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:d6dea9a8b0ceec761122502a61722ae23b73deed8eb1b26d1c9774d7ba002a28",
+          "config_digest": "sha256:7963df894cfdd2d78ae9da272a487118c58f31ac179adc004d99248c9a9b48df"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate build run 40768159179 at b96617fb (release-images workflow_dispatch v0.13.4-rc.1); registry identities read with docker buildx imagetools inspect after the run completed"
+    },
+    "vexaai/vexa-mcp": {
+      "class": "oss_only",
+      "digest": "sha256:52d41abf084d141c184f3ebe2da40151267588a13255fee02d45c8e3b32e0a80",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:d78030ab854ae0b14be36c4eada1c101e27dc3873d6b6e6d590343e6121cb935",
+          "config_digest": "sha256:7cec97a9212561546b9674eb489ffaf0bf755ece6603694a7360632db2d6967f"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:f4f68511b40a83cf85cfc0153fb4116cee6bf02db915f58b94ae4c360c8c4aee",
+          "config_digest": "sha256:7230f8e0a71e5d8e6d4dd004f9ef783b1478e8be309a7d493769aa07be10f3c2"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate build run 40768159179 at b96617fb (release-images workflow_dispatch v0.13.4-rc.1); registry identities read with docker buildx imagetools inspect after the run completed"
+    },
+    "vexaai/vexa-meeting-api": {
+      "class": "prod_deployed",
+      "digest": "sha256:bf6262e0b8f2f629b8ef76082d946cc5940abf078b5fb0bd3451a495e0c47599",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:4efa7f3f59a0ff542e97eec54cf8affce370c2dc383950a7f870e0e94e7be6c6",
+          "config_digest": "sha256:0527bf1f343f833d677c693ba1e2c2f1192e5a7bc2e97ef1f32dcaa4a65731ac"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:67e486a8312d92f3fa231d7c81f6f0550c812d56f8a0d659294cc9358527de57",
+          "config_digest": "sha256:db910d22bb98b85969200648ca84beab9ea1f07ffad84d5afdf727a9da3b32db"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate build run 40768159179 at b96617fb (release-images workflow_dispatch v0.13.4-rc.1); registry identities read with docker buildx imagetools inspect after the run completed"
+    },
+    "vexaai/vexa-runtime": {
+      "class": "prod_deployed",
+      "digest": "sha256:1781d210ad947c88921c8adbf5e1a40e1ffc4b1487fe3baf827ca7f9b908a358",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:7f0c4d9190c9509f1802495cd1c5c86af5a89d5b7d6777da5cee40231a62cd12",
+          "config_digest": "sha256:b218476ed3f1def6a5bc73905332ade54d492fcd95fafe4dc3334d7a04993dfb"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:b1d4dd7f0af3a78630ff96784d2d84fb27dbd857096d6c9ddfb00234427cca68",
+          "config_digest": "sha256:5eeb8acc87cbcafb6451a77e5248a37774d1bb10a12d3acf16533d1e5f3aaa5c"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate build run 40768159179 at b96617fb (release-images workflow_dispatch v0.13.4-rc.1); registry identities read with docker buildx imagetools inspect after the run completed"
+    },
+    "vexaai/vexa-terminal": {
+      "class": "oss_only",
+      "digest": "sha256:50d5c1a5f91a5e12e878d46b18adc9dd4ba90d0cd075b06a95276e958e40c0d6",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "platform_manifests": {
+        "linux/amd64": {
+          "manifest_digest": "sha256:7cd4a7220d010e6e3e87d90a86ffd58a3384077dd5a54a4412fa900ff04d6774",
+          "config_digest": "sha256:80da7f664afc253abaf75c155df38abe7de8d2112bf7339ae7f137474672c24f"
+        },
+        "linux/arm64": {
+          "manifest_digest": "sha256:2d1220340b826a5dfe1b3195bcb529fe0fa78dca850e047789ca9061e4d35d37",
+          "config_digest": "sha256:2d832b672cf1d06c567e77a157d16bd7bfe641bae7325851942d2033df150f50"
+        }
+      },
+      "attestations": true,
+      "evidence": "candidate build run 40768159179 at b96617fb (release-images workflow_dispatch v0.13.4-rc.1); registry identities read with docker buildx imagetools inspect after the run completed"
+    }
+  }
+}
