@@ -143,7 +143,7 @@ See [Deployment](/deployment) and [Configuration](/configuration).
 | Symptom | Cause |
 |---|---|
 | First HTTP node fails immediately | The template's stale `gateway.dev.vexa.ai` base URL. Swap it for `api.cloud.vexa.ai`. |
-| `503` from `POST /bots` | No transcription backend configured. Default spawns require STT — see [Configuration](/configuration#transcription-stt). |
+| `503` from `POST /bots` | No transcription backend configured (self-hosted), or the endpoint saved in Settings answers unauthorized / exhausted / not found — the detail says which; see [Troubleshooting](/troubleshooting#post-bots-returns-503-transcription-required). |
 | `422` from `POST /bots` | `meeting_url` isn't a recognizable meeting link, or `platform` and `meeting_url` disagree. |
 | Transcript empty | The bot may still be in the lobby, or the meeting hasn't produced audio yet. Check bot status before fetching. |
 | Only the oldest calendar event ever fires | The Google Calendar trigger behaviour noted above. Narrow the trigger or use Vexa's calendar sync instead. |

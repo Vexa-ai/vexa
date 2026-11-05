@@ -141,10 +141,16 @@ That is intentional (refuse loud). Fixes:
 If STT *is* set but the live probe says the backend is wrong, the 503 detail names the probe
 reason instead — fix the URL/token and re-probe (`GET /health?force=1`).
 
+If the detail starts `your saved transcription endpoint is not working: …`, the endpoint saved in
+Settings (`PUT /user/transcription`) rejected its token, cannot pay, has a wrong path or resolves to
+an internal address. Fix it in Settings — a re-save tests it at once; otherwise it re-tests by itself
+within 60s. `/health?force=1` re-probes the deployment's backend only, not a personal endpoint.
+
 ## Bot joins but there's no transcript
 
 The bot is capturing audio, but transcription isn't configured — or the bot was spawned
-**capture-only**, which looks identical from the outside.
+**capture-only**, which looks identical from the outside. (An endpoint saved in Settings that answers
+401/402/404 can no longer cause this: it is refused at spawn with a `503`, above.)
 
 - **First, check whether the bot was spawned capture-only.** `GET /bots` (or `GET /meetings/{id}`)
   reports the resolved flag: `data.transcribe_enabled: false` means the bot was never asked to

@@ -47,8 +47,9 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/transcription/languages"
 - **`default`** is the deployment's default setting (see below). It is only a default, so it never
   shortens `languages`.
 
-The list follows your own transcription backend when you set one in Settings. Vexa never calls your
-own endpoint to ask; it uses the model you configured for it. The list is the model's: the
+The list follows your own transcription backend when you set one in Settings. Vexa never asks your
+own endpoint which model it serves; it uses the model you configured for it (the only calls Vexa
+itself makes to it are the check on save and before each spawn). The list is the model's: the
 English-only Whisper models (`*.en`, distil-whisper) list only English, `large-v3` and its turbo variant
 list 100 codes including Cantonese (`yue`), and earlier Whisper models, OpenAI's `whisper-1` among them,
 list 99. A key with scope `bot` or `tx` can read it.

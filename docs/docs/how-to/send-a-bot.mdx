@@ -143,7 +143,8 @@ the segment boundary. A window whose language could not be determined has `langu
 ### Capture-only (no STT)
 
 Default spawns **require** a configured transcription backend. Without `TRANSCRIPTION_SERVICE_URL`
-/ `TRANSCRIPTION_SERVICE_TOKEN`, `POST /bots` answers **503** (refuse loud) rather than joining a
+/ `TRANSCRIPTION_SERVICE_TOKEN` — or when the transcription endpoint saved in Settings answers
+unauthorized, exhausted or not found — `POST /bots` answers **503** (refuse loud) rather than joining a
 bot that can never produce text. For a deliberate no-STT meeting, opt out on the spawn:
 
 ```bash
