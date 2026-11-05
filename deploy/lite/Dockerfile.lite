@@ -119,11 +119,11 @@ RUN valkey-server --version && command -v valkey-cli
 
 # uv — the per-service venvs resolve from each service's pyproject + uv.lock. The release binary,
 # checked against the SHA-256 pinned here before it is unpacked (no remote script runs).
-ARG UV_VERSION=0.11.33
+ARG UV_VERSION=0.13.4
 RUN set -eu; \
     case "$(dpkg --print-architecture)" in \
-      amd64) triple=x86_64-unknown-linux-gnu; sum=aa9fca823c03289fb6e3460b3dc864f3ea895cafaf9b99247701a67b17d1b018;; \
-      arm64) triple=aarch64-unknown-linux-gnu; sum=9ed88a9a42de3102f9704d021ab186fdf8a69a7ad9a1d3f3486ac6b1e55d6141;; \
+      amd64) triple=x86_64-unknown-linux-gnu; sum=2b428396f12572d4429cf210ca234dd599a33b3af0958a4d5ed569d63e3f344f;; \
+      arm64) triple=aarch64-unknown-linux-gnu; sum=1ae72b4718729e2ccc4f1ae2c6d1e531ca8467800e0546e9130b3886023a60ab;; \
       *) echo "no pinned uv for $(dpkg --print-architecture)" >&2; exit 1;; \
     esac; \
     curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${triple}.tar.gz" -o /tmp/uv.tar.gz; \

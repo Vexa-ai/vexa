@@ -23,7 +23,7 @@ RUN set -eux; \
 
 # uv via PyPI (ghcr.io is unreachable in this build env) — pinned for deterministic resolves, at a
 # release past the advisories fixed in 0.11.15.
-RUN pip install --no-cache-dir uv==0.11.33
+RUN pip install --no-cache-dir uv==0.13.4
 
 ENV UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
