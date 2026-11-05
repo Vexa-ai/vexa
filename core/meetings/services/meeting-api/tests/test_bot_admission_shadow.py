@@ -16,8 +16,11 @@ from fastapi.testclient import TestClient
 from meeting_api.admission import Interval, Prediction, admission_mode, build_observer, decide, predict
 from meeting_api.admission.predict import peak_by_hour, raised_floor, with_headroom
 from meeting_api.admission.router import build_reading_router
-from meeting_api.admission.shadow import COMPUTE_KEY, COUNTS_KEY, OUTSIDE_KEY, PREDICTION_KEY, FailOnce, ShadowObserver
-from meeting_api.admission.sweep import compute, daily_tick, history_page_stmt, interval_of
+from meeting_api.admission.shadow import (
+    BOOKED_KEY, COMPUTE_KEY, COUNTS_KEY, OUTSIDE_KEY, PREDICTION_KEY, FailOnce, ShadowObserver, booked_peaks,
+)
+from meeting_api.admission.sweep import MeetingHistory, compute, daily_tick, history_slice_stmt, interval_of
+from meeting_api.bot_spawn.adapters import active_by_kind_stmt
 from meeting_api.bot_spawn import MaxBotsExceeded, request_bot
 from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
 
@@ -30,12 +33,8 @@ def at(day=0, hour=0, minute=0):
     return MON + timedelta(days=day, hours=hour, minutes=minute)
 
 
-def booked(start, end):
-    return Interval(start=start, end=end, booked=True)
-
-
 def adhoc(start, end):
-    return Interval(start=start, end=end, booked=False)
+    return Interval(start=start, end=end)
 
 
 class FakeRedis:
@@ -51,6 +50,9 @@ class FakeRedis:
         self.kv[key] = value
         self.ttl[key] = ex
         return True
+
+    async def mget(self, keys):
+        return [self.kv.get(key) for key in keys]
 
     async def delete(self, key):
         self.kv.pop(key, None)
@@ -128,6 +130,13 @@ def test_raised_floor_holds_only_above_the_plan_default():
     assert raised_floor(None) == 0 and raised_floor(5) == 0 and raised_floor(6) == 6
 
 
+def test_a_cap_at_the_plan_default_is_never_a_floor():
+    # 3,887 accounts sit at 5 (founder's count): none of them may become a floor at 5.
+    decision = decide(Prediction(), kind="adhoc", active=2, cap=5, at=at())
+    assert (decision.limit, decision.would, decision.within_prediction) == (2, "queue_over_limit", False)
+    assert decide(Prediction(), kind="scheduled", active=2, cap=6, at=at()).limit == 6
+
+
 def test_floor_does_not_cap_a_higher_peak():
     crowd = [adhoc(at(hour=1), at(hour=2)) for _ in range(10)]
     assert predict(crowd, cap=6).adhoc.limit == 15
@@ -151,15 +160,17 @@ def test_week_wraps_from_sunday_to_monday():
     assert peak_by_hour([adhoc(at(day=6, hour=23, minute=30), at(day=7, hour=0, minute=30))]) == {167: 1, 0: 1}
 
 
-def test_booked_and_adhoc_are_separate():
-    p = predict(
-        [booked(at(hour=9), at(hour=10)) for _ in range(4)] + [adhoc(at(hour=9), at(hour=10))],
-    )
-    assert p.scheduled.limit == 6 and p.adhoc.limit == 2
+def test_adhoc_comes_from_the_total_and_scheduled_only_from_booked_peaks():
+    p = predict([adhoc(at(hour=9), at(hour=10)) for _ in range(4)])
+    assert p.adhoc.limit == 6 and p.scheduled.limit == 2  # history alone teaches scheduled nothing
+    p = predict([], booked_peaks={9: 4})
+    assert p.scheduled.limit == 6 and p.scheduled.at(9) == 6 and p.scheduled.at(10) == 2
+    assert p.adhoc.limit == 2
+    assert predict([], booked_peaks={9: 1}, cap=9).scheduled.limit == 9
 
 
 def test_prediction_survives_json():
-    p = predict([booked(at(hour=9), at(hour=10)) for _ in range(4)])
+    p = predict([adhoc(at(hour=9), at(hour=10)) for _ in range(4)], booked_peaks={3: 2})
     assert Prediction.from_json(json.loads(json.dumps(p.to_json()))) == p
 
 
@@ -298,6 +309,53 @@ async def test_active_is_counted_per_kind():
     }
 
 
+# ── the forward count of booked bots ──────────────────────────────────────────────────────────────
+
+async def test_a_booked_spawn_records_bots_at_once_with_a_15_day_ttl():
+    repo, redis = InMemoryMeetingRepo(), FakeRedis()
+    observer = ShadowObserver(repo, redis)
+    key = BOOKED_KEY.format(USER, 10)
+    repo.count_active_bots_by_kind = _active_booked(3)
+    await observer.observe(user_id=USER, kind="scheduled", cap=None, now=at(hour=10))
+    assert redis.kv[key] == "4" and redis.ttl[key] == 15 * 24 * 3600
+
+    # A lower count keeps the peak and doesn't extend its life.
+    redis.ttl[key] = 99
+    repo.count_active_bots_by_kind = _active_booked(0)
+    await observer.observe(user_id=USER, kind="scheduled", cap=None, now=at(hour=10))
+    assert redis.kv[key] == "4" and redis.ttl[key] == 99
+    assert await booked_peaks(redis, USER) == {10: 4}
+
+
+async def test_an_adhoc_spawn_records_no_booked_peak():
+    repo, redis = InMemoryMeetingRepo(), FakeRedis()
+    await ShadowObserver(repo, redis).observe(user_id=USER, kind="adhoc", cap=None, now=at(hour=10))
+    assert BOOKED_KEY.format(USER, 10) not in redis.kv
+
+
+async def test_the_daily_job_takes_the_booked_peak_and_scheduled_starts_at_the_default():
+    redis = FakeRedis()
+    redis.kv[BOOKED_KEY.format(USER, 9)] = "4"
+    page = [(USER, adhoc(at(hour=1), at(hour=2))), (8, adhoc(at(hour=1), at(hour=2)))]
+    await compute(FakeHistory([page]), redis, now=at(day=3))
+    assert Prediction.from_json(json.loads(redis.kv[PREDICTION_KEY.format(USER)])).scheduled.limit == 6
+    assert Prediction.from_json(json.loads(redis.kv[PREDICTION_KEY.format(8)])).scheduled.limit == 2
+
+
+def _active_booked(n):
+    async def count(**_):
+        return {"scheduled": n, "adhoc": 0}
+    return count
+
+
+def test_counting_active_by_kind_reads_data_only_on_that_accounts_active_rows():
+    sql = _sql(active_by_kind_stmt(user_id=USER, exclude_meeting_id=None))
+    where = sql.split("WHERE", 1)[1].split("GROUP BY", 1)[0]
+    assert f"meetings.user_id = {USER}" in where
+    assert "meetings.status IN ('requested', 'joining', 'awaiting_admission', 'active')" in where
+    assert "meetings.data" not in where
+
+
 # ── once per 7 days ───────────────────────────────────────────────────────────────────────────────
 
 async def test_outside_prediction_is_logged_once_per_seven_days(capsys):
@@ -360,7 +418,7 @@ class FakeHistory:
 
 
 async def test_compute_stores_each_account_with_a_ttl_and_the_reading_reports_it():
-    page = [(USER, adhoc(at(hour=9), at(hour=10))) for _ in range(4)] + [(8, booked(at(hour=1), at(hour=2)))]
+    page = [(USER, adhoc(at(hour=9), at(hour=10))) for _ in range(4)] + [(8, adhoc(at(hour=1), at(hour=2)))]
     redis = FakeRedis()
     summary = await compute(FakeHistory([page]), redis, now=at(day=3))
 
@@ -406,28 +464,43 @@ def _sql(stmt):
     return str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
 
 
-def test_the_page_reads_only_timestamps_user_and_booked():
-    sql = _sql(history_page_stmt(
-        created_from=at(day=-28), created_until=at(), started_from=at(day=-14),
-        after=(at(day=-20), 12), limit=1000,
-    ))
+def test_the_daily_query_never_touches_data_and_stays_on_the_created_at_range():
+    sql = _sql(history_slice_stmt(created_from=at(day=-15), created_until=at(day=-14), started_from=at(day=-14)))
+    assert "data" not in sql
     selected = sql.split("FROM", 1)[0]
-    assert "meetings.data ->> 'scheduled_at'" in selected or "(meetings.data ->> 'scheduled_at')" in selected
-    assert selected.count("meetings.data") == 1
-    for column in ("platform_specific_id", "bot_container_id", "meetings.status"):
-        assert column not in selected
-    assert "meetings.created_at >=" in sql and "ORDER BY meetings.created_at, meetings.id" in sql
-    assert "LIMIT 1000" in sql
+    assert [c.strip() for c in selected.replace("SELECT", "").split(",")] == [
+        "meetings.user_id", "meetings.start_time", "meetings.end_time",
+    ]
+    assert "meetings.created_at >=" in sql and "meetings.created_at <" in sql
+
+
+async def test_the_history_walks_15_days_in_slices():
+    statements = []
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def execute(self, stmt):
+            statements.append(stmt)
+            return SimpleNamespace(all=lambda: [])
+
+    pages = [page async for page in MeetingHistory(Session, pause_s=0).pages(at(day=20))]
+    assert pages == []
+    slices = [s for s in statements if "created_at" in str(s)]
+    assert len(slices) == 15 * 4  # 15 days of 6-hour slices
+    assert sum("statement_timeout = '30s'" in str(s) for s in statements) == 15 * 4
 
 
 def test_interval_of_a_row_with_no_end():
-    row = SimpleNamespace(start_time=at(hour=1), end_time=None, updated_at=at(day=5), booked=False)
-    assert interval_of(row, at(day=9)).end == at(hour=7)  # a later edit doesn't stretch it past 6 h
-    row = SimpleNamespace(start_time=at(hour=1), end_time=None, updated_at=at(hour=2), booked=True)
-    got = interval_of(row, at(day=9))
-    assert got.end == at(hour=2) and got.booked is True
-    row = SimpleNamespace(start_time=at(hour=1), end_time=at(hour=3), updated_at=at(hour=2), booked=None)
-    assert interval_of(row, at(day=9)) == Interval(at(hour=1), at(hour=3), False)
+    row = SimpleNamespace(start_time=at(hour=1), end_time=None)
+    assert interval_of(row, at(day=9)).end == at(hour=2)
+    assert interval_of(row, at(hour=1, minute=20)).end == at(hour=1, minute=20)
+    row = SimpleNamespace(start_time=at(hour=1), end_time=at(hour=3))
+    assert interval_of(row, at(day=9)) == Interval(at(hour=1), at(hour=3))
 
 
 # ── the reading ───────────────────────────────────────────────────────────────────────────────────

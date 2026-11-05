@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Mapping, Optional
 
 from ..obs import log_event
-from .predict import Prediction, decide
+from .predict import Prediction, decide, hour_of_week
 
 log = logging.getLogger(__name__)
 
@@ -25,6 +25,8 @@ PREDICTION_KEY = "bot_admission:prediction:{}"
 PREDICTION_TTL_S = 3 * 24 * 3600
 OUTSIDE_KEY = "bot_admission:outside:{}"
 OUTSIDE_EVERY_S = 7 * 24 * 3600
+BOOKED_KEY = "bot_admission:booked:{}:{}"  # account, hour of the week
+BOOKED_TTL_S = 15 * 24 * 3600
 COUNTS_KEY = "bot_admission:counts"
 COUNTS_TTL_S = 30 * 24 * 3600
 COMPUTE_KEY = "bot_admission:last_compute"
@@ -32,6 +34,24 @@ COMPUTE_KEY = "bot_admission:last_compute"
 
 def admission_mode(env: Optional[Mapping[str, str]] = None) -> str:
     return "shadow" if (os.environ if env is None else env).get(MODE_ENV) == "shadow" else "off"
+
+
+async def record_booked(redis, user_id: int, at: datetime, running: int) -> None:
+    """Keep the most booked bots seen at once in this hour of the week.
+
+    The scheduled limit learns only from here, not from history: telling booked rows apart there
+    means reading ``meetings.data``, which the daily job must not do (see ``predict``). It stores
+    bots at once, not spawns, so five meetings one after another in an hour stay a peak of 1. A peak
+    lasts 15 days from when it was last reached, then a lower one can replace it."""
+    key = BOOKED_KEY.format(user_id, hour_of_week(at))
+    current = await redis.get(key)
+    if current is None or running >= int(current):
+        await redis.set(key, str(running), ex=BOOKED_TTL_S)
+
+
+async def booked_peaks(redis, user_id: int) -> dict[int, int]:
+    values = await redis.mget([BOOKED_KEY.format(user_id, hour) for hour in range(168)])
+    return {hour: int(value) for hour, value in enumerate(values) if value is not None}
 
 
 class FailOnce:
@@ -85,6 +105,8 @@ class ShadowObserver:
                 "would": decision.would, "within_prediction": decision.within_prediction,
             },
         )
+        if kind == "scheduled":
+            await record_booked(self._redis, user_id, at, active + 1)
         await self._redis.hincrby(COUNTS_KEY, "would_allow" if decision.would == "allow" else "would_queue", 1)
         await self._redis.expire(COUNTS_KEY, COUNTS_TTL_S)
         if not decision.within_prediction:

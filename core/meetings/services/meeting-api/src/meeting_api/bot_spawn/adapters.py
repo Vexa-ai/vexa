@@ -79,6 +79,28 @@ def _respawn_retired(data, workload_id) -> bool:
     return retired_workload(data if isinstance(data, dict) else {}, workload_id)
 
 
+def active_by_kind_stmt(*, user_id, exclude_meeting_id=None):
+    """Active bots of ONE account by kind. This reads ``meetings.data``, which holds bot_logs, so the
+    WHERE clause keeps it to that account's active rows, a handful, and never a wide scan."""
+    from sqlalchemy import func, select
+
+    from ..sessions.models import Meeting
+
+    booked = Meeting.data["scheduled_at"].astext.isnot(None)
+    stmt = (
+        select(booked.label("booked"), func.count())
+        .where(
+            Meeting.user_id == user_id,
+            Meeting.status.in_(["requested", "joining", "awaiting_admission", "active"]),
+            Meeting.platform != "browser_session",
+        )
+        .group_by(booked)
+    )
+    if exclude_meeting_id is not None:
+        stmt = stmt.where(Meeting.id != exclude_meeting_id)
+    return stmt
+
+
 class SqlAlchemyMeetingRepo:
     """``MeetingRepo`` over a SQLAlchemy-async ``session_factory`` (``meetings`` /
     ``meeting_sessions`` tables). Carve of the parent ``meetings.request_bot`` DB ops."""
@@ -438,22 +460,7 @@ class SqlAlchemyMeetingRepo:
             return int((await db.execute(stmt)).scalar() or 0)
 
     async def count_active_bots_by_kind(self, *, user_id, exclude_meeting_id=None) -> dict:
-        from sqlalchemy import func, select
-
-        from ..sessions.models import Meeting
-
-        booked = Meeting.data["scheduled_at"].astext.isnot(None)
-        stmt = (
-            select(booked.label("booked"), func.count())
-            .where(
-                Meeting.user_id == user_id,
-                Meeting.status.in_(["requested", "joining", "awaiting_admission", "active"]),
-                Meeting.platform != "browser_session",
-            )
-            .group_by(booked)
-        )
-        if exclude_meeting_id is not None:
-            stmt = stmt.where(Meeting.id != exclude_meeting_id)
+        stmt = active_by_kind_stmt(user_id=user_id, exclude_meeting_id=exclude_meeting_id)
         async with self._session_factory() as db:
             counts = {bool(row[0]): int(row[1]) for row in (await db.execute(stmt)).all()}
         return {"scheduled": counts.get(True, 0), "adhoc": counts.get(False, 0)}

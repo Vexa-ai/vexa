@@ -1,9 +1,12 @@
 """Bot limits, the arithmetic: no I/O, no clock, no meeting content.
 
-An account has two limits, one per kind of bot: ``scheduled`` (a booked meeting) and ``adhoc``. Each
-comes from the account's own peak concurrent bots over the last 14 days, per hour of the week, plus
-50% rounded up. An account with no history gets 2 and 2. A cap raised above the plan default is a
-floor: it was granted on purpose, and history never takes it away.
+An account has two limits, one per kind of bot, each a peak of concurrent bots per hour of the week,
+plus 50% rounded up. ``adhoc`` comes from the account's total peak over the last 14 days of meeting
+timestamps. ``scheduled`` comes from booked peaks recorded from now on (see ``shadow``): the history
+can't tell booked rows apart without reading ``meetings.data``, which holds bot_logs, and heavy reads
+of it took prod Postgres into recovery on 26 Oct 2026. So it starts at the default and learns.
+An account with no history gets 2 and 2. A cap raised above the plan default is a floor: it was
+granted on purpose, and history never takes it away.
 
 ``limit`` is the peak across the whole week: what decides ``would``. The per-hour figures only answer
 ``within_prediction``: is this bot inside what the account normally does at this hour of the week?
@@ -25,7 +28,6 @@ class Interval:
 
     start: datetime
     end: datetime
-    booked: bool
 
 
 @dataclass(frozen=True)
@@ -106,8 +108,7 @@ def peak_by_hour(intervals: Iterable[Interval]) -> dict[int, int]:
     return peaks
 
 
-def _kind_limits(intervals: Iterable[Interval], floor: int) -> KindLimits:
-    peaks = peak_by_hour(intervals)
+def _kind_limits(peaks: Mapping[int, int], floor: int) -> KindLimits:
     overall = max(peaks.values(), default=0)
     return KindLimits(
         limit=max(with_headroom(overall), floor),
@@ -115,13 +116,15 @@ def _kind_limits(intervals: Iterable[Interval], floor: int) -> KindLimits:
     )
 
 
-def predict(intervals: Iterable[Interval], *, cap: Optional[int] = None) -> Prediction:
-    """One account's two limits from its own history."""
-    items = list(intervals)
+def predict(
+    intervals: Iterable[Interval], *, booked_peaks: Optional[Mapping[int, int]] = None,
+    cap: Optional[int] = None,
+) -> Prediction:
+    """One account's two limits: ad-hoc from its total history, scheduled from its booked peaks."""
     floor = raised_floor(cap)
     return Prediction(
-        scheduled=_kind_limits((i for i in items if i.booked), floor),
-        adhoc=_kind_limits((i for i in items if not i.booked), floor),
+        scheduled=_kind_limits(booked_peaks or {}, floor),
+        adhoc=_kind_limits(peak_by_hour(intervals), floor),
     )
 
 
