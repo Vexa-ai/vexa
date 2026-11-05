@@ -33,7 +33,7 @@
     "ctranslate2==4.8.0": "MIT",
     "dkimpy==1.1.8": "Zlib",
     "dnspython==2.9.0": "ISC",
-    "fastapi-guard==7.2.2": "MIT",
+    "fastapi-guard==8.1.2": "MIT",
     "fastapi-mcp==0.4.0": "MIT",
     "fastapi==0.137.2": "MIT",
     "fastapi==0.138.0": "MIT",
