@@ -6,12 +6,13 @@ An individual's personal CRM is the one exception, made at runtime through a fun
 migrations path owns (`ensure_personal_org`).
 Idempotent — an existing organisation, type or policy is left exactly as an administrator left it.
 """
+import re
 from datetime import datetime, timezone
 
 from sqlalchemy import select
 
 from . import schema as s
-from .field_classes import default_classes
+from .field_classes import PRIVATE_SOURCES, default_class, default_classes
 
 ENTITY_TYPES = ('Person', 'Company', 'Deal', 'Project')
 
@@ -149,6 +150,78 @@ def upgrade_card_definition(engine, org):
         c.execute(s.object_types.update().where(s.object_types.c.org_id == org, s.object_types.c.name == 'Card')
                   .values(definition={**row, 'properties': {**props, **missing}}))
         return True
+
+
+#: A field name an install may add: capitalised like the product's own fields (``Name``,
+#: ``LastContact``), at most 64 characters, so a card face's field pattern also accepts it. Record
+#: writes check field names against the stored definition, not against this pattern.
+_FIELD_NAME = re.compile(r'[A-Z][A-Za-z0-9_]{0,63}')
+
+#: The privacy classes a definitions file may declare (``x-class``). A workspace-sharing class
+#: (``{"ws": [...]}``) is never taken from a file: sharing a field with a workspace is a
+#: classification an administrator sets, which is recorded.
+_FILE_CLASSES = ('private', 'org')
+
+
+def _check_privacy(kind, field, prop):
+    """A file may make a field private, never less private than the product's rules make it."""
+    declared = prop.get('x-class')
+    if declared is not None and declared not in _FILE_CLASSES:
+        raise ValueError(f'{kind}.{field}: x-class must be one of {", ".join(_FILE_CLASSES)}; '
+                         'sharing a field with a workspace is set by an administrator, not by a file')
+    source = prop.get('x-source')
+    if source is not None and source not in PRIVATE_SOURCES:
+        raise ValueError(f'{kind}.{field}: x-source must be one of {", ".join(PRIVATE_SOURCES)}')
+    if declared == 'org' and default_class(field, {k: v for k, v in prop.items() if k != 'x-class'})[0] == 'private':
+        raise ValueError(f'{kind}.{field}: x-class org would make a private field (contact history or '
+                         'email-derived) readable by the org; that is set by an administrator, not by a file')
+
+
+def extend_definitions(engine, org, extensions):
+    """Add an install's OWN fields to an org's existing definitions (``CRM_DEFINITIONS_FILE``):
+    ``{object_type: {field: <JSON-schema property>}}``. Additive exactly as ``upgrade_card_definition``:
+    nothing is removed, a type the org does not have is refused rather than created. A field the
+    product itself defines for that type (``DEFINITIONS``, the Card lifecycle included) is refused, so a
+    later release's version of it is never shadowed by the install's. A field the stored definition
+    already has is left as it is; when the file's property differs from the stored one it is reported,
+    never applied. Every property must be a valid JSON-schema object, and its ``x-class`` / ``x-source``
+    one the product knows (``_check_privacy``). One transaction: any refusal leaves every type as it was.
+    Run by the migrations path with the admin credential (crm-api's own role may not write definitions).
+    Returns ``(added, differs)``: the ``Type.Field`` names added, and those left as is although the
+    file's property differs from the stored one."""
+    if not isinstance(extensions, dict):
+        raise ValueError('definition extensions must be an object of {object_type: {field: property}}')
+    from jsonschema import Draft202012Validator
+    added, differs = [], []
+    with engine.begin() as c:
+        for kind, fields in extensions.items():
+            if not isinstance(fields, dict):
+                raise ValueError(f'{kind}: the fields must be an object of {{field: property}}')
+            row = c.execute(select(s.object_types.c.definition).where(
+                s.object_types.c.org_id == org, s.object_types.c.name == kind)).scalar_one_or_none()
+            if not isinstance(row, dict):
+                raise ValueError(f'{kind}: this org has no such object type; extensions add fields, never types')
+            product = set((DEFINITIONS.get(kind) or {}).get('properties') or {})
+            props = dict(row.get('properties') or {})
+            missing = {}
+            for field, prop in fields.items():
+                if not isinstance(field, str) or not _FIELD_NAME.fullmatch(field):
+                    raise ValueError(f'{kind}.{field}: not a field name')
+                if field in product:
+                    raise ValueError(f'{kind}.{field}: the product defines this field; an install adds its own fields only')
+                if not isinstance(prop, dict):
+                    raise ValueError(f'{kind}.{field}: the property must be a JSON-schema object')
+                Draft202012Validator.check_schema(prop)
+                _check_privacy(kind, field, prop)
+                if field not in props:
+                    missing[field] = prop
+                elif props[field] != prop:
+                    differs.append(f'{kind}.{field}')
+            if missing:
+                c.execute(s.object_types.update().where(s.object_types.c.org_id == org, s.object_types.c.name == kind)
+                          .values(definition={**row, 'properties': {**props, **missing}}))
+                added += [f'{kind}.{f}' for f in missing]
+    return added, differs
 
 
 def ensure_personal_org(engine, org, name):
