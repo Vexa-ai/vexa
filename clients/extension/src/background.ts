@@ -69,6 +69,11 @@ let tabStreamId: string | null = null;
  *  feed speaker-name hints from their inpage zoom-/msteams-speakers DOM. */
 const MIXED = new Set(['youtube', 'zoom', 'teams']);
 const isMixed = (p: string | null | undefined): boolean => !!p && MIXED.has(p);
+/** Mixed-lane MEETINGS have a local participant: their tab audio carries only the remote
+ *  side, so the local mic ("You", channel 1000) is captured in-page alongside it. YouTube
+ *  has no local speaker and keeps the tab audio alone. */
+const MIXED_MEETINGS = new Set(['zoom', 'teams']);
+const hasLocalMic = (p: string | null | undefined): boolean => !!p && MIXED_MEETINGS.has(p);
 
 // ── P21 capture liveness: state is EARNED by observed frames, not the Start command.
 const NO_SIGNAL_MS = 6000;
@@ -190,6 +195,9 @@ async function startCaptureForTab(tabId: number, url: string, meetingRef?: Meeti
           // toolbar click that opened this session already minted the stream id;
           // use it now.
           startTabAudio();
+          if (hasLocalMic(state.platform) && state.tabId !== null) {
+            chrome.tabs.sendMessage(state.tabId, { type: 'BEGIN_CAPTURE' }).catch(() => { /* content not ready */ });
+          }
         } else {
           // Page-side capture (Google Meet): local mic ("You") + per-participant
           // <audio> elements, captured in-page by inpage.ts.
@@ -264,6 +272,9 @@ async function stopCapture(): Promise<void> {
     // MIXED-lane tab (YouTube, Zoom): capture lives in the offscreen, not the
     // content script.
     chrome.runtime.sendMessage({ type: 'TAB_CAPTURE_STOP' }).catch(() => { /* offscreen gone */ });
+    if (hasLocalMic(state.platform) && state.tabId !== null) {
+      chrome.tabs.sendMessage(state.tabId, { type: 'END_CAPTURE' }).catch(() => { /* tab gone */ });
+    }
   } else {
     if (state.tabId !== null) {
       chrome.tabs.sendMessage(state.tabId, { type: 'END_CAPTURE' }).catch(() => { /* tab gone */ });
