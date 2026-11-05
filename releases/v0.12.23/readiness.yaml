@@ -1,0 +1,116 @@
+# Production-readiness manifest — v0.12.23.
+#
+# The six legs of the readiness standard, each declaring what fires it, what proves it, where its
+# receipt lives, and what its receipt is bound to. Validated and enforced by
+# release/readiness/check.mjs; shape documented at release/readiness/readiness.schema.json.
+#
+# Leg 3 splits: 3a is the mechanical build/run proof the release-validate legs already give, 3b is
+# API coverage as of the docs — every documented endpoint probed against the staged candidate.
+#
+# Every leg binds the candidate map sha. Re-cutting the candidate re-writes
+# releases/v0.12.23/candidate-images.json, which strands every receipt taken against the old bytes:
+# check.mjs names those legs and prints the stale_reason declared here.
+
+schema_version: 1
+release: v0.12.23
+candidate_map: releases/v0.12.23/candidate-images.json
+receipts_dir: releases/v0.12.23/readiness
+
+legs:
+  - id: train-value
+    leg: '1'
+    title: TRAIN VALUE as of PRs
+    kind: machine
+    phase: formation
+    oracle:
+      command: RELEASE_VERSION=v0.12.23 node scripts/release-value-gate.mjs
+    receipt: releases/v0.12.23/readiness/train-value.receipt.json
+    identity:
+      binds_candidate_map: true
+      input: 'The batch range the value gate walked: <last shipped tag>...<this release>. Every PR in it carries a user-recognizable value sentence and a pass criterion, or is state: value-signed.'
+      input_pattern: '^v\d+\.\d+\.\d+\.\.\.v\d+\.\d+\.\d+$'
+      stale_reason: 'the batch is what the promote hands users; a re-cut can add or drop PRs, so the set of value sentences proven is no longer the set shipping'
+
+  - id: blast-radius
+    leg: '2'
+    title: BLAST RADIUS as of PRs
+    kind: agent
+    phase: formation
+    oracle:
+      protocol: release/readiness/protocols/blast-radius.md
+    receipt: releases/v0.12.23/readiness/blast-radius.receipt.json
+    identity:
+      binds_candidate_map: true
+      input: 'The exact diff the surface map was built from: <prev tag>..<candidate head sha>.'
+      input_pattern: '^v\d+\.\d+\.\d+\.\.[0-9a-f]{40}'
+      stale_reason: 'the per-PR diff-to-surface table describes a diff the re-cut candidate no longer ships, so its covering evidence and its named uncovered cells both stop applying'
+
+  - id: full-functionality
+    leg: '3a'
+    title: FULL FUNCTIONALITY — builds and runs (lite + compose)
+    kind: machine
+    phase: staging
+    oracle:
+      command: gh workflow run release-validate.yml -f version=<candidate> -f promote=false
+    receipt: releases/v0.12.23/readiness/full-functionality.receipt.json
+    identity:
+      binds_candidate_map: true
+      input: 'The release-validate run URL whose legs pulled the published candidate bytes.'
+      input_pattern: '^https://github\.com/Vexa-ai/vexa/actions/runs/\d+$'
+      stale_reason: 'the validate legs pull published image bytes by tag; a re-cut publishes different bytes under the candidate, so the run proved artifacts that are no longer the candidate'
+
+  - id: api-docs-sweep
+    leg: '3b'
+    title: FULL FUNCTIONALITY — API coverage as of docs
+    kind: agent
+    phase: staging
+    oracle:
+      protocol: release/readiness/protocols/api-docs-sweep.md
+    receipt: releases/v0.12.23/readiness/api-docs-sweep.receipt.json
+    identity:
+      binds_candidate_map: true
+      input: 'The documented surface swept and the deployment it was probed against: docs@<docs tree sha> against <base url>.'
+      input_pattern: '^docs@[0-9a-f]{40} against https?://\S+$'
+      stale_reason: 'the sweep probed a running deployment of specific image bytes; a re-cut changes those bytes, and a documented endpoint proven against the old ones is unproven against the new'
+
+  - id: security-review
+    leg: '4'
+    title: SECURITY review
+    kind: agent
+    phase: both
+    oracle:
+      protocol: release/readiness/protocols/security-review.md
+    receipt: releases/v0.12.23/readiness/security-review.receipt.json
+    identity:
+      binds_candidate_map: true
+      input: 'The reviewed diff plus the dependency state of the shipped images: <prev tag>..<candidate head sha> + deps@<lockfile sha256>.'
+      input_pattern: '^v\d+\.\d+\.\d+\.\.[0-9a-f]{40}'
+      stale_reason: 'new surfaces, authz paths and shipped-image dependencies are read out of the exact diff and the exact images; a re-cut can add either, and neither was reviewed'
+
+  - id: compliance-review
+    leg: '5'
+    title: COMPLIANCE review — legal, architecture, principles, delivery
+    kind: agent
+    phase: both
+    oracle:
+      protocol: release/readiness/protocols/compliance-review.md
+    receipt: releases/v0.12.23/readiness/compliance-review.receipt.json
+    identity:
+      binds_candidate_map: true
+      input: 'The reviewed diff plus the roster it was checked against: <prev tag>..<candidate head sha> + roster@<issue/PR snapshot>.'
+      input_pattern: '^v\d+\.\d+\.\d+\.\.[0-9a-f]{40}'
+      stale_reason: 'contract widening, sealed-gate state, changelog fragments and issue custody are all read off the exact commit set; a re-cut changes the commit set and the roster derived from it'
+
+  - id: promotion-ceremony
+    leg: '6'
+    title: PROMOTION CEREMONY — rehearsal receipts green and bound
+    kind: machine
+    phase: staging
+    oracle:
+      command: make check-promotion-legs validate-rehearsal-promotion-values
+    receipt: releases/v0.12.23/readiness/promotion-ceremony.receipt.json
+    identity:
+      binds_candidate_map: true
+      input: 'The rehearsal packet in Vexa-ai/vexa-platform whose four promotion legs rendered green in the scoped namespace, and whose carry rendered zero-diff against live prod.'
+      input_pattern: '^release-\d{3}-vexa-\d+\.\d+\.\d+\b'
+      stale_reason: 'the rehearsal rendered and applied the exact candidate digests; a re-cut changes those digests, so the rendered manifests and the zero-diff carry describe a promotion that is not the one about to happen'
