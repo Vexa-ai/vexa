@@ -139,7 +139,7 @@ async function main(): Promise<void> {
     await page.evaluate('window.__fixtureSpeakingSince = performance.now();');
     await sleep(400);
     await page.evaluate('window.__fixtureSpeakingSince = null;');
-    await sleep(900);                                    // > the 400ms inactivity window
+    await sleep(1300);                                   // > the 800ms inactivity window, with real-clock margin
     await stop();
     await recorder.close();
 
