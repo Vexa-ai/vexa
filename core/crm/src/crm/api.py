@@ -679,6 +679,15 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
         return audited('card.offer', actor, '', lambda: cards.offer_many(org_id, actor, ws, body.origin, specs,
                                                                          body.reason))
 
+    @app.post('/internal/cards/blockers', include_in_schema=False)
+    def internal_cards_blockers(body: CardRef, caller=Depends(internal)):
+        """What a card still waits on (the flows tier's ``card_blockers_done``): the ids in its
+        ``Chain.blocked_by`` whose card is not finished (``open``), the finished ones (``done``), the
+        ones that ended on a side state with their titles (``dropped``) and ids with no card
+        (``missing``). Reads only ``blocked_by``: ``Chain.blocks`` on the other card is not kept in
+        step with it. Internal tier only (flows holds the secret); it acts for nobody."""
+        return audited('card.blockers', caller, body.card, lambda: cards.blockers(org_id, body.card))
+
     @app.post('/internal/orgs/{org}/erase', include_in_schema=False)
     def erase_org(org: str, caller=Depends(internal)):
         """Erase an individual's personal CRM: the rows keyed to their org of one (``p-<id>``),

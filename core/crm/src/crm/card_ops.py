@@ -1156,6 +1156,46 @@ class Cards:
                 continue
         return out
 
+    # ── what a card still waits on (the flows tier's ``card_blockers_done``) ──────────────────────
+    def blockers(self, org, card):
+        """The cards this one still waits on: every id in its ``Chain.blocked_by`` whose card is not
+        finished, plus the ones that ended on a side state (dropped, declined, expired) with their
+        titles, so the person waiting can be told the plan changed under them.
+
+        Only ``blocked_by`` is read. ``Chain`` stores a link at both ends (``blocks`` on the blocker,
+        ``blocked_by`` on the card waiting) and nothing keeps the two in step, so the waiting card's
+        own list is the one answer; ``blocks`` is never consulted.
+
+        Finished is the blocker's own lifecycle: its last stage (``Done`` by default, ``closed`` for a
+        card of a kind) is done; a side state is dropped; anything else is open. An id with no card
+        behind it (never made, deleted) is ``missing``: it can never finish, so it is reported rather
+        than waited on. Internal tier only: it acts for nobody and answers ids, states and the titles
+        of dropped blockers, never another field."""
+        with self.engine.connect() as c:
+            row = self._card_row(c, org, card)
+            raw = row['fields'] or {}
+            chain = raw.get('Chain') if isinstance(raw.get('Chain'), dict) else {}
+            ids = list(dict.fromkeys(str(x) for x in (chain.get('blocked_by') or [])
+                                     if _ID.fullmatch(str(x))))[:20]
+            out = {'card': row['id'], 'blocked_by': ids, 'open': [], 'done': [], 'dropped': [], 'missing': []}
+            for blocker in ids:
+                try:
+                    brow = self._card_row(c, org, blocker)
+                except NotFound:
+                    out['missing'].append(blocker)
+                    continue
+                fields = brow['fields'] or {}
+                state = fields.get('State') or ''
+                life = self.lifecycle(brow['object_type'], fields.get('Kind'))
+                if state == life['stages'][-1]:
+                    out['done'].append(blocker)
+                elif state in life['side']:
+                    out['dropped'].append({'id': blocker, 'state': state,
+                                           'title': _clip(fields.get('Title') or 'A card')})
+                else:
+                    out['open'].append({'id': blocker, 'state': state})
+            return out
+
     def list(self, org, actor, workspace=None, about=None, state=None, mine=False, limit=LIST_MAX):
         caller = as_caller(actor)
         limit = max(1, min(int(limit or LIST_MAX), LIST_MAX))

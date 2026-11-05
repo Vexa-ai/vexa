@@ -559,10 +559,24 @@ def main(argv):
         except Exception as exc:  # noqa: BLE001 — a refusal from Postgres, in its own words
             print(f'[crm-schema] STOP: Postgres refused: {_pg_message(exc)}. See {DOCS}', flush=True)
             return 1
-        from .bootstrap import bootstrap_org, upgrade_card_definition
+        from .bootstrap import bootstrap_org, extend_definitions, upgrade_card_definition
         created = bootstrap_org(engine, org, os.environ.get('CRM_ORG_NAME', '') or org)
         if upgrade_card_definition(engine, org):
             created.append('Card lifecycle properties')
+        extra = os.environ.get('CRM_DEFINITIONS_FILE', '').strip()
+        if extra:
+            # the install's own fields, declared as configuration and added additively
+            try:
+                with open(extra, encoding='utf-8') as f:
+                    added = extend_definitions(engine, org, json.load(f))
+            except (OSError, ValueError) as exc:
+                print(f'[crm-schema] STOP: CRM_DEFINITIONS_FILE: {exc}', flush=True)
+                return 1
+            except Exception as exc:  # noqa: BLE001 — jsonschema's SchemaError: an invalid property
+                print(f'[crm-schema] STOP: CRM_DEFINITIONS_FILE: {type(exc).__name__}: {getattr(exc, "message", exc)}', flush=True)
+                return 1
+            if added:
+                created.append(f'fields {", ".join(added)}')
         print(f'[crm-schema] role {role} and the crm_* tables are ready (schema version {SCHEMA_VERSION}; '
               f'grants on those tables only); audit kept {audit_days or "for ever"}'
               f'{" days" if audit_days else ""}; created: {", ".join(created) or "nothing"}', flush=True)
