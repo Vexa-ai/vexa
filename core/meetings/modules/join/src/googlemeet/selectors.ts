@@ -93,6 +93,19 @@ export const googleConsentPromptIndicators: string[] = [
   '[role="alertdialog"]:has-text("taking notes")',
 ];
 
+// The "Join now" inside Meet's join notices ("Gemini is taking notes", "Your call
+// audio and video will be shared with <notetaker>"), which read Leave / Join now.
+// Scoped to the dialog's copy so it can't hit the pre-join screen's own "Join now".
+// "take notes for me" asks to START notes and has no "Join now", so it never matches.
+export const googleJoinNoticeJoinNowSelectors: string[] = [
+  '[role="dialog"]:has-text("taking notes") :is(button, [role="button"]):has-text("Join now")',
+  '[role="alertdialog"]:has-text("taking notes") :is(button, [role="button"]):has-text("Join now")',
+  '[role="dialog"]:has-text("Gemini") :is(button, [role="button"]):has-text("Join now")',
+  '[role="alertdialog"]:has-text("Gemini") :is(button, [role="button"]):has-text("Join now")',
+  '[role="dialog"]:has-text("will be shared with") :is(button, [role="button"]):has-text("Join now")',
+  '[role="alertdialog"]:has-text("will be shared with") :is(button, [role="button"]):has-text("Join now")',
+];
+
 export const googleRejectionIndicators: string[] = [
   // Waiting-room denial patterns. Google Meet can leave some lobby text in
   // the DOM after a host rejects the bot, so these must be checked before
