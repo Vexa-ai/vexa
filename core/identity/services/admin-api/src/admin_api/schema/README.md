@@ -9,6 +9,7 @@ see `MIGRATION-0001-drop-recordings.md`. The org as a first-class object (`orgs`
 `MIGRATION-0010-token-kind.md`; every sign-in credential ending with its cookie (a data pass, run on
 each boot) is `MIGRATION-0011-sign-in-credential-expiry.md`. Removing stored Zoom host tokens (`zak`) from `meetings.data` and masking the passcodes stored
 diagnostics quoted, an out-of-band data pass run by an operator, is `MIGRATION-0012-scrub-zoom-host-tokens.md`.
+Dropping the unread `transcriptions.session_uid` column and its index, an out-of-band step an operator runs, is `MIGRATION-0017-drop-transcription-session-uid.md`.
 
 **Upgrade path:** the 0.10 → 0.12 convergence is validated against a full production migration
 (July 2026), together with the out-of-band steps in `MIGRATION-0002` and `MIGRATION-0005`. The

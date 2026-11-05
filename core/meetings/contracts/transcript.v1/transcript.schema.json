@@ -44,10 +44,9 @@
       "description": "Opens a transcript session on the bus. Auth is transport-layer (not a field here); tenant/owner/visibility are deferred — added additively to this object when sharing lands (ADR-0003).",
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "session_uid", "meeting_id", "platform", "start_time"],
+      "required": ["type", "meeting_id", "platform", "start_time"],
       "properties": {
         "type": { "const": "session_start" },
-        "session_uid": { "type": "string" },
         "meeting_id": { "type": "string" },
         "platform": { "type": "string" },
         "start_time": { "type": "string", "format": "date-time" }
@@ -57,10 +56,9 @@
       "description": "A batch of persisted (confirmed) segments → the collector stream.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "session_uid", "meeting_id", "segments"],
+      "required": ["type", "meeting_id", "segments"],
       "properties": {
         "type": { "const": "transcription" },
-        "session_uid": { "type": "string" },
         "meeting_id": { "type": "string" },
         "segments": { "type": "array", "items": { "$ref": "#/$defs/TranscriptSegment" } }
       }

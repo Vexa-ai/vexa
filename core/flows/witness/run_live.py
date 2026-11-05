@@ -148,7 +148,7 @@ def main() -> int:
             st.setdefault("admitted_at", ctx.clock_now)
             if ctx.clock_now - st["admitted_at"] < 40:
                 return Wait(seconds=5)
-            n = rs.inject_fixture_transcript(st["meeting_id"], f"live-{st['meeting_id']}")
+            n = rs.inject_fixture_transcript(st["meeting_id"])
             say(f"fixture transcript injected ({n} segments) → stopping bot")
             rs.stop_bot(api_key(), st["platform"], st["native"])
             return Wait(seconds=5)
