@@ -488,6 +488,11 @@ vulnerabilities:
       - "pkg:golang/stdlib@v1.24.6"
     statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
     expired_at: 2026-12-31
+  - id: CVE-2026-56857
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. This advisory (os.Root following junctions) is Windows-only and gosu has no os.Root code; the newest upstream build (2026-10-21) still ships gosu on go1.24.6. It clears when Docker rebuilds gosu with Go 1.26.9 or later, and the digest pin moves with it."
+    expired_at: 2026-12-31
   - id: CVE-2026-56858
     purls:
       - "pkg:golang/stdlib@v1.24.6"
