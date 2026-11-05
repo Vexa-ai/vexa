@@ -16,6 +16,11 @@ The `vexa` MCP server is connected. Start with `whats_waiting` — it says what 
 
 Every tool returns `platform` + `native_meeting_id`; feed one tool's output straight into the next.
 
+## One bot per meeting: joining and sharing
+- «Send Vexa to <link>» is always `request_meeting_bot(meeting_url)`. If a teammate's bot is already in that call and the call is shared with this person (or bound to a workspace they're in), it answers `attached: true` with `owner` and a `message` instead of sending a second bot. Tell them in one line, e.g. «Joined Ana's bot in this call», and follow the transcript as usual.
+- An attached reader can't stop a teammate's bot (`stop_bot` → `not_bot_owner`); offer to stop following instead.
+- «Share this call with Ana» → `share_meeting(platform, native_meeting_id, email)`, or `workspace_id` to share with a whole workspace. Only the bot's owner can share, within the same organization. Confirm the email before sharing.
+
 ## Write a meeting into the user's notes
 
 When asked to sync, log, or file a meeting:

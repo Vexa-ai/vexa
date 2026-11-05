@@ -1,34 +1,50 @@
 {
   "name": "vexa",
   "displayName": "Vexa",
-  "version": "0.1.0",
-  "description": "Send a bot to a Google Meet, Teams or Zoom call and read the transcript, live or after, with speakers labelled. Hosted at api.cloud.vexa.ai, or point it at your own self-hosted Vexa.",
-  "author": { "name": "Vexa", "url": "https://github.com/Vexa-ai" },
+  "version": "0.2.0",
+  "description": "Send a bot to a Google Meet, Teams or Zoom call and follow the live transcript beside the chat. Nothing to configure: Claude offers to sign you in and gives you the link. Optional settings: your company's Vexa address; an API key only for a Vexa without sign-in yet.",
+  "author": {
+    "name": "Vexa",
+    "url": "https://github.com/Vexa-ai"
+  },
   "homepage": "https://docs.vexa.ai/vexa-mcp",
   "repository": "https://github.com/Vexa-ai/vexa",
   "license": "Apache-2.0",
-  "keywords": ["meetings", "transcription", "google-meet", "microsoft-teams", "zoom", "meeting-bot", "mcp"],
+  "icon": ".claude-plugin/icon.png",
+  "privacyPolicyUrl": "https://vexa.ai/legal/privacy",
+  "keywords": [
+    "meetings",
+    "transcription",
+    "google-meet",
+    "microsoft-teams",
+    "zoom",
+    "meeting-bot",
+    "mcp"
+  ],
+  "types": "./types/index.d.ts",
   "userConfig": {
+    "vexa_url": {
+      "type": "string",
+      "title": "Vexa address",
+      "description": "The Vexa this plugin talks to. Keep https://api.cloud.vexa.ai for hosted Vexa; a company running its own Vexa puts its address here, for example https://vexa.example.com.",
+      "default": "https://api.cloud.vexa.ai"
+    },
     "vexa_api_key": {
       "type": "string",
-      "title": "Vexa API key",
-      "description": "From https://vexa.ai/account (hosted) or printed by `make all` on a self-hosted stack. Or open https://vexa.ai/connect and paste the prompt into Claude Code instead of installing this plugin.",
+      "title": "Vexa API key (only until your Vexa offers sign-in)",
+      "description": "Leave empty when your Vexa signs you in through /mcp (OAuth). Hosted Vexa takes a key until its sign-in ships: create one at https://vexa.ai/account and paste it here.",
       "sensitive": true,
-      "required": true
-    },
-    "vexa_mcp_url": {
-      "type": "string",
-      "title": "Vexa MCP URL",
-      "description": "Hosted: https://api.cloud.vexa.ai/mcp. Self-hosted: your gateway's /mcp, e.g. http://localhost:18056/mcp.",
-      "default": "https://api.cloud.vexa.ai/mcp",
-      "required": false
+      "required": false,
+      "default": ""
     }
   },
   "mcpServers": {
     "vexa": {
       "type": "http",
-      "url": "${user_config.vexa_mcp_url}",
-      "headers": { "Authorization": "Bearer ${user_config.vexa_api_key}" }
+      "url": "${user_config.vexa_url}/mcp",
+      "headers": {
+        "X-API-Key": "${user_config.vexa_api_key}"
+      }
     }
   }
 }
