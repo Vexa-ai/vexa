@@ -112,6 +112,41 @@ export default function AdminUsersPage() {
         />
       </div>
 
+      {/* Update User */}
+      <div id="update-user">
+        <APIEndpointDoc
+          title="Update User"
+          description="Change an account's concurrency ceiling and bot ramp dials. bot_ramp_burst (integer, at least 1), bot_ramp_share (0 to 1) and bot_ramp_window_s (10 to 3600) are stored in data.bot_ramp. A dial sent as null goes back to the deployment default, and a value out of range returns 422."
+          method="PATCH"
+          path="/admin/users/{id}"
+          authType="admin"
+          dashboardProxy="/api/admin/users/{id}"
+          pathParams={[
+            {
+              name: "id",
+              type: "string",
+              description: "The user ID",
+              required: true,
+            },
+          ]}
+          requestBody={{
+            schema: {
+              max_concurrent_bots: 25,
+              bot_ramp_burst: 3,
+              bot_ramp_share: 0.2,
+              bot_ramp_window_s: 120,
+            },
+          }}
+          responseExample={{
+            id: "user-123",
+            email: "user@example.com",
+            name: "John Doe",
+            max_concurrent_bots: 25,
+            data: { bot_ramp: { burst: 3, share: 0.2, window_s: 120 } },
+          }}
+        />
+      </div>
+
       {/* Create Token */}
       <div id="create-api-token">
         <APIEndpointDoc
