@@ -1,5 +1,10 @@
 # Contributing to Vexa
 
+**Before you code: open an issue.** Say what the problem is, how you propose to solve it, and how
+you will validate it. We agree the architecture and the validation with you in that issue. Your PR
+then follows the agreed contract and attaches the validation artifacts; that is what makes it easy
+to merge. Start from the [prepared-issue template](.github/ISSUE_TEMPLATE/3-prepared-issue.md).
+
 The whole delivery loop — roadmap, claiming, the acceptance-table merge promise, validation —
 is one page: **https://docs.vexa.ai/governance/delivery** (source:
 [`docs/docs/governance/delivery.mdx`](docs/docs/governance/delivery.mdx)).
