@@ -16,7 +16,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 python3-pip curl libsndfile1 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
-RUN pip3 install --no-cache-dir uv==0.11.33
+RUN pip3 install --no-cache-dir uv==0.13.4
 # The cuda base ships system python 3.10, but faster-whisper's onnxruntime needs cp311+.
 # uv fetches a managed CPython 3.12 (UV_PYTHON) and builds /opt/venv on it.
 RUN uv python install 3.12

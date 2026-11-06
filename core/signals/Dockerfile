@@ -1,5 +1,5 @@
 FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
-RUN pip install --no-cache-dir uv==0.11.33
+RUN pip install --no-cache-dir uv==0.13.4
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv PYTHONPATH=/app/src PATH=/opt/venv/bin:$PATH PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY pyproject.toml uv.lock ./

@@ -131,7 +131,7 @@
     "typing-inspection==0.4.4": "MIT",
     "tzdata==2026.2": "Apache-2.0",
     "urllib3==2.8.0": "MIT",
-    "uv==0.11.33": "MIT OR Apache-2.0",
+    "uv==0.13.4": "MIT OR Apache-2.0",
     "uvicorn==0.34.0": "BSD-3-Clause",
     "uvicorn==0.49.0": "BSD-3-Clause",
     "uvicorn==0.51.0": "BSD-3-Clause",
@@ -147,8 +147,8 @@
     "yarl==1.25.1": "Apache-2.0"
   },
   "installs": {
-    "- :: uv==0.11.33": [
-      "uv==0.11.33"
+    "- :: uv==0.13.4": [
+      "uv==0.13.4"
     ]
   }
 }
