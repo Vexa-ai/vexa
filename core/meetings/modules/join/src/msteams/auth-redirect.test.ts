@@ -67,6 +67,7 @@ function mockPage(url: string | string[], visible: string[] = []): any {
   return {
     url: () => urls[Math.min(urlCalls++, urls.length - 1)],
     goto: async () => {},
+    on: () => {},
     waitForTimeout: async (ms: number) => { vnow += ms; },
     locator: node,
     evaluate: async () => 'media warm-up success (tracks=0)',
