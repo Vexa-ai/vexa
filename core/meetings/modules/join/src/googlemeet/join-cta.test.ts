@@ -46,6 +46,7 @@
 import { JSDOM } from 'jsdom';
 import {
   googleJoinButtonSelectors,
+  googleAuthJoinCtaSelectors,
   googleLobbyIconGlyphSelectors,
   googleLobbyCtaMaxLabelChars,
 } from './selectors';
@@ -378,6 +379,20 @@ const isCta = (el: Element | null) => el !== null && el.getAttribute('data-cta')
     assert(/Mégse/.test(message) && /Kérvényezés/.test(message),
       'the visible text-button labels are recorded — the next occurrence is a one-look diagnosis');
     console.log(`    last_error.reason would read: ${message}`);
+  }
+
+  console.log('\n=== 7. Authenticated lobby: "Join anyway" is named by the list, not left to the backstop (#2048) ===');
+  {
+    // Signed-in lobby in the bot container: no camera + mic "muted by system", so Meet labels
+    // the CTA "Join anyway". The structural entry also matches the Gemini "Start" button there.
+    const joinAnyway = 'button:has-text("Join anyway")';
+    const broad = 'button[jsname]:not([aria-label]):has(span)';
+    const hit = await waitForLobbyCta(
+      mockPage({ visible: [joinAnyway, broad] }) as any, googleAuthJoinCtaSelectors, 5000, 'authenticated join CTA');
+    assert(hit.selector === joinAnyway,
+      `"Join anyway" beats the structural backstop on a signed-in lobby ("${hit.selector}")`);
+    assert(googleAuthJoinCtaSelectors[googleAuthJoinCtaSelectors.length - 1] === broad,
+      'the structural backstop stays LAST in the authenticated list');
   }
 
   console.log(`\n=== summary: ${passed} passed, ${failed} failed ===`);

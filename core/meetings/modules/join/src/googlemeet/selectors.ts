@@ -400,7 +400,10 @@ export const googleNameInputSelectors: string[] = [
   'input[placeholder*="Name"]'
 ];
 
-// Authenticated-lobby primary CTA — "Join now" / "Switch here" / "Ask to join".
+// Authenticated-lobby primary CTA — "Join now" / "Join anyway" / "Switch here" / "Ask to join".
+// "Join anyway" is what Meet shows instead of "Join now" when it flags a device problem, which
+// in the bot container is always the case (no camera, mic "muted by system"). Without it the
+// structural backstop lands on the lobby's Gemini "Start" button (#2048).
 // Same ordering rule as googleJoinButtonSelectors above: ordered resolution makes
 // list position authoritative, so the EXACT text selectors come FIRST and the
 // broad structural `button[jsname]:not([aria-label]):has(span)` entry comes LAST.
@@ -410,6 +413,7 @@ export const googleNameInputSelectors: string[] = [
 export const googleAuthJoinCtaSelectors: string[] = [
   // Exact text FIRST.
   'button:has-text("Join now")',
+  'button:has-text("Join anyway")',
   'button:has-text("Switch here")',
   'button:has-text("Ask to join")',
   // Broad structural backstop LAST.
