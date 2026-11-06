@@ -28,6 +28,32 @@ async function clearAvConfirmModalAndRejoin(page: Page): Promise<boolean> {
   return dismissed;
 }
 
+// Teams refuses an anonymous join when the organiser's tenant turned anonymous join off (guests
+// must verify with an email code). The pre-join "Join now" button stays on screen, which the checks
+// below read as a lobby, but no host is ever asked to admit the bot. Teams reports the refusal only
+// in the page console, so latch it there (same pattern as jitsi's members-only watch). Attach
+// before navigation, from join.ts.
+const ANONYMOUS_JOIN_DISABLED_RE = /Anonymous Join is disabled|ccSubCode:\s*5761\b/i;
+const anonymousJoinWatched = new WeakSet<object>();
+const anonymousJoinDisabled = new WeakSet<object>();
+
+export function attachAnonymousJoinWatch(page: Page): void {
+  if (anonymousJoinWatched.has(page)) return;
+  anonymousJoinWatched.add(page);
+  page.on("console", (msg) => {
+    try { if (ANONYMOUS_JOIN_DISABLED_RE.test(msg.text())) anonymousJoinDisabled.add(page); } catch { /* noop */ }
+  });
+}
+
+function throwIfAnonymousJoinDisabled(page: Page): void {
+  if (!anonymousJoinDisabled.has(page)) return;
+  log("🚨 Teams refused the anonymous join: this meeting does not allow anonymous guests");
+  throw new AdmissionError(
+    "denial",
+    "Teams refused the bot: this meeting does not allow anonymous guests, so no host was asked to admit it",
+  );
+}
+
 // Function to check if bot has been rejected from the meeting
 export async function checkForTeamsRejection(page: Page): Promise<boolean> {
   try {
@@ -92,6 +118,7 @@ export async function waitForTeamsMeetingAdmission(
     // blocks the join AND keeps the pre-join "Join now" button visible, which
     // the checks below read as a permanent waiting room. Clear it first.
     await clearAvConfirmModalAndRejoin(page);
+    throwIfAnonymousJoinDisabled(page);
 
     // FIRST: Check if bot is already admitted (no waiting room needed)
     log("Checking if bot is already admitted to the Teams meeting...");
@@ -177,6 +204,7 @@ export async function waitForTeamsMeetingAdmission(
       const effectiveTimeout = () => timeout + getEscalationExtensionMs();
 
       while (Date.now() - startTime < effectiveTimeout()) {
+        throwIfAnonymousJoinDisabled(page);
         // If the only reason we look "stuck in waiting room" is the AV-confirm
         // modal pinning the pre-join "Join now" button, clear it and re-join.
         if (await isTeamsAvConfirmModalVisible(page)) {

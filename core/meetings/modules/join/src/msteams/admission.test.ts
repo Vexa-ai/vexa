@@ -16,7 +16,7 @@
  * Run: npx tsx src/msteams/admission.test.ts
  */
 
-import { waitForTeamsMeetingAdmission } from "./admission";
+import { waitForTeamsMeetingAdmission, attachAnonymousJoinWatch } from "./admission";
 import { AdmissionError } from "../shared/admission";
 import { resetEscalation } from "../shared/escalation";
 
@@ -35,8 +35,11 @@ function makePage(isVisible: (sel: string) => boolean): any {
     click: async () => {},
     count: async () => 0,
   });
+  const consoleHandlers: Array<(msg: any) => void> = [];
   return {
     locator,
+    on: (ev: string, fn: (msg: any) => void) => { if (ev === "console") consoleHandlers.push(fn); },
+    emitConsole: (text: string) => consoleHandlers.forEach((fn) => fn({ text: () => text })),
     getByRole: (_role: string, _opts?: any) => locator(`role:${_role}`),
     waitForTimeout: async (_ms: number) => {},
     evaluate: async (fn: any, arg?: any) => {
@@ -94,6 +97,29 @@ async function main() {
     const got = await outcomeOf(waitForTeamsMeetingAdmission(page, 0, cfg));
     check("indeterminate state stays a plain Error (transient join_failure at the driver)",
       got.startsWith("Error:"), got);
+  }
+
+  console.log("\n=== Teams refused the anonymous join (tenant blocks anonymous guests) → denial at once ===");
+  {
+    resetEscalation();
+    // The pre-join "Join now" stays visible, which reads as a lobby; only the console says why.
+    const page = makePage((sel) => sel.includes("Join now"));
+    attachAnonymousJoinWatch(page);
+    page.emitConsole("ObservableCallService: Failed to get observable call. error=Create/Join conversation failed because Anonymous Join is disabled. Prompt Email otp login as EOTP Meeting Option is enabled, error.message=terminatedReason: 8, ccCode: 403, ccSubCode: 5761, resultCategory: ExpectedError");
+    const started = Date.now();
+    const got = await outcomeOf(waitForTeamsMeetingAdmission(page, 900_000, cfg));
+    check("anonymous join disabled → AdmissionError('denial'), no 15-minute lobby wait",
+      got === "AdmissionError:denial" && Date.now() - started < 5_000, got);
+  }
+
+  console.log("\n=== other console errors do not end a real lobby wait ===");
+  {
+    resetEscalation();
+    const page = makePage((sel) => sel.includes("Join now"));
+    attachAnonymousJoinWatch(page);
+    page.emitConsole("CallingBotService: waitForCallRegion failed with error: Call disconnected");
+    const got = await outcomeOf(waitForTeamsMeetingAdmission(page, 0, cfg));
+    check("unrelated console error → still lobby_timeout", got === "AdmissionError:lobby_timeout", got);
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);

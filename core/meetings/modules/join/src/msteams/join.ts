@@ -14,6 +14,7 @@ import {
   teamsSpeakerDisableSelectors
 } from "./selectors";
 import { dismissTeamsAvConfirmModal, isTeamsAvConfirmModalVisible } from "./modals";
+import { attachAnonymousJoinWatch } from "./admission";
 import {
   authRedirectError,
   classifyNonMeetingUrl,
@@ -166,6 +167,7 @@ export async function joinMicrosoftTeams(
 ): Promise<void> {
   // Step 1: Navigate to Teams meeting
   log(`Step 1: Navigating to Teams meeting: ${meetingUrl}`);
+  attachAnonymousJoinWatch(page);
   await page.goto(meetingUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForTimeout(500);
 
