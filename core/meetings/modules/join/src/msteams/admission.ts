@@ -325,6 +325,7 @@ export async function waitForTeamsMeetingAdmission(
 
       while (Date.now() - pollStart < pollTimeout) {
         await page.waitForTimeout(pollInterval);
+        throwIfAnonymousJoinDisabled(page);
 
         // Check for rejection first
         const isRejected = await checkForTeamsRejection(page);
@@ -355,6 +356,7 @@ export async function waitForTeamsMeetingAdmission(
           // Wait for admission in the lobby
           const lobbyStart = Date.now();
           while (Date.now() - lobbyStart < timeout) {
+            throwIfAnonymousJoinDisabled(page);
             if (await isTeamsAvConfirmModalVisible(page)) {
               await clearAvConfirmModalAndRejoin(page);
               await page.waitForTimeout(500);
