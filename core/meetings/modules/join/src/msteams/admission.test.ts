@@ -16,7 +16,7 @@
  * Run: npx tsx src/msteams/admission.test.ts
  */
 
-import { waitForTeamsMeetingAdmission, attachAnonymousJoinWatch } from "./admission";
+import { waitForTeamsMeetingAdmission, attachAnonymousJoinWatch, TEAMS_ANONYMOUS_JOIN_DISABLED } from "./admission";
 import { AdmissionError } from "../shared/admission";
 import { resetEscalation } from "../shared/escalation";
 
@@ -52,9 +52,10 @@ function makePage(isVisible: (sel: string) => boolean): any {
 const LOBBY = "Someone will let you in shortly";
 const DENIED = "Sorry, but you were denied";
 
+let lastError: any = null;
 async function outcomeOf(run: Promise<unknown>): Promise<string> {
   try { await run; return "resolved"; }
-  catch (e: any) { return e instanceof AdmissionError ? `AdmissionError:${e.outcome}` : `Error:${e.message}`; }
+  catch (e: any) { lastError = e; return e instanceof AdmissionError ? `AdmissionError:${e.outcome}` : `Error:${e.message}`; }
 }
 
 async function main() {
@@ -111,6 +112,8 @@ async function main() {
     check("anonymous join disabled → AdmissionError('denial'), no 15-minute lobby wait",
       got === "AdmissionError:denial" && Date.now() - started < 5_000, got);
   }
+  check("the reason starts with the code the platform maps",
+    String(lastError?.message).startsWith(`${TEAMS_ANONYMOUS_JOIN_DISABLED}: `), lastError?.message);
 
   console.log("\n=== other console errors do not end a real lobby wait ===");
   {

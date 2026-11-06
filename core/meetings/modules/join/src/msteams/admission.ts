@@ -33,6 +33,8 @@ async function clearAvConfirmModalAndRejoin(page: Page): Promise<boolean> {
 // below read as a lobby, but no host is ever asked to admit the bot. Teams reports the refusal only
 // in the page console, so latch it there (same pattern as jitsi's members-only watch). Attach
 // before navigation, from join.ts.
+/** Reason-text prefix the platform maps to its own "meeting doesn't allow anonymous guests" reason. */
+export const TEAMS_ANONYMOUS_JOIN_DISABLED = "teams_anonymous_join_disabled";
 const ANONYMOUS_JOIN_DISABLED_RE = /Anonymous Join is disabled|ccSubCode:\s*5761\b/i;
 const anonymousJoinWatched = new WeakSet<object>();
 const anonymousJoinDisabled = new WeakSet<object>();
@@ -50,7 +52,7 @@ function throwIfAnonymousJoinDisabled(page: Page): void {
   log("🚨 Teams refused the anonymous join: this meeting does not allow anonymous guests");
   throw new AdmissionError(
     "denial",
-    "Teams refused the bot: this meeting does not allow anonymous guests, so no host was asked to admit it",
+    `${TEAMS_ANONYMOUS_JOIN_DISABLED}: Teams refused the bot: this meeting does not allow anonymous guests, so no host was asked to admit it`,
   );
 }
 
