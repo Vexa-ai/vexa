@@ -20,7 +20,7 @@ from meeting_api.admission.shadow import (
     BOOKED_KEY, COMPUTE_KEY, COUNTS_KEY, OUTSIDE_KEY, PREDICTION_KEY, FailOnce, ShadowObserver, booked_peaks,
 )
 from meeting_api.admission.sweep import MeetingHistory, compute, daily_tick, history_slice_stmt, interval_of
-from meeting_api.bot_spawn.adapters import active_by_kind_stmt
+from meeting_api.bot_spawn.adapters import SqlAlchemyMeetingRepo, active_by_kind_stmt
 from meeting_api.bot_spawn import MaxBotsExceeded, request_bot
 from meeting_api.bot_spawn.fakes import FakeRuntimeClient, InMemoryMeetingRepo
 
@@ -333,6 +333,45 @@ async def test_an_adhoc_spawn_records_no_booked_peak():
     assert BOOKED_KEY.format(USER, 10) not in redis.kv
 
 
+async def test_an_account_with_only_booked_rows_is_still_published_and_they_stay_out_of_adhoc():
+    redis = FakeRedis()
+    rows = [(USER, Interval(at(hour=9), at(hour=10), booked=True)) for _ in range(4)]
+    await compute(FakeHistory([rows]), redis, now=at(day=3))
+    stored = Prediction.from_json(json.loads(redis.kv[PREDICTION_KEY.format(USER)]))
+    assert stored.adhoc.limit == 2 and stored.adhoc.hours == {}
+
+
+@pytest.mark.parametrize("ahead,is_booked", [
+    (timedelta(seconds=30), False),
+    (timedelta(minutes=25), False),  # the longest ad-hoc wait: lobby budget plus a queue slot
+    (timedelta(minutes=30), False),
+    (timedelta(minutes=31), True),
+    (timedelta(days=14), True),  # the calendar sync's horizon
+])
+def test_a_row_is_booked_when_created_well_before_it_started(ahead, is_booked):
+    row = SimpleNamespace(created_at=at(hour=9) - ahead, start_time=at(hour=9), end_time=at(hour=10))
+    assert interval_of(row, at(day=9)).booked is is_booked
+
+
+async def test_counting_active_by_kind_sets_a_statement_timeout_first():
+    statements = []
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def execute(self, stmt):
+            statements.append(str(stmt))
+            return SimpleNamespace(all=lambda: [(True, 2), (False, 1)])
+
+    got = await SqlAlchemyMeetingRepo(Session).count_active_bots_by_kind(user_id=USER)
+    assert got == {"scheduled": 2, "adhoc": 1}
+    assert "statement_timeout = '1s'" in statements[0]
+
+
 async def test_the_daily_job_takes_the_booked_peak_and_scheduled_starts_at_the_default():
     redis = FakeRedis()
     redis.kv[BOOKED_KEY.format(USER, 9)] = "4"
@@ -469,12 +508,12 @@ def test_the_daily_query_never_touches_data_and_stays_on_the_created_at_range():
     assert "data" not in sql
     selected = sql.split("FROM", 1)[0]
     assert [c.strip() for c in selected.replace("SELECT", "").split(",")] == [
-        "meetings.user_id", "meetings.start_time", "meetings.end_time",
+        "meetings.user_id", "meetings.created_at", "meetings.start_time", "meetings.end_time",
     ]
     assert "meetings.created_at >=" in sql and "meetings.created_at <" in sql
 
 
-async def test_the_history_walks_15_days_in_slices():
+async def test_the_history_walks_28_days_in_slices():
     statements = []
 
     class Session:
@@ -491,15 +530,15 @@ async def test_the_history_walks_15_days_in_slices():
     pages = [page async for page in MeetingHistory(Session, pause_s=0).pages(at(day=20))]
     assert pages == []
     slices = [s for s in statements if "created_at" in str(s)]
-    assert len(slices) == 15 * 4  # 15 days of 6-hour slices
-    assert sum("statement_timeout = '30s'" in str(s) for s in statements) == 15 * 4
+    assert len(slices) == 28 * 4  # 28 days of 6-hour slices
+    assert sum("statement_timeout = '30s'" in str(s) for s in statements) == 28 * 4
 
 
 def test_interval_of_a_row_with_no_end():
-    row = SimpleNamespace(start_time=at(hour=1), end_time=None)
+    row = SimpleNamespace(created_at=at(hour=1), start_time=at(hour=1), end_time=None)
     assert interval_of(row, at(day=9)).end == at(hour=2)
     assert interval_of(row, at(hour=1, minute=20)).end == at(hour=1, minute=20)
-    row = SimpleNamespace(start_time=at(hour=1), end_time=at(hour=3))
+    row = SimpleNamespace(created_at=at(hour=1), start_time=at(hour=1), end_time=at(hour=3))
     assert interval_of(row, at(day=9)) == Interval(at(hour=1), at(hour=3))
 
 

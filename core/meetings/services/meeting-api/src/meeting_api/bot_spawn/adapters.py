@@ -460,8 +460,11 @@ class SqlAlchemyMeetingRepo:
             return int((await db.execute(stmt)).scalar() or 0)
 
     async def count_active_bots_by_kind(self, *, user_id, exclude_meeting_id=None) -> dict:
+        from sqlalchemy import text
+
         stmt = active_by_kind_stmt(user_id=user_id, exclude_meeting_id=exclude_meeting_id)
         async with self._session_factory() as db:
+            await db.execute(text("SET LOCAL statement_timeout = '1s'"))
             counts = {bool(row[0]): int(row[1]) for row in (await db.execute(stmt)).all()}
         return {"scheduled": counts.get(True, 0), "adhoc": counts.get(False, 0)}
 

@@ -1,10 +1,11 @@
 """Bot limits, the arithmetic: no I/O, no clock, no meeting content.
 
 An account has two limits, one per kind of bot, each a peak of concurrent bots per hour of the week,
-plus 50% rounded up. ``adhoc`` comes from the account's total peak over the last 14 days of meeting
-timestamps. ``scheduled`` comes from booked peaks recorded from now on (see ``shadow``): the history
-can't tell booked rows apart without reading ``meetings.data``, which holds bot_logs, and heavy reads
-of it took prod Postgres into recovery on 26 Oct 2026. So it starts at the default and learns.
+plus 50% rounded up. ``adhoc`` comes from the account's peak over the last 14 days of rows not booked,
+judged from timestamps alone (``sweep.BOOKED_AHEAD``). ``scheduled`` comes from booked peaks recorded
+from now on (see ``shadow``), because that judgement sets aside booked load but can't vouch for it,
+and ``meetings.data``, which would, holds bot_logs: heavy reads of it took prod Postgres into recovery
+on 26 Oct 2026. So it starts at the default and learns.
 An account with no history gets 2 and 2. A cap raised above the plan default is a floor: it was
 granted on purpose, and history never takes it away.
 
@@ -28,6 +29,7 @@ class Interval:
 
     start: datetime
     end: datetime
+    booked: bool = False
 
 
 @dataclass(frozen=True)
@@ -120,11 +122,11 @@ def predict(
     intervals: Iterable[Interval], *, booked_peaks: Optional[Mapping[int, int]] = None,
     cap: Optional[int] = None,
 ) -> Prediction:
-    """One account's two limits: ad-hoc from its total history, scheduled from its booked peaks."""
+    """One account's two limits: ad-hoc from its rows not booked, scheduled from its booked peaks."""
     floor = raised_floor(cap)
     return Prediction(
         scheduled=_kind_limits(booked_peaks or {}, floor),
-        adhoc=_kind_limits(peak_by_hour(intervals), floor),
+        adhoc=_kind_limits(peak_by_hour(i for i in intervals if not i.booked), floor),
     )
 
 

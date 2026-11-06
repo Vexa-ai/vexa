@@ -1,12 +1,14 @@
 """Bot limits, the daily job: read when bots ran, write each account's prediction to Redis.
 
-The query reads ``user_id`` and two timestamps. It never touches ``meetings.data``, which holds
-bot_logs: heavy reads of it took prod Postgres into recovery on 26 Oct 2026. So history can't say
-which rows were booked; the scheduled limit learns from the shadow's own count instead (``shadow``).
+The query reads ``user_id`` and three timestamps. It never touches ``meetings.data``, which holds
+bot_logs: heavy reads of it took prod Postgres into recovery on 26 Oct 2026. So a booked row is told
+apart by how long before its start it was created (``BOOKED_AHEAD``), which keeps booked load out of
+the ad-hoc limit; the scheduled limit learns from the shadow's own count instead (``shadow``).
 
-Its load on prod's database is bounded by a ``created_at`` index range of 15 days, walked in 6-hour
-slices with a pause between them, and a 30 s statement timeout per slice. The extra day catches rows
-created shortly before their start; a row booked earlier than that is missed, which lowers its peak.
+Its load on prod's database is bounded by a ``created_at`` index range of 28 days, walked in 6-hour
+slices with a pause between them, and a 30 s statement timeout per slice. 14 of those days are the
+calendar sync's horizon: a booked row is created up to that long before it runs, and an account whose
+only row in range was missed would get no prediction at all.
 """
 from __future__ import annotations
 
@@ -25,7 +27,11 @@ from .shadow import COMPUTE_KEY, PREDICTION_KEY, PREDICTION_TTL_S, FailOnce, boo
 log = logging.getLogger(__name__)
 
 HISTORY_DAYS = 14
-CREATED_LEAD_DAYS = 1
+CREATED_LEAD_DAYS = 14  # calendar_sync.service.DEFAULT_HORIZON_DAYS
+# A row whose bot started more than this after the row was created was booked. An ad-hoc bot starts
+# within its lobby budget (15 min, VEXA_LOBBY_BUDGET_S) plus at most a 10-minute wait for a free slot,
+# so 25 min at worst; 30 clears that. A meeting booked under 30 min ahead counts as ad-hoc load.
+BOOKED_AHEAD = timedelta(minutes=30)
 SLICE = timedelta(hours=6)
 SLICE_PAUSE_S = 0.2
 STATEMENT_TIMEOUT = "30s"
@@ -41,7 +47,7 @@ def history_slice_stmt(*, created_from, created_until, started_from):
 
     from ..sessions.models import Meeting
 
-    return select(Meeting.user_id, Meeting.start_time, Meeting.end_time).where(
+    return select(Meeting.user_id, Meeting.created_at, Meeting.start_time, Meeting.end_time).where(
         Meeting.created_at >= created_from,
         Meeting.created_at < created_until,
         Meeting.start_time >= started_from,
@@ -76,7 +82,10 @@ class MeetingHistory:
 
 def interval_of(row, now: datetime) -> Interval:
     end = row.end_time if row.end_time is not None else min(row.start_time + OPEN_INTERVAL, now)
-    return Interval(start=row.start_time, end=max(end, row.start_time))
+    return Interval(
+        start=row.start_time, end=max(end, row.start_time),
+        booked=row.start_time - row.created_at > BOOKED_AHEAD,
+    )
 
 
 async def compute(history, redis, *, now: Optional[datetime] = None) -> Optional[dict]:
