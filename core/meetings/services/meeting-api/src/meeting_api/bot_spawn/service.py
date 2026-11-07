@@ -75,7 +75,6 @@ __all__ = [
     "DEFAULT_LOBBY_BUDGET_S",
     "lobby_budget_ms",
     "NO_MEETING_URL_PLATFORMS",
-
 ]
 
 # The waiting-room budget the control plane ISSUES to every bot it spawns (``automatic_leave
@@ -210,9 +209,10 @@ def _teams_url(native_meeting_id: str, teams_base_host: Optional[str]) -> str:
     if _TEAMS_SHORT_ID.match(native_meeting_id):
         return f"https://{host}/meet/{native_meeting_id}"
     return f"https://{host}/l/meetup-join/{native_meeting_id}"
-# NO_MEETING_URL_PLATFORMS (discord — no join-by-URL concept at all, a different case from the
-# templates above) now lives in invocation.py, imported above, so build_invocation's meetingUrl
-# null-survival check reads the SAME set as the router's URL-required gate below.
+
+
+# NO_MEETING_URL_PLATFORMS (discord, no join-by-URL concept at all, a different case from the
+# templates above) lives in invocation.py, imported above, and drives the router's URL-required gate.
 
 
 async def _fetch_bot_context(user_id: int) -> dict:
