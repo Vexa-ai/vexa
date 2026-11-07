@@ -1,0 +1,23 @@
+[
+ "annotate_meeting",
+ "flows_list",
+ "friction_so_far",
+ "get_bot_status",
+ "get_meeting_chat",
+ "get_meeting_transcript",
+ "get_recording",
+ "list_meetings",
+ "list_recordings",
+ "parse_meeting_link",
+ "reaction_signal",
+ "reactions_list",
+ "report_friction",
+ "report_issue",
+ "request_meeting_bot",
+ "search_transcripts",
+ "speak_in_meeting",
+ "stop_bot",
+ "timeline",
+ "update_bot_config",
+ "whats_waiting"
+]

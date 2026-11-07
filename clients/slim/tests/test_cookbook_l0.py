@@ -36,25 +36,25 @@ async def test_connect_binds_key_and_verifies(monkeypatch):
 
 
 # ── Meeting (during) ────────────────────────────────────────────────────────────────────────────────
-async def test_agent_on_meeting_with_url_sends_bot_then_starts(slim):
-    out = await cb.agent_on_meeting(slim, "abc-defg-hij", meet_url="https://meet/x")
-    assert slim.names() == ["send_bot", "start_processing"]   # bot first, then the processor
+async def test_agent_on_meeting_with_url_sends_the_bot(slim):
+    """It used to do a second thing after the bot — start the in-product processor. PRD decision 34
+    removed that producer, so putting an agent on a meeting is the bot plus a chat turn."""
+    await cb.agent_on_meeting(slim, "abc-defg-hij", meet_url="https://meet/x")
+    assert slim.names() == ["send_bot"]
     assert slim.last("send_bot")["url"] == "https://meet/x"
-    assert out["on"] is True
 
 
-async def test_agent_on_meeting_without_url_skips_bot(slim):
-    await cb.agent_on_meeting(slim, "abc")
-    assert slim.names() == ["start_processing"]               # no bot when no url
+async def test_agent_on_meeting_without_url_does_nothing(slim):
+    out = await cb.agent_on_meeting(slim, "abc")
+    assert slim.names() == []
+    assert out["sent"] is False
 
 
-async def test_listen_to_meeting_returns_harvest_and_stops(slim):
+async def test_listen_to_meeting_returns_harvest(slim):
     out = await cb.listen_to_meeting(slim, "abc", seconds=1.0, meet_url="https://meet/x")
-    # full happy path: bot → start → watch → stop
-    assert slim.names() == ["send_bot", "start_processing", "watch", "stop_processing"]
+    assert slim.names() == ["send_bot", "watch"]
     assert isinstance(out, Harvest)
-    assert out.counts() == {"transcript": 1, "note": 1, "card": 2}
-    assert len(out.of("card")) == 2
+    assert out.counts() == {"transcript": 2}
     assert slim.last("watch")["seconds"] == 1.0
 
 

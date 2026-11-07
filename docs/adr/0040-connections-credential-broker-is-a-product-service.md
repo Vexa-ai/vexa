@@ -1,0 +1,139 @@
+# ADR 0040 — Connections: the credential broker is a product service with its own encrypted store
+
+**Status:** accepted · 2026-10-08 · for v0.13.2 ([#1784](https://github.com/Vexa-ai/vexa/pull/1784),
+[#1783](https://github.com/Vexa-ai/vexa/issues/1783)) · applies P10, P15 and P4 · records a
+Category B licence decision under [ADR-0004](0004-open-source-dependency-and-license-policy.md)
+
+## Context
+
+v0.13.2 ships Connections: a person connects Gmail, Google Calendar or a custom API to their agent
+in the terminal, and the agent then reads mail, creates drafts or calls the service without ever
+holding the credential. The product code for it (agent-api's Connections routes and Git store, the
+terminal's panel) called a broker that existed only as a development harness in
+`deploy/dogfood/credentials-mvp`: no contract, no product image, no deploy surface, tests that ran in
+no CI lane, three hand-written copies of its request signature, and an OpenBao that was
+single-node, manually unsealed, without TLS, and whose broker token expired after 24 hours.
+Production runs agent-api and the terminal, so Connections has to work on a standard install.
+
+## Decision
+
+1. **A separate service, in the agent domain** — `core/agent/services/credential-broker`, image
+   `vexaai/v012-credential-broker`, deployed by compose and the chart whenever agent-api is. The
+   force that justifies the distribution (P10) is trust isolation: agent-api runs next to the worker
+   containers that execute model-chosen tool calls, and the authority to consent and store a
+   credential must live in no process an agent can reach.
+2. **Three role keys, one wire.** Each caller signs every request with its own key —
+   `agent` (agent-api: request, list and use), `human` (the terminal, for the signed-in person:
+   consent, store, disconnect, delete), `git` (agent-api's Git store). The assertion binds actor,
+   session, time, a single-use nonce, method, path and body. The wire is the sealed contract
+   `core/agent/contracts/credential-broker.v1`; one Python signer (vendored byte-for-byte) and one
+   TypeScript signer reproduce its golden vectors. No route returns a credential to `agent` or
+   `human`.
+3. **The default store is the broker's own: AES-256-GCM** over SQLite on the broker's state volume,
+   one random nonce per version, path and version bound as associated data. The 32-byte key is a
+   secret mounted from somewhere other than that volume (a Kubernetes Secret; a separate compose
+   volume), so a copied volume or a backup is ciphertext.
+4. **OpenBao (or Vault) is an optional backend** behind the same port
+   (`VEXA_CONNECTIONS_STORE=openbao`), for operators who already run one. The chart and compose do
+   not ship it. Its path layout is the harness's, so the development deployment keeps its data.
+5. **Network.** Only agent-api and the terminal reach the broker: compose puts it on an internal
+   network only those two join, and the chart ships a NetworkPolicy admitting their Pods only.
+   Worker containers mount no key and cannot open a socket to it.
+6. **Not in Lite.** Lite runs agent workers as child processes of its one container, so nothing
+   could keep the human key from a worker. Lite answers "Connections are not configured".
+7. **One replica.** State is SQLite on a ReadWriteOnce volume; the chart pins `replicas: 1` with a
+   Recreate rollout.
+
+## Why not a production OpenBao in the chart
+
+Making the harness's OpenBao production-grade means running it as a three-node Raft cluster with
+persistent volumes, TLS between the broker and the vault and between peers, an auto-unseal source,
+a bootstrap job that creates the mount, policy and audit device, and a token lifecycle (Kubernetes
+auth, or a renewal loop) to replace the 24-hour token. Every self-hoster would operate all of that
+for one service. And on a standard install the auto-unseal key is itself a Kubernetes Secret beside
+the cluster — the same custody the local store's key has — so the cluster buys availability and an
+audit device, not a stronger key-custody property. An operator who needs those already runs a vault
+and can point the broker at it. The local store is the smaller system with the same guarantee at
+rest.
+
+## Trade-off
+
+- **The broker is a single point of failure for Connections** (one replica, one volume). Agent-api
+  answers 503 with a typed fault when it is down. Saved Git credentials are the exception: they
+  live here too (amendment below), so a broker outage refuses Git operations that need one rather
+  than running them without it.
+- **The terminal reaches the broker directly**, past the gateway (ADR-0037 decision 1). It is on the
+  dated door backlog: it closes when the gateway re-stamps a person's session as the human role (the
+  signed-identity work) and the terminal reaches Connections through `GATEWAY_URL` only.
+- **agent-api acts for a person only inside a request the gateway signed for them.** Since
+  ADR-0041 both roles agent-api holds, `agent` and `git`, carry the gateway's signed identity, which
+  the broker verifies and requires to name the assertion's actor; the git role then serves only that
+  person's own Git credentials and the deploy keys of the shared workspaces signed with them. What
+  remains trusted is agent-api's handling of a signature while it is valid. The network boundary in
+  decision 5 keeps every other process from presenting either role.
+- **Key loss is data loss.** Losing the store key makes every stored credential unreadable; people
+  reconnect. Rotation without that loss (re-encrypting under a new key) is not built.
+- **Deleted connections keep their encrypted versions** until a retention process removes them;
+  disconnect does not revoke the grant at the provider.
+
+## Licences
+
+`cryptography` (Apache-2.0 OR BSD-3-Clause) is the broker's one new Python dependency. OpenBao is
+MPL-2.0, Category B; it is recorded in `image-licenses.json` as an operator-run optional backend.
+Vexa pins and redistributes no OpenBao bytes, and the broker only speaks its HTTP API, so no Vexa
+source is MPL-covered. No npm dependency is added.
+
+## Consequences
+
+- The release map moves to schema 3 (twelve images); the release workflows build, pull and probe
+  the broker like every other image.
+- `gate:config-contract` adopts the broker; agent-api's broker keys are capabilities plumbed on
+  compose and helm; the terminal's Connections keys are declared in its own test.
+- `gate:domain-doors` counts the broker doors; `gate:fact-parity` holds the vendored signer;
+  `gate:contract-conformance` runs the broker's route table against the contract in both directions.
+- The development harness is deleted.
+
+## Amendment — 2026-10-12: the broker is the only credential store ([#1783](https://github.com/Vexa-ai/vexa/issues/1783))
+
+Saved Git tokens and deploy keys were opt-in here, and otherwise kept by agent-api in a store of its
+own on the workspaces volume. That left a second store inside the process decision 1 keeps the
+authority out of. The `git` role is now always wired: compose and the chart point agent-api at the
+broker and mount the git key, agent-api holds no store and no store key, and without a broker a
+save is a typed refusal. Entries an older agent-api kept move on their owner's next Git operation
+(read, written here, read back, then removed), or all at once with the broker's operator-run
+`python -m credential_broker.import_git_legacy`. `VEXA_SECRETS_KEY` is read only for that move.
+`credential-broker.v1` is unchanged: the `git` role's route already carried `get`, `put` and
+`migrate`.
+
+## Amendment — 2026-10-13: a write to a mailbox or calendar always needs a person ([#1783](https://github.com/Vexa-ai/vexa/issues/1783))
+
+The connection policy (`_global/POLICIES.md`, narrowed by the person) is resolved by agent-api and
+forwarded to the broker with each action as `ActionPolicy`; the broker enforces it again. That body
+is the caller's word, not something the broker can verify, so it must not be what opens a write.
+
+1. **A write is refused to a worker without a person in the loop, categorically.** The draft,
+   draft-update and calendar-event routes take the identity without `unwatched_ok`: the gateway's
+   signed regime alone decides, and no forwarded policy changes it. At agent-api the five write
+   verbs (`gmail/draft`, `gmail/draft/update`, `calendar/event/create|update|cancel`) are
+   `person: true` in `routes.v1.json`, so the person gate refuses them before any policy is read.
+2. **`connection_actions_unattended` lists reads only** (`gmail.search`, `gmail.read`,
+   `gmail.thread`, `calendar.events`). A write, or `all`, there makes the file unreadable: every
+   connection action is refused, naming the key, rather than the file quietly meaning less than it
+   says.
+3. **Reads stay policy-governed.** The four read verbs are `person: false`; a background routine
+   reads only what the file lists (none by default), and the broker serves an unwatched read only
+   when the forwarded policy says so. What remains trusted there is agent-api's resolution of the
+   policy, the same trust the Trade-off above already places in its handling of a signature.
+4. **A signed policy was not chosen.** Signing `ActionPolicy` would need a key the broker trusts and
+   agent-api does not hold, i.e. a third signer for one bit; refusing unwatched writes outright is
+   smaller and leaves nothing to verify.
+5. **The person's own setting is the person's.** Saving it (`PUT /api/connections/policy`, broker
+   `POST /api/preferences`) is refused to every delegated caller, watched or not: a worker steered by
+   text it read could otherwise loosen restrictions the person set. Reading it stays open to workers.
+6. **A change to a connection key in `_global/POLICIES.md` needs a person, and is announced.** The
+   file is written by an org admin, and by an admin's agent (the policies wizard). A page write,
+   removal or move that changes a `connection_*`, `calendar_*` or `draft_*` value is refused to a
+   worker without a person in the loop; from anyone else its commit in `_global` carries
+   `connection policy changed: <keys> — by <subject> (the person | an agent, person in the loop)`,
+   and agent-api logs one `connection_policy_changed` line. `_global`'s history is the audit trail
+   an administrator already reads; a separate approval step for an admin's own file was not added.

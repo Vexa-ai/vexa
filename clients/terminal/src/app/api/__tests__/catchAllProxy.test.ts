@@ -66,3 +66,63 @@ describe("catch-all proxy — upstream status passthrough", () => {
     expect((await res.json()).error).toBe("upstream_unreachable");
   });
 });
+
+it("streams recording bytes and preserves range seeking through the meetings gateway", async () => {
+  const bytes = new Uint8Array([0, 255, 128, 1]);
+  const mock = vi.fn(async (_url: string, _init: RequestInit) => new Response(bytes, { status: 206, headers: {
+    "Content-Type": "audio/webm", "Content-Range": "bytes 4-7/100", "Accept-Ranges": "bytes", "Content-Length": "4",
+  } }));
+  vi.stubGlobal("fetch", mock);
+  const req = makeReq("GET");
+  Object.defineProperty(req, "headers", { value: new Headers({ Range: "bytes=4-7" }) });
+  const res = await getRoute(req, ctx("recordings", "7", "media", "9", "raw"));
+  expect(mock.mock.calls[0][0]).toContain("/recordings/7/media/9/raw");
+  expect(mock.mock.calls[0][0]).not.toContain("/agent/");
+  expect((mock.mock.calls[0][1].headers as Record<string, string>).Range).toBe("bytes=4-7");
+  expect(res.status).toBe(206);
+  expect(res.headers.get("content-range")).toBe("bytes 4-7/100");
+  expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes);
+});
+
+it("relays a download's attachment header and query so a saved recording keeps its server filename", async () => {
+  const mock = vi.fn(async (_url: string, _init: RequestInit) => new Response(new Uint8Array([1, 2]), { status: 200, headers: {
+    "Content-Type": "audio/webm", "Content-Disposition": 'attachment; filename="meeting-31-2026-10-09-audio.webm"',
+  } }));
+  vi.stubGlobal("fetch", mock);
+  const res = await getRoute(makeReq("GET", "?type=audio&download=1"), ctx("recordings", "7", "media", "9", "raw"));
+  expect(mock.mock.calls[0][0]).toContain("/recordings/7/media/9/raw?type=audio&download=1");
+  expect(res.headers.get("content-disposition")).toBe('attachment; filename="meeting-31-2026-10-09-audio.webm"');
+  expect(res.headers.get("cache-control")).toBe("private, no-store");
+});
+
+describe("catch-all proxy — bot accounts", () => {
+  const ID = "0123456789abcdef0123456789abcdef";
+
+  it("forwards /api/bot-accounts/... to the gateway root, not /agent", async () => {
+    const mock = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify({ accounts: [] }), { status: 200 }));
+    vi.stubGlobal("fetch", mock);
+    const res = await getRoute(makeReq("GET"), ctx("bot-accounts"));
+    expect(mock.mock.calls[0][0]).toMatch(/\/bot-accounts$/);
+    expect(mock.mock.calls[0][0]).not.toContain("/agent/");
+    expect(await res.json()).toEqual({ accounts: [] });
+  });
+
+  it("passes the noVNC client's bytes and content type through unchanged", async () => {
+    const html = "<!doctype html><title>noVNC</title>";
+    const mock = vi.fn(async (_url: string, _init: RequestInit) => new Response(html, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } }));
+    vi.stubGlobal("fetch", mock);
+    const res = await getRoute(makeReq("GET"), ctx("bot-accounts", "sessions", ID, "view", "vnc.html"));
+    expect(mock.mock.calls[0][0]).toContain(`/bot-accounts/sessions/${ID}/view/vnc.html`);
+    expect(mock.mock.calls[0][0]).not.toContain("/agent/");
+    expect((mock.mock.calls[0][1].headers as Record<string, string>)["X-API-Key"]).toBe("alice-tok");
+    expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(await res.text()).toBe(html);
+  });
+
+  it("keeps JavaScript a script", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("export default 1;", { status: 200, headers: { "Content-Type": "application/javascript" } })));
+    const res = await getRoute(makeReq("GET"), ctx("bot-accounts", "sessions", ID, "view", "core", "rfb.js"));
+    expect(res.headers.get("content-type")).toBe("application/javascript");
+    expect(await res.text()).toBe("export default 1;");
+  });
+});

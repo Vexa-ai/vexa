@@ -91,6 +91,16 @@ export class MediaRecorderChunker implements RecordingTap {
     return this.recorder;
   }
 
+  /** Force the recorder to emit a chunk NOW with everything buffered since the last timeslice —
+   *  without stopping. The tail-loss fix: on eviction Zoom navigates the page away (destroying the
+   *  recorder) before the next timeslice boundary, so the last partial (the final few seconds of
+   *  speech) never becomes a chunk. Flushing at the earliest end-signal (the mix going silent) turns
+   *  that partial into a real, immediately-uploaded chunk before the context dies. Idempotent + safe. */
+  flush(): void {
+    try { if (this.recorder && this.recorder.state === "recording") this.recorder.requestData(); }
+    catch (err: any) { blog(`[record-chunker] flush() requestData failed: ${err?.message || err}`); }
+  }
+
   async start(): Promise<void> {
     if (this.recorder) {
       blog("[record-chunker] start() called twice — ignoring");
@@ -237,62 +247,115 @@ export class MediaRecorderChunker implements RecordingTap {
 // ───────────────────────────────────────────────────────────────────────
 
 /**
- * Find active media elements that expose audio. Two-pass (strict → relaxed):
- * tiles can be paused or expose audio via captureStream() rather than a direct
- * srcObject, so the relaxed pass mirrors buildCombinedStream's fallbacks. This
- * is platform-agnostic — a recording grabs every audio element on the page.
+ * Every on-page audio-bearing MediaStream that is CURRENTLY producing audio (has a `live` track).
+ * Prefers `srcObject`; falls back to a captureStream() cached on the element (a fresh captureStream()
+ * each scan would mint a new stream id, defeating the mixer's dedup and leaking source nodes). Deduped
+ * downstream by stream id. Platform-agnostic — a recording grabs every audio element on the page.
  */
-async function findMediaElements(retries = 5, delay = 2000): Promise<HTMLMediaElement[]> {
-  for (let i = 0; i < retries; i++) {
-    const all = Array.from(document.querySelectorAll("audio, video"));
-    let els = all.filter((el: any) =>
-      !el.paused && el.srcObject instanceof MediaStream && el.srcObject.getAudioTracks().length > 0
-    ) as HTMLMediaElement[];
-    if (els.length > 0) { blog(`[record-chunker] ${els.length} media elements (strict)`); return els; }
-
-    els = all.filter((el: any) => {
-      try {
-        if (el.srcObject instanceof MediaStream && el.srcObject.getAudioTracks().length > 0) return true;
-        if (typeof el.captureStream === "function" && el.captureStream()?.getAudioTracks?.().length > 0) return true;
-        if (typeof el.mozCaptureStream === "function" && el.mozCaptureStream()?.getAudioTracks?.().length > 0) return true;
-      } catch { /* not probeable; skip */ }
-      return false;
-    }) as HTMLMediaElement[];
-    if (els.length > 0) { blog(`[record-chunker] ${els.length} media elements (relaxed)`); return els; }
-
-    await new Promise((r) => setTimeout(r, delay));
+function collectAudioStreams(): MediaStream[] {
+  const els = Array.from(document.querySelectorAll("audio, video")) as any[];
+  const out: MediaStream[] = [];
+  for (const el of els) {
+    try {
+      let s: MediaStream | null = el.srcObject instanceof MediaStream ? el.srcObject : null;
+      if (!s) {
+        const cap: unknown =
+          el.__vexaRecCapStream instanceof MediaStream ? el.__vexaRecCapStream :
+          typeof el.captureStream === "function" ? el.captureStream() :
+          typeof el.mozCaptureStream === "function" ? el.mozCaptureStream() : null;
+        if (cap instanceof MediaStream) { el.__vexaRecCapStream = cap; s = cap; }
+      }
+      // Only LIVE audio: an element lingering with an ENDED track must not re-enter the mix (it would
+      // reconnect a dead source every scan and oscillate against the prune below).
+      if (s && s.getAudioTracks().some((t) => t.readyState === "live")) out.push(s);
+    } catch { /* not probeable; skip */ }
   }
-  return [];
+  return out;
 }
 
-/** Mix every media element's audio into one MediaStream via a destination node. */
-async function buildCombinedStream(mediaElements: HTMLMediaElement[]): Promise<MediaStream> {
-  if (mediaElements.length === 0) throw new Error("[record-chunker] no media elements to combine");
-  const ctx = new AudioContext();
-  const dest = ctx.createMediaStreamDestination();
-  let connected = 0;
-  mediaElements.forEach((element: any, index) => {
-    try {
-      const s =
-        element.srcObject ||
-        (element.captureStream && element.captureStream()) ||
-        (element.mozCaptureStream && element.mozCaptureStream());
-      if (s instanceof MediaStream && s.getAudioTracks().length > 0) {
-        ctx.createMediaStreamSource(s).connect(dest);
-        connected++;
-        blog(`[record-chunker] connected element ${index + 1}/${mediaElements.length}`);
-      }
-    } catch (e: any) { blog(`[record-chunker] could not connect element ${index + 1}: ${e?.message || e}`); }
-  });
-  if (connected === 0) throw new Error("[record-chunker] could not connect any audio streams");
-  blog(`[record-chunker] combined ${connected} streams`);
-  return dest.stream;
+/**
+ * A LIVE audio mix that FOLLOWS the meeting. One AudioContext destination that a periodic rescan keeps
+ * wired to every current on-page audio stream: it connects newly-appearing streams and prunes ones whose
+ * tracks have ended. Zoom/Teams deliver each participant as a separate WebRTC track and churn them
+ * constantly (each new track is mirrored into a fresh injected <audio> by @vexa/mixed-capture-core's
+ * hook) — so a ONE-TIME combine records silence the moment the originally-captured tracks end. Recording
+ * `dest.stream` (a STABLE handle whose sources come and go underneath) keeps the mix complete for the
+ * whole meeting. Full sample rate — deliberately NOT the 16 kHz transcription mix.
+ */
+class DynamicAudioMixer {
+  private ctx: AudioContext;
+  private dest: MediaStreamAudioDestinationNode;
+  private sources = new Map<string, { node: MediaStreamAudioSourceNode; stream: MediaStream }>();
+  private timer: ReturnType<typeof setInterval> | null = null;
+  /** Fired when the live-source count falls to 0 (all participant tracks ended — the meeting is
+   *  closing). The recording host uses it to flush the recorder's buffered tail before the page dies. */
+  private onEmpty: (() => void) | null;
+
+  /** Fired when a stream is connected (the live-source count rose). The tap uses it to start the
+   *  recorder on the meeting's FIRST audio when that audio arrives after the initial wait. */
+  onAdded: (() => void) | null = null;
+  private intervalMs: number;
+
+  constructor(onEmpty?: () => void, intervalMs = 2000) {
+    this.ctx = new AudioContext();   // default (full) sample rate — NOT the 16 kHz transcription mix
+    this.ctx.resume?.();
+    this.dest = this.ctx.createMediaStreamDestination();
+    this.onEmpty = onEmpty ?? null;
+    this.intervalMs = intervalMs;
+  }
+
+  get stream(): MediaStream { return this.dest.stream; }
+  get connectedCount(): number { return this.sources.size; }
+
+  /** Connect newly-seen streams; prune streams whose audio has ended. Idempotent — safe every tick. */
+  scan(): void {
+    const present = new Map(collectAudioStreams().map((s) => [s.id, s]));
+    const before = this.sources.size;
+    for (const [id, s] of present) {
+      if (this.sources.has(id)) continue;
+      try {
+        const node = this.ctx.createMediaStreamSource(s);
+        node.connect(this.dest);
+        this.sources.set(id, { node, stream: s });
+        blog(`[record-chunker] mix +stream (${this.sources.size} live)`);
+      } catch { /* not connectable yet — retried next tick */ }
+    }
+    if (this.sources.size > before && this.onAdded) { try { this.onAdded(); } catch { /* */ } }
+    // Prune truly-dead streams (all tracks ended) so a long meeting's track churn doesn't accumulate
+    // source nodes. A still-live stream is KEPT even if its element left the DOM (the node holds the
+    // stream ref and still pulls audio) — presence is not the liveness signal, the track state is.
+    const had = this.sources.size;
+    for (const [id, entry] of this.sources) {
+      if (entry.stream.getAudioTracks().some((t) => t.readyState === "live")) continue;
+      try { entry.node.disconnect(); } catch { /* */ }
+      this.sources.delete(id);
+      blog(`[record-chunker] mix -stream (${this.sources.size} live)`);
+    }
+    // Just went silent (all tracks ended → the meeting is closing) — flush the recorder's buffered tail
+    // NOW, before the platform navigates the page away and destroys the recorder mid-partial-timeslice.
+    if (had > 0 && this.sources.size === 0 && this.onEmpty) { try { this.onEmpty(); } catch { /* */ } }
+  }
+
+  start(): void {
+    this.scan();
+    if (this.timer) return;
+    this.timer = setInterval(() => { try { this.scan(); } catch { /* the rescan must never die */ } }, this.intervalMs);
+  }
+
+  stop(): void {
+    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    for (const { node } of this.sources.values()) { try { node.disconnect(); } catch { /* */ } }
+    this.sources.clear();
+    try { void this.ctx.close(); } catch { /* */ }
+  }
 }
 
 /** Options for createRecordingTap — combine all audio elements then optionally override. */
 export interface CreateRecordingTapOptions extends RecordingTapOptions {
   /** Provide a ready stream to record (e.g. the mixed-lane tab stream); else all audio elements are combined. */
   stream?: MediaStream;
+  /** Page-audio rescan interval in ms (default 2000). The initial first-stream wait is 5 scans. */
+  scanIntervalMs?: number;
 }
 
 /**
@@ -307,25 +370,66 @@ export interface CreateRecordingTapOptions extends RecordingTapOptions {
  */
 export function createRecordingTap(opts: CreateRecordingTapOptions): RecordingTap {
   let chunker: MediaRecorderChunker | null = null;
+  let mixer: DynamicAudioMixer | null = null;
+  let stopped = false;
+  let starting: Promise<void> | null = null;
+  const startChunker = (stream: MediaStream): Promise<void> => {
+    if (starting || stopped) return starting ?? Promise.resolve();
+    const c = new MediaRecorderChunker({
+      stream,
+      timesliceMs: opts.timesliceMs ?? 15000,
+      onChunk: opts.onChunk,
+      onStarted: opts.onStarted,
+    });
+    chunker = c;
+    starting = c.start();
+    return starting;
+  };
   return {
     async start(): Promise<void> {
-      let stream = opts.stream;
-      if (!stream) {
-        const els = await findMediaElements();
-        if (els.length === 0) { blog("[record-chunker] no media elements — cannot record"); return; }
-        stream = await buildCombinedStream(els);
+      stopped = false;
+      if (opts.stream) { await startChunker(opts.stream); return; }
+      // No ready stream ⇒ build a LIVE mix of the page's audio. Wait (bounded) for the first stream —
+      // post-admission the participant / injected <audio> elements appear a beat late — so the
+      // MediaRecorder's onStarted t=0 aligns with real audio; the rescan then follows the churn.
+      // onEmpty → flush the recorder's buffered tail the instant the mix goes silent (meeting close),
+      // so the final partial timeslice (the last few seconds of speech) is a real chunk before the
+      // page navigates away on eviction.
+      const intervalMs = opts.scanIntervalMs ?? 2000;
+      const m = new DynamicAudioMixer(() => chunker?.flush(), intervalMs);
+      mixer = m;
+      for (let i = 0; i < 5; i++) {
+        m.scan();
+        if (m.connectedCount > 0) break;
+        await new Promise((r) => setTimeout(r, intervalMs));
+        if (stopped) return;
       }
-      chunker = new MediaRecorderChunker({
-        stream,
-        timesliceMs: opts.timesliceMs ?? 15000,
-        onChunk: opts.onChunk,
-        onStarted: opts.onStarted,
-      });
-      await chunker.start();
+      if (m.connectedCount > 0) {
+        m.start();
+        await startChunker(m.stream);
+        return;
+      }
+      // Still no audio after the initial wait. NEVER give up: Zoom mirrors a participant's track into
+      // the page only when their audio first reaches the bot, which can be long after admission
+      // (app.dev meeting 144: 21 s; the old give-up here lost the whole 28-minute recording). Keep
+      // the rescan running and start the recorder on the first stream, without blocking start().
+      blog("[record-chunker] no audio streams yet — recording starts with the first one");
+      m.onAdded = () => {
+        m.onAdded = null;
+        if (stopped || mixer !== m) return;
+        blog("[record-chunker] first audio stream — recording started");
+        void startChunker(m.stream).catch(() => { /* chunker logs its own refusal */ });
+      };
+      m.start();
     },
     async stop(): Promise<void> {
+      stopped = true;
+      if (starting) await starting.catch(() => { /* */ });
       await chunker?.stop();
       chunker = null;
+      starting = null;
+      mixer?.stop();
+      mixer = null;
     },
   };
 }

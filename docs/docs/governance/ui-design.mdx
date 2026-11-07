@@ -1,0 +1,381 @@
+---
+title: "Terminal UI design"
+description: "How the Vexa terminal looks and lays out: principles, the responsive shell, design tokens, primitives, the /design catalogue, and the gates that hold them."
+---
+
+> The terminal's design system — sibling of [Architecture](/governance/architecture). That book
+> governs how the software is built; this page governs how the terminal **looks and behaves on
+> screen**: which pane gives way first when the window narrows, which colour means what, what a
+> button is. Same discipline: a rule that can be checked is a test, not a sentence (P9).
+>
+> The code lives in `clients/terminal/src/ui-kit/` (`layout/`, `primitives/`, `format/`).
+
+---
+
+## 1. Principles
+
+1. **Surfaces compose primitives; primitives own the look.** A surface decides *what* appears and
+   *where*, never colour, size, radius, padding, border, shadow or state styling.
+2. **One accent, one meaning: "this is the one / do this".** Accent marks the primary action, the
+   selected item and focus. Live is green, danger is red, attention is amber, information is blue.
+   A badge never wears accent.
+3. **Hierarchy comes from colour, then weight, then size.** Make the secondary quieter rather than
+   the primary louder.
+4. **Chrome recedes and the work advances.** Rails, headers and toolbars use secondary text and
+   quiet surfaces; only the conversation and the document use primary text at full weight.
+5. **The primary task never loses space to a secondary one.** As the window narrows, side panes
+   collapse before the conversation shrinks below its minimum (§3).
+6. **Static is a badge; interactive is a chip.** They never share a shape.
+7. **Every interactive element shows where focus is, can be reached by keyboard, and is at least
+   24×24 px** (WCAG 2.2 SC 2.4.7, 2.5.8).
+8. **Every state is earned and every failure is loud.** Status reflects observed reality (P21);
+   errors sit beside their cause, name the fix and keep the user's input (P18).
+9. **Text never breaks mid-word.** It wraps at spaces; a long unbreakable token truncates with an
+   ellipsis and gives the full value on hover and focus.
+10. **If it is not in the catalogue, it does not exist.** A new primitive, variant or token lands
+    in `/design` in the same PR.
+
+---
+
+## 2. Design tokens
+
+All visual values live in one file, `clients/terminal/src/app/tokens.css` — the only writer of
+colour, type, space, radius, elevation, motion and layer values. Dark is the primary theme; light
+overrides it under `data-theme="light"`.
+
+**Colour roles.** Every surface has a text pair, and every status colour has a separate `-text`
+variant for use as text.
+
+| Role | Use |
+|---|---|
+| `--surface-0` … `--surface-3` | the deepest well (rails, pages panel) → the focal plane (conversation) → raised (selected row, input, chip) → hover and pressed |
+| `--surface-overlay` | menus, popovers, dialogs (lighter than the base in dark mode) |
+| `--border-subtle` / `--border` / `--border-control` | decoration only / card outlines / **the only border allowed to identify a control** (at least 3:1) |
+| `--text-1` / `--text-2` / `--text-3` / `--text-disabled` | primary / secondary and chrome labels / tertiary: timestamps, metadata, placeholders / disabled only |
+| `--accent`, `--accent-hover`, `--on-accent`, `--accent-text`, `--accent-tint`, `--focus-ring` | the primary action, the selected item, focus — never a badge |
+| `--danger`, `--warning`, `--success`, `--info`, `--meeting` (each with `-text` and `-tint`) | destructive and errors only; attention; live, done, connected; information and links in content; meeting entities only |
+
+**Contrast is fixed at the token level.** The old tertiary text (`--t3`, the most-used text colour)
+read 2.4–3.4:1 and failed WCAG AA on every surface; `--text-3` is at least 4.6:1 on all four
+surfaces in both themes. The light accent was darkened so white text on it reads 4.8:1 (it was
+3.9:1). The contrast gate recomputes every declared pair (`src/app/tokens.pairs.json`) in both
+themes on every run; the hex values are starting points and the gate is the authority.
+
+**Type.** Geist Sans for text and Geist Mono for code, IDs, keys and paths. Six sizes:
+`--text-xs` 12/16 (the floor), `--text-sm` 13/18 (dense lists, controls), `--text-md` 14/20 (body),
+`--text-lg` 16/24 (section titles), `--text-xl` 20/28 (page titles), `--text-2xl` 24/32 (empty-state
+headlines only); weights 400, 500 and 600. No uppercase eyebrow labels.
+
+**Space, size, radius, elevation, motion, layers.** A 4px grid (`--space-0` … `--space-16`);
+control heights 24, 28 and 32 (`--control-xs/sm/md`); radii 4, 6, 10 and 14 plus full
+(`--radius-sm/md/lg/xl/full`); three shadows (`--shadow-1` menus, `--shadow-2` dialogs and sheets,
+`--shadow-3` toasts); three durations (`--dur-fast/base/slow`, all zero under reduced motion) and one
+easing; eight layers (`--z-base` … `--z-tooltip`).
+
+**Old names stay as aliases.** `--bg`, `--sidebar`, `--panel`, `--panel2`, `--line`, `--line2`,
+`--t1`–`--t3`, `--green`, `--blue`, `--violet`, `--warn` and the rest resolve to their semantic
+token, so a surface not yet migrated follows the tokens — including the contrast fixes — without
+being edited. New code uses the semantic names.
+
+**Tailwind** reads the tokens only: `@theme inline` in `globals.css` maps the colour roles onto
+Tailwind's namespace after `--color-*: initial` removes its default palette.
+
+---
+
+## 3. The responsive shell
+
+The Minutes shell has three panes: the **rail** (chat list), the **conversation**, and the
+**pages** panel (documents and entities). The conversation is protected.
+
+| Mode | Window | Rail | Conversation | Pages |
+|---|---|---|---|---|
+| **wide** | ≥ 1440 | docked, 240 (drag 200–320) | at least 560 | docked, 480 (drag 320 to the lesser of 60% of the window and what leaves the conversation 560) |
+| **desktop** | 1200–1439 | docked, 240 (drag 200–280) | at least 480 | docked, 400 (drag 320 to what leaves the conversation 480) |
+| **compact** | 960–1199 | a 48px icon strip; opens as a drawer over the conversation | at least 440 | docked, 360 (drag 320 up) |
+| **narrow** | 720–959 | strip and drawer | full width | a **sheet** over the conversation from the right (480 or 90% of the window), opened from the header |
+| **single** | below 720 | a drawer, opened from the header's menu control | full width | a full-screen sheet with a back control |
+
+- **The collapse order is fixed:** the rail goes first, then the pages panel.
+- **What the reader asked for and what fits are separate.** Hiding a pane is a preference and is
+  remembered. A mode folding a pane is not, and never overwrites the preference, so widening the
+  window brings the reader's layout back.
+- **Both side panes resize** with a splitter: drag it, or focus it and use ←/→ (16px), Shift+←/→
+  (64px), Home/End (the bounds), Enter or a double-click (the default). Widths are remembered **per
+  mode**, clamped to what the window allows when read, and never discarded.
+- **Inside a pane, components answer to the pane's width, not the window's** (container queries):
+  - the metadata table stacks its labels above its values below 360px;
+  - the composer toolbar never wraps — below 560px the effort control is an icon, below 400px
+    attach and dictate move into a "⋯" menu, and the model and send controls are always visible;
+  - the chat header's workspace chips fold into one "Writes to …" menu below 520px;
+  - the pages tab strip scrolls, fades at an edge with tabs beyond it, and shows an overflow
+    control listing every tab whenever one is out of view.
+- **Nothing scrolls sideways.** A horizontal scrollbar on a pane is a defect; only code blocks and
+  wide tables scroll inside their own frame.
+- **Nothing breaks mid-word.** Dates are single units ("2026-10-09" never splits at its hyphen);
+  emails, URLs and IDs truncate with an ellipsis (paths and IDs in the middle, so both ends stay
+  readable) and show the full value in their tooltip.
+
+### Before and after (app.dev, pages panel open)
+
+| Window | Before: rail · conversation · pages | After |
+|---|---|---|
+| 1440 | 240 · 960 · 240, two panes scrolling sideways | wide: 240 · 720 · 480 |
+| 1024 | 240 · 544 · 240 | compact: 48 · 616 · 360 |
+| 820 | 240 · **340** · 240; composer toolbar on two rows | narrow: 48 · 772, pages as a sheet |
+| 640 | 240 · **160** · 240; composer text box 92px | single: 640, rail and pages as overlays |
+
+---
+
+## 4. Primitives
+
+Every primitive lives in `clients/terminal/src/ui-kit/primitives/`, is exported from
+`src/ui-kit/index.tsx`, reads only tokens, and appears in the `/design` catalogue. Each interactive
+one implements rest, hover, **focus-visible** (a 2px ring with a 2px offset), pressed, selected
+(never colour alone), disabled and loading.
+
+| Primitive | Rule |
+|---|---|
+| `Button` | `primary` (at most one per view), `secondary`, `ghost`, `danger` (a destructive dialog's confirm only), `danger-ghost`; 28 or 32px; verb-first sentence-case labels |
+| `IconButton` | 24, 28 or 32px; an accessible name is required by its type and shown as a tooltip; `pressed` → `aria-pressed`; lucide icons, never text glyphs |
+| `Input`, `Textarea` | label above the field; 32px; control border; error line linked through `aria-describedby` |
+| `Menu`, `Select`, `Popover` | the WAI-ARIA menu pattern: arrows, Home/End, typeahead, Enter, Esc returns focus to the trigger |
+| `Badge`, `Tag` | static: radius 4, never clickable, never accent |
+| `Chip`, `EntityChip` | interactive: radius 6, 24px, a border; remove is a named `×` button; entity chips carry a type icon |
+| `Tabs`, `OverflowStrip` | roving tabindex; strips fade and list hidden tabs in an overflow menu |
+| `Breadcrumb` | sans, chevron separators; the middle collapses into "…" past four segments |
+| `ListRow`, `PanelHeader`, `Card` | 28/44px rows; selected = fill, weight 500 and a 2px accent bar; 44px panel headers; an interactive card is one button |
+| `Dialog`, `ConfirmDialog` | focus trap, Esc, focus return, titled; the confirm names the act; irreversible acts can require typing a name. Replaces `window.confirm`. Focus moves in **once, when the dialog opens** (the first control, or `data-autofocus`) and never on a re-render, so a parent that re-renders under it (the rail's sessions poll, an inline `onClose`) cannot move the reader off the button they are on; `Sheet` does the same. `focusConfirm` starts a ConfirmDialog on the named act instead of Cancel, so Enter confirms and Esc still cancels — for a dialog the reader opened by choosing that act (the rail's "Delete chat"); ignored with `typeToConfirm`, whose field takes focus. Stacking: the layer sits at `--z-modal` and its scrim drops the drawer stratum (`z-index: auto`), so the dialog paints and takes clicks above it — `scripts/overlay-hit.mjs` proves it in a browser, and drives the `focusConfirm` demo by keyboard across parent renders |
+| `EmptyState`, `Skeleton`, `ErrorState` | loading, empty, error and content look different; an error states what, why, the fix and the verbatim detail |
+| `Tooltip`, `Toaster` | a tooltip is supplementary to the trigger's own name; toasts only for completed background outcomes or Undo |
+| `KeyValue`, `Truncate`, `DateText`, `SourceList` | see §5 |
+| `ExternalLink`, `Code`, `SecretReveal` | see Security below |
+
+## 5. Text, dates and truncation
+
+- The default is `overflow-wrap: break-word`. `overflow-wrap: anywhere` and `word-break: break-all`
+  are allowed only in the code and secret-display primitives.
+- Dates render through **one formatter** (`ui-kit/format/date.ts`): relative within seven days
+  ("6:29 PM", "Yesterday 6:29 PM", "Thu"), absolute beyond ("Oct 8"; the year only when it is not
+  this year). A date-only value is a calendar day in every time zone. Full precision is in the
+  tooltip and in `<time dateTime>`.
+- Every flex child that holds text has `min-width: 0`; every pane root clips sideways overflow.
+
+---
+
+## 6. Migrating the surfaces
+
+Surfaces move onto the primitives one at a time. Each move lowers that file's entry in
+`clients/terminal/src/style-budget.json` — the count of inline style keys that should belong to a
+primitive or a token (colour, type, spacing, border, radius, shadow, layer, motion). The budget
+gate fails when a file goes up, and when a file went down without its budget being lowered.
+
+| Surface | What changed | Inline-style budget |
+|---|---|---|
+| Composer and conversation | context chips → `Chip` in a one-line `ChipRow` with a "+N" chip (no dashed "+ schedule", no uppercase "FOCUS"); attach, dictate, send and stop → `IconButton`; below 400px the effort levels move into the "⋯" menu; references in the text → `Tag`; workspace paths in answers → `EntityChip` (no longer mono blue code); external links → `ExternalLink`; commit and rejection → `Badge`; files a turn wrote → `EntityChip`; **sources → `SourceList`** (below) | `chat.tsx` 202 → 124 · `Markdown.tsx` 62 → 46 · `agent-window.tsx` 112 → 88 |
+| Chat list | rows on the ui-kit row (selected = fill, weight and bar); live is the success colour with its word, not accent; a finished meeting has no status word (its date in the time column; a filled dot, where a chat's is a ring, marks it as a call; founder 2026-10-11 retired the "Held" badge); the row action takes the time's place on hover and focus — the time column is at least `--control-xs` wide and steps aside with `visibility`, so nothing shifts; the write target → a muted `Tag`; the "All N" pill → underline `Tabs` "Active / All" in the header; delete → `ConfirmDialog` ("Delete chat") instead of the two-click × → ✓; the icon strip and the account menu on `IconButton` and the menu classes | `Rail.tsx` 57 → 0 · `AccountBadge.tsx` 26 → 0 |
+| Pages panel and entity view | document tabs on the `document` skin (the tab in front joins the page; no accent border; lucide pin and close); navigation, copy and edit → `IconButton`; Save/Cancel → `Button`; one `Breadcrumb` (sans, chevrons, middle collapses) instead of the mono trail; folder listings on the row classes; empty states → `EmptyState`; the workspace front page's nested scroller → its 1/8-screen cap plus "Show more"; its facts and the policy lenses on the metadata table's rules (label column, stacked below 360px; no uppercase); policy values → `Badge` ("On" / "Off"); every inline reference — wikilinks, document paths, workspace names, cross-workspace links — one entity chip (radius 6, type icon, no per-type fill, no dashed border); the header's workspace chips → `Chip`, the target reading "Writes to …" with a pen icon | `PagesPanel.tsx` 80 → 0 · `WorkspaceReadmePanel.tsx` 130 → 111 · `docLinks.tsx` 49 → 16 · `WsLink.tsx` 15 → 1 · `policyDoc.tsx` 86 → 74 · `ContextBar.tsx` 52 → 31 · `Navigator.tsx` 53 → 0 (the file tree on the row classes, lucide carets, depth as an indent token) · `MdxDoc.tsx` 107 → 54 and `Markdown.tsx` 46 → 37 (both renderers share one `.vx-prose` stylesheet: headings on the type scale, lists, quotes, tables that scroll inside their own frame, external links through `ExternalLink`) |
+| Meetings | uppercase eyebrows → `SectionLabel` (sentence case); the meeting phase → a `Badge` earned from the observed state — "Live" (success, with its dot), "Connecting…" and "Reconnecting…" (warning, with a spinner), "Recap" (meeting colour); document kinds → `Tag`; deleting a planned meeting → `ConfirmDialog` ("Delete meeting") instead of `window.confirm`. The meeting page header and player are being reworked on Vexa-ai/vexa#1798 and move onto primitives once that lands | `meeting.tsx` 353 → 292 |
+| Meetings (codemod) | the rest of the meeting, prep and onboarding surfaces onto the token utilities | `meeting` 292 → 38 · `meetingPrep` 226 → 22 · `meetingsOnboarding` · `MeetingHealthBanner` — see the budget file |
+| Canvas kit (agent-facing, API frozen) | `ui.Badge`, `ui.Tag`, `ui.Button` and `ui.Tabs` keep their props and names (the canvas manifest and validator are unchanged) and render the terminal's own `Badge`, `Button` and `Tabs`; the rest of the kit's internals onto the token utilities | `kit.tsx` 287 → see the budget file · `runtime.tsx` · `TranscriptWidget.tsx` |
+| Pages panel, entity view, conversation chrome, workbench (codemod) | the README panel, policy and entity property views, both document renderers, attach-repo, connections, the header, the extend action, today, entities, tasks, the workbench and the agent window onto the token utilities | see the budget file |
+| Settings, admin, calendar connections, workspaces, routines, sign-in, join, tokens (codemod) | static type, colour, space, radius and border literals onto the token utilities, snapped to the scale | `settings` 97 → 25 · `admin` 106 → 40 · `calendarConnections` 63 → 31 · `workspace` 414 → 73 · `workspaceManage` 140 → 40 · `routines` · `App` · `join` · `AuthGate` 64 → 3 · `tokens` 47 → 0 — see the budget file |
+| Settings, admin, workspaces, auth | every remaining `window.confirm` (delete and stop-sharing a workspace, twice each) → `useConfirm`, a `ConfirmDialog` that names the act; deleting a workspace requires typing its name; the one-time API token → `SecretReveal` (masked until shown, never in an attribute); every keyboard-focused field shows a 2px focus ring — the sign-in inputs, the join field, filters and forms had none; form buttons on the `Button` classes | `tokens.tsx` 70 → 47 |
+
+### Token utilities and the codemod
+
+A surface that is not rebuilt on a primitive still reaches its type, colour, space, radius and
+border through **token utilities** (`ui-kit/primitives/utilities.css`): `t-xs`…`t-2xl`,
+`fw-400/500/600`, `c-1/2/3` and the status text colours, `bg-0`…`bg-3` and the tints, `bd` /
+`bd-strong`, `r-sm/md/lg/xl/full`, and padding and margin on the 4px grid (`p-2`, `pt-1_5`,
+`ml-auto`, …). Every class reads a token. `clients/terminal/scripts/design-codemod.mjs`
+moves static inline style literals onto them, **snapping each value to the scale** (37 font sizes
+onto 6, paddings onto the grid, radii onto five steps); expressions and component props are left
+alone, so behaviour does not change. The snapping is deliberate — it is how a surface comes onto
+the scale — and the diff is reviewed visually.
+
+### Sources
+
+An answer's sources render as a citation list — one row per source, title as a link, host and
+date beneath, the date shown **once** (a date already in the title is not repeated). Two ways in:
+
+- **Structured:** a `sources` event on the chat stream, `{ "type": "sources", "items": [{ "url",
+  "title"?, "date"?, "snippet"? }] }`. The terminal merges a turn's items by URL. agent-api's
+  producer (one frame per page a turn successfully fetched) lands separately, in
+  [Vexa-ai/vexa#1815](https://github.com/Vexa-ai/vexa/pull/1815); until it does, no server sends
+  the event and the fallback below is what renders. Only `http:`/`https:`
+  URLs are kept, at most 50, and a server that never sends it changes nothing.
+- **Fallback:** when the agent writes its sources as a Markdown list under a "Sources" (or
+  "References", "Citations", "Links") label, that list is lifted out of the prose and rendered as
+  the citation list. If any item is not a link, the block stays prose.
+
+---
+
+## The design catalogue
+
+`/design` renders every token and primitive as it really renders, from placeholder fixtures:
+
+- **Tokens** — every colour role with its contrast ratio computed in the page from the live
+  variables (the same function the contrast gate runs), the type scale, radii, shadows and spacing.
+- **Every primitive** — one section per registry entry, in dark and light side by side, some at
+  pane widths 320, 480 and 720 so container-query behaviour is visible. Each section carries
+  `data-gallery="<id>"` for scripted screenshots.
+- **The responsive shell** — the same layout machinery the Minutes shell runs, around placeholder
+  panes, in a box with a width slider. `/design?view=shell` renders it full screen; that is what the
+  layout sweep loads. It keeps its own layout store (`vexa.shell.catalogue`), so playing with it
+  never rearranges the reader's real layout.
+
+**When it is served.** Always in development. In a production build only when the operator sets
+`VEXA_TERMINAL_DESIGN_CATALOGUE=1` (set it on development and staging; leave it unset on
+production) — otherwise `/design` is a 404. It is `noindex, nofollow`, analytics skip it, and it
+needs no sign-in because it holds no user data.
+
+**Use.** A pull request that changes the UI attaches `/design` screenshots of the entries it
+touched, in both themes; a new primitive gets its registry entry (`src/app/design/registry.tsx`) in
+the same pull request — the coverage gate fails otherwise.
+
+---
+
+## How it works
+
+1. **Tokens.** `src/app/tokens.css` defines every visual value for the dark theme on `:root` and
+   the light overrides on `:root[data-theme="light"]`; `platform/theme.ts` sets the attribute and is the
+   only code that reads the theme. `globals.css` imports `tokens.css` and maps it onto Tailwind with
+   `@theme inline`. The root layout loads Geist through `geist/font/sans` and `geist/font/mono`,
+   which set `--font-geist-sans` and `--font-geist-mono`; `--font-sans` and `--font-mono` read them
+   (with the system stacks as fallback).
+2. **The layout is one pure function.** `shellLayout(viewportWidth, prefs, storedWidths)` in
+   `ui-kit/layout/shellLayout.ts` returns the mode, each pane's form (`railKind`: docked, strip or
+   drawer; `pagesKind`: docked, collapsed, sheet or fullscreen), the three grid columns, the widths
+   and the splitter bounds. It writes nothing.
+3. **One hook feeds it and is the only writer of the layout's state.** `useShellLayout` (same
+   folder) measures the shell's own box with a `ResizeObserver`, reads and writes
+   `localStorage["vexa.shell.v1"]` = `{ prefs: { railOpen, pagesOpen }, widths: { <mode>: { rail,
+   pages } } }`, and holds the transient drawer and sheet state, which closes when the mode changes.
+   A profile with no `vexa.shell.v1` is seeded once from the old keys
+   (`vexa.minutes.railCollapsed`, `vexa.minutes.pagesCollapsed`, `vexa.minutes.pagesW`); nothing
+   writes the old keys any more.
+4. **The shell renders the result.** `minutes/MinutesShell.tsx` sets `grid-template-columns` from
+   the layout, puts the rail docked, as a `RailStrip` plus a `Drawer`, or as a `Drawer` alone, and
+   wraps the pages panel in a `Sheet`. A `Sheet` is one element with three forms — `inline`
+   (`display: contents`, so the panel sits in the grid), `overlay` and `fullscreen` — so crossing a
+   breakpoint never remounts the panel and an unsaved edit survives it.
+5. **Overlays are modal dialogs.** An open drawer or sheet moves focus in, traps Tab, closes on Esc
+   or a scrim click, and returns focus to the control that opened it. A closed one stays mounted
+   but `inert`.
+6. **Opening a document reveals the panel.** In a docked mode a folded panel unfolds. Where the
+   panel is a sheet, it opens only when the reader asked (a link they clicked), never for a page
+   the agent wrote while they were typing.
+7. **Pane-internal behaviour is CSS container queries.** Pane roots are `.vx-pane` (an inline-size
+   container that clips sideways overflow); the composer toolbar is `.vx-container`. `Fold` renders
+   both forms of a control and the stylesheet shows one; `KeyValue` is its own container.
+8. **Styles are global, prefixed, and gathered once.** Each primitive's CSS (`vx-` classes) lives
+   beside it; `ui-kit/styles.css` imports them, and `app/globals.css` imports that, because Next's
+   App Router admits global CSS only from the root layout.
+9. **Everything is exported from `ui-kit/index.tsx`**, the folder's one front door. Surfaces
+   (`minutes/`, `surfaces/`) import from it and never deep-import.
+10. **The catalogue** (`src/app/design/`) imports the same primitives through the same front door
+    and renders `registry.tsx` with `fixtures.ts`. `page.tsx` reads `VEXA_TERMINAL_DESIGN_CATALOGUE`
+    per request (`gate.ts`) and answers 404 when it is off.
+
+**Configuration.** `VEXA_TERMINAL_DESIGN_CATALOGUE` (server environment; `1` serves `/design` in a
+production build — see [Configuration](/configuration)). Per browser only: `vexa.shell.v1` (layout),
+`vexa.shell.catalogue` (the catalogue's fixture shell) and `vexa.terminal.theme` (theme); none is
+sent to a server.
+
+**Limits.**
+- The shell measures its own width, so a layout at 200% zoom is the layout of half the width — by
+  design (WCAG 1.4.4): the shell changes mode instead of overflowing.
+- Container queries need a current evergreen browser (Chrome, Edge, Safari and Firefox have shipped
+  them since 2023).
+- In single mode the rail has no strip; the header's menu control is the only way to the chat list.
+
+**What the user sees when something fails.**
+- If `localStorage` is unavailable (a private window, blocked site data), the layout falls back to
+  its defaults on every load and still works; widths and folds are not remembered.
+- A stored width the window cannot fit is clamped, not reset; widening the window restores it.
+- With the catalogue disabled, `/design` is a 404.
+
+---
+
+## Why it complies
+
+### Architecture
+
+| Rule | How this meets it | Gate |
+|---|---|---|
+| **P1** package by domain | `ui-kit` is the terminal's shared presentational leaf; primitives are named for UI concepts; surfaces stay grouped by domain (`minutes/`, `surfaces/`) | review |
+| **P2** couple through contracts, **P3** acyclic | `ui-kit` imports React, `lucide-react` and its own files only; it never imports `minutes/`, `surfaces/` or `canvas/` | `gate:isolation` (the terminal's folder-cycle check) |
+| **P6** one front door | layout, primitives and the formatter are exported only from `src/ui-kit/index.tsx`; `minutes/` and `surfaces/` import from there | `gate:exports`; ungated inside the terminal: reviewed |
+| **P9** mechanically enforced | the layout rules are a unit sweep (`shellLayout.test.ts`, 320–2560px, every preference) and a browser sweep (`scripts/layout-sweep.mjs`, L1–L3) | `gate:ui-design` (also under `gate:node`); the browser sweep runs in CI as `terminal-layout` |
+| **P4**, **P16** published, backward-compatible wires | the chat stream's `sources` event is additive: an older client ignores an unknown event, and a server that never sends it changes nothing; no sealed contract changed | ungated: reviewed |
+| **P12** every folder self-documents | `ui-kit/layout/`, `ui-kit/primitives/`, `ui-kit/format/`, `app/design/` and `app/design/sections/` each carry a README | `gate:readme` |
+| **P14** config by env | the catalogue's one switch is `VEXA_TERMINAL_DESIGN_CATALOGUE`, read per request; documented in [Configuration](/configuration) | ungated: reviewed |
+| **P17** licence-clean | no new dependency. `geist` (the Geist fonts, SIL OFL-1.1, FINOS Category B) was already a dependency and is logged as an exception in `license-exceptions.json` — served unmodified as web fonts; `lucide-react` (ISC) was already in the lockfile; Playwright (Apache-2.0) is not a terminal dependency — the sweep runs where it is installed | `gate:licenses` |
+| **P18** fail loud | a storage failure degrades to defaults (the shell still renders) and is never thrown into the page; nothing is swallowed into a wrong layout | `layoutPrimitives.test.tsx` ("storage that throws still yields a working layout") |
+| **P23** one writer per carrier | colour and size values are written only in `tokens.css`; `vexa.shell.v1` only by `useShellLayout`; the theme only by `theme.ts`; a turn's source list comes from the stream event, else from the answer text, never both | G3 and G7 for tokens (`designTokens.test.ts`); ungated for the layout store and theme: reviewed |
+
+### Security
+
+- **The catalogue.** `/design` renders fixtures only and imports nothing that could reach user data
+  — no API client, no session, no auth, no `fetch` — so there is nothing to authorise; it is off in
+  production unless the operator turns it on. Tests: `designCatalogue.test.tsx`, "imports only the
+  ui-kit front door, its own files, React, lucide and Next", "fixtures are placeholders", and "is on
+  outside production, and in production only with the flag".
+- **Access.** The layout holds no user data and calls no API: it is widths and two booleans in the
+  reader's own browser. What a pane shows is unchanged and still authorised where it was (P20
+  `canAccess` at the server).
+- **Links.** `Truncate` renders a link only for `http:`, `https:` and `mailto:`; any other scheme is
+  text, and external links open with `rel="noopener noreferrer"`. Test: `keyValue.test.tsx`, "an
+  unsafe scheme is text, never a link".
+- **Injection.** The metadata table renders values as text and nested tables, never as HTML and
+  never through `JSON.stringify` into markup. Test: `entityProperties.test.tsx`, "does not execute
+  links or markup from metadata".
+- **Personal data.** Nothing about the layout enters a URL or leaves the browser.
+- **Secrets.** `SecretReveal` shows a token masked until the reader presses Show, copies only on an
+  explicit press, and never puts the value in `title`, `aria-label`, `data-*`, a URL or storage.
+  Tests: `primitives.test.tsx`, "masked until revealed" and "never renders the value into title,
+  aria-label or data attributes".
+- **External links.** `ExternalLink` allows `http:` and `https:` only and always sets
+  `rel="noopener noreferrer"`; any other scheme renders as text. Test: `primitives.test.tsx`,
+  "refuses javascript: and data: schemes".
+- **Sources.** A `sources` event's items are kept only for `http:`/`https:` URLs, at most 50, and
+  render through `ExternalLink`; Markdown links in answers also go through `ExternalLink`, so a
+  `javascript:` or `data:` href renders as text. Test: `sources.test.tsx`, "keeps only http(s)
+  sources, with a title".
+- **Destructive acts.** `ConfirmDialog` names the act on its button and can require typing the
+  name. Every browser dialog in the terminal now goes through it (`useConfirm`); G12 holds that:
+  `designGuards.test.ts`, "no window.confirm or window.alert". Its buttons sit above the dialog's
+  scrim, checked in a real browser by `clients/terminal/scripts/overlay-hit.mjs` (a step of
+  `terminal-layout`).
+
+---
+
+## Gates
+
+All of these fail CI. They run as **`gate:ui-design`** (`pnpm gate:ui-design`, in the `gates`
+workflow's static leg, and again under `gate:node` with the rest of the terminal's tests), and the
+browser layout sweep runs as the **`terminal-layout`** workflow on every pull request that touches
+`clients/terminal/`.
+
+| ID | Rule | Where | Status |
+|---|---|---|---|
+| G1 | no new raw colour (hex, `rgb()`, `hsl()`) outside `tokens.css` — a per-file budget that only goes down | `styleBudget.test.ts` + `src/style-budget.json` (`rawColours`) | **have** |
+| G2 | inline `style` carries layout only — colour, type, spacing, border, radius, shadow, layer and motion keys are a per-file budget that only goes down (so a new one-off font size fails) | same (`files`) | **have** |
+| G3 | every `var(--x)` resolves to a token; no colour behind a `var()` fallback | `designTokens.test.ts` | **have** |
+| G4 | `overflow-wrap: anywhere` / `word-break: break-all` only in code-like displays, each listed with its reason | `designGuards.test.ts` | **have** |
+| G5 | no new `outline: none` outside the primitives — a per-file budget that only goes down; every focused field shows a ring | `styleBudget.test.ts` (`outlineNone`) + `controls.css` | **have** |
+| G6 | every animation and transition is timed by a duration token or sits inside a `prefers-reduced-motion: no-preference` block | `designGuards.test.ts` | **have** |
+| G7 | every declared text pair ≥ 4.5:1 and boundary pair ≥ 3:1, in both themes | `designTokens.test.ts` + `src/app/tokens.pairs.json` | **have** |
+| G8 | nothing named token / secret / apiKey / password flows into `title`, `aria-label` or `data-*` | `designGuards.test.ts` | **have** |
+| G9 | no `<a target="_blank">` outside `ExternalLink` (and `Truncate`) | `designGuards.test.ts` | **have** |
+| G10 | `dangerouslySetInnerHTML` only in the pre-paint theme script and the sanitised Mermaid SVG | `designGuards.test.ts` | **have** |
+| G11 | `/design` imports only the ui-kit front door and its own files | `designCatalogue.test.tsx` | **have** |
+| G12 | no `window.confirm` / `window.alert`; `window.prompt` only where allowlisted | `designGuards.test.ts` | **have** |
+| G13 | every ui-kit component has a catalogue entry that renders in both themes | `designCatalogue.test.tsx` | **have** |
+| L-unit | the shell's width sweep (320–2560 and phones, every preference) | `shellLayout.test.ts` | **have** |
+| L1–L3 | in a browser, 360–1920 in both themes plus Pixel 7 and iPhone 14 in both orientations, each width loaded fresh: no pane scrolls sideways, the shell is never scrolled, the conversation meets its floor and stays on screen, the composer toolbar is one row, a tab strip that hides a tab shows its overflow control | `.github/workflows/terminal-layout.yml` → `scripts/layout-sweep.mjs` | **have** |
+| KV, A8, S1, S2 | the metadata table never breaks a word; WAI-ARIA patterns; secrets masked; links scheme-checked | `keyValue.test.tsx`, `layoutPrimitives.test.tsx`, `primitives.test.tsx` | **have** |
+
+**Lowering a budget.** When a change removes inline styles, raw colours or `outline: none` from a
+file, run `UPDATE_STYLE_BUDGET=1 npx vitest run styleBudget` in `clients/terminal` and commit the
+lowered `src/style-budget.json` with it — the gate fails while a budget is higher than the file.

@@ -1,0 +1,104 @@
+{
+  "components": {
+    "schemas": {}
+  },
+  "paths": {
+    "/bots/status": {
+      "get": {
+        "description": "Get the status of currently running bots under your API key.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "platform",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Platform"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-user-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Id"
+            }
+          }
+        ],
+        "summary": "Bots Status"
+      }
+    },
+    "/recordings/{recording_id}": {
+      "get": {
+        "description": "Get a single recording and its media files. 404 if the id is not one of your recordings.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recording_id",
+            "required": true,
+            "schema": {
+              "title": "Recording Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-user-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Id"
+            }
+          }
+        ],
+        "summary": "Get Recording"
+      }
+    },
+    "/voice-notes/recorder": {
+      "post": {
+        "description": "Open the voice-note recorder in the person's Minutes tab, so they can dictate a note\nthat is transcribed like a meeting. You cannot record or hear audio yourself: this only\nasks the person's open Minutes tab to start the recorder, and they speak and press Stop.\nCall it when the person asks to record, dictate or take a voice note. It is refused in a\nrun with nobody present (a routine or background flow). Afterwards the note is a meeting\nwith platform voice_note: find it with list_meetings and read it with\nget_meeting_transcript.",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-user-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Id"
+            }
+          }
+        ],
+        "summary": "Record Voice Note"
+      }
+    }
+  }
+}

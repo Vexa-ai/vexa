@@ -1,0 +1,6 @@
+{
+  "instruction": "The desktop changed since you read it. Call desktop_read and apply your change to the version it returns.",
+  "reason": "desk_changed",
+  "status": "refused",
+  "version": 1
+}

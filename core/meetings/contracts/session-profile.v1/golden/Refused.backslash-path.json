@@ -1,0 +1,11 @@
+{
+  "why": "a profile path is '/'-separated",
+  "body": {
+    "files": [
+      {
+        "path": "Default\\Cookies",
+        "data": "eA=="
+      }
+    ]
+  }
+}

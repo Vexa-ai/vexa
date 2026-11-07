@@ -10,7 +10,9 @@
 #
 # Build (REPO ROOT context):
 #   docker build -f core/meetings/services/bot/Dockerfile.mock -t mock-bot:dev .
-FROM node:20-slim
+# The terminal's base, by the same digest: Node 22 on Debian 13. node:20-slim carried Debian 12's
+# perl-base and gnutls and an older npm with fixed critical and high advisories (CVE scan, S75).
+FROM node:22-trixie-slim@sha256:154ba2f4d6fec323d28e4f4bb86bba4677f1223391a1979cf521304e03a98dfa
 WORKDIR /app
 
 # The only runtime deps the mock actually imports (ajv/ajv-formats for config+contract validation,
@@ -24,6 +26,14 @@ RUN printf '{"name":"mock-bot","private":true,"type":"module","dependencies":{"a
 COPY core/meetings/services/bot/src   /app/meetings/services/bot/src
 COPY core/meetings/services/bot/mock  /app/meetings/services/bot/mock
 COPY core/meetings/contracts          /app/meetings/contracts
+
+# The one @vexa/join subpath the reused orchestrator imports: `@vexa/join/url-redaction`, which
+# redacts the meeting URL in every lifecycle event's free text. It is pure string work with no
+# imports, so the mock resolves the package's REAL source through a package.json that exports that
+# subpath alone (tsx runs the .ts directly), never a copy of its logic or a stub.
+COPY core/meetings/modules/join/src/shared/url-redaction.ts /app/node_modules/@vexa/join/src/shared/url-redaction.ts
+RUN printf '{"name":"@vexa/join","private":true,"type":"module","exports":{"./url-redaction":"./src/shared/url-redaction.ts"}}' \
+      > /app/node_modules/@vexa/join/package.json
 
 # Match the real bot image's launcher path exactly: ENTRYPOINT ["/app/entrypoint.sh"]. The runtime
 # spawns the bot with no profile command, so the image ENTRYPOINT is what every backend execs — this

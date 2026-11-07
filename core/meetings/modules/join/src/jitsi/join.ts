@@ -8,6 +8,8 @@ import {
   jitsiJoinButtonSelector,
   jitsiGuestEntryTexts,
 } from "./selectors";
+import { checkUiLocale } from "../shared/ui-locale";
+import { redactMeetingUrl, redactUrlsIn, rethrowRedacted } from "../shared/url-redaction";
 
 // NOTE vs the other platforms: Jitsi Meet is SELF-HOSTABLE — meet.jit.si is just
 // the canonical public deployment. The join layer therefore never rewrites the
@@ -43,11 +45,11 @@ export function buildJitsiMeetingUrl(
   try {
     url = new URL(meetingUrl);
   } catch (err: any) {
-    throw new Error(`Invalid Jitsi meeting URL: ${meetingUrl} — ${err.message}`);
+    throw new Error(`Invalid Jitsi meeting URL: ${redactMeetingUrl(meetingUrl)} — ${redactUrlsIn(err.message)}`);
   }
   const room = url.pathname.replace(/\/+$/, "");
   if (!room || room === "") {
-    throw new Error(`Cannot extract room from Jitsi URL (no path): ${meetingUrl}`);
+    throw new Error(`Cannot extract room from Jitsi URL (no path): ${redactMeetingUrl(meetingUrl)}`);
   }
 
   const existing = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
@@ -142,12 +144,13 @@ export async function joinJitsiMeeting(
   attachMembersOnlyWatch(page);
 
   const navUrl = buildJitsiMeetingUrl(meetingUrl, { botName });
-  log(`[Jitsi] Navigating to: ${navUrl}`);
-  await page.goto(navUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+  log(`[Jitsi] Navigating to: ${redactMeetingUrl(navUrl)}`);
+  await page.goto(navUrl, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(rethrowRedacted);
   await page.waitForTimeout(2000);
 
   // Notify the host: joining
   await callJoiningCallback(botConfig);
+  await checkUiLocale(page, "jitsi", "pre-join");
 
   // Prejoin screen may be disabled per-deployment (config.prejoinConfig.enabled=false)
   // — in that case the app enters the conference (or the lobby) directly and the

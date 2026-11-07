@@ -1,0 +1,22 @@
+{
+  "why": "a forwarded row outside its prefix is a route the edge would have to serve by name",
+  "manifest": {
+    "contract": "routes.v1",
+    "domain": "agent",
+    "owner": "core/agent",
+    "edge": "gateway",
+    "forward": {
+      "edge_prefix": "/agent/",
+      "upstream_prefix": "/api/"
+    },
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/api/x",
+        "scopes": [
+          "tx"
+        ]
+      }
+    ]
+  }
+}

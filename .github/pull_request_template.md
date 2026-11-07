@@ -47,18 +47,22 @@ technical review, but they do block merge until resolved.
 ## Docs diff (D6c)
 <!-- The pages this PR updates, mapped to the issue's docs surface — quickstart / how-to /
      reference / concept, each at its reader's altitude. If a named page needed no change,
-     say why. The validator signs the docs story alongside the value. -->
+     say why. The diff review covers the docs story (right pages, right altitude, consistent
+     with how the docs teach), and so does a live validation when one is run (D6c). -->
 
 ## Security checks (required on the diff)
 <!-- Dependency/licence scan, secrets scan, SAST where it applies — show the runs.
      The maintainer runs the closing security bundle before release. -->
 
-## Validation request
-<!-- Who should witness the value (any competent non-author; the originating reporter preferred)
-     and what they'll watch. The attestation must corroborate with the instrument channels —
-     a human/instrument divergence blocks merge until reconciled, and is a finding.
-     The attestation also covers the docs story (D6c): the update lands on the right pages, at the
-     right altitudes, consistent with how the docs already teach.
+## Validation request (optional, credited)
+<!-- Who is invited to witness the value live (any competent non-author; the originating reporter
+     is the preferred validator) and what they'll watch. A validation is optional and credited in
+     release notes beside you (D9). It is not a step before merge, and no label or gate waits for
+     it. When run, it is multichannel and its channels must corroborate: a human/instrument
+     divergence is a credited finding (D9/D11), filed on the PR or as an issue. It does not block
+     merge by itself; if it shows the change is wrong, that reaches the merge card as a red
+     value-fsm, a `fail` pass marker or a changes-requested review. When run, it also covers the
+     docs story (D6c): the right pages, at the right altitudes, consistent with how the docs teach.
      D12b: state the DEPLOYMENT validated (Lite / full compose / k8s / hosted) and its build
      provenance — repo sha, compose or values file, fresh-clone vs long-lived, env deltas from
      stock. Deployments the issue names but nobody ran stay honestly unclaimed here. -->

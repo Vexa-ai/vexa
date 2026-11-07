@@ -1,0 +1,45 @@
+# OpenShift (restricted-v2) and multi-node profile. Layer it over your own values:
+#
+#   helm install vexa <chart> -f <chart>/values-openshift.yaml -f my-values.yaml \
+#     --set agentApi.workspaces.storageClassName=<a ReadWriteMany class>
+#
+# Each value below answers something measured on a three-node cluster with network-attached block
+# storage and restricted Pod Security (2026-10-14):
+global:
+  securityContext:
+    # restricted-v2 injects the uid, runAsNonRoot, seccomp and fsGroup; a spec that brings its own
+    # uid (10001) falls outside the project range and is refused.
+    deliver: false
+runtime:
+  workloadScheduling:
+    agentWorker:
+      # restricted-v2 admits no added capability.
+      capabilities: []
+  botSandbox:
+    installer:
+      # The installer DaemonSet writes the bot seccomp profile through a hostPath as root, which
+      # restricted Pod Security and restricted-v2 refuse. Install the profile on the nodes
+      # yourself (a MachineConfig, or the Security Profiles Operator; then set localhostProfile to
+      # the path it installs), or set runtime.botSandbox.enabled=false.
+      enabled: false
+agentApi:
+  workspaces:
+    # Every agent worker mounts the same workspace store as agent-api. On ReadWriteOnce block
+    # storage a worker scheduled on another node waits for the volume and its chat never answers,
+    # and an agent-api restart on another node waits for every worker to leave. Name a
+    # ReadWriteMany class (OpenShift Data Foundation: CephFS, typically ocs-storagecluster-cephfs).
+    accessMode: ReadWriteMany
+    storageClassName: ""
+
+# OpenShift's cluster DNS: the openshift-dns Pods, which listen on 5353 behind the dns-default
+# Service's port 53 (policies match the Pod's port).
+networkPolicy:
+  dns:
+    to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: openshift-dns
+        podSelector:
+          matchLabels:
+            dns.operator.openshift.io/daemonset-dns: default
+    ports: [53, 5353]

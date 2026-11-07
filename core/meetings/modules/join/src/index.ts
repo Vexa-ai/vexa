@@ -9,7 +9,7 @@
 import type { Page } from "playwright";
 import { joinGoogleMeeting } from "./googlemeet/join";
 import { waitForGoogleMeetingAdmission, checkForGoogleAdmissionSilent } from "./googlemeet/admission";
-import { knockUntilGoogleAccepts } from "./googlemeet/refusal";
+import { knockUntilGoogleAccepts, googleKnockConfig } from "./googlemeet/refusal";
 import { prepareForRecording, leaveGoogleMeet } from "./googlemeet/leave";
 import { startGoogleRemovalMonitor } from "./googlemeet/removal";
 import { joinMicrosoftTeams } from "./msteams/join";
@@ -20,6 +20,8 @@ import { joinZoomMeeting, buildZoomWebClientUrl } from "./zoom/join";
 import { waitForZoomMeetingAdmission, checkForZoomAdmissionSilent } from "./zoom/admission";
 import { leaveZoomMeeting, dismissZoomPopups } from "./zoom/leave";
 import { startZoomRemovalMonitor } from "./zoom/removal";
+import { stopZoomIncomingVideo, incomingVideoStep, ZOOM_INCOMING_VIDEO_SELECTORS } from "./zoom/incoming-video";
+export type { IncomingVideoOutcome, IncomingVideoStep, IncomingVideoSelectors, StopIncomingVideoOptions } from "./zoom/incoming-video";
 import { joinJitsiMeeting, buildJitsiMeetingUrl } from "./jitsi/join";
 import { waitForJitsiMeetingAdmission, checkForJitsiAdmissionSilent } from "./jitsi/admission";
 import { leaveJitsiMeeting } from "./jitsi/leave";
@@ -27,6 +29,12 @@ import { startJitsiRemovalMonitor } from "./jitsi/removal";
 import { startDebugView } from "./shared/escalation";
 import { setHooks, type BotConfig, type Hooks, type JoinState } from "./_host";
 import { JOIN_BROWSER_ARGS, getJoinBrowserArgs } from "./browser-args";
+import { AuthSessionError } from "./googlemeet/join";
+import { TeamsJoinRedirectError } from "./msteams/auth-redirect";
+import {
+  UiLocaleMismatchError, checkUiLocale, uiLocaleMismatchOf, type UiLocaleReading,
+} from "./shared/ui-locale";
+import { redactMeetingUrl } from "./shared/url-redaction";
 
 export type { BotConfig, Hooks, JoinState };
 export { startDebugView, setHooks };
@@ -61,8 +69,6 @@ export interface JoinOptions {
 
 /** Infer the platform from the meeting URL. Throws on an unrecognized host. */
 export function resolvePlatform(meetingUrl: string): Platform {
-  if (meetingUrl.includes("meet.google.com")) return "google_meet";
-  if (meetingUrl.includes("teams.microsoft.com") || meetingUrl.includes("teams.live.com")) return "teams";
   // Canonical zoom.us / *.zoom.us only — white-label portals (LFX etc.) can't be
   // inferred from the URL; the embedder passes platform: "zoom" explicitly.
   // Same rule for Jitsi: only the canonical public deployments are inferable —
@@ -70,10 +76,12 @@ export function resolvePlatform(meetingUrl: string): Platform {
   // platform: "jitsi" explicitly.
   try {
     const host = new URL(meetingUrl).hostname;
+    if (host === "meet.google.com") return "google_meet";
+    if (host === "teams.microsoft.com" || host.endsWith(".teams.microsoft.com") || host === "teams.live.com") return "teams";
     if (host === "zoom.us" || host.endsWith(".zoom.us")) return "zoom";
     if (host === "meet.jit.si" || host === "8x8.vc" || host.endsWith(".8x8.vc")) return "jitsi";
   } catch { /* fall through to throw below */ }
-  throw new Error(`Cannot infer platform from meeting URL: ${meetingUrl}`);
+  throw new Error(`Cannot infer platform from meeting URL: ${redactMeetingUrl(meetingUrl)}`);
 }
 
 /**
@@ -83,6 +91,28 @@ export function resolvePlatform(meetingUrl: string): Platform {
 /** Default bot name, reads env at call time so tests and the server-side proxy observe it when set. */
 export function defaultBotName(): string {
   return process.env.DEFAULT_BOT_NAME?.trim() || "Vexa Join Layer";
+}
+
+/** The page's language at the moment the join reached its verdict: a fresh reading, or the
+ *  mismatch recorded when the page loaded. */
+async function uiLocaleMismatchAtVerdict(page: Page, platform: string): Promise<UiLocaleReading | null> {
+  await checkUiLocale(page, platform, "join verdict");
+  return uiLocaleMismatchOf(page);
+}
+
+/**
+ * A join that failed on a page rendered in another language is reported as `ui_locale_mismatch`:
+ * the English detectors' verdict on that page (a timeout, a "rejection", a missing button) is not
+ * trusted. Failures read from the URL, not the page copy (a signed-out profile, a Teams sign-in
+ * redirect), keep their own type.
+ */
+async function uiLocaleVerdict(page: Page, platform: string, e: unknown): Promise<unknown> {
+  if (e instanceof UiLocaleMismatchError || e instanceof AuthSessionError || e instanceof TeamsJoinRedirectError) return e;
+  try {
+    const mismatch = await uiLocaleMismatchAtVerdict(page, platform);
+    if (mismatch) return new UiLocaleMismatchError(platform, mismatch, e instanceof Error ? e.message : String(e));
+  } catch { /* the original failure stands */ }
+  return e;
 }
 
 export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinResult> {
@@ -105,35 +135,47 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
   }
 
   let admitted: boolean;
-  if (platform === "teams") {
-    await joinMicrosoftTeams(page, opts.meetingUrl, botConfig.botName!, botConfig);
-    admitted = await waitForTeamsMeetingAdmission(
-      page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
-    );
-  } else if (platform === "zoom") {
-    await joinZoomMeeting(page, opts.meetingUrl, botConfig.botName!, botConfig);
-    admitted = await waitForZoomMeetingAdmission(
-      page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
-    );
-  } else if (platform === "jitsi") {
-    await joinJitsiMeeting(page, opts.meetingUrl, botConfig.botName!, botConfig);
-    admitted = await waitForJitsiMeetingAdmission(
-      page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
-    );
-  } else if (platform === "google_meet") {
-    // Meet can refuse a knock outright ("You can't join this video call"); that refusal is
-    // flaky, so knock again within the same lobby budget (googlemeet/refusal.ts).
-    admitted = await knockUntilGoogleAccepts(page, botConfig.automaticLeave!.waitingRoomTimeout!, async (remainingMs) => {
-      await joinGoogleMeeting(page, opts.meetingUrl, botConfig.botName!, botConfig);
-      return waitForGoogleMeetingAdmission(page, remainingMs, botConfig);
-    });
-  } else {
-    // Explicit refusal, never a fallthrough: an unknown platform used to silently run the GOOGLE
-    // MEET join flow against whatever URL it was handed — the wrong flow on the wrong site, failing
-    // minutes later with misattributed selector errors instead of naming the real problem here.
-    throw new Error(
-      `Unsupported platform '${platform}' — this join layer drives google_meet, teams, zoom, jitsi`,
-    );
+  try {
+    if (platform === "teams") {
+      await joinMicrosoftTeams(page, opts.meetingUrl, botConfig.botName!, botConfig);
+      admitted = await waitForTeamsMeetingAdmission(
+        page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
+      );
+    } else if (platform === "zoom") {
+      await joinZoomMeeting(page, opts.meetingUrl, botConfig.botName!, botConfig);
+      admitted = await waitForZoomMeetingAdmission(
+        page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
+      );
+    } else if (platform === "jitsi") {
+      await joinJitsiMeeting(page, opts.meetingUrl, botConfig.botName!, botConfig);
+      admitted = await waitForJitsiMeetingAdmission(
+        page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
+      );
+    } else if (platform === "google_meet") {
+      // Meet can refuse a knock outright ("You can't join this video call"); that refusal is
+      // flaky, so knock again within the same lobby budget, waiting longer each time and, for an
+      // anonymous bot, as a fresh guest (googlemeet/refusal.ts).
+      const knock = googleKnockConfig();
+      admitted = await knockUntilGoogleAccepts(page, botConfig.automaticLeave!.waitingRoomTimeout!, async (remainingMs) => {
+        await joinGoogleMeeting(page, opts.meetingUrl, botConfig.botName!, botConfig);
+        return waitForGoogleMeetingAdmission(page, remainingMs, botConfig);
+      }, Date.now, { freshen: !botConfig.authenticated && knock.wipe, backoffMs: knock.backoffMs, maxKnocks: knock.maxKnocks });
+    } else {
+      // Explicit refusal, never a fallthrough: an unknown platform used to silently run the GOOGLE
+      // MEET join flow against whatever URL it was handed — the wrong flow on the wrong site, failing
+      // minutes later with misattributed selector errors instead of naming the real problem here.
+      throw new Error(
+        `Unsupported platform '${platform}' — this join layer drives google_meet, teams, zoom, jitsi`,
+      );
+    }
+  } catch (e) {
+    throw await uiLocaleVerdict(page, platform, e);
+  }
+  if (!admitted) {
+    const mismatch = await uiLocaleMismatchAtVerdict(page, platform);
+    if (mismatch) {
+      throw new UiLocaleMismatchError(platform, mismatch, "the join ended without admission (awaiting_admission)");
+    }
   }
 
   return { admitted: !!admitted, state: admitted ? "admitted" : "awaiting_admission" };
@@ -148,9 +190,15 @@ export { joinGoogleMeeting, waitForGoogleMeetingAdmission, checkForGoogleAdmissi
 export { AdmissionError } from "./shared/admission";
 // Meet refusing the knock itself ("You can't join this video call") — a typed `denial` whose message
 // starts with GOOGLE_JOIN_REFUSED, after GOOGLE_JOIN_MAX_KNOCKS knocks (googlemeet/refusal.ts).
-export { GoogleJoinRefusedError, GOOGLE_JOIN_REFUSED, GOOGLE_JOIN_MAX_KNOCKS } from "./googlemeet/refusal";
+export { GoogleJoinRefusedError, GOOGLE_JOIN_REFUSED, GOOGLE_JOIN_MAX_KNOCKS, GOOGLE_JOIN_REKNOCK_BACKOFF_MS, googleKnockConfig } from "./googlemeet/refusal";
 export type { AdmissionOutcome } from "./shared/admission";
-export { AuthSessionError } from "./googlemeet/join";
+export { AuthSessionError };
+// The English pin and its check (shared/ui-locale.ts): a meeting page rendered in another language
+// ends a non-admitted join as `UiLocaleMismatchError` (reason code `ui_locale_mismatch`).
+export {
+  PINNED_UI_LOCALE, UI_LOCALE_MISMATCH, UiLocaleMismatchError, classifyUiLanguage, checkUiLocale,
+} from "./shared/ui-locale";
+export type { UiLocaleReading } from "./shared/ui-locale";
 export { joinMicrosoftTeams, waitForTeamsMeetingAdmission, checkForTeamsAdmissionSilent, prepareForTeamsRecording, leaveMicrosoftTeams, startTeamsRemovalMonitor };
 // The Teams anonymous-join origin guard. A meetup-join redirected to the Microsoft sign-in host
 // terminates the join THERE with `TeamsJoinRedirectError` — deliberately not an AdmissionError, so
@@ -161,5 +209,12 @@ export {
   isMicrosoftLoginUrl, isTeamsMeetingUrl,
 } from "./msteams/auth-redirect";
 export type { TeamsJoinRedirectReason } from "./msteams/auth-redirect";
+// The Teams pre-join gate (#1780): a "Join now" button Teams keeps disabled (an invalid display
+// name) terminates the join with `TeamsPreJoinBlockedError` — same not-an-AdmissionError idiom, so
+// `teams_prejoin_blocked` and Teams' own validation text reach the terminal event's reason text.
+export {
+  TeamsPreJoinBlockedError, TEAMS_PREJOIN_BLOCKED, teamsDisplayNameDisallowedChars,
+} from "./msteams/prejoin-blocked";
 export { joinZoomMeeting, buildZoomWebClientUrl, waitForZoomMeetingAdmission, checkForZoomAdmissionSilent, leaveZoomMeeting, dismissZoomPopups, startZoomRemovalMonitor };
+export { stopZoomIncomingVideo, incomingVideoStep, ZOOM_INCOMING_VIDEO_SELECTORS };
 export { joinJitsiMeeting, buildJitsiMeetingUrl, waitForJitsiMeetingAdmission, checkForJitsiAdmissionSilent, leaveJitsiMeeting, startJitsiRemovalMonitor };

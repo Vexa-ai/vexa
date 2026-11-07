@@ -373,10 +373,10 @@ export function wrapTranscribeWithTap<T extends TranscribeFn>(
     appendFile(path, JSON.stringify(rec) + '\n', 'utf8')
       .catch((e) => { if (faults++ < 5) log(`write failed: ${String(e)}`); });
   };
-  const tapped = (async (pcm: Float32Array, prompt?: string) => {
+  const tapped = (async (pcm: Float32Array, prompt?: string, hint?: { language?: string }) => {
     const t0 = Date.now();
     try {
-      const res = await transcribe(pcm, prompt);
+      const res = await (transcribe as unknown as (p: Float32Array, q?: string, h?: { language?: string }) => Promise<Awaited<ReturnType<T>>>)(pcm, prompt, hint);
       write({ at: new Date(t0).toISOString(), ms: Date.now() - t0, pcm_len: pcm.length, prompt_len: prompt?.length ?? 0, ok: true, text: res.text, language: res.language, duration: res.duration, segments: res.segments.length });
       return res;
     } catch (e) {
@@ -384,7 +384,7 @@ export function wrapTranscribeWithTap<T extends TranscribeFn>(
       write({ at: new Date(t0).toISOString(), ms: Date.now() - t0, pcm_len: pcm.length, prompt_len: prompt?.length ?? 0, ok: false, kind: x?.kind ?? 'unknown', status: x?.status, error: x?.message });
       throw e;
     }
-  }) as T;
+  }) as unknown as T;
   return tapped;
 }
 

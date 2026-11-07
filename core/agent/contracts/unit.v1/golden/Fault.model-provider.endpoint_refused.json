@@ -1,0 +1,9 @@
+{
+  "source": "model-provider",
+  "kind": "endpoint_refused",
+  "provider": "own",
+  "model": "mine",
+  "status": null,
+  "detail": "Your endpoint cannot carry this turn: model endpoint host 'gw.example.net' is not allow-listed.",
+  "remedy": "Fix it under Settings → Models, or pick another model."
+}

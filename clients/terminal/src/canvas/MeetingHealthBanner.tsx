@@ -1,29 +1,38 @@
 "use client";
-// Failure-surfacing banner for the live meeting feed. The signals (connected / reconnects /
-// lastTranscriptAt / issues[]) are already tracked per live meeting and exposed as
-// `meeting.diagnostics`; this is the LOUD surface that makes a broken feed unmissable to an operator
-// instead of silently showing stale lines.
+// THE BOT'S STATE CARD — at the door · admitted · quiet · left. The signals (the meeting's status,
+// plus connected / reconnects / lastTranscriptAt / issues[] tracked per live meeting and exposed as
+// `meeting.diagnostics`) collapse into one verdict in `meetingHealth`, and the wording lives in one
+// pure function, `botStateHeadline`.
+//
+// It says where the BOT is and nothing else. Every earlier phrasing described the FEED — "Waiting
+// for transcript — no new lines for 24s" — which reads as the product working on something; the
+// product does no work during a meeting (PRD decision 34), so no wording here may imply it.
 import { useEffect, useState } from "react";
 import { useMeeting } from "./useMeeting";
-import { formatElapsed, meetingHealth, STALE_MS, type MeetingHealthKind } from "./meetingHealth";
+import { botStateHeadline, meetingHealth, STALE_MS, type MeetingHealthKind } from "./meetingHealth";
 
 // Live statuses (mirrors the meeting surface header) — a feed we should watch for staleness/drops.
 const LIVE_STATUSES = new Set(["active", "live", "requested", "joining", "awaiting_admission", "needs_help", "stopping"]);
 
-// Only a real error is LOUD (red). A reconnect or a quiet meeting (no new lines) is benign — often just
-// silence, not a failure — so those get a muted, informational tone instead of the alarming red box.
-const TONE: Record<Exclude<MeetingHealthKind, "ok">, { color: string; bg: string }> = {
+// Only a real error is LOUD (red). A bot at the door, a reconnect, or a quiet room is benign —
+// often just silence, not a failure — so those get a muted, informational tone.
+const TONE: Record<Exclude<MeetingHealthKind, "ok" | "recovered">, { color: string; bg: string }> = {
+  "at-door": { color: "var(--t2)", bg: "var(--panel2)" },
   ended: { color: "var(--t2)", bg: "var(--panel2)" },
   disconnected: { color: "var(--t2)", bg: "var(--panel2)" },
   stalled: { color: "var(--t2)", bg: "var(--panel2)" },
+  // Catching up / finishing: the product is working through queued speech — neutral, never red.
+  behind: { color: "var(--t2)", bg: "var(--panel2)" },
+  finishing: { color: "var(--t2)", bg: "var(--panel2)" },
   // Warm amber (brand accent) — noticeable but not the alarming blood-red of a fatal failure.
   error: { color: "var(--accent)", bg: "var(--accentbg)" },
 };
 
-function issueLabel(kind: "stream" | "model" | "parse"): string {
-  if (kind === "model") return "Model inference error";
-  if (kind === "parse") return "Transcript parse error";
-  return "Stream error";
+// The two things that can go wrong on the wire between the bot and this pane. Neither is a model:
+// one is the connection, the other is a frame that would not decode.
+function issueLabel(kind: "stream" | "parse" | "access", voiceNote = false): string {
+  if (kind === "access") return "Access removed";
+  return kind === "parse" ? "Unreadable transcript frame" : voiceNote ? "Transcript feed error" : "Bot feed error";
 }
 
 export function MeetingHealthBanner() {
@@ -31,8 +40,10 @@ export function MeetingHealthBanner() {
   const diagnostics = meeting.diagnostics;
   const status = String(meeting.meeting.status ?? "").toLowerCase();
   const live = LIVE_STATUSES.has(status);
+  const platform = String(meeting.meeting.platform ?? "");
+  const voiceNote = platform === "voice_note";
 
-  // A cheap 1s now-tick so the "no new lines for Ns" elapsed time keeps ticking while stale/disconnected.
+  // A cheap 1s now-tick so the "no words for Ns" elapsed time keeps ticking while quiet/disconnected.
   // Only runs while a live feed could go stale; cleaned up on unmount / when not live.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -43,10 +54,12 @@ export function MeetingHealthBanner() {
 
   const [dismissedAt, setDismissedAt] = useState<number | undefined>(undefined);
 
-  const health = meetingHealth(diagnostics, now, live, STALE_MS);
+  const health = meetingHealth(diagnostics, now, live, STALE_MS, status);
   if (health.kind === "ok") return null;
+  // recovered: one quiet line, no box (founder 2026-10-16)
+  if (health.kind === "recovered") return <div role="status" className="mt-2 mr-4 mb-0 ml-4 t-xs c-3" data-health="recovered">Feed reconnected · words are coming in</div>;
 
-  // The error chip (model/parse/stream issue) is dismissible; the headline failure states are not.
+  // The error chip (a wire issue) is dismissible; the headline bot states are not.
   const issue = health.latestIssue;
   const issueDismissed = issue?.at != null && dismissedAt === issue.at;
 
@@ -54,59 +67,40 @@ export function MeetingHealthBanner() {
   if (health.kind === "error" && issueDismissed) return null;
 
   const tone = TONE[health.kind];
-  const elapsed = health.staleForMs != null ? formatElapsed(health.staleForMs) : undefined;
-
-  let headline: string;
-  let dot = true;
-  switch (health.kind) {
-    case "ended":
-      headline = "Meeting ended";
-      dot = false;
-      break;
-    case "disconnected":
-      headline = "Reconnecting to live stream…";
-      break;
-    case "stalled":
-      headline = `Waiting for transcript${elapsed ? ` — no new lines for ${elapsed}` : ""}`;
-      break;
-    case "error":
-    default:
-      headline = issue ? `${issueLabel(issue.kind)}${issue.status ? ` (${issue.status})` : ""}` : "Meeting feed error";
-      break;
-  }
+  // ONE source for the words (meetingHealth.botStateHeadline); the error state is the only one whose
+  // line depends on the issue itself, so it is composed here from the same label the detail row uses.
+  const headline = health.kind === "error" && issue
+    ? `${issueLabel(issue.kind, voiceNote)}${issue.status ? ` (${issue.status})` : ""}`
+    : botStateHeadline(health, platform);
+  const dot = health.kind !== "ended";   // the bot has left — nothing is pulsing
 
   return (
     <div
       role="status"
       aria-live="polite"
-      style={{
-        display: "flex", flexDirection: "column", gap: 4,
-        margin: "8px 18px 0", padding: "8px 11px", borderRadius: 8,
-        background: tone.bg, border: `1px solid ${tone.color}`, color: tone.color,
-        fontSize: 12.5, lineHeight: 1.4,
-      }}
+      className="mt-2 mr-4 mb-0 ml-4 pt-2 pr-3 pb-2 pl-3 r-md t-xs lh-snug" style={{ display: "flex", flexDirection: "column", gap: 4, background: tone.bg, border: `1px solid ${tone.color}`, color: tone.color }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        {dot && <span style={{ width: 7, height: 7, borderRadius: "50%", background: tone.color, flex: "none", boxShadow: `0 0 0 3px ${tone.bg}` }} />}
+        {dot && <span className="r-full" style={{ width: 7, height: 7, background: tone.color, flex: "none", boxShadow: `0 0 0 3px ${tone.bg}` }} />}
         <span style={{ fontWeight: health.kind === "error" ? 700 : 600 }}>{headline}</span>
       </div>
 
       {/* For stalled/disconnected, still surface the most recent underlying issue if there is one. */}
       {health.kind !== "ended" && health.kind !== "error" && issue && !issueDismissed && (
-        <div style={{ fontSize: 11.5, opacity: 0.92 }}>
-          {issueLabel(issue.kind)}{issue.status ? ` (${issue.status})` : ""}: {issue.message}
+        <div className="t-xs" style={{ opacity: 0.92 }}>
+          {issueLabel(issue.kind, voiceNote)}{issue.status ? ` (${issue.status})` : ""}: {issue.message}
         </div>
       )}
 
       {/* The error chip carries the message + a dismiss control. */}
       {health.kind === "error" && issue && (
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 11.5, opacity: 0.92, flex: 1, minWidth: 0 }}>{issue.message}</span>
+          <span className="t-xs" style={{ opacity: 0.92, flex: 1, minWidth: 0 }}>{issue.message}</span>
           <button
             type="button"
             onClick={() => setDismissedAt(issue.at)}
             title="Dismiss"
-            style={{ flex: "none", background: "transparent", border: `1px solid ${tone.color}`, color: tone.color, borderRadius: 6, padding: "1px 7px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}
+            className="bg-none r-md pt-0 pr-1_5 pb-0 pl-1_5 t-xs fw-600" style={{ flex: "none", border: `1px solid ${tone.color}`, color: tone.color, cursor: "pointer" }}
           >
             Dismiss
           </button>

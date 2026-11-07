@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import stat
 import time
 import urllib.error
 import urllib.request
@@ -274,15 +275,22 @@ def _file_probe(spec: dict, env: Mapping[str, str], timeout: float) -> dict:
     tried = []
     for p in [raw, *(spec.get("fallback_paths") or [])]:
         path = Path(p)
-        if not path.exists():
-            tried.append(f"{p}: not found")
-            continue
-        if not path.is_file():
-            return {"ok": False, "path": p,
-                    "reason": f"{p} is not a regular file — docker bind-mounts a MISSING host path "
-                              f"as a DIRECTORY, so the host file behind {spec['path_key']} is absent"}
         try:
+            try:
+                mode = path.stat().st_mode
+            except (FileNotFoundError, NotADirectoryError):
+                tried.append(f"{p}: not found")
+                continue
+            if not stat.S_ISREG(mode):
+                return {"ok": False, "path": p,
+                        "reason": f"{p} is not a regular file — docker bind-mounts a MISSING host path "
+                                  f"as a DIRECTORY, so the host file behind {spec['path_key']} is absent"}
             data = json.loads(path.read_text(encoding="utf-8"))
+        except PermissionError:
+            # This service runs as an unprivileged uid and the host keeps the file to its owner. The
+            # workers that use the credential read it themselves; this service cannot look.
+            return {"ok": True, "path": p, "unverified":
+                    f"{p}: permission denied to this service (uid {os.getuid()}); not checked here"}
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "path": p, "reason": f"{p}: unreadable or not JSON ({e.__class__.__name__})"}
         if not data:

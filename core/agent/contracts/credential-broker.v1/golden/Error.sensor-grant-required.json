@@ -1,0 +1,4 @@
+{
+  "detail": "This person has not let their sensors read this calendar",
+  "reason": "sensor_grant_required"
+}

@@ -1,0 +1,20 @@
+{
+  "connection_id": "c1",
+  "resync_required": false,
+  "cursor": "CPDAlvWDx70CEPDAlvWDx70CGAU=",
+  "items": [
+    {
+      "event_id": "abc123",
+      "status": "confirmed",
+      "etag": "\"3181\"",
+      "updated": "2027-03-01T08:00:00Z",
+      "title": "Weekly sync",
+      "start": "2027-03-01T10:00:00+01:00",
+      "end": "2027-03-01T10:30:00+01:00",
+      "video_url": "https://meet.google.com/abc-defg-hij",
+      "self_response": "accepted",
+      "organizer_self": false,
+      "calendar_id": "primary"
+    }
+  ]
+}

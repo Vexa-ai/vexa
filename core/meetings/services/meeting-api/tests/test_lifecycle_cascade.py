@@ -95,14 +95,21 @@ def test_full_meeting_lifecycle_cascade():
     assert len(runtime.specs) == 1, "the spawn must have created exactly one workload"
 
     conn = asyncio.run(repo.list_sessions(meeting_id=meeting_id))[-1]
+    # The bot's ONLY credential is the MeetingToken in its invocation, bound to its session.
+    invocation = json.loads(runtime.specs[0]["env"]["VEXA_BOT_CONFIG"])
+    assert "internalSecret" not in invocation
+    bot_auth = {"Authorization": f"Bearer {invocation['token']}"}
 
     # ── 2. drive the bot lifecycle joining → active → completed ──
+    unauthenticated = client.post("/bots/internal/callback/lifecycle",
+                                  json={"connection_id": conn, "status": "joining"})
+    assert unauthenticated.status_code == 401
     for st in ("joining", "active", "completed"):
         ev = {"connection_id": conn, "status": st}
         if st == "completed":
             ev["exit_code"] = 0
             ev["completion_reason"] = "stopped"
-        rr = client.post("/bots/internal/callback/lifecycle", json=ev)
+        rr = client.post("/bots/internal/callback/lifecycle", json=ev, headers=bot_auth)
         assert rr.status_code == 200, f"{st}: {rr.text}"
 
     # ── 3. durable persist (sessions/repo) — the FSM advance reached the DB row ──

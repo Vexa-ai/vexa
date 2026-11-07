@@ -1,0 +1,20 @@
+{
+  "claims": {
+    "delegation": {
+      "regime": "human",
+      "unit": "agent-42-chat-main",
+      "workspaces": "*"
+    },
+    "email": "ada@example.com",
+    "limits": 3,
+    "scopes": [
+      "bot",
+      "tx"
+    ],
+    "sub": "42"
+  },
+  "now": 1760000000,
+  "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n-----END PUBLIC KEY-----\n",
+  "token": "v1.eyJkZWxlZ2F0aW9uIjp7InJlZ2ltZSI6Imh1bWFuIiwidW5pdCI6ImFnZW50LTQyLWNoYXQtbWFpbiIsIndvcmtzcGFjZXMiOiIqIn0sImVtYWlsIjoiYWRhQGV4YW1wbGUuY29tIiwiZXhwIjoxNzYwMDAwMDYwLCJpYXQiOjE3NjAwMDAwMDAsImxpbWl0cyI6Mywic2NvcGVzIjpbImJvdCIsInR4Il0sInN1YiI6IjQyIiwidHlwIjoidmV4YS1pZGVudGl0eSJ9.vWfuTTkQ7TW_csINqrK2kXBRMSYcXaPa3jfZ3cqB6opxdWj1sEHymVdVmTZklkLMsf6OtWRcy4XfqOumz1hnDQ",
+  "ttl_sec": 60
+}

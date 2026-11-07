@@ -86,10 +86,10 @@ function htmlToMarkdown(html: string): string {
     // Line breaks
     .replace(/<br\s*\/?>/g, "\n")
     // Clean up entities
-    .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"');
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&");   // last, so an escaped entity (`&amp;lt;`) is not decoded twice
 
   return md.trim() + "\n";
 }

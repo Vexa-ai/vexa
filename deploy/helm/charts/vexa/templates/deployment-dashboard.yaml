@@ -23,18 +23,26 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: dashboard
       annotations:
-        {{- toYaml .Values.global.podAnnotations | nindent 8 }}
+        checksum/secrets: {{ include "vexa.checksum" (list . .Values.secrets) }}
+        {{- with .Values.global.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
-      securityContext:
-        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      enableServiceLinks: false
+      {{- include "vexa.podSecurityContext" . | nindent 6 }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with include "vexa.extraCA.initContainer" . }}
+      initContainers:{{ . | trim | nindent 8 }}
+      {{- end }}
+      {{- with include "vexa.extraCA.volumes" . }}
+      volumes:{{ . | trim | nindent 8 }}
+      {{- end }}
       containers:
         - name: dashboard
-          securityContext:
-            {{- toYaml .Values.global.securityContext | nindent 12 }}
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
           # NB: deliberately NOT prefixed by global.imageTag — the dashboard is a deprecated
           # external image on its own pinned tag, not part of the release image set.
           image: "{{ .Values.dashboard.image.repository }}:{{ .Values.dashboard.image.tag }}"
@@ -42,7 +50,11 @@ spec:
           ports:
             - name: http
               containerPort: 3000
+          {{- with include "vexa.extraCA.mounts" . }}
+          volumeMounts:{{ . | trim | nindent 12 }}
+          {{- end }}
           env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
             - name: VEXA_API_URL
               value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
             - name: VEXA_ADMIN_API_URL

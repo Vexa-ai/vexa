@@ -42,6 +42,7 @@ def apply_chunk_to_recording(
     is_final: bool,
     duration_seconds: Optional[float],
     sample_rate: Optional[int],
+    capture_started_at_ms: Optional[float] = None,
 ) -> tuple[dict, bool]:
     """Fold one uploaded chunk into the recording payload.
 
@@ -95,7 +96,12 @@ def apply_chunk_to_recording(
     new_storage_path = prior_sp if keep_prior_path else storage_path
     new_is_final = True if master_finalized else is_final
 
+    # Keep the capture clock fixed across retries, later chunks and the final empty marker.
+    origin = (prior_same_type or {}).get("capture_started_at_ms")
+    if origin is None and type(capture_started_at_ms) in (int, float) and 1e12 < capture_started_at_ms < 1e14:
+        origin = capture_started_at_ms
     media_files.append({
+        **({"capture_started_at_ms": origin} if origin is not None else {}),
         "id": (prior_same_type or {}).get("id") or new_recording_numeric_id(),
         "type": media_type,
         "format": media_format,
@@ -135,12 +141,24 @@ def apply_chunk_to_recording(
     return rec_payload, status_transitioned
 
 
+#: The media a bot uploads as recording chunks, and their formats: an audio stream (WAV, or Opus in
+#: WebM), the video capture (WebM, Matroska or MP4). Both are path segments of a chunk's object key, so
+#: only these values reach one; the upload route refuses anything else before it reads the body.
+RECORDING_MEDIA_TYPES = ("audio", "video")
+RECORDING_MEDIA_FORMATS = ("wav", "webm", "mkv", "mp4")
+
+
 def chunk_storage_key(
     *, user_id: int, recording_id: int, session_uid: str, media_type: str, media_format: str,
     chunk_seq: int,
 ) -> str:
     """The object key for one uploaded chunk (parent's scheme — ``media_type`` in the path keeps
-    audio/video from colliding at ``chunk_seq=0``)."""
+    audio/video from colliding at ``chunk_seq=0``). ``media_type`` and ``media_format`` MUST be in
+    ``RECORDING_MEDIA_TYPES`` / ``RECORDING_MEDIA_FORMATS``."""
+    if media_type not in RECORDING_MEDIA_TYPES:
+        raise ValueError(f"unknown recording media_type; known: {list(RECORDING_MEDIA_TYPES)}")
+    if media_format not in RECORDING_MEDIA_FORMATS:
+        raise ValueError(f"unknown recording media_format; known: {list(RECORDING_MEDIA_FORMATS)}")
     return (
         f"recordings/{user_id}/{recording_id}/{session_uid}/{media_type}/"
         f"{chunk_seq:06d}.{media_format}"
@@ -198,6 +216,12 @@ SIGNAL_TAPE_PART_FORMATS = {"botlog": "txt"}
 SIGNAL_PROMOTED_MARKER = "PROMOTED"
 
 
+def signal_meeting_prefix(*, user_id: int, meeting_id: int) -> str:
+    """The prefix holding EVERY tape of one owned meeting (all its bot sessions) — what a deletion of
+    that meeting's fixtures erases."""
+    return f"{SIGNAL_ROOT_PREFIX}{user_id}/{meeting_id}/"
+
+
 def signal_tape_prefix(*, user_id: int, meeting_id: int, session_uid: str) -> str:
     """The prefix holding ONE bot session's tape (both parts + any promotion marker).
 
@@ -206,7 +230,7 @@ def signal_tape_prefix(*, user_id: int, meeting_id: int, session_uid: str) -> st
     would only create a second identifier for the same thing. ``meeting_id`` is the join back to the
     meeting row; ``session_uid`` (the bot's connectionId) is what a curator actually looks up.
     """
-    return f"{_SIGNAL_PREFIX}/{user_id}/{meeting_id}/{session_uid}/"
+    return f"{signal_meeting_prefix(user_id=user_id, meeting_id=meeting_id)}{session_uid}/"
 
 
 def signal_tape_key(*, user_id: int, meeting_id: int, session_uid: str, part: str,

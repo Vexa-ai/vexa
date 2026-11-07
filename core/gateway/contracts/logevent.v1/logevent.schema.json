@@ -13,7 +13,7 @@
       "enum": ["user", "system"]
     },
     "LogEvent": {
-      "description": "One structured log line. `trace_id` is the correlation key threaded edge→downstream via X-Trace-Id; every line emitted while serving one request carries the SAME trace_id.",
+      "description": "One structured log line. `trace_id` is the correlation key threaded edge→downstream via X-Trace-Id; every line emitted while serving one request carries the SAME trace_id. `session`, when present, names the agent unit (a chat or a background job) that caused the line, so every trace one session started can be collected.",
       "type": "object",
       "additionalProperties": false,
       "required": ["ts", "level", "service", "trace_id", "audience", "event"],
@@ -47,6 +47,11 @@
           "type": "string",
           "minLength": 1,
           "description": "The meeting/session the event concerns, when applicable."
+        },
+        "session": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The agent session (unit) that caused this line, when one did: the unit id agent-api dispatched (e.g. agent-<subject>-chat-<thread>[-g<gen>] for a chat, agent-<subject>-<trigger>-<digest> for a background job). A service sets it ONLY from a value it can trust — the `unit` claim of a delegation token (delegation.v1), as identity's validate answer or the gateway's signed identity (gateway-identity.v1 delegation.unit) carries it, or its own dispatch — never from a header a client can set. The same value is the credential broker's audit.session. Absent for a person's own request."
         },
         "audience": { "$ref": "#/$defs/Audience" },
         "event": {

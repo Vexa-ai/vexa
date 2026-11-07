@@ -10,6 +10,9 @@ import {
   validateManifestIdentity,
   verifyCandidateMapHash,
 } from "./registry-candidate-validate.mjs";
+import { guardTree } from "./test-tree.mjs";
+
+guardTree();
 
 const digest = (character) => `sha256:${character.repeat(64)}`;
 const sha256 = (bytes) => `sha256:${createHash("sha256").update(bytes).digest("hex")}`;

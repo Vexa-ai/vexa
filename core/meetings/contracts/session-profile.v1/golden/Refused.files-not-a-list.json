@@ -1,0 +1,8 @@
+{
+  "why": "files is a list of entries, not a map",
+  "body": {
+    "files": {
+      "Default/Cookies": "cm90YXRlZC1jb29raWUtZGI="
+    }
+  }
+}

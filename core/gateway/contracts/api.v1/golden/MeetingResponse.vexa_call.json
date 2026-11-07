@@ -1,0 +1,23 @@
+{
+  "id": 43,
+  "user_id": 7,
+  "platform": "vexa_call",
+  "native_meeting_id": "call-5d2e9b0c41a7",
+  "constructed_meeting_url": null,
+  "status": "active",
+  "bot_container_id": null,
+  "start_time": "2026-10-12T09:00:00Z",
+  "end_time": null,
+  "data": {
+    "call": {
+      "room": "call-5d2e9b0c41a7",
+      "url": "wss://calls.example.com",
+      "session_id": "s-0123456789abcdef0123456789abcdef",
+      "transcribed": true,
+      "transcription_switchable": false,
+      "max_duration_sec": 14400
+    }
+  },
+  "created_at": "2026-10-12T08:59:58Z",
+  "updated_at": "2026-10-12T09:00:01Z"
+}

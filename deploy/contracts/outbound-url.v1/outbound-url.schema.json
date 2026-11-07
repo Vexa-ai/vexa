@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/contracts/outbound-url.v1/outbound-url.schema.json",
+  "title": "outbound-url.v1 — the outbound URL rule's case table",
+  "description": "Whether a server may fetch a URL somebody else supplied, written as cases. Every implementation of the rule (the Python ssrf.py vendored into each image that fetches such a URL, and the bot's TypeScript url-guard.ts) is held to this table by its own test suite, reading a byte-identical copy of the golden (scripts/parity.json, fact outbound-url-vectors).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "what", "addresses", "hostnames", "urls"],
+  "properties": {
+    "contract": {
+      "const": "outbound-url.v1"
+    },
+    "what": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Prose: what the table is and how each section is read."
+    },
+    "addresses": {
+      "type": "array",
+      "minItems": 1,
+      "description": "is_blocked_ip: an IP address, in any notation the rule reads, and whether a connection to it is refused.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["addr", "blocked"],
+        "properties": {
+          "addr": {"type": "string", "description": "May be empty: an empty address is a case too."},
+          "blocked": {"type": "boolean"}
+        }
+      }
+    },
+    "hostnames": {
+      "type": "array",
+      "minItems": 1,
+      "description": "is_blocked_hostname: a host name refused before any lookup because it can only name this deployment.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["host", "blocked"],
+        "properties": {
+          "host": {"type": "string", "description": "May be empty: an empty host is a case too."},
+          "blocked": {"type": "boolean"}
+        }
+      }
+    },
+    "urls": {
+      "type": "array",
+      "minItems": 1,
+      "description": "validate_url: a URL, the resolver's answer for its host (null for a literal address, where no lookup happens), and whether the URL is refused.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["url", "resolved", "refused"],
+        "properties": {
+          "url": {"type": "string"},
+          "resolved": {
+            "oneOf": [
+              {"type": "null"},
+              {"type": "array", "items": {"type": "string"}}
+            ]
+          },
+          "refused": {"type": "boolean"}
+        }
+      }
+    }
+  }
+}

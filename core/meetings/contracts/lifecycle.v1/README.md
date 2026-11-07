@@ -53,7 +53,8 @@ expiry — two different owners, two different fixes, one number.
   "reason":      "awaiting_admission_timeout",
                                         // WHAT: awaiting_admission_rejected · awaiting_admission_timeout ·
                                         //   auth_session_missing · never_reached_lobby ·
-                                        //   navigation_failure · stopped_while_joining · unknown
+                                        //   navigation_failure · ui_locale_mismatch ·
+                                        //   stopped_while_joining · unknown
                                         //   (the first three are the SEALED enum's own words: one
                                         //    word per fact, so the axes layer instead of competing)
   "attribution": "host_action",         // WHO:  system_fault · user_action · host_action ·
@@ -78,4 +79,14 @@ per platform. An absent timing is **absent**, never zero — "nobody measured" a
 different facts. Producing this evidence is **fail-open**: it describes a run that has already
 ended, and no fault in it may alter the terminal being recorded.
 
-No auth token (transport-layer), no tenancy fields (deferred). Goldens validated by `gate:schema`.
+## Transport and the bot's credential
+The bot POSTs each event to the invocation's `meetingApiCallbackUrl` (meeting-api
+`POST /bots/internal/callback/lifecycle`) with **`Authorization: Bearer <token>`**, the session's
+MeetingToken from invocation.v1. meeting-api applies the event only when the token verifies and its
+`session_uid` equals the event's `connection_id` (or the caller is on the internal tier,
+`X-Internal-Secret`); otherwise it answers `401 {"status": "error", "detail": "bot session credential
+required"}` and drops the event. A bot older than v0.13.2 sends no bearer: see invocation.v1
+§ Minimum bot version.
+
+The payload itself carries no credential, and no tenancy fields (deferred). Goldens validated by
+`gate:schema`.

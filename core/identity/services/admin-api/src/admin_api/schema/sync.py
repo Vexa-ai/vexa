@@ -13,9 +13,13 @@ NOT need the `prerequisites=` two-base bridge the parent used (it split identity
 bases) because the v0.12 schema co-locates both in one `Base.metadata` — create_all already
 emits tables in FK order.
 """
+import asyncio
 import logging
+import os
+import time
 
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.engine import Connection
 
 from .errors import SchemaInvariantError
@@ -37,6 +41,7 @@ _TYPE_MAP = {
     "TIMESTAMP": lambda c: "TIMESTAMP WITHOUT TIME ZONE",
     "JSONB": lambda c: "JSONB",
     "JSON": lambda c: "JSON",
+    "LARGEBINARY": lambda c: "BYTEA",
     "ARRAY": lambda c: _array_type(c),
 }
 
@@ -90,8 +95,16 @@ def _sync_columns(conn: Connection, base):
             conn.execute(text(stmt))
 
 
-def _sync_indexes(conn: Connection, base):
+def _sync_indexes(conn: Connection, base, deferred: list | None = None):
     """Additive index convergence — tolerant for non-unique, FAIL CLOSED for unique (#1186).
+
+    On Postgres a missing NON-UNIQUE index is not built here: it is appended to ``deferred`` and
+    built after this transaction commits, ``CONCURRENTLY`` (``_build_deferred_indexes``). This
+    transaction can hold ACCESS EXCLUSIVE on ``users`` and ``api_tokens`` (an additive ``ADD
+    COLUMN``) until it commits, so an index built inside it would hold every ``/internal/validate``
+    for the whole build. An INVALID leftover of a failed concurrent build under a non-unique model
+    name is deferred the same way, to be dropped and rebuilt. UNIQUE indexes stay in-band: they are
+    invariants the code relies on, and their failure stops the convergence (below).
 
     A non-unique index is a performance hint: losing one degrades latency, nothing else, so a
     failed CREATE stays tolerated at DEBUG. A UNIQUE index is an *invariant the application code
@@ -112,13 +125,22 @@ def _sync_indexes(conn: Connection, base):
     """
     inspector = inspect(conn)
     existing_tables = set(inspector.get_table_names())
+    invalid = _invalid_index_names(conn)
     unique_failures: list[tuple[str, str, str]] = []   # (table, index, underlying error)
     for table in base.metadata.sorted_tables:
         if table.name not in existing_tables:
             continue
         existing = {idx["name"] for idx in inspector.get_indexes(table.name) if idx["name"]}
         for index in table.indexes:
+            unique = bool(getattr(index, "unique", False))
             if index.name and index.name in existing:
+                if index.name not in invalid:
+                    continue
+                if unique or deferred is None:
+                    logger.error(_invalid_index_message(table.name, str(index.name)))
+                    continue
+            if deferred is not None and not unique:
+                deferred.append(index)
                 continue
             # Per-index SAVEPOINT: a failed CREATE INDEX (e.g. a UNIQUE index on a table that still
             # holds rows violating it) must NOT poison the surrounding convergence transaction —
@@ -142,6 +164,81 @@ def _sync_indexes(conn: Connection, base):
         raise SchemaInvariantError(_unique_index_failure_message(unique_failures))
 
 
+#: Reflection lists an index by name whether or not Postgres can use it, so the INVALID leftover of a
+#: failed ``CREATE INDEX CONCURRENTLY`` would otherwise read as present and never be rebuilt.
+_INVALID_INDEXES_SQL = (
+    "SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE NOT i.indisvalid AND n.nspname = current_schema()"
+)
+
+
+def _invalid_index_names(conn: Connection) -> set[str]:
+    if getattr(getattr(conn, "dialect", None), "name", None) != "postgresql":
+        return set()
+    return {row[0] for row in conn.execute(text(_INVALID_INDEXES_SQL))}
+
+
+def _invalid_index_message(table: str, index: str) -> str:
+    return (f"schema-sync: index {index} on {table} exists but is INVALID (a failed CREATE INDEX "
+            f"CONCURRENTLY); Postgres never uses it. Rebuild it: DROP INDEX CONCURRENTLY {index}; "
+            f"then restart admin-api (or run python -m admin_api.migrate).")
+
+
+#: The concurrent builds run on their own autocommit connection after the convergence commits.
+#: One process builds at a time (every admin-api replica and the migrations Job converge): the
+#: others find the advisory lock held and leave the work to it. A build first waits for every
+#: transaction already writing the table; ``CONCURRENT_LOCK_TIMEOUT_MS`` bounds each of those waits,
+#: so a long-open writer delays a boot by seconds, never indefinitely. The lock it takes (SHARE
+#: UPDATE EXCLUSIVE) conflicts with no read or write, so nobody queues behind a build.
+CONCURRENT_INDEX_LOCK_KEY = 0x76786131          # "vxa1"
+CONCURRENT_LOCK_TIMEOUT_MS = 5000
+
+
+def _concurrent_index_sql(index, dialect) -> str:
+    from sqlalchemy.schema import CreateIndex  # noqa: PLC0415
+
+    ddl = str(CreateIndex(index, if_not_exists=True).compile(dialect=dialect))
+    prefix = "CREATE INDEX IF NOT EXISTS "
+    if not ddl.startswith(prefix):
+        raise ValueError(f"unexpected index DDL for {index.name}: {ddl[:80]}")
+    return "CREATE INDEX CONCURRENTLY IF NOT EXISTS " + ddl[len(prefix):]
+
+
+def _build_deferred_indexes(conn: Connection, indexes: list) -> None:
+    """Build each deferred non-unique index CONCURRENTLY. ``conn`` must be in AUTOCOMMIT.
+
+    A failed build is logged with the statement to run by hand and does not fail the convergence:
+    a non-unique index is a performance hint. Postgres leaves an INVALID index behind a failed
+    concurrent build; the next convergence drops and rebuilds it."""
+    if not indexes:
+        return
+    if not conn.execute(text("SELECT pg_try_advisory_lock(:k)"),
+                        {"k": CONCURRENT_INDEX_LOCK_KEY}).scalar():
+        logger.warning("schema-sync: another process is building indexes concurrently; leaving %s "
+                       "to it", ", ".join(str(i.name) for i in indexes))
+        return
+    try:
+        conn.execute(text(f"SET lock_timeout = '{CONCURRENT_LOCK_TIMEOUT_MS}ms'"))
+        invalid = _invalid_index_names(conn)
+        for index in indexes:
+            sql = _concurrent_index_sql(index, conn.dialect)
+            try:
+                if index.name in invalid:
+                    conn.execute(text(f'DROP INDEX CONCURRENTLY IF EXISTS "{index.name}"'))
+                started = time.monotonic()
+                conn.execute(text(sql))
+                logger.info("schema-sync: built index %s on %s concurrently in %.2fs",
+                            index.name, index.table.name, time.monotonic() - started)
+            except DBAPIError as e:
+                logger.error("schema-sync: index %s on %s NOT built (%s); the next convergence "
+                             "retries it. By hand: DROP INDEX CONCURRENTLY IF EXISTS %s; %s",
+                             index.name, index.table.name, getattr(e, "orig", e), index.name, sql)
+    finally:
+        conn.execute(text("RESET lock_timeout"))
+        conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": CONCURRENT_INDEX_LOCK_KEY})
+
+
 def _unique_index_failure_message(failures: list[tuple[str, str, str]]) -> str:
     """Operator-facing text: which index, on what table, the underlying error, what to do next."""
     lines = [
@@ -161,13 +258,15 @@ def _unique_index_failure_message(failures: list[tuple[str, str, str]]) -> str:
 
 # MIGRATION-0004-backfill-token-scopes — grandfather pre-scope (0.10-era) API tokens.
 #
-# 0.10's api_tokens had no `scopes` column; keys were unscoped = allow-all. 0.12 adds
-# `scopes ARRAY(Text) NOT NULL server_default '{}'`, so the additive `ADD COLUMN` above fills
-# every pre-existing row with an empty array — which the gateway/validate path reads as
-# no-access and 403s on every core route. This one-shot, idempotent backfill converges those
-# empty/NULL rows to the full valid-scope set, mirroring 0.10's allow-all behavior. It only
-# touches empties, so newly-minted (already-scoped) tokens are never widened, and re-running
-# ensure_schema is a no-op once there are no empty rows left.
+# 0.10's api_tokens had no `scopes` column; keys were unscoped = allow-all. The `scopes ARRAY(Text)
+# NOT NULL server_default '{}'` column, added by the additive `ADD COLUMN`, fills every pre-existing
+# row with an empty array, which the read path (`get_current_user`, `/internal/validate`) treats as
+# no access. Those rows, and only those, are converged to the full valid-scope set, in the same
+# transaction that adds the column, mirroring 0.10's allow-all.
+#
+# A row whose `scopes` column already exists is never rewritten. An empty array there is a key with
+# no access, and it keeps none: the read path denies `{}` and NULL alike, so rewriting it would grant
+# access the key never had.
 #
 # See MIGRATION-0004-backfill-token-scopes.md. Kept in step with app.main.VALID_SCOPES.
 # Bound as a Python list (not a '{...}' literal): asyncpg maps a list → text[], and rejects the
@@ -176,17 +275,23 @@ def _unique_index_failure_message(failures: list[tuple[str, str, str]]) -> str:
 _FULL_TOKEN_SCOPES = ["bot", "tx", "browser"]
 
 
-def _backfill_token_scopes(conn: Connection):
+def _tokens_predate_scopes(conn: Connection) -> bool:
+    """True when ``api_tokens`` exists without a ``scopes`` column: this pass adds it."""
     inspector = inspect(conn)
     if "api_tokens" not in set(inspector.get_table_names()):
+        return False
+    return "scopes" not in {c["name"] for c in inspector.get_columns("api_tokens")}
+
+
+def _backfill_token_scopes(conn: Connection, predate_scopes: bool):
+    if not predate_scopes:
         return
     result = conn.execute(text(
-        "UPDATE api_tokens SET scopes = :full "
-        "WHERE scopes = '{}'::text[] OR scopes IS NULL"
+        "UPDATE api_tokens SET scopes = :full WHERE scopes = '{}'::text[]"
     ), {"full": _FULL_TOKEN_SCOPES})
     if result.rowcount:
-        logger.info("schema-sync backfill token scopes (MIGRATION-0004): %d row(s) grandfathered "
-                    "to %s", result.rowcount, _FULL_TOKEN_SCOPES)
+        logger.info("schema-sync backfill token scopes (MIGRATION-0004): %d pre-scope row(s) "
+                    "grandfathered to %s", result.rowcount, _FULL_TOKEN_SCOPES)
 
 
 # MIGRATION-0005 — the meetings-list EVENT-time ordering (#1222).
@@ -220,25 +325,146 @@ $fn$
 """
 
 
+# MIGRATION-0008 — the org as a first-class object. The convergence above makes `orgs` and
+# `org_members` (new tables) and adds `users.org_id` with a constant default (a catalog change on
+# Postgres >= 11: no rewrite, no per-row UPDATE). This makes sure the default org EXISTS, so every
+# `users.org_id` points at a real row. Idempotent: ON CONFLICT DO NOTHING, and the CRM binding is
+# stamped only while it is still unset, so an operator's later choice is never overwritten.
+DEFAULT_ORG_NAME = "Default"
+
+
+def _ensure_default_org(conn: Connection):
+    from .models import DEFAULT_ORG_ID  # noqa: PLC0415 — models imports nothing from here
+
+    inspector = inspect(conn)
+    if "orgs" not in set(inspector.get_table_names()):
+        return
+    crm = (os.environ.get("CRM_ORG_ID") or "").strip() or None
+    conn.execute(text(
+        "INSERT INTO orgs (id, name, policy_source, crm_org_id, data, created_at) "
+        "VALUES (:id, :name, '_global', :crm, '{}'::jsonb, now()) ON CONFLICT (id) DO NOTHING"
+    ), {"id": DEFAULT_ORG_ID, "name": DEFAULT_ORG_NAME, "crm": crm})
+    if crm:
+        conn.execute(text("UPDATE orgs SET crm_org_id = :crm WHERE id = :id AND crm_org_id IS NULL"),
+                     {"id": DEFAULT_ORG_ID, "crm": crm})
+
+
+# MIGRATION-0011 — every sign-in credential ends with the cookie that carries it (B1).
+#
+# A session minted before sessions had a lifetime, and the `terminal-login` KEY a browser was signed
+# in with before sessions existed (or on a deployment without them), have `expires_at` NULL: a
+# standing credential, though the browser cookie that carried it lived 30 days. Each gets the end its
+# cookie had — `created_at` + 30 days, which may already be past (that cookie is gone) — and a row
+# with no `created_at` gets 30 days from this convergence. Only rows with no end are touched, so the
+# pass is idempotent and an operator's own expiry is never moved. Self-serve keys (any other name)
+# are the person's to bound, and are left alone.
+LOGIN_LIFETIME_SECONDS = 60 * 60 * 24 * 30
+SIGN_IN_TOKEN_NAME = "terminal-login"
+
+
+def _bound_sign_in_credentials(conn: Connection):
+    if conn.dialect.name != "postgresql":
+        return
+    inspector = inspect(conn)
+    if "api_tokens" not in set(inspector.get_table_names()):
+        return
+    cols = {c["name"] for c in inspector.get_columns("api_tokens")}
+    if not {"kind", "expires_at", "created_at", "name", "scopes"} <= cols:
+        return
+    result = conn.execute(text(
+        "UPDATE api_tokens "
+        "SET expires_at = COALESCE(created_at, now() AT TIME ZONE 'utc') + make_interval(secs => :life) "
+        "WHERE expires_at IS NULL AND (kind = 'session' "
+        "OR (kind = 'key' AND name = :name AND 'browser' = ANY(scopes)))"
+    ), {"life": LOGIN_LIFETIME_SECONDS, "name": SIGN_IN_TOKEN_NAME})
+    if result.rowcount:
+        logger.info("schema-sync (MIGRATION-0011): %d sign-in credential(s) with no end now end with "
+                    "their cookie (created_at + 30 days)", result.rowcount)
+
+
 def _sync_functions(conn: Connection):
     conn.execute(text(_MEETING_EVENT_TIME_FN))
 
 
-def _ensure_schema_sync(conn: Connection, base):
+#: A CONVERGENCE NEVER QUEUES LIVE READS BEHIND A LOCK IT IS WAITING FOR (2026-10-13: validate at
+#: 23–38 s with Postgres sessions waiting on a lock during deploys). A waiting `ALTER TABLE` keeps its
+#: place in the table's lock queue and every later reader — every `/internal/validate` — waits behind
+#: it. Each lock is therefore asked for with this timeout (below validate's own 1 s read bound), and
+#: a convergence that could not get one is rolled back and tried again after LOCK_RETRY_BACKOFF_S.
+LOCK_TIMEOUT_MS = 500
+LOCK_RETRY_BACKOFF_S = (0.5, 1, 2, 4, 8, 15)
+_LOCK_NOT_AVAILABLE = "55P03"
+
+
+def _lock_not_available(e: Exception) -> bool:
+    orig = getattr(e, "orig", None)
+    code = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+    return code == _LOCK_NOT_AVAILABLE or "lock timeout" in str(e).lower()
+
+
+def _bound_locks(conn: Connection):
+    if conn.dialect.name == "postgresql":
+        conn.execute(text(f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT_MS}ms'"))
+
+
+def _ensure_schema_sync(conn: Connection, base, deferred: list | None = None):
+    _bound_locks(conn)
     _sync_functions(conn)                              # MIGRATION-0005 fn (indexes reference it)
+    predate_scopes = _tokens_predate_scopes(conn)
     base.metadata.create_all(conn, checkfirst=True)   # missing tables, FK order
     _sync_columns(conn, base)                          # additive columns
-    _backfill_token_scopes(conn)                       # MIGRATION-0004 data backfill
-    _sync_indexes(conn, base)                          # additive indexes
+    _backfill_token_scopes(conn, predate_scopes)       # MIGRATION-0004 data backfill
+    _ensure_default_org(conn)                          # MIGRATION-0008 the default org row
+    _bound_sign_in_credentials(conn)                   # MIGRATION-0011 sign-in credentials end
+    _sync_indexes(conn, base, deferred)                # additive indexes (non-unique: deferred)
+
+
+def _deferred_list(engine) -> list | None:
+    return [] if getattr(getattr(engine, "dialect", None), "name", None) == "postgresql" else None
 
 
 async def ensure_schema(engine, base):
     """Converge the DB to `base.metadata`. Never drops. Idempotent. async-engine entry."""
-    async with engine.begin() as conn:
-        await conn.run_sync(_ensure_schema_sync, base)
+    for wait in (*LOCK_RETRY_BACKOFF_S, None):
+        deferred = _deferred_list(engine)
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(_ensure_schema_sync, base, deferred)
+        except DBAPIError as e:
+            if wait is None or not _lock_not_available(e):
+                raise
+            logger.warning("schema-sync: a lock was not available in %d ms; retrying in %ss",
+                           LOCK_TIMEOUT_MS, wait)
+            await asyncio.sleep(wait)
+            continue
+        if deferred:
+            try:
+                async with engine.connect() as conn:
+                    conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+                    await conn.run_sync(_build_deferred_indexes, deferred)
+            except Exception as e:  # noqa: BLE001 — a performance hint never fails the convergence
+                logger.error("schema-sync: concurrent index builds did not run: %s", e)
+        return
 
 
 def ensure_schema_sync(engine, base):
-    """Sync-engine entry (same convergence) — used by the testcontainers evals."""
-    with engine.begin() as conn:
-        _ensure_schema_sync(conn, base)
+    """Sync-engine entry (same convergence and retry) — used by the testcontainers evals."""
+    for wait in (*LOCK_RETRY_BACKOFF_S, None):
+        deferred = _deferred_list(engine)
+        try:
+            with engine.begin() as conn:
+                _ensure_schema_sync(conn, base, deferred)
+        except DBAPIError as e:
+            if wait is None or not _lock_not_available(e):
+                raise
+            logger.warning("schema-sync: a lock was not available in %d ms; retrying in %ss",
+                           LOCK_TIMEOUT_MS, wait)
+            time.sleep(wait)
+            continue
+        if deferred:
+            try:
+                with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+                    _build_deferred_indexes(conn, deferred)
+            except Exception as e:  # noqa: BLE001 — a performance hint never fails the convergence
+                logger.error("schema-sync: concurrent index builds did not run: %s", e)
+        return

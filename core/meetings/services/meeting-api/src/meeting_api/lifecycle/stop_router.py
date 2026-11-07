@@ -6,7 +6,8 @@ composition, P2), behaviour-matched to the parent ``meetings.stop_bot``:
 
   1. Resolve the caller (``x-user-id`` the gateway injects after it validates ``x-api-key``).
   2. ``find_active_rows`` — EVERY non-terminal meeting the user has for ``(platform, native_id)``,
-     404 if none. Not one row: *"explicit stop must be stop, evict"* (founder ruling 2026-08-17).
+     none → the latest row answers `already_stopped`/`already_stopping` (idempotent), and only a
+     room the user never had is a 404. Not one row: *"explicit stop must be stop, evict"* (2026-08-17).
      The user pressed stop once and means the MEETING, so a sibling row still waiting in the lobby
      is taken down with it. Stopping only the newest let that sibling walk in after the user said no.
   2b. Split the rows by whether a bot EXISTS for them. A PLANNED row (``scheduled``/``idle``) has no
@@ -28,12 +29,16 @@ injects the real ``redis_client.publish``.
 """
 from __future__ import annotations
 
+from . import meet_respawn
+
+import asyncio
 import json
 from typing import Any, Optional, Protocol, runtime_checkable
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 
 from ..bot_spawn.ports import MeetingRepo, WorkloadUnknown
+from ..regime import live_bot_guard
 from .stop import leave_command_channel, leave_command_payload
 
 
@@ -81,6 +86,10 @@ _BOOTING_STATUSES = {"requested", "joining", "awaiting_admission"}
 # zombie is F1 (stage rev 193 row 26306: stop accepted 200, pod spawned 02:52:16, bot joined).
 _PLANNED_STATUSES = {"scheduled", "idle"}
 
+# Where a stopped meeting ends (``machine._TERMINAL``): a stop that finds the room here has nothing
+# left to do and answers ``already_stopped``.
+_TERMINAL_STATUSES = frozenset({"completed", "failed"})
+
 # The terminal a cancelled plan lands on. `failed`, never `completed`: the FSM admits COMPLETED only
 # from ACTIVE (``machine.LEGAL_TRANSITIONS``), and every reader treats a `completed` row as positive
 # evidence the bot reached the room (``occurrence`` rule 2) — writing it for a bot that never existed
@@ -96,12 +105,18 @@ _CANCELLED_REASON = "stopped"
 # platform guard (A1/A3): reject a non-enum platform up front, BEFORE the find_active lookup (which would
 # otherwise miss and 404 — drifting from the contract a client must code against).
 #
-# "discord" is NOT yet in api.v1's own sealed enum (api.v1 is OpenAPI-sealed — DO NOT edit it in
+# "discord" is NOT yet in api.v1's own sealed enum (api.v1 is OpenAPI-sealed, DO NOT edit it in
 # place, see bot_spawn/README.md's "Contract decision" note); it is added here, matching the
 # existing "browser_session" precedent (also stop-routable, also absent upstream at api.v1's
-# original freeze) — a hand-synced superset the DELETE route enforces directly, reconciled against
+# original freeze): a hand-synced superset the DELETE route enforces directly, reconciled against
 # invocation.v1's SPAWNABLE_PLATFORMS (which DOES already carry discord) at the POST boundary.
-_SUPPORTED_PLATFORMS = frozenset({"google_meet", "zoom", "teams", "jitsi", "browser_session", "discord"})
+_SUPPORTED_PLATFORMS = frozenset(
+    {"google_meet", "zoom", "teams", "jitsi", "browser_session", "voice_note", "vexa_call", "discord"}
+)
+
+
+#: Teardowns started outside a request's BackgroundTasks, held until done (a bare task can be collected).
+_spawned: set = set()
 
 
 def build_stop_router(repo: MeetingRepo, publisher: CommandPublisher, runtime=None) -> APIRouter:
@@ -109,13 +124,33 @@ def build_stop_router(repo: MeetingRepo, publisher: CommandPublisher, runtime=No
     ``RuntimeClient`` for the direct-teardown guarantee) ports."""
     router = APIRouter()
 
-    @router.delete("/bots/{platform}/{native_meeting_id}")
+    @router.delete("/bots/{platform}/{native_meeting_id}",
+                   dependencies=[Depends(live_bot_guard("DELETE", "/bots/{platform}/{native_meeting_id}"))])
     async def stop_bot(
         platform: str,
         native_meeting_id: str,
+        background: BackgroundTasks,
         x_user_id: Optional[str] = Header(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
+        try:
+            return await stop_meeting(user_id, platform, native_meeting_id, background)
+        except HTTPException as e:
+            if e.status_code != 404:
+                raise
+            # IDEMPOTENT (friction 2026-10-13). "No active meeting" used to be the whole answer, so
+            # an agent stopping a bot that had already left — the meeting ended, the person pressed
+            # Stop first, a retry after a timeout — read a 404 as "this meeting does not exist".
+            # A meeting this caller HAS is answered as a success with the state it is in; only a
+            # room they never had stays a 404. Nothing is published or written on this path.
+            done = await _already_stopped(repo, user_id, platform, native_meeting_id)
+            if done is None:
+                raise
+            return done
+
+    async def stop_meeting(user_id: int, platform: str, native_meeting_id: str,
+                           background: Optional[BackgroundTasks] = None) -> dict:
+        """The stop itself, for the route above and for a meeting delete that must end the bot first."""
         # A3: the sealed path param is the `Platform` enum → an unsupported platform is a 422
         # (validation error), not a 404. Reject it BEFORE find_active (which would miss → 404),
         # mirroring the POST /bots platform guard. Valid platforms keep idempotent-delete
@@ -172,6 +207,11 @@ def build_stop_router(repo: MeetingRepo, publisher: CommandPublisher, runtime=No
         # and ``bot_spawn.service``'s post-spawn check).
         for row in live:
             await _mark_stop_requested(repo, row)
+        # A Meet meeting BETWEEN BOT PODS (lifecycle/meet_respawn.py) has no bot to ask: the last one
+        # was refused and the next has not started. It ends here, as the user's stop.
+        for row in live:
+            if meet_respawn.waiting_on_respawn(row.get("data")):
+                await _end_between_pods(repo, row)
 
         # Publish the leave command — an ACTIVE (listening) bot honours it, leaves, emits its terminal
         # event. One command per row: each bot listens on its OWN meeting-scoped channel, so evicting a
@@ -210,15 +250,19 @@ def build_stop_router(repo: MeetingRepo, publisher: CommandPublisher, runtime=No
         #     spawn:  write bot_container_id → read stop_requested   (bot_spawn.service)
         #
         # Each side publishes before it reads, so no interleaving lets both miss.
+        #
+        # AFTER THE ANSWER, never before it. The teardown waits out the runtime's SIGTERM grace
+        # (RUNTIME_STOP_GRACE_SEC + 5 s), which is longer than the callers in front of this route
+        # wait (the MCP edge gives up at 10 s): held here, a stop that had already worked answered
+        # 504. It never decided the answer anyway — best-effort, logged, reconcile backstops — and
+        # the interlock above only needs the read to come after OUR write, which it still does.
         if runtime is not None:
-            for row in live:
-                fresh = await _reread(repo, row)
-                container = fresh.get("bot_container_id")
-                if container and fresh.get("status") in _BOOTING_STATUSES:
-                    try:
-                        await runtime.delete_workload(container)
-                    except Exception as e:  # noqa: BLE001 — best-effort; reconcile backstops
-                        _log_stop_teardown_failed(row["id"], container, e)
+            if background is not None:
+                background.add_task(_teardown_booting, repo, runtime, list(live))
+            else:   # a meeting delete stopping the bot: after this call, in the same loop
+                _spawned.add(t := asyncio.get_running_loop().create_task(
+                    _teardown_booting(repo, runtime, list(live))))
+                t.add_done_callback(_spawned.discard)
 
         if siblings:
             _log_stop_evicted(meeting_id, [row["id"] for row in siblings], native_meeting_id)
@@ -237,7 +281,32 @@ def build_stop_router(repo: MeetingRepo, publisher: CommandPublisher, runtime=No
             "cancelled": [row["id"] for row in planned],
         }
 
+    router.stop_meeting = stop_meeting   # type: ignore[attr-defined] — read by the meeting delete
     return router
+
+
+async def _already_stopped(repo, user_id: int, platform: str, native_meeting_id: str) -> Optional[dict]:
+    """The answer to a stop with nothing left to stop: this user's latest row for the room, as
+    ``already_stopped`` (terminal) or ``already_stopping`` (a stop is under way), or ``None`` when
+    the user never had the room. Owner-scoped by ``find_latest``'s own ``user_id`` filter."""
+    finder = getattr(repo, "find_latest", None)
+    if finder is None:
+        return None
+    try:
+        row = await finder(user_id, platform, native_meeting_id)
+    except Exception:  # noqa: BLE001 — a failed read keeps the plain 404, never invents a state
+        return None
+    if not row:
+        return None
+    status = str(row.get("status") or "")
+    return {
+        "status": "already_stopped" if status in _TERMINAL_STATUSES else "already_stopping",
+        "meeting_status": status,
+        "meeting_id": row.get("id"),
+        "native_meeting_id": native_meeting_id,
+        "also_stopped": [],
+        "cancelled": [],
+    }
 
 
 async def _active_rows(repo, user_id: int, platform: str, native_meeting_id: str) -> list:
@@ -252,6 +321,19 @@ async def _active_rows(repo, user_id: int, platform: str, native_meeting_id: str
         return list(await lister(user_id, platform, native_meeting_id) or ())
     single = await repo.find_active(user_id, platform, native_meeting_id)
     return [single] if single else []
+
+
+async def _teardown_booting(repo, runtime, live: list) -> None:
+    """Tear down the workload of every stopped row whose bot is still BOOTING — re-read fresh (the
+    F2 interlock's read half). Runs after the stop has answered; a failure is logged, never raised."""
+    for row in live:
+        fresh = await _reread(repo, row)
+        container = fresh.get("bot_container_id")
+        if container and fresh.get("status") in _BOOTING_STATUSES:
+            try:
+                await runtime.delete_workload(container)
+            except Exception as e:  # noqa: BLE001 — best-effort; reconcile backstops
+                _log_stop_teardown_failed(row["id"], container, e)
 
 
 async def _reread(repo, row: dict) -> dict:
@@ -299,6 +381,31 @@ async def _cancel_planned(repo, row: dict) -> None:
         )
     except Exception:  # noqa: BLE001 — logging never fails a stop
         pass
+
+
+async def _end_between_pods(repo, row: dict) -> None:
+    """Terminalize a Meet meeting stopped while it waited for its next bot pod: ``failed`` /
+    ``stopped`` at ``joining`` (no bot was ever admitted), its respawn block ``cancelled``. A next
+    pod already starting is fenced by the spawn interlock, which reads the stop flag."""
+    block = dict(((row.get("data") or {}).get(meet_respawn.KEY)) or {})
+    block["state"] = meet_respawn.CANCELLED
+    block.pop("next_at", None)
+    reason = "stopped by the user while the next bot was due (Google Meet refused the last one)"
+    data = {"stop_requested": True, meet_respawn.KEY: block}
+    # The same typed axes every pre-active terminal carries: the user ended it (user_action).
+    from .reconcile import _reconcile_join_evidence
+
+    evidence = _reconcile_join_evidence(status="joining", completion_reason="stopped",
+                                        detail=reason, source="user_stop")
+    if evidence is not None:
+        data["join_evidence"] = evidence
+    await repo.fail_meeting(
+        meeting_id=row["id"],
+        reason=reason,
+        failure_stage="joining",
+        completion_reason="stopped",
+        data=data,
+    )
 
 
 async def _mark_stop_requested(repo, row: dict) -> None:

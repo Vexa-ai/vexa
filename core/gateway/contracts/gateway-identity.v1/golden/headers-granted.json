@@ -1,0 +1,13 @@
+{
+  "claims_golden": "claims-granted.json",
+  "headers": {
+    "x-user-id": "42",
+    "x-user-email": "ada@example.com",
+    "x-user-scopes": "bot,tx",
+    "x-user-limits": "3",
+    "x-user-regime": "autonomous",
+    "x-user-delegation-workspaces": "42",
+    "x-user-delegation-grants": "bot.request,flow.retire_self",
+    "x-user-delegation-flow": "user:42/bot-at-1213"
+  }
+}

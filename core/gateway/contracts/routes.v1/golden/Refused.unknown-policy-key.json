@@ -1,0 +1,23 @@
+{
+  "why": "a policy key the contract does not name is a promise no loader reads; a new one is a contract change",
+  "manifest": {
+    "contract": "routes.v1",
+    "domain": "agent",
+    "owner": "core/agent",
+    "edge": "gateway",
+    "forward": {
+      "edge_prefix": "/agent/",
+      "upstream_prefix": "/api/"
+    },
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/agent/x",
+        "scopes": [
+          "tx"
+        ],
+        "person_only": true
+      }
+    ]
+  }
+}

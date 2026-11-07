@@ -1,17 +1,13 @@
 "use client";
-import { registerCommand, registerTab } from "../contributions";
-import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
-import { MeetingCanvasView } from "../canvas/MeetingCanvasView";
+import { registerCommand } from "../contributions";
+import { LayoutServiceId, type TabDescriptor } from "../platform/layout";
 
+// The "canvas" tab-kind itself (and the transcript widget) register in ../canvas/register.tsx: the
+// canvas sits above this folder, so this file names the tab by kind and never imports it.
 function canvasTab(): TabDescriptor {
   return { id: "meeting-canvas", title: "Meeting Canvas", kind: "canvas", params: {}, context: null };
 }
 
-function CanvasTab() {
-  return <MeetingCanvasView />;
-}
-
-registerTab("canvas", CanvasTab);
 registerCommand({
   id: "meeting.canvas.open",
   title: "Open Meeting Canvas",

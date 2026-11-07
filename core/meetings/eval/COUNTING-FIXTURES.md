@@ -76,8 +76,10 @@ cd core/meetings/eval
 python3 src/counting_fixture.py --scenario silence --n 500 --speakers A,B,V,C --cadence 5
 #   → manifest.json oracle: {missing, dupes, in_order, stt_recall}
 
-# 2) DOWNSTREAM GATE (deterministic, fast) — replay segments → collector → tc:meeting:{native},
-#    attribute loss by stage (STT vs downstream). Needs the local vexa-v012 stack up.
+# 2) DOWNSTREAM GATE (deterministic, fast) — replay segments → collector → tc:meeting:{meeting_id},
+#    attribute loss by stage (STT vs downstream). Needs the local vexa-v012 stack up. Entries are
+#    signed for their meeting the way a bot signs them (src/segment_bus.py, run inside the meeting-api
+#    container for its ADMIN_TOKEN); the collector drops unsigned ones.
 python3 src/counting_matrix.py                       # the 1to20 scenario matrix
 python3 src/counting_matrix.py ~/vexa-test-rig/fixtures/google_meet/count-silence-1to500   # at scale
 #   → per fixture: STT recall(stage-2)  ·  downstream LOSSLESS|DROP(stage-4-5)  ·  PASS/FAIL

@@ -25,7 +25,7 @@ from .machine import IllegalTransition, LifecycleSink, MeetingStore, TransitionS
 from .webhook import build_status_change_envelope, build_typed_envelope
 from ..obs import TraceMiddleware, log_event
 
-#: See ``meeting_api.app._ENVELOPE_LOG_CAP`` — the same bounded eval/introspection seam applies to
+#: See ``lifecycle.mount._ENVELOPE_LOG_CAP`` — the same bounded eval/introspection seam applies to
 #: the standalone lifecycle receiver: an append-only list grew RSS under production callback traffic
 #: (#803). Bounded ring buffer, recent-envelope semantics preserved.
 _ENVELOPE_LOG_CAP = 256

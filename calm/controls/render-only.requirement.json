@@ -1,9 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vexa.ai/calm/controls/render-only.requirement.json",
+  "$id": "https://raw.githubusercontent.com/Vexa-ai/vexa/main/calm/controls/render-only.requirement.json",
   "title": "Render-only consumer",
-  "description": "A client that consumes a producer's data must only render it, never re-derive or republish it (P23).",
+  "description": "A client that consumes a producer's data only renders it, never re-derives or republishes it (P23). gate:dataflow fails when a forbidden transform is defined or used in the node's own source.",
   "type": "object",
-  "properties": { "mode": { "const": "render-only" } },
-  "required": ["mode"]
+  "allOf": [{ "$ref": "https://calm.finos.org/release/1.2/meta/control-requirement.json" }],
+  "properties": {
+    "control-id": { "const": "vexa-p23-render-only" },
+    "forbidden-symbols": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Transforms that must not appear in the consumer's source."
+    }
+  },
+  "required": ["control-id", "forbidden-symbols"]
 }

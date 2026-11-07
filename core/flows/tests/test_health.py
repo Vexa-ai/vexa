@@ -34,11 +34,11 @@ from fastapi.testclient import TestClient  # noqa: E402
 # here made `tests/test_link_loop.py` fail, because it asserts on a secret it sets itself and
 # whichever module imports FIRST wins an env var. Alphabetical order is not a contract.
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key",
-        "INTERNAL_API_SECRET": "test-internal-secret",
+        "VEXA_FLOWS_SERVICE_KEY": "test-flows-service-key-not-a-placeholder",
         # UNREACHABLE on purpose (port 1 is never a service) — proves the import touches no
         # network. A real Postgres DSN shape is required: unset or `sqlite://` both refuse at
         # `db_from_url` now (Postgres is the only production dialect).
-        "VEXA_FLOWS_DB_URL": "postgresql+psycopg://health-gate:unreachable@127.0.0.1:1/flows"}
+        "VEXA_FLOWS_DB_URL": "postgresql+pg8000://health-gate:unreachable@127.0.0.1:1/flows"}
 _saved = {k: os.environ.get(k) for k in _ENV}
 os.environ.update(_ENV)
 try:

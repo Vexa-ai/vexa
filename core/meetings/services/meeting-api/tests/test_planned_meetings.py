@@ -21,6 +21,8 @@ from meeting_api.collector.meeting_link import find_meeting_link, parse_meeting_
 
 USER = 7
 H = {"x-user-id": str(USER)}
+# Binding a planned meeting into a workspace takes write access there (meeting_api.workspace_write).
+H = {**H, "x-user-writable-workspaces": "ws-1,ws-9,ws-42"}
 AT = "2026-07-10T15:00:00Z"
 URL = "https://meet.google.com/abc-defg-hij"
 
@@ -245,3 +247,135 @@ def test_find_meeting_link_in_free_text():
     assert find_meeting_link(text) == ("google_meet", "abc-defg-hij",
                                        "https://meet.google.com/abc-defg-hij")
     assert find_meeting_link("no links here") is None
+
+
+# ---- a ROOM's planned call (rooms, F1) ---------------------------------------------------------
+
+def test_a_rooms_planned_call_records_room_agenda_invitees_and_exports_ics(monkeypatch):
+    monkeypatch.setenv("VEXA_FEATURES", "all,rooms")
+    client, store, _redis = _client()
+    r = client.post("/meetings", json={
+        "title": "Install sync", "scheduled_at": AT, "auto_join": False, "workspace_id": "ws-1",
+        "room": "s-room1", "agenda": "kg/entities/meeting/2026-07-10-install-sync.md",
+        "end_at": "2026-07-10T15:45:00Z", "attendees": ["Ana@Example.com", "bo@example.com"]}, headers=H)
+    assert r.status_code == 201, r.text
+    row = r.json()
+    assert row["status"] == "scheduled" and row["data"]["auto_join"] is False      # no bot, a room call
+    assert row["data"]["room"] == "s-room1" and row["data"]["agenda"].endswith("install-sync.md")
+    assert row["data"]["attendees"] == ["ana@example.com", "bo@example.com"]
+    ics = client.get(f"/meetings/{row['id']}/ics", headers=H)
+    assert ics.status_code == 200 and ics.headers["content-type"].startswith("text/calendar")
+    text = ics.text
+    assert "DTSTART:20260710T150000Z" in text and "DTEND:20260710T154500Z" in text
+    assert "ATTENDEE;RSVP=TRUE:mailto:ana@example.com" in text and "SUMMARY:Install sync" in text
+    assert all(len(line.encode()) <= 75 for line in text.split("\r\n"))
+    # the calendar event made by the creator's own click is recorded as the source of truth
+    p = client.patch(f"/meetings/{row['id']}", json={"calendar_event_ref": "gcal:evt-123"}, headers=H)
+    assert p.status_code == 200 and p.json()["data"]["calendar_event_ref"] == "gcal:evt-123"
+    assert client.get(f"/meetings/{row['id']}/ics", headers={"x-user-id": "8"}).status_code == 404
+
+
+def test_room_fields_are_refused_while_rooms_is_off_even_under_all(monkeypatch):
+    monkeypatch.setenv("VEXA_FEATURES", "all")
+    client, _store, _redis = _client()
+    r = client.post("/meetings", json={"title": "x", "scheduled_at": AT, "room": "s-room1"}, headers=H)
+    assert r.status_code == 403 and r.json()["detail"]["reason"] == "feature_disabled"
+    ok = client.post("/meetings", json={"title": "x", "scheduled_at": AT}, headers=H)
+    assert ok.status_code == 201 and "room" not in ok.json()["data"]                # nothing else changes
+    assert client.get(f"/meetings/{ok.json()['id']}/ics", headers=H).status_code == 403
+
+
+def test_agent_api_switches_room_plans_on_over_the_internal_tier(monkeypatch):
+    """agent-api decides `rooms` (its features layer and the company's POLICIES); meeting-api takes
+    its word on the internal tier (`X-User-Features`, an x-user-* header the identity guard keeps
+    only from the internal tier) and needs no switch of its own."""
+    monkeypatch.setenv("VEXA_FEATURES", "")
+    client, _store, _redis = _client()
+    r = client.post("/meetings", json={"title": "x", "scheduled_at": AT, "room": "s-room1"},
+                    headers={**H, "X-User-Features": "rooms"})
+    assert r.status_code == 201 and r.json()["data"]["room"] == "s-room1"
+    assert client.get(f"/meetings/{r.json()['id']}/ics", headers={**H, "X-User-Features": "rooms"}).status_code == 200
+    assert client.post("/meetings", json={"title": "y", "scheduled_at": AT, "room": "s-room1"},
+                       headers=H).status_code == 403
+
+
+# ---- sync back: the creator's calendar is the source of truth (rooms, PLAN-8H 8.4) ---------------
+
+def _room_call(client, ref="evt123abc"):
+    r = client.post("/meetings", json={
+        "title": "Install sync", "scheduled_at": AT, "auto_join": False, "room": "s-room1",
+        "end_at": "2026-07-10T15:45:00Z", "attendees": ["ana@example.com"]}, headers=H)
+    assert r.status_code == 201, r.text
+    mid = r.json()["id"]
+    client.patch(f"/meetings/{mid}", json={"calendar_event_ref": ref}, headers=H)
+    return mid
+
+
+def _row(client, mid, headers=H):
+    return next(m for m in client.get("/meetings", headers=headers).json()["meetings"] if m["id"] == mid)
+
+
+def test_a_time_moved_in_the_calendar_moves_the_planned_call(monkeypatch):
+    monkeypatch.setenv("VEXA_FEATURES", "all,rooms")
+    client, _store, _redis = _client()
+    mid = _room_call(client)
+    r = client.post("/meetings/calendar-sync", headers=H, json={
+        "event_id": "evt123abc", "status": "updated",
+        "start": "2026-07-11T09:00:00Z", "end": "2026-07-11T09:30:00Z"})
+    assert r.status_code == 200 and r.json()["synced"] == [mid]
+    row = _row(client, mid)
+    assert row["data"]["scheduled_at"] == "2026-07-11T09:00:00Z" and row["data"]["end_at"] == "2026-07-11T09:30:00Z"
+    assert row["status"] == "scheduled" and not row["data"].get("cancelled_at")
+
+
+def test_a_cancel_in_the_calendar_marks_the_planned_call_cancelled_and_keeps_it(monkeypatch):
+    monkeypatch.setenv("VEXA_FEATURES", "all,rooms")
+    client, _store, _redis = _client()
+    mid = _room_call(client)
+    r = client.post("/meetings/calendar-sync", headers=H, json={"event_id": "evt123abc", "status": "cancelled"})
+    assert r.status_code == 200 and r.json()["synced"] == [mid]
+    # what changed, for the room to say: the room, the title and the change
+    assert r.json()["changes"] == [{"meeting_id": mid, "room": "s-room1", "title": "Install sync", "status": "cancelled"}]
+    row = _row(client, mid)
+    assert row["data"]["cancelled_at"] and row["data"]["scheduled_at"] == AT     # kept, marked
+
+
+def test_sync_touches_only_the_owners_room_rows_with_that_event(monkeypatch):
+    monkeypatch.setenv("VEXA_FEATURES", "all,rooms")
+    client, _store, _redis = _client()
+    mine = _room_call(client, ref="evtmineaaa")
+    plain = client.post("/meetings", json={"title": "not a room", "scheduled_at": AT}, headers=H).json()["id"]
+    other_user = {"x-user-id": "8"}
+    assert client.post("/meetings/calendar-sync", headers=other_user,
+                       json={"event_id": "evtmineaaa", "status": "cancelled"}).json()["synced"] == []
+    assert client.post("/meetings/calendar-sync", headers=H,
+                       json={"event_id": "evtunknown", "status": "cancelled"}).json()["synced"] == []
+    assert not _row(client, mine)["data"].get("cancelled_at") and not _row(client, plain)["data"].get("cancelled_at")
+
+
+def test_calendar_sync_is_refused_while_rooms_is_off(monkeypatch):
+    monkeypatch.setenv("VEXA_FEATURES", "all")
+    client, _store, _redis = _client()
+    r = client.post("/meetings/calendar-sync", headers=H, json={"event_id": "evt123abc", "status": "cancelled"})
+    assert r.status_code == 403 and r.json()["detail"]["reason"] == "feature_disabled"
+
+
+def test_the_ics_file_carries_only_well_formed_url_and_attendee_lines():
+    """A stored link or attendee with line breaks or separators is left out of the calendar file:
+    every property line is one the row's own fields can produce, never one a value adds."""
+    from datetime import datetime, timezone
+
+    from meeting_api.collector import room_plan
+    row = {"id": 9, "data": {
+        "scheduled_at": "2026-10-20T15:00:00Z", "title": "Plan",
+        "constructed_meeting_url": ("https://zoom.us/j/1234567890\r\nATTENDEE;RSVP=TRUE:mailto:x@y.z"
+                                    "\r\nORGANIZER:mailto:o@y.z"),
+        "attendees": ["ok@example.com", {"email": "a@b.c\r\nORGANIZER:mailto:o@y.z"}, "bad value@x.y"]}}
+    text = room_plan.ics(row, now=datetime(2026, 10, 16, tzinfo=timezone.utc))
+    lines = text.split("\r\n")
+    assert not any(line.startswith("ORGANIZER") for line in lines)
+    assert [line for line in lines if line.startswith("ATTENDEE")] == ["ATTENDEE;RSVP=TRUE:mailto:ok@example.com"]
+    assert not any(line.startswith("URL:") for line in lines)
+    ok = room_plan.ics({"id": 9, "data": {"scheduled_at": "2026-10-20T15:00:00Z",
+                                          "constructed_meeting_url": "https://zoom.us/j/1234567890"}})
+    assert "URL:https://zoom.us/j/1234567890" in ok.split("\r\n")

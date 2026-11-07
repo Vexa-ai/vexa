@@ -1,0 +1,42 @@
+/* /decide/<card> — the nudge landing (0.13.4 S6). Tokens only; no solid fills (UI 7r); no caps
+ * eyebrows. Desktop: one column, card alone. Below 720px (single mode, PRD §11): nothing scrolls
+ * sideways, each act is full width and at least 44px tall, the decision row wraps into a stack. */
+.vx-decide { min-height: 100vh; box-sizing: border-box; background: var(--bg); color: var(--text-1); font-family: var(--font-sans);
+  padding: var(--space-12) var(--space-6); display: flex; flex-direction: column; gap: var(--space-4); max-width: 720px; margin: 0 auto; overflow-x: hidden; }
+.vx-decide-card, .vx-decide-signin { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vx-decide-kind { margin: 0; font-size: var(--text-sm); color: var(--text-3); }
+.vx-decide-title { margin: 0; font-size: var(--text-xl); line-height: var(--leading-xl); font-weight: var(--weight-semibold); color: var(--text-1); overflow-wrap: break-word; }
+.vx-decide-say { margin: 0; font-size: var(--text-md); line-height: var(--leading-md); color: var(--text-2); overflow-wrap: break-word; }
+.vx-decide-fields { margin: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-1) var(--space-4); font-size: var(--text-md); line-height: var(--leading-md); }
+.vx-decide-field { display: contents; }
+.vx-decide-fields dt { color: var(--text-3); }
+.vx-decide-fields dd { margin: 0; color: var(--text-1); overflow-wrap: break-word; min-width: 0; }
+.vx-decide-rule { margin: 0; font-size: var(--text-sm); color: var(--text-2); overflow-wrap: break-word; }
+.vx-decide-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.vx-decide-act { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; min-height: var(--control-md); min-width: 24px;
+  padding: 0 var(--space-4); border: 1px solid var(--border-control); border-radius: var(--radius-md); background: transparent; color: var(--text-1);
+  font: inherit; font-size: var(--text-md); text-decoration: none; cursor: pointer; overflow-wrap: break-word; text-align: center; }
+.vx-decide-act:hover { background: var(--surface-2); }
+.vx-decide-act:focus-visible, .vx-decide-link:focus-visible, .vx-decide-linkbtn:focus-visible, .vx-decide-input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.vx-decide-act:disabled { cursor: default; color: var(--text-disabled); }
+.vx-decide-primary { border-color: var(--accent); color: var(--accent-text); align-self: flex-start; }
+.vx-decide-line { margin: 0; font-size: var(--text-sm); color: var(--text-2); }
+.vx-decide-foot { margin: 0; font-size: var(--text-xs); color: var(--text-3); overflow-wrap: break-word; }
+.vx-decide-link { font-size: var(--text-md); color: var(--accent-text); text-decoration: none; align-self: flex-start; min-height: 24px; display: inline-flex; align-items: center; }
+.vx-decide-link:hover { text-decoration: underline; }
+.vx-decide-notyou { margin: var(--space-4) 0 0; font-size: var(--text-xs); color: var(--text-3); overflow-wrap: break-word; }
+.vx-decide-linkbtn { border: 0; background: none; padding: 0; min-height: 24px; font: inherit; color: var(--accent-text); cursor: pointer; }
+.vx-decide-form { display: flex; flex-direction: column; gap: var(--space-2); max-width: 420px; }
+.vx-decide-label { font-size: var(--text-sm); color: var(--text-2); }
+.vx-decide-input { box-sizing: border-box; width: 100%; min-height: var(--control-md); padding: 0 var(--space-3); border: 1px solid var(--border-control); border-radius: var(--radius-md);
+  background: transparent; color: var(--text-1); font: inherit; font-size: var(--text-md); }
+
+@media (max-width: 719px) {
+  .vx-decide { padding: var(--space-6) var(--space-4); }
+  .vx-decide-fields { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .vx-decide-fields dd { margin-bottom: var(--space-2); }
+  .vx-decide-row { flex-direction: column; }
+  .vx-decide-act, .vx-decide-primary { width: 100%; min-height: 44px; align-self: stretch; }
+  .vx-decide-form { max-width: none; }
+  .vx-decide-input { min-height: 44px; }
+}

@@ -10,9 +10,15 @@
 // Exit 0 = every named PR resolved; 1 = one or more need a docs decision; 2 = usage.
 
 import { execSync } from "node:child_process";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { prFiles } from "./pr-files.mjs";
 
 const REPO = process.env.GITHUB_REPOSITORY;
-if (!REPO) { console.error("docs-current-gate: GITHUB_REPOSITORY required"); process.exit(2); }
+// Run as a command, not imported by its test. Compared by real path, so a symlinked invocation
+// still runs the gate rather than exiting 0 having judged nothing.
+const IS_MAIN = (() => { try { return realpathSync(process.argv[1] || "") === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })();
+if (IS_MAIN && !REPO) { console.error("docs-current-gate: GITHUB_REPOSITORY required"); process.exit(2); }
 
 // Product surfaces a user reads docs for (mirror pr-value's runtime filter — those are the
 // surfaces users interact with). A change here needs a docs decision.
@@ -32,17 +38,13 @@ function prNumbers() {
   return [...new Set([...ref.matchAll(/pr-(\d+)-/g)].map((m) => +m[1]))];
 }
 
-function files(num) {
-  const out = [];
-  for (let pg = 1; pg <= 20; pg++) { const f = ghj(`repos/${REPO}/pulls/${num}/files?per_page=100&page=${pg}`); out.push(...f.map((x) => x.filename)); if (f.length < 100) break; }
-  return out;
-}
-
-function card(num) {
-  const pr = ghj(`repos/${REPO}/pulls/${num}`);
+// Every changed path, all of them: pr-files reads past the API's 3,000-file cap (#2008).
+// Every read goes through the injected `api` and `git`, so the card is testable offline.
+export function card(num, { api = ghj, git, repo = REPO } = {}) {
+  const pr = api(`repos/${repo}/pulls/${num}`);
   if (pr.draft) return { num, ok: true, skip: "draft" };
   const labels = (pr.labels || []).map((l) => l.name);
-  const changed = files(num);
+  const changed = prFiles(pr, { repo, api, ...(git ? { git } : {}) }).map((f) => f.filename);
   const touchesSurface = changed.some(isSurface);
   const touchesDocs = changed.some(isDocs);
   const declaredNone = labels.includes(NONE_LABEL);
@@ -53,21 +55,25 @@ function card(num) {
   return { num, ok: false, why: `touches a product surface but changes no docs/** and lacks the \`${NONE_LABEL}\` label — update the docs, or add \`${NONE_LABEL}\` (with a reason) to confirm none is needed (D6c)` };
 }
 
-const nums = prNumbers();
-if (!nums.length) { console.error("docs-current-gate: no PR number resolved"); process.exit(2); }
+if (IS_MAIN) main();
 
-let failed = 0;
-for (const num of nums) {
-  let c;
-  try { c = card(num); }
-  catch (e) { console.error(`::error ::docs-current #${num} — could not evaluate: ${e.message}`); failed++; continue; }
-  if (c.skip) { console.log(`#${num}: skipped (${c.skip})`); continue; }
-  console.log(`#${num}: ${c.ok ? "✅" : "❌"} ${c.why}`);
-  if (!c.ok) failed++;
-}
+function main() {
+  const nums = prNumbers();
+  if (!nums.length) { console.error("docs-current-gate: no PR number resolved"); process.exit(2); }
 
-if (failed) {
-  console.error(`::error ::docs-current — ${failed} PR(s) need a docs decision: update docs/** or add the \`${NONE_LABEL}\` label (D6c).`);
-  process.exit(1);
+  let failed = 0;
+  for (const num of nums) {
+    let c;
+    try { c = card(num); }
+    catch (e) { console.error(`::error ::docs-current #${num} — could not evaluate: ${e.message}`); failed++; continue; }
+    if (c.skip) { console.log(`#${num}: skipped (${c.skip})`); continue; }
+    console.log(`#${num}: ${c.ok ? "✅" : "❌"} ${c.why}`);
+    if (!c.ok) failed++;
+  }
+
+  if (failed) {
+    console.error(`::error ::docs-current — ${failed} PR(s) need a docs decision: update docs/** or add the \`${NONE_LABEL}\` label (D6c).`);
+    process.exit(1);
+  }
+  console.log(`✓ docs-current — docs decision made for: ${nums.map((n) => "#" + n).join(", ")}`);
 }
-console.log(`✓ docs-current — docs decision made for: ${nums.map((n) => "#" + n).join(", ")}`);

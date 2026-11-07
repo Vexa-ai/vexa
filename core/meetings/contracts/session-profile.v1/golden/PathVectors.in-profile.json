@@ -1,0 +1,53 @@
+{
+  "inProfile": true,
+  "vectors": [
+    {
+      "path": "Local State",
+      "why": "a listed file at the profile root"
+    },
+    {
+      "path": "Default/Cookies",
+      "why": "a listed file"
+    },
+    {
+      "path": "Default/Cookies-journal",
+      "why": "a listed journal"
+    },
+    {
+      "path": "Default/Login Data For Account-journal",
+      "why": "a listed file whose name has spaces and a hyphen"
+    },
+    {
+      "path": "Default/Web Data",
+      "why": "a listed file"
+    },
+    {
+      "path": "Default/Local Storage/leveldb/CURRENT",
+      "why": "a LevelDB CURRENT file"
+    },
+    {
+      "path": "Default/Local Storage/leveldb/MANIFEST-000001",
+      "why": "a LevelDB manifest"
+    },
+    {
+      "path": "Default/Local Storage/leveldb/000003.log",
+      "why": "a LevelDB log"
+    },
+    {
+      "path": "Default/Local Storage/leveldb/000012.ldb",
+      "why": "a LevelDB table"
+    },
+    {
+      "path": "Default/Session Storage/000005.sst",
+      "why": "a LevelDB table, older suffix"
+    },
+    {
+      "path": "Default/Session Storage/MANIFEST-0000000000000001",
+      "why": "sixteen digits, the most a manifest number has"
+    },
+    {
+      "path": "Default/Session Storage/9999999999999999.log",
+      "why": "sixteen digits, the most a file number has"
+    }
+  ]
+}

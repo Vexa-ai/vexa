@@ -19,6 +19,7 @@ import pytest
 
 from meeting_api.collector import consume_segments, ingest
 from meeting_api.collector.fakes import FakeRedisBus, InMemoryTranscriptStore
+from _segment_auth import admin_token, signed_xadd  # noqa: E402,F401 — entries are signed as a bot signs them
 from meeting_api.collector.ingest import STREAM_NAME, _mutable_channel
 
 
@@ -160,10 +161,10 @@ async def test_ingest_ignores_non_segment_messages(store, bus):
 
 async def test_consume_segments_drains_a_fakeredis_batch(store, bus):
     # enqueue two stream messages, then drain the batch via XREADGROUP + XACK
-    await bus.xadd(STREAM_NAME, {"type": "transcription", "meeting_id": "1",
+    await signed_xadd(bus, {"type": "transcription", "meeting_id": "1",
                                  "segments": [{"segment_id": "a", "start": 0.0, "end": 1.0,
                                                "text": "one", "completed": True}]})
-    await bus.xadd(STREAM_NAME, {"type": "transcription", "meeting_id": "1",
+    await signed_xadd(bus, {"type": "transcription", "meeting_id": "1",
                                  "segments": [{"segment_id": "b", "start": 1.0, "end": 2.0,
                                                "text": "two", "completed": True}]})
     total = await consume_segments(store, bus)
@@ -172,3 +173,22 @@ async def test_consume_segments_drains_a_fakeredis_batch(store, bus):
     assert {s["text"] for s in doc["segments"]} == {"one", "two"}
     # acked: a second drain reads nothing new
     assert await consume_segments(store, bus) == 0
+
+
+@pytest.fixture(autouse=True)
+def _signed_by_this_secret(admin_token):
+    """The collector admits only session-signed entries; these tests sign with ``admin_token``."""
+
+
+async def test_ingest_progress_reaches_the_feed_and_persists_nothing(store, bus):
+    # The bot reports how far transcription is behind capture; the collector forwards it on the
+    # row-scoped feed so the terminal can tell "you're silent" from "transcription is behind".
+    n = await ingest(store, bus, {"payload": json.dumps({
+        "type": "transcription_progress", "meeting_id": "1",
+        "backlog_s": 42.5, "silence_s": 0.3, "finishing": False,
+    })})
+    assert n == 0
+    entries = await bus._client.xrange("tc:meeting:1")
+    payloads = [json.loads(f[b"payload"]) for _id, f in entries]
+    assert payloads == [{"type": "progress", "backlog_s": 42.5, "silence_s": 0.3, "finishing": False}]
+    assert (await store.get_transcript(7, "google_meet", "abc-defg-hij"))["segments"] == []

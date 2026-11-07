@@ -1,0 +1,15 @@
+{
+  "source": "https://openrouter.ai/api/v1/models",
+  "read_at": "2026-10-15T20:20:00Z",
+  "note": "USD per 1M tokens. The fallback when the live table cannot be read. Refresh by copying current OpenRouter prices; never raise a price above the market's.",
+  "unmatched": "qwen/qwen3.8-27b",
+  "models": {
+    "qwen/qwen3.8-27b": {"prompt": 0.24, "completion": 2.20, "cache_read": 0.05},
+    "qwen/qwen3.8-flash": {"prompt": 0.15, "completion": 0.47, "cache_read": 0.016},
+    "anthropic/claude-haiku-5.5": {"prompt": 0.10, "completion": 0.50, "cache_read": 0.01},
+    "anthropic/claude-sonnet-5.5": {"prompt": 2.00, "completion": 10.00, "cache_read": 0.10},
+    "anthropic/claude-sonnet-5": {"prompt": 2.00, "completion": 10.00, "cache_read": 0.20},
+    "anthropic/claude-opus-5.5": {"prompt": 4.00, "completion": 20.00, "cache_read": 0.20},
+    "anthropic/claude-fable-5.1": {"prompt": 10.00, "completion": 50.00, "cache_read": 0.25}
+  }
+}

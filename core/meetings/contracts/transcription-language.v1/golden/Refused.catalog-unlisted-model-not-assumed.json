@@ -1,0 +1,1 @@
+{"shape": "LanguageCatalog", "value": {"languages": [{"code": "en", "name": "English"}], "default": {"language": null, "allowed_languages": []}, "model": "gpt-4o-transcribe", "source": "configured"}, "reason": "a model catalog.json does not list has no sealed list; its source is assumed"}

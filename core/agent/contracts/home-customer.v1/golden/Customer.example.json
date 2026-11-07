@@ -1,0 +1,12 @@
+{
+ "spec": "home-customer.v1",
+ "updated_at": "2026-10-13T10:14:00Z",
+ "fields": {
+  "stage": {"value": {"stage": "activating", "why": "1 meeting(s), 1 source(s) connected"}, "evidence": ["facts:usage"], "confidence": 0.8, "updated_at": "2026-10-13T10:14:00Z"},
+  "capabilities": {"value": {"adopted": ["connect-calendar", "first-meeting"], "not_yet": ["connect-mail", "voice-note"]}, "evidence": ["curriculum:connect-calendar", "curriculum:first-meeting"], "confidence": 0.9, "updated_at": "2026-10-13T10:14:00Z"},
+  "jobs": {"value": [{"job": "run a two-team pilot to a November decision", "evidence": ["r-1042"]}], "evidence": ["r-1042"], "confidence": 0.5, "updated_at": "2026-10-13T10:14:00Z"},
+  "next_best_actions": {"value": [{"card": "r-1042", "kind": "result", "hypothesis": "ended 6 min ago, 4 proposals", "metric": "acted on (clicked, sent or done) within 48 h"}], "evidence": ["r-1042"], "confidence": 0.5, "updated_at": "2026-10-13T10:14:00Z"}
+ },
+ "corrections": {},
+ "changes": [{"field": "capabilities", "why": "new evidence"}]
+}

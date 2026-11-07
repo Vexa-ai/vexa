@@ -72,7 +72,7 @@ def test_status_change_webhook_delivered(goldens):
         "webhook_url": "https://hook.example/x", "webhook_secret": "s3cr3t",
         "webhook_events": {"meeting.status_change": True},
     })
-    client = TestClient(create_app(meeting_repo=repo, webhook_sink=sink))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo, webhook_sink=sink))
     r = client.post("/bots/internal/callback/lifecycle", json=goldens["joining"])
     assert r.status_code == 200, r.text
     assert sink.calls, "no webhook delivered on FSM advance"
@@ -86,7 +86,7 @@ def test_status_change_webhook_delivered(goldens):
 def test_no_webhook_when_url_unconfigured(goldens):
     repo, sink = InMemoryMeetingRepo(), _CaptureSink()
     _seed(repo, session_uid="sess-uid", data={})  # no webhook_url on the meeting
-    client = TestClient(create_app(meeting_repo=repo, webhook_sink=sink))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo, webhook_sink=sink))
     r = client.post("/bots/internal/callback/lifecycle", json=goldens["joining"])
     assert r.status_code == 200, r.text
     assert not sink.calls
@@ -109,7 +109,7 @@ def _wired_client():
         "webhook_url": "https://hook.example/x", "webhook_secret": "s3cr3t",
         "webhook_events": dict(_ALL_EVENTS),
     })
-    return TestClient(create_app(meeting_repo=repo, webhook_sink=sink)), sink
+    return TestClient(create_app(open_callbacks=True, meeting_repo=repo, webhook_sink=sink)), sink
 
 
 def _post(client, event):
@@ -163,6 +163,7 @@ def test_meeting_completed_exposes_frozen_privacy_safe_service_provenance():
 
     client = TestClient(
         create_app(
+            open_callbacks=True,
             meeting_repo=repo,
             webhook_sink=sink,
             transcript_finalizer=finalizer,
@@ -206,6 +207,7 @@ def test_finalization_failure_never_claims_vexa_transcription_was_served():
 
     client = TestClient(
         create_app(
+            open_callbacks=True,
             meeting_repo=repo,
             webhook_sink=sink,
             transcript_finalizer=failed_finalizer,
@@ -307,7 +309,7 @@ def _delivery_logs(capsys):
 
 
 def _run_advance(repo, sink, goldens):
-    client = TestClient(create_app(meeting_repo=repo, webhook_sink=sink))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo, webhook_sink=sink))
     return client.post("/bots/internal/callback/lifecycle", json=goldens["joining"])
 
 

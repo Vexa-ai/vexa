@@ -5,9 +5,8 @@ The parent ``meetings.request_bot`` assembled a ``BOT_CONFIG`` dict, minted a st
 ``MeetingToken`` (HS256 JWT) into it, and POSTed a spawn request to the runtime API. This carve
 ports the CORE of that:
 
-  * ``mint_meeting_token(...)`` — the parent's hand-rolled HS256 MeetingToken (``ADMIN_TOKEN``-signed;
-    claims: meeting_id/user_id/platform/native_meeting_id/scope/iss/aud/iat/exp/jti). The bot carries
-    it and the recording-upload endpoint re-verifies it.
+  * ``mint_meeting_token(...)`` — re-exported from ``meeting_token``: the session-bound HS256
+    MeetingToken the bot carries; the lifecycle callback and the uploads admit it for that session.
   * ``build_invocation(...)`` — the parent's ``BOT_CONFIG`` as an ``invocation.v1`` ``Invocation``
     (camelCase fields, ``None`` stripped). Validated against the sealed schema before it ships.
   * ``build_workload_spec(...)`` — wrap the invocation as the ONE env var the bot reads
@@ -19,17 +18,14 @@ continue_meeting / max-bots / join-retry are P3 — NOT here; ``request_bot`` le
 """
 from __future__ import annotations
 
-import base64
-import hmac
 import json
-import os
-import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 import jsonschema
 from referencing import Registry, Resource
+
+from ..meeting_token import mint_meeting_token  # noqa: F401 — re-exported for the spawn flow
 
 # ── sealed-schema loaders (the seam, P8 — by path, not import) ──────────────────────────────────
 
@@ -67,10 +63,9 @@ _RT_REGISTRY = Registry().with_resource(
 # bot is OAuth2-invited to the guild once, then joins a channel by its snowflake id over the
 # gateway (``native_meeting_id`` alone is sufficient and authoritative);
 # ``https://discord.com/channels/{guild}/{channel}`` is a human deep link the bot never parses
-# (#875 A1). Lives here (not service.py, which imports FROM this module) so both the router's
-# URL-required gate and ``build_invocation``'s meetingUrl null-survival (below) read the SAME set —
-# re-exported from ``service`` for callers that already do ``from .service import
-# NO_MEETING_URL_PLATFORMS`` (router.py).
+# (#875 A1). Lives here (not service.py, which imports FROM this module) and is re-exported from
+# ``service`` for callers that already do ``from .service import NO_MEETING_URL_PLATFORMS``
+# (router.py's URL-required gate).
 NO_MEETING_URL_PLATFORMS = frozenset({"discord"})
 
 # Platform → runtime profile (core/runtime/src/runtime_kernel/profiles.py's ProfileRegistry keys).
@@ -105,48 +100,8 @@ def conforms_workload_spec(obj: dict) -> None:
     _conforms(obj, _RUNTIME_SCHEMA, _RT_REGISTRY, "WorkloadSpec")
 
 
-# ── MeetingToken (HS256 JWT) — ported verbatim from parent meetings.mint_meeting_token ──────────
-
-
-def _b64url(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
-
-
-def mint_meeting_token(
-    meeting_id: int,
-    user_id: int,
-    platform: str,
-    native_meeting_id: str,
-    *,
-    ttl_seconds: int = 7200,
-    secret: Optional[str] = None,
-) -> str:
-    """Mint a stateless MeetingToken (HS256 JWT), signed with ``ADMIN_TOKEN`` (or ``secret``).
-
-    No token table — minted on demand, embedded in the invocation, re-verified at recording upload.
-    """
-    secret = secret if secret is not None else os.environ.get("ADMIN_TOKEN")
-    if not secret:
-        raise ValueError("ADMIN_TOKEN not configured; cannot mint MeetingToken")
-    now = int(datetime.now(timezone.utc).timestamp())
-    header = {"alg": "HS256", "typ": "JWT"}
-    payload = {
-        "meeting_id": meeting_id,
-        "user_id": user_id,
-        "platform": platform,
-        "native_meeting_id": native_meeting_id,
-        "scope": "transcribe:write",
-        "iss": "meeting-api",
-        "aud": "transcription-collector",
-        "iat": now,
-        "exp": now + ttl_seconds,
-        "jti": str(uuid.uuid4()),
-    }
-    header_b64 = _b64url(json.dumps(header, separators=(",", ":")).encode())
-    payload_b64 = _b64url(json.dumps(payload, separators=(",", ":")).encode())
-    signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
-    signature = hmac.new(secret.encode(), signing_input, digestmod="sha256").digest()
-    return f"{header_b64}.{payload_b64}.{_b64url(signature)}"
+# The MeetingToken is minted by ``meeting_token.mint_meeting_token`` (re-exported here for the
+# spawn flow and the bot_spawn front door).
 
 
 # ── invocation + workload-spec builders ─────────────────────────────────────────────────────────
@@ -163,12 +118,12 @@ def build_invocation(
     native_meeting_id: Optional[str],
     connection_id: str,
     language: Optional[str] = None,
+    allowed_languages: Optional[list[str]] = None,
     task: Optional[str] = None,
     transcription_tier: str = "realtime",
     redis_url: str,
     automatic_leave: Optional[dict] = None,
     meeting_api_callback_url: Optional[str] = None,
-    internal_secret: Optional[str] = None,
     transcribe_enabled: bool = True,
     recording_enabled: bool = False,
     capture_modes: Optional[list[str]] = None,
@@ -177,18 +132,32 @@ def build_invocation(
     transcription_service_url: Optional[str] = None,
     transcription_service_token: Optional[str] = None,
     transcription_model: Optional[str] = None,
+    transcription_service_owner: Optional[str] = None,
     authenticated: Optional[bool] = None,
     userdata_s3_path: Optional[str] = None,
     s3_endpoint: Optional[str] = None,
     s3_bucket: Optional[str] = None,
     s3_access_key: Optional[str] = None,
     s3_secret_key: Optional[str] = None,
+    session_writeback_url: Optional[str] = None,
+    voice_note: Optional[dict] = None,
+    call: Optional[dict] = None,
+    session_restore_url: Optional[str] = None,
+    meeting_host_allow: Optional[list[str]] = None,
 ) -> dict:
     """Assemble the bot's ``invocation.v1`` Invocation (the parent's ``BOT_CONFIG``).
 
     ``None`` values are stripped (the parent strips them before serializing). The result is
     validated against the sealed schema — a malformed invocation never ships.
+
+    ``session_writeback_url`` rides only beside ``authenticated``: it is where the bot PUTs its
+    session-profile.v1 write-back, and a bot older than v0.13.2 refuses an invocation carrying it.
+    ``session_restore_url`` likewise: where a bot joining as a saved bot account GETs its profile.
     """
+    if session_writeback_url is not None and not authenticated:
+        raise ValueError("sessionWritebackUrl is sent only in authenticated mode")
+    if session_restore_url is not None and not authenticated:
+        raise ValueError("sessionRestoreUrl is sent only in authenticated mode")
     invocation: dict[str, Any] = {
         "platform": platform,
         "meetingUrl": meeting_url,
@@ -200,12 +169,18 @@ def build_invocation(
         "meeting_id": meeting_id,
         "redisUrl": redis_url,
         "language": language,
+        # transcription-language.v1's list (restricted detection). Empty is the same as absent, so
+        # it is stripped with the Nones and an auto or forced bot carries no list at all.
+        "allowedLanguages": list(allowed_languages) if allowed_languages else None,
         "task": task,
         "transcriptionTier": transcription_tier,
         "transcribeEnabled": transcribe_enabled,
         "transcriptionServiceUrl": transcription_service_url,
         "transcriptionServiceToken": transcription_service_token,
         "transcriptionModel": transcription_model,
+        # `customer` only: the bot then holds every request to the endpoint to its outbound URL
+        # guard. The deployment's own endpoint is left unstated (an older bot refuses the field).
+        "transcriptionServiceOwner": "customer" if transcription_service_owner == "customer" else None,
         "recordingEnabled": recording_enabled,
         "captureModes": capture_modes,
         # O-TEL-1 (sealed invocation.v1 field): tee the raw captured-signal.v1 stream to durable
@@ -216,7 +191,6 @@ def build_invocation(
         "captureSignalEnabled": capture_signal_enabled,
         "recordingUploadUrl": recording_upload_url,
         "meetingApiCallbackUrl": meeting_api_callback_url,
-        "internalSecret": internal_secret,
         "automaticLeave": automatic_leave,
         # Authenticated-bot mode (sealed invocation.v1 auth block): the bot restores the stored
         # browser session from the userdata store before launch and joins signed-in. Deployment-
@@ -228,21 +202,26 @@ def build_invocation(
         "s3Bucket": s3_bucket,
         "s3AccessKey": s3_access_key,
         "s3SecretKey": s3_secret_key,
+        # The authenticated bot's session write-back sink (session-profile.v1's route, this session's
+        # uid in the path). The bot reads it from here and derives no URL from the others.
+        "sessionWritebackUrl": session_writeback_url,
+        # A voice note (#1783): the note's audio stream and limits; present exactly when the platform
+        # is voice_note (the schema requires it there and refuses it anywhere else).
+        "voiceNote": voice_note,
+        # A call (#1783): the LiveKit room the listener joins hidden, with its own token; present
+        # exactly when the platform is vexa_call.
+        "call": call,
+        # A bot-account bot's restore source (session-profile.v1's GET route, this session's uid in
+        # the path): it restores its profile from here instead of the userdata store.
+        "sessionRestoreUrl": session_restore_url,
+        # The operator's meeting-host allowance (VEXA_MEETING_HOST_ALLOW entries): internal hosts
+        # and networks the bot's navigation guard admits. Absent: every navigation must reach a
+        # public address.
+        "meetingHostAllow": list(meeting_host_allow) if meeting_host_allow else None,
     }
-    # meetingUrl is REQUIRED by the sealed schema but its type is ["string", "null"]. For a platform
-    # in NO_MEETING_URL_PLATFORMS (discord — no join-by-URL concept at all) None is a legitimate,
-    # PERMANENT null, so the key must survive as JSON null rather than being stripped like every
-    # other unset field below (a missing "meetingUrl" fails the schema's required check). Scoped to
-    # exactly that set, not every platform: an unscoped strip would also swallow a None meetingUrl
-    # for a platform that DOES need one, reaching this function only if router.py's URL-required
-    # gate was bypassed (e.g. bot_spawn/auto_join.py calls request_bot directly with
-    # ``meeting_url=data.get("constructed_meeting_url")``, which can be None) — scoping it means
-    # that bypass still fails LOUD here (the required-field check below), instead of silently
-    # spawning a bot with no way to find its meeting.
-    invocation = {
-        k: v for k, v in invocation.items()
-        if v is not None or (k == "meetingUrl" and platform in NO_MEETING_URL_PLATFORMS)
-    }
+    # `meetingUrl` is required and nullable: a voice note has nothing to join and says so with null,
+    # and neither has a discord voice channel (NO_MEETING_URL_PLATFORMS).
+    invocation = {k: v for k, v in invocation.items() if v is not None or k == "meetingUrl"}
     conforms_invocation(invocation)
     return invocation
 
@@ -253,6 +232,7 @@ def build_workload_spec(
     invocation: dict,
     callback_url: Optional[str] = None,
     extra_env: Optional[dict[str, str]] = None,
+    avoid_nodes: Optional[list[str]] = None,
 ) -> dict:
     """Wrap ``invocation`` as the bot's ONE config env var (``VEXA_BOT_CONFIG``) inside a ``runtime.v1``
     ``WorkloadSpec``. ``profile`` is resolved from ``invocation["platform"]`` via
@@ -277,5 +257,9 @@ def build_workload_spec(
     }
     if callback_url:
         spec["callbackUrl"] = callback_url
+    # Nodes a refused earlier attempt ran on (lifecycle/meet_respawn.py): the runtime prefers others,
+    # never requires it. Sent only on a respawn, so a first spawn's spec is unchanged.
+    if avoid_nodes:
+        spec["avoidNodes"] = list(dict.fromkeys(avoid_nodes))[-10:]
     conforms_workload_spec(spec)
     return spec

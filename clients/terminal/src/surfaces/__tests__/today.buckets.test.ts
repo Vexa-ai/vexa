@@ -104,7 +104,7 @@ describe("deviationPhrase (the one-phrase law)", () => {
     expect(deviationPhrase(g([m({ live_status: "scheduled", native_id: "x" })]))?.text).toBe("no brief yet");
   });
   it("a prepared meeting is QUIET — no phrase", () => {
-    expect(deviationPhrase(g([m({ live_status: "scheduled", native_id: "x", workspace_id: "oenb" })]))).toBeNull();
+    expect(deviationPhrase(g([m({ live_status: "scheduled", native_id: "x", workspace_id: "examplebank" })]))).toBeNull();
   });
   it("own-workspace brief (frame 6) silences 'no brief yet' without a bound workspace", () => {
     expect(deviationPhrase(g([m({ live_status: "scheduled", native_id: "x" })]), true)).toBeNull();

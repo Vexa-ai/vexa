@@ -2,9 +2,10 @@
 """counting_replay — push a counting fixture's stage-3 segments THROUGH THE REAL LOCAL PIPELINE to the end.
 
 Fake-bot replay (no live meeting): publish `3-segments.jsonl` onto `transcription_segments` with the native
-id STAMPED (the P23 path) → meeting-api collector writes `tc:meeting:{native}` → agent-api watcher arms the
-copilot → copilot emits notes/cards on `unit:agent-meet-{native}:out`. Then assert the 1..N oracle survived to
-the copilot output.
+id STAMPED (the P23 path), each entry signed for its meeting the way a bot signs (`segment_bus.py`; the
+collector drops anything else) → meeting-api collector writes `tc:meeting:{meeting_id}` → agent-api watcher
+arms the copilot → copilot emits notes/cards on `unit:agent-meet-{native}:out`. Then assert the 1..N oracle
+survived to the copilot output.
 
 Runs against the local vexa-v012 stack (gateway :18056, redis via docker exec). Usage:
   python counting_replay.py --fixture ~/vexa-test-rig/fixtures/google_meet/count-silence-1to20
@@ -18,6 +19,9 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import segment_bus  # noqa: E402
 
 sys.path.insert(0, "/home/dima/vexa-0.12/clients/slim")
 import vexa_slim.client as C  # noqa: E402
@@ -47,20 +51,18 @@ def _key() -> str:
     return next(l.split("=", 1)[1].strip() for l in env.splitlines() if l.startswith("VEXA_API_KEY="))
 
 
+MEETING_ID = 900001   # the meeting the replay publishes as; its token is minted for this id
+
+
 def publish_segments(native: str, segs: list[dict]) -> None:
-    """XADD each stage-3 segment onto transcription_segments with native stamped (paced ~1s, live cadence)."""
-    payloads = [json.dumps({"type": "transcription", "meeting_id": "900001",
+    """XADD each stage-3 segment onto transcription_segments with native stamped, signed for MEETING_ID
+    (paced ~1s, live cadence)."""
+    payloads = [json.dumps({"type": "transcription", "meeting_id": MEETING_ID,
                             "native_meeting_id": native, "platform": "google_meet", "segments": [s]})
                 for s in segs]
-    script = (
-        "import os,sys,json,time,redis\n"
-        "r=redis.from_url(os.environ.get('REDIS_URL','redis://redis:6379/0'),decode_responses=True)\n"
-        "for line in sys.stdin:\n"
-        "    line=line.strip()\n"
-        "    if not line: continue\n"
-        "    r.xadd('transcription_segments',{'payload':line}); time.sleep(1.0)\n"
-        "print('published ok (no session_end — let the copilot process live)')\n"
-    )
+    script = segment_bus.remote(
+        f"publish(sys.stdin, {MEETING_ID}, {native!r}, pace_s=1.0)\n"
+        "print('published ok (no session_end — let the copilot process live)')")
     subprocess.run(["docker", "exec", "-i", "vexa-v012-meeting-api-1", "python", "-c", script],
                    input="\n".join(payloads), text=True, check=True)
 

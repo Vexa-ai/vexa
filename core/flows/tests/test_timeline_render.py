@@ -87,7 +87,9 @@ def test_the_preamble_is_a_handful_of_lines_capped_both_ways():
 
 def test_the_preamble_states_now_and_the_zone_rule():
     out = render_preamble(_payload([_ev(INVITE, "invite.received", "Platform Sync")]), LISBON)
-    assert "**Now: Wednesday 02 September 2026, 16:20 WEST.**" in out
+    assert ("**Now: Wednesday 02 September 2026, 16:20 Europe/Lisbon (WEST, UTC+01:00); "
+            "15:20 UTC.**") in out
+    assert "UTC" in out and "Z" in out                       # how to read a UTC timestamp is said
     assert "timeline(since, until)" in out                  # the deeper read is named
     assert "12:23 WEST" in out                              # the event, in THEIR zone
 
@@ -101,3 +103,20 @@ def test_no_payload_renders_nothing_at_all():
     """A heading over an empty list teaches the model the section is noise."""
     assert render_preamble({}, LISBON) == ""
     assert render_preamble({"events": []}, LISBON) == ""
+
+
+def test_the_preamble_now_crosses_dst_from_the_zone():
+    """Vexa-ai/vexa#1783 — the offset is the zone's on THAT instant, never a remembered one."""
+    import datetime as _d
+    before = _d.datetime(2026, 10, 25, 0, 30, tzinfo=_d.timezone.utc).timestamp()
+    after = _d.datetime(2026, 10, 25, 1, 30, tzinfo=_d.timezone.utc).timestamp()
+    p = _payload([])
+    assert "01:30 Europe/Lisbon (WEST, UTC+01:00); 00:30 UTC" in render_preamble(
+        {**p, "now_epoch": before}, LISBON)
+    assert "01:30 Europe/Lisbon (WET, UTC+00:00); 01:30 UTC" in render_preamble(
+        {**p, "now_epoch": after}, LISBON)
+
+
+def test_the_preamble_with_no_zone_says_utc_plainly():
+    out = render_preamble(_payload([]), "")
+    assert "15:20 UTC (no timezone set)" in out

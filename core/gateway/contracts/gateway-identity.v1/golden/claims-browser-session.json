@@ -1,0 +1,14 @@
+{
+  "credential_class": "session",
+  "email": "ada@example.com",
+  "exp": 1760000060,
+  "iat": 1760000000,
+  "limits": 3,
+  "scopes": [
+    "bot",
+    "tx",
+    "browser"
+  ],
+  "sub": "42",
+  "typ": "vexa-identity"
+}

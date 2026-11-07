@@ -1,0 +1,7 @@
+{
+  "what": "a correctly signed gateway event ticket claiming 601 s",
+  "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n-----END PUBLIC KEY-----\n",
+  "now": 1767225600,
+  "token": "st1.eyJjbHMiOlsiYm90LmRpc3BhdGNoIiwiZGVzay53cml0ZSIsInJvdXRpbmUudHVybiJdLCJldnQiOiJ2YWxpZGF0ZSIsImV4cCI6MTc2NzIyNjIwMSwiaWF0IjoxNzY3MjI1NjAwLCJpc3MiOiJnYXRld2F5IiwianRpIjoiMDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiIiwia2luZCI6ImV2ZW50Iiwic3ViIjoiNDIiLCJ2Ijoic3ViamVjdC10aWNrZXQudjEifQ.JUH0D-XrIhUJ_Zh2JJcx38MTqzzV916_hO7-W0J9zn5r6h6nqid6eNjjLiC04ALbI1fXcszUoc6EO6r0eqeGDQ",
+  "reason": "lifetime_too_long"
+}

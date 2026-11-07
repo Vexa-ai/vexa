@@ -48,6 +48,13 @@ needs_agent = pytest.mark.skipif(
 VALID_KEY = "vxa_test_unit_key"
 VALID_USER = {"user_id": 7, "scopes": ["bot", "tx", "browser"], "max_concurrent": 3, "email": "u@example.com"}
 
+# gateway-identity.v1: one Ed25519 keypair per test session. The gateway signs with SIGNING_KEY; the
+# services behind it verify with VERIFY_KEY (its public half) and nothing else.
+from gateway import identity_token as _identity_token  # noqa: E402
+
+SIGNING_KEY = _identity_token.generate_signing_key()
+VERIFY_KEY = SIGNING_KEY.public_key()
+
 
 class FakeAuthorizer:
     """Satisfies ``ports.Authorizer``: resolve a single valid key, authorize a fixed subscribe."""
@@ -116,7 +123,7 @@ class FakeDownstream:
             yield chunk
 
     @asynccontextmanager
-    async def open_stream(self, method, url, *, headers=None, params=None, content=None):
+    async def open_stream(self, method, url, *, headers=None, params=None, content=None, timeout=None):
         """The head-aware streaming forward (``ports.StreamedResponse``): status + headers first,
         then the canned chunks. Used by the relay leg (MCP), where the upstream's own verdict must
         reach the caller instead of a gateway-minted envelope."""
@@ -168,6 +175,11 @@ class FakeRedis:
 
     def __init__(self):
         self._subs: dict[str, list[asyncio.Queue]] = {}
+        # redis STREAMS (the signals carrier `sig:meeting:{row}`): key → [(id, fields)], in order
+        self._streams: dict[str, list[tuple[str, dict]]] = {}
+        self._seq = 0
+        self._added = asyncio.Event()
+        self.xread_keys: list[str] = []   # every stream key a reader asked for (deny tests read it)
 
     def pubsub(self) -> FakePubSub:
         return FakePubSub(self)
@@ -175,3 +187,41 @@ class FakeRedis:
     async def publish(self, channel: str, data: str) -> None:
         for q in list(self._subs.get(channel, [])):
             await q.put(data)
+
+    # ── streams, the redis-py asyncio shapes the gateway calls ──
+    async def xadd(self, key: str, fields: dict) -> str:
+        self._seq += 1
+        entry_id = f"{self._seq}-0"
+        self._streams.setdefault(key, []).append((entry_id, dict(fields)))
+        self._added.set()
+        self._added = asyncio.Event()
+        return entry_id
+
+    @staticmethod
+    def _after(a: str, b: str) -> bool:
+        pa, pb = [int(x) for x in a.split("-")], [int(x) for x in (b if b != "$" else "0-0").split("-")]
+        return pa > pb
+
+    async def xrevrange(self, key: str, max: str = "+", min: str = "-", count=None):
+        self.xread_keys.append(key)
+        rows = list(reversed(self._streams.get(key, [])))
+        return rows[:count] if count else rows
+
+    async def xread(self, streams: dict, count=None, block=None):
+        self.xread_keys.extend(streams)
+        deadline = asyncio.get_event_loop().time() + (block or 0) / 1000.0
+        while True:
+            out = []
+            for key, last in streams.items():
+                rows = [r for r in self._streams.get(key, []) if self._after(r[0], last)]
+                if rows:
+                    out.append([key, rows[:count] if count else rows])
+            if out or block is None:
+                return out
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                return []
+            try:
+                await asyncio.wait_for(self._added.wait(), remaining)
+            except (asyncio.TimeoutError, TimeoutError):
+                return []

@@ -1,0 +1,4 @@
+{"type": "card", "id": "m-41", "kind": "meeting", "state": "prepared", "result": {"chat": "meet-41"},
+ "refs": {"session": "meet-41", "meeting": "41", "pages": ["acme/kg/entities/company/northwind.md"], "urls": ["https://northwind.example"]},
+ "blocks": [{"type": "title", "text": "Funding model call"}, {"type": "text", "tone": "ok", "text": "Prepared"},
+  {"type": "action", "label": "Continue", "primary": true, "open": {"chat": "meet-41"}}]}

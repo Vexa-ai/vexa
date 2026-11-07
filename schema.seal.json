@@ -1,14 +1,490 @@
 {
+  "core/agent/control_plane/session_store.py": {
+    "agent_session": {
+      "UNIQUE (owner, name)": "UNIQUE (owner, name)",
+      "channel": "channel TEXT",
+      "created": "created DOUBLE PRECISION NOT NULL",
+      "flow": "flow TEXT",
+      "head_key": "head_key TEXT",
+      "head_version": "head_version INTEGER NOT NULL DEFAULT 0",
+      "id": "id TEXT PRIMARY KEY",
+      "last_active": "last_active DOUBLE PRECISION NOT NULL",
+      "name": "name TEXT NOT NULL",
+      "owner": "owner TEXT NOT NULL",
+      "title": "title TEXT NOT NULL DEFAULT ''",
+      "workspaces": "workspaces TEXT NOT NULL DEFAULT '[]'"
+    },
+    "agent_session_attachment": {
+      "PRIMARY KEY (session_id, path, poster)": "PRIMARY KEY (session_id, path, poster)",
+      "created": "created DOUBLE PRECISION NOT NULL",
+      "name": "name TEXT NOT NULL DEFAULT ''",
+      "path": "path TEXT NOT NULL",
+      "poster": "poster TEXT NOT NULL",
+      "session_id": "session_id TEXT NOT NULL"
+    },
+    "agent_session_call": {
+      "PRIMARY KEY (session_id, room)": "PRIMARY KEY (session_id, room)",
+      "ended": "ended DOUBLE PRECISION",
+      "meeting_id": "meeting_id INTEGER NOT NULL",
+      "owner": "owner TEXT NOT NULL",
+      "room": "room TEXT NOT NULL",
+      "session_id": "session_id TEXT NOT NULL",
+      "share_token": "share_token TEXT NOT NULL",
+      "shared_with": "shared_with TEXT",
+      "started": "started DOUBLE PRECISION NOT NULL"
+    },
+    "agent_session_call_change": {
+      "after_digest": "after_digest TEXT NOT NULL",
+      "at": "at DOUBLE PRECISION NOT NULL",
+      "base": "base TEXT",
+      "id": "id TEXT PRIMARY KEY",
+      "meeting_id": "meeting_id INTEGER",
+      "on_behalf_of": "on_behalf_of TEXT",
+      "path": "path TEXT NOT NULL",
+      "room": "room TEXT NOT NULL",
+      "session_id": "session_id TEXT NOT NULL",
+      "undone_at": "undone_at DOUBLE PRECISION",
+      "undone_by": "undone_by TEXT",
+      "unit": "unit TEXT NOT NULL",
+      "workspace": "workspace TEXT NOT NULL"
+    },
+    "agent_session_filing": {
+      "PRIMARY KEY (owner, row_key)": "PRIMARY KEY (owner, row_key)",
+      "filed": "filed DOUBLE PRECISION NOT NULL",
+      "folder": "folder TEXT NOT NULL",
+      "owner": "owner TEXT NOT NULL",
+      "position": "position DOUBLE PRECISION NOT NULL DEFAULT 0",
+      "row_key": "row_key TEXT NOT NULL"
+    },
+    "agent_session_folder": {
+      "PRIMARY KEY (owner, id)": "PRIMARY KEY (owner, id)",
+      "collapsed": "collapsed INTEGER NOT NULL DEFAULT 0",
+      "created": "created DOUBLE PRECISION NOT NULL",
+      "id": "id TEXT NOT NULL",
+      "name": "name TEXT NOT NULL",
+      "owner": "owner TEXT NOT NULL",
+      "position": "position INTEGER NOT NULL DEFAULT 0"
+    },
+    "agent_session_home_composition": {
+      "composed_at": "composed_at DOUBLE PRECISION NOT NULL",
+      "customer": "customer TEXT NOT NULL DEFAULT '{}'",
+      "id": "id TEXT PRIMARY KEY",
+      "inputs": "inputs TEXT NOT NULL DEFAULT '{}'",
+      "model": "model TEXT NOT NULL DEFAULT ''",
+      "next_due": "next_due DOUBLE PRECISION NOT NULL",
+      "owner": "owner TEXT NOT NULL",
+      "stage": "stage TEXT NOT NULL DEFAULT ''",
+      "trigger": "trigger TEXT NOT NULL",
+      "view": "view TEXT NOT NULL"
+    },
+    "agent_session_home_event": {
+      "at": "at DOUBLE PRECISION NOT NULL",
+      "card": "card TEXT NOT NULL",
+      "chat": "chat TEXT NOT NULL DEFAULT ''",
+      "composition": "composition TEXT NOT NULL DEFAULT ''",
+      "event": "event TEXT NOT NULL",
+      "id": "id TEXT PRIMARY KEY",
+      "kind": "kind TEXT NOT NULL DEFAULT ''",
+      "owner": "owner TEXT NOT NULL",
+      "page": "page TEXT NOT NULL DEFAULT ''",
+      "people": "people TEXT NOT NULL DEFAULT '[]'",
+      "reason": "reason TEXT NOT NULL DEFAULT ''",
+      "state": "state TEXT NOT NULL DEFAULT ''",
+      "title": "title TEXT NOT NULL DEFAULT ''"
+    },
+    "agent_session_note": {
+      "PRIMARY KEY (session_id, seq)": "PRIMARY KEY (session_id, seq)",
+      "author": "author TEXT NOT NULL",
+      "created": "created DOUBLE PRECISION NOT NULL",
+      "heard": "heard INTEGER NOT NULL DEFAULT 0",
+      "seq": "seq INTEGER NOT NULL",
+      "session_id": "session_id TEXT NOT NULL",
+      "text": "text TEXT NOT NULL"
+    },
+    "agent_session_notification": {
+      "acted": "acted TEXT",
+      "actor": "actor TEXT NOT NULL",
+      "actor_name": "actor_name TEXT NOT NULL DEFAULT ''",
+      "created": "created DOUBLE PRECISION NOT NULL",
+      "expires_at": "expires_at DOUBLE PRECISION",
+      "id": "id TEXT PRIMARY KEY",
+      "kind": "kind TEXT NOT NULL",
+      "object_id": "object_id TEXT NOT NULL",
+      "object_kind": "object_kind TEXT NOT NULL",
+      "object_name": "object_name TEXT NOT NULL DEFAULT ''",
+      "read_at": "read_at DOUBLE PRECISION",
+      "recipient": "recipient TEXT NOT NULL",
+      "source": "source TEXT",
+      "text": "text TEXT NOT NULL",
+      "url": "url TEXT"
+    },
+    "agent_session_participant": {
+      "PRIMARY KEY (session_id, principal)": "PRIMARY KEY (session_id, principal)",
+      "added": "added DOUBLE PRECISION NOT NULL",
+      "kind": "kind TEXT NOT NULL",
+      "principal": "principal TEXT NOT NULL",
+      "role": "role TEXT NOT NULL",
+      "session_id": "session_id TEXT NOT NULL"
+    },
+    "agent_session_proposal": {
+      "body": "body TEXT NOT NULL",
+      "created": "created DOUBLE PRECISION NOT NULL",
+      "decided": "decided DOUBLE PRECISION",
+      "decided_by": "decided_by TEXT",
+      "id": "id TEXT PRIMARY KEY",
+      "kind": "kind TEXT NOT NULL",
+      "meeting_id": "meeting_id INTEGER",
+      "owner": "owner TEXT NOT NULL",
+      "path": "path TEXT",
+      "session_id": "session_id TEXT NOT NULL",
+      "status": "status TEXT NOT NULL",
+      "title": "title TEXT NOT NULL DEFAULT ''",
+      "workspace": "workspace TEXT"
+    },
+    "agent_session_room": {
+      "agent_on": "agent_on INTEGER",
+      "created_by": "created_by TEXT",
+      "cross_org": "cross_org INTEGER",
+      "level": "level TEXT",
+      "listen": "listen TEXT NOT NULL DEFAULT '{}'",
+      "listen_version": "listen_version INTEGER NOT NULL DEFAULT 0",
+      "org_id": "org_id TEXT",
+      "proactivity": "proactivity TEXT NOT NULL",
+      "session_id": "session_id TEXT PRIMARY KEY",
+      "switch_asks": "switch_asks TEXT",
+      "transcribe": "transcribe INTEGER",
+      "updated": "updated DOUBLE PRECISION NOT NULL",
+      "visibility": "visibility TEXT NOT NULL",
+      "workspace": "workspace TEXT"
+    },
+    "agent_session_schema": {
+      "version": "version INTEGER NOT NULL"
+    },
+    "agent_session_version": {
+      "PRIMARY KEY (session_id, version)": "PRIMARY KEY (session_id, version)",
+      "bytes": "bytes INTEGER NOT NULL",
+      "created": "created DOUBLE PRECISION NOT NULL",
+      "object_key": "object_key TEXT NOT NULL",
+      "session_id": "session_id TEXT NOT NULL",
+      "version": "version INTEGER NOT NULL"
+    }
+  },
+  "core/agent/services/credential-broker/src/credential_broker/metadata.py": {
+    "assertion_nonces": {
+      "expires": "REAL",
+      "nonce": "TEXT PRIMARY KEY"
+    },
+    "audit": {
+      "action": "TEXT",
+      "actor": "TEXT",
+      "at": "REAL",
+      "connection": "TEXT",
+      "operation_id": "TEXT",
+      "outcome": "TEXT",
+      "receipt": "TEXT",
+      "seq": "INTEGER PRIMARY KEY",
+      "session": "TEXT",
+      "vault_request_id": "TEXT",
+      "version": "INTEGER"
+    },
+    "broker_meta": {
+      "key": "TEXT PRIMARY KEY",
+      "value": "TEXT NOT NULL"
+    },
+    "connections": {
+      "account": "TEXT NOT NULL DEFAULT ''",
+      "actor": "TEXT",
+      "approved_host": "TEXT NOT NULL DEFAULT ''",
+      "created": "REAL",
+      "grants": "TEXT NOT NULL DEFAULT ''",
+      "id": "TEXT PRIMARY KEY",
+      "label": "TEXT",
+      "oauth_app_version": "INTEGER NOT NULL DEFAULT 0",
+      "provider": "TEXT NOT NULL DEFAULT 'custom_secret'",
+      "session": "TEXT",
+      "setup_request": "TEXT NOT NULL DEFAULT ''",
+      "setup_spec": "TEXT NOT NULL DEFAULT ''",
+      "status": "TEXT",
+      "touched": "REAL NOT NULL DEFAULT 0",
+      "version": "INTEGER DEFAULT 0"
+    },
+    "draft_requests": {
+      "actor": "TEXT",
+      "connection": "TEXT",
+      "fingerprint": "TEXT",
+      "id": "TEXT PRIMARY KEY",
+      "result": "TEXT"
+    },
+    "drafts": {
+      "actor": "TEXT NOT NULL",
+      "connection": "TEXT NOT NULL",
+      "created": "REAL NOT NULL",
+      "draft_id": "TEXT PRIMARY KEY"
+    },
+    "oauth_states": {
+      "actor": "TEXT",
+      "connection": "TEXT",
+      "expires": "REAL",
+      "grant_name": "TEXT NOT NULL DEFAULT ''",
+      "session": "TEXT",
+      "state_hash": "TEXT PRIMARY KEY"
+    },
+    "preferences": {
+      "actor": "TEXT PRIMARY KEY",
+      "updated": "REAL NOT NULL",
+      "value": "TEXT NOT NULL"
+    },
+    "sensor_grants": {
+      "actor": "TEXT NOT NULL",
+      "connection": "TEXT NOT NULL",
+      "created": "REAL NOT NULL",
+      "expires": "REAL NOT NULL",
+      "id": "TEXT PRIMARY KEY",
+      "issued_via": "TEXT NOT NULL DEFAULT ''",
+      "revoked": "REAL NOT NULL DEFAULT 0",
+      "scope": "TEXT NOT NULL"
+    }
+  },
+  "core/flows/schema.sql": {
+    "delivery": {
+      "CONSTRAINT delivery_stage CHECK (stage IN ('armed','notified','digest','done'))": "CONSTRAINT delivery_stage CHECK (stage IN ('armed','notified','digest','done'))",
+      "PRIMARY KEY (person, ref)": "PRIMARY KEY (person, ref)",
+      "armed_at": "armed_at DOUBLE PRECISION NOT NULL",
+      "attempts": "attempts INTEGER NOT NULL",
+      "digested_at": "digested_at DOUBLE PRECISION",
+      "emailed_at": "emailed_at DOUBLE PRECISION",
+      "kind": "kind TEXT NOT NULL",
+      "link": "link TEXT NOT NULL",
+      "names": "names TEXT",
+      "notice_id": "notice_id TEXT",
+      "notified_at": "notified_at DOUBLE PRECISION",
+      "org": "org TEXT NOT NULL",
+      "outcome": "outcome TEXT",
+      "owner": "owner TEXT NOT NULL",
+      "person": "person TEXT NOT NULL",
+      "ref": "ref TEXT NOT NULL",
+      "room": "room TEXT NOT NULL",
+      "stage": "stage TEXT NOT NULL",
+      "updated_at": "updated_at DOUBLE PRECISION NOT NULL",
+      "version": "version INTEGER NOT NULL",
+      "wake_at": "wake_at DOUBLE PRECISION NOT NULL",
+      "workspace": "workspace TEXT NOT NULL"
+    },
+    "delivery_send": {
+      "CONSTRAINT delivery_send_kind CHECK (kind IN ('single','digest'))": "CONSTRAINT delivery_send_kind CHECK (kind IN ('single','digest'))",
+      "CONSTRAINT delivery_send_status CHECK (status IN ('sending','sent','failed'))": "CONSTRAINT delivery_send_status CHECK (status IN ('sending','sent','failed'))",
+      "PRIMARY KEY (id)": "PRIMARY KEY (id)",
+      "at": "at DOUBLE PRECISION NOT NULL",
+      "channel": "channel TEXT NOT NULL",
+      "day": "day TEXT NOT NULL",
+      "handle": "handle TEXT",
+      "id": "id TEXT NOT NULL",
+      "kind": "kind TEXT NOT NULL",
+      "person": "person TEXT NOT NULL",
+      "reason": "reason TEXT",
+      "refs": "refs TEXT NOT NULL",
+      "status": "status TEXT NOT NULL"
+    },
+    "effect_receipt": {
+      "CONSTRAINT receipt_state CHECK (state IN ('reserved','confirmed','failed'))": "CONSTRAINT receipt_state CHECK (state IN ('reserved','confirmed','failed'))",
+      "FOREIGN KEY(reaction_id) REFERENCES reaction (reaction_id)": "FOREIGN KEY(reaction_id) REFERENCES reaction (reaction_id)",
+      "PRIMARY KEY (effect_key)": "PRIMARY KEY (effect_key)",
+      "attempted_at": "attempted_at DOUBLE PRECISION NOT NULL",
+      "confirmed_at": "confirmed_at DOUBLE PRECISION",
+      "effect_key": "effect_key TEXT NOT NULL",
+      "provider_ref": "provider_ref TEXT",
+      "reaction_id": "reaction_id TEXT NOT NULL",
+      "result": "result TEXT",
+      "state": "state TEXT NOT NULL",
+      "step": "step TEXT NOT NULL"
+    },
+    "flow_version": {
+      "CONSTRAINT flow_status CHECK (status IN ('draft','active','retired'))": "CONSTRAINT flow_status CHECK (status IN ('draft','active','retired'))",
+      "PRIMARY KEY (scope, name, version)": "PRIMARY KEY (scope, name, version)",
+      "created_at": "created_at DOUBLE PRECISION NOT NULL",
+      "created_by": "created_by TEXT",
+      "cron": "cron TEXT",
+      "name": "name TEXT NOT NULL",
+      "on_event": "on_event TEXT NOT NULL",
+      "params": "params TEXT",
+      "scope": "scope TEXT DEFAULT 'instance' NOT NULL",
+      "status": "status TEXT NOT NULL",
+      "steps": "steps TEXT NOT NULL",
+      "subject_grant": "subject_grant TEXT",
+      "version": "version INTEGER NOT NULL"
+    },
+    "friction_occurrence": {
+      "PRIMARY KEY (dedup_key)": "PRIMARY KEY (dedup_key)",
+      "admitted": "admitted INTEGER NOT NULL",
+      "dedup_key": "dedup_key TEXT NOT NULL",
+      "first_seen": "first_seen DOUBLE PRECISION NOT NULL",
+      "friction_id": "friction_id TEXT NOT NULL",
+      "last_seen": "last_seen DOUBLE PRECISION NOT NULL",
+      "occurrences": "occurrences INTEGER NOT NULL",
+      "uid": "uid TEXT NOT NULL"
+    },
+    "keyed_schedule": {
+      "CONSTRAINT keyed_status CHECK (status IN ('armed','fired','cancelled','missed'))": "CONSTRAINT keyed_status CHECK (status IN ('armed','fired','cancelled','missed'))",
+      "PRIMARY KEY (scope, flow, key)": "PRIMARY KEY (scope, flow, key)",
+      "event_type": "event_type TEXT NOT NULL",
+      "fire_at": "fire_at DOUBLE PRECISION NOT NULL",
+      "fired_for": "fired_for DOUBLE PRECISION",
+      "flow": "flow TEXT NOT NULL",
+      "key": "key TEXT NOT NULL",
+      "payload": "payload TEXT",
+      "person": "person TEXT NOT NULL",
+      "scope": "scope TEXT NOT NULL",
+      "status": "status TEXT NOT NULL",
+      "updated_at": "updated_at DOUBLE PRECISION NOT NULL",
+      "version": "version INTEGER NOT NULL"
+    },
+    "mail_cursor": {
+      "CONSTRAINT cursor_singleton CHECK (id = 1)": "CONSTRAINT cursor_singleton CHECK (id = 1)",
+      "PRIMARY KEY (id)": "PRIMARY KEY (id)",
+      "id": "id SERIAL NOT NULL",
+      "token": "token TEXT",
+      "uid": "uid INTEGER NOT NULL"
+    },
+    "mail_outbox_sent": {
+      "PRIMARY KEY (subject_uid, session, hash)": "PRIMARY KEY (subject_uid, session, hash)",
+      "hash": "hash TEXT NOT NULL",
+      "sent_at": "sent_at DOUBLE PRECISION NOT NULL",
+      "session": "session TEXT NOT NULL",
+      "subject_uid": "subject_uid TEXT NOT NULL"
+    },
+    "mail_quarantine": {
+      "PRIMARY KEY (ext_id)": "PRIMARY KEY (ext_id)",
+      "at": "at DOUBLE PRECISION NOT NULL",
+      "ext_id": "ext_id TEXT NOT NULL",
+      "facts": "facts TEXT",
+      "from_addr": "from_addr TEXT NOT NULL",
+      "kind": "kind TEXT NOT NULL",
+      "reason": "reason TEXT NOT NULL",
+      "replied_at": "replied_at DOUBLE PRECISION"
+    },
+    "mail_seen": {
+      "PRIMARY KEY (source, ext_id)": "PRIMARY KEY (source, ext_id)",
+      "created": "created TEXT NOT NULL",
+      "ext_id": "ext_id TEXT NOT NULL",
+      "seen_at": "seen_at DOUBLE PRECISION NOT NULL",
+      "source": "source TEXT NOT NULL"
+    },
+    "mail_send": {
+      "PRIMARY KEY (id)": "PRIMARY KEY (id)",
+      "at": "at DOUBLE PRECISION NOT NULL",
+      "detail": "detail TEXT",
+      "id": "id TEXT NOT NULL",
+      "kind": "kind TEXT NOT NULL",
+      "message_id": "message_id TEXT",
+      "recipient_domain": "recipient_domain TEXT NOT NULL",
+      "result": "result TEXT NOT NULL",
+      "template_version": "template_version TEXT NOT NULL",
+      "test": "test INTEGER NOT NULL"
+    },
+    "mail_test_send": {
+      "PRIMARY KEY (kind, template_version)": "PRIMARY KEY (kind, template_version)",
+      "at": "at DOUBLE PRECISION NOT NULL",
+      "by": "by TEXT NOT NULL",
+      "kind": "kind TEXT NOT NULL",
+      "template_version": "template_version TEXT NOT NULL"
+    },
+    "mail_thread": {
+      "PRIMARY KEY (message_id)": "PRIMARY KEY (message_id)",
+      "created_at": "created_at DOUBLE PRECISION NOT NULL",
+      "message_id": "message_id TEXT NOT NULL",
+      "session": "session TEXT NOT NULL",
+      "subject_uid": "subject_uid TEXT NOT NULL"
+    },
+    "mail_turn": {
+      "PRIMARY KEY (ext_id)": "PRIMARY KEY (ext_id)",
+      "at": "at DOUBLE PRECISION NOT NULL",
+      "ext_id": "ext_id TEXT NOT NULL",
+      "from_addr": "from_addr TEXT NOT NULL"
+    },
+    "reaction": {
+      "CONSTRAINT reaction_status CHECK (status IN ('admitted','running','blocked','retrying','failed','cancelled','done'))": "CONSTRAINT reaction_status CHECK (status IN ('admitted','running','blocked','retrying','failed','cancelled','done'))",
+      "PRIMARY KEY (reaction_id)": "PRIMARY KEY (reaction_id)",
+      "UNIQUE (source_event_id)": "UNIQUE (source_event_id)",
+      "attempt": "attempt INTEGER NOT NULL",
+      "blocked_deadline": "blocked_deadline DOUBLE PRECISION",
+      "created_at": "created_at DOUBLE PRECISION NOT NULL",
+      "event_type": "event_type TEXT NOT NULL",
+      "flow": "flow TEXT NOT NULL",
+      "flow_version": "flow_version INTEGER NOT NULL",
+      "lease_until": "lease_until DOUBLE PRECISION",
+      "next_run_at": "next_run_at DOUBLE PRECISION NOT NULL",
+      "reaction_id": "reaction_id TEXT NOT NULL",
+      "reason": "reason TEXT",
+      "scratch": "scratch TEXT",
+      "source_event_id": "source_event_id TEXT NOT NULL",
+      "status": "status TEXT NOT NULL",
+      "step": "step TEXT NOT NULL",
+      "subject_refs": "subject_refs TEXT NOT NULL",
+      "updated_at": "updated_at DOUBLE PRECISION NOT NULL"
+    },
+    "sensor": {
+      "CONSTRAINT sensor_status CHECK (status IN ('draft','active','degraded','stopped'))": "CONSTRAINT sensor_status CHECK (status IN ('draft','active','degraded','stopped'))",
+      "PRIMARY KEY (scope, name)": "PRIMARY KEY (scope, name)",
+      "connection_id": "connection_id TEXT",
+      "created_at": "created_at DOUBLE PRECISION NOT NULL",
+      "created_by": "created_by TEXT",
+      "cursor": "cursor TEXT",
+      "failures": "failures INTEGER NOT NULL",
+      "filter": "filter TEXT",
+      "interval_s": "interval_s DOUBLE PRECISION NOT NULL",
+      "kind": "kind TEXT NOT NULL",
+      "last_change_at": "last_change_at DOUBLE PRECISION",
+      "last_events": "last_events TEXT",
+      "last_tick_at": "last_tick_at DOUBLE PRECISION",
+      "lease_until": "lease_until DOUBLE PRECISION",
+      "mode": "mode TEXT NOT NULL",
+      "name": "name TEXT NOT NULL",
+      "next_due_at": "next_due_at DOUBLE PRECISION NOT NULL",
+      "reason": "reason TEXT",
+      "scope": "scope TEXT NOT NULL",
+      "status": "status TEXT NOT NULL",
+      "tested_at": "tested_at DOUBLE PRECISION",
+      "tested_version": "tested_version INTEGER",
+      "version": "version INTEGER NOT NULL"
+    },
+    "signal": {
+      "CONSTRAINT signal_kind CHECK (kind IN ('resume','retry','cancel','wake'))": "CONSTRAINT signal_kind CHECK (kind IN ('resume','retry','cancel','wake'))",
+      "FOREIGN KEY(reaction_id) REFERENCES reaction (reaction_id)": "FOREIGN KEY(reaction_id) REFERENCES reaction (reaction_id)",
+      "PRIMARY KEY (signal_id)": "PRIMARY KEY (signal_id)",
+      "actor": "actor TEXT NOT NULL",
+      "consumed_at": "consumed_at DOUBLE PRECISION",
+      "created_at": "created_at DOUBLE PRECISION NOT NULL",
+      "kind": "kind TEXT NOT NULL",
+      "reaction_id": "reaction_id TEXT NOT NULL",
+      "reason": "reason TEXT",
+      "signal_id": "signal_id TEXT NOT NULL"
+    }
+  },
   "core/identity/services/admin-api/src/admin_api/schema/models.py": {
     "api_tokens": {
       "created_at": "Column(DateTime, server_default=func.now())",
       "expires_at": "Column(DateTime, nullable=True)",
       "id": "Column(Integer, primary_key=True, index=True)",
+      "kind": "Column(String(16), nullable=False, server_default=text(\"'key'\"))",
       "last_used_at": "Column(DateTime, nullable=True)",
       "name": "Column(String(255), nullable=True)",
       "scopes": "Column(ARRAY(Text), nullable=False, server_default=text(\"'{}'::text[]\"))",
       "token": "Column(String(255), unique=True, index=True, nullable=False)",
       "user_id": "Column(Integer, ForeignKey('users.id'), nullable=False, index=True)"
+    },
+    "invites": {
+      "created_at": "Column(String(40), nullable=True)",
+      "created_by": "Column(String(128), nullable=True)",
+      "data": "Column(JSONB, nullable=False, server_default=text(\"'{}'::jsonb\"), default=lambda: {})",
+      "expires_at": "Column(BigInteger, nullable=False)",
+      "id": "Column(String(32), primary_key=True)",
+      "max_uses": "Column(Integer, nullable=False, server_default='1', default=1)",
+      "mode": "Column(String(16), nullable=False, server_default=text(\"'open'\"), default='open')",
+      "resource": "Column(String(160), nullable=False, index=True)",
+      "revoked": "Column(Boolean, nullable=False, server_default=text('false'), default=False)",
+      "role": "Column(String(16), nullable=False)",
+      "token_hash": "Column(String(64), nullable=False, unique=True)",
+      "uses": "Column(Integer, nullable=False, server_default='0', default=0)"
     },
     "meeting_sessions": {
       "id": "Column(Integer, primary_key=True, index=True)",
@@ -29,10 +505,54 @@
       "updated_at": "Column(DateTime, server_default=func.now(), onupdate=func.now())",
       "user_id": "Column(Integer, nullable=False, index=True)"
     },
+    "memberships": {
+      "added_at": "Column(String(40), nullable=True)",
+      "added_by": "Column(String(128), nullable=True)",
+      "data": "Column(JSONB, nullable=False, server_default=text(\"'{}'::jsonb\"), default=lambda: {})",
+      "position": "Column(Integer, nullable=False, server_default='0', default=0)",
+      "principal_id": "Column(String(128), primary_key=True)",
+      "resource": "Column(String(160), primary_key=True, index=True)",
+      "role": "Column(String(16), nullable=False)"
+    },
+    "org_members": {
+      "created_at": "Column(DateTime, server_default=func.now(), default=func.now())",
+      "org_id": "Column(String(64), ForeignKey('orgs.id', ondelete='CASCADE'), primary_key=True)",
+      "role": "Column(String(32), nullable=False, server_default=text(\"'member'\"), default='member')",
+      "user_id": "Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), primary_key=True, index=True)"
+    },
+    "orgs": {
+      "billing_account": "Column(String(255), nullable=True)",
+      "created_at": "Column(DateTime, server_default=func.now(), default=func.now())",
+      "crm_org_id": "Column(String(255), nullable=True)",
+      "data": "Column(JSONB, nullable=False, server_default=text(\"'{}'::jsonb\"), default=lambda: {})",
+      "id": "Column(String(64), primary_key=True)",
+      "kind": "Column(String(16), nullable=False, server_default=text(\"'org'\"), default='org')",
+      "name": "Column(String(200), nullable=False)",
+      "policy_source": "Column(String(255), nullable=False, server_default=text(\"'_global'\"), default='_global')"
+    },
+    "person_photos": {
+      "checked_at": "Column(Float, nullable=False, server_default='0')",
+      "content_type": "Column(String(32), nullable=False, server_default='')",
+      "object_key": "Column(String(255), nullable=False, server_default='')",
+      "origin": "Column(String(64), nullable=False, server_default='')",
+      "provider": "Column(String(16), nullable=False, server_default='')",
+      "sha256": "Column(String(64), nullable=False, server_default='')",
+      "source": "Column(String(16), primary_key=True)",
+      "updated_at": "Column(Float, nullable=False, server_default='0')",
+      "user_id": "Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), primary_key=True)"
+    },
     "platform_settings": {
       "key": "Column(String(64), primary_key=True)",
       "updated_at": "Column(DateTime, server_default=func.now(), onupdate=func.now())",
       "value": "Column(JSONB, nullable=False, server_default=text(\"'{}'::jsonb\"), default=lambda: {})"
+    },
+    "principals": {
+      "bills_to": "Column(Integer, ForeignKey('users.id', ondelete='RESTRICT'), nullable=True)",
+      "created_at": "Column(DateTime, server_default=func.now(), default=func.now())",
+      "id": "Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), primary_key=True)",
+      "kind": "Column(String(16), nullable=False, server_default=text(\"'workspace'\"), default='workspace')",
+      "status": "Column(String(16), nullable=False, server_default=text(\"'active'\"), default='active')",
+      "workspace_id": "Column(String(255), nullable=True)"
     },
     "transcriptions": {
       "created_at": "Column(DateTime, default=datetime.utcnow)",
@@ -42,6 +562,7 @@
       "meeting_id": "Column(Integer, ForeignKey('meetings.id'), nullable=False, index=True)",
       "segment_id": "Column(String, nullable=True)",
       "session_uid": "Column(String, nullable=True, index=True)",
+      "source": "Column(String(32), nullable=True)",
       "speaker": "Column(String(255), nullable=True)",
       "start_time": "Column(Float, nullable=False)",
       "text": "Column(Text, nullable=False)"
@@ -53,7 +574,19 @@
       "id": "Column(Integer, primary_key=True, index=True)",
       "image_url": "Column(Text)",
       "max_concurrent_bots": "Column(Integer, nullable=False, server_default='3', default=3)",
-      "name": "Column(String(100))"
+      "name": "Column(String(100))",
+      "org_id": "Column(String(64), nullable=False, server_default=text(\"'default'\"), default=DEFAULT_ORG_ID)"
+    },
+    "workspaces": {
+      "archived_at": "Column(DateTime, nullable=True)",
+      "connections": "Column(JSONB, nullable=False, server_default=text(\"'[]'::jsonb\"), default=lambda: [])",
+      "id": "Column(String(128), primary_key=True)",
+      "kind": "Column(String(16), nullable=False, server_default=text(\"'normal'\"), default='normal')",
+      "org_id": "Column(String(64), nullable=False, server_default=text(\"'default'\"), default=DEFAULT_ORG_ID)",
+      "owner": "Column(String(128), nullable=True)",
+      "slug": "Column(String(128), nullable=False, unique=True)",
+      "updated_at": "Column(DateTime, server_default=func.now(), default=func.now())",
+      "visibility": "Column(String(16), nullable=False, server_default=text(\"'closed'\"), default='closed')"
     }
   },
   "core/meetings/services/meeting-api/src/meeting_api/sessions/models.py": {
@@ -84,6 +617,7 @@
       "meeting_id": "Column(Integer, ForeignKey('meetings.id'), nullable=False, index=True)",
       "segment_id": "Column(String, nullable=True)",
       "session_uid": "Column(String, nullable=True, index=True)",
+      "source": "Column(String(32), nullable=True)",
       "speaker": "Column(String(255), nullable=True)",
       "start_time": "Column(Float, nullable=False)",
       "text": "Column(Text, nullable=False)"

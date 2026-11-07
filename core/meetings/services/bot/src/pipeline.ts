@@ -25,6 +25,7 @@ import {
   type TranscriptSink as LaneTranscriptSink,
   type TranscriptSegment as LaneSegment,
   type SpeakerStreamManagerConfig,
+  type MissingRange,
 } from '@vexa/gmeet-pipeline';
 import {
   ChunkedTranscriber,
@@ -37,14 +38,21 @@ import {
   type TransportEvent,
   type TurnSourceObservation,
 } from '@vexa/mixed-pipeline';
-import { TranscriptionClient, type TranscriptionResult } from '@vexa/transcribe-whisper';
-import { isMixedLanePlatform, isPerTrackLanePlatform, type Invocation, type Platform } from './config.js';
+import { TranscriptionClient, confidenceFilterFromEnv, type SttPressure, type TranscriptionResult } from '@vexa/transcribe-whisper';
+import { isMixedLanePlatform, isPerTrackLanePlatform, reconfirmSecFromEnv, sttTimeoutMsFromEnv, type Invocation, type Platform } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { Pipeline, TranscriptSink } from './ports.js';
+import {
+  createLanguageControl,
+  languageAwareTranscribe,
+  pinnedLanguage,
+  type LanguageControl,
+  type SttCall,
+} from './transcription-language.js';
 
-/** stt.v1 round-trip — real adapter = TranscriptionClient.transcribe; L2/L3 = a mock. The
- *  lane bakes language/prompt at the call site, so the closure carries the configured language. */
-export type Transcribe = (pcm: Float32Array, prompt?: string) => Promise<TranscriptionResult>;
+/** stt.v1 round-trip — real adapter = TranscriptionClient.transcribe; L2/L3 = a mock. The lane
+ *  supplies only audio + prompt; the closure carries the live transcription-language setting. */
+export type Transcribe = (pcm: Float32Array, prompt?: string, hint?: { language?: string }) => Promise<TranscriptionResult>;
 
 /** Each platform's TRUE hint kind — the binder's lag correction is per-kind
  *  (cluster-name-binder KIND_LAG_MS), so the label must survive the bot's wiring:
@@ -64,12 +72,38 @@ export interface HintCounters {
   missed: number;
 }
 
+/** How long a stopping bot waits for its transcription lane to finish (ms). The control plane
+ *  destroys a stopping bot after STOP_RECONCILE_GRACE_S (45 s by default); a bot still draining a
+ *  saturated STT then never sends its terminal event, and the meeting loses the record of what was
+ *  not transcribed along with it (prod-cutover R4 re-run). 25 s leaves room for the leave, the
+ *  recording's last chunk and the terminal callback. */
+export const STOP_TRANSCRIBE_BUDGET_MS = 25_000;
+
+/** Wait for `dispose` at most `budgetMs`; past it, `abandon` records what is still owed as missing
+ *  and the stop goes on. Never throws. */
+export async function boundedDispose(
+  dispose: () => Promise<void>,
+  budgetMs: number,
+  abandon?: (reason: string) => void,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<'timeout'>((r) => { timer = setTimeout(() => r('timeout'), Math.max(0, budgetMs)); });
+  const done = dispose().then(() => 'done' as const, () => 'done' as const);
+  const winner = await Promise.race([done, timedOut]);
+  if (timer) clearTimeout(timer);
+  if (winner === 'timeout') {
+    const reason = `stt had not transcribed it when the meeting stopped (stop budget ${Math.round(budgetMs / 1000)}s)`;
+    console.error(`[bot] transcription stop budget spent with audio still owed — recording it as missing (${reason})`);
+    try { abandon?.(reason); } catch { /* a report must never block the stop */ }
+  }
+}
+
 /** The mixed-lane transcriber seam — the REAL ChunkedTranscriber in production,
  *  injectable so an offline test observes exactly what reaches the transcriber
  *  (name, KIND, tMs) without the pyannote model load. */
 export type MixedTranscriber =
   Pick<ChunkedTranscriber, 'feedAudio' | 'recordHint' | 'dispose'>
-  & Partial<Pick<ChunkedTranscriber, 'recordTransportEvent' | 'recordCaption' | 'recordRosterName' | 'recordRosterCoverage'>>;
+  & Partial<Pick<ChunkedTranscriber, 'recordTransportEvent' | 'recordCaption' | 'recordRosterName' | 'recordRosterCoverage' | 'missingRanges' | 'abandon'>>;
 export type MixedTranscriberFactory = (cb: ChunkedTranscriberCallbacks) => Promise<MixedTranscriber>;
 
 /** Teams is still a mixed CAPTURE lane, but its transcription lane is a set of CSRC-owned
@@ -85,7 +119,7 @@ export type TeamsTranscriber = Pick<
   | 'recordRosterName'
   | 'recordRosterCoverage'
   | 'dispose'
->;
+> & Partial<Pick<TeamsCsrcGmeetPipeline, 'missingRanges'>>;
 export type TeamsTranscriberFactory = (options: TeamsCsrcGmeetPipelineOptions) => TeamsTranscriber;
 
 /** The Pipeline port extended with the capture entry the bridge pumps frames into. The
@@ -116,7 +150,14 @@ export interface BotPipeline extends Pipeline {
   recordRosterCoverage?(named: number, participants: number, tMs?: number): void;
   /** Mixed lane only: the cumulative hint-hop counters (undefined on the gmeet lane). */
   readonly hintCounters?: HintCounters;
+  /** Every stretch of captured audio the lane will never transcribe (a window the STT refused past
+   *  its retries, the held-audio bound, a lane closed with audio still owed), by capture time in
+   *  epoch ms. Read after stop() for the terminal lifecycle event — a loss is a recorded gap in the
+   *  meeting, never silent. */
+  missingRanges?(): MissingRange[];
 }
+
+export type { MissingRange };
 
 /** The lane segments are the SEALED transcript.v1 view — structurally identical to the bot's
  *  contracts.ts TranscriptSegment (same SSOT schema). Map defensively so a future drift in
@@ -250,14 +291,37 @@ function createGmeetBotPipeline(
   config?: SpeakerStreamManagerConfig,
   onError?: (e: unknown) => void,
   onsetGapMs?: number,
+  stopBudgetMs: number = STOP_TRANSCRIBE_BUDGET_MS,
+  reconfirmSec = 0,
 ): BotPipeline {
-  const lane = createGmeetPipeline({ transcribe, sink: laneSink(sink, onError), config, onError, onsetGapMs });
+  // Progress → the meeting's feed: a viewer sees "catching up (Ns behind)" while transcription is
+  // behind capture, and "finishing" while the final pass runs after stop.
+  let finishing = false;
+  const report = (p: { backlog_s: number; silence_s: number | null }) => {
+    void sink.progress?.({ backlog_s: p.backlog_s, silence_s: p.silence_s, finishing })
+      .catch((e) => (onError ?? (() => {}))(e));
+  };
+  const lane = createGmeetPipeline({
+    transcribe, sink: laneSink(sink, onError), config, onError, onsetGapMs, reconfirmSec,
+    // Under overload a reconfirmation waits; it must still end inside the stop budget.
+    reconfirmHoldMs: Math.min(15_000, Math.max(1_000, stopBudgetMs - 10_000)),
+    // The final pass ends inside the stop budget, so the terminal report goes out with what is left.
+    finalPassMs: Math.max(0, stopBudgetMs - 5_000),
+    onProgress: sink.progress ? (p) => report(p) : undefined,
+  });
   return {
     async start() { /* lane is lazy — begins on the first fed frame */ },
-    async stop() { await lane.dispose(); },
+    async stop() {
+      finishing = true;
+      const now = lane.progress();
+      report({ backlog_s: now.backlogSec, silence_s: now.silentForSec < 0 ? null : now.silentForSec });
+      await boundedDispose(() => lane.dispose(), stopBudgetMs, () => lane.abandon());
+      finishing = false;
+    },
     feedAudio: (channel, glowName, pcm, tsMs) => lane.feedAudio(channel, glowName, pcm, tsMs),
     feedMixedAudio() { /* not the gmeet lane */ },
     recordHint() { /* not the gmeet lane */ },
+    missingRanges: () => lane.missingRanges(),
   };
 }
 
@@ -271,12 +335,15 @@ function createTeamsBotPipeline(
   createTranscriber: TeamsTranscriberFactory = (options) => new TeamsCsrcGmeetPipeline(options),
   onObservation?: (source: string, obs: Record<string, unknown>, tMs?: number) => void,
   selfName?: string,
+  stopBudgetMs: number = STOP_TRANSCRIBE_BUDGET_MS,
 ): BotPipeline {
   const hintCounters: HintCounters = { received: 0, matched: 0, missed: 0 };
   const reportError = onError ?? ((error: unknown) => console.error(`[bot] pipeline(teams-csrc): ${String(error)}`));
 
   const transcriber = createTranscriber({
     transcribe: (pcm, prompt) => transcribe(pcm, prompt),
+    // Give up a window inside the stop budget, so it is reported missing on the terminal event.
+    finalPassMs: Math.max(0, stopBudgetMs - 5_000),
     selfName,
     onSegment: (segment) => {
       const task = !segment.completed && !segment.text.trim()
@@ -294,7 +361,7 @@ function createTeamsBotPipeline(
 
   return {
     async start() { /* lane is ready synchronously and begins on its first routed frame */ },
-    async stop() { await transcriber.dispose(); },
+    async stop() { await boundedDispose(() => transcriber.dispose(), stopBudgetMs); },
     feedAudio() { /* Teams supplies one decoded mixed stream */ },
     feedMixedAudio: (pcm, tsMs) => transcriber.feedMixedAudio(pcm, tsMs),
     recordHint: (name, tMs, isEnd) => {
@@ -306,6 +373,7 @@ function createTeamsBotPipeline(
     recordRosterName: (name, tMs) => transcriber.recordRosterName(name, tMs),
     recordRosterCoverage: (named, participants, tMs) => transcriber.recordRosterCoverage(named, participants, tMs),
     hintCounters,
+    missingRanges: () => transcriber.missingRanges?.() ?? [],
   };
 }
 
@@ -317,11 +385,12 @@ function createMixedBotPipeline(
   transcribe: Transcribe,
   sink: TranscriptSink,
   hintKind: HintKind,
-  language?: string,
+  language: () => string | undefined,
   onError?: (e: unknown) => void,
   createTranscriber: MixedTranscriberFactory = (cb) => ChunkedTranscriber.create(cb),
   onObservation?: (source: string, obs: Record<string, unknown>, tMs?: number) => void,
   selfName?: string,
+  stopBudgetMs: number = STOP_TRANSCRIBE_BUDGET_MS,
 ): BotPipeline {
   let transcriber: MixedTranscriber | null = null;
   let creating: Promise<MixedTranscriber> | null = null;
@@ -368,7 +437,9 @@ function createMixedBotPipeline(
         // The turn's pending is gone (moved to another name / tail emptied / turn closed) → retract it.
         clearPending: () => { reconcilePending([]); },
         rename: (_oldSpeaker, newSpeaker, segments) => publish(newSpeaker, segments, true),
-        language,
+        // Read on every turn: the transcriber holds this object by reference, so a reconfigure
+        // reaches the segment stamp and the language-probability gate of the next turn.
+        get language() { return language(); },
         onError,
         // C1 hop 4: the binder's instantaneous verdict per hint — a hint with no
         // overlapping turn increments `missed` (loudly, on the periodic counter line).
@@ -398,7 +469,10 @@ function createMixedBotPipeline(
 
   return {
     async start() { await ensure(); },
-    async stop() { if (transcriber) await transcriber.dispose(); },
+    async stop() {
+      const t = transcriber;
+      if (t) await boundedDispose(() => t.dispose(), stopBudgetMs, (reason) => t.abandon?.(reason));
+    },
     feedAudio() { /* not the mixed lane (mixed has no per-channel glow) */ },
     feedMixedAudio: (pcm, tsMs) => { transcriber?.feedAudio(pcm, tsMs); },
     // C1 hop 3 + C2: count the arrival, forward under the platform's TRUE kind.
@@ -408,23 +482,47 @@ function createMixedBotPipeline(
     recordRosterName: (name, tMs) => { transcriber?.recordRosterName?.(name, tMs); },
     recordRosterCoverage: (named, participants, tMs) => { transcriber?.recordRosterCoverage?.(named, participants, tMs); },
     hintCounters,
+    missingRanges: () => transcriber?.missingRanges?.() ?? [],
   };
 }
 
-/** Build the real STT transcribe closure from invocation.v1 — language baked into the call so
- *  the lane never knows about config. transcribeEnabled=false ⇒ a no-op transcribe (the engine
- *  still runs turn gating but emits empty text; recording-only meetings need no STT). */
-export function createTranscribe(inv: Invocation): Transcribe {
+/** The live language setting a lane runs with, seeded from invocation.v1. */
+export function languageControlFrom(inv: Invocation): LanguageControl {
+  return createLanguageControl({ language: inv.language, allowedLanguages: inv.allowedLanguages });
+}
+
+/** Build the real STT transcribe closure from invocation.v1. The language is decided per call by
+ *  the control (auto / forced / restricted), so the lane never knows about config.
+ *  transcribeEnabled=false ⇒ a no-op transcribe (the engine still runs turn gating but emits empty
+ *  text; recording-only meetings need no STT). `stt` replaces the TranscriptionClient call (tests);
+ *  `env` supplies BOT_STT_TIMEOUT_SEC. */
+export function createTranscribe(
+  inv: Invocation,
+  control: LanguageControl = languageControlFrom(inv),
+  stt?: SttCall,
+  env: NodeJS.ProcessEnv = process.env,
+): Transcribe {
   if (inv.transcribeEnabled === false || !inv.transcriptionServiceUrl) {
     return async () => ({ text: '', language: inv.language ?? 'en', duration: 0, segments: [] });
   }
+  if (stt) return languageAwareTranscribe(stt, control);
   const client = new TranscriptionClient({
     serviceUrl: inv.transcriptionServiceUrl,
     apiToken: inv.transcriptionServiceToken,
     model: inv.transcriptionModel ?? undefined,
+    // the person's own Settings endpoint: every request held to the outbound URL guard
+    publicOnly: inv.transcriptionServiceOwner === 'customer',
+    // BOT_STT_TIMEOUT_SEC (forwarded by the runtime like the BOT_SPEAKER_* knobs); unset → 90 s.
+    requestTimeoutMs: sttTimeoutMsFromEnv(env),
+    // BOT_STT_CONFIDENCE_FILTER=strict (forwarded by the runtime); unset → the always-on rule only.
+    confidenceFilter: confidenceFilterFromEnv(env.BOT_STT_CONFIDENCE_FILTER),
   });
-  const language = inv.language ?? undefined;
-  return (pcm, prompt) => client.transcribe(pcm, language, prompt);
+  const transcribe: Transcribe & { sttPressure?: SttPressure } =
+    languageAwareTranscribe((pcm, language, prompt) => client.transcribe(pcm, language, prompt), control);
+  // The client's shared gate (one per bot): the per-channel lane reads it so it never sends a
+  // window again while the client is backing off from an overloaded STT.
+  transcribe.sttPressure = client.pressure();
+  return transcribe;
 }
 
 /**
@@ -456,12 +554,23 @@ export function createBotPipeline(
     /** Where the lane's own typed observations go (the turn-spine switch). Wired at the
      *  composition root to the capture-signal recorder's observations sidecar. */
     onObservation?: (source: string, obs: Record<string, unknown>, tMs?: number) => void;
+    /** The live transcription-language setting (reconfigure acts apply to it). Seeded from the
+     *  invocation when absent. */
+    languageControl?: LanguageControl;
+    /** How long stop() waits for the lane's final pass before recording what is still owed as
+     *  missing. Default STOP_TRANSCRIBE_BUDGET_MS. */
+    stopBudgetMs?: number;
+    /** Show fast, then reconfirm (per-channel lane): seconds of speech a reconfirmation covers at
+     *  most. Default `reconfirmSecFromEnv()` (BOT_TRANSCRIPT_RECONFIRM_SEC, 10; 0 = off). */
+    reconfirmSec?: number;
   } = {},
 ): BotPipeline {
-  const transcribe = opts.transcribe ?? createTranscribe(inv);
+  const stopBudgetMs = opts.stopBudgetMs ?? STOP_TRANSCRIBE_BUDGET_MS;
+  const languageControl = opts.languageControl ?? languageControlFrom(inv);
+  const transcribe = opts.transcribe ?? createTranscribe(inv, languageControl);
   if (inv.platform === 'teams') {
     return createTeamsBotPipeline(
-      transcribe, sink, opts.onError, opts.createTeamsTranscriber, opts.onObservation, inv.botName,
+      transcribe, sink, opts.onError, opts.createTeamsTranscriber, opts.onObservation, inv.botName, stopBudgetMs,
     );
   }
   // Zoom rides the per-channel (gmeet) lane per-track; only Jitsi remains on the legacy mixed
@@ -469,12 +578,13 @@ export function createBotPipeline(
   if (isMixedLanePlatform(inv.platform) && !isPerTrackLanePlatform(inv.platform)) {
     return createMixedBotPipeline(
       transcribe, sink, hintKindForPlatform(inv.platform),
-      inv.language ?? undefined, opts.onError, opts.createMixedTranscriber, opts.onObservation,
-      inv.botName,
+      () => pinnedLanguage(languageControl.get()), opts.onError, opts.createMixedTranscriber, opts.onObservation,
+      inv.botName, stopBudgetMs,
     );
   }
   return createGmeetBotPipeline(
     transcribe, sink, perChannelLaneConfig(inv.platform, opts.config), opts.onError, perChannelOnsetGapMs(inv.platform),
+    stopBudgetMs, opts.reconfirmSec ?? reconfirmSecFromEnv(),
   );
 }
 
@@ -485,7 +595,8 @@ export const PER_TRACK_ONSET_GAP_MS = 2000;
 
 /** The per-channel lane's turn-onset gap for one platform; undefined keeps the lane default. */
 export function perChannelOnsetGapMs(platform: Platform | string): number | undefined {
-  return isPerTrackLanePlatform(platform) ? PER_TRACK_ONSET_GAP_MS : undefined;
+  // A call's channel is one participant's own track too (#1783).
+  return isPerTrackLanePlatform(platform) || platform === 'vexa_call' ? PER_TRACK_ONSET_GAP_MS : undefined;
 }
 
 /** The per-channel lane's tuning for one platform. Per-track capture (Zoom) stamps each frame at

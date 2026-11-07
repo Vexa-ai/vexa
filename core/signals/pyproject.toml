@@ -1,0 +1,21 @@
+[project]
+name = "vexa-signals"
+version = "0.13.3"
+description = "Transcript signals: a small model listens to live sources against the agent's brief and wakes it through the company's flow"
+requires-python = ">=3.11"
+dependencies = ["redis==8.0.0", "httpx>=0.27,<1"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8,<10",
+    "fakeredis>=2.26,<3",
+    "jsonschema>=4,<5",
+    "pytest-timeout>=2.4.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

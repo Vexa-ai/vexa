@@ -1,17 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+  "$id": "https://raw.githubusercontent.com/Vexa-ai/vexa/main/calm/controls/single-writer.requirement.json",
   "title": "Single-writer ownership (P23)",
-  "description": "A data carrier must declare exactly one producer. Readers never re-derive a producer's data.",
+  "description": "A data carrier declares the producers allowed to write it; readers never re-derive a producer's data. P23 asks for exactly one writer: a set of more than one is a named exception in the chart, and gate:dataflow holds the code to whatever set is declared.",
   "type": "object",
+  "allOf": [{ "$ref": "https://calm.finos.org/release/1.2/meta/control-requirement.json" }],
   "properties": {
+    "control-id": { "const": "vexa-p23-single-writer" },
     "writers": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": { "type": "string", "minLength": 1 },
       "minItems": 1,
-      "maxItems": 1,
-      "description": "The single owning producer of this carrier."
-    }
+      "uniqueItems": true,
+      "description": "unique-ids of the nodes allowed to write this carrier."
+    },
+    "match": { "type": "string", "minLength": 1, "description": "Regular expression over the carrier key that gate:dataflow uses to attribute writes in code." },
+    "op": { "type": "string", "minLength": 1, "description": "The write operation gate:dataflow attributes; gate:dataflow refuses an op it cannot see." }
   },
-  "required": ["writers"]
+  "required": ["control-id", "writers"],
+  "dependentRequired": { "match": ["op"], "op": ["match"] }
 }

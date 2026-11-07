@@ -1,0 +1,21 @@
+{
+  "what": "a routine the person turned on from their own session",
+  "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n-----END PUBLIC KEY-----\n",
+  "now": 1767225600,
+  "ttl_sec": 34560000,
+  "claims": {
+    "cls": [
+      "bot.dispatch",
+      "routine.turn"
+    ],
+    "evt": "user:42/morning-brief",
+    "exp": 1801785600,
+    "iat": 1767225600,
+    "iss": "agent",
+    "jti": "a1b2c3d4e5f60718293a4b5c",
+    "kind": "grant",
+    "sub": "42",
+    "v": "subject-ticket.v1"
+  },
+  "token": "st1.eyJjbHMiOlsiYm90LmRpc3BhdGNoIiwicm91dGluZS50dXJuIl0sImV2dCI6InVzZXI6NDIvbW9ybmluZy1icmllZiIsImV4cCI6MTgwMTc4NTYwMCwiaWF0IjoxNzY3MjI1NjAwLCJpc3MiOiJhZ2VudCIsImp0aSI6ImExYjJjM2Q0ZTVmNjA3MTgyOTNhNGI1YyIsImtpbmQiOiJncmFudCIsInN1YiI6IjQyIiwidiI6InN1YmplY3QtdGlja2V0LnYxIn0.dY350QOFcnJLO38umy0Bz1157sgUXhy6q65fRwtCCPBFbSbv6kxxWKAmXzWgyvTzER66giKUETeRuegZ6T4QCA"
+}
