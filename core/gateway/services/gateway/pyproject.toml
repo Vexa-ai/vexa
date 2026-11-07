@@ -12,7 +12,7 @@ dependencies = [
     "pydantic>=2",
     # fastapi-guard: per-IP rate limiting + auto-IP-ban at the edge (edge_guard.py builds and
     # installs the SecurityConfig / SecurityMiddleware). The /ws path runs the library's own
-    # guard_websocket directly (called from run_multiplex in app.py), so no Vexa-authored guard
+    # guard_websocket directly (called from run_multiplex in multiplex.py), so no Vexa-authored guard
     # orchestration remains for either path. History still true today: 7.8.0 joins repeated
     # X-Forwarded-For field lines in its Starlette adapter and scans the /ws handshake through
     # guard_websocket; 7.8.1 makes a whitelisted IP skip the /ws rate limit like the HTTP path;
