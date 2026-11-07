@@ -53,8 +53,8 @@ fi
 # spawned bot workload's log — the whole Lite failure set in one read.
 PROBE_SWEEP_CMD="
 echo '--- $APP (tail 60) ---'; docker logs --tail 60 '$APP' 2>&1;
-echo '--- bot workload logs (/tmp/vexa-workloads) ---';
-docker exec '$APP' bash -c 'for f in /tmp/vexa-workloads/*.log; do
+echo '--- bot workload logs (/var/lib/vexa-runtime/logs) ---';
+docker exec '$APP' bash -c 'for f in /var/lib/vexa-runtime/logs/*.log; do
   [ -e \"\$f\" ] || { echo \"(no workload logs)\"; break; };
   echo \"--- \$f (tail 25) ---\"; tail -25 \"\$f\"; done' 2>&1"
 

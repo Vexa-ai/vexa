@@ -71,7 +71,7 @@ async def test_cp2_session_end_marker_on_row_keyed_feed(store, bus):
         {"type": "session_end", "meeting_id": "1", "native_meeting_id": "abc-defg-hij"})})
     assert await _feed_entries(bus._client, "abc-defg-hij") == []          # not on the native key
     entries = await _feed_entries(bus._client, 1)                          # on the row key
-    assert entries == [{"type": "session_end", "uid": "abc-defg-hij"}]
+    assert entries == [{"type": "session_end", "session_uid": "abc-defg-hij"}]
 
 
 async def test_cp2_native_feed_byte_identical_across_runs(store):

@@ -1,0 +1,7 @@
+{
+  "secret": "delegation.v1-published-test-vector-key",
+  "now": 1767225600,
+  "token": "vxa_mcp_000000000000000000000000",
+  "reason": "not_delegated",
+  "what": "a bearer without the vxd_ prefix: not this scheme, so the caller tries its others"
+}

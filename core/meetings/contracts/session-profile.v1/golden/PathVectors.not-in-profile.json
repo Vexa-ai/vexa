@@ -1,0 +1,141 @@
+{
+  "inProfile": false,
+  "vectors": [
+    {
+      "path": "",
+      "why": "empty"
+    },
+    {
+      "path": "/Default/Cookies",
+      "why": "absolute"
+    },
+    {
+      "path": "../Local State",
+      "why": "a '..' segment"
+    },
+    {
+      "path": "Default/../Local State",
+      "why": "a '..' segment inside"
+    },
+    {
+      "path": "Default/Local Storage/leveldb/../../../../etc/cron.d/x",
+      "why": "traversal out of a LevelDB dir"
+    },
+    {
+      "path": "./Local State",
+      "why": "a '.' segment"
+    },
+    {
+      "path": "Default//Cookies",
+      "why": "an empty segment"
+    },
+    {
+      "path": "Default/Cookies/",
+      "why": "a trailing slash is an empty segment"
+    },
+    {
+      "path": "Default\\Cookies",
+      "why": "a backslash"
+    },
+    {
+      "path": "Default/Cookies\u0000",
+      "why": "a NUL"
+    },
+    {
+      "path": "Default/Local Storage/leveldb/CURRENT\n",
+      "why": "a trailing newline, which a '$' anchor can let through"
+    },
+    {
+      "path": "Default/Local Storage/leveldb/CURRENT\u007f",
+      "why": "a DEL"
+    },
+    {
+      "path": "default/cookies",
+      "why": "paths are case-sensitive"
+    },
+    {
+      "path": "Default/Cookies ",
+      "why": "a trailing space"
+    },
+    {
+      "path": "Default",
+      "why": "a directory, not a file"
+    },
+    {
+      "path": "Default/Local Storage/leveldb",
+      "why": "a LevelDB dir itself"
+    },
+    {
+      "path": "Local State/x",
+      "why": "below a listed file"
+    },
+    {
+      "path": "Default/Extensions/abc/1.0/manifest.json",
+      "why": "an extension"
+    },
+    {
+      "path": "Default/Cache/data_0",
+      "why": "a cache file"
+    },
+    {
+      "path": "Default/Preferences.bak",
+      "why": "a backup beside a listed file"
+    },
+    {
+      "path": "Default/Bookmarks",
+      "why": "profile data that is not session data"
+    },
+    {
+      "path": "Default/Local Storage/leveldb/LOCK",
+      "why": "a LevelDB lock"
+    },
+    {
+      "path": "Default/Local Storage/leveldb/LOG",
+      "why": "a LevelDB info log"
+    },
+    {
+      "path": "Default/Local Storage/leveldb/sub/000003.log",
+      "why": "nested below a LevelDB dir"
+    },
+    {
+      "path": "Default/Local Storage/000003.log",
+      "why": "the parent of a LevelDB dir"
+    },
+    {
+      "path": "Default/Session Storage/evil.ldb",
+      "why": "a non-numeric table name"
+    },
+    {
+      "path": "Default/Session Storage/000003.LOG",
+      "why": "suffixes are lower-case"
+    },
+    {
+      "path": "Default/Session Storage/000003.log.bak",
+      "why": "a suffix after the suffix"
+    },
+    {
+      "path": "Default/Session Storage/x000003.log",
+      "why": "a prefix before the number"
+    },
+    {
+      "path": "Default/Session Storage/CURRENT.bak",
+      "why": "a suffix after CURRENT"
+    },
+    {
+      "path": "Default/Session Storage/MANIFEST-",
+      "why": "a manifest with no number"
+    },
+    {
+      "path": "Default/Session Storage/MANIFEST-00000000000000001",
+      "why": "seventeen digits"
+    },
+    {
+      "path": "Default/Session Storage/00000000000000001.log",
+      "why": "seventeen digits"
+    },
+    {
+      "path": "Default/Session Storage/\u0663.log",
+      "why": "a non-ASCII digit, which a Unicode-aware digit class would admit"
+    }
+  ]
+}

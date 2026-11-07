@@ -1,0 +1,259 @@
+"""A TOOL SAYS WHICH CREDENTIAL ITS DOOR TAKES — issue #1468 C2.
+
+The manifest could say who the CALLER must be (`identity`) and nothing at all about what this edge
+has to PRESENT to the door behind the tool. So the edge did the only thing it could: forward the
+caller's own credential to everything, and find out at call time. Flows' four tools were behind a
+deployment-wide operator key this edge does not hold and must never hold, and the result reached the
+agent as a JSON-RPC answer with a 401 inside it — a tool that is in `tools/list` and cannot work.
+
+`auth` closes that at BOOT, where every other rule in this assembler already lives:
+
+    subject   the caller's own credential travels, which is what this edge does today
+    admin     a deployment-held key travels instead — and the deployment must actually hold it
+    none      nothing travels
+
+A tool whose `auth` this deployment cannot satisfy is REFUSED AT ASSEMBLY, naming it. Not published
+and 401ing later: an agent that cannot see a tool recovers; an agent told a tool exists and handed a
+refusal tells the person the product is broken. That is the same fail-direction as every other rule
+in `manifest.py`, applied to the one fact the contract could not express.
+"""
+from __future__ import annotations
+
+import httpx
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from vexa_mcp import reentry as reentry_mod
+from vexa_mcp import bind, register
+from vexa_mcp import manifest as m
+
+OPENAPI = {"paths": {
+    "/flows": {"get": {"summary": "Every flow version", "parameters": []}},
+    "/admin/thing": {"post": {"summary": "An operator verb", "parameters": []}},
+    "/open": {"get": {"summary": "No credential at all", "parameters": []}},
+}}
+
+
+def _tool(name="flows_list", auth="subject", path="/flows", method="GET", **kw):
+    t = {"name": name, "identity": "user", "requires": ["identity", "flows"],
+         "route": {"method": method, "path": path}}
+    if auth is not ...:
+        t["auth"] = auth
+    t.update(kw)
+    return t
+
+
+def _manifest(tools=None, **kw):
+    doc = {"contract": "mcp.tools.v1", "domain": "flows", "source": "oss", "owner": "core/flows",
+           "base_url_env": "FLOWS_API_URL", "served_at": "/.well-known/mcp-tools.json",
+           "depends_on": ["identity"],
+           "tools": tools if tools is not None else [_tool()]}
+    doc.update(kw)
+    return doc
+
+
+DEPLOYED = {"identity", "flows"}
+
+
+# ── the field exists, and a manifest may not stay silent about it ───────────────────────────────
+
+def test_a_tool_must_say_how_it_is_authenticated():
+    """Optional-with-a-default would reproduce the hole this field is for: the next manifest would
+    say nothing and the edge would guess, exactly as it guessed for flows."""
+    with pytest.raises(m.ManifestError, match="auth"):
+        m.validate(_manifest(tools=[_tool(auth=...)]))
+
+
+def test_the_three_values_and_no_others():
+    for good in ("subject", "admin", "none"):
+        m.validate(_manifest(tools=[_tool(auth=good)],
+                             admin_auth={"header": "X-Flows-Operator-Key",
+                                         "key_env": "VEXA_MCP_FLOWS_ADMIN_KEY"}))
+    with pytest.raises(m.ManifestError, match="auth"):
+        m.validate(_manifest(tools=[_tool(auth="operator")]))
+
+
+def test_an_admin_tool_must_say_which_header_and_which_variable():
+    """`auth: admin` is a promise the DEPLOYMENT has to be able to keep, and it cannot keep one it
+    cannot spell: which header the door reads, and which variable holds the key."""
+    with pytest.raises(m.ManifestError, match="admin_auth"):
+        m.validate(_manifest(tools=[_tool(auth="admin", path="/admin/thing", method="POST")]))
+
+
+# ── satisfiable, or refused at assembly ─────────────────────────────────────────────────────────
+
+ADMIN_MANIFEST = _manifest(
+    tools=[_tool(name="flows_retire", auth="admin", path="/admin/thing", method="POST")],
+    admin_auth={"header": "X-Flows-Operator-Key", "key_env": "VEXA_MCP_FLOWS_ADMIN_KEY"})
+
+
+def test_an_admin_tool_whose_key_this_deployment_does_not_hold_refuses_the_boot():
+    with pytest.raises(m.ManifestError) as e:
+        m.assemble([ADMIN_MANIFEST], deployed=DEPLOYED, env={})
+    assert "flows_retire" in str(e.value) and "VEXA_MCP_FLOWS_ADMIN_KEY" in str(e.value)
+
+
+def test_the_same_manifest_assembles_when_the_deployment_holds_the_key():
+    a = m.assemble([ADMIN_MANIFEST], deployed=DEPLOYED,
+                   env={"VEXA_MCP_FLOWS_ADMIN_KEY": "an-operator-key"})
+    assert [t.name for t in a.tools] == ["flows_retire"]
+    assert a.tools[0].auth == "admin"
+
+
+@pytest.mark.parametrize("placeholder", sorted(m.PLACEHOLDER_KEYS))
+def test_a_placeholder_is_not_holding_the_key(placeholder):
+    """A published literal authenticates nobody and everybody — the same refusal list flows-api and
+    the services' config.v1 already keep (fact placeholder-secrets), CHANGE-ME included."""
+    with pytest.raises(m.ManifestError) as e:
+        m.assemble([ADMIN_MANIFEST], deployed=DEPLOYED, env={"VEXA_MCP_FLOWS_ADMIN_KEY": placeholder})
+    assert "flows_retire" in str(e.value)
+
+
+def test_a_subject_tool_is_always_satisfiable():
+    """It travels the caller's own credential, and the caller brought it."""
+    a = m.assemble([_manifest()], deployed=DEPLOYED, env={})
+    assert [t.auth for t in a.tools] == ["subject"]
+
+
+def test_an_unsatisfiable_tool_never_reaches_the_surface():
+    """The refusal is at ASSEMBLY, before the app has a route for it — never a published tool that
+    401s on first use."""
+    app = FastAPI()
+    with pytest.raises(m.ManifestError):
+        a = m.assemble([ADMIN_MANIFEST], deployed=DEPLOYED, env={})
+        register.register(app, bind.verify(a, {"flows": OPENAPI}), {"flows": "http://flows"})
+    assert not [r for r in app.routes if getattr(r, "operation_id", None) == "flows_retire"]
+
+
+# ── and what actually travels ───────────────────────────────────────────────────────────────────
+
+def _wire(manifest, env, *, me=None):
+    """``me`` is what the gateway's `/auth/me` answers for the caller — what an `auth: admin` tool
+    asks before it spends the deployment's key. None: there is no gateway to ask."""
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "gateway.test" and request.url.path == "/auth/me":
+            status, body = me if isinstance(me, tuple) else (200, me)
+            return httpx.Response(status, json=body)
+        seen.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    app = FastAPI()
+    a = m.assemble([manifest], deployed=DEPLOYED, env=env)
+    register.register(app, bind.verify(a, {"flows": OPENAPI}), {"flows": "http://flows"},
+                      transport=httpx.MockTransport(handler), env=env,
+                      gateway_url="http://gateway.test" if me is not None else None)
+    return TestClient(app), seen
+
+
+def test_a_subject_tool_forwards_the_callers_own_credential():
+    client, seen = _wire(_manifest(), {})
+    client.get("/tools/flows_list", headers={"Authorization": "Bearer person-key"})
+    assert seen[-1].headers["X-API-Key"] == "person-key"
+
+
+def test_an_admin_tool_sends_the_deployments_key_and_not_the_callers():
+    """The caller is still authenticated at this edge — they just do not get to present their own
+    credential to a door that reads an operator key."""
+    env = {"VEXA_MCP_FLOWS_ADMIN_KEY": "an-operator-key"}
+    client, seen = _wire(ADMIN_MANIFEST, env, me={"user_id": 1, "admin_account": True})
+    client.post("/tools/flows_retire", headers={"Authorization": "Bearer person-key"}, json={})
+    sent = seen[-1].headers
+    assert sent["X-Flows-Operator-Key"] == "an-operator-key"
+    assert "person-key" not in str(dict(sent))
+
+
+# ── and for whom: the admin account, with its own credential, confirmed at call time ─────────
+
+@pytest.mark.parametrize("me", [
+    {"user_id": 7, "is_admin": False},          # a person's own key, not the admin
+    {"user_id": 7, "is_admin": True},           # the INSTANCE admin is a person, not the admin account
+    {"user_id": 7, "is_admin": True, "admin_account": False},
+    {"user_id": 7},                              # an answer that does not say
+    {"user_id": 7, "admin_account": "true"},     # not a boolean
+    (403, {"detail": "a worker's delegation token is accepted on /mcp only"}),  # a worker
+    (401, {"detail": "Invalid API key"}),        # nobody
+    None,                                        # no gateway to ask
+])
+def test_an_admin_tool_spends_the_deployments_key_for_the_admin_account_only(me):
+    env = {"VEXA_MCP_FLOWS_ADMIN_KEY": "an-operator-key"}
+    client, seen = _wire(ADMIN_MANIFEST, env, me=me)
+    r = client.post("/tools/flows_retire", headers={"Authorization": "Bearer someone"}, json={})
+    assert r.status_code == 403
+    assert "admin account" in r.json()["detail"]
+    assert seen == [], "the operator key went out for a caller who is not the admin"
+
+
+def test_the_admin_check_never_reads_what_the_caller_says_about_itself():
+    env = {"VEXA_MCP_FLOWS_ADMIN_KEY": "an-operator-key"}
+    client, seen = _wire(ADMIN_MANIFEST, env, me={"user_id": 7, "is_admin": False})
+    r = client.post("/tools/flows_retire", json={},
+                    headers={"Authorization": "Bearer someone", "X-User-Scopes": "admin",
+                             "X-Is-Admin": "true", "X-User-Regime": "human"})
+    assert r.status_code == 403 and seen == []
+
+
+def test_a_subject_tool_does_not_ask():
+    client, seen = _wire(_manifest(), {}, me=(500, {}))
+    client.get("/tools/flows_list", headers={"Authorization": "Bearer person-key"})
+    assert seen[-1].url.path == "/flows"
+
+
+def test_a_none_tool_sends_no_credential_at_all():
+    client, seen = _wire(_manifest(tools=[_tool(name="open_thing", auth="none", path="/open",
+                                                identity="none")]), {})
+    client.get("/tools/open_thing")
+    sent = {k.lower(): v for k, v in seen[-1].headers.items()}
+    assert "x-api-key" not in sent and "authorization" not in sent
+
+
+# ── the manifest in this repository declares it ─────────────────────────────────────────────────
+
+def test_every_flows_tool_declares_the_credential_its_own_door_actually_reads():
+    """Most of flows' doors take the person's own credential (C1) — `subject_or_operator` on
+    `/reactions`, `/timeline`, `/friction`, `GET /flows` — so those tools are `auth: subject`, and
+    the edge forwarding it is correct rather than a guess that happened to be wrong.
+
+    `flows_submit` and `flow_lifecycle` are the one real exception, not a drift: `POST /flows` and
+    `POST /flows/{name}/{version}/{action}` are gated by flows-api's own plain `auth` dependency,
+    which checks ONLY the operator key (`VEXA_FLOWS_API_KEY`) — a caller's own credential 401s
+    there, so `auth: subject` would publish a tool this edge could list and never actually call on
+    the caller's behalf. Asserted over WHATEVER the manifest holds beyond this one named exception,
+    not a list written here — a further tool added by another change silently drifting to `admin`
+    is exactly the case a hard-coded exception set would miss."""
+    import json
+    import pathlib
+    doc = json.loads((pathlib.Path(__file__).resolve().parents[5]
+                      / "core/flows/mcp.tools.v1.json").read_text())
+    assert doc["tools"], "the flows manifest declares no tools"
+    # ADR-0046: `POST /flows` and the lifecycle verb take the caller's own credential and decide the
+    # scope from it (instance scope: the admin account). The admin account's two reads of the whole
+    # deployment stay operator-gated `auth` routes: the friction sink and the mail settings.
+    admin_gated = {"friction_list", "mail_settings"}
+    assert {t["name"]: t.get("auth") for t in doc["tools"]} == {
+        t["name"]: ("admin" if t["name"] in admin_gated else "subject") for t in doc["tools"]}
+
+
+def test_the_admin_question_carries_the_re_entry_identity_so_a_worker_can_be_answered():
+    """A worker's token is answered at the gateway's `/auth/me` only on this edge's re-entry, so the
+    question carries the identity the gateway signed onto the request being served."""
+    asked = []
+    env = {"VEXA_MCP_FLOWS_ADMIN_KEY": "an-operator-key"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/auth/me":
+            asked.append(request)
+            return httpx.Response(200, json={"user_id": 1, "admin_account": True})
+        return httpx.Response(200, json={"ok": True})
+
+    app = FastAPI()
+    app.add_middleware(reentry_mod.ReentryMiddleware)
+    a = m.assemble([ADMIN_MANIFEST], deployed=DEPLOYED, env=env)
+    register.register(app, bind.verify(a, {"flows": OPENAPI}), {"flows": "http://flows"},
+                      transport=httpx.MockTransport(handler), env=env, gateway_url="http://gateway.test")
+    TestClient(app).post("/tools/flows_retire", json={},
+                         headers={"Authorization": "Bearer vxd_a.b.c", "X-Vexa-Identity": "v1.s.t"})
+    assert asked[-1].headers["x-vexa-internal-mcp-identity"] == "v1.s.t"
+    assert asked[-1].headers["x-api-key"] == "vxd_a.b.c"

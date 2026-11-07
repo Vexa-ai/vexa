@@ -6,7 +6,7 @@ import { type CSSProperties, type KeyboardEvent } from "react";
 import { Command } from "cmdk";
 import { useService, useStore, CommandServiceId } from "../platform";
 import { PaletteServiceId } from "./palette";
-import { LayoutServiceId } from "./layout";
+import { LayoutServiceId } from "../platform/layout";
 import { registry } from "../contributions";
 
 const overlay: CSSProperties = { position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: "12vh", zIndex: 1000 };

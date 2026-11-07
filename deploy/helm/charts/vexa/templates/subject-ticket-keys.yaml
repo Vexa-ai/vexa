@@ -1,0 +1,80 @@
+{{- /*
+subject-ticket.v1 — the ticket producers' Ed25519 keypairs.
+
+A flows call that acts for a person passes the gateway's service door only with a ticket the
+producer of that person's fact signed: meeting-api (`meetings`), agent-api (`agent`), the flows
+mail intake (`mail`, read by flows-mailbox and the worker's mailbox sensor). Each producer's PRIVATE
+key is its own Secret below, mounted by that producer alone. The PUBLIC halves are the
+subject-ticket-verify-keys ConfigMap, `<issuer>.pem`, mounted by the gateway alone; the gateway's
+own tickets are signed with its identity key. Nothing renders without flows: there is no door then,
+and nobody to present a ticket to.
+
+Generated once, then reused — the lifecycle of identity-keys.yaml and fact-seal-keys.yaml: an
+explicit subjectTickets.<issuer>.signingKey wins, then the key the release's Secret already holds
+(lookup, so an upgrade keeps it), and only a brand-new install mints one. Each Secret is kept
+through an uninstall (resource-policy). `helm template` cannot look a Secret up and mints new pairs
+on every render — set subjectTickets.<issuer>.signingKey, or subjectTickets.<issuer>.existingSecret
+with subjectTickets.<issuer>.publicKey, when a GitOps tool renders the chart.
+
+The public key is DERIVED from the private key on every render (the self-signed-certificate lift
+identity-keys.yaml documents), so the two never disagree.
+*/}}
+{{- if .Values.flows.enabled }}
+{{- $issuers := list }}
+{{- if .Values.meetingApi.enabled }}{{ $issuers = append $issuers (list "meetings" "meeting-api") }}{{ end }}
+{{- if .Values.agentApi.enabled }}{{ $issuers = append $issuers (list "agent" "agent-api") }}{{ end }}
+{{- $issuers = append $issuers (list "mail" "flows-worker") }}
+{{- $publics := dict }}
+{{- range $pair := $issuers }}
+{{- $iss := index $pair 0 }}
+{{- $cfg := index $.Values.subjectTickets $iss | default dict }}
+{{- if $cfg.existingSecret }}
+{{- $_ := set $publics $iss (required (printf "subjectTickets.%s.publicKey is required with subjectTickets.%s.existingSecret — the PEM public key of the Secret's signing-key.pem (`openssl pkey -in signing-key.pem -pubout`)" $iss $iss) $cfg.publicKey | trim) }}
+{{- else }}
+{{- $signingName := include "vexa.componentName" (list $ (printf "subject-ticket-%s-key" $iss)) }}
+{{- $pem := $cfg.signingKey | default "" }}
+{{- if not $pem }}
+{{- $existing := (lookup "v1" "Secret" $.Release.Namespace $signingName).data | default dict }}
+{{- if hasKey $existing "signing-key.pem" }}
+{{- $pem = index $existing "signing-key.pem" | b64dec }}
+{{- end }}
+{{- end }}
+{{- if not $pem }}
+{{- $pem = genPrivateKey "ed25519" }}
+{{- end }}
+{{- $cert := genSelfSignedCertWithKey (printf "vexa-subject-ticket-%s" $iss) nil nil 1 $pem }}
+{{- $der := $cert.Cert | replace "-----BEGIN CERTIFICATE-----" "" | replace "-----END CERTIFICATE-----" "" | nospace | b64dec }}
+{{- $spki := "\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00" }}
+{{- $pub := (split $spki $der)._1 | trunc 32 }}
+{{- if ne (len $pub) 32 }}
+{{- fail (printf "subjectTickets.%s.signingKey must be an Ed25519 private key in PKCS#8 PEM (`openssl genpkey -algorithm ed25519`), or empty to generate one" $iss) }}
+{{- end }}
+{{- $_ := set $publics $iss (printf "-----BEGIN PUBLIC KEY-----\n%s\n-----END PUBLIC KEY-----" (printf "%s%s" $spki $pub | b64enc)) }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $signingName }}
+  labels:
+    {{- include "vexa.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ index $pair 1 }}
+  annotations:
+    helm.sh/resource-policy: keep
+type: Opaque
+data:
+  signing-key.pem: {{ $pem | b64enc }}
+---
+{{- end }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vexa.componentName" (list . "subject-ticket-verify-keys") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+data:
+  {{- range $iss := keys $publics | sortAlpha }}
+  {{ $iss }}.pem: |
+    {{- index $publics $iss | nindent 4 }}
+  {{- end }}
+{{- end }}

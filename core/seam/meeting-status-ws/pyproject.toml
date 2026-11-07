@@ -16,6 +16,9 @@ dependencies = [
     "python-multipart>=0.0.9",
     "pytest>=8",
     "pytest-asyncio>=0.23,<2",
+    # gateway-identity.v1: the gateway and meeting-api sources this suite imports sign and verify
+    # with Ed25519 (cryptography). Apache-2.0 OR BSD-3-Clause.
+    "cryptography>=50.0.1,<51",
 ]
 
 [tool.uv]

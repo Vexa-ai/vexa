@@ -140,8 +140,8 @@ def test_a_2xx_answer_is_the_ordinary_path(monkeypatch, code):
 
 
 def test_the_room_still_rides_the_same_post(monkeypatch):
-    """The half a stricter dispatch would break: the meeting-room fields and the internal-tier
-    header are unchanged."""
+    """The half a stricter dispatch would break: the meeting-room fields are unchanged, and the post
+    carries the flows key and the subject through the service door — never the internal secret."""
     sent: list = []
 
     def fake_http(method, url, headers, body=None, timeout=20):
@@ -151,12 +151,14 @@ def test_the_room_still_rides_the_same_post(monkeypatch):
         return 200, {"ok": True}
 
     monkeypatch.setattr(ag, "http", fake_http)
-    monkeypatch.setattr(ag, "require_internal_secret", lambda: "internal-tier-secret")
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "flows-service-key-0001")
     ag.dispatch_turn("7", "main", "go",
                      room={"meeting_id": 41, "read": ["a@b.test"],
                            "names": {"a@b.test": "A B"}, "read_max": 12})
     headers, body = sent[0]
-    assert headers["X-Internal-Secret"] == "internal-tier-secret"
+    assert headers["X-Vexa-Service-Key"] == "flows-service-key-0001"
+    assert headers["X-User-Id"] == "7"
+    assert "X-Internal-Secret" not in headers
     assert body["room_meeting_id"] == "41"
     assert body["room_participants"] == ["a@b.test"]
     assert body["room_participant_names"] == {"a@b.test": "A B"}
@@ -193,3 +195,43 @@ def test_the_desk_probes_say_when_they_could_not_read(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert out.count("warning: swallowed") == 2
     assert "flows_steps.agent.head_sha" in out and "flows_steps.agent.head_subjects" in out
+
+
+# ── a turn flows dispatches runs with nobody in the loop ─────────────────────────────────────────
+def _headers_of_post(monkeypatch):
+    seen: dict = {}
+
+    def fake_http(method, url, headers, body=None, timeout=20):
+        if url.endswith("/history"):
+            return 200, {"turns": []}
+        seen["headers"] = dict(headers)
+        return 200, {"ok": True}
+    monkeypatch.setattr(ag, "http", fake_http)
+    return seen
+
+
+@pytest.mark.parametrize("named", [{"flow": "email_chat", "step": "feedback_turn"},
+                                   {"flow": "post_meeting", "step": "process_meeting"},
+                                   {"flow": "onboarding", "step": "open_onboarding"}, {}])
+def test_every_turn_flows_dispatches_runs_unattended(monkeypatch, named):
+    """Nobody typed a turn flows posts — an email reply, a meeting kick, an onboarding opening — so
+    agent-api must run it in the `autonomous` regime, which it believes only from the internal tier —
+    reached through the gateway's service door with the flows key. Without the regime header the
+    turn ran as though its person were watching."""
+    seen = _headers_of_post(monkeypatch)
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "flows-service-key-0001")
+    ag.dispatch_turn("7", "main", "go", **named)
+    assert seen["headers"]["X-Vexa-Flow-Regime"] == "autonomous"
+    assert seen["headers"]["X-Vexa-Service-Key"] == "flows-service-key-0001", \
+        "the regime is believed only through the service door"
+    assert "X-Internal-Secret" not in seen["headers"]
+    assert seen["headers"]["X-User-Id"] == "7"
+
+
+def test_a_thread_busy_with_its_persons_turn_is_retried_later(monkeypatch):
+    """An unattended turn waits for the person's running turn in the same thread (agent-api answers
+    409 `thread_busy`): that is a moment, not a fact about the call, so the step is retried."""
+    _wire(monkeypatch, post=lambda m, u: (409, {"detail": {"refused": "thread_busy"}}))
+    with pytest.raises(StepError) as e:
+        ag.dispatch_turn("7", "main", "go", flow="email_chat", step="feedback_turn")
+    assert e.value.retryable is True

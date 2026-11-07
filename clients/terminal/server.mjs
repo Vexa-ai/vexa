@@ -7,20 +7,68 @@
 // header (key stays server-side, never in any client-visible URL), and pipes
 // frames bidirectionally. The browser connects KEYLESS to same-origin `/ws`.
 //
-// The key injected here is the SAME per-user key the REST proxy forwards
-// (src/app/api/proxyAuth.ts): the logged-in user's APIToken from the `vexa-token`
-// cookie, falling back to VEXA_API_KEY / VEXA_BOT_API_KEY. This MUST match the REST
+// An upgrade is taken only from this terminal's own pages (Origin same-origin or the configured
+// public origin), and a voice note's audio socket only with the session cookie
+// (src/app/api/socketUpgrade.mjs).
+//
+// The key injected on `/ws` is the SAME per-user key the REST proxy forwards
+// (src/app/api/proxyAuth.ts): the signed-in person's token from the `vexa-token` cookie, and
+// for a request without one nothing (the upgrade is refused) unless zero-login is on — one rule,
+// src/app/api/auth/deploymentKey.mjs. This MUST match the REST
 // side — the gateway auto-subscribes the socket to `u:{user_id}:meetings` from this
 // key, so a mismatched key would deliver another user's live meeting.status frames
 // (or none), freezing the client's meeting list at its last REST snapshot.
 import { createServer } from "node:http";
+import { join } from "node:path";
 import nextEnv from "@next/env";
 import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
+import { authSecretStartupError } from "./src/app/api/auth/authSecret.mjs";
+import { signinConfigStartupError, signinSchemeStartupWarning } from "./src/app/api/auth/oidcConfig.mjs";
+import { stampClientAddress, trustedProxies } from "./src/app/api/auth/clientAddress.mjs";
+import { isImageOptimizerPath, refuseImageOptimizer } from "./src/app/api/imageOptimizer.mjs";
+import { applyFallbackPolicy } from "./src/app/api/responsePolicy.mjs";
+import { canvasDoorRefusal, refuse, terminalDoorRefusal } from "./src/app/api/frameDoor.mjs";
+import { canvasOrigin, canvasPort, canvasStartupError, canvasStartupWarning } from "./src/app/canvasOrigin.mjs";
+import { refuseUpgrade, upgradeRefusal, upstreamKey } from "./src/app/api/socketUpgrade.mjs";
+import { wsUpstream } from "./src/app/api/wsUpstream.mjs";
 
 const dev = process.env.NODE_ENV !== "production";
 const { loadEnvConfig } = nextEnv;
 loadEnvConfig(process.cwd(), dev);
+
+// The signing secret is checked before anything else starts: an unset, short, or published
+// NEXTAUTH_SECRET signs nothing anybody should trust, so the terminal does not run with one.
+const secretError = authSecretStartupError(process.env);
+if (secretError) {
+  console.error(`[terminal] refusing to start: ${secretError}`);
+  process.exit(1);
+}
+
+// The sign-in doors, likewise: a generic OIDC issuer set without the client, secret or a readable CA
+// bundle it needs, or a VEXA_SIGNIN_METHODS naming a door that does not exist, is a deploy whose
+// login is not what the operator wrote. Refuse and name the key (oidcConfig.mjs).
+const signinError = signinConfigStartupError(process.env);
+if (signinError) {
+  console.error(`[terminal] refusing to start: ${signinError}`);
+  process.exit(1);
+}
+const schemeWarning = signinSchemeStartupWarning(process.env);
+if (schemeWarning) console.warn(schemeWarning);
+
+// The Meeting Canvas origin (src/app/canvasOrigin.mjs): a value that cannot be served, or one with no
+// terminal origin to let frame it, is refused by name; unset, the canvas shares this origin, and the
+// operator is told so.
+const canvasError = canvasStartupError(process.env);
+if (canvasError) {
+  console.error(`[terminal] refusing to start: ${canvasError}`);
+  process.exit(1);
+}
+const CANVAS_ORIGIN = canvasOrigin(process.env);
+const CANVAS_HOST = CANVAS_ORIGIN ? new URL(CANVAS_ORIGIN).host.toLowerCase() : "";
+const CANVAS_PORT = CANVAS_ORIGIN ? canvasPort(process.env) : 0;
+const canvasWarning = canvasStartupWarning(process.env);
+if (canvasWarning) console.warn(canvasWarning);
 
 const port = parseInt(process.env.PORT || "3000", 10);
 const hostname = process.env.HOST || "0.0.0.0";
@@ -32,29 +80,6 @@ const GATEWAY_URL = (process.env.GATEWAY_URL || "ws://127.0.0.1:18056")
 // The httpOnly cookie carrying the logged-in user's APIToken (set by /api/auth/login).
 // Mirrors AUTH_COOKIE in src/app/api/auth/adminApi.ts.
 const AUTH_COOKIE = process.env.VEXA_AUTH_COOKIE_NAME || "vexa-token";
-
-/** Resolve the x-api-key to send upstream on the `/ws` upgrade, PER REQUEST. The gateway resolves the
- *  user_id from this key at connect and auto-subscribes the socket to `u:{user_id}:meetings` — so it MUST
- *  be the same per-user key the REST proxy forwards (src/app/api/proxyAuth.ts), else the live meeting.status
- *  frames land on a different user's channel and the client's list never advances past its last snapshot.
- *  Resolution mirrors proxyAuth.ts: cookie token → VEXA_API_KEY → VEXA_BOT_API_KEY → "". */
-function resolveUpstreamKey(req) {
-  const cookieToken = readCookie(req.headers.cookie, AUTH_COOKIE);
-  return cookieToken || process.env.VEXA_API_KEY || process.env.VEXA_BOT_API_KEY || "";
-}
-
-/** Pull a single cookie value out of a raw `Cookie` header. Returns undefined if absent. */
-function readCookie(header, name) {
-  if (!header) return undefined;
-  for (const part of header.split(";")) {
-    const eq = part.indexOf("=");
-    if (eq < 0) continue;
-    if (part.slice(0, eq).trim() === name) {
-      return decodeURIComponent(part.slice(eq + 1).trim());
-    }
-  }
-  return undefined;
-}
 
 process.on("unhandledRejection", (reason) => {
   logError("unhandled promise rejection", reason);
@@ -69,17 +94,48 @@ const handle = app.getRequestHandler();
 
 await app.prepare();
 
-const server = createServer((req, res) => {
+// The client address routes may trust (rate limits): the TCP peer, or the address a proxy appended
+// to X-Forwarded-For when the peer is loopback or a TERMINAL_TRUSTED_PROXIES address or range.
+const TRUSTED_PROXIES = trustedProxies(process.env);
+
+// The build's own files, the one thing besides the frame document the canvas host serves.
+const DOOR = { staticDir: join(process.cwd(), ".next", "static"), dev, canvasConfigured: Boolean(CANVAS_ORIGIN) };
+
+/** Whether a request is for the canvas host: it came in on the canvas listener, or names its host. */
+function forCanvas(req, viaCanvasPort) {
+  if (!CANVAS_ORIGIN) return false;
+  return viaCanvasPort || String(req.headers.host || "").toLowerCase() === CANVAS_HOST;
+}
+
+const handleRequest = (viaCanvasPort) => (req, res) => {
+  // THE FRONT DOOR (src/app/api/frameDoor.mjs), before any route or log sees the URL: the canvas host
+  // serves its frame and the build's files and nothing else; the terminal is never framed by, and
+  // serves no code to, another origin.
+  const refusal = forCanvas(req, viaCanvasPort) ? canvasDoorRefusal(req, DOOR) : terminalDoorRefusal(req, DOOR);
+  if (refusal) return refuse(res, refusal);
+  stampClientAddress(req, TRUSTED_PROXIES);
+  // A response its route gave no Content-Security-Policy leaves with the one for its path
+  // (src/app/api/responsePolicy.mjs): the API, the /b/ proxy, build assets and public files.
+  applyFallbackPolicy(req, res);
+  // The optimizer is off; answered here so Next never sets up its cache for it (src/app/api/imageOptimizer.mjs).
+  if (isImageOptimizerPath(req.url)) return refuseImageOptimizer(res);
   Promise.resolve(handle(req, res)).catch((err) => {
     logError("request handler failed", err);
     sendProxyError(res);
   });
-});
+};
+
+const server = createServer(handleRequest(false));
 
 // Browser-facing WS server — we do the upgrade ourselves (noServer) only for `/ws`.
 const wss = new WebSocketServer({ noServer: true });
 
 server.on("upgrade", (req, socket, head) => {
+  // The canvas host relays no socket.
+  if (forCanvas(req, false)) {
+    socket.destroy();
+    return;
+  }
   let pathname;
   try {
     pathname = new URL(req.url, `http://${req.headers.host}`).pathname;
@@ -87,17 +143,35 @@ server.on("upgrade", (req, socket, head) => {
     socket.destroy();
     return;
   }
-  if (pathname !== "/ws") {
+  // `/ws` is the meetings multiplex; `/voice-notes/{id}/stream` is a voice note's audio socket
+  // (#1783) — the browser streams its microphone through it to the gateway, keyless, like `/ws`;
+  // `/bot-accounts/sessions/<id>/vnc` is a browser session's live view (ADR-0049). Other
+  // `/bot-accounts/` shapes are refused (src/app/api/wsUpstream.mjs).
+  const routed = wsUpstream(pathname);
+  if (!routed) {
     // Let Next/HMR handle its own upgrades (e.g. `_next/webpack-hmr` in dev).
     return;
   }
+  if (routed.refuse) {
+    socket.destroy();
+    return;
+  }
+  const upstreamPath = routed.path;
+  // Only this terminal's own pages, and a voice note only with the session cookie.
+  const refusal = upgradeRefusal(req, upstreamPath, process.env, AUTH_COOKIE);
+  if (refusal) {
+    refuseUpgrade(socket, refusal);
+    return;
+  }
   // Resolve the per-user key from THIS request's cookie before the upgrade completes (req.headers are
-  // gone once we hand off to the WS client). Falls back to the env keys for keyless / single-key deploys.
-  const apiKey = resolveUpstreamKey(req);
+  // gone once we hand off to the WS client). `/ws` falls back to the env keys for single-key deploys;
+  // the gateway resolves the user_id from it and auto-subscribes the socket to `u:{user_id}:meetings`,
+  // so it MUST match the REST proxy's key (src/app/api/proxyAuth.ts).
+  const apiKey = upstreamKey(req, upstreamPath, process.env, AUTH_COOKIE);
   let closeOnSocketError = () => endSocket(socket);
   attachSocketError(socket, "client upgrade", () => closeOnSocketError());
   wss.handleUpgrade(req, socket, head, (client) => {
-    closeOnSocketError = proxyToGateway(client, socket, apiKey);
+    closeOnSocketError = proxyToGateway(client, socket, apiKey, upstreamPath);
   });
 });
 
@@ -114,8 +188,8 @@ wss.on("error", (err) => {
   logError("websocket server error", err);
 });
 
-function proxyToGateway(client, clientSocket, apiKey) {
-  const target = `${GATEWAY_URL}/ws`;
+function proxyToGateway(client, clientSocket, apiKey, upstreamPath = "/ws") {
+  const target = `${GATEWAY_URL}${upstreamPath}`;
   const upstream = new WebSocket(target, {
     headers: apiKey ? { "x-api-key": apiKey } : {},
   });
@@ -242,5 +316,20 @@ function logError(scope, err) {
 
 server.listen(port, hostname, () => {
   // eslint-disable-next-line no-console
-  console.log(`> Terminal ready on http://${hostname}:${port} (WS proxy /ws -> ${GATEWAY_URL}/ws)`);
+  console.log(`> Terminal ready on http://${hostname}:${port} (WS proxy /ws, /voice-notes/*/stream -> ${GATEWAY_URL})`);
 });
+
+// The canvas host on a port of its own (compose, Lite): every request here is the canvas host's.
+if (CANVAS_PORT) {
+  const canvasServer = createServer(handleRequest(true));
+  canvasServer.on("upgrade", (_req, socket) => socket.destroy());
+  canvasServer.on("clientError", (err, socket) => endSocket(socket));
+  canvasServer.on("error", (err) => logError("canvas server error", err));
+  canvasServer.listen(CANVAS_PORT, hostname, () => {
+    // eslint-disable-next-line no-console
+    console.log(`> Meeting Canvas frame on http://${hostname}:${CANVAS_PORT} (public origin ${CANVAS_ORIGIN})`);
+  });
+} else if (CANVAS_ORIGIN) {
+  // eslint-disable-next-line no-console
+  console.log(`> Meeting Canvas frame served for Host ${CANVAS_HOST} (public origin ${CANVAS_ORIGIN})`);
+}

@@ -14,7 +14,6 @@ import importlib
 import os
 from urllib.parse import parse_qs, urlparse
 
-import agent_half
 import flows_defs.production as production
 import flows_steps.common as common
 import flows_steps.mailtext as mailtext
@@ -22,6 +21,23 @@ import flows_steps.notify as notify_mod
 import flows_config
 import pytest
 from flows import Done, Reaction, Registry, StepCtx, StepError
+
+
+@pytest.fixture(autouse=True)
+def _person_settings_are_declared(monkeypatch):
+    """THIS TEST PROCESS HAS AN IDENTITY DOMAIN, the way `conftest` gives it a flows key — and for
+    the same reason, one door along.
+
+    `person_settings` used to answer the DEFAULTS on any failure, so every test in this file that
+    reached `setting()` without saying so got them from a swallowed exception: there is no identity
+    service here, `require_service_key` refuses, and the broad `except` turned that into "this
+    person prefers the defaults". 0.12.27 makes an unreachable identity RETRYABLE instead
+    (`SettingsUnavailable`), so a test standing on that swallow now fails — correctly. The suite
+    declares what a deployment declares. Tests that are ABOUT a preference still set their own;
+    this is the baseline underneath them."""
+    common.forget_person_settings()
+    monkeypatch.setattr(common, "person_settings", lambda uid: dict(common._SETTING_DEFAULTS))
+
 
 
 class FakeChannel:
@@ -106,26 +122,6 @@ def scaffolds(monkeypatch):
     fake = FakeScaffolds()
     monkeypatch.setattr(production, "mint_scaffold", fake)
     return fake
-
-
-@pytest.fixture(autouse=True)
-def _person_settings_are_declared(monkeypatch):
-    """THIS TEST PROCESS HAS AN IDENTITY DOMAIN, the way `conftest._admin_key_present` gives it an
-    admin key — and for the same reason, one door along.
-
-    `person_settings` used to answer the DEFAULTS on any failure, so every test in this file that
-    reached `setting()` without saying so got them from a swallowed exception: there is no identity
-    service here, `require_internal_secret` refuses, and the broad `except` turned that into "this
-    person prefers the defaults". That is a test standing on the very behaviour R-P7 removed — an
-    unconfigured read and an unreachable one answering the same thing as a real preference.
-
-    Now the read raises, so the suite declares what a deployment declares. The tests that are ABOUT
-    a preference still set their own (`monkeypatch.setattr(production, "setting", …)`); this is the
-    baseline underneath them.
-    """
-    common.forget_person_settings()
-    monkeypatch.setattr(common, "person_settings",
-                        lambda uid: dict(common._SETTING_DEFAULTS))
 
 
 @pytest.fixture(autouse=True)
@@ -229,7 +225,6 @@ def test_email_minutes_still_obeys_the_person_switch(monkeypatch):
     assert ch.sent == []
 
 
-@agent_half.required
 def test_prepare_meeting_sends_five_plain_lines_and_the_prep_link(monkeypatch, scaffolds):
     reg, ch = _rig()
     monkeypatch.setattr(production, "setting",
@@ -251,7 +246,6 @@ def test_prepare_meeting_sends_five_plain_lines_and_the_prep_link(monkeypatch, s
     assert len(notify_mod.compose(msg["body"], msg["link"]).strip().splitlines()) <= 5
 
 
-@agent_half.required
 def test_prepare_meeting_obeys_mail_prep(monkeypatch):
     reg, ch = _rig()
     monkeypatch.setattr(production, "setting",
@@ -262,7 +256,6 @@ def test_prepare_meeting_obeys_mail_prep(monkeypatch):
     assert ch.sent == []
 
 
-@agent_half.required
 def test_prepare_meeting_resolves_the_row_id_from_the_url(monkeypatch, scaffolds):
     """No meeting_id in refs — the step asks the platform which row this url is, because the
     terminal deeplink names a ROW, and an invite carries only the meeting url."""
@@ -288,19 +281,14 @@ def test_the_prep_fact_is_emitted_inside_invite_intake():
     # `emit_prep`, which is a test failing on something it is not about.
     newest = max(v for (n, v) in reg.flows if n == "invite_intake")
     steps = reg.get("invite_intake", newest).steps
-    assert steps.index("emit_prep") < steps.index("await_start")
+    # VERSION 4 (ADR-0050): the intake ends at the prep; the bot is `invite_join`'s keyed schedule
+    assert steps[-1] == "emit_prep" and "await_start" not in steps
+    from flows_defs.production import SEEDS
+    assert next(d for d in SEEDS if d["name"] == "invite_join")["steps"][1] == "dispatch_bot"
     # DECISION 29: three touches and no others — RSVP accept, the ack mail, the prepare mail.
     assert "spawn_onboardings" not in steps
     assert ("onboard_person", 1) not in reg.flows and ("onboard_group", 1) not in reg.flows
-    # THE CONSUMER OF THE FACT is `meeting_prep`, and it lives in the optional
-    # `flows_defs/production_agent.py` — so the emit above is asserted in every tree and the
-    # subscription only where the module is. A deployment with no agent half emits `meeting.upcoming`
-    # and nothing reacts to it, which is `admit()`'s documented zero-flow case and not a defect: the
-    # prepare touch IS an agent conversation, and there is nothing for it to degrade to.
-    if agent_half.PRESENT:
-        assert reg.get("meeting_prep", 1).on.name == "meeting.upcoming"
-    else:
-        assert not [n for (n, _v) in reg.flows if n in agent_half.FLOWS]
+    assert reg.get("meeting_prep", 1).on.name == "meeting.upcoming"
     emitted = []
     ctx = _ctx({"ics_uid": "u-1", "organizer": "a@b.test"},
                {"ensure_user": {"uid": "7"}})
@@ -488,7 +476,8 @@ def _mint_rig(monkeypatch, status, body):
         calls.append({"method": method, "url": url, "headers": headers, "body": payload})
         return status, body
 
-    monkeypatch.setenv("VEXA_INTERNAL_SECRET", "internal-tier-secret-for-tests")
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "flows-service-key-for-tests")
+    monkeypatch.setenv("INTERNAL_API_SECRET", "internal-tier-secret-flows-must-not-send")
     monkeypatch.setattr(common, "http", fake_http)
     return calls
 
@@ -501,9 +490,10 @@ def test_mint_scaffold_posts_the_record_and_returns_the_url(monkeypatch):
     assert url == "https://app.test/?s=abc"
     call = calls[0]
     assert call["method"] == "POST" and call["url"].endswith("/internal/scaffolds")
-    # THE INTERNAL TIER. A browser client through the gateway holds no such secret and therefore
-    # cannot mint a scaffold for anybody — the same gate the meeting room uses.
-    assert call["headers"]["X-Internal-Secret"] == "internal-tier-secret-for-tests"
+    # THE SERVICE DOOR. A browser client through the gateway holds no flows key and therefore
+    # cannot mint a scaffold for anybody; flows reaches the internal route only through the door,
+    # and never presents the internal secret itself.
+    assert call["headers"] == {"X-Vexa-Service-Key": "flows-service-key-for-tests"}
     assert call["body"] == {"who": "anna@bank.test", "kind": "prep", "opening": "prep",
                             "meeting": "41", "refs": {"title": "Pilot sync"},
                             "provenance": {"flow": "meeting_prep", "minted_by": "7"}}
@@ -540,12 +530,14 @@ def test_mint_returns_the_token_and_asks_by_row_id(monkeypatch):
     import flows_steps.meeting as mt
 
     calls = []
-    monkeypatch.setattr(mt, "user_api_key", lambda uid: "k")
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "flows-service-key-for-tests")
     monkeypatch.setattr(mt, "http", lambda m, url, h, b=None, **kw:
-                        (calls.append((m, url, b)) or (200, {"token": "97.tok", "id": "g1"})))
+                        (calls.append((m, url, h, b)) or (200, {"token": "97.tok", "id": "g1"})))
     assert mt.mint_transcript_share("7", 97, "ben@bank.test") == "97.tok"
-    method, url, body = calls[0]
+    method, url, headers, body = calls[0]
     assert method == "POST" and url.endswith("/meetings/97/share")
+    # the grant is written AS the meeting's owner, named through the service door — no minted key
+    assert headers == {"X-Vexa-Service-Key": "flows-service-key-for-tests", "X-User-Id": "7"}
     assert body["mode"] == "restricted" and body["allowed_emails"] == ["ben@bank.test"]
 
 
@@ -561,7 +553,6 @@ def test_mint_never_swallows_a_non_token_answer(monkeypatch, status, body, retry
     `except Exception` never fired and the mail shipped without a capability."""
     import flows_steps.meeting as mt
 
-    monkeypatch.setattr(mt, "user_api_key", lambda uid: "k")
     monkeypatch.setattr(mt, "http", lambda *a, **k: (status, body))
     with pytest.raises(mt.ShareMintError) as e:
         mt.mint_transcript_share("7", 97, "ben@bank.test")

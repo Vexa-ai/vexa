@@ -126,7 +126,9 @@ def test_second_delete_never_re_stops_a_pre_active_bot():
         published = len(pub.published)
 
         second = TestClient(app).delete(f"/bots/google_meet/once-{stage}", headers={"x-user-id": "7"})
-        assert second.status_code == 404, f"{stage}: a redelivered stop must not re-trigger"
+        # idempotent: the redelivery succeeds and says the stop is already under way
+        assert second.status_code == 200, f"{stage}: {second.text}"
+        assert second.json()["status"] == "already_stopping", second.json()
         assert len(pub.published) == published, f"{stage}: second DELETE re-published a leave command"
 
 
@@ -232,10 +234,9 @@ def test_a_sibling_spawned_after_the_stop_is_still_evicted():
     ).status_code == 200
     published = len(pub.published)
 
-    # nothing new → the redelivery guard holds
-    assert TestClient(app).delete(
-        "/bots/google_meet/late", headers={"x-user-id": "7"}
-    ).status_code == 404
+    # nothing new → the redelivery guard holds (an idempotent success, no second leave)
+    again = TestClient(app).delete("/bots/google_meet/late", headers={"x-user-id": "7"})
+    assert again.status_code == 200 and again.json()["status"] == "already_stopping", again.text
     assert len(pub.published) == published
 
     # a fresh sibling arrives → the stop reaches it
@@ -279,3 +280,87 @@ def test_stop_marks_a_row_that_has_no_session_yet():
     assert r.status_code == 200, r.text
     rows = {row["id"]: row for row in asyncio.run(repo.find_active_rows(7, "google_meet", "nosess"))}
     assert (rows[sessionless["id"]]["data"] or {}).get("stop_requested") is True
+
+
+def test_stop_answers_before_the_booting_workload_teardown_finishes():
+    """The stop is ACCEPTED once the intent is persisted and the leave is published; tearing a
+    booting bot's workload down waits out the runtime's SIGTERM grace (up to
+    RUNTIME_STOP_GRACE_SEC + 5 s) and must not hold the answer. Held, it outlived the MCP edge's
+    10 s upstream timeout: `stop_bot` reported 504 for a stop that had already worked."""
+    from meeting_api.bot_spawn.fakes import FakeRuntimeClient
+
+    order: list[str] = []
+
+    class SlowTeardownRuntime(FakeRuntimeClient):
+        async def delete_workload(self, workload_id):
+            order.append("teardown")
+            await super().delete_workload(workload_id)
+
+    repo, pub = InMemoryMeetingRepo(), InMemoryCommandPublisher()
+    runtime = SlowTeardownRuntime()
+    app = create_app(meeting_repo=repo, command_publisher=pub, runtime=runtime)
+    m = _seed(repo, user_id=7, platform="google_meet", native="slow", status="awaiting_admission")
+    asyncio.run(repo.set_bot_container(meeting_id=m["id"], bot_container_id="wl-slow"))
+
+    async def call():
+        scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+                 "method": "DELETE", "scheme": "http", "path": "/bots/google_meet/slow",
+                 "raw_path": b"/bots/google_meet/slow", "root_path": "", "query_string": b"",
+                 "headers": [(b"x-user-id", b"7"), (b"host", b"test")],
+                 "client": ("test", 1), "server": ("test", 80)}
+        sent = False
+
+        async def receive():
+            nonlocal sent
+            if not sent:
+                sent = True
+                return {"type": "http.request", "body": b"", "more_body": False}
+            await asyncio.sleep(3600)
+
+        async def send(message):
+            if message["type"] == "http.response.start":
+                order.append(f"status:{message['status']}")
+            elif message["type"] == "http.response.body" and not message.get("more_body"):
+                order.append("answered")
+
+        await app(scope, receive, send)
+
+    asyncio.run(call())
+    assert runtime.deleted == ["wl-slow"], "the booting workload must still be torn down"
+    assert order.index("answered") < order.index("teardown"), (
+        f"the stop held its answer for the workload teardown ({order}) — behind the runtime's "
+        f"stop grace that is longer than the MCP edge waits, so a stop that worked reads as a 504"
+    )
+
+
+# ── stop is idempotent (friction 2026-10-13: stop_bot answered 404 for a bot already gone) ───────
+
+
+def test_stopping_a_meeting_that_already_ended_answers_success_with_its_status():
+    """An agent that stops a bot which has already left — the meeting ended, the person pressed
+    Stop first, a retry after a timeout — was told 404 "No active meeting", and read that as
+    "this meeting does not exist". The meeting exists and is stopped: say so, as a success."""
+    for terminal in ("completed", "failed"):
+        repo, pub = InMemoryMeetingRepo(), InMemoryCommandPublisher()
+        app = create_app(meeting_repo=repo, command_publisher=pub)
+        m = _seed(repo, user_id=7, platform="google_meet", native=f"done-{terminal}", status="active")
+        asyncio.run(repo.update_meeting_status(session_uid=f"sess-{m['id']}", status=terminal))
+
+        r = TestClient(app).delete(f"/bots/google_meet/done-{terminal}", headers={"x-user-id": "7"})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["status"] == "already_stopped"
+        assert body["meeting_status"] == terminal
+        assert body["meeting_id"] == m["id"]
+        assert body["native_meeting_id"] == f"done-{terminal}"
+        assert body["also_stopped"] == [] and body["cancelled"] == []
+        assert not pub.published, "an already-stopped meeting must not get a leave command"
+
+
+def test_an_already_stopped_meeting_of_another_user_is_still_404():
+    repo, pub = InMemoryMeetingRepo(), InMemoryCommandPublisher()
+    app = create_app(meeting_repo=repo, command_publisher=pub)
+    m = _seed(repo, user_id=7, platform="google_meet", native="theirs", status="active")
+    asyncio.run(repo.update_meeting_status(session_uid=f"sess-{m['id']}", status="completed"))
+    r = TestClient(app).delete("/bots/google_meet/theirs", headers={"x-user-id": "8"})
+    assert r.status_code == 404

@@ -13,7 +13,7 @@ requires one only when `cardinality` is `exactly_once_per_subject`) — the case
 pinned is that recurrence is the point, so nothing here claims a durable dedup guarantee it does
 not hold.
 
-**Seven goldens for seven carriers, and the last three were the gap.** `gate:schema` validates the
+**One golden per carrier — eight of each today, and the three added at seven were the gap.** `gate:schema` validates the
 live census as one document plus whatever is in this folder, so four goldens over seven registered
 carriers meant three shapes were pinned only by the census — and a census entry is the thing under
 change, not the reference the change is checked against (P8: the L1–L2 spec was red for exactly
@@ -25,6 +25,17 @@ this). The three that were missing each carry a distinct case:
 | `Carrier.desk-unscaffolded.json` | `exactly_once_per_subject` whose stamp is **not a column** (the desk on disk), and the first `published_by: "private"` entry |
 | `Carrier.claim-proposed.json` | a two-ref `once_per_occurrence` carrier that is `private` and correctly carries no `stamp` |
 
+`Carrier.workspace-invited.json` (Vexa-ai/vexa#1632) is the eighth, and the case it pins is **the
+wide one**: nine refs on a `once_per_occurrence` carrier, correctly carrying no `stamp`. The
+temptation with a fact that ends in an irreversible-looking effect — a mail to a stranger — is to
+claim `exactly_once_per_subject` for it, which the schema would then require a durable stamp
+behind. There is none and there should be none: a second invite to the same address, after an
+expiry or at a different role, is a second occurrence and must mail again, and what stops one
+invite mailing twice is the `source_event_id` keyed to the invite rather than to the person.
+
+`FlowDefinition.user-routine.json` and `FlowDefinition.instance-event.json` pin the two triggers
+(ADR-0046): a person's schedule flow running `agent_run`, and the instance's event flow.
+
 A golden and its census entry must agree on the CONTRACT — owner, cardinality, refs, whether a
 stamp stands behind an exactly-once claim, and `published_by` — and `tests/test_carrier_census.py`
 checks exactly that, per carrier. Their prose may differ and in two cases does: the meeting
@@ -32,3 +43,12 @@ goldens carry the empty-room race on the calendar-intake path written out in ful
 census summarises it. That is a reference instance being more useful than the registry, not drift.
 
 _Governed by `docs/docs/governance/architecture.mdx` (P1–P12). This folder owns one concern; its public surface is its `index`/contract; it may depend only on what the dependency-rules allow._
+
+`Carrier.thread-message.json` (ADR-0046 decision 13) is the ninth: one agent writing to another. The
+case it pins is a carrier whose refs carry the facts a POLICY decides on (`shared`,
+`sender_routine`) beside the addresses, so the intake can refuse a message by naming the rule.
+
+`Carrier.crm-record-changed.json` (PRD 0.13.4 D8) is the first carrier owned by `crm`, and the case
+it pins is a fact whose REACH is not its subject: `uid` is the actor, and who else the fact reaches
+travels in the sealed event.v2 envelope beside the refs (`../../event.v2/`), never in the refs a
+caller controls.

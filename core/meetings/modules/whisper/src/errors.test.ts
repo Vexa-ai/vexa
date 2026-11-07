@@ -37,12 +37,12 @@ async function run() {
     check('402 → STT called exactly once (no retry storm)', calls() === 1, `calls=${calls()}`);
     check('402 → balance detail preserved', !!f?.detail && /balance/i.test(f.detail), f?.detail);
   }
-  // 503 — transient: unavailable, retryable, retried maxRetries+1 times.
+  // 503 — overload: unavailable, retryable, retried maxRetries+1 times behind the shared gate's pause.
   {
     const calls = stubFetch(503, 'upstream down');
-    const client = new TranscriptionClient({ serviceUrl: 'http://stt.test', maxRetries: 2, retryDelayMs: 1 });
+    const client = new TranscriptionClient({ serviceUrl: 'http://stt.test', maxRetries: 2, retryDelayMs: 1, overloadBackoffBaseMs: 1 });
     const f = await faultOf(() => client.transcribe(pcm, 'en'));
-    check('503 → kind=unavailable, retryable', f?.kind === 'unavailable' && f?.retryable === true);
+    check('503 → kind=unavailable, retryable, overloaded', f?.kind === 'unavailable' && f?.retryable === true && f?.overloaded === true);
     check('503 → retried (maxRetries+1 = 3 attempts)', calls() === 3, `calls=${calls()}`);
   }
   // 401 — bad token: unauthorized, non-retryable.
@@ -55,9 +55,16 @@ async function run() {
   // An unrelated 400 remains a non-retryable provider fault; only explicit verbose_json rejection negotiates.
   {
     const calls = stubFetch(400, 'unsupported audio encoding');
-    const client = new TranscriptionClient({ serviceUrl: 'http://stt.test', maxRetries: 3, retryDelayMs: 1 });
+    const client = new TranscriptionClient({ serviceUrl: 'http://stt.test', maxRetries: 3, retryDelayMs: 1, audioFormat: 'wav' });
     const f = await faultOf(() => client.transcribe(pcm, 'en'));
     check('unrelated 400 → bad_request without format fallback', f?.kind === 'bad_request' && calls() === 1, `calls=${calls()}`);
+  }
+  // A backend that refuses the FLAC upload is asked once more in WAV, then the 400 stands.
+  {
+    const calls = stubFetch(400, 'unsupported audio encoding');
+    const client = new TranscriptionClient({ serviceUrl: 'http://stt.test', maxRetries: 3, retryDelayMs: 1 });
+    const f = await faultOf(() => client.transcribe(pcm, 'en'));
+    check('a FLAC refusal falls back to WAV once (2 calls), then bad_request', f?.kind === 'bad_request' && calls() === 2, `calls=${calls()}`);
   }
 
   (globalThis as any).fetch = realFetch;

@@ -88,7 +88,8 @@ def _database_url() -> str:
     port = os.getenv("DB_PORT", "5432")
     name = os.getenv("DB_NAME", "vexa")
     user = os.getenv("DB_USER", "postgres")
-    password = os.getenv("DB_PASSWORD", "postgres")
+    # No fallback: the boot preflight has already refused an unset or published DB_PASSWORD.
+    password = os.environ["DB_PASSWORD"]
     return f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{name}"
 
 
@@ -105,6 +106,29 @@ def build_production_app():
     # fail-closed /internal/validate guard 503 every gateway validation hop, but the process would
     # otherwise come up green (the 2026-04-23 shape: 23 meetings failed while monitors stayed green).
     preflight()
+
+    # The two sign-in lists are not free strings: a malformed entry matches nothing, silently. Refuse
+    # the boot instead, naming the key and the entry, as preflight() does for a missing key.
+    from .app.signin_allow import boot_problems, open_to_everyone
+    from .config_preflight import ConfigError
+    from .app import admin_account
+    problems = boot_problems() + admin_account.boot_problems()
+    if problems:
+        raise ConfigError("admin-api refuses to boot — malformed sign-in configuration: "
+                          + "; ".join(problems))
+    from .app.main import capture_signal_default
+    try:
+        capture_signal_default()
+    except ValueError as e:
+        raise ConfigError(f"admin-api refuses to boot: {e}") from None
+    from .app.calendars import feed_allowance
+    try:
+        feed_allowance()
+    except ValueError as e:
+        raise ConfigError(f"admin-api refuses to boot: {e}") from None
+    if open_to_everyone():
+        logger.warning("VEXA_SIGNIN_ALLOW contains '*': ANY email address may sign in to this "
+                       "instance and get an account. Meant for dev/demo stacks only.")
 
     # F208: FLOWS_API_URL was the one flows publish-edge key spelled without the VEXA_ prefix
     # meeting-api and agent-api already used — a dogfood stage worker had to open each service's
@@ -144,8 +168,87 @@ def build_production_app():
         # absent must not be served by a process that assumes it. Not retried (see
         # _is_transient_connect_error) — it needs an operator, not a backoff.
         await _connect_with_retry(lambda: ensure_schema(app_db.get_engine(), Base))
+        await _announce_admin_claim()
+        await _warn_stored_open_signin()
+        await _warn_admin_account_state()
 
     return app
+
+
+async def _warn_admin_account_state() -> None:
+    """Say at boot what the admin account is (app/admin_account.py): none configured (nobody writes
+    `_global`), or a named address that already belongs to an everyday account — which is NOT turned
+    into the admin account, so the operator learns it here rather than from a refusal. Never fails
+    the boot, and never names more than the addresses the operator already wrote."""
+    from sqlalchemy import func
+    from sqlalchemy.future import select
+
+    from .app import admin_account
+    from .app import db as app_db
+    from .schema.models import User
+
+    names, _ = admin_account.designated()
+    if not names:
+        logger.info("%s is empty: there is no admin account, so nobody writes _global on this "
+                    "deployment (everybody reads it).", admin_account.ENV_KEY)
+        return
+    try:
+        async with app_db.session() as db:
+            rows = (await db.execute(
+                select(User.email, User.data).where(func.lower(User.email).in_(names)))).all()
+    except Exception as exc:  # noqa: BLE001 — a warning, never a boot failure
+        logger.warning("could not read the admin account's row at boot (%s)", type(exc).__name__)
+        return
+    conflicts = [str(e).lower() for e, d in rows if not admin_account.is_stamped(d)]
+    if conflicts:
+        logger.warning(admin_account.conflicts_message(conflicts))
+
+
+async def _warn_stored_open_signin() -> None:
+    """A `*` in the admin-edited sign-in list — stored before the setting refused it — is ignored
+    (`signin_allow.effective`): opening the instance to everyone is the operator's opt-in through
+    VEXA_SIGNIN_ALLOW. Say so at boot, so the stored value is not mistaken for an open instance or
+    left in place unnoticed. Never fails the boot."""
+    from .app import db as app_db
+    from .app import signin_allow
+    from .app.platform_settings import read_platform_setting
+
+    try:
+        async with app_db.session() as db:
+            stored = (await read_platform_setting(signin_allow.SETTING_KEY, db)).get(
+                signin_allow.SETTING_FIELD, "")
+    except Exception as exc:  # noqa: BLE001 — the admission ignores it either way
+        logger.warning("could not read the sign-in setting at boot (%s)", type(exc).__name__)
+        return
+    if signin_allow.stored_wildcard(stored):
+        logger.warning("the admin-edited sign-in list (Settings → sign-in) holds '*'; it is IGNORED — "
+                       "opening sign-in to everyone is an operator-only opt-in through "
+                       "VEXA_SIGNIN_ALLOW. Remove the entry from the setting.")
+
+
+async def _announce_admin_claim() -> None:
+    """On an instance nobody has claimed, issue the one-time admin claim code and log it — the only
+    way the first administrator is made without VEXA_ADMIN_EMAILS (app/claim_code.py). Never fails
+    the boot: a code that could not be issued is logged, and restarting admin-api issues one."""
+    import socket
+    from datetime import datetime, timezone
+
+    from .app import claim_code
+    from .app import db as app_db
+    from .app.main import issue_admin_claim_code
+
+    try:
+        async with app_db.session() as db:
+            code, note = await issue_admin_claim_code(
+                db, host=socket.gethostname(), now=datetime.now(timezone.utc))
+    except Exception as exc:  # noqa: BLE001 — logged loud; the claim screen stays closed meanwhile
+        logger.error("admin claim code NOT issued (%s: %s) — restart admin-api to issue one",
+                     type(exc).__name__, exc)
+        return
+    if code:
+        logging.getLogger("admin_api.claim").warning(claim_code.announcement(code))
+    else:
+        logger.info("admin claim: no code issued — %s", note)
 
 
 # uvicorn ``admin_api.__main__:app`` resolves this. Exposed LAZILY via PEP 562 so merely importing

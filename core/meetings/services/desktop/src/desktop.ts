@@ -97,12 +97,18 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
   const meetings = new Map<string, Meeting>();
   let nextId = 1;
   const keyOf = (p: string, n: string) => `${p}/${n}`;
+  // What a /ws open with the key in the URL is told (ws.v1 api_key_query_removed), then close 4401.
+  const QUERY_KEY_REFUSAL = {
+    type: 'error', error: 'api_key_query_removed', changed_in: '0.13.4',
+    do_instead: "send the key in the x-api-key header, or (a browser) in the subprotocol list: new WebSocket(url, ['vexa.v1', 'vexa.key.' + key])",
+    docs: 'https://docs.vexa.ai/changes-0-13-4-auth',
+  };
 
   // ── P20 / ADR-0012 — complete mediation: every read path consults canAccess ──
   // The SEAM (default owner-only = allow-all on the single-user localhost; real
   // grants land additively behind this same port — ADR-0003). Resolved ONCE here.
-  // Subject is derived from the request: the X-API-Key header on HTTP routes, the
-  // api_key query param on the headerless /ws connection, else 'local'.
+  // Subject is derived from the request: the X-API-Key header, else (a browser /ws) the
+  // `vexa.key.<key>` subprotocol entry, else 'local'. A key in the URL is refused (ws.v1).
   const canAccess: CanAccess = opts.canAccess ?? ownerOnly;
   const subjectOf = (req: http.IncomingMessage): string => {
     const h = req.headers['x-api-key'];
@@ -302,12 +308,21 @@ export async function startDesktop(opts: DesktopOptions = {}): Promise<Desktop> 
     }
     send({ error: 'not found', path: url.pathname }, 404);
   });
-  const wss = new WebSocketServer({ server: gateway, path: '/ws' });
+  // ws.v1 § Connect: the key rides the x-api-key header or the subprotocol list
+  // (["vexa.v1", "vexa.key.<key>"], answered "vexa.v1"); never the URL.
+  const wss = new WebSocketServer({ server: gateway, path: '/ws',
+    handleProtocols: (protocols) => (protocols.has('vexa.v1') ? 'vexa.v1' : false) });
   wss.on('connection', (ws, req) => {
+    if (new URL(req.url || '', 'http://localhost').searchParams.has('api_key')) {
+      ws.send(JSON.stringify(QUERY_KEY_REFUSAL));
+      ws.close(4401);
+      return;
+    }
     liveClients.set(ws, new Set());
-    // P20: the /ws connection carries no header we can read per-message — derive the
-    // subject from the `api_key` query param on the connection URL (else 'local').
-    const subject = new URL(req.url || '', 'http://localhost').searchParams.get('api_key') || 'local';
+    // P20: the subject is fixed for the connection — the header, else the key subprotocol entry.
+    const offered = String(req.headers['sec-websocket-protocol'] || '').split(',').map((x) => x.trim());
+    const keyEntry = offered.find((x) => x.startsWith('vexa.key.') && x.length > 'vexa.key.'.length);
+    const subject = subjectOf(req) !== 'local' ? subjectOf(req) : keyEntry ? keyEntry.slice('vexa.key.'.length) : 'local';
     ws.on('message', (d) => { try { const m = JSON.parse(d.toString()); if (m.action === 'subscribe') {
       // DROP denied keys from the subscription set — a forbidden meeting yields no
       // transcript/health broadcast for the subject. An EMPTY set means "all meetings"

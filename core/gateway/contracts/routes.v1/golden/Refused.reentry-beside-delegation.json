@@ -1,0 +1,24 @@
+{
+  "why": "the row already admits the token, so mcp_reentry beside delegation does nothing",
+  "manifest": {
+    "contract": "routes.v1",
+    "domain": "agent",
+    "owner": "core/agent",
+    "edge": "gateway",
+    "forward": {
+      "edge_prefix": "/agent/",
+      "upstream_prefix": "/api/"
+    },
+    "routes": [
+      {
+        "method": "POST",
+        "path": "/agent/x",
+        "scopes": [
+          "tx"
+        ],
+        "delegation": true,
+        "mcp_reentry": true
+      }
+    ]
+  }
+}

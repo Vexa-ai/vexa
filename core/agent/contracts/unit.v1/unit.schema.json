@@ -5,8 +5,8 @@
   "description": "The DISPATCH — the one backend object (one run of an agent), composed of the seven primitives. The Scheduler fires it; the Runtime spawns an isolated container, mounts the granted workspace LIST + brokers creds; the Agent (runner) runs from a start point and streams on its derived Stream `unit:<id>:out`. The envelope carries WHO it acts for and who launched it (identity: subject · launcher · signed token), WHICH agent runs (runner), WHICH workspaces it mounts at what access (workspaces[{id,mode}] — mode is the write-access source of truth), WHICH tools it may call (tools — each auto|gate per its tool.v1 descriptor), WHY it fired (trigger — informs the DERIVED input-trust), what it is grounded in (context), and WHAT to do (start: an entry point or a resumed session). `trust` (all-ro && irreversible-gated) and `output` (`unit:<id>:out`) are DERIVED, never stored. There is no `lifecycle` — the Runtime reaps on idle and continuity is the session file in the workspace. No tenancy beyond subject (ADR-0003). Supersedes the flat MVP shape and the meeting-only invoke.v1.",
   "$defs": {
     "Trigger": {
-      "description": "Why the dispatch fired — an input to the Scheduler, recorded for provenance + to DERIVE input-trust (message = you, in chat ⇒ trusted ⇒ rw; event/transcription from an external source ⇒ untrusted ⇒ propose-only). message = a user turn (chat, now); scheduled = a schedule entry fired (routine); event = an Integration published an event (e.g. email.received); transcription = a live transcript stream beat / session start (the in-meeting agent).",
-      "enum": ["message", "scheduled", "event", "transcription"]
+      "description": "Why the dispatch fired — an input to the Scheduler, recorded for provenance + to DERIVE input-trust (message = you, in chat ⇒ trusted ⇒ rw; event/transcription from an external source ⇒ untrusted ⇒ propose-only). message = a user turn (chat, now); scheduled = a schedule entry fired (routine); event = an Integration published an event (e.g. email.received); transcription = a live transcript stream beat / session start (the in-meeting agent); signal = a meeting.signal woke the meeting's agent in the meeting's chat (untrusted: it writes only the meeting's page and its listening brief, everything else is proposed).",
+      "enum": ["message", "scheduled", "event", "transcription", "signal"]
     },
     "Mode": {
       "description": "Workspace access mode — the SOURCE OF TRUTH for write access (governance). ro = materialized read-only; rw = synced back to the bucket on commit.",
@@ -120,6 +120,192 @@
         "context": { "$ref": "#/$defs/Context" },
         "start": { "$ref": "#/$defs/Start" }
       }
+    },
+    "InputEntry": {
+      "description": "One entry of a live unit's input stream unit:<id>:in, where agent-api (its only writer) puts the person's next message for a warm worker. `turn` is the message as a JSON string; `sig` is HMAC-SHA256(key = the unit's input key, message = the `turn` string) as 64 lowercase hex digits. The unit key is HMAC-SHA256(INTERNAL_API_SECRET, \"vexa-unit-input.v1:\" + unit id), hex; agent-api derives it per unit and hands it to that unit's worker as VEXA_UNIT_IN_KEY, and no other worker holds it. A worker runs only entries whose signature holds under its key, and runs none when it has no key. The chat's pending list shows only verifying entries. A worker from v0.13.2 under an agent-api from before it finds every follow-up unsigned and drops it: upgrade agent-api and the worker image together.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "turn",
+        "sig"
+      ],
+      "properties": {
+        "turn": {
+          "type": "string",
+          "minLength": 2
+        },
+        "sig": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "InputVector": {
+      "description": "A unit-input vector: the unit key derived from `secret` and `unit_id` must be `key`, and signing `turn` with it must give `sig`. The secret is a fixture.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "secret",
+        "unit_id",
+        "key",
+        "turn",
+        "sig"
+      ],
+      "properties": {
+        "secret": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unit_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "key": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "turn": {
+          "type": "string"
+        },
+        "sig": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "FaultSource": {
+      "description": "WHO failed (`Fault.source`). `runtime` — the agent runtime agent-api asks to start a worker (core/agent/shared/runtime_fault.py) · `model-provider` — the model's provider refused the turn (core/agent/llm/faults.py) · `vexa-tools` — the turn's Vexa tool access was refused (core/agent/worker/tool_access.py) · `agent-worker` — the worker would not start the turn in the environment it was given (core/agent/worker/tool_access.py, core/agent/llm/claude_code.py) · `agent-api` / `gateway` — the terminal's chat proxy got no typed answer from them (clients/terminal/src/app/api/chat/route.ts).",
+      "enum": ["runtime", "model-provider", "vexa-tools", "agent-worker", "agent-api", "gateway"]
+    },
+    "RuntimeFaultKind": {
+      "description": "spawn_refused — the runtime answered that it could not start the workload (runtime.v1 502, or 409) · quota_exceeded — the person's workload quota is full (429) · unauthorized — the runtime refused agent-api's caller credential (401/403) · refused — another 4xx · not_found — the runtime does not know the workload (404) · unreachable — no HTTP answer at all · unavailable — another server error · bad_response — a 2xx body that is not runtime.v1.",
+      "enum": ["spawn_refused", "quota_exceeded", "unauthorized", "refused", "not_found", "unreachable", "unavailable", "bad_response"]
+    },
+    "ModelProviderFaultKind": {
+      "description": "A provider call that failed: unpaid — out of credit or quota (402, or the provider's own words) · unauthorized — the credential was refused (401/403) · rate_limited — 429 · unavailable — 5xx, 529, a timeout or a transport failure · refused — any other 4xx · no_tool_calling — the endpoint and model do not do function calling (the server refused the turn's tools, dropped them, or the model answered with tool calls written as text), so the turn cannot use any tool (core/agent/llm/faults.py). A chat's model pick that agent-api refused before any call (ADR-0043; `provider` is then the catalog's provider key and `model` the catalog id): unknown_model — not in the catalog · not_permitted — an admins-only model, for anyone else · not_configured — an own-endpoint model with no endpoint set, or a catalog offering this person nothing · credential_missing — the provider's secret_ref is not set · endpoint_refused — the person's own endpoint cannot carry the turn · effort_unsupported — the effort level picked is not one this model offers, or not one its provider's adapter can express.",
+      "enum": ["unpaid", "unauthorized", "rate_limited", "unavailable", "refused", "no_tool_calling", "unknown_model", "not_permitted", "not_configured", "credential_missing", "endpoint_refused", "effort_unsupported"]
+    },
+    "VexaToolsFaultKind": {
+      "description": "access_expired — the turn ran past its delegation token, and the Vexa tool calls it made after that were refused.",
+      "enum": ["access_expired"]
+    },
+    "AgentWorkerFaultKind": {
+      "description": "tools_unconfined — a path the turn needs could not be handed to the user the model's tools run as, so the turn was not started (core/agent/worker/tool_access.py) · credential_conflict — the turn runs on the person's own model endpoint, and the worker's environment holds another model credential it could not remove, so the turn was not started (core/agent/llm/claude_code.py).",
+      "enum": ["tools_unconfined", "credential_conflict"]
+    },
+    "AgentApiFaultKind": {
+      "description": "internal — agent-api answered a 5xx with no typed fault · unavailable — it answered 502/503/504 with none.",
+      "enum": ["internal", "unavailable"]
+    },
+    "GatewayFaultKind": {
+      "description": "unreachable — the terminal could not reach the gateway at all.",
+      "enum": ["unreachable"]
+    },
+    "FaultRuntimeOp": {
+      "description": "Which runtime call failed (runtime faults only).",
+      "enum": ["spawn", "status", "list"]
+    },
+    "Fault": {
+      "description": "A dependency's typed failure (P18): WHO failed (`source`) and HOW (`kind`, closed per source — the `$def` named `<Source>FaultKind`), one safe sentence (`detail`) and what a person can do about it (`remedy`). Carried as `fault` on a failed `DoneFrame`, on an `ErrorFrame`, on a `DispatchRefusal`, and on a blocked inbox row. A runtime fault names its `op`; a model-provider fault names the `provider` host and the `model` (\"\" when unknown). `at` is present only on a fault agent-api recorded against a chat unit (`unit:<id>:fault`). The kind vocabularies are generated into every side that names one (`gen-faults.mjs`).",
+      "type": "object",
+      "required": ["source", "kind"],
+      "additionalProperties": false,
+      "properties": {
+        "source": { "$ref": "#/$defs/FaultSource" },
+        "kind": { "type": "string", "pattern": "^[a-z][a-z_]*[a-z]$" },
+        "status": { "type": ["integer", "null"], "minimum": 100, "maximum": 599, "description": "the dependency's HTTP status, or null when it gave none (a timeout, a refused connection)" },
+        "detail": { "type": "string", "description": "one safe sentence — never the dependency's raw text, never a secret" },
+        "remedy": { "type": "string", "description": "one line a person (or their operator) can act on, or \"\"" },
+        "provider": { "type": "string", "description": "model-provider only: the host the request went to, or \"unknown\"" },
+        "model": { "type": "string", "description": "model-provider only: the model id, or \"\"" },
+        "op": { "$ref": "#/$defs/FaultRuntimeOp" },
+        "at": { "type": "number", "description": "a recorded fault only: when agent-api recorded it, in seconds since the epoch" }
+      },
+      "allOf": [
+        { "if": { "properties": { "source": { "const": "runtime" } } },
+          "then": { "required": ["op"], "properties": { "kind": { "$ref": "#/$defs/RuntimeFaultKind" } } } },
+        { "if": { "properties": { "source": { "const": "model-provider" } } },
+          "then": { "required": ["provider", "model"], "properties": { "kind": { "$ref": "#/$defs/ModelProviderFaultKind" } } } },
+        { "if": { "properties": { "source": { "const": "vexa-tools" } } },
+          "then": { "properties": { "kind": { "$ref": "#/$defs/VexaToolsFaultKind" } } } },
+        { "if": { "properties": { "source": { "const": "agent-worker" } } },
+          "then": { "properties": { "kind": { "$ref": "#/$defs/AgentWorkerFaultKind" } } } },
+        { "if": { "properties": { "source": { "const": "agent-api" } } },
+          "then": { "properties": { "kind": { "$ref": "#/$defs/AgentApiFaultKind" } } } },
+        { "if": { "properties": { "source": { "const": "gateway" } } },
+          "then": { "properties": { "kind": { "$ref": "#/$defs/GatewayFaultKind" } } } },
+        { "if": { "not": { "properties": { "source": { "const": "runtime" } } } },
+          "then": { "not": { "required": ["op"] } } },
+        { "if": { "not": { "properties": { "source": { "const": "model-provider" } } } },
+          "then": { "not": { "anyOf": [ { "required": ["provider"] }, { "required": ["model"] } ] } } }
+      ]
+    },
+    "DoneFrame": {
+      "description": "A turn's last UnitEvent on the worker's out-stream (`unit:<id>:out`), relayed unchanged to the chat stream. The frozen fields are `reply`, `sessionId` and `ok`; `fault` is additive. A `done` that carries a fault is a failed turn: `ok` is false, and `reply` is the fault as one sentence for a client that reads only the reply.",
+      "type": "object",
+      "required": ["type", "reply", "sessionId", "ok"],
+      "properties": {
+        "type": { "const": "done" },
+        "reply": { "type": "string" },
+        "sessionId": { "type": ["string", "null"] },
+        "ok": { "type": "boolean" },
+        "detail": { "type": "string" },
+        "fault": { "$ref": "#/$defs/Fault" }
+      },
+      "if": { "required": ["fault"] },
+      "then": { "properties": { "ok": { "const": false } } }
+    },
+    "ErrorFrame": {
+      "description": "A chat-stream `error` frame: agent-api's relay answering an attach to a unit whose spawn failed, or the terminal's proxy answering for an upstream that gave no stream. `message` is the sentence an older client shows on its own.",
+      "type": "object",
+      "required": ["type", "message"],
+      "properties": {
+        "type": { "const": "error" },
+        "message": { "type": "string" },
+        "status": { "type": ["integer", "null"] },
+        "fault": { "$ref": "#/$defs/Fault" }
+      }
+    },
+    "DispatchRefusal": {
+      "description": "The JSON body agent-api answers a refused dispatch with — 503 when the runtime is down or full (`unreachable`, `unavailable`, `quota_exceeded`), 502 for every other runtime kind, never 500. `detail` stays a sentence for every client that reads only that; `fault` is the typed half.",
+      "type": "object",
+      "required": ["detail", "fault"],
+      "additionalProperties": false,
+      "properties": {
+        "detail": { "type": "string" },
+        "fault": { "$ref": "#/$defs/Fault" }
+      }
+    },
+    "SessionBundle": {
+      "description": "ADR-0048: a conversation, carried on a chat turn's message as `session_bundle`. `id` is the session; `version` is the transcript version these files are; `files` maps a plain relative path under the harness's continuity root to its bytes, base64. The pointer and the turn records are named `.claude/sessions/conversation.session` and `.claude/sessions/conversation.turns.jsonl` whatever the chat is called locally. A worker that already holds a newer version ignores an older one, unless `replace` is set: agent-api sets it when the store refused this conversation's last hand-back, so the worker's copy is ahead of a head that never took it and gives way to these files.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "files"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "version": { "type": "integer", "minimum": 0 },
+        "files": { "$ref": "#/$defs/SessionFiles" },
+        "replace": { "const": true }
+      }
+    },
+    "SessionBundleEvent": {
+      "description": "ADR-0048: the conversation handed back on the unit's output stream before `turn-complete`. agent-api saves `files` as version `base` + 1 only while `base` is still the head; otherwise the version is refused and logged, never merged. agent-api never relays this event to a client.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "session_id", "base", "files"],
+      "properties": {
+        "type": { "const": "session-bundle" },
+        "session_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "base": { "type": "integer", "minimum": 0 },
+        "turn_id": { "type": "string" },
+        "files": { "$ref": "#/$defs/SessionFiles" }
+      }
+    },
+    "SessionFiles": {
+      "description": "A conversation's files: plain relative paths (no `.` or `..` component) to base64 bytes.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z0-9._-][A-Za-z0-9._@+=-]*(/[A-Za-z0-9._-][A-Za-z0-9._@+=-]*)*$" },
+      "additionalProperties": { "type": "string", "contentEncoding": "base64" }
     }
   }
 }

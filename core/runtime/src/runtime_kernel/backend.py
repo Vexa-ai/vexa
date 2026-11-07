@@ -26,8 +26,13 @@ class Backend(Protocol):
         runnable: Runnable,
         env: dict[str, str],
         resources: Optional[Resources] = None,
+        avoid_nodes: tuple[str, ...] = (),
     ) -> WorkloadHandle:
-        """Start the workload. ``resources`` is the effective sizing the kernel resolved (the spec's
+        """Start the workload. ``avoid_nodes`` (``WorkloadSpec.avoidNodes``) asks the k8s backend for a
+        preferred anti-affinity to those nodes; the kernel passes it only when the spec sets it, and
+        docker/process accept and ignore it (one host, nothing to avoid).
+
+        ``resources`` is the effective sizing the kernel resolved (the spec's
         own, else the profile's deployment default); ``None`` means unsized — today's behaviour.
 
         ENFORCEMENT IS PER-SUBSTRATE and deliberately NOT claimed at parity: only the k8s backend

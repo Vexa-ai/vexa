@@ -23,10 +23,15 @@ print(harvest.counts())          # e.g. {"transcript": 80, "note": 99, "card": 3
 # the kinds ("note", "card", …) are defined by the agent WORKSPACE TEMPLATE, not the client.
 ```
 
-## First scope: the meeting-processor agent
+## First scope: the live transcript
 
-`run` validates the listening/processing agent end-to-end: turn the copilot processor ON, watch the merged
-live feed, and assert the agent emits cleaned **notes + cards** — not just raw transcript.
+`run` validates the live path end-to-end: put a bot in the meeting, watch the live feed, and assert the
+**transcript** flows.
+
+It used to assert a second thing on the same feed — cleaned **notes + cards** from an in-product
+processor, switched on by `process`. PRD decision 34 removed that pipeline: the product runs no model
+calls of its own beside the agent, so the feed carries the transcript and everything intelligent is a
+`chat` turn carrying an `active` meeting reference.
 
 ## Setup
 

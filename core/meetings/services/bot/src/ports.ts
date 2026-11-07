@@ -81,6 +81,9 @@ export interface JoinDriver {
    *  pre-active ABORT (the user stopped us mid-lobby, so the join never returns at all). MUST NOT
    *  throw — the orchestrator calls it while already handling a failure. */
   lastSignals?(): JoinSignals | undefined;
+  /** A PNG of the page as it is now, for the join-failure evidence (join-screenshot.ts). OPTIONAL —
+   *  a driver with no page (a call, a voice note) has none. MUST NOT throw. */
+  screenshot?(): Promise<Buffer | undefined>;
 }
 
 /** The capture → lane → STT → transcript/recording engine. The orchestrator starts/stops
@@ -101,6 +104,25 @@ export interface TranscriptSink {
    *  terminal upserts by id — without this a stale pending draft lingers as a duplicate. Optional so
    *  lanes/adapters that don't produce retractable drafts (or test fakes) need not implement it. */
   retract?(segmentIds: string[]): Promise<void>;
+  /** How far transcription is behind capture: seconds of audio not yet transcribed, seconds since
+   *  the speaker was last heard (null before any speech), and whether the final pass is running.
+   *  Lets a viewer tell a quiet room from a transcript that is catching up. Optional. */
+  progress?(p: TranscriptionProgressReport): Promise<void>;
+}
+
+/** The outcome of one acts.v1 `chat_send` that carried an `id`, as the bot reports it to meeting-api
+ *  (transcript.v1 `ChatSendResult`, on the same signed stream as the transcript): `posted` only once
+ *  the line showed in the meeting chat, otherwise the sender's failure reason. */
+export interface ChatSendReport {
+  id: string;
+  posted: boolean;
+  reason?: string;
+}
+
+export interface TranscriptionProgressReport {
+  backlog_s: number;
+  silence_s: number | null;
+  finishing: boolean;
 }
 
 /** The reachability verdict of the FIRST (load-bearing) lifecycle emit (#530). `reachable` iff

@@ -11,3 +11,9 @@ a consumer may rely on, and its cardinality. It is the registry `gate:config-con
 service's `publish-edge` keys against, which is what makes a publish edge declarable as the thing it
 is rather than as a dependency. Registered in the chart, deliberately **unsealed** while in
 development.
+
+`event.v2` is the **sealed fact envelope** (PRD 0.13.4 D8): the producer computes who a fact reaches
+(`audience`, `owner`, `visibility`, a card's lifecycle coordination fields) and seals it per
+producer; `POST /events` verifies it and admission starts a person's flow when the person is the
+subject or in the audience. Its `fact_envelope.py` is the canonical copy the crm outbox and the
+flows intake vendor (parity fact `fact-envelope`). Unsealed while in development.

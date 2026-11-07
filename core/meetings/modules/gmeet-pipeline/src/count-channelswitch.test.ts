@@ -76,7 +76,10 @@ async function runScenario(label: string, glowPolicy: "named" | "undefined") {
     draft: () => { /* drafts are pre-confirm; the oracle is the CONFIRMED stream after flush */ },
     finalize: () => {},
   };
-  const pipe = createGmeetPipeline({ transcribe, sink });
+  // The fixture's last turn is 3 numbers = 0.9 s. Real final windows under a second are not sent by
+  // default (minFinalAudioSec, they only come back as filtered phrases) and are counted as `shortSec`;
+  // this oracle measures the lane's no-drop guarantee, so it sends every final window.
+  const pipe = createGmeetPipeline({ transcribe, sink, config: { minFinalAudioSec: 0 } });
 
   // ── Drive 1..N as a sequence of TURNS, switching channels + glows the way Google Meet does. ──
   // A "turn" is a run of consecutive numbers on ONE (channel, glow). Between turns we alternate the

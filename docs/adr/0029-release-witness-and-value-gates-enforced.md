@@ -73,3 +73,10 @@ against the real v0.12.3 batch (5/5 accepted) and the v0.12.4 batch (all heads `
 
 `docs/docs/governance/delivery.mdx` enforcement map: rows D9/D10/D15 move from **TO BUILD** to
 **have (CI)** for the release-time gates, with a pointer to this ADR.
+
+## Amendment 2026-10-30 — the value-gate drops the label path (#1935)
+
+`value-gate` (guarantee 8) accepts a batch PR when it is `pr-value`-green on its head; a
+non-runtime PR is accepted as gates-green (merged through `gates`). The `state: value-signed` path
+above is removed: it never rescued a red value-fsm and every non-runtime PR was already accepted,
+so no release verdict changes. Guarantee 7 (the human release witness) is unchanged.

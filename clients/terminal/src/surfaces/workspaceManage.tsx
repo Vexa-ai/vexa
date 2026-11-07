@@ -3,22 +3,24 @@
  *  README is the page BODY (the dashboard you land on); management is a compact header:
  *   • Header   — mount toggle + name (inline rename) · SHARE (the primary action — enables sharing if
  *                needed and opens the invite dialog) · ⋯ menu (Rename / Manage / Archive / Delete) ·
- *                one quiet meta row (members · GitHub sync · role).
+ *                one quiet meta row (members · repository sync · role).
  *   • README   — rendered below the header, live-refreshed; the hero of the page.
- *   • Manage   — the deeper sections (Purpose · GitHub push/pull/publish · Participants) fold below the
+ *   • Manage   — the deeper sections (Purpose · repository push/pull/publish · Participants) fold below the
  *                README behind one quiet toggle, opened by the meta row / ⋯ / Share.
  *
  *  Opened via `manageTabDescriptor(...)` from workspace.tsx. Data-access is the workspaceApi SoC module. */
+import { Identity } from "../ui-kit/Identity";
+import { WorkspaceImageDialog, WorkspaceImageProposal } from "./workspaceImage";
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { useService } from "../platform";
-import { LayoutServiceId, type LayoutService, type TabDescriptor } from "../workbench/layout";
+import { LayoutServiceId, type LayoutService, type TabDescriptor } from "../platform/layout";
 import { registerTab, type TabProps } from "../contributions";
-import { meetingsOnly } from "../app/mode";
-import { Icon, Checkbox } from "../ui-kit";
+import { meetingsOnly } from "../platform/mode";
+import { Icon, Checkbox, useConfirm, ExternalLink } from "../ui-kit";
 import { Modal } from "../ui-kit/Modal";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
-import { presentError } from "./apiClient";
+import { presentError } from "../data/apiClient";
 import { DocMetaContext } from "../ui-kit/docLinks";
 import {
   readAttachedWorkspaces, readActiveSet, listSharedMemberships, renameWorkspace,
@@ -28,7 +30,11 @@ import {
   readWorkspacePurpose, writeWorkspacePurpose, readWorkspaceFile,
   listWorkspaceMembers, removeWorkspaceMember, leaveWorkspace, mintInvite,
   type AttachedWorkspaces, type ActiveMount, type Membership, type GitRemoteStatus, type WorkspaceMember, type SavedGitToken,
-} from "./workspaceApi";
+} from "../data/workspaceApi";
+import {
+  listGitProviders, knownGitProviders, setKnownGitProviders, defaultProvider, providerForUrl,
+  type GitProvider, type GitProviderList,
+} from "../data/gitProviders";
 
 /** The tab descriptor a WORKSPACES row opens. `shared` ⇒ `slug` is a shared workspace_id (member view);
  *  otherwise `slug` is one of the caller's own slots. `name` seeds the tab title + header label. */
@@ -54,7 +60,7 @@ const short = (subject: string) => subject.replace(/@.*$/, "").replace(/^u_/, ""
 function Section({ icon, title, right, children }: { icon: string; title: string; right?: ReactNode; children: ReactNode }) {
   return (
     <div style={card}>
-      <div style={sectionTitle}><Icon name={icon} size={13} /><span>{title}</span>{right && <span style={{ marginLeft: "auto", textTransform: "none", letterSpacing: 0 }}>{right}</span>}</div>
+      <div style={sectionTitle}><Icon name={icon} size={13} /><span>{title}</span>{right && <span className="ml-auto" style={{ textTransform: "none", letterSpacing: 0 }}>{right}</span>}</div>
       {children}
     </div>
   );
@@ -131,29 +137,29 @@ function WorkspaceManagePanel({ id, params }: TabProps) {
   });
 
   return (
-    <div style={{ height: "100%", overflowY: "auto", background: "var(--bg)" }}>
-      <div style={{ maxWidth: 720, margin: "0 auto", padding: "22px 24px" }}>
+    <div className="bg-0" style={{ height: "100%", overflowY: "auto" }}>
+      <div className="mt-0 mr-auto mb-0 ml-auto pt-5 pr-6 pb-5 pl-6" style={{ maxWidth: 720 }}>
         <Header
           slug={slug} shared={shared} isSeed={isSeed} displayName={displayName} mounted={mounted}
           archived={!!meta?.archived} busy={busy} onRun={run} reload={loadCore} layout={layout} tabId={id}
           onShare={doShare} onManage={() => setManage(true)}
           meta={{ members: shareWsId ? members : null, status, myRole: shared ? myRole : undefined }}
         />
-        {err && <div role="alert" style={{ margin: "0 0 12px", fontSize: 12.5, color: "var(--danger)", background: "var(--panel)", border: "1px solid var(--danger)", borderRadius: 8, padding: "8px 11px" }}>⚠ {err}</div>}
-        {note && <div role="status" style={{ margin: "0 0 12px", fontSize: 12.5, color: "var(--green)" }}>✓ {note}</div>}
+        {err && <div role="alert" className="mt-0 mr-0 mb-3 ml-0 t-xs c-danger bg-2 bd-danger r-md pt-2 pr-3 pb-2 pl-3">⚠ {err}</div>}
+        {note && <div role="status" className="mt-0 mr-0 mb-3 ml-0 t-xs c-success">✓ {note}</div>}
 
         <ReadmeBody slug={slug} />
 
         {/* the deeper management sections, folded — README stays the hero */}
         <div onClick={() => setManage((v) => !v)}
-          style={{ display: "flex", alignItems: "center", gap: 6, margin: "18px 0 12px", padding: "6px 0", cursor: "pointer", borderTop: "1px solid var(--line)", fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".05em" }}>
+          className="mt-4 mr-0 mb-3 ml-0 pt-1_5 pr-0 pb-1_5 pl-0 bd-t t-xs c-3" style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", textTransform: "uppercase", letterSpacing: ".05em" }}>
           <Icon name="chevR" size={12} style={{ transform: manage ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
           <Icon name="gear" size={12} />Manage workspace
         </div>
         {manage && (<>
           <PurposeSection slug={slug} />
 
-          <GitHubSection
+          <RepositorySection
             slug={slug} status={status} published_url={isSeed ? (attached.published_url ?? null) : null}
             defaultRepoName={defaultRepoName(displayName)}
             busy={busy} onRun={run} reload={loadCore}
@@ -168,10 +174,10 @@ function WorkspaceManagePanel({ id, params }: TabProps) {
 
         {invite && (
           <Modal title={`Share “${displayName}”`} onClose={() => setInvite(null)}>
-            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+            <div className="mb-2" style={{ display: "flex", gap: 6 }}>
               {(["link", "email"] as const).map((m) => (
                 <button key={m} disabled={busy} onClick={() => setInvite({ ...invite, mode: m, link: null })}
-                  style={{ ...btn(invite.mode === m ? "primary" : "ghost"), fontSize: 12 }}>
+                  className="t-xs" style={{ ...btn(invite.mode === m ? "primary" : "ghost") }}>
                   {m === "link" ? "Invite link" : "Add by email"}
                 </button>
               ))}
@@ -199,13 +205,13 @@ function ReadmeBody({ slug }: { slug: string }) {
     window.addEventListener("focus", load);
     return () => { live = false; clearInterval(iv); window.removeEventListener("focus", load); };
   }, [slug]);
-  if (error) return <div role="alert" style={{ fontSize: 12.5, color: "var(--danger)" }}>⚠ Couldn’t read the README — {error}</div>;
-  if (text === undefined) return <div style={{ fontSize: 12.5, color: "var(--t3)" }}>loading…</div>;
-  if (text === null) return <div style={{ fontSize: 12.5, color: "var(--t3)" }}>No README yet — ask the agent in Chat to start this workspace’s dashboard.</div>;
+  if (error) return <div role="alert" className="t-xs c-danger">⚠ Couldn’t read the README — {error}</div>;
+  if (text === undefined) return <div className="t-xs c-3">loading…</div>;
+  if (text === null) return <div className="t-xs c-3">No README yet — ask the agent in Chat to start this workspace’s dashboard.</div>;
   const body = text.replace(/^---\n[\s\S]*?\n---\n/, "");  // READMEs rarely carry frontmatter; strip if present
   return (
     <DocMetaContext.Provider value={{ path: "README.md", slug }}>
-      <div style={{ fontSize: 14, color: "var(--t1)", lineHeight: 1.6 }}><MdxDoc>{body}</MdxDoc></div>
+      <div className="t-md c-1 lh-normal"><MdxDoc>{body}</MdxDoc></div>
     </DocMetaContext.Provider>
   );
 }
@@ -221,7 +227,9 @@ function Header({ slug, shared, isSeed, displayName, mounted, archived, busy, on
   meta: { members: WorkspaceMember[] | null; status: GitRemoteStatus | null; myRole?: string };
 }) {
   const [renaming, setRenaming] = useState(false);
+  const [imaging, setImaging] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [confirm, confirmDialog] = useConfirm();
   const cancelled = useRef(false);
   const toggle = () => onRun(async () => {
     if (shared) await setSharedActive(slug, !mounted);
@@ -234,53 +242,58 @@ function Header({ slug, shared, isSeed, displayName, mounted, archived, busy, on
   const sync = !st?.has_home ? null : !st.tracked ? "not fetched" : st.ahead || st.behind ? `${st.ahead ? `↑${st.ahead}` : ""}${st.ahead && st.behind ? " " : ""}${st.behind ? `↓${st.behind}` : ""}` : "up to date";
   const metaItem: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer" };
   return (
-    <div style={{ marginBottom: 14 }}>
+    <div className="mb-3">
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <Checkbox checked={mounted} disabled={busy} onChange={toggle}
           title={mounted ? "Mounted into the agent — uncheck to switch off" : "Switched off — check to mount"}
           label={`${displayName} — ${mounted ? "on" : "off"}`} />
+        <Identity kind="workspace" id={slug} slug={slug} name={displayName} size={40} onChange={() => setImaging(true)} />
         {renaming && !shared ? (
           <input autoFocus defaultValue={displayName} disabled={busy}
             onKeyDown={(e) => { if (e.key === "Enter") { cancelled.current = false; e.currentTarget.blur(); } else if (e.key === "Escape") { cancelled.current = true; e.currentTarget.blur(); } }}
             onBlur={(e) => { if (cancelled.current) { cancelled.current = false; setRenaming(false); } else doRename(e.currentTarget.value); }}
-            style={{ ...field, flex: 1, fontSize: 18, fontWeight: 600, padding: "4px 8px" }} />
+            className="t-lg fw-600 pt-1 pr-2 pb-1 pl-2" style={{ ...field, flex: 1 }} />
         ) : (
-          <h1 style={{ margin: 0, fontSize: 19, fontWeight: 650, color: "var(--t1)", flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayName}</h1>
+          <h1 className="m-0 t-xl fw-600 c-1" style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayName}</h1>
         )}
         <button disabled={busy} onClick={onShare} style={btn("primary")} title="Share this workspace — mint an invite link or add by email">
           <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="link" size={13} />Share</span>
         </button>
         <span onClick={openMenu} title="Rename · Manage · Archive · Delete"
-          style={{ cursor: "pointer", color: "var(--t3)", padding: "2px 7px", fontSize: 16, lineHeight: 1, border: "1px solid var(--line)", borderRadius: 7 }}>⋯</span>
+          className="c-3 pt-0_5 pr-1_5 pb-0_5 pl-1_5 t-lg lh-tight bd r-md" style={{ cursor: "pointer" }}>⋯</span>
       </div>
-      {/* ONE quiet meta row: members · GitHub sync · role/kind — each opens the manage fold. */}
-      <div style={{ fontSize: 12, color: "var(--t3)", marginTop: 6, marginLeft: 26, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+      {/* ONE quiet meta row: members · repository sync · role/kind — each opens the manage fold. */}
+      <div className="t-xs c-3 mt-1_5 ml-6" style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
         {meta.members !== null && (
           <span style={metaItem} onClick={onManage} title="Participants">
             <Icon name="user" size={12} />{meta.members.length} member{meta.members.length === 1 ? "" : "s"}
           </span>
         )}
         {sync && (
-          <span style={metaItem} onClick={onManage} title="GitHub sync">
-            <Icon name="github" size={12} />{sync}
+          <span style={metaItem} onClick={onManage} title="Repository sync">
+            <Icon name="git" size={12} />{sync}
           </span>
         )}
         <span style={{ ...metaItem, cursor: "default" }}>
           {shared ? `shared${meta.myRole ? ` · ${meta.myRole}` : ""}` : isSeed ? "Personal" : meta.members !== null ? "shared by you" : "private"}
-          {archived ? " · archived" : ""}
+          {archived ? " · hidden" : ""}
           {!mounted && " · not mounted"}
         </span>
       </div>
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
           ...(!shared ? [{ id: "rename", label: "Rename", detail: "display label", onSelect: () => setRenaming(true) }] : []),
-          { id: "manage", label: "Manage workspace", detail: "purpose · GitHub · participants", onSelect: onManage },
+          { id: "image", label: "Change image…", detail: "upload · logo · reset", onSelect: () => setImaging(true) },
+          { id: "manage", label: "Manage workspace", detail: "purpose · repository · participants", onSelect: onManage },
           ...(!shared && !isSeed ? [
-            { id: "archive", label: archived ? "Un-archive" : "Archive", detail: "collapse · keep data", onSelect: () => void onRun(async () => { await archiveWorkspace(slug, !archived); reload(); }, archived ? "Un-archived." : "Archived.") },
-            { id: "delete", label: "Delete", detail: "removes all data", onSelect: () => { if (window.confirm(`Delete "${displayName}"? This permanently removes the workspace and all its data.`)) void onRun(async () => { await deleteWorkspace(slug); layout.closeTab(tabId); }); } },
+            { id: "archive", label: archived ? "Unhide" : "Hide", detail: archived ? "listed and mounted again" : "not mounted · not listed · kept", onSelect: () => void onRun(async () => { await archiveWorkspace(slug, !archived); reload(); }, archived ? "Unhidden." : "Hidden.") },
+            { id: "delete", label: "Delete", detail: "removes all data", onSelect: () => { void confirm({ title: `Delete “${displayName}”?`, consequence: "This permanently removes the workspace and all its data.", confirmLabel: "Delete workspace", typeToConfirm: displayName }).then((ok) => { if (ok) void onRun(async () => { await deleteWorkspace(slug); layout.closeTab(tabId); }); }); } },
           ] : []),
         ]} />
       )}
+      {confirmDialog}
+      <WorkspaceImageProposal slug={slug} name={displayName} />
+      <WorkspaceImageDialog slug={slug} name={displayName} open={imaging} onClose={() => setImaging(false)} />
     </div>
   );
 }
@@ -301,21 +314,21 @@ function PurposeSection({ slug }: { slug: string }) {
   };
   return (
     <Section icon="info" title="Purpose"
-      right={!editing && <span onClick={() => setEditing(true)} style={{ cursor: "pointer", color: "var(--t3)" }}><Icon name="edit" size={13} /></span>}>
-      {err && <div role="alert" style={{ fontSize: 12, color: "var(--danger)", marginBottom: 6 }}>⚠ {err}</div>}
+      right={!editing && <span onClick={() => setEditing(true)} className="c-3" style={{ cursor: "pointer" }}><Icon name="edit" size={13} /></span>}>
+      {err && <div role="alert" className="t-xs c-danger mb-1_5">⚠ {err}</div>}
       {editing ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <textarea autoFocus value={draft} disabled={busy} placeholder="What is this workspace for? (one line — the agent reads it to know where things belong)"
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void save(); } if (e.key === "Escape") { setDraft(purpose); setEditing(false); } }}
-            rows={2} style={{ ...field, resize: "vertical", lineHeight: 1.5 }} />
+            rows={2} className="lh-snug" style={{ ...field, resize: "vertical" }} />
           <div style={{ display: "flex", gap: 8 }}>
             <button disabled={busy} onClick={() => void save()} style={btn("primary")}>{busy ? "Saving…" : "Save"}</button>
             <button disabled={busy} onClick={() => { setDraft(purpose); setEditing(false); }} style={btn()}>Cancel</button>
           </div>
         </div>
       ) : (
-        <div style={{ fontSize: 13.5, color: purpose ? "var(--t1)" : "var(--t3)", lineHeight: 1.5, cursor: "pointer" }} onClick={() => setEditing(true)}>
+        <div className="t-sm lh-snug" style={{ color: purpose ? "var(--t1)" : "var(--t3)", cursor: "pointer" }} onClick={() => setEditing(true)}>
           {purpose || "No purpose set — click to describe what this workspace is for."}
         </div>
       )}
@@ -323,67 +336,95 @@ function PurposeSection({ slug }: { slug: string }) {
   );
 }
 
-// ── GitHub sync ──────────────────────────────────────────────────────────────────────────────────
-function GitHubSection({ slug, status, published_url, defaultRepoName, busy, onRun, reload }: {
+// ── repository sync (any configured git provider) ──────────────────────────────────────────────
+function RepositorySection({ slug, status, published_url, defaultRepoName, busy, onRun, reload }: {
   slug: string; status: GitRemoteStatus | null; published_url: string | null;
   defaultRepoName: string; busy: boolean; onRun: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; reload: () => void;
 }) {
   const [pushTok, setPushTok] = useState<{ open: boolean; token: string }>({ open: false, token: "" });
   const [pullTok, setPullTok] = useState<{ open: boolean; token: string }>({ open: false, token: "" });
-  const [pub, setPub] = useState<{ name: string; priv: boolean; token: string } | null>(null);
-  const [savedTok, setSavedTok] = useState<SavedGitToken | null>(null);  // the reusable server-side token
+  const [pub, setPub] = useState<{ name: string; priv: boolean; token: string; provider: string; org: string } | null>(null);
+  const [savedTok, setSavedTok] = useState<SavedGitToken | null>(null);  // the default provider's saved token
+  const [providers, setProviders] = useState<GitProviderList>(knownGitProviders());
   useEffect(() => { void getGitToken().then(setSavedTok).catch(() => setSavedTok(null)); }, []);
-  const hasSaved = !!savedTok?.set;
+  useEffect(() => {
+    let live = true;
+    void listGitProviders().then((l) => { if (!live) return; setKnownGitProviders(l); setProviders(l); }).catch(() => {});
+    return () => { live = false; };
+  }, []);
+  const defName = defaultProvider(providers).name;
+  // A provider's saved-token state: the list says so on a provider-aware server; an older server only
+  // knows the one (default) token, which `getGitToken()` reports.
+  const savedFor = (p: GitProvider | null | undefined) =>
+    typeof p?.token_saved === "boolean" ? p.token_saved : (!p || p.name === defName) && !!savedTok?.set;
   const hasHome = !!status?.has_home;
   const url = status?.url || published_url;
+  const home = providerForUrl(url, providers);
+  const hasSaved = savedFor(home);
+  const homeLabel = home?.label ?? null;
+  const creatable = providers.providers.filter((p) => p.can_create);
+  const pubProvider = pub ? providers.providers.find((p) => p.name === pub.provider) ?? defaultProvider(providers) : null;
+  const pubSaved = savedFor(pubProvider);
   // token: prompt value → else the saved token (backend fills it in when omitted).
-  const doPush = () => onRun(async () => { await pushWorkspace({ slug, token: pushTok.token.trim() || undefined }); setPushTok({ open: false, token: "" }); reload(); }, "Pushed to GitHub.");
-  const doPull = () => onRun(async () => { const r = await pullWorkspace({ slug, token: pullTok.token.trim() || undefined }); setPullTok({ open: false, token: "" }); reload(); return r; }, "Pulled — fast-forwarded from GitHub.");
-  const doPublish = (f: { name: string; priv: boolean; token: string }) => onRun(async () => { await publishWorkspace(f.name.trim(), f.priv, f.token.trim() || undefined, undefined, slug); setPub(null); reload(); }, "Published to GitHub.");
+  const doPush = () => onRun(async () => { await pushWorkspace({ slug, token: pushTok.token.trim() || undefined }); setPushTok({ open: false, token: "" }); reload(); }, "Pushed to the repository.");
+  const doPull = () => onRun(async () => { const r = await pullWorkspace({ slug, token: pullTok.token.trim() || undefined }); setPullTok({ open: false, token: "" }); reload(); return r; }, "Pulled — fast-forwarded from the repository.");
+  const doPublish = (f: NonNullable<typeof pub>, label: string) => onRun(async () => {
+    await publishWorkspace(f.name.trim(), f.priv, f.token.trim() || undefined, undefined, slug, { provider: f.provider, org: f.org.trim() || undefined });
+    setPub(null); reload();
+  }, `Published to ${label}.`);
   // With a saved token, push/pull run straight away (no prompt); otherwise open the one-off token row.
   const onPush = () => { if (hasSaved) void doPush(); else { setPushTok({ open: true, token: "" }); setPullTok({ open: false, token: "" }); } };
   const onPull = () => { if (hasSaved) void doPull(); else { setPullTok({ open: true, token: "" }); setPushTok({ open: false, token: "" }); } };
+  const tokenNoun = homeLabel ? `${homeLabel} token` : "Access token";
 
   return (
-    <Section icon="github" title="GitHub"
-      right={status?.branch && <span style={{ fontFamily: "var(--mono)", fontSize: 11.5, color: "var(--t2)" }}>{status.branch}</span>}>
+    <Section icon="git" title="Repository"
+      right={status?.branch && <span className="f-mono t-xs c-2">{status.branch}</span>}>
       {status === null ? (
-        <div style={{ fontSize: 12.5, color: "var(--t3)" }}>Checking the GitHub state…</div>
+        <div className="t-xs c-3">Checking the repository state…</div>
       ) : hasHome ? (<>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 12.5, color: "var(--t2)", marginBottom: 10, flexWrap: "wrap" }}>
-          {url && <a href={url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)", display: "inline-flex", alignItems: "center", gap: 4 }}><Icon name="openIn" size={13} />Open on GitHub</a>}
+        <div className="t-xs c-2 mb-2" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          {url && <ExternalLink href={url} className="c-accent" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Icon name="openIn" size={13} />{homeLabel ? `Open on ${homeLabel}` : "Open repository"}</ExternalLink>}
           <AheadBehind ahead={status!.ahead} behind={status!.behind} tracked={status!.tracked} />
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <button disabled={busy} onClick={onPush} style={btn("primary")} title="Push this branch to its GitHub home (fast-forward only)"><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="upload" size={13} />Push{status!.ahead ? ` (↑${status!.ahead})` : ""}</span></button>
-          <button disabled={busy} onClick={onPull} style={btn()} title="Fetch + fast-forward from GitHub"><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="refresh" size={13} />Pull{status!.behind ? ` (↓${status!.behind})` : ""}</span></button>
-          {hasSaved && <span title="Using your saved GitHub token" style={{ fontSize: 11, color: "var(--t3)", display: "inline-flex", alignItems: "center", gap: 3 }}><Icon name="key" size={11} />saved token</span>}
+          <button disabled={busy} onClick={onPush} style={btn("primary")} title="Push this branch to its repository (fast-forward only)"><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="upload" size={13} />Push{status!.ahead ? ` (↑${status!.ahead})` : ""}</span></button>
+          <button disabled={busy} onClick={onPull} style={btn()} title="Fetch + fast-forward from the repository"><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="refresh" size={13} />Pull{status!.behind ? ` (↓${status!.behind})` : ""}</span></button>
+          {hasSaved && <span title={`Using your saved ${tokenNoun}`} className="t-xs c-3" style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><Icon name="key" size={11} />saved token</span>}
         </div>
         {pushTok.open && (
-          <TokenRow label="GitHub token (repo scope — used once, never stored)" value={pushTok.token} busy={busy}
+          <TokenRow label={`${tokenNoun} (write access — used once, never stored)`} value={pushTok.token} busy={busy}
             onChange={(t) => setPushTok({ open: true, token: t })} onSubmit={doPush} onCancel={() => setPushTok({ open: false, token: "" })}
             submitLabel={busy ? "Pushing…" : "Push"} required />
         )}
         {pullTok.open && (
-          <TokenRow label="GitHub token (optional — public repos need none)" value={pullTok.token} busy={busy}
+          <TokenRow label={`${tokenNoun} (optional — public repos need none)`} value={pullTok.token} busy={busy}
             onChange={(t) => setPullTok({ open: true, token: t })} onSubmit={doPull} onCancel={() => setPullTok({ open: false, token: "" })}
             submitLabel={busy ? "Pulling…" : "Pull"} />
         )}
       </>) : (<>
         {/* No home yet ⇒ this is a vexa-born workspace (attached clones always have origin) — offer
             Publish on ANY of them, own or shared (the backend permission-checks the slug). */}
-        <div style={{ fontSize: 12.5, color: "var(--t2)", marginBottom: 10 }}>Not published yet — create a GitHub repo and push this workspace's full history.</div>
-        {pub === null ? (
-          <button disabled={busy} onClick={() => setPub({ name: defaultRepoName, priv: true, token: "" })} style={btn("primary")}>Publish to GitHub…</button>
+        <div className="t-xs c-2 mb-2">Not published yet — create a repository and push this workspace's full history.</div>
+        {pub === null || !pubProvider ? (
+          <button disabled={busy || creatable.length === 0}
+            onClick={() => setPub({ name: defaultRepoName, priv: true, token: "", provider: (creatable.find((p) => p.name === defName) ?? creatable[0] ?? defaultProvider(providers)).name, org: "" })}
+            style={btn("primary")}>{`Publish to ${(creatable.find((p) => p.name === defName) ?? creatable[0] ?? defaultProvider(providers)).label}…`}</button>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <input autoFocus value={pub.name} placeholder="repo name" disabled={busy} onChange={(e) => setPub({ ...pub, name: e.target.value })} style={field} />
-            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--t2)", cursor: "pointer" }}>
+            {creatable.length > 1 && (
+              <select aria-label="Provider" value={pub.provider} disabled={busy} onChange={(e) => setPub({ ...pub, provider: e.target.value, token: "" })} className="vx-input">
+                {creatable.map((p) => <option key={p.name} value={p.name}>{p.label} — {p.host}</option>)}
+              </select>
+            )}
+            <input aria-label="Owner / group" value={pub.org} placeholder={pubProvider.nested_groups ? "group/subgroup" : "org (optional)"} disabled={busy} onChange={(e) => setPub({ ...pub, org: e.target.value })} className="vx-input" />
+            <input autoFocus value={pub.name} placeholder="repo name" disabled={busy} onChange={(e) => setPub({ ...pub, name: e.target.value })} className="vx-input" />
+            <label className="t-xs c-2" style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
               <input type="checkbox" checked={pub.priv} disabled={busy} onChange={(e) => setPub({ ...pub, priv: e.target.checked })} /> private repo
             </label>
-            <input type="password" value={pub.token} placeholder={hasSaved ? "GitHub token (optional — using your saved token)" : "GitHub token (repo scope — used once, never stored)"} disabled={busy} onChange={(e) => setPub({ ...pub, token: e.target.value })} style={field} />
+            <input type="password" value={pub.token} placeholder={pubSaved ? `${pubProvider.label} token (optional — using your saved token)` : `${pubProvider.label} token (used once, never stored)`} disabled={busy} onChange={(e) => setPub({ ...pub, token: e.target.value })} className="vx-input" />
             <div style={{ display: "flex", gap: 8 }}>
-              <button disabled={busy || !pub.name.trim() || (!pub.token.trim() && !hasSaved)} onClick={() => doPublish(pub)} style={btn("primary")}>{busy ? "Publishing…" : "Publish"}</button>
+              <button disabled={busy || !pub.name.trim() || (!pub.token.trim() && !pubSaved)} onClick={() => doPublish(pub, pubProvider.label)} style={btn("primary")}>{busy ? "Publishing…" : "Publish"}</button>
               <button disabled={busy} onClick={() => setPub(null)} style={btn()}>Cancel</button>
             </div>
           </div>
@@ -394,12 +435,12 @@ function GitHubSection({ slug, status, published_url, defaultRepoName, busy, onR
 }
 
 function AheadBehind({ ahead, behind, tracked }: { ahead: number; behind: number; tracked: boolean }) {
-  if (!tracked) return <span style={{ color: "var(--t3)" }}>not yet fetched</span>;
-  if (!ahead && !behind) return <span style={{ color: "var(--green)" }}>up to date</span>;
+  if (!tracked) return <span className="c-3">not yet fetched</span>;
+  if (!ahead && !behind) return <span className="c-success">up to date</span>;
   return (
-    <span style={{ display: "inline-flex", gap: 8, fontFamily: "var(--mono)" }}>
-      {ahead > 0 && <span style={{ color: "var(--accent)" }} title={`${ahead} local commit(s) to push`}>↑{ahead}</span>}
-      {behind > 0 && <span style={{ color: "var(--warn)" }} title={`${behind} remote commit(s) to pull`}>↓{behind}</span>}
+    <span className="f-mono" style={{ display: "inline-flex", gap: 8 }}>
+      {ahead > 0 && <span className="c-accent" title={`${ahead} local commit(s) to push`}>↑{ahead}</span>}
+      {behind > 0 && <span className="c-warning" title={`${behind} remote commit(s) to pull`}>↓{behind}</span>}
     </span>
   );
 }
@@ -408,11 +449,11 @@ function TokenRow({ label, value, busy, onChange, onSubmit, onCancel, submitLabe
   label: string; value: string; busy: boolean; onChange: (v: string) => void; onSubmit: () => void; onCancel: () => void; submitLabel: string; required?: boolean;
 }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
+    <div className="mt-2" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <input autoFocus type="password" value={value} placeholder={label} disabled={busy}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Enter" && (!required || value.trim())) onSubmit(); if (e.key === "Escape") onCancel(); }}
-        style={field} />
+        className="vx-input" />
       <div style={{ display: "flex", gap: 8 }}>
         <button disabled={busy || (required && !value.trim())} onClick={onSubmit} style={btn("primary")}>{submitLabel}</button>
         <button disabled={busy} onClick={onCancel} style={btn()}>Cancel</button>
@@ -429,6 +470,7 @@ function ParticipantsSection({ ownSlug, shared, shareWsId, myRole, setShareWsId,
 }) {
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [invite, setInvite] = useState<{ mode: "link" | "email"; role: string; ttlDays: number; emails: string; link: string | null } | null>(null);
+  const [confirm, confirmDialog] = useConfirm();
   const loadMembers = () => { if (shareWsId) void listWorkspaceMembers(shareWsId).then(setMembers).catch(() => setMembers([])); };
   useEffect(() => { loadMembers(); }, [shareWsId]);  // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -436,7 +478,7 @@ function ParticipantsSection({ ownSlug, shared, shareWsId, myRole, setShareWsId,
   if (!shareWsId) {
     return (
       <Section icon="user" title="Participants">
-        <div style={{ fontSize: 12.5, color: "var(--t3)", marginBottom: 10 }}>Private to you. Share it to add members and collaborate.</div>
+        <div className="t-xs c-3 mb-2">Private to you. Share it to add members and collaborate.</div>
         <button disabled={busy || !ownSlug} style={btn("primary")}
           onClick={() => ownSlug && onRun(async () => { const { workspace_id } = await shareEnableWorkspace(ownSlug); setShareWsId(workspace_id); reload(); }, "Sharing enabled.")}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="link" size={13} />Share this workspace</span>
@@ -456,40 +498,41 @@ function ParticipantsSection({ ownSlug, shared, shareWsId, myRole, setShareWsId,
   });
 
   return (
-    <Section icon="user" title="Participants" right={<span style={{ fontSize: 11.5, color: "var(--t3)" }}>{members.length} member{members.length === 1 ? "" : "s"}</span>}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 2, marginBottom: 10 }}>
+    <Section icon="user" title="Participants" right={<span className="t-xs c-3">{members.length} member{members.length === 1 ? "" : "s"}</span>}>
+      <div className="mb-2" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
         {members.map((m) => {
           const creator = m.role === "owner";
           return (
-            <div key={m.subject} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 4px", borderBottom: "1px solid var(--line)" }}>
+            <div key={m.subject} className="pt-1_5 pr-1 pb-1_5 pl-1 bd-b" style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <Icon name="user" size={14} style={{ color: "var(--t3)" }} />
-              <span title={m.subject} style={{ flex: 1, fontSize: 13, color: "var(--t1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.email || short(m.subject)}</span>
-              <span style={{ fontSize: 11, color: creator ? "var(--accent)" : "var(--t3)", textTransform: "uppercase", letterSpacing: ".03em" }}>{creator ? "creator" : "member"}</span>
+              <span title={m.subject} className="t-sm c-1" style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.email || short(m.subject)}</span>
+              <span className="t-xs" style={{ color: creator ? "var(--accent)" : "var(--t3)", textTransform: "uppercase", letterSpacing: ".03em" }}>{creator ? "creator" : "member"}</span>
               {isOwner && !creator && (
                 <span onClick={() => onRun(async () => { await removeWorkspaceMember(shareWsId, m.subject); loadMembers(); }, "Member removed.")}
-                  title="Remove member" style={{ cursor: "pointer", color: "var(--t3)", padding: "0 3px" }}><Icon name="x" size={13} /></span>
+                  title="Remove member" className="c-3 pt-0 pr-0_5 pb-0 pl-0_5" style={{ cursor: "pointer" }}><Icon name="x" size={13} /></span>
               )}
             </div>
           );
         })}
-        {members.length === 0 && <div style={{ fontSize: 12.5, color: "var(--t3)", padding: "4px 0" }}>No members yet — invite someone below.</div>}
+        {members.length === 0 && <div className="t-xs c-3 pt-1 pr-0 pb-1 pl-0">No members yet — invite someone below.</div>}
       </div>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button disabled={busy} onClick={() => setInvite({ mode: "link", role: "contributor", ttlDays: 7, emails: "", link: null })} style={btn("primary")}><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="link" size={13} />Invite link</span></button>
         <button disabled={busy} onClick={() => setInvite({ mode: "email", role: "contributor", ttlDays: 7, emails: "", link: null })} style={btn()}><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="mail" size={13} />Add by email</span></button>
         {shared && (
-          <button disabled={busy} style={{ ...btn(), marginLeft: "auto", color: "var(--danger)" }}
+          <button disabled={busy} className="ml-auto c-danger" style={{ ...btn() }}
             onClick={() => onRun(async () => { await leaveWorkspace(shareWsId); layout.closeTab(tabId); }, "Left the workspace.")}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="logout" size={13} />Leave</span></button>
         )}
         {isOwner && shared && (
-          <button disabled={busy} style={{ ...btn(), color: "var(--danger)" }}
-            onClick={() => { if (window.confirm("Stop sharing? All members lose access and it becomes your private workspace.")) onRun(async () => { await unshareWorkspace(shareWsId); layout.closeTab(tabId); }, "Unshared."); }}>Unshare</button>
+          <button disabled={busy} className="c-danger" style={{ ...btn() }}
+            onClick={() => { void confirm({ title: "Stop sharing this workspace?", consequence: "All members lose access and it becomes your private workspace.", confirmLabel: "Stop sharing" }).then((ok) => { if (ok) void onRun(async () => { await unshareWorkspace(shareWsId); layout.closeTab(tabId); }, "Unshared."); }); }}>Unshare</button>
         )}
       </div>
 
       {invite && <InviteDialog s={invite} setS={setInvite} onMint={doMint} busy={busy} />}
+      {confirmDialog}
     </Section>
   );
 }
@@ -503,23 +546,23 @@ function InviteDialog({ s, setS, onMint, busy, plain }: {
     <div style={plain
       ? { display: "flex", flexDirection: "column", gap: 8 }
       : { marginTop: 12, padding: "12px", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 8, display: "flex", flexDirection: "column", gap: 8 }}>
-      {!plain && <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>{s.mode === "email" ? "Add by email" : "Invite link"}</div>}
+      {!plain && <div className="t-xs c-3" style={{ textTransform: "uppercase", letterSpacing: ".04em" }}>{s.mode === "email" ? "Add by email" : "Invite link"}</div>}
       <div style={{ display: "flex", gap: 8 }}>
         <select value={s.role} disabled={busy} onChange={(e) => setS({ ...s, role: e.target.value, link: null })} style={{ ...field, flex: 1 }}>
           <option value="contributor">member (read + write)</option>
           <option value="viewer">viewer (read)</option>
         </select>
-        <select value={s.ttlDays} disabled={busy} onChange={(e) => setS({ ...s, ttlDays: Number(e.target.value), link: null })} style={field}>
+        <select value={s.ttlDays} disabled={busy} onChange={(e) => setS({ ...s, ttlDays: Number(e.target.value), link: null })} className="vx-input">
           <option value={1}>1 day</option><option value={7}>7 days</option><option value={30}>30 days</option>
         </select>
       </div>
       {s.mode === "email" && (
         <input value={s.emails} placeholder="emails (comma-separated) — only these may redeem" disabled={busy}
-          onChange={(e) => setS({ ...s, emails: e.target.value, link: null })} style={field} />
+          onChange={(e) => setS({ ...s, emails: e.target.value, link: null })} className="vx-input" />
       )}
       {s.link ? (
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <input readOnly value={s.link} onFocus={(e) => e.currentTarget.select()} style={{ ...field, flex: 1, fontSize: 11.5, color: "var(--t2)" }} />
+          <input readOnly value={s.link} onFocus={(e) => e.currentTarget.select()} className="t-xs c-2" style={{ ...field, flex: 1 }} />
           <button onClick={() => void copyText(s.link!)} style={btn("primary")}>Copy</button>
         </div>
       ) : (

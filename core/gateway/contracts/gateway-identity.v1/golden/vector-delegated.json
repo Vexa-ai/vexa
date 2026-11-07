@@ -1,0 +1,22 @@
+{
+  "claims": {
+    "delegation": {
+      "regime": "autonomous",
+      "target": "ws_7f3a",
+      "workspaces": [
+        "ws_7f3a"
+      ]
+    },
+    "email": "ada@example.com",
+    "limits": 3,
+    "scopes": [
+      "bot",
+      "tx"
+    ],
+    "sub": "42"
+  },
+  "now": 1760000000,
+  "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n-----END PUBLIC KEY-----\n",
+  "token": "v1.eyJkZWxlZ2F0aW9uIjp7InJlZ2ltZSI6ImF1dG9ub21vdXMiLCJ0YXJnZXQiOiJ3c183ZjNhIiwid29ya3NwYWNlcyI6WyJ3c183ZjNhIl19LCJlbWFpbCI6ImFkYUBleGFtcGxlLmNvbSIsImV4cCI6MTc2MDAwMDA2MCwiaWF0IjoxNzYwMDAwMDAwLCJsaW1pdHMiOjMsInNjb3BlcyI6WyJib3QiLCJ0eCJdLCJzdWIiOiI0MiIsInR5cCI6InZleGEtaWRlbnRpdHkifQ.uc-8cSYfU-fE5hDKL66YzvlHP9zpprIeYTRx_v8McClL7cIEkCPZ1XTLHkwAwzmul4Use7e8_bYKSDWOA0eVCw",
+  "ttl_sec": 60
+}

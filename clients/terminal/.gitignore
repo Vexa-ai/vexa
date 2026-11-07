@@ -6,3 +6,4 @@
 next-env.d.ts
 .env*.local
 .DS_Store
+/public/mediapipe

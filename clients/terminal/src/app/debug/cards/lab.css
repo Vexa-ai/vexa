@@ -1,0 +1,11 @@
+/* The card lab's own frame (/debug/cards). Tokens only; the cards bring their own CSS. */
+.lab-cards { min-height: 100dvh; background: var(--surface-0); color: var(--text-1); }
+.lab-bar { position: sticky; top: 0; z-index: var(--z-sticky); display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2);
+  padding: var(--space-2) var(--space-4); background: var(--surface-1); border-bottom: 1px solid var(--border-subtle); font-size: var(--text-sm); }
+.lab-note { color: var(--text-3); font-size: var(--text-xs); }
+.lab-grow { flex: 1; }
+.lab-main { max-width: 760px; margin: 0 auto; padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-6); }
+.lab-sec { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.lab-h { margin: 0; font-size: var(--text-xs); font-weight: var(--weight-medium); color: var(--text-3); }
+.lab-row { margin: 0; display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); color: var(--text-2); }
+@media (max-width: 519px) { .lab-note { display: none; } .lab-bar { flex-wrap: nowrap; } }

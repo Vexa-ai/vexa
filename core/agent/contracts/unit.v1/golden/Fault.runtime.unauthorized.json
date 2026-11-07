@@ -1,0 +1,8 @@
+{
+  "source": "runtime",
+  "kind": "unauthorized",
+  "op": "spawn",
+  "status": 401,
+  "detail": "the runtime refused agent-api's credential",
+  "remedy": "An operator must give agent-api and the runtime the same RUNTIME_API_TOKEN."
+}

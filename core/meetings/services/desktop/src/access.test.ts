@@ -41,8 +41,9 @@ async function seed(ingestPort: number, platform: string, native: string): Promi
 // Returns the count of health frames the client received for `key`.
 async function collectHealth(gatewayPort: number, platform: string, native: string, apiKey: string | null, waitMs: number): Promise<number> {
   const key = `${platform}/${native}`;
-  const q = apiKey ? `?api_key=${encodeURIComponent(apiKey)}` : '';
-  const live = new WebSocket(`ws://localhost:${gatewayPort}/ws${q}`);
+  const live = apiKey
+    ? new WebSocket(`ws://localhost:${gatewayPort}/ws`, ['vexa.v1', `vexa.key.${apiKey}`])
+    : new WebSocket(`ws://localhost:${gatewayPort}/ws`);
   let got = 0;
   await new Promise<void>((r) => live.on('open', () => r()));
   live.on('message', (d) => { try { const m = JSON.parse(d.toString()); if (m.type === 'health' && m.meeting === key) got++; } catch { /* */ } });
@@ -84,6 +85,17 @@ async function main(): Promise<void> {
       const got = await collectHealth(desk.gatewayPort, platform, native, 'denied-key', 700);
       ingest.close();
       check('deny: /ws subscribe yields NO broadcast for the denied meeting', got === 0, `${got} health frame(s) leaked`);
+
+      // ws.v1: a key in the URL is refused with what to do instead, then close 4401.
+      const old = new WebSocket(`ws://localhost:${desk.gatewayPort}/ws?api_key=denied-key`);
+      const [frame, code] = await new Promise<[any, number]>((r) => {
+        let f: any = null;
+        old.on('message', (d) => { f = JSON.parse(d.toString()); });
+        old.on('close', (c) => r([f, c]));
+      });
+      check('a key in the /ws URL is refused api_key_query_removed + 4401',
+        frame?.error === 'api_key_query_removed' && frame?.changed_in === '0.13.4' && frame?.docs === 'https://docs.vexa.ai/changes-0-13-4-auth' && code === 4401,
+        `${JSON.stringify(frame)} ${code}`);
     } finally {
       await desk.close();
     }

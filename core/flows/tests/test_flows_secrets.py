@@ -1,14 +1,12 @@
 """The flows engine's remaining security rows: the key, the tokens, the urls, the ICS, the compare.
 
-R-B11 · R-B13 · R-B14 · R-B15 · R-B16 from the 2026-09-02 release backlog. Each test below fails
-on `origin/minutes-mcp-viewer` @ b25733d12, where respectively: `ADMIN_KEY` defaulted to
-`"changeme"`, `user_api_key` minted a permanent full-scope token on every call, `email` and `path`
-were interpolated into internal urls unencoded, the iMIP reply built ICS and its `Subject` by raw
-interpolation of the invite's own title, and the operator-key comparison was `!=`.
+R-B11 · R-B13 · R-B14 · R-B15 · R-B16 from the 2026-09-02 release backlog: the flows key has no
+default, no gateway token is minted for a person, `email` and `path` are encoded into internal
+urls, the iMIP reply escapes ICS and its `Subject`, and the operator-key comparison is constant
+time.
 """
 from __future__ import annotations
 
-import inspect
 import sys
 from pathlib import Path
 
@@ -20,39 +18,61 @@ import flows_steps.common as common  # noqa: E402
 import flows_steps.emailx as emailx  # noqa: E402
 
 
-# ── R-B11 · the admin key has no default, because it mints accounts and tokens ────────────────
-def test_the_admin_key_has_no_default_at_all(monkeypatch):
-    """It sat four lines above `require_internal_secret`, whose docstring says *"a weak default is
-    worse than no default… so there is no default"* — and this is the stronger case of the two:
-    the key opens `ensure_platform_user` and `user_api_key`, which mints a full-scope gateway
-    token for ANY user id the caller names."""
-    monkeypatch.delenv("VEXA_FLOWS_ADMIN_KEY", raising=False)
+# ── R-B11 · the flows key has no default, because it is the tier's one way into the platform ──
+def test_the_service_key_has_no_default_at_all(monkeypatch):
+    """The admin key this row was first written about is gone from flows: the tier holds ONE
+    credential, the flows key, and it is refused exactly as the admin key was — unset stops the
+    caller, it is never a literal in this file."""
+    monkeypatch.delenv("VEXA_FLOWS_SERVICE_KEY", raising=False)
     with pytest.raises(RuntimeError) as e:
-        common.require_admin_key()
-    assert "VEXA_FLOWS_ADMIN_KEY is unset" in str(e.value)
+        common.require_service_key()
+    assert "VEXA_FLOWS_SERVICE_KEY is unset" in str(e.value)
 
 
 @pytest.mark.parametrize("weak", ["changeme", "change-me", "default", "secret"])
 def test_the_placeholders_are_refused_by_name(monkeypatch, weak):
-    monkeypatch.setenv("VEXA_FLOWS_ADMIN_KEY", weak)
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", weak)
     with pytest.raises(RuntimeError):
-        common.require_admin_key()
+        common.require_service_key()
 
 
-def test_no_module_constant_carries_the_key_any_more():
+@pytest.mark.parametrize("published", ["vexa-internal-secret", "lite-internal-secret", "changeme",
+                                       "change-me", "CHANGE-ME", "default", "secret"])
+def test_every_value_shipped_for_a_secret_is_refused_where_it_is_used(monkeypatch, published):
+    """The boot refuses these (config.v1 `forbidden_values`), and so does the use site, from the
+    same list (fact placeholder-secrets)."""
+    assert published in common.PLACEHOLDER_SECRETS
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", published)
+    with pytest.raises(RuntimeError):
+        common.require_service_key()
+    with pytest.raises(RuntimeError):
+        common.door_headers("7")
+
+
+def test_no_admin_key_is_held_any_more():
+    """Flows mints no gateway token and creates no account with an admin key: it names the subject
+    through the service door instead. The admin-key surface is GONE, not merely unused."""
+    for name in ("ADMIN_KEY", "require_admin_key", "_admin_headers", "ADMIN_KEY_PLACEHOLDERS",
+                 "user_api_key", "_KEY_CACHE", "_key_ttl"):
+        assert not hasattr(common, name), f"common.{name} is back"
+    assert "VEXA_FLOWS_ADMIN_KEY" not in flows_config.DECLARED
+    assert "VEXA_FLOWS_ADMIN_KEY" not in flows_config.SECRETS
+
+
+def test_no_module_constant_carries_the_key():
     """A constant read at import forces the refusal into import time — where a test that never
-    touches admin-api pays for it and the failure is blamed on whoever imported first."""
+    touches another domain pays for it and the failure is blamed on whoever imported first."""
+    assert not hasattr(common, "SERVICE_KEY")
     assert not hasattr(common, "ADMIN_KEY")
 
 
 def test_the_refusal_never_prints_the_value(monkeypatch):
-    monkeypatch.setenv("VEXA_FLOWS_ADMIN_KEY", "changeme")
-    try:
-        common.require_admin_key()
-    except RuntimeError as e:
-        assert "changeme" in str(e), "the PLACEHOLDER may be named — it is not a secret"
-    monkeypatch.setenv("VEXA_FLOWS_ADMIN_KEY", "s3cr3t-real-value-abcdef")
-    assert common.require_admin_key() == "s3cr3t-real-value-abcdef"
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "changeme")
+    with pytest.raises(RuntimeError) as e:
+        common.require_service_key()
+    assert "changeme" in str(e.value), "the PLACEHOLDER may be named — it is not a secret"
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "s3cr3t-real-value-abcdef")
+    assert common.require_service_key() == "s3cr3t-real-value-abcdef"
 
 
 def test_no_test_in_this_suite_hardcodes_the_old_default():
@@ -64,76 +84,66 @@ def test_no_test_in_this_suite_hardcodes_the_old_default():
         if f.name == Path(__file__).name:
             continue
         text = f.read_text()
-        for header in ('"X-Admin-API-Key": "changeme"', "'X-Admin-API-Key': 'changeme'"):
-            assert header not in text, f"{f.name} still presents the removed default as a key"
+        for header in ('"X-Admin-API-Key": "changeme"', "'X-Admin-API-Key': 'changeme'",
+                       '"X-Vexa-Service-Key": "changeme"', "'X-Vexa-Service-Key': 'changeme'"):
+            assert header not in text, f"{f.name} still presents a removed default as a key"
 
 
-# ── R-B13 · one short-lived token, not thirty permanent ones ─────────────────────────────────
-def _key_rig(monkeypatch, ttl="900"):
-    monkeypatch.setenv("VEXA_FLOWS_ADMIN_KEY", "real-key")
-    monkeypatch.setenv("VEXA_FLOWS_USER_KEY_TTL_S", ttl)
-    common._KEY_CACHE.clear()
+# ── R-B13 · no token is minted at all ─────────────────────────────────────────────────────────
+def _wire(monkeypatch):
+    import flows_steps.meeting as mt
+    monkeypatch.setenv("VEXA_FLOWS_SERVICE_KEY", "real-flows-key")
     calls = []
 
     def fake_http(method, url, headers, body=None, timeout=20):
-        calls.append((method, url, body))
-        return 200, {"token": f"tok-{len(calls)}"}
+        calls.append((method, url, dict(headers or {}), body))
+        if "/transcripts/" in url:
+            return 200, {"segments": [{"speaker": "Anna", "text": "hello"}]}
+        return 200, []
 
     monkeypatch.setattr(common, "http", fake_http)
-    return calls
+    monkeypatch.setattr(mt, "http", fake_http)
+    monkeypatch.setattr(mt, "meetings_door", lambda: "http://gw")
+    return mt, calls
 
 
-def test_one_reaction_mints_one_token_not_one_per_read(monkeypatch):
-    """`user_api_key` is called per gateway read — including once per attendee inside
-    `mint_transcript_share`. One 20-person meeting left ~30 `["bot","browser","tx"]` tokens on the
-    organiser's account, permanently, and nothing ever deleted one."""
-    calls = _key_rig(monkeypatch)
-    keys = {common.user_api_key("7") for _ in range(30)}
-    assert keys == {"tok-1"} and len(calls) == 1
+def test_thirty_reads_mint_no_token(monkeypatch):
+    """The organiser's account used to collect a `["bot","browser","tx"]` token per gateway read —
+    about thirty for one 20-person meeting (R-B13). Now a read names its subject through the
+    service door and NOTHING is minted: no request ever reaches a `/tokens` route."""
+    mt, calls = _wire(monkeypatch)
+    for _ in range(30):
+        mt.transcript_text("7", 41)
+    assert len(calls) == 30
+    assert not [c for c in calls if "/tokens" in c[1] or "/admin/" in c[1]]
+    assert all(c[2] == {"X-Vexa-Service-Key": "real-flows-key", "X-User-Id": "7"} for c in calls)
 
 
-def test_the_token_is_asked_to_expire(monkeypatch):
-    """admin-api has taken `expires_in` since the mint endpoint existed. A token a post-meeting
-    run needs for four minutes does not need to outlive the deployment."""
-    calls = _key_rig(monkeypatch, ttl="600")
-    common.user_api_key("7")
-    _method, _url, body = calls[0]
-    assert body["expires_in"] == 600
-    assert body["scopes"] == ["bot", "browser", "tx"]
+def test_two_users_are_two_subjects_never_one_shared_credential(monkeypatch):
+    mt, calls = _wire(monkeypatch)
+    mt.transcript_text("7", 41)
+    mt.transcript_text("8", 42)
+    assert [c[2]["X-User-Id"] for c in calls] == ["7", "8"]
+    assert not [c for c in calls if "X-API-Key" in c[2]]
 
 
-def test_the_cache_expires_with_the_token(monkeypatch):
-    """A cache that outlives the credential it holds is a worse bug than the one it fixes."""
-    calls = _key_rig(monkeypatch, ttl="60")
-    common.user_api_key("7")
-    common._KEY_CACHE["7"] = ("tok-1", 0.0)             # as if the ttl had passed
-    assert common.user_api_key("7") == "tok-2"
-    assert len(calls) == 2
-
-
-def test_two_users_never_share_a_key(monkeypatch):
-    calls = _key_rig(monkeypatch)
-    assert common.user_api_key("7") != common.user_api_key("8")
-    assert len(calls) == 2
-
-
-def test_the_cache_is_process_memory_and_never_a_file():
-    """The file's stateless law: everything a step needs travels in refs. A credential cache is a
-    cache, not state a step may depend on — a restart simply mints another."""
-    src = inspect.getsource(common.user_api_key)
-    assert "open(" not in src and "Path(" not in src
+def test_the_ttl_knob_is_gone_with_the_mint():
+    """`VEXA_FLOWS_USER_KEY_TTL_S` bounded the lifetime of a minted token. There is no token, so
+    there is no knob: a key nothing reads is a surface for no reader (P14 the other way round)."""
+    assert "VEXA_FLOWS_USER_KEY_TTL_S" not in flows_config.DECLARED
+    src = Path(common.__file__).read_text()
+    assert "VEXA_FLOWS_USER_KEY_TTL_S" not in src and "/tokens" not in src
 
 
 # ── R-B14 · attacker-supplied strings are encoded into internal urls ─────────────────────────
 def test_an_address_off_an_ics_line_cannot_re_point_an_internal_request(monkeypatch):
     """`email` comes off the invite's own `ATTENDEE`/`ORGANIZER` line. Unencoded, a `/` or a `?`
     in it addresses a different route on a service that trusts this caller."""
-    monkeypatch.setenv("VEXA_FLOWS_ADMIN_KEY", "real-key")
     seen = []
     monkeypatch.setattr(common, "http",
                         lambda m, url, h, body=None, timeout=20: seen.append(url) or (404, {}))
     common.platform_user_id("../../admin/users/1/tokens?x=@evil.test")
-    assert "../.." not in seen[0] and "?" not in seen[0].split("/admin/users/email/")[1]
+    assert "../.." not in seen[0] and "?" not in seen[0].split("/internal/users/by-email/")[1]
     assert "%2F" in seen[0] and "%3F" in seen[0]
 
 

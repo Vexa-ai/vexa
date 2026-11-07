@@ -1,0 +1,11 @@
+{"refs": {
+  "room:s-0a1b2c": {"kind": "room", "visible": true, "name": "Launch plan", "session": "s-0a1b2c", "members": 3},
+  "call:601": {"kind": "call", "visible": true, "name": "Kickoff", "sub": "Oct 16 · scheduled", "meeting": "601", "state": "upcoming"},
+  "file:plan.md": {"kind": "file", "visible": true, "name": "Launch plan", "path": "plan.md", "slug": "client-x"},
+  "person:ana@example.test": {"kind": "person", "visible": true, "name": "Ana", "initials": "AN", "sub": "Client X"},
+  "routine:flow:weekly-digest": {"kind": "routine", "visible": true, "name": "Weekly digest", "state": "ok", "sub": "Ran 2d ago · next in 5d",
+                                 "runs": [{"at": 1791927200, "ok": true, "what": "Ran"}]},
+  "workspace:client-x": {"kind": "workspace", "visible": true, "name": "Client X", "slug": "client-x", "members": 3},
+  "card:c1": {"kind": "card", "visible": false},
+  "chat:s-elsewhere": {"kind": "chat", "visible": false}
+}}

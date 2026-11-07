@@ -1,0 +1,16 @@
+{
+  "name": "room.signal",
+  "subject": "u_jane",
+  "target": { "chat": "s-5f0c2a" },
+  "plan": { "prompt": "Messages since you last spoke (score 1.10 against the room's brief). Speak if it helps the room." },
+  "data": {
+    "session": "s-5f0c2a",
+    "source": { "kind": "chat", "id": "s-5f0c2a" },
+    "buffer": [
+      { "segment_id": "s-5f0c2a:42", "speaker": "u_sam", "text": "Do we know if the proxy supports TLS 1.3?", "scores": { "question": 0.88 } }
+    ],
+    "score": 1.1,
+    "reason": "threshold",
+    "brief_version": 1
+  }
+}

@@ -27,11 +27,12 @@ afterEach(() => {
   jar = new Map();
   delete process.env.VEXA_API_KEY;
   delete process.env.VEXA_BOT_API_KEY;
+  delete process.env.VEXA_TERMINAL_ZERO_LOGIN;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
-describe("resolveApiKey — cookie token with env fallback", () => {
+describe("resolveApiKey — the session's token, and nothing for an anonymous request", () => {
   it("prefers the vexa-token cookie", async () => {
     jar.set("vexa-token", "user-token-123");
     process.env.VEXA_API_KEY = "env-key";
@@ -39,7 +40,16 @@ describe("resolveApiKey — cookie token with env fallback", () => {
     expect(await resolveApiKey()).toBe("user-token-123");
   });
 
-  it("falls back to VEXA_API_KEY, then VEXA_BOT_API_KEY", async () => {
+  it("never acts as a deployment key for a request with no cookie", async () => {
+    process.env.VEXA_API_KEY = "env-key";
+    process.env.VEXA_BOT_API_KEY = "bot-key";
+    expect(await resolveApiKey()).toBe("");
+    process.env.VEXA_TERMINAL_ZERO_LOGIN = "yes";       // only the literal `true` switches it on
+    expect(await resolveApiKey()).toBe("");
+  });
+
+  it("acts as VEXA_API_KEY, then VEXA_BOT_API_KEY, only under zero-login", async () => {
+    process.env.VEXA_TERMINAL_ZERO_LOGIN = "true";
     process.env.VEXA_API_KEY = "env-key";
     process.env.VEXA_BOT_API_KEY = "bot-key";
     expect(await resolveApiKey()).toBe("env-key");
@@ -71,7 +81,7 @@ describe("catch-all proxy — meetings domain forwards the cookie token as X-API
     expect(seen.key).toBe("cookie-tok");
   });
 
-  it("falls back to VEXA_BOT_API_KEY when no cookie is present", async () => {
+  it("forwards an anonymous request with NO key, even where VEXA_BOT_API_KEY is set", async () => {
     process.env.VEXA_BOT_API_KEY = "legacy-bot-key";
     const seen: { key?: string } = {};
     vi.stubGlobal(
@@ -84,7 +94,7 @@ describe("catch-all proxy — meetings domain forwards the cookie token as X-API
 
     await catchAllGet(makeReq(), { params: Promise.resolve({ path: ["meetings"] }) });
 
-    expect(seen.key).toBe("legacy-bot-key");
+    expect(seen.key).toBe("");
   });
 });
 

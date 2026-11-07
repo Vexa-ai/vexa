@@ -12,3 +12,6 @@ imports host symbols only from [`_host.ts`](_host.ts) (the one seam back to the 
 | `shared/` | cross-platform helpers (the debug/escalation view) |
 
 Depends on `playwright` + Node builtins only (gate:isolation).
+
+`zoom/` is the web-client backend. `zoom-sdk/` is the separate native backend,
+exported through `@vexa/join/node` and driven through an injected runtime port.

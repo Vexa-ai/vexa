@@ -194,3 +194,33 @@ def test_file_focus_untouched():
     body = _body(context={"focus": {"kind": "file", "ref": "@file:notes.md"},
                           "surface": {"tab": {"kind": "doc"}}})
     assert _ground(body)[2] == "hi"
+
+
+# ── a fixed file folded into the prompt is never read through a planted link ─────────────────────
+
+def test_the_entity_index_is_not_read_through_a_planted_link(tmp_path):
+    """`entity_index_preamble` folds `<mount>/kg/INDEX.md` into every turn's prompt. The mount is a
+    work tree the model's tools can write, so a link planted at `kg` or `kg/INDEX.md` — pointed at
+    another tenant's file or at the worker's own `/proc/self/environ` — must not be followed; the
+    preamble renders live from the (empty) directory instead."""
+    import os
+    from worker.engine import entity_index_preamble
+    secret = tmp_path / "secret"
+    secret.write_text("TENANT-SECRET-INDEX")
+    ws = tmp_path / "ws"
+    (ws / "kg").mkdir(parents=True)
+    os.symlink(secret, ws / "kg" / "INDEX.md")
+    out = entity_index_preamble([{"slug": "ws", "path": str(ws), "write": True, "id": "ws"}])
+    assert "TENANT-SECRET-INDEX" not in out
+
+
+def test_global_context_is_not_read_through_a_planted_link(tmp_path):
+    import os
+    from worker.engine import global_context_preamble
+    secret = tmp_path / "secret"
+    secret.write_text("NOT-ORG-CONTEXT")
+    g = tmp_path / "_global"
+    g.mkdir()
+    os.symlink(secret, g / "CLAUDE.md")
+    out = global_context_preamble([{"slug": "_global", "role": "global", "path": str(g)}])
+    assert "NOT-ORG-CONTEXT" not in out

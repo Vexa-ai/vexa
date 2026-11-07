@@ -1,0 +1,590 @@
+"""THE RULES ARE A FILE, AND THE FILE AND THE CODE CANNOT DRIFT.
+
+Four claims, in the order they would fail:
+
+  P1  The seeded `behavior/global/POLICIES.md` declares exactly the keys `policies.DEFAULTS` knows,
+      with exactly those values. A key in one and not the other is either a rule nobody can answer
+      or a control that silently does nothing — the failure `production.py`'s own docstrings call
+      out for inert params.
+  P2  Resolution order: flow param, then the file, then env, then the baked default. An absent or
+      empty file changes nothing; a file that exists and cannot be read, or names a profile nobody
+      knows, CLOSES every rule that widens who is mailed, joined or read (S03-1).
+  P3  The disclosure claims only what the software backs. It composes, byte for byte, to
+      `mailtext.VISIBILITY_SENTENCE`; `data_statement` replaces its locality clause; the rules
+      nothing enforces (`agent_reads_desk`, the two retention rules) change none of it; and it does
+      not say where recordings and transcripts are kept (S03-2).
+  P4  The rules reach the steps: who the follow-up is mailed to, and whether it is sent at all.
+  P5  Every block `asks/policies-wizard.md` recommends is one THIS module can read (Vexa-ai/vexa#1627),
+      and the clauses the wizard says the attendee sentence is composed from are this module's own.
+      The wizard writes front matter that nothing else validates until a mail goes out; a block it
+      recommends and this reader shrugs at would fail silently, at the defaults, weeks later.
+"""
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+from flows import Registry
+from flows_defs import production
+from flows_steps import mailkinds, mailtext, policies
+
+# <repo>/core/flows/src/flows_steps/policies.py -> parents[4] is the repo root, the same anchor
+# `test_attendee_mail_shape`'s drift gate uses for `behavior/mail`.
+SEEDED = Path(policies.__file__).resolve().parents[4] / "behavior" / "global" / "POLICIES.md"
+WIZARD = Path(policies.__file__).resolve().parents[4] / "behavior" / "asks" / "policies-wizard.md"
+
+
+# ── P1 · the file and the table are the same set ─────────────────────────────────────────────────
+
+def test_the_seeded_policy_file_declares_every_rule_the_code_knows():
+    if not SEEDED.is_file():
+        pytest.skip(f"no seed at {SEEDED}")
+    declared = policies.front_matter(SEEDED.read_text(encoding="utf-8"))
+    missing = [k for k in policies.DEFAULTS if k not in declared]
+    assert not missing, (f"{SEEDED} does not carry {missing} — a rule the code applies that the "
+                         f"admin cannot see or answer")
+
+
+def test_the_policy_file_declares_no_rule_the_code_does_not_read():
+    if not SEEDED.is_file():
+        pytest.skip(f"no seed at {SEEDED}")
+    declared = set(policies.front_matter(SEEDED.read_text(encoding="utf-8")))
+    extra = declared - set(policies.DEFAULTS) - {"kind", "profile"}
+    assert not extra, (f"{SEEDED} declares {sorted(extra)}, which nothing reads — an inert row a "
+                       f"deployment can still set is a control that silently does nothing")
+
+
+def test_the_seeded_values_are_the_defaults():
+    """The file a person reads and the defaults the code applies say the same thing."""
+    if not SEEDED.is_file():
+        pytest.skip(f"no seed at {SEEDED}")
+    seeded = policies.resolve(SEEDED.read_text(encoding="utf-8"))
+    for key, default in policies.DEFAULTS.items():
+        assert seeded[key] == default, f"{key}: the seed says {seeded[key]!r}, the code {default!r}"
+    assert seeded["profile"] == "default"
+    assert seeded["problems"] == []
+
+
+def test_the_seeded_file_names_the_two_profiles_the_founder_named():
+    if not SEEDED.is_file():
+        pytest.skip(f"no seed at {SEEDED}")
+    body = SEEDED.read_text(encoding="utf-8")
+    for name in ("bank", "studio"):
+        assert f"`{name}`" in body, f"the {name} profile is in the code and not on the page"
+    assert set(policies.PROFILES) == {"default", "bank", "studio"}
+
+
+# ── P2 · resolution ──────────────────────────────────────────────────────────────────────────────
+
+def test_no_file_is_the_defaults():
+    assert policies.resolve(None)["external_participants"] is True
+    assert policies.resolve("")["transcript_retention_days"] == policies.FOREVER
+
+
+def test_a_file_with_no_front_matter_declares_nothing():
+    assert policies.resolve("# Policies\n\nsome prose")["open_web"] is True
+
+
+def test_an_unclosed_fence_is_not_front_matter():
+    assert policies.resolve("---\nopen_web: off\n\nprose")["open_web"] is True
+
+
+def test_an_explicit_answer_wins():
+    assert policies.resolve("---\nopen_web: off\n---\n")["open_web"] is False
+    assert policies.resolve("---\nnewcomer_reads_history: yes\n---\n")["newcomer_reads_history"]
+
+
+def test_an_empty_row_is_not_an_answer():
+    """`attendee_domains:` with nothing after it is the shape an unanswered row has."""
+    out = policies.resolve("---\nattendee_domains:\nopen_web: off\n---\n")
+    assert out["attendee_domains"] == ()
+    assert out["open_web"] is False
+
+
+def test_the_bank_profile_is_the_founders_bank():
+    out = policies.resolve("---\nprofile: bank\n---\n")
+    assert out["external_participants"] is False
+    assert out["bot_joins_mixed_meetings"] is False
+    assert out["recording_retention_days"] == 0
+    assert out["open_web"] is False
+    assert out["report_to_participants"] is True, "the loop levers stay on in a bank"
+    assert out["prep_and_invite_mail"] is True
+
+
+def test_the_studio_profile_keeps_recordings():
+    assert policies.resolve("---\nprofile: studio\n---\n")["recording_retention_days"] == \
+        policies.FOREVER
+
+
+def test_an_explicit_row_wins_over_the_profile():
+    out = policies.resolve("---\nprofile: bank\nopen_web: on\n---\n")
+    assert out["open_web"] is True
+    assert out["external_participants"] is False
+
+
+def test_an_unknown_profile_closes_every_widening_rule_and_says_so():
+    """`profile: bnak` is an admin asking for something narrower than nothing; a typo must not
+    leave the deployment at the permissive defaults."""
+    out = policies.resolve("---\nprofile: casino\n---\n")
+    assert out["profile"] == "default"
+    assert any("casino" in p for p in out["problems"])
+    for key, value in policies.CLOSED.items():
+        assert out[key] == value, key
+    assert mailkinds.switch(out, "minutes") == "off"
+
+
+def test_an_explicit_row_still_wins_over_an_unknown_profile():
+    out = policies.resolve("---\nprofile: casino\nopen_web: on\n---\n")
+    assert out["open_web"] is True and out["external_participants"] is False
+
+
+def test_a_value_this_module_cannot_read_falls_back_and_says_so():
+    out = policies.resolve("---\nopen_web: maybe\n---\n")
+    assert out["open_web"] is True
+    assert any("open_web" in p for p in out["problems"])
+
+
+def test_domains_are_normalised():
+    out = policies.resolve("---\nattendee_domains: @Acme.com, partner.example , \n---\n")
+    assert out["attendee_domains"] == ("acme.com", "partner.example")
+
+
+def test_retention_reads_days_and_forever():
+    out = policies.resolve("---\ntranscript_retention_days: 30\nrecording_retention_days: ∞\n---\n")
+    assert out["transcript_retention_days"] == 30
+    assert out["recording_retention_days"] == policies.FOREVER
+
+
+def test_a_file_that_cannot_be_read_closes_every_widening_rule(monkeypatch, caplog):
+    """S03-1: agent-api restarting, a timeout, an error status — the file may say `profile: bank`
+    and nobody heard it. The rules close (no mail to externals, no prep or minutes mail, no join),
+    the read still never raises, and the degradation is logged at warning."""
+    def boom(*_a, **_k):
+        raise policies.PolicyUnreadable("agent-api answered 503")
+    monkeypatch.setattr(policies, "ws_file", boom)
+    with caplog.at_level("WARNING"):
+        out = policies.read("57")
+    for key, value in policies.CLOSED.items():
+        assert out[key] == value, key
+    assert out["report_to_participants"] is False and out["external_participants"] is False
+    assert mailkinds.switch(out, "minutes") == "off"
+    assert any("could not be read" in r.getMessage() and r.levelname == "WARNING" for r in caplog.records)
+
+
+@pytest.mark.policy_door
+def test_the_door_answering_an_error_status_is_unreadable_not_absent(monkeypatch):
+    monkeypatch.setattr(policies, "ws_get", lambda *_a, **_k: (503, {"detail": "restarting"}))
+    assert policies.read("57")["external_participants"] is False
+    monkeypatch.setattr(policies, "ws_get", lambda *_a, **_k: (404, {"detail": "not found"}))
+    assert policies.read("57")["external_participants"] is True
+
+
+def test_no_agent_domain_is_nobody_answering_the_defaults(monkeypatch):
+    def absent(*_a, **_k):
+        raise policies.AgentDomainAbsent("no agent domain here")
+    monkeypatch.setattr(policies, "ws_file", absent)
+    assert policies.read("57")["report_to_participants"] is True
+
+
+def test_read_with_no_uid_reads_the_company_layer(monkeypatch):
+    """A ref with no uid is not a licence for the defaults: `_global` is every subject's to read,
+    so it is read as the company reader."""
+    seen = []
+    monkeypatch.setattr(policies, "ws_file",
+                        lambda uid, *_a, **_k: (seen.append(uid), "---\nprofile: bank\n---\n")[1])
+    assert policies.read("")["external_participants"] is False
+    assert seen == [policies.COMPANY_READER]
+
+
+def test_read_takes_the_file_the_admin_wrote(monkeypatch):
+    monkeypatch.setattr(policies, "ws_file", lambda *_a, **_k: "---\nprofile: bank\n---\n")
+    assert policies.read("57")["external_participants"] is False
+
+
+def test_param_prefers_the_flow_over_the_file(monkeypatch):
+    monkeypatch.setattr(policies, "ws_file",
+                        lambda *_a, **_k: "---\nopen_web: off\nexternal_participants: off\n---\n")
+
+    class _Flow:
+        def param(self, key, default=None):
+            return {"open_web": True}.get(key, default)
+
+    class _Ctx:
+        flow = _Flow()
+        refs = {"uid": "57"}
+
+    assert policies.param(_Ctx(), "open_web") is True
+    assert policies.param(_Ctx(), "external_participants") is False
+
+
+# ── P3 · the derived disclosure ──────────────────────────────────────────────────────────────────
+
+def test_at_the_defaults_it_is_the_baked_sentence():
+    """The composition and `mailtext.VISIBILITY_SENTENCE` are the same bytes.
+
+    That constant stays where it is: `scripts/parity.json`'s `visibility-sentence` fact anchors one
+    of its four sites on that assignment, and this change touches no site."""
+    assert policies.visibility_sentence(policies.resolve(None)) == mailtext.VISIBILITY_SENTENCE
+
+
+#: Every answer an admin can write to the three rules nothing enforces (S03-2). Desk off; transcripts
+#: and recordings for a number of days; recordings `0`; recordings forever; and the combinations a
+#: profile produces.
+_UNENFORCED_ANSWERS = [
+    "agent_reads_desk: off",
+    "agent_reads_desk: on",
+    "transcript_retention_days: 30",
+    "recording_retention_days: 7",
+    "recording_retention_days: 0",
+    "recording_retention_days: forever",
+    "transcript_retention_days: 30\nrecording_retention_days: 0",
+    "transcript_retention_days: 30\nrecording_retention_days: 7",
+    "transcript_retention_days: forever\nrecording_retention_days: 7",
+    "transcript_retention_days: 1\nrecording_retention_days: forever\nagent_reads_desk: off",
+    "profile: bank",
+    "profile: studio",
+]
+
+
+@pytest.mark.parametrize("rows", _UNENFORCED_ANSWERS)
+def test_a_rule_nothing_enforces_does_not_change_what_attendees_are_told(rows):
+    """S03-2. `agent_reads_desk` is read by no access path (a desk is readable by any signed-in
+    member, agent-api `_read_target`) and nothing deletes a transcript or a recording on a schedule.
+    So under every answer to them the attendee hears exactly the default sentence: no "read only by
+    an agent working for its own person", no "for N days", no "no recording is kept"."""
+    resolved = policies.resolve(f"---\n{rows}\n---\n")
+    assert resolved["problems"] == []
+    said = policies.visibility_sentence(resolved)
+    assert said == mailtext.VISIBILITY_SENTENCE
+    for claim in ("read only by", "days", "no recording"):
+        assert claim not in said, f"{rows!r}: the sentence claims {claim!r}, which nothing enforces"
+
+
+def test_the_clauses_that_stay_are_in_every_sentence():
+    """POSITIVE CONTROL for the test above: the clauses the software backs are still said, and the
+    sentence is not emptied to pass it. The desk clause is backed by agent-api serving any desk to
+    any signed-in member (agent `test_agent_api_authz.py::
+    test_a_colleagues_desk_is_readable_and_never_writable`); the locality clause names no rule."""
+    said = policies.visibility_sentence(policies.resolve("---\nagent_reads_desk: off\n---\n"))
+    assert said == f"{policies.LOCALITY_CLAUSE}; {policies.DESK_VISIBLE_CLAUSE}."
+    assert said.startswith("Vexa runs on this organisation's own servers;")
+    assert "visible to the company's agents" in said
+
+
+def test_a_studio_that_keeps_recordings_says_so():
+    said = policies.visibility_sentence(policies.resolve("---\nprofile: studio\n---\n"))
+    assert said == mailtext.VISIBILITY_SENTENCE, \
+        "keeping recordings on the same servers does not change where they are"
+
+
+def test_a_written_data_statement_replaces_the_locality_clause():
+    said = policies.visibility_sentence(policies.resolve(
+        "---\ndata_statement: Everything stays in our Frankfurt rack.\n---\n"))
+    assert said.startswith("Everything stays in our Frankfurt rack;")
+    assert "visible to the company's agents" in said
+
+
+def test_the_mail_renderer_fills_visibility_from_the_rules(monkeypatch):
+    monkeypatch.setattr(mailtext, "ws_file", lambda *_a, **_k: None)
+    monkeypatch.setattr(policies, "ws_file", lambda *_a, **_k: (
+        "---\nagent_reads_desk: off\ntranscript_retention_days: 30\nrecording_retention_days: 0\n"
+        "data_statement: Everything stays in our Frankfurt rack.\n---\n"))
+    _subject, body = mailtext.render("minutes-head", "57", {"title": "T", "when": "now"})
+    # the rule the software backs reaches the mail; the ones nothing enforces do not
+    assert "Everything stays in our Frankfurt rack;" in body
+    assert policies.DESK_VISIBLE_CLAUSE in body
+    for claim in ("read only by", "30 days", "no recording"):
+        assert claim not in body
+
+
+def test_with_no_policy_file_the_mail_says_what_it_always_said(monkeypatch):
+    monkeypatch.setattr(mailtext, "ws_file", lambda *_a, **_k: None)
+    monkeypatch.setattr(policies, "ws_file", lambda *_a, **_k: None)
+    _subject, body = mailtext.render("minutes-head", "57", {"title": "T", "when": "now"})
+    assert mailtext.VISIBILITY_SENTENCE in body
+
+
+# ── P4 · the rules reach the steps ───────────────────────────────────────────────────────────────
+#
+# `_attendees` and `_followup_on` are closures inside `production.build`, so these go through the
+# step itself, on the rig `test_attendee_mail_shape` already owns — one meeting, four addresses,
+# three of them inside `bank.test` and `out@other.test` outside it.
+
+from test_attendee_mail_shape import PRIOR, REFS, _ctx, _rig, teardown_function  # noqa: E402,F401
+from test_link_loop import FakeScaffolds  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _scaffolds(monkeypatch):
+    """Every send mints a scaffold first; this stands in for agent-api. Autouse fixtures do not
+    travel with an imported rig, so this module declares its own."""
+    monkeypatch.setattr(production, "mint_scaffold", FakeScaffolds())
+
+
+def _who(monkeypatch, policy_file):
+    monkeypatch.setattr(policies, "ws_file", lambda *_a, **_k: policy_file)
+    reg, ch = _rig(monkeypatch)
+    out = reg.steps["email_attendees"](_ctx(dict(REFS), PRIOR))
+    return sorted(m["to"] for m in ch.sent), out
+
+
+def test_outside_the_domain_is_still_never(monkeypatch):
+    """PRD §16.2 is not a rule on the page and did not become one: `out@other.test` is never
+    mailed while the allow-list is the organiser's own domain, whatever `external_participants`
+    says. That rule is the OTHER axis — a participant with no desk here."""
+    to, out = _who(monkeypatch, "---\nexternal_participants: on\n---\n")
+    assert to == ["ben@bank.test", "cara@bank.test"]
+    assert out.result["sent"] == 2
+
+
+def test_externals_off_mails_only_people_who_already_have_an_account(monkeypatch):
+    monkeypatch.setattr(production, "platform_user_id",
+                        lambda a: "12" if a == "ben@bank.test" else "")
+    to, _ = _who(monkeypatch, "---\nexternal_participants: off\n---\n")
+    assert to == ["ben@bank.test"]
+
+
+def test_externals_on_asks_identity_nothing(monkeypatch):
+    """The default path must not pay for a question whose answer it would ignore."""
+    monkeypatch.setattr(production, "platform_user_id",
+                        lambda a: pytest.fail("asked identity with the rule ON"))
+    to, _ = _who(monkeypatch, "---\nexternal_participants: on\n---\n")
+    assert to == ["ben@bank.test", "cara@bank.test"]
+
+
+def test_the_bank_profile_writes_to_nobody_without_an_account(monkeypatch):
+    monkeypatch.setattr(production, "platform_user_id", lambda a: "")
+    to, _ = _who(monkeypatch, "---\nprofile: bank\n---\n")
+    assert to == []
+
+
+def test_identity_being_down_does_not_mail_wider(monkeypatch):
+    def boom(_a):
+        raise RuntimeError("admin-api is unreachable")
+    monkeypatch.setattr(production, "platform_user_id", boom)
+    to, _ = _who(monkeypatch, "---\nexternal_participants: off\n---\n")
+    assert to == []
+
+
+def test_the_allow_list_on_the_page_widens_what_inside_means(monkeypatch):
+    to, _ = _who(monkeypatch, "---\nattendee_domains: bank.test, other.test\n---\n")
+    assert to == ["ben@bank.test", "cara@bank.test", "out@other.test"]
+
+
+def test_the_page_wins_over_the_env(monkeypatch):
+    monkeypatch.setenv("VEXA_FLOWS_ATTENDEE_DOMAINS", "other.test")
+    to, _ = _who(monkeypatch, "---\nattendee_domains: bank.test\n---\n")
+    assert to == ["ben@bank.test", "cara@bank.test"]
+
+
+def test_the_env_still_holds_when_the_page_answers_nothing(monkeypatch):
+    monkeypatch.setenv("VEXA_FLOWS_ATTENDEE_DOMAINS", "other.test")
+    to, _ = _who(monkeypatch, "---\nopen_web: on\n---\n")
+    assert to == ["out@other.test"], "the env fallback is still read when the page answers nothing"
+
+
+def test_report_to_participants_off_stops_the_fan_out(monkeypatch):
+    to, out = _who(monkeypatch, "---\nreport_to_participants: off\n---\n")
+    assert to == []
+    assert out.result["followup"] == "off"
+
+
+def test_the_per_meeting_opt_out_still_wins(monkeypatch):
+    monkeypatch.setattr(policies, "ws_file",
+                        lambda *_a, **_k: "---\nreport_to_participants: on\n---\n")
+    reg, ch = _rig(monkeypatch)
+    out = reg.steps["email_attendees"](_ctx({**REFS, "share_opt_out": True}, PRIOR))
+    assert ch.sent == [] and out.result["followup"] == "off"
+
+
+# ── P5 · the wizard's blocks, through this reader ────────────────────────────────────────────────
+#
+# `asks/policies-wizard.md` (Vexa-ai/vexa#1627) walks an administrator through five questions and
+# recommends a block of front matter. Nothing validates that block on the way to the file — the
+# wizard writes it, the admin approves it, and it is read here on the next send. So the four shapes
+# it works are resolved here: a row this module cannot read falls back to the default and says so in
+# `problems`, which is precisely the failure nobody would notice, because the mail still goes out.
+
+#: What the placeholder in a recommended block is replaced by before anybody's file carries it.
+_DOMAINS = "example.test, partner.test"
+
+
+def _wizard_shapes() -> dict:
+    """`{heading: the block's rows}` — the fenced snippets under each `####` of the worked shapes."""
+    body = WIZARD.read_text(encoding="utf-8")
+    out = {}
+    parts = re.split(r"^#### (.+)$", body, flags=re.M)
+    for i in range(1, len(parts) - 1, 2):
+        m = re.search(r"```yaml\n(.*?)```", parts[i + 1], flags=re.S)
+        if m:
+            out[parts[i].strip()] = m.group(1).strip()
+    return out
+
+
+def _resolved(rows: str) -> dict:
+    """The block as a file: fenced front matter, the placeholder answered, resolved."""
+    return policies.resolve(f"---\n{rows.replace('<the domains that count as inside>', _DOMAINS)}\n---\n")
+
+
+#: The rules each shape is FOR. Written out here rather than derived, so this is the spec and the
+#: file is the implementation. Keys not named are the profile's or the default's and are covered by
+#: `problems == []` plus P1's own assertions.
+SHAPE_RULES = {
+    "Only our own people": {
+        "profile": "default", "external_participants": False, "bot_joins_mixed_meetings": False,
+        "report_to_participants": True, "open_web": True, "organizer_confirms_join": False,
+    },
+    "Partners in the room, and the words stay here": {
+        "profile": "bank", "external_participants": False, "bot_joins_mixed_meetings": False,
+        "report_to_participants": False, "organizer_confirms_join": True, "open_web": False,
+        "recording_retention_days": 0, "attendee_domains": ("example.test", "partner.test"),
+        # the loop levers the bank preset keeps, minus the one this shape's answers switched off
+        "prep_and_invite_mail": True,
+    },
+    "Partners in the room, and the mail reaches them": {
+        "profile": "default", "external_participants": True, "report_to_participants": True,
+        "recording_retention_days": policies.FOREVER, "open_web": True,
+        "attendee_domains": ("example.test", "partner.test"),
+    },
+    "Sometimes the public": {
+        "profile": "default", "external_participants": False, "report_to_participants": True,
+        "organizer_confirms_join": True, "bot_joins_mixed_meetings": True,
+        "attendee_domains": ("example.test", "partner.test"),
+    },
+}
+
+
+def test_the_wizard_recommends_the_four_shapes_this_test_knows():
+    if not WIZARD.is_file():
+        pytest.skip(f"no wizard at {WIZARD}")
+    assert set(_wizard_shapes()) == set(SHAPE_RULES)
+
+
+@pytest.mark.parametrize("shape", list(SHAPE_RULES))
+def test_every_block_the_wizard_recommends_is_one_this_reader_understands(shape):
+    if not WIZARD.is_file():
+        pytest.skip(f"no wizard at {WIZARD}")
+    out = _resolved(_wizard_shapes()[shape])
+    assert out["problems"] == [], f"{shape}: this reader cannot read its own recommendation"
+    for key, want in SHAPE_RULES[shape].items():
+        assert out[key] == want, f"{shape}: {key} resolves to {out[key]!r}, not {want!r}"
+
+
+def test_the_domain_row_is_a_placeholder_and_not_a_domain():
+    """`attendee_domains` is the line between inside and outside. A wizard that shipped a worked
+    example with a real domain in it would be one copy-paste away from writing somebody else's
+    company into a bank's policy file, so the worked blocks carry a gap that has to be filled."""
+    if not WIZARD.is_file():
+        pytest.skip(f"no wizard at {WIZARD}")
+    for shape, rows in _wizard_shapes().items():
+        for line in rows.splitlines():
+            if line.startswith("attendee_domains:"):
+                assert line == "attendee_domains: <the domains that count as inside>", shape
+
+
+def test_the_wizards_attendee_sentence_is_composed_from_THIS_modules_clauses():
+    """The disclosure is DERIVED and there is no front-matter key for it (P3). The wizard therefore
+    has to compose it in the recommendation, and the words it composes from are these — pinned here
+    rather than in the ask, so a rewording of a clause fails at the module that owns it."""
+    if not WIZARD.is_file():
+        pytest.skip(f"no wizard at {WIZARD}")
+    said = " ".join(WIZARD.read_text(encoding="utf-8").split())
+    for clause in (policies.LOCALITY_CLAUSE, policies.DESK_VISIBLE_CLAUSE):
+        assert clause in said, f"the wizard would compose a sentence this module does not: {clause!r}"
+    # …and never the clauses that followed a rule nothing enforces (S03-2)
+    for gone in ("read only by an agent working for its own person", "say the two numbers",
+                 "recordings and transcripts stay here"):
+        assert gone not in said, f"the wizard still composes {gone!r}"
+
+
+def test_the_join_confirmation_rule_defaults_to_what_the_engine_actually_does():
+    """Question 4 of the wizard offers it, so it is a key. It is `off` because an invite IS the whole
+    decision today — a default of `on` would tell a bank's administrator that a person stands between
+    an invite and a recording, which is the one direction this table must never lie in."""
+    assert policies.DEFAULTS["organizer_confirms_join"] is False
+    assert policies.resolve(None)["organizer_confirms_join"] is False
+    assert policies.resolve("---\norganizer_confirms_join: on\n---\n")["organizer_confirms_join"] is True
+
+
+# ── P6 · the first read waits for the door ───────────────────────────────────────────────────────
+#
+# At first boot a worker can start before the gateway's door (or agent-api behind it) answers. It
+# used to read the file as unreadable, run under the closed rules, and say so only in a swallowed
+# warning. Now the boot read retries, says what it heard, and an unreadable company layer is asked
+# again within seconds instead of being held for the full quota TTL.
+
+def _door_up_after(n_failures: int, content: "str | None" = "---\nprofile: bank\n---\n"):
+    calls = []
+
+    def ws_file(uid, *_a, **_k):
+        calls.append(uid)
+        if len(calls) <= n_failures:
+            raise policies.PolicyUnreadable("http GET http://gateway:8002/agent/...: URLError: "
+                                            "[Errno 111] Connection refused")
+        return content
+    return ws_file, calls
+
+
+def test_the_boot_read_retries_until_the_door_answers(monkeypatch, capsys):
+    ws_file, calls = _door_up_after(3)
+    monkeypatch.setattr(policies, "ws_file", ws_file)
+    slept = []
+    assert policies.read_at_boot(attempts=10, wait_s=2.0, sleep=slept.append) == "answered"
+    assert len(calls) == 4 and slept == [2.0, 2.0, 2.0]
+    assert calls == [policies.COMPANY_READER] * 4
+    out = capsys.readouterr().out
+    assert out.count("unreadable at boot") == 3 and "Connection refused" in out
+    assert "_global/POLICIES.md read at boot: answered (attempt 4)" in out
+
+
+def test_the_boot_read_says_absent_and_no_agent_domain_without_retrying(monkeypatch, capsys):
+    monkeypatch.setattr(policies, "ws_file", lambda *_a, **_k: None)
+    assert policies.read_at_boot(attempts=5, sleep=lambda _s: pytest.fail("no retry")) == "absent"
+
+    def absent(*_a, **_k):
+        raise policies.AgentDomainAbsent("no agent domain here")
+    monkeypatch.setattr(policies, "ws_file", absent)
+    assert policies.read_at_boot(attempts=5, sleep=lambda _s: pytest.fail("no retry")) == "no agent domain"
+    assert "read at boot: no agent domain (attempt 1)" in capsys.readouterr().out
+
+
+def test_a_boot_read_that_never_hears_the_file_says_so_at_error_and_never_raises(monkeypatch, capsys):
+    ws_file, calls = _door_up_after(99)
+    monkeypatch.setattr(policies, "ws_file", ws_file)
+    assert policies.read_at_boot(attempts=3, wait_s=0.0, sleep=lambda _s: None) == "unreadable"
+    assert len(calls) == 3
+    out = capsys.readouterr().out
+    assert "error: policies: _global/POLICIES.md could not be read at boot after 3 attempts" in out
+    assert "every widening rule is closed until it can be read" in out
+
+
+def test_an_unreadable_company_layer_is_asked_again_within_seconds(monkeypatch):
+    """The quota cache held a closed answer for COMPANY_TTL_S (30 s) — a worker that read before the
+    door was up ran half a minute under the install default. An unreadable read is held only
+    COMPANY_RETRY_S; a heard one still the full TTL."""
+    ws_file, calls = _door_up_after(1, "---\nroutine_runs_per_day: 7\n---\n")
+    monkeypatch.setattr(policies, "ws_file", ws_file)
+    monkeypatch.setitem(policies._CQ, "rules", None)
+    monkeypatch.setitem(policies._CQ, "at", 0.0)
+    import flows_config
+    install_default = flows_config.get_int("VEXA_FLOWS_USER_RUNS_PER_DAY")
+    assert install_default != 7
+    t0 = 1_000_000.0
+    assert (policies.company_quota("routine_runs_per_day", "VEXA_FLOWS_USER_RUNS_PER_DAY", now=t0)
+            == install_default)
+    later = t0 + 6.0                      # seconds after the door came up, well inside the 30 s TTL
+    assert policies.company_quota("routine_runs_per_day", "VEXA_FLOWS_USER_RUNS_PER_DAY", now=later) == 7
+    assert len(calls) == 2
+    # a heard answer is held for the TTL: no third read inside it
+    assert policies.company_quota("routine_runs_per_day", "VEXA_FLOWS_USER_RUNS_PER_DAY",
+                                  now=later + 20.0) == 7
+    assert len(calls) == 2
+
+
+def test_the_worker_reads_the_policy_file_before_its_loop():
+    src = (Path(policies.__file__).resolve().parents[1] / "flows_worker" / "__main__.py").read_text()
+    body = src[src.index("def main()"):]
+    assert "policies.read_at_boot()" in body
+    assert body.index("policies.read_at_boot()") < body.index("while True:")

@@ -1,0 +1,310 @@
+/** docDiagrams — what a ```mermaid fence renders as, in every renderer (Vexa-ai/vexa#1617).
+ *
+ *  Founder, 2026-09-06, asking the setup agent for the deployment picture: *"no we need to see
+ *  diagram here"*. The agent wrote a `flowchart TB` into `_global/STRUCTURE.md`, said *"the diagram
+ *  is now in STRUCTURE.md"*, and the page showed the fence as a code block. The admin saw source.
+ *
+ *  Three properties this module exists to hold, in the order they bite:
+ *
+ *  1. NO CDN, EVER. The mermaid library is an npm dependency compiled into our own bundle and served
+ *     from our own origin. This product runs inside a bank's perimeter with no egress: a `<script
+ *     src="https://cdn…">` renders nothing there, and the failure is invisible — a blank box on the
+ *     one page someone opened to look at a diagram. It is also a third party watching a customer's
+ *     documents load, which is the same rule `docImages` refuses to hotlink pictures under (#1612).
+ *  2. PAGES WITHOUT DIAGRAMS PAY NOTHING. mermaid is ~1 MB of parser, layout and renderer. It is
+ *     reached through a lazy `import("mermaid")` inside the effect, so the bundler emits it as its
+ *     own chunk and no reader downloads it until a page actually carries a fence.
+ *  3. NEVER A BLANK. The source block is not the failure case, it is the STARTING state: a fence
+ *     renders as its own text and is REPLACED when (and only when) an SVG exists. A parse error
+ *     leaves that text standing and prints the parser's message under it. So every path — loading,
+ *     broken, a build where the import fails — shows the reader the diagram's source, which is the
+ *     behaviour they had before this module and the worst thing it can degrade to.
+ *
+ *  THEME. The page renders light and dark from one CSS variable set (globals.css), so the diagram
+ *  does too: mermaid's `base` theme with `themeVariables` resolved from the SAME `--t1/--t2/--t3/
+ *  --panel/--panel2/--bg` tokens every other surface paints from. mermaid runs colour math on those
+ *  values (khroma), so they are read as computed values, never handed through as `var(--t1)`.
+ *
+ *  SECURITY. kg/ markdown is agent-written from meeting transcripts and external content — the same
+ *  untrusted input `MdxDoc`'s `assertNoExecutableMdx` refuses to execute. mermaid renders with
+ *  `securityLevel: "strict"`, which sanitizes the SVG it returns and disables diagram click actions.
+ */
+"use client";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+
+export type DiagramTheme = "dark" | "light";
+
+/** Does this fence's info string name a mermaid diagram? The first word is the language; anything
+ *  after it is meta the renderers do not read (` ```mermaid title="x" ` stays a diagram). */
+export function isMermaidFence(info: string | null | undefined): boolean {
+  return (info ?? "").trim().split(/\s+/)[0].toLowerCase() === "mermaid";
+}
+
+// ── the library, loaded once and only when a page needs it ──────────────────────────
+// The promise is cached at module scope rather than per-component: a page with six diagrams pulls
+// the chunk once, and the second diagram's `await` resolves against the first one's download.
+let loading: Promise<typeof import("mermaid").default> | null = null;
+function loadMermaid(): Promise<typeof import("mermaid").default> {
+  if (!loading) loading = import("mermaid").then((m) => m.default);
+  return loading;
+}
+
+// ── the palette, read off the page ──────────────────────────────────────────────────
+/** One design token, as the value the browser computed for it. Falls back to the literal from
+ *  globals.css when there is no document to ask (tests, SSR) so a diagram is never colourless. */
+function token(name: string, fallback: string): string {
+  if (typeof document === "undefined") return fallback;
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+const FALLBACK: Record<DiagramTheme, Record<string, string>> = {
+  dark: { "--bg": "#0e0e11", "--panel": "#222329", "--panel2": "#2b2c34", "--t1": "#ededf0", "--t2": "#9a9aa4", "--t3": "#65656f", "--accent": "#d8855c" },
+  light: { "--bg": "#ffffff", "--panel": "#f7f7f9", "--panel2": "#e6e6eb", "--t1": "#1a1a1f", "--t2": "#5c5c66", "--t3": "#8a8a94", "--accent": "#c06a3f" },
+};
+
+/** mermaid `themeVariables` painted from the page's own tokens: TEXT is `--t1`/`--t2`, LINES and
+ *  arrowheads are `--t2`, borders `--t3`, node fills `--panel2`, groups `--panel`. Every diagram
+ *  family mermaid ships names its colours separately (a sequence diagram's actor box is not a
+ *  flowchart's node), so the map is wide on purpose — an unnamed variable falls back to mermaid's
+ *  own palette and reads as a foreign object on the page. */
+function themeVariables(theme: DiagramTheme): Record<string, string | boolean> {
+  const t = (name: string) => token(name, FALLBACK[theme][name]);
+  const bg = t("--bg"), panel = t("--panel"), panel2 = t("--panel2");
+  const t1 = t("--t1"), t2 = t("--t2"), t3 = t("--t3"), accent = t("--accent");
+  return {
+    darkMode: theme === "dark",              // drives mermaid's own lighten/darken direction
+    background: bg,
+    fontFamily: token("--sans", "-apple-system, BlinkMacSystemFont, Segoe UI, Inter, system-ui, sans-serif"),
+    fontSize: "14px",
+    // text
+    textColor: t1, primaryTextColor: t1, secondaryTextColor: t1, tertiaryTextColor: t2,
+    titleColor: t1, nodeTextColor: t1, labelTextColor: t1, loopTextColor: t1,
+    // lines
+    lineColor: t2, arrowheadColor: t2, gridColor: t3, signalColor: t2, signalTextColor: t1,
+    // fills + borders
+    primaryColor: panel2, primaryBorderColor: t3,
+    secondaryColor: panel, secondaryBorderColor: t3,
+    tertiaryColor: panel, tertiaryBorderColor: t3,
+    mainBkg: panel2, nodeBorder: t3, altBackground: panel,
+    clusterBkg: panel, clusterBorder: t3,
+    edgeLabelBackground: bg,
+    noteBkgColor: panel, noteTextColor: t1, noteBorderColor: t3,
+    actorBkg: panel2, actorBorder: t3, actorTextColor: t1, actorLineColor: t2,
+    labelBoxBkgColor: panel2, labelBoxBorderColor: t3,
+    sectionBkgColor: panel, sectionBkgColor2: panel2,
+    taskBkgColor: panel2, taskBorderColor: t3, taskTextColor: t1,
+    taskTextOutsideColor: t1, taskTextLightColor: t1, taskTextDarkColor: t1,
+    activeTaskBkgColor: accent, activeTaskBorderColor: accent,
+    doneTaskBkgColor: panel, doneTaskBorderColor: t3,
+    critBorderColor: accent, critBkgColor: accent,
+    errorBkgColor: panel, errorTextColor: t1,
+  };
+}
+
+// A fresh DOM id per render: mermaid mounts the diagram under it while it measures, and two
+// diagrams sharing an id measure each other.
+let seq = 0;
+
+/** Source → SVG, or a throw carrying the parser's own message. The `parse` call is deliberate and
+ *  not redundant with `render`: it is the step whose error text names the line and token the author
+ *  got wrong, which is the whole content of the fallback below. */
+export async function renderMermaid(source: string, theme: DiagramTheme): Promise<string> {
+  const mermaid = await loadMermaid();
+  mermaid.initialize({
+    startOnLoad: false,          // nothing scans the document; every render is one we asked for
+    securityLevel: "strict",     // untrusted authorship — sanitize, and no click actions
+    suppressErrorRendering: true, // a syntax error is OUR fallback to draw, not mermaid's bomb glyph
+    theme: "base",
+    themeVariables: themeVariables(theme),
+  });
+  await mermaid.parse(source);
+  const id = `vexa-mermaid-${++seq}`;
+  const { svg } = await drawingWithoutStyleAttributes(id, () => mermaid.render(id, source));
+  return withStyleNonce(svg, styleNonce());
+}
+
+// ── style attributes, which the page refuses ────────────────────────────────────────
+/** The attribute an inline style travels in through mermaid's SVG text (see below). */
+export const STYLE_DATA = "data-vx-style";
+
+/** THE PAGE REFUSES STYLE ATTRIBUTES (`style-src-attr 'none'`, app/contentSecurityPolicy.ts); a style
+ *  set through the CSSOM (`el.style.…`) is not an attribute and applies. mermaid writes its styles as
+ *  attributes twice:
+ *  - while it DRAWS, in a scratch element in this document, through `setAttribute("style", …)`
+ *    (d3's `.attr("style")`, KaTeX). Those must apply, because mermaid measures the labels they
+ *    shape. For the length of the draw, `setAttribute("style", v)` is `el.style.cssText = v`: a
+ *    script that runs is already trusted by `script-src`, which is why a `<style>` it creates gets
+ *    the nonce (`styleNonceBootstrap`). Markup is never affected.
+ *  - in the SVG TEXT it returns, which it sanitizes by parsing it (DOMPurify) and which the page
+ *    then inserts: every parse of a `style="…"` there is a refusal. So when mermaid serializes its
+ *    scratch element, each style the page APPLIED moves into `data-vx-style` (an inert attribute),
+ *    and one the page refused — markup in a label — is dropped. `mermaidSvgNode` puts them back
+ *    through the CSSOM. mermaid's own scoped `<style>`, which it created and the bootstrap stamped,
+ *    is serialized with the nonce, so its sanitizer's parse is not refused either.
+ *  The two patches are on while any draw is in flight and removed when the last one ends. */
+const drawing = new Set<string>();
+let restoreDom: (() => void) | null = null;
+
+function innerHtmlOwner(): { owner: object; desc: PropertyDescriptor } | null {
+  for (let o: object | null = Element.prototype; o; o = Object.getPrototypeOf(o)) {
+    const desc = Object.getOwnPropertyDescriptor(o, "innerHTML");
+    if (desc?.get) return { owner: o, desc };
+  }
+  return null;
+}
+
+/** The styles the page applied in `root`'s subtree, moved into `data-vx-style`; refused ones dropped. */
+function stylesToData(root: Element, setAttribute: Element["setAttribute"]): void {
+  for (const el of Array.from(root.querySelectorAll("[style]"))) {
+    const css = (el as HTMLElement).style?.cssText ?? "";
+    el.removeAttribute("style");
+    if (css) setAttribute.call(el, STYLE_DATA, css);
+  }
+  const own = root.querySelector(":scope > svg > style");
+  const nonce = styleNonce();
+  if (own && nonce) setAttribute.call(own, "nonce", nonce);
+}
+
+function patchDom(): () => void {
+  const E = Element.prototype;
+  const setAttribute = E.setAttribute;
+  E.setAttribute = function (this: Element, name: string, value: string) {
+    if (String(name).toLowerCase() === "style" && (this as HTMLElement).style) { (this as HTMLElement).style.cssText = String(value); return; }
+    return setAttribute.call(this, name, value);
+  };
+  const html = innerHtmlOwner();
+  if (html) {
+    Object.defineProperty(html.owner, "innerHTML", { ...html.desc, get(this: Element) {
+      if (drawing.has(this.id)) stylesToData(this, setAttribute);
+      return html.desc.get!.call(this);
+    } });
+  }
+  return () => {
+    E.setAttribute = setAttribute;
+    if (html) Object.defineProperty(html.owner, "innerHTML", html.desc);
+  };
+}
+
+/** Run one mermaid draw under the two patches above. `id` is the diagram's id; mermaid's scratch
+ *  element, the one it serializes, is `d<id>`. */
+export async function drawingWithoutStyleAttributes<T>(id: string, draw: () => Promise<T>): Promise<T> {
+  if (typeof document === "undefined") return draw();
+  if (drawing.size === 0) restoreDom = patchDom();
+  drawing.add(`d${id}`);
+  try {
+    return await draw();
+  } finally {
+    drawing.delete(`d${id}`);
+    if (drawing.size === 0 && restoreDom) { restoreDom(); restoreDom = null; }
+  }
+}
+
+/** mermaid's SVG text as nodes for this document: parsed inert, then each `data-vx-style` applied
+ *  through the CSSOM. Never inserted as markup, which would carry no style at all. */
+export function mermaidSvgNode(svg: string): DocumentFragment {
+  const parsed = new DOMParser().parseFromString(svg, "text/html");
+  const out = document.createDocumentFragment();
+  for (const n of Array.from(parsed.body.childNodes)) out.appendChild(document.importNode(n, true));
+  for (const el of Array.from(out.querySelectorAll(`[${STYLE_DATA}]`))) {
+    const css = el.getAttribute(STYLE_DATA) ?? "";
+    el.removeAttribute(STYLE_DATA);
+    if ((el as HTMLElement).style) (el as HTMLElement).style.cssText = css;
+  }
+  return out;
+}
+
+/** The page's style nonce, which the root layout's first script publishes
+ *  (`styleNonceBootstrap`, app/contentSecurityPolicy.ts); "" outside a page. */
+function styleNonce(): string {
+  if (typeof window === "undefined") return "";
+  return String((window as unknown as { __vxStyleNonce?: string }).__vxStyleNonce ?? "");
+}
+
+/** Mermaid scopes its colours in ONE `<style>` placed right after the root `<svg …>` tag. Both
+ *  callers parse the SVG text (`mermaidSvgNode`), and the page applies a parsed `<style>` only with the
+ *  response's nonce (`style-src-elem`, app/contentSecurityPolicy.ts) — so that one element, and no
+ *  other, carries it. A `<style>` anywhere else in the text (the diagram's own labels) stays
+ *  without one and does not apply.
+ *
+ *  Mermaid builds that `<style>` with `createElementNS`, so the layout's bootstrap has already
+ *  stamped it, and the browser hides a nonce once the element is in a document: the text mermaid
+ *  serializes would carry `<style nonce="">` (the draw puts the value back, `stylesToData`, and a
+ *  sanitizer may drop it). Whatever stands there is replaced with the nonce. */
+export function withStyleNonce(svg: string, nonce: string): string {
+  if (!nonce || !/^[A-Za-z0-9+/=]+$/.test(nonce)) return svg;
+  return svg.replace(/^(\s*<svg\b[^>]*>)<style(?:\s+nonce="[^"<>]*")?>/, `$1<style nonce="${nonce}">`);
+}
+
+// ── the live theme ───────────────────────────────────────────────────────────────────
+/** The theme as the DOM currently has it. `data-theme` on <html> (written by platform/theme.ts, read by
+ *  every rule in globals.css) is the one channel that is always current — `useTheme()` holds
+ *  PER-CALLER state, so a diagram calling it would never hear the footer switch toggle somewhere
+ *  else. Same reason, and the same shape, as MarkdownEditor's reader. */
+export function useDocumentTheme(): DiagramTheme {
+  const [theme, setTheme] = useState<DiagramTheme>("dark");
+  useEffect(() => {
+    const read = () => setTheme(document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark");
+    read();
+    const obs = new MutationObserver(read);
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => obs.disconnect();
+  }, []);
+  return theme;
+}
+
+// ── the render ───────────────────────────────────────────────────────────────────────
+/** The fence as it stands, optionally with what the parser said about it. This is what a reader sees
+ *  while the library loads and what they keep if it never draws — the pre-#1617 behaviour, which is
+ *  a legible diagram description, not a blank. */
+function DiagramSource({ source, error }: { source: string; error?: string }) {
+  return (
+    <div data-mermaid-source className="mt-1_5 mr-0 mb-2 ml-0">
+      <pre className="vx-mermaid-source"><code>{source}</code></pre>
+      {error && (
+        <div data-mermaid-error role="note" className="f-mono t-xs c-3 mt-1">
+          diagram not drawn — {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type DiagramState =
+  | { status: "pending" }
+  | { status: "ok"; svg: string }
+  | { status: "failed"; error: string };
+
+/** A ```mermaid fence, drawn. Used by BOTH doc renderers (MdxDoc's `pre` mapping and the plain
+ *  Markdown fallback's fence branch) so a document that fails to compile as MDX still shows the
+ *  picture — the same one-component rule `DocImage` follows for `![alt](src)`. */
+export function MermaidDiagram({ source }: { source: string }) {
+  const theme = useDocumentTheme();
+  const [state, setState] = useState<DiagramState>({ status: "pending" });
+  const figure = useRef<HTMLDivElement>(null);
+  const svg = state.status === "ok" ? state.svg : null;
+  // the drawing goes in as nodes, its styles through the CSSOM (`mermaidSvgNode`)
+  useLayoutEffect(() => { if (svg !== null && figure.current) figure.current.replaceChildren(mermaidSvgNode(svg)); }, [svg]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ status: "pending" });
+    renderMermaid(source, theme).then(
+      (svg) => { if (!cancelled) setState({ status: "ok", svg }); },
+      (err: unknown) => { if (!cancelled) setState({ status: "failed", error: String((err as Error)?.message ?? err).trim() }); },
+    );
+    return () => { cancelled = true; };
+  }, [source, theme]);
+
+  if (state.status !== "ok") return <DiagramSource source={source} error={state.status === "failed" ? state.error : undefined} />;
+  return (
+    // mermaid's own <style> is scoped to the svg's id, so the markup carries its colours with it and
+    // nothing here leaks into the page. Horizontal overflow scrolls INSIDE the figure: a wide
+    // deployment diagram must not widen the document (docs are read in a pane, not a browser tab).
+    <div data-mermaid-diagram className="mt-2 mr-0 mb-3 ml-0 vx-mermaid-figure" ref={figure} />
+  );
+}

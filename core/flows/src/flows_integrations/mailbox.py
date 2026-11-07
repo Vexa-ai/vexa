@@ -16,7 +16,7 @@ never by sender. Cursor is durable (mail_cursor row) — restarts resume, never 
 WHICH inbox this is stops at `inbox.get_inbox()` — routing, admission and dedup below are
 source-blind by design:
 
-    VEXA_MAIL_INBOX = imap     (default) — IMAP against imap.gmail.com, behaviour unchanged
+    VEXA_MAIL_INBOX = imap     (default) — IMAP; Gmail preset, or VEXA_MAIL_IMAP_* for any server
                     = mailpit           — the dev stack's mail double (REST only, no IMAP)
     VEXA_MAILPIT_URL           — mailpit's HTTP base (default http://127.0.0.1:8025)
     VEXA_MAIL_ADDR             — the address this inbox answers as; mailpit filters on it
@@ -29,6 +29,7 @@ mailpit invite produce byte-identical facts. See `flows_integrations/inbox.py` f
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import sys
@@ -38,11 +39,30 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import flows_config as cfg
+import flows_obs
 from flows import Registry, SystemClock, admit, postgres_db
 from flows_defs import production
-from flows_integrations import mail_policy
+from flows_integrations import mail_policy, outlook
+from flows_integrations import mailbox_status
+from flows_integrations import mail_tickets
 from flows_integrations.inbox import get_inbox
 from flows_steps.common import db_url
+from flows_steps.mail_transport import MailTransportError
+
+
+def log_sender(addr: str) -> str:
+    """How a sender appears in this process's log: the domain and a short digest of the whole
+    address, never the address. Enough to correlate two lines about one sender, and to tell one
+    domain's mail from another's; not enough to read who wrote."""
+    a = (addr or "").strip().lower()
+    domain = a.rsplit("@", 1)[1] if "@" in a else "?"
+    return f"<{hashlib.sha256(a.encode()).hexdigest()[:10]}@{domain}>"
+
+
+def log_message(msg) -> str:
+    """A message as it appears in the log: a digest of its source id. The subject is never logged."""
+    ref = str(getattr(msg, "ext_id", "") or getattr(msg, "message_id", "") or "")
+    return "msg:" + hashlib.sha256(ref.encode()).hexdigest()[:10]
 
 POLL_SECONDS = 12
 
@@ -60,15 +80,95 @@ POLL_SECONDS = 12
 # matters most commercially — it is what a bank or a studio actually runs.
 MEET_URL = re.compile(r"https://meet\.google\.com/[a-z-]+")
 ZOOM_URL = re.compile(r"https://(?:[A-Za-z0-9-]+\.)*zoom\.us/j/\d+(?:\?pwd=[A-Za-z0-9._%~-]+)?")
+# `\\` and `;` EXCLUDED from the class, and that is a fix rather than tidiness: a newline inside
+# an ICS TEXT value arrives as the TWO characters backslash-n, so a class that permits `\\` runs
+# straight past the end of the link into the next line's prose — the captured URL reads
+# `…?p=HspUEOnQK2jxCFVGhg\\nMeeting`, which joins nothing. Measured on a live Microsoft 365
+# invitation (Vexa-ai/vexa#1320); a `;` ends an ICS parameter list and never belongs either.
 TEAMS_URL = re.compile(
-    r"https://teams\.(?:microsoft|live)\.com/l/meetup-join/[^\s<>\"']+"
-    r"|https://teams\.(?:microsoft|live)\.com/meet/[^\s<>\"']+")
+    r"https://teams\.(?:microsoft|live)\.com/l/meetup-join/[^\s<>\"';\\]+"
+    r"|https://teams\.(?:microsoft|live)\.com/meet/[^\s<>\"';\\]+")
 # Jitsi is host-scoped exactly as meeting_link.py scopes it: meet.jit.si always, plus whatever
 # VEXA_JITSI_HOSTS declares. A bare "any host with a path" rule would match half the web.
 _JITSI_HOSTS = [h.strip() for h in
                 ("meet.jit.si," + os.environ.get("VEXA_JITSI_HOSTS", "")).split(",") if h.strip()]
 JITSI_URL = re.compile(
     r"https://(?:" + "|".join(re.escape(h) for h in _JITSI_HOSTS) + r")/[^\s<>\"'?#]+")
+
+
+# WINDOWS ZONE NAMES. Outlook and Exchange write `TZID:W. Europe Standard Time`, not
+# `Europe/Berlin` — the CLDR "windowsZones" spelling, which `zoneinfo` has never heard of. Before
+# this table `ZoneInfo(...)` raised `ZoneInfoNotFoundError` straight out of `parse_ics`, out of
+# `route`, and out of the mailbox poll: EVERY Exchange invite was dropped, by an exception rather
+# than by a decision, so nothing downstream could say which meeting had gone missing. The pilot's
+# organiser sends from Exchange, and `W. Europe Standard Time` is the row it lands on.
+#
+# Not the whole CLDR mapping — the zones a real invite to us arrives in, and the fallback below
+# handles the rest without a dependency. Each maps to the IANA zone CLDR itself names for it.
+_WINDOWS_ZONES = {
+    "w. europe standard time": "Europe/Berlin",
+    "central europe standard time": "Europe/Budapest",
+    "central european standard time": "Europe/Warsaw",
+    "romance standard time": "Europe/Paris",
+    "gmt standard time": "Europe/London",
+    "greenwich standard time": "Atlantic/Reykjavik",
+    "e. europe standard time": "Europe/Chisinau",
+    "fle standard time": "Europe/Kiev",
+    "gtb standard time": "Europe/Bucharest",
+    "turkey standard time": "Europe/Istanbul",
+    "israel standard time": "Asia/Jerusalem",
+    "russian standard time": "Europe/Moscow",
+    "utc": "UTC",
+    "eastern standard time": "America/New_York",
+    "central standard time": "America/Chicago",
+    "mountain standard time": "America/Denver",
+    "pacific standard time": "America/Los_Angeles",
+    "arabian standard time": "Asia/Dubai",
+    "india standard time": "Asia/Kolkata",
+    "se asia standard time": "Asia/Bangkok",
+    "china standard time": "Asia/Shanghai",
+    "singapore standard time": "Asia/Singapore",
+    "korea standard time": "Asia/Seoul",
+    "tokyo standard time": "Asia/Tokyo",
+    "aus eastern standard time": "Australia/Sydney",
+    "new zealand standard time": "Pacific/Auckland",
+    "south africa standard time": "Africa/Johannesburg",
+    "e. south america standard time": "America/Sao_Paulo",
+}
+
+# THE PER-MEETING OPT-OUT (PRD §16.2 item 3). Creator-controlled sharing is default ON — that one
+# value is the viral coefficient — and the creator's way to exclude ONE meeting is a token in the
+# invite, the only surface a meeting's creator owns without an administrator. Same shape as the
+# `#group:` token this parser already scans for, and scanned over the whole ICS for the same
+# reason: people put it in the title as readily as in the body.
+#
+# `\b` on BOTH sides, so `#noshareholders` is a hashtag about shareholders and not a silently
+# suppressed fan-out — a token that fires on a substring produces the one failure nobody reports.
+NOSHARE = re.compile(r"#noshare\b", re.I)
+
+
+def _zone(tzid: str):
+    """The IANA zone for an ICS `TZID`, or None when we cannot name it.
+
+    Three tries, cheapest first: the name as given (Google sends IANA), the Windows table above,
+    and nothing. NEVER raises — see `parse_ics`, where None means "treat this DTSTART as UTC",
+    which is exactly what the floating-DTSTART branch beside it already does with the same
+    uncertainty. A meeting an hour off still joins; an invite that raises never joins at all."""
+    from zoneinfo import ZoneInfo
+    # THE QUOTES ARE MICROSOFT'S AND BELONG TO NEITHER NAME. Outlook writes
+    # `DTSTART;TZID="W. Europe Standard Time":…` as readily as the bare form, and with the quotes
+    # still attached this lookup misses the table, misses tzdata, and falls through to UTC — an
+    # hour wrong, silently, on the pilot's own zone, which is the one failure shape this table
+    # exists to prevent. Stripped here rather than at the regex so both spellings reach one rule.
+    tzid = (tzid or "").strip().strip('"').strip("'")
+    for name in (tzid, _WINDOWS_ZONES.get(tzid.strip().lower(), "")):
+        if not name:
+            continue
+        try:
+            return ZoneInfo(name)
+        except Exception:  # noqa: BLE001 — an unknown zone is a fact we lack, not a failure
+            continue
+    return None
 
 
 def _meeting_url(text: str) -> str | None:
@@ -82,8 +182,11 @@ def _meeting_url(text: str) -> str | None:
 def _unfold(ics: str) -> str:
     """RFC 5545 line folding: a CRLF followed by one space or tab continues the line. Real
     invites fold — a Zoom URL with a `?pwd=` is long enough to be split mid-token, and an
-    ATTENDEE line with a CN and a mailto is longer still."""
-    return re.sub(r"\r?\n[ \t]", "", ics)
+    ATTENDEE line with a CN and a mailto is longer still.
+
+    The implementation lives in `flows_integrations.outlook`, because every Microsoft reading
+    rule there depends on it and it must not exist twice."""
+    return outlook.unfold_ics(ics)
 
 
 def parse_ics(ics: str, self_addr: str | None = None) -> dict | None:
@@ -91,7 +194,17 @@ def parse_ics(ics: str, self_addr: str | None = None) -> dict | None:
     if "BEGIN:VEVENT" not in ics:
         return None                       # no event block — never fall back to scanning VTIMEZONE
     ve = ics.split("BEGIN:VEVENT", 1)[-1].split("END:VEVENT", 1)[0]
-    url = _meeting_url(ve) or _meeting_url(ics)
+    # MICROSOFT'S OWN PROPERTIES FIRST, and the order is the whole point (see
+    # `flows_integrations/outlook.py`, rules 4-6). The generic scan reads the event
+    # top-to-bottom, and on a real Exchange invite that means LOCATION — the literal string
+    # "Microsoft Teams Meeting", carrying no URL at all — and then DESCRIPTION, whose FIRST link
+    # is the short form `teams.microsoft.com/meet/<digits>`. That is A DIFFERENT IDENTIFIER FOR
+    # THE SAME MEETING than `X-MICROSOFT-SKYPETEAMSMEETINGURL` carries, and nothing anywhere
+    # errors: the invite is admitted, a bot is dispatched, and it joins nothing.
+    #
+    # An invite with no Microsoft properties is untouched — `teams_join_url` returns None and the
+    # scan below is byte-for-byte what it was.
+    url = outlook.teams_join_url(ics) or _meeting_url(ve) or _meeting_url(ics)
     if not url:
         return None
     # ⚠ ANCHORED TO A LINE START, and it has to be. These patterns are case-insensitive and
@@ -108,7 +221,10 @@ def parse_ics(ics: str, self_addr: str | None = None) -> dict | None:
     # flow reporting success. Property names live at the start of a content line (RFC 5545 §3.1),
     # so `re.M` + `^` is the whole fix, and `_unfold` above has already joined continuations.
     org = re.search(r"^ORGANIZER[^:]*:(?:mailto:)?([^\s]+)", ve, re.I | re.M)
-    dt = re.search(r"^DTSTART(?:;TZID=([^:;]+))?[^:]*:(\d{8}T\d{6})(Z?)", ve, re.M)
+    # `"…"` in the TZID alternation: Outlook writes `DTSTART;TZID="W. Europe Standard Time":…`
+    # and `[^:;]+` alone stops at neither quote — the captured name kept them, and `_zone` then
+    # missed a table row it has. Both spellings now reach `_zone`, which strips them.
+    dt = re.search(r'^DTSTART(?:;TZID=("[^"]*"|[^:;]+))?[^:]*:(\d{8}T\d{6})(Z?)', ve, re.M)
     uid = re.search(r"^UID:(.+)$", ve, re.M)
     # THE OCCURRENCE, not the series. RFC 5545 gives every occurrence of a recurring event the
     # SAME `UID`; only `RECURRENCE-ID` separates them. The dedup key was `ics-<UID>`, so a
@@ -116,7 +232,12 @@ def parse_ics(ics: str, self_addr: str | None = None) -> dict | None:
     # duplicate, produced no reaction and no error, on precisely the "put the mailbox on the
     # recurring dailies" case `POST /events/batch` exists for (R-B02).
     rec = re.search(r"^RECURRENCE-ID(?:;[^:]*)?:(\S+)$", ve, re.M)
-    summ = re.search(r"^SUMMARY:(.+)$", ve, re.M)
+    seq = re.search(r"^SEQUENCE:(\d{1,9})\s*$", ve, re.M)
+    # `;LANGUAGE=en-US` — Exchange puts a parameter on SUMMARY where Google does not, so
+    # `^SUMMARY:` matched nothing and every Exchange invite was titled "Meeting". Silent, and it
+    # reaches the person: the title is the subject line of the mail we send back. Same
+    # `(?:;[^:\n]*)?` shape RECURRENCE-ID above already uses.
+    summ = re.search(r"^SUMMARY(?:;[^:\n]*)?:(.+)$", ve, re.M)
     desc = re.search(r"^DESCRIPTION:(.*)$", ve, re.M)
     group = None
     gm = re.search(r"#group:([\w-]+)", ics)
@@ -150,13 +271,31 @@ def parse_ics(ics: str, self_addr: str | None = None) -> dict | None:
     if dt:
         import calendar as cal
         from datetime import datetime
-        from zoneinfo import ZoneInfo
-        t = time.strptime(dt.group(2), "%Y%m%dT%H%M%S")
+        # `\d{8}T\d{6}` IS NOT ENOUGH TO MAKE strptime SAFE. Its `%H`/`%m`/`%d` patterns each
+        # accept a single digit, so a value the regex admits can still be unparseable —
+        # `20301231T240000` raises `ValueError: unconverted data remains: 0`. Out of `parse_ics`,
+        # out of `route`, out of the poll: the cursor advances only after a message is routed, so
+        # ONE such invite wedges every message behind it, forever. Exactly the failure `_zone`
+        # was written to end, one line further down, arriving by a different door. Found by the
+        # mutation storm over the Outlook corpus (`tests/test_exchange_ics.py`).
+        #
+        # An unreadable DTSTART is treated as an ABSENT one — the `if dt:` branch is simply not
+        # taken — because that is the answer this parser already gives to the same amount of
+        # information, and adding a second policy for it would be the drift, not the fix.
+        try:
+            t = time.strptime(dt.group(2), "%Y%m%dT%H%M%S")
+        except ValueError:
+            t = None
+    if dt and t is not None:
         if dt.group(3) == "Z":
             start = cal.timegm(t)
-        elif dt.group(1):
-            start = datetime(*t[:6], tzinfo=ZoneInfo(dt.group(1))).timestamp()
+        elif dt.group(1) and (tz := _zone(dt.group(1))) is not None:
+            start = datetime(*t[:6], tzinfo=tz).timestamp()
         else:
+            # A TZID WE CANNOT NAME IS TREATED AS UTC, never as an error (the Exchange incident —
+            # see `_WINDOWS_ZONES`). Falling through to the same branch as a floating DTSTART is
+            # deliberate: both are "a wall-clock time whose zone we do not have", and both answer
+            # it the same way rather than growing a second policy for the same missing fact.
             # A FLOATING DTSTART IS UTC, never the server's local time (R-B10). `time.mktime`
             # reads the tuple in whatever zone the worker happens to run in, and this value drives
             # the bot dispatch and the note filename — the two things that must not move when the
@@ -172,14 +311,79 @@ def parse_ics(ics: str, self_addr: str | None = None) -> dict | None:
             # what makes THIS occurrence not the series: RECURRENCE-ID when the sender gave one,
             # else the occurrence's own DTSTART, which is what a per-occurrence invite differs by.
             "occurrence": (rec.group(1).strip() if rec else (dt.group(2) + dt.group(3) if dt else "")),
+            # THE MEETING ACROSS ITS UPDATES (ADR-0050 keyed schedules): UID, plus RECURRENCE-ID for
+            # one occurrence of a series — never DTSTART, which is exactly what a reschedule moves.
+            "event_key": ((uid.group(1).strip() if uid else f"noid-{int(start)}")
+                          + (f"@{rec.group(1).strip()}" if rec else "")),
+            "sequence": int(seq.group(1)) if seq else 0,
             "title": (summ.group(1).strip() if summ else "Meeting"),
             "group": group,
             "participants": participants,
-            "participant_names": names}
+            "participant_names": names,
+            # TRUTHY, and only present when it is true. Admission's `_merge_refs` keeps an
+            # existing key unless its value is falsy and the incoming one is not — so a
+            # `share: False` could be silently flipped to True by any later admission for the
+            # same meeting, which is a suppressed fan-out un-suppressing itself. This spelling
+            # cannot be clobbered by that rule in either direction.
+            **({"share_opt_out": True} if NOSHARE.search(ics) else {}),
+            **workspace_invite(ics)}
+
+
+#: A workspace invite link in the event body: `<this deployment's UI>/join/<token>` (founder,
+#: 2026-10-14: the meeting goes into the workspace whose invite link the host put in the event).
+_JOIN = re.compile(r"(https?://[^\s\"<>\\]+?)/join/([A-Za-z0-9_\-.~]{6,200})")
+
+
+def workspace_invite(ics: str) -> dict:
+    """`{workspace_invite_link, workspace_invite_token}` when the invite's text carries a workspace
+    invite link of THIS deployment, else `{}`. Only a link on this deployment's own UI origin
+    (`VEXA_UI_URL`) counts: a link anybody could paste into an event must not attach a meeting to a
+    workspace somewhere else, and the token is resolved — and authorised — by the step that uses
+    it, never here. ICS folding and escaping are undone first, so a link split across lines is
+    still found."""
+    from urllib.parse import urlsplit
+    try:
+        from flows_steps.common import ui_link
+        ui = ui_link().rstrip("/")         # the one door to the client's URL (common.py)
+    except Exception:  # noqa: BLE001 — no UI URL configured: no link can be ours
+        return {}
+    if not ui:
+        return {}
+    want = urlsplit(ui)
+    text = _unfold(ics or "").replace("\\n", " ").replace("\\,", ",").replace("\\;", ";")
+    for m in _JOIN.finditer(text):
+        base = urlsplit(m.group(1))
+        if (base.scheme, base.netloc.lower()) == (want.scheme, want.netloc.lower()):
+            token = m.group(2).rstrip(".")
+            return {"workspace_invite_link": f"{ui}/join/{token}", "workspace_invite_token": token}
+    return {}
+
+
+def _uid_or_blank(known_uid, address: str) -> str:
+    """The platform id `known_uid` answers for `address`, or "" — never raises (a ticket for an
+    organizer who is not a user yet names their address alone)."""
+    try:
+        uid = known_uid(address)
+    except Exception:  # noqa: BLE001
+        return ""
+    return str(uid) if uid not in (None, "") else ""
+
+
+def _addr(frm: str) -> str:
+    """The bare, lower-cased address of a `From:` value (`Name <a@b>` or `a@b`)."""
+    from email.utils import parseaddr
+    return (parseaddr(frm or "")[1] or "").strip().lower()
+
+
+def _unauthenticated(frm: str, why: str) -> tuple[str, dict]:
+    """A mail whose `From:` its domain did not vouch for: quarantined like a stranger's (D25)."""
+    return ("quarantine", {"kind": mail_policy.UNAUTHENTICATED_MAIL,
+                           "reason": f"{frm} was not authenticated by its domain ({why})"})
 
 
 def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
-          known_uid, is_scaffolded, allowed: set | None = None) -> tuple[str, dict] | None:
+          known_uid, is_scaffolded, allowed: set | None = None,
+          raw: bytes = b"") -> tuple[str, dict] | None:
     """The routing DECISION, pure: returns (kind, payload) or None (ignore).
 
       kind ∈ invite | invite_quarantine | thread_reply | known_user_mail | new_sender_mail
@@ -187,7 +391,8 @@ def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
 
     `known_uid(email) -> uid|None` and `is_scaffolded(uid) -> bool` are injected so the routing
     storm can drive every branch with no services; `allowed` is the domain allow-list, likewise
-    injectable, defaulting to `mail_policy.allow_domains(self_addr)`.
+    injectable, defaulting to `mail_policy.allow_domains(self_addr)`. `raw` is the message as
+    received, for in-app DKIM verification (`VEXA_FLOWS_MAIL_AUTH_MODE`).
 
     TWO AUTHORIZATION RULES LIVE HERE, and both were absent (R-B12):
 
@@ -210,7 +415,7 @@ def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
         return None
     allowed = mail_policy.allow_domains(self_addr) if allowed is None else allowed
     if ics and "BEGIN:VEVENT" in ics:
-        if "METHOD:REPLY" in ics or "METHOD:CANCEL" in ics:
+        if "METHOD:REPLY" in ics and "METHOD:CANCEL" not in ics:
             return None               # calendar machinery (our own RSVP echoes!) — never a
                                       # conversation, never a provisioning trigger (storm catch:
                                       # we nearly onboarded calendar-notification@google.com)
@@ -218,14 +423,32 @@ def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
         if not (ev and ev["organizer"]):
             return None
         org = ev["organizer"]
-        if known_uid(org) is not None or mail_policy.in_allow_list(org, self_addr, allowed):
-            return ("invite", ev)
-        return ("invite_quarantine", ev)
+        # AN INVITE ACTS FOR ITS ORGANIZER, SO THE ORGANIZER MUST BE WHO SENT IT (D25, H6). The
+        # `ORGANIZER:` line is text inside the attachment; what the receiving MTA vouches for is the
+        # `From:` domain. So the same verdict every mail branch meets applies here, and the
+        # authenticated `From:` must be the organizer — otherwise the meeting facts are recorded
+        # and nothing is sent, joined or called off.
+        if _addr(frm) != org:
+            return ("quarantine", {"kind": mail_policy.UNAUTHENTICATED_MAIL,
+                                   "reason": f"{frm} sent an invite whose organizer is {org}"})
+        authed, auth_why = mail_policy.sender_authenticated(frm, headers, raw)
+        if not authed:
+            return _unauthenticated(frm, auth_why)
+        acts_for = known_uid(org) is not None or mail_policy.in_allow_list(org, self_addr, allowed)
+        if "METHOD:CANCEL" in ics:
+            # A CANCELLED MEETING (ADR-0050): the bot armed for it is called off. Only an organizer
+            # we would act for may cancel, the same test an invite meets.
+            return ("invite_cancel", ev) if acts_for else None
+        return ("invite", ev) if acts_for else ("invite_quarantine", ev)
     auto = (headers.get("Auto-Submitted", "no").lower() != "no"
             or headers.get("Precedence", "").lower() in ("bulk", "list", "junk")
             or any(t in frm for t in ("no-reply", "noreply", "mailer-daemon", "postmaster", "bounce")))
     ref = (headers.get("In-Reply-To") or "").strip() or \
           (headers.get("References", "").split() or [""])[-1]
+    # A `From:` IS NOT A PERSON UNTIL ITS DOMAIN VOUCHES FOR IT (D25, H6). Every branch below that
+    # acts for the address — a reply on its thread, a turn in its user's session, an account for a
+    # colleague — needs the receiving MTA's DMARC verdict (or an aligned DKIM/SPF pass) first.
+    authed, auth_why = mail_policy.sender_authenticated(frm, headers, raw)
     hit = db.execute("SELECT subject_uid, session FROM mail_thread WHERE message_id = :m",
                      {"m": ref}) if ref else []
     forged = False
@@ -233,6 +456,8 @@ def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
         suid, session = hit[0]
         uid = known_uid(frm)
         if uid is not None and str(uid) == str(suid):
+            if not authed:
+                return _unauthenticated(frm, auth_why)
             return ("thread_reply", {"uid": suid, "session": session})
         # Not this thread's participant. The ref buys nothing; the sender is judged on their own
         # identity below, and the quarantine row that may follow says the ref was the reason.
@@ -241,9 +466,13 @@ def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
         return None
     uid = known_uid(frm)
     if uid is not None:
+        if not authed:
+            return _unauthenticated(frm, auth_why)
         return ("known_user_mail", {"uid": str(uid),
                                     "session": "main" if is_scaffolded(str(uid)) else "onboarding"})
     if mail_policy.in_allow_list(frm, self_addr, allowed):
+        if not authed:
+            return _unauthenticated(frm, auth_why)
         return ("new_sender_mail", {"session": "onboarding"})
     return ("quarantine", {
         "kind": mail_policy.THREAD_MISMATCH if forged else mail_policy.STRANGER_MAIL,
@@ -251,6 +480,39 @@ def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
                    f"({', '.join(sorted(allowed)) or 'empty'})"
                    + (f"; its In-Reply-To named thread {ref} it is not a participant of"
                       if forged else ""))})
+
+
+_GMEET_CODE = re.compile(r"^[a-z]{3}-[a-z]{4}-[a-z]{3}$")
+_ZOOM_ID = re.compile(r"\d{9,11}")
+
+
+def invite_native(url: str) -> tuple[str, str]:
+    """(platform, native_meeting_id) of an invite's meeting link, or ("", "") — the pair meeting-api
+    files the meeting under, so a mail ticket's `native` names the meeting the bot is sent to.
+
+    A local read of meeting-api's canonical parser
+    (`core/meetings/services/meeting-api/src/meeting_api/collector/meeting_link.py`
+    :func:`parse_meeting_url`) for the four links this intake extracts (`_meeting_url`); flows stays
+    import-free of the services. If the two ever disagree, that file wins."""
+    import urllib.parse as _u
+    value = (url or "").strip()
+    parsed = _u.urlparse(value)
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return ("", "")
+    if host == "meet.google.com":
+        code = next((p for p in reversed(parsed.path.split("/")) if p), "").lower()
+        return ("google_meet", code) if _GMEET_CODE.match(code) else ("", "")
+    if "zoom" in host:
+        m = _ZOOM_ID.search(parsed.path) or _ZOOM_ID.search(parsed.query)
+        return ("zoom", m.group(0)) if m else ("", "")
+    teams = outlook.teams_native_id(value)
+    if teams:
+        return teams
+    if host in _JITSI_HOSTS:
+        room = parsed.path.strip("/")
+        return ("jitsi", room) if room and "/" not in room else ("", "")
+    return ("", "")
 
 
 def invite_source_id(ev: dict) -> str:
@@ -272,44 +534,119 @@ def invite_source_id(ev: dict) -> str:
 BODY_ELISION = "\n\n[… {n} more characters of this message elided at VEXA_FLOWS_MAIL_BODY_MAX ({cap}) …]"
 
 
+#: THE MOST `VEXA_FLOWS_MAIL_BODY_MAX` MAY RAISE THE CAP TO, in characters. The key tunes the excerpt
+#: a reply carries; it never lifts the bound on what one reaction row stores.
+BODY_CEILING = 16_000
+
+#: WHAT ONE `mail.reply` REACTION STORES, in bytes of its stored JSON (`flows.db.dumps`, ASCII
+#: escaped): the sum of the field budgets below plus the field names and the two ids this
+#: deployment wrote itself (`uid`, `session`, from `mail_thread`).
+REPLY_REFS_MAX_BYTES = 36 * 1024
+
+#: Field budgets, in stored-JSON bytes including the quotes. A header line is at most 998
+#: characters (RFC 5322 §2.1.1) and an address at most 320 (RFC 3696 erratum 1690).
+TEXT_MAX_BYTES = 32 * 1024
+HEADER_MAX_BYTES = 1000
+ADDR_MAX_BYTES = 322
+#: What `BODY_ELISION` may take of the text budget once formatted (it is about 120 bytes stored).
+ELISION_BYTES = 200
+
+#: THE FIELDS A `mail.reply` REACTION HOLDS — exactly what its steps read: `feedback_turn` reads
+#: uid, session, text and from_addr; `email_reply` reads uid, session, from_addr, subject and
+#: orig_msgid; `organizer` names the sender for the timeline and for `feedback_turn`'s fallback.
+REPLY_FIELDS = ("uid", "session", "from_addr", "text", "subject", "orig_msgid", "organizer")
+
+
 def body_max() -> int:
-    """How much of an inbound body may travel on `mail.reply` — `VEXA_FLOWS_MAIL_BODY_MAX`.
+    """How much of an inbound body may travel on `mail.reply` — `VEXA_FLOWS_MAIL_BODY_MAX`, in
+    characters, between 1 and `BODY_CEILING`.
 
-    THE KEY WAS DECLARED AND READ BY NOTHING (R-B12). `flows_config.DECLARED` carries it with a
-    default of 4000 and the sentence *"how much of an inbound body may enter an agent prompt,
-    inside the untrusted block"*; `core/flows/README.md` tells an operator that an allowed body
-    "arrives quoted, fenced, length-capped (`VEXA_FLOWS_MAIL_BODY_MAX`)". Neither was true: the
-    only cap in the intake was a literal `[:2000]` on the line below, so an operator who set the
-    key got no error and no effect, and one who read the README believed a number that was not the
-    number. That is the failure mode `test_config_declaration`'s declared⊆read direction exists to
-    catch, and it caught this one.
+    Read PER CALL, never bound at import: the poller is a long-lived process. Floored at 1: a cap
+    of zero would admit a reply carrying no text at all, which is a fact thrown away rather than a
+    limit applied. `cfg.get_int` answers the declared default for a value that is not a number, so
+    a typo is 4000 and never a crash mid-poll."""
+    return min(max(cfg.get_int("VEXA_FLOWS_MAIL_BODY_MAX"), 1), BODY_CEILING)
 
-    Read PER CALL, never bound at import: the poller is a long-lived process and a door resolved at
-    import is the defect the rest of this brick spent a release removing.
 
-    Floored at 1: a cap of zero would admit a reply carrying no text at all, which is a fact
-    thrown away rather than a limit applied. `cfg.get_int` already answers the declared default for
-    a value that is not a number, so a typo is 4000 and never a crash mid-poll."""
-    return max(cfg.get_int("VEXA_FLOWS_MAIL_BODY_MAX"), 1)
+def _json_len(ch: str) -> int:
+    """Bytes one character takes in the stored JSON (ASCII-escaped: `\\uXXXX`, a surrogate pair
+    for a character outside the BMP)."""
+    if ord(ch) < 0x80:
+        return 2 if ch in '"\\\b\f\n\r\t' else (6 if ch < " " else 1)
+    return 6 if ord(ch) < 0x10000 else 12
+
+
+def _fit(text: str, budget: int) -> str:
+    """The longest prefix of `text` whose stored JSON, quotes included, is at most `budget` bytes."""
+    used, i = 2, 0
+    for i, ch in enumerate(text):
+        used += _json_len(ch)
+        if used > budget:
+            return text[:i]
+    return text
+
+
+#: Where a reply's own words end and the thread it answers begins, for a client that does not
+#: prefix the history with `>`: Outlook's separator, and its web client's rule followed by `From:`.
+HISTORY_START = re.compile(r"^\s*-{2,}\s*Original Message\s*-{2,}\s*$", re.I)
+WEB_RULE = re.compile(r"^\s*_{10,}\s*$")
+#: The attribution line a client writes above a `>`-quoted thread ("On <date>, <who> wrote:").
+ATTRIBUTION = re.compile(r"^\s*On .{1,400}wrote:\s*$")
 
 
 def strip_quotes(body: str) -> str:
-    """The sender's own words: quoted lines dropped, then capped at `body_max()`.
+    """The sender's own words: the quoted thread dropped, then capped at `body_max()` characters
+    and at `TEXT_MAX_BYTES` of stored JSON.
 
     The quote strip comes FIRST and the cap second, which is the order that matters — a reply whose
     first screen is the thread it is answering would otherwise spend its whole budget on text we
-    already sent."""
-    text = "\n".join(l for l in body.strip().splitlines() if not l.strip().startswith(">"))
+    already sent. A body that was cut ends with `BODY_ELISION`, saying how much was dropped."""
+    lines = body.strip().splitlines()
+    own: list[str] = []
+    for n, line in enumerate(lines):
+        if HISTORY_START.match(line) or (
+                WEB_RULE.match(line) and n + 1 < len(lines) and lines[n + 1].startswith("From:")):
+            break
+        if line.strip().startswith(">"):
+            continue
+        if ATTRIBUTION.match(line) and any(l.strip().startswith(">") for l in lines[n + 1:n + 3]):
+            continue
+        own.append(line)
+    text = "\n".join(own).strip()
     cap = body_max()
-    if len(text) <= cap:
+    kept = _fit(text[:cap], TEXT_MAX_BYTES - ELISION_BYTES)
+    if len(kept) == len(text):
         return text
-    return text[:cap] + BODY_ELISION.format(n=len(text) - cap, cap=cap)
+    return kept + BODY_ELISION.format(n=len(text) - len(kept), cap=cap)
+
+
+def _header(value: str, budget: int) -> str:
+    """A header value as one line (RFC 5322 unfolding), within its stored budget."""
+    return _fit(re.sub(r"\r?\n(?=[ \t])", "", str(value or "")).replace("\r", "").replace("\n", " "),
+                budget)
+
+
+def reply_refs(uid, session, msg) -> dict:
+    """THE `mail.reply` REACTION'S REFS — `REPLY_FIELDS`, each within its budget, and nothing else.
+
+    Both intakes build them here: the mailbox poller (`handle`) and the `mailbox` sensor kind
+    (`flows_sensors.mailbox`). The row is durable until fact retention removes it, so what goes in
+    is what its steps read and no more: the sender's own words as a bounded excerpt, never the
+    message — no quoted thread, no attachment, no HTML alternative (`inbox.from_rfc822` reads only
+    the first inline `text/plain` part). The stored JSON is at most `REPLY_REFS_MAX_BYTES`."""
+    frm = _fit(str(msg.frm or ""), ADDR_MAX_BYTES)
+    return {"uid": str(uid), "session": str(session), "from_addr": frm,
+            "text": strip_quotes(str(msg.body or "")),
+            "subject": _header(msg.subject, HEADER_MAX_BYTES),
+            "orig_msgid": _header(msg.message_id, HEADER_MAX_BYTES),
+            "organizer": frm}
 
 
 def _fixed_reply(db, msg, ext_id: str, now: float, reply) -> bool:
     """AT MOST one fixed line back to a quarantined stranger — a template, never a model.
 
-    Off unless the deployment turns it on, and once per address ever. Silence is the safest answer
+    Off unless the deployment turns it on, and once per address per retention period
+    (`mail_policy.already_answered`). Silence is the safest answer
     to somebody we cannot place: an automatic reply to an unverified sender is a reflector, and two
     auto-responders that answer each other are a mail loop nobody notices until the bill.
     """
@@ -320,14 +657,20 @@ def _fixed_reply(db, msg, ext_id: str, now: float, reply) -> bool:
     try:
         reply(msg.frm, "Re: " + (msg.subject or "your message"), mail_policy.QUARANTINE_TEMPLATE)
     except Exception as e:  # noqa: BLE001 — a refusal we could not post is still a refusal
-        print(f"quarantine reply to {msg.frm} failed: {type(e).__name__}: {e}", flush=True)
+        print(f"quarantine reply to {log_sender(msg.frm)} failed: {type(e).__name__}", flush=True)
         return False
     mail_policy.mark_answered(db, ext_id, now)
     return True
 
 
+def _company_rules() -> dict:
+    """The company's answers, read hot per message; never raises (`policies.read` is fail-soft)."""
+    from flows_steps import policies
+    return policies.read_company()
+
+
 def handle(db, reg, clock, self_addr: str, msg, known_uid, is_scaffolded,
-           provision, reply=None) -> tuple[str, int] | None:
+           provision, reply=None, rules: dict | None = None) -> tuple[str, int] | None:
     """One inbound message → at most one admission. Source-blind and service-blind: every reach
     outside is injected, so the whole intake is drivable offline.
 
@@ -336,17 +679,48 @@ def handle(db, reg, clock, self_addr: str, msg, known_uid, is_scaffolded,
     quarantined WITH ITS MEETING FACTS, and a mail that would exceed a rate limit is quarantined
     with the count that stopped it. `provision` — the call that mints a platform account — is
     reached only on the `new_sender_mail` branch, which now requires the allow-list.
+
+    THE COMPANY'S ANSWERS (`rules`, `_global/POLICIES.md`, the admin account's to write) decide two
+    things here: who is inside (`mail_domains`, before the operator's env value) and whether an
+    invitation is acted on at all (`bot_joins_on_invite`). Injectable so the storm needs no agent
+    domain; absent, they are read once per message and an unreadable `_global` is the defaults.
     """
-    decision = route(db, self_addr, msg.frm, msg.headers, msg.ics, known_uid, is_scaffolded)
+    if rules is None:
+        rules = _company_rules()
+    allowed = mail_policy.allow_domains(self_addr, rules)
+    decision = route(db, self_addr, msg.frm, msg.headers, msg.ics, known_uid, is_scaffolded,
+                     allowed=allowed, raw=getattr(msg, "raw", b""))
     if decision is None:
         return None
     kind, payload = decision
     ext = str(msg.message_id or msg.ext_id)
     now = clock.now()
+    if kind == "invite" and rules.get("bot_joins_on_invite", True) is False:
+        # THE COMPANY SAID NO TO INVITATIONS. Recorded with the meeting's facts, exactly like an
+        # invite from an organiser we cannot place: no account, no RSVP, no prep, no bot. A meeting
+        # is still attended when a person asks for it in the product.
+        mail_policy.quarantine(
+            db, ext_id=ext, frm=msg.frm, kind=mail_policy.INVITE_POLICY_OFF,
+            reason=("bot_joins_on_invite is off in _global/POLICIES.md — meeting facts recorded, "
+                    "nothing created, accepted or joined"),
+            facts=payload, at=now)
+        return ("invite_policy_off", 0)
     if kind == "invite":
-        n = admit(db, reg, clock, source_event_id=invite_source_id(payload),
-                  event_type="invite.received", subject_refs=payload)
+        # THE MAIL ISSUER VOUCHES FOR THE INVITE (subject-ticket.v1) — after route() authenticated
+        # its organizer and placed them; the ticket is what lets flows act for them at the door.
+        sid = invite_source_id(payload)
+        ticket = mail_tickets.invite_ticket(payload, evt=sid, sub=_uid_or_blank(known_uid,
+                                                                                payload["organizer"]),
+                                            now=now)
+        n = admit(db, reg, clock, source_event_id=sid,
+                  event_type="invite.received",
+                  subject_refs=mail_tickets.carrying(payload, ticket))
         return ("invite", n)
+    if kind == "invite_cancel":
+        n = admit(db, reg, clock,
+                  source_event_id=f"ics-cancel-{payload['event_key']}-{payload.get('sequence', 0)}",
+                  event_type="invite.cancelled", subject_refs=payload)
+        return ("invite_cancel", n)
     if kind == "invite_quarantine":
         # THE FACTS SURVIVE THE REFUSAL. Decision 19 binds the prepare touch to the organizer and
         # to attendees who are already users, and says the workspace is established on the click,
@@ -366,7 +740,11 @@ def handle(db, reg, clock, self_addr: str, msg, known_uid, is_scaffolded,
         mail_policy.quarantine(db, ext_id=ext, frm=msg.frm, kind=payload["kind"],
                                reason=payload["reason"],
                                facts={"subject": msg.subject}, at=now)
-        _fixed_reply(db, msg, ext, now, reply)
+        # A DMARC FAILURE IS SPAM, ANSWERED BY A QUIET RECEIPT ONLY (decision 4, deny test 34): its
+        # `From:` is exactly what its domain did not vouch for, so a reply would go to whoever was
+        # impersonated (backscatter). The quarantine row is the receipt; no reply, notice or turn.
+        if payload["kind"] != mail_policy.UNAUTHENTICATED_MAIL:
+            _fixed_reply(db, msg, ext, now, reply)
         return ("quarantine", 0)
     # ── from here on the sender may cause an AGENT TURN, so the ceilings apply ──────────────
     limited = mail_policy.rate_check(db, msg.frm, now)
@@ -376,30 +754,81 @@ def handle(db, reg, clock, self_addr: str, msg, known_uid, is_scaffolded,
         return ("rate_limited", 0)
     if kind == "new_sender_mail":
         payload["uid"] = provision(msg.frm)
-    n = admit(db, reg, clock,
-              source_event_id=f"mail-{msg.message_id or msg.ext_id}",
-              event_type="mail.reply",
-              subject_refs={"uid": str(payload["uid"]), "session": payload["session"],
-                            "from_addr": msg.frm, "text": strip_quotes(msg.body),
-                            "subject": msg.subject, "orig_msgid": msg.message_id,
-                            "organizer": msg.frm})
+    sid = f"mail-{msg.message_id or msg.ext_id}"
+    ticket = mail_tickets.reply_ticket(uid=str(payload["uid"]), addr=_addr(msg.frm), evt=sid,
+                                       now=now)
+    n = admit(db, reg, clock, source_event_id=sid, event_type="mail.reply",
+              subject_refs=mail_tickets.carrying(reply_refs(payload["uid"], payload["session"], msg),
+                                                 ticket))
     if n:
         mail_policy.record_turn(db, ext, msg.frm, now)
     return (kind, n)
 
 
+def _boot(db, inbox) -> str:
+    """The persisted cursor, or — first boot — the CURRENT inbox tail, anchored (history is never
+    replayed). Reaches the mail server on first boot, so it fails the same typed way a poll does."""
+    cursor = inbox.restore(db)
+    if cursor is None:
+        cursor = sys.argv[1] if len(sys.argv) > 1 else inbox.tail_cursor()
+        inbox.anchor(db, cursor)
+    return cursor
+
+
+SERVICE = "mailbox"
+
+
+def process(db, reg, clock, self_addr: str, msg, known_uid, is_scaffolded,
+            provision, reply=None) -> tuple[str, int] | None:
+    """`handle`, as ONE TRACED UNIT (logevent.v1): a fresh trace per message, bound while it is
+    routed, so the identity/agent-api lookups it makes carry the same `X-Trace-Id`
+    (`flows_steps.common.http`). The line names the message by its source-native id — an IMAP UID,
+    a mailpit or Graph id, opaque — and the outcome; never the sender, subject or body."""
+    with flows_obs.unit(SERVICE):
+        fields = {"ext_id": str(msg.ext_id)}
+        try:
+            out = handle(db, reg, clock, self_addr, msg, known_uid, is_scaffolded, provision,
+                         reply=reply)
+        except Exception as e:
+            flows_obs.log_event("mail_failed", level="warning",
+                                fields={**fields, "error": type(e).__name__})
+            raise
+        kind, n = out if out is not None else ("ignored", 0)
+        flows_obs.log_event("mail_processed", fields={**fields, "outcome": kind, "admitted": n})
+        return out
+
+
 def main() -> int:
+    flows_obs.set_service(SERVICE)
     db = postgres_db(db_url())
     clock = SystemClock()
     reg = Registry()
     production.build(reg, db)     # the matcher needs the flow triggers; steps unused here
-    inbox = get_inbox()
+    status = mailbox_status.Reporter()
+    try:
+        inbox = get_inbox()
+    except MailTransportError as e:
+        # A setting that can never work (an unknown TLS mode, a non-numeric port). Reported where
+        # the probe reads it, then the process stops: there is nothing to retry.
+        status.fault(e)
+        return 2
 
-    cursor = inbox.restore(db)
-    if cursor is None:
-        # first boot: anchor at the CURRENT inbox tail — history is never replayed
-        cursor = sys.argv[1] if len(sys.argv) > 1 else inbox.tail_cursor()
-        inbox.anchor(db, cursor)
+    # THE MAILBOX NEVER CRASH-LOOPS ON A MAIL-SERVER FAULT. A wrong password, an untrusted
+    # certificate or an unreachable host used to escape `main` on first boot (a restart loop that
+    # reads as a broken deployment) and, after it, became one `poll hiccup` line per poll. Now each
+    # is a typed fault (`flows_steps.mail_transport`): logged once when it starts and when it
+    # clears, written where the readiness probe reads it, and retried on the poll cadence — so
+    # the pod stays up, reports NotReady with the reason, and recovers by itself once the
+    # Exchange side is fixed.
+    cursor = None
+    while cursor is None:
+        try:
+            cursor = _boot(db, inbox)
+        except MailTransportError as e:
+            status.fault(e)
+            time.sleep(POLL_SECONDS)
+    # NOT `status.ok` here: a cursor restored from the database proves nothing about the mail
+    # server. Readiness turns green on the first poll that actually reached it.
     print(f"mailbox integration up · inbox {inbox.name} · cursor {cursor!r}", flush=True)
 
     from flows_steps.common import ensure_platform_user, platform_user_id
@@ -413,21 +842,59 @@ def main() -> int:
         return platform_user_id(e) or None
 
     def _reply(to: str, subject: str, body: str) -> str:
-        return notify(to, subject, body)
+        # Through the one outbound path: `mail.quarantine-reply` (off by default) and the audit.
+        from flows_steps import outbound
+        out = outbound.send("quarantine-reply", to, subject=subject, body=body, db=db,
+                            sender=lambda *a, **k: notify(*a, **k))
+        if not out.sent:
+            raise RuntimeError(f"quarantine reply not sent: {out.result}")
+        return out.message_id
 
+    # THE EDGE (`mail_sensor`): only invitations and replies to mail Vexa sent reach `process`;
+    # everything else is dropped here — no event, no row, no model — and only counted.
+    from flows_integrations.mail_sensor import MailSensor, sensor_id_for
+
+    def _emit_from(self_addr: str):
+        def emit(msg):
+            out = process(db, reg, clock, self_addr, msg, _known_uid, _scaff,
+                          ensure_platform_user, reply=_reply)
+            if out is None:
+                print(f"ignored mail from {log_sender(msg.frm)} ({log_message(msg)})", flush=True)
+            else:
+                kind, n = out
+                print(f"{kind} {log_sender(msg.frm)} {log_message(msg)} → admitted {n}", flush=True)
+        return emit
+
+    def _a_sensor_reads_it() -> bool:
+        """A `mailbox` sensor (flows-sensors, owned by the global account) reads this mailbox now —
+        then this loop stands aside, so one message is never admitted twice by two readers."""
+        try:
+            return bool(db.execute("SELECT 1 FROM sensor WHERE kind = 'mailbox' "
+                                   "AND status IN ('active', 'degraded') LIMIT 1"))
+        except Exception:  # noqa: BLE001 — no sensor table yet: this loop is the reader
+            return False
+
+    standing_aside = False
     while True:
+        if _a_sensor_reads_it():
+            if not standing_aside:
+                print("mailbox: a `mailbox` sensor reads this mailbox — this loop stands aside",
+                      flush=True)
+            standing_aside = True
+            status.ok(inbox.name)
+            time.sleep(POLL_SECONDS)
+            continue
+        standing_aside = False
         try:
             self_addr = inbox.address().lower()
-            for msg in inbox.fetch(cursor):
-                out = handle(db, reg, clock, self_addr, msg, _known_uid, _scaff,
-                             ensure_platform_user, reply=_reply)
-                if out is None:
-                    print(f"ignored mail from {msg.frm} ({msg.subject[:40]!r})", flush=True)
-                else:
-                    kind, n = out
-                    print(f"{kind} {msg.frm} {msg.subject[:40]!r} → admitted {n}", flush=True)
-                cursor = msg.cursor
-                inbox.commit(db, msg)
+            sensor = MailSensor(sensor_id_for(self_addr), "global", inbox, _emit_from(self_addr))
+            cursor = sensor.tick(db, cursor)
+            if sensor.dropped:
+                print(f"mail sensor {sensor.sensor_id}: dropped {sensor.dropped} at the edge "
+                      f"(not an invitation, not a reply to Vexa mail)", flush=True)
+            status.ok(inbox.name)
+        except MailTransportError as e:
+            status.fault(e)
         except Exception as e:  # noqa: BLE001
             print(f"poll hiccup: {type(e).__name__}: {e}", flush=True)
         time.sleep(POLL_SECONDS)

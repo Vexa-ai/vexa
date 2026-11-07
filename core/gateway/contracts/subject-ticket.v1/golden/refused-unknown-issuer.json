@@ -1,0 +1,7 @@
+{
+  "what": "a correctly signed ticket naming an issuer the verifier holds no key for",
+  "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n-----END PUBLIC KEY-----\n",
+  "now": 1767225600,
+  "token": "st1.eyJjbHMiOlsiY2hhdC5hdXRvbm9tb3VzIiwiZGVzay53cml0ZSIsInJvb20uYmlsbHNfdG8iLCJ0cmFuc2NyaXB0LnJlYWQiXSwiZXZ0IjoibWVldGluZy5jb21wbGV0ZWQ6Nzc4MSIsImV4cCI6MTc2NzQ4NDgwMCwiaWF0IjoxNzY3MjI1NjAwLCJpc3MiOiJjcm0iLCJqdGkiOiIwZjFlMmQzYzRiNWE2OTc4ODc5NmE1YjQiLCJraW5kIjoiZXZlbnQiLCJtaWQiOiI3NzgxIiwibmF0aXZlIjoiZ29vZ2xlX21lZXQvYWJjLWRlZmctaGlqIiwic3ViIjoiNDIiLCJ2Ijoic3ViamVjdC10aWNrZXQudjEifQ.LfSFktBLZe7DSAZFeKDxcLI8ZPApje7wbt33Vk7GBQgel9rEDxzFa4co5r4tcgCXwKM0P7vNlKFIoiyZBacHBQ",
+  "reason": "unknown_issuer"
+}

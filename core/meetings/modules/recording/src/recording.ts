@@ -226,6 +226,7 @@ export class RecordingService {
     chunkSeq: number,
     isFinal: boolean,
     format: string = 'webm',
+    startedAtMs?: number,
   ): Promise<void> {
     const uploadTimeoutMs = 30_000;
     const durationSeconds = this.startTime > 0 ? (Date.now() - this.startTime) / 1000 : undefined;
@@ -239,6 +240,7 @@ export class RecordingService {
       channels: this.channels,
       duration_seconds: durationSeconds,
       file_size_bytes: chunkData.length,
+      capture_started_at_ms: startedAtMs,
       chunk_seq: chunkSeq,
       is_final: isFinal,
     });

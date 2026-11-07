@@ -45,11 +45,11 @@ import pytest
 # this suite is a deployment whose URL names Postgres and is simply UNREACHABLE — laziness, not a
 # different adapter, is what lets the import succeed.
 _PRIOR_ENV = {k: os.environ.get(k) for k in
-              ("VEXA_FLOWS_API_KEY", "INTERNAL_API_SECRET", "VEXA_FLOWS_DB_URL")}
+              ("VEXA_FLOWS_API_KEY", "VEXA_FLOWS_SERVICE_KEY", "VEXA_FLOWS_DB_URL")}
 
 os.environ.setdefault("VEXA_FLOWS_API_KEY", "test-flows-key")
-os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret")
-os.environ["VEXA_FLOWS_DB_URL"] = "postgresql+psycopg://health-gate:unreachable@127.0.0.1:1/flows"
+os.environ.setdefault("VEXA_FLOWS_SERVICE_KEY", "test-flows-service-key-not-a-placeholder")
+os.environ["VEXA_FLOWS_DB_URL"] = "postgresql+pg8000://health-gate:unreachable@127.0.0.1:1/flows"
 try:
     from flows_integrations import flows_api  # noqa: E402
 finally:
@@ -63,7 +63,12 @@ finally:
 #: without a test saying so — an assembly that quietly lost one still looks assembled. Written out
 #: rather than counted: a count is satisfied by a swap, and the set is the thing that matters.
 TOOLS = {"flows_list", "reactions_list", "reaction_signal", "timeline", "whats_waiting",
-        "report_friction", "friction_so_far"}
+        "report_friction", "friction_so_far", "flows_submit", "flow_lifecycle",
+        "friction_list", "mail_settings", "mail_templates_list", "mail_template_edit",
+        "mail_preview", "mail_test_send", "mail_kind_set", "mail_address", "flow_runs",
+        "routine_claim", "routine_add_trigger",
+        "concern_stage", "event_agents_pause", "chat_subscribe", "chat_unsubscribe",
+        "sensor_list", "sensor_create", "sensor_test", "sensor_action", "sensor_connect"}
 
 
 def _route(path: str, method: str = ""):
@@ -172,7 +177,26 @@ def test_the_new_keys_are_declared():
         assert key in flows_config.DECLARED, f"{key} is read and declared nowhere"
 
 
-def test_a_step_time_door_is_not_read_at_import(monkeypatch):
+@pytest.fixture
+def cold_flows_modules():
+    """`flows_defs.*` and `flows_steps.*` imported from a cold start, and the suite's own copies
+    back in `sys.modules` afterwards. Every other test module bound these at collection time
+    (`from flows_steps import grants`, `meeting as mt`); a step resolves its siblings at call time
+    (`from . import grants`), so leaving the fresh copies behind would split a later test's patch
+    from the module the step reads."""
+    import sys
+
+    prefixes = ("flows_defs", "flows_steps")
+    saved = {m: mod for m, mod in sys.modules.items() if m.startswith(prefixes)}
+    for m in saved:
+        del sys.modules[m]
+    yield
+    for m in [m for m in sys.modules if m.startswith(prefixes)]:
+        del sys.modules[m]
+    sys.modules.update(saved)
+
+
+def test_a_step_time_door_is_not_read_at_import(monkeypatch, cold_flows_modules):
     """A REQUIRED-EXPLICIT door that is only used to compose a mailed link must not decide whether
     the process can BOOT. Found by the live proof on bbb: flows-api crash-looped with
     `VEXA_UI_URL is unset` before serving anything, including /health and the tool manifest.
@@ -186,13 +210,10 @@ def test_a_step_time_door_is_not_read_at_import(monkeypatch):
     the link would have been composed.
     """
     import importlib
-    import sys
 
     monkeypatch.delenv("VEXA_UI_URL", raising=False)
     monkeypatch.setenv("VEXA_FLOWS_GATEWAY_URL", "http://gateway:8000")
     monkeypatch.setenv("VEXA_FLOWS_ADMIN_API_URL", "http://admin-api:8001")
-    for mod in [m for m in sys.modules if m.startswith(("flows_defs", "flows_steps"))]:
-        del sys.modules[mod]
 
     importlib.import_module("flows_defs.production")      # must not raise
 

@@ -1,0 +1,9 @@
+{
+  "source": "model-provider",
+  "kind": "no_tool_calling",
+  "provider": "litellm.internal",
+  "model": "glm-4",
+  "status": null,
+  "detail": "The endpoint answered without calling a tool when one was required, so the model's tool calling is off.",
+  "remedy": "Serve this model with tool calling on (for LiteLLM: a model that supports function calling, without drop_params removing tools), or choose another model under Settings → Models."
+}

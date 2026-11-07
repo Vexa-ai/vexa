@@ -1,0 +1,8 @@
+{
+  "languages": [
+    {"code": "en", "name": "English"}
+  ],
+  "default": {"language": "en", "allowed_languages": []},
+  "model": "tiny.en",
+  "source": "provider"
+}

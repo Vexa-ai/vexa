@@ -111,7 +111,7 @@ def test_fetch_ics_error_taxonomy(monkeypatch, body, status, expect):
 
     from meeting_api.calendar_sync import adapters as cal_adapters
 
-    def fake_transport():
+    def fake_transport(**_kwargs):  # build_ics_client passes the feed allowance
         def handler(request):
             return httpx.Response(status, text=body)
         return httpx.MockTransport(handler)

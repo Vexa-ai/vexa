@@ -1,0 +1,19 @@
+{{- if .Values.livekit.enabled }}
+# Calls: in-cluster signalling for meeting-api, agent-api and the listener. Browsers reach
+# livekit.url through your ingress; media does not cross this Service (it uses the node's UDP range).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vexa.componentName" (list . "livekit") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.livekit.service.type }}
+  ports:
+    - name: signal
+      port: {{ .Values.livekit.service.port }}
+      targetPort: signal
+  selector:
+    {{- include "vexa.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: livekit
+{{- end }}

@@ -1,0 +1,1 @@
+{"adapter": "openai-compatible", "route": "signal-small", "base_url": "https://llm.internal.example/v1", "secret_ref": "none"}

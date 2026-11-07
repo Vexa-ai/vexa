@@ -1,0 +1,29 @@
+<!-- Google Meet in-call chat panel, UI language: nl. CONSTRUCTED from the structure the
+     reader targets (jsname/data-* hooks, aria-live list, composer row); NOT a capture of live Meet.
+     Labels are this language's wording of the controls. Variant notes: nl. Replace with a real
+     capture (document.body.outerHTML of the call page with the chat panel open) when one exists. -->
+<!doctype html>
+<html lang="nl"><body>
+<div role="toolbar" class="Tmb7Fd">
+  <button jsname="BOHaEe" aria-label="Een reactie sturen" class="VfPpkd-Bz112c-LgbsSe"><i class="google-symbols notranslate" aria-hidden="true">mood</i></button>
+  <button jsname="A5il2e" aria-label="Iedereen bekijken" data-panel-id="1" aria-pressed="false"><i class="google-symbols notranslate" aria-hidden="true">people</i></button>
+  <button jsname="A5il2e" aria-label="Chatten met iedereen" data-panel-id="2" aria-pressed="true" data-fixture-id="toggle"><i class="quRWN-Bz112c google-symbols notranslate" aria-hidden="true">chat</i></button>
+  <button jsname="CQylAd" aria-label="Gesprek verlaten"><i class="google-symbols notranslate" aria-hidden="true">call_end</i></button>
+</div>
+<aside class="R3Gmyc" role="complementary">
+  <div class="hWX4r">
+    <div class="J8vCN" jsname="xySENc" aria-live="polite" tabindex="-1" data-fixture-id="list">
+      <div class="Ss4fHf">
+        <div class="HNucUd"><div class="poVWob">Anouk</div><div class="MuzmKe">10:42</div></div>
+        <div class="beTDc"><div class="RLrADb" data-message-id="h1"><div jsname="dTKtvb"><div>van voordat de bot erbij kwam</div></div></div></div>
+      </div>
+    </div>
+  </div>
+  <div class="BC4V9b">
+    <div class="RpC4Ne"><label class="cKXeMb"><textarea id="bfTqV" class="qdOxv-fmcmS-wGMbrd" rows="1" aria-label="Een bericht sturen" placeholder="Een bericht sturen" data-fixture-id="composer"></textarea></label></div>
+    <span data-is-tooltip-wrapper="true"><button jsname="SoqoBf" aria-label="Een bericht sturen" data-fixture-id="send"><i class="google-symbols notranslate" aria-hidden="true">send</i></button></span>
+  </div>
+</aside>
+<!-- Meet's in-call page carries reCAPTCHA's response field (seen live, 21 Oct): never the composer. -->
+<div class="Tdx3fe"><textarea id="g-recaptcha-response-100000" name="g-recaptcha-response" class="g-recaptcha-response" data-fixture-id="recaptcha"></textarea></div>
+</body></html>

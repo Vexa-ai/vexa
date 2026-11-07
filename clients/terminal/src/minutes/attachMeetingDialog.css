@@ -1,0 +1,11 @@
+/* "Use as meeting page" (#1783) — tokens only */
+.vx-am { display: flex; flex-direction: column; gap: var(--space-3); font-family: var(--sans); }
+.vx-am-lede { margin: 0; font-size: var(--text-xs); color: var(--t2); }
+.vx-am-empty { margin: 0; font-size: var(--text-xs); color: var(--t3); }
+.vx-am-list { display: flex; flex-direction: column; gap: var(--space-1); max-height: 280px; overflow-y: auto; }
+.vx-am-row { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1_5) var(--space-2); border-radius: var(--radius-md); cursor: pointer; font-size: var(--text-sm); color: var(--t1); }
+.vx-am-row:hover { background: var(--surface-3); }
+.vx-am-name { flex: 1 1 0%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-am-when { color: var(--t3); font-size: var(--text-xs); white-space: nowrap; }
+.vx-am-error { margin: 0; font-size: var(--text-xs); color: var(--danger); }
+.vx-am-acts { display: flex; justify-content: flex-end; gap: var(--space-2); }

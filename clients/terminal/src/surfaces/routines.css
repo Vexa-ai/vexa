@@ -1,0 +1,18 @@
+/* THE ROUTINES BOARD'S OWN SHAPES (routines.tsx). Colours are tokens; values off the scale stay
+   literal. The switch's state is `data-on`, so the knob's travel is CSS, not a style per render. */
+
+.rt-switch {
+  position: relative; flex: none; width: 32px; height: 18px; cursor: pointer;
+  border-radius: var(--radius-lg); background: var(--panel2); transition: background var(--dur-fast);
+}
+.rt-switch[data-on] { background: var(--green); }
+.rt-knob { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; transition: left var(--dur-fast); }
+.rt-switch[data-on] .rt-knob { left: 16px; }
+
+.rt-input {
+  background: var(--panel2); border: 1px solid var(--line2); border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-2); color: var(--t1); font-size: var(--text-sm); font-family: inherit;
+}
+
+.rt-note { font-size: 12.5px; color: var(--t2); margin-top: 9px; line-height: 1.5; }
+.rt-kicker { text-transform: uppercase; letter-spacing: 0.04em; }

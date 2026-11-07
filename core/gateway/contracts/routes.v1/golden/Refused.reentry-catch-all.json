@@ -1,0 +1,24 @@
+{
+  "why": "mcp_reentry names one route an MCP tool calls back; a catch-all would admit every path under its prefix",
+  "manifest": {
+    "contract": "routes.v1",
+    "domain": "agent",
+    "owner": "core/agent",
+    "edge": "gateway",
+    "forward": {
+      "edge_prefix": "/agent/",
+      "upstream_prefix": "/api/"
+    },
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/agent/{path:path}",
+        "scopes": [
+          "bot",
+          "tx"
+        ],
+        "mcp_reentry": true
+      }
+    ]
+  }
+}
