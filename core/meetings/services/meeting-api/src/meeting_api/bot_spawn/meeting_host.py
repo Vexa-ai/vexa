@@ -49,6 +49,9 @@ PLATFORM_DOMAINS = {
     "teams": TEAMS_HOST_SUFFIXES,
     "zoom": ("zoom.us", "zoom.com", "zoomgov.com"),
     "jitsi": ("meet.jit.si",),
+    # discord joins by channel id (NO_MEETING_URL_PLATFORMS); an optional meeting_url is the
+    # https://discord.com/channels/{guild}/{channel} deep link, held to the same host rule.
+    "discord": ("discord.com",),
 }
 
 #: Platforms whose meetings may also live on a host the organisation chose.
