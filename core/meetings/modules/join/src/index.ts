@@ -28,7 +28,7 @@ import { leaveJitsiMeeting } from "./jitsi/leave";
 import { startJitsiRemovalMonitor } from "./jitsi/removal";
 import { startDebugView } from "./shared/escalation";
 import { setHooks, type BotConfig, type Hooks, type JoinState } from "./_host";
-import { JOIN_BROWSER_ARGS, getJoinBrowserArgs } from "./browser-args";
+import { JOIN_BROWSER_ARGS, getJoinBrowserArgs, getAuthenticatedJoinBrowserArgs } from "./browser-args";
 import { AuthSessionError } from "./googlemeet/join";
 import { TeamsJoinRedirectError } from "./msteams/auth-redirect";
 import {
@@ -40,7 +40,7 @@ export type { BotConfig, Hooks, JoinState };
 export { startDebugView, setHooks };
 // Canonical browser launch args — the vexa-bot service and the debug harness both
 // build on this ONE set (browser-args.ts), so join↔bot flags never drift.
-export { JOIN_BROWSER_ARGS, getJoinBrowserArgs };
+export { JOIN_BROWSER_ARGS, getJoinBrowserArgs, getAuthenticatedJoinBrowserArgs };
 
 export type Platform = "google_meet" | "teams" | "zoom" | "jitsi";
 
