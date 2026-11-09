@@ -43,7 +43,7 @@ import { launchBrowser, startCaptureBridge, startRecording, restartMixedCapture,
 import { createActDispatch } from './act-dispatch.js';
 import { createDeafLaneMonitor, createRemoteAudioActivityTap, deafLaneFault, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
 import { installSignalHandlers } from './signals.js';
-import { createVoiceNoteJoinDriver, createVoiceNotePipeline, createVoiceNoteSource, voiceNoteIdleMs, voiceNoteMaxActiveMs } from './voice-note.js';
+import { VOICE_NOTE_OWNER_TRACK, createVoiceNoteJoinDriver, createVoiceNotePipeline, createVoiceNoteSource, voiceNoteIdleMs, voiceNoteMaxActiveMs } from './voice-note.js';
 import { createRedisAudioStreamReader, redisStreamClientFrom, type LiveRedisStreamClient } from './adapters/voice-note-redis.js';
 import { createSessionEnd } from './adapters/redis-terminal.js';
 import { callMaxActiveMs, createCallJoinDriver, createCallPipeline, createCallSource } from './call.js';
@@ -293,7 +293,9 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     voiceStreamClient = redisStreamClientFrom(inv.redisUrl, { session: redisSession });
     const source = createVoiceNoteSource({
       reader: createRedisAudioStreamReader({ client: voiceStreamClient, key: vn.audioStream }),
-      feed: (pcm, tsMs) => engine.feedAudio(0, vn.speakerName, pcm, tsMs),
+      // Track 0 is the note's owner; tracks 1.. are a per-track capture's participants, named by the frame
+      // (or unnamed until the sender's resolver binds them: the lane renames the turn in place then).
+      feed: (pcm, tsMs, track, name) => engine.feedAudio(track, name || (track === VOICE_NOTE_OWNER_TRACK ? vn.speakerName : ''), pcm, tsMs),
       onEnd: () => endVoiceNote?.('stopped'),
       onIdle: () => endVoiceNote?.('left_alone'),
       idleMs: voiceNoteIdleMs(inv),

@@ -36,10 +36,33 @@ export interface AudioStreamReader {
   read(afterId: string, blockMs: number): Promise<StreamEntry[]>;
 }
 
+/** Track 0 of a voice note is its owner (the person recording); tracks 1.. are a per-track capture's
+ *  participants. A sender that captures participants numbers them from VOICE_NOTE_FIRST_PARTICIPANT_TRACK. */
+export const VOICE_NOTE_OWNER_TRACK = 0;
+export const VOICE_NOTE_FIRST_PARTICIPANT_TRACK = 1;
+/** Each track opens a lane channel, so the bot bounds them itself (the door caps at the same number). */
+export const VOICE_NOTE_MAX_TRACKS = 64;
+
+/** A frame's speaker name becomes a transcript label: control, bidi, invisible-filler and tag characters
+ *  are removed (ZWJ/ZWNJ are kept: emoji sequences and Persian/Indic names need them), whitespace
+ *  collapsed, and the length bounded by code points so no surrogate half is left. Empty → undefined. */
+export function speakerLabelFromFrame(name?: string): string | undefined {
+  if (!name) return undefined;
+  const clean = name
+    .replace(/[\u0000-\u001f\u007f-\u009f­؜ᅟᅠ​‎‏‪-‮⁠-⁩ㅤ﻿ﾠ\u{e0000}-\u{e007f}]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const bounded = Array.from(clean).slice(0, 120).join('');
+  return bounded || undefined;
+}
+
 export interface VoiceNoteSourceOptions {
   reader: AudioStreamReader;
-  /** One decoded frame for the lane: mono 16 kHz PCM and its capture epoch ms. */
-  feed: (pcm: Float32Array, tsMs: number) => void;
+  /** One decoded frame for the lane: mono 16 kHz PCM, its capture epoch ms, and the frame's own channel
+   *  and speaker name (a NAMED capture.v1 frame). Track 0 is the note's owner (his mic, as before); a
+   *  per-track capture (the extension on a Zoom tab) sends each participant on track 1.. with the name its
+   *  resolver bound, or no name until it binds. Card brain:card/66d7eaa642e5. */
+  feed: (pcm: Float32Array, tsMs: number, track: number, name?: string) => void;
   /** The browser said Stop: the end marker was read. Fires once. */
   onEnd: () => void;
   /** Neither audio nor an end for `idleMs`: the browser went away. Fires once. */
@@ -92,10 +115,15 @@ export function createVoiceNoteSource(opts: VoiceNoteSourceOptions): VoiceNoteSo
       log(`[bot] voice note: dropped entry ${e.id} (not a capture.v1 audio frame)`);
       return;
     }
+    if (decoded.speakerIndex < 0 || decoded.speakerIndex >= VOICE_NOTE_MAX_TRACKS) {
+      dropped++;
+      if (dropped <= 3 || dropped % 1000 === 0) log(`[bot] voice note: dropped entry ${e.id} (track ${decoded.speakerIndex} outside 0..${VOICE_NOTE_MAX_TRACKS - 1})`);
+      return;
+    }
     frames++;
     samples += decoded.samples.length;
     lastActivity = now();
-    opts.feed(decoded.samples, decoded.ts);
+    opts.feed(decoded.samples, decoded.ts, decoded.speakerIndex, speakerLabelFromFrame(decoded.speakerName));
   };
 
   const run = async (): Promise<void> => {

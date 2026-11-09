@@ -13,8 +13,7 @@ import {
   createVoiceNotePipeline,
   voiceNoteMaxActiveMs,
   type AudioStreamReader,
-  type StreamEntry,
-} from './voice-note.js';
+  type StreamEntry, speakerLabelFromFrame, VOICE_NOTE_MAX_TRACKS } from './voice-note.js';
 import { createBotPipeline } from './pipeline.js';
 import type { Invocation } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
@@ -83,6 +82,54 @@ console.log('\n=== voice note: the stream feeds the lane, in order, then ends ==
   check('no idle verdict on a note that ended', idles === 0);
   await src.stop(100);
   check('stats count the seconds of audio', Math.abs(src.stats().audioSeconds - 0.2) < 1e-9, String(src.stats().audioSeconds));
+}
+
+console.log('\n=== voice note: a NAMED frame keeps its own channel and speaker (per-track capture) ===');
+{
+  const s = memoryStream();
+  const fed: Array<{ track: number; name?: string; n: number }> = [];
+  const src = createVoiceNoteSource({
+    reader: s.reader,
+    feed: (pcm, _ts, track, name) => fed.push({ track, name, n: pcm.length }),
+    onEnd: () => {}, onIdle: () => {}, idleMs: 10_000, blockMs: 20,
+  });
+  src.start();
+  s.frame(new Float32Array(160).fill(0.1), 1_700_000_000_000);                    // the owner, no name
+  s.raw(new Uint8Array(encodeAudioFrame(2, 1_700_000_000_050, new Float32Array(320).fill(0.2), 'Maya')));
+  s.raw(new Uint8Array(encodeAudioFrame(3, 1_700_000_000_060, new Float32Array(320).fill(0.3))));   // unbound yet
+  await sleep(60);
+  check('the owner stays on track 0 with no name in the frame', fed[0]?.track === 0 && fed[0]?.name === undefined, JSON.stringify(fed));
+  check('a named frame reaches the lane on its own track, with its name', fed[1]?.track === 2 && fed[1]?.name === 'Maya' && fed[1]?.n === 320, JSON.stringify(fed));
+  check('an unbound participant keeps its track, still unnamed', fed[2]?.track === 3 && !fed[2]?.name, JSON.stringify(fed));
+  await src.stop(100);
+}
+
+console.log('\n=== voice note: a track outside 0..63 is dropped, never a new lane channel ===');
+{
+  const s = memoryStream();
+  const fed: number[] = [];
+  const src = createVoiceNoteSource({
+    reader: s.reader, feed: (_pcm, _ts, track) => fed.push(track),
+    onEnd: () => {}, onIdle: () => {}, idleMs: 10_000, blockMs: 20, log: () => {},
+  });
+  src.start();
+  s.raw(new Uint8Array(encodeAudioFrame(VOICE_NOTE_MAX_TRACKS - 1, 1_700_000_000_000, new Float32Array(320).fill(0.1), 'Last')));
+  s.raw(new Uint8Array(encodeAudioFrame(VOICE_NOTE_MAX_TRACKS, 1_700_000_000_010, new Float32Array(320).fill(0.1), 'Over')));
+  s.raw(new Uint8Array(encodeAudioFrame(5000, 1_700_000_000_020, new Float32Array(320).fill(0.1))));
+  await sleep(60);
+  check('track 63 is fed, 64 and 5000 are dropped', JSON.stringify(fed) === JSON.stringify([VOICE_NOTE_MAX_TRACKS - 1]), JSON.stringify(fed));
+  await src.stop(100);
+}
+
+console.log('\n=== voice note: a frame name is cleaned before it labels the transcript ===');
+{
+  check('control, bidi and zero-width characters are removed', speakerLabelFromFrame('Ma\u202eya\u0007\u200b') === 'Maya');
+  check('whitespace collapses and the label is bounded', speakerLabelFromFrame('  Dmitriy \n  Grankin ') === 'Dmitriy Grankin' && (speakerLabelFromFrame('x'.repeat(500)) || '').length === 120);
+  const cut = speakerLabelFromFrame('x'.repeat(119) + '\u{1F600}tail') || '';
+  check('the bound cuts by code point, never leaving a surrogate half', cut === 'x'.repeat(119) + '\u{1F600}', JSON.stringify(cut.slice(-3)));
+  check('ZWJ sequences and ZWNJ names survive', speakerLabelFromFrame('\u{1F468}‍\u{1F469}') === '\u{1F468}‍\u{1F469}' && speakerLabelFromFrame('می‌ر') === 'می‌ر');
+  check('tag characters, soft hyphen and Hangul fillers are removed', speakerLabelFromFrame('Ma\u{E0041}\u{E0042}ya­ㅤ') === 'Maya');
+  check('an empty or all-control name is no name', speakerLabelFromFrame('\u0000\u202e') === undefined && speakerLabelFromFrame('') === undefined);
 }
 
 console.log('\n=== voice note: a malformed entry is dropped, never thrown ===');
