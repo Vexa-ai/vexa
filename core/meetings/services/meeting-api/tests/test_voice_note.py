@@ -137,6 +137,35 @@ def test_the_cap_ends_the_note_and_counts_across_reconnects(env):
     assert sum(1 for x in writer.entries[stream] if "f" in x) == 2
 
 
+def _named(track: int, name: str, samples: int, ts: float = 1_760_000_000_000.0) -> bytes:
+    nb = name.encode("utf-8")
+    pad = (len(nb) + 3) & ~3
+    return (struct.pack("<Idi", (track | 0x80000000) & 0xFFFFFFFF, ts, len(nb)) + nb + b"\0" * (pad - len(nb))
+            + struct.pack(f"<{samples}f", *([0.01] * samples)))
+
+
+def test_several_tracks_share_one_wall_time_and_a_bad_track_is_dropped_not_fatal(env):
+    """Per-track capture (named frames): two participants speaking the same second are ONE second of the
+    note, not two (the cap and the pace follow the longest track); a frame on a track past the bound is
+    dropped and the note goes on (review of baa2886d)."""
+    client, _, writer = env
+    body = _start(client)
+    path = f"/voice-notes/{body['native_meeting_id']}/stream"
+    stream = f"voice_note:meeting:{body['id']}:audio"
+    with client.websocket_connect(path, headers=USER) as ws:
+        ws.receive_json()
+        ws.send_bytes(_named(1, "Maya", 16000))
+        ws.send_bytes(_named(2, "Leo", 16000))       # the same second, another participant
+        ws.send_bytes(_named(99, "Overflow", 16000)) # past MAX_TRACKS: dropped, not a bad_frame
+        assert ws.receive_json() == {"type": "progress", "received_sec": 1.0}
+        ws.send_bytes(_named(1, "Maya", 8000))
+        ws.send_bytes(_named(2, "Leo", 8000))
+    with client.websocket_connect(path, headers=USER) as ws:
+        assert ws.receive_json()["received_sec"] == 1.5     # 1.5 s of wall audio, not 3 s summed
+    audio = [x for x in writer.entries[stream] if "f" in x]
+    assert len(audio) == 4, "the two tracks' frames are kept, the overflow track's is not"
+
+
 def test_a_plain_get_on_the_socket_path_is_told_to_upgrade(env):
     client, _, _ = env
     r = client.get("/voice-notes/vn-0/stream", headers=USER)

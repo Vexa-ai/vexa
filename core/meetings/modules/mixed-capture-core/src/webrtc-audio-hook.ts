@@ -21,6 +21,11 @@
 
 export interface WebRtcAudioHookOptions {
   log?: (msg: string) => void;
+  /** Play the mirrored element (default true: the bot's page has nobody else playing it). A host whose page
+   *  already plays the meeting (the capture extension in his Zoom tab) passes false: the element stays as the
+   *  stream's consumer (Chromium feeds a remote WebRTC stream to WebAudio only while a media element holds
+   *  it) but is muted, so he never hears a voice twice. */
+  playback?: boolean;
 }
 
 /** The shape a reader needs from one intercepted connection: its receivers. */
@@ -74,8 +79,9 @@ export function installRemoteAudioHook(opts: WebRtcAudioHookOptions = {}): boole
 
       const audioEl = document.createElement('audio');
       audioEl.autoplay = true;
-      audioEl.muted = false;
-      audioEl.volume = 1.0;
+      const play = opts.playback !== false;
+      audioEl.muted = !play;
+      audioEl.volume = play ? 1.0 : 0;
       audioEl.dataset.vexaInjected = 'true';
       audioEl.style.position = 'absolute';
       audioEl.style.left = '-9999px';

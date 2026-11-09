@@ -85,5 +85,19 @@ pc.emit({ track: { id: 'video-1', kind: 'video' }, streams: [] });
 check('video tracks are ignored', win.__vexaCapturedRemoteAudioStreams.length === 2,
   `n=${win.__vexaCapturedRemoteAudioStreams.length}`);
 
+// ── playback:false (the extension in his own Zoom tab): the element holds the stream but is silent ──
+{
+  const before = win.__vexaInjectedAudioElements.length;
+  // a second install is a no-op, so read the option off a fresh hook state
+  win.__vexaRemoteAudioHookInstalled = false; win.RTCPeerConnection = FakePC as any;
+  installRemoteAudioHook({ log: () => {}, playback: false });
+  const pc2: any = new (globalThis as any).RTCPeerConnection();
+  const t3 = { id: 'muted-1', kind: 'audio' };
+  pc2.emit({ track: t3, streams: [new win.MediaStream([t3])] });
+  const e = win.__vexaInjectedAudioElements[before];
+  check('playback:false mirrors the track into a MUTED element at volume 0', !!e && e.muted === true && e.volume === 0, JSON.stringify(e && { muted: e.muted, volume: e.volume }));
+  check('the default still plays (the bot)', win.__vexaInjectedAudioElements[0].muted === false && win.__vexaInjectedAudioElements[0].volume === 1);
+}
+
 if (failed) { console.error(`\n❌ webrtc-dedup: ${failed} check(s) FAILED.`); process.exit(1); }
 console.log('\n✅ webrtc-dedup: each remote audio track is mirrored exactly once, so the mixer cannot sum a track with itself.');

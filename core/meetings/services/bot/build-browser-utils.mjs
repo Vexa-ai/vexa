@@ -80,6 +80,7 @@ import {
 } from ${JSON.stringify(GMEET)};
 import {
   createMixedAudioCapture,
+  createMixedLaneCapture,
   installRemoteAudioHook,
   selectTeamsMixStreams,
   mainAudioProvedSilent,
@@ -100,6 +101,7 @@ import {
 import {
   createZoomSpeakers,
   createTrackNameResolver,
+  createZoomPerTrackCapture,
 } from ${JSON.stringify(ZOOM)};
 
 const VexaBrowserUtils = {
@@ -117,6 +119,7 @@ const VexaBrowserUtils = {
   awaitGmeetChatLanded,      // capture-bridge.ts createChatSender: the trusted send's landing check
   // ── mixed lane (zoom/teams single combined stream) ──
   createMixedAudioCapture,   // capture-bridge.ts: w.VexaBrowserUtils.createMixedAudioCapture
+  createMixedLaneCapture,    // capture-bridge.ts + the capture extension: the mixed lane (Teams/Jitsi), one module
   installRemoteAudioHook,
   selectTeamsMixStreams,     // capture-bridge.ts setupMix: Teams mix vs fail-open (one impl, unit-tested)
   mainAudioProvedSilent,     // capture-bridge.ts setupMix: presence is not liveness — abandon a silent mix
@@ -133,6 +136,7 @@ const VexaBrowserUtils = {
   // ── zoom lane (active-speaker DOM watcher → 'dom-active' naming hints) ──
   createZoomSpeakers,        // capture-bridge.ts: w.VexaBrowserUtils.createZoomSpeakers
   createTrackNameResolver,   // capture-bridge.ts setupPerTrack: the pure channel↔name correlator
+  createZoomPerTrackCapture, // capture-bridge.ts + the capture extension: Zoom's per-track capture, one module
 };
 
 (globalThis).VexaBrowserUtils = VexaBrowserUtils;

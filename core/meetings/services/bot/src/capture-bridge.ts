@@ -866,174 +866,38 @@ export async function startCaptureBridge(
       //     re-separate speakers, named by time-windowed hints. Kept until each platform's streams are
       //     seen live (streams ≈ participants → safe to flip to per-track; streams ≫ participants → slots).
       if (isPerTrack) {
-      // ── The track→name resolver ──────────────────────────────────────────────────────────────
-      // Zoom's remote audio is STABLE per participant: verified live that each speaker gets their OWN
-      // WebRTC stream (a permanent channel here), appearing when they first become active and never
-      // remapped or reused — 5 streams for 5 speakers, ch=3/ch=4 arriving only when the 4th/5th person
-      // first spoke. The unreliable part is the NAME: Zoom's active-speaker DOM is a sticky dominant-
-      // speaker spotlight (worse under screen-share) that lags/holds the wrong person. Attaching each
-      // stable channel to the right name and DEFENDING it against that DOM is the resolver's whole job,
-      // and it is the SAME job GmeetChannelBinder does for Meet's glow and TrackNamer for the Teams
-      // CSRC spine — so, like both of those, it is a pure module (@vexa/zoom-capture,
-      // createTrackNameResolver: vote · margin hysteresis · 1:1 by identity · purity co-hold · idle
-      // release · self-exclusion · Speaker A/B/C) with goldens, bundled into VexaBrowserUtils. It is
-      // NOT written here: an attribution algorithm inside a serialized page closure cannot be tested,
-      // diffed against its two siblings, or replayed against a fixture, which is exactly why this lane
-      // was the one lane with no offline evidence.
-      if (!w.__vexaTrackNamer) {
-        const makeResolver = w.VexaBrowserUtils?.createTrackNameResolver;
-        if (makeResolver) {
-          w.__vexaTrackNamer = makeResolver({
-            mode: isTeams ? 'additive' : 'exclusive',
-            // The leak-proof backstop: our own tile can never become a remote channel's identity,
-            // even in the window where the watcher's self marker is transiently absent.
-            selfName: botName,
-            onBind: (ch: number, name: string, votes: number): void => {
-              // A FLIP (the resolver changing its mind about a channel) is a different event from a
-              // first BIND and reads differently in a tape: the first is the algorithm working, the
-              // second is it correcting a wrong name — which the per-channel lane cannot repaint, so
-              // an unexplained flip rate is the symptom that would send us to the fixture.
-              if (!w.__vexaTrackBound) w.__vexaTrackBound = new Map();
-              const prev = w.__vexaTrackBound.get(ch);
-              w.__vexaTrackBound.set(ch, name);
-              w.logBot?.('[pertrack] bound ch=' + ch + ' → ' + name + ' (' + votes + ' votes)');
-              w.__vexaObservation?.('pertrack', {
-                type: prev ? 'pertrack-flip' : 'pertrack-bind',
-                channel: ch, name, previous: prev, votes, tMs: Date.now(),
-              }, Date.now());
-            },
-          });
-        } else {
-          // Absence of an expected signal is itself a reportable state (P18/ADR-0010): without the
-          // resolver every channel stays unnamed, which is a degraded run, not a broken one — so say
-          // so as DATA and keep capturing.
-          w.logBot?.('[pertrack] resolver unavailable — VexaBrowserUtils.createTrackNameResolver missing; channels stay unnamed');
-          w.__vexaObservation?.('pertrack', { type: 'pertrack-resolver-absent', tMs: Date.now() }, Date.now());
-        }
-      }
-
-      // ── Per-track capture: one 16 kHz PCM tap per remote track, each on its own stable channel ──
-      // ONE shared AudioContext hosts every track's tap (Chromium hard-caps concurrent AudioContexts
-      // at 6 — a per-track context would drop the 7th+ participant in a large meeting). Each track gets
-      // its own ScriptProcessor on that context; callbacks share the page's main thread.
-      // All tracks use one epoch-anchored monotonic page clock. Each frame is stamped at
-      // callback time minus its duration; skipped callbacks cannot compress elapsed time.
-      // Resolver hints and frame times remain on the same epoch timeline.
-      // #1195 — the deaf-capture guard's presence oracle, on THIS lane too. The guard abstains
-      // whenever it is never told about streams (aloneness.ts row 2: `streamsPresentAt === undefined`
-      // → 'alone', i.e. no objection), so a capture branch that never calls __vexaStreamPresence
-      // silently opts its platform OUT of the guard: a Zoom bot whose capture chain dies mid-meeting
-      // could once again leave a LIVE meeting as completed(left_alone) — a recorded success, and
-      // silent. The mixed branch walks __vexaMixStreamRefs; per-track walks the hook's own array and
-      // counts the same bit — an audio track that is `live` and not `muted` (a remote track mutes
-      // when packets stop arriving). Reported on every rescan INCLUDING the zero case, because zero
-      // is what row 2 (the genuinely empty room) is made of.
-      const reportPerTrackPresence = (): void => {
-        let live = 0;
-        for (const s of (w.__vexaCapturedRemoteAudioStreams || []) as Array<any>) {
-          try {
-            const tracks = s?.getAudioTracks ? s.getAudioTracks() : [];
-            for (const t of tracks) {
-              if (t && t.readyState === 'live' && t.muted !== true) { live++; break; }
-            }
-          } catch { /* a stream may have been torn down mid-walk */ }
-        }
-        try { w.__vexaStreamPresence?.(live); } catch { /* presence must never break capture */ }
-      };
-      // The lane's SHAPE as data (P18/ADR-0010), not only as a log line — the same reason
-      // mix-topology exists, and the csrc-wiring test's own assertion: "the mix topology crossed as
-      // DATA". N per-participant tracks behave nothing like one server mix, and the difference
-      // decides how a tape may be read. Emitted on the first capture and on every CHANGE, so the
-      // fixture carries the shape over time rather than one snapshot taken before everyone arrived.
-      const reportPerTrackTopology = (): void => {
-        const n = w.__vexaTrackCaps ? w.__vexaTrackCaps.size : 0;
-        if (w.__vexaTrackTopology === n) return;
-        w.__vexaTrackTopology = n;
-        w.__vexaObservation?.('pertrack', { type: 'pertrack-topology', streams: n, tMs: Date.now() }, Date.now());
-      };
-      const setupPerTrack = (): void => {
-        reportPerTrackPresence();
-        const streams = (w.__vexaCapturedRemoteAudioStreams || []) as Array<{ id: string }>;
-        if (!streams.length) return;
-        if (!w.__vexaTrackCtx) {
-          w.__vexaTrackCtx = new (globalThis as any).AudioContext({ sampleRate: 16000 });
-          w.__vexaTrackCtx.resume?.();
-          w.__vexaTrackEpochMs = Date.now() - performance.now();
-          w.__vexaTrackCaps = new Map();
-          w.__vexaTrackNextCh = 0;
-        }
-        const ctx = w.__vexaTrackCtx;
-        const SR = 16000, SILENCE = 0.005;
-        for (const s of streams) {
-          if (!s || w.__vexaTrackCaps.has(s.id)) continue;
-          const ch: number = w.__vexaTrackNextCh++;
-          try {
-            const src = ctx.createMediaStreamSource(s);
-            const proc = ctx.createScriptProcessor(4096, 1, 1);
-            let lastFrameEndMs: number | undefined;
-            let lastGapReportMs = -Infinity;
-            proc.onaudioprocess = (e: any): void => {
-              const input = e.inputBuffer.getChannelData(0) as Float32Array;
-              const frameMs = (input.length / SR) * 1000;
-              const frameEndMs = w.__vexaTrackEpochMs + performance.now();
-              const ts = frameEndMs - frameMs;
-              // Callback delivery approximates capture time; it cannot reconstruct audio
-              // lost upstream. Report discontinuities before silence gating so they remain
-              // distinguishable from a participant simply not speaking.
-              const gapMs = lastFrameEndMs === undefined ? 0 : ts - lastFrameEndMs;
-              if (gapMs > 1000 && frameEndMs - lastGapReportMs >= 10000) {
-                w.__vexaObservation?.('pertrack', { type: 'capture-clock-gap', channel: ch, gapMs, frameMs, tMs: ts }, ts);
-                lastGapReportMs = frameEndMs;
-              }
-              lastFrameEndMs = frameEndMs;
-              let maxVal = 0;
-              for (let i = 0; i < input.length; i++) { const a = Math.abs(input[i]); if (a > maxVal) maxVal = a; }
-              if (maxVal <= SILENCE) return;                   // gate silence (as the mix path did)
-              w.__vexaTrackNamer?.markHot(ch, ts, maxVal);     // peak energy → the dominant-slot ranking
-              const name = w.__vexaTrackNamer?.resolve(ch, ts);
-              const arr = Array.from(input);                   // copy — the input buffer is reused
-              // An UNBOUND channel deliberately crosses with NO name, not with its Speaker A/B/C
-              // label: the per-channel lane opens such a turn UNKNOWN and RENAMES it in place the
-              // moment the resolver binds (gmeet-pipeline's onset-adopt). Handing it a label instead
-              // would make that turn already-named, so the real name would arrive as a rotation and
-              // SPLIT one person's turn in two. The label is what a reader should see for a channel
-              // that never earns a name; carrying it to the transcript needs the retroactive repaint
-              // the transport spine has (stable speaker_key) and the per-channel lane does not — the
-              // Commit-B follow-up. Until then it is reported as data on the bind observations.
-              if (name) w.__vexaNamedAudioData(ch, name, arr, ts);
-              else w.__vexaPerSpeakerAudioData(ch, arr, ts);
-            };
-            src.connect(proc);
-            proc.connect(ctx.destination);                     // pull the processor (it outputs silence)
-            w.__vexaTrackCaps.set(s.id, { ch, src, proc });
-            w.logBot?.('[pertrack] capturing ch=' + ch + ' (' + w.__vexaTrackCaps.size + ' track(s))');
-            reportPerTrackTopology();
-            w.__vexaRemoteAudioReady?.();
-          } catch (e: any) {
-            // A track we could not tap is a participant we cannot hear — a fault, and one that only
-            // this line ever sees. It crosses as data for the same reason the watcher's no-signal
-            // observation does: absence of an expected signal is itself a reportable state.
-            w.logBot?.('[pertrack] track setup failed ch=' + ch + ': ' + String(e));
-            w.__vexaObservation?.('pertrack', { type: 'pertrack-capture-failed', channel: ch, error: String(e), tMs: Date.now() }, Date.now());
-          }
-        }
-      };
-      setupPerTrack();
-      w.__vexaMixRescan = (globalThis as any).setInterval(setupPerTrack, 2000); // pick up late-joining tracks
-      // Zoom's active-speaker DOM watcher — the WHO signal the resolver correlates with per-track energy
-      // (also teed to __vexaSpeakerHint for telemetry; the pipeline's recordHint is a no-op on this lane).
-      if (isZoom && w.VexaBrowserUtils?.createZoomSpeakers && !w.__vexaZoomSpeakers) {
-        let lastActive: string | null = null;
-        w.__vexaZoomSpeakers = w.VexaBrowserUtils.createZoomSpeakers({
+      // ── Per-track capture: the SHARED module (@vexa/zoom-capture createZoomPerTrackCapture) ──────────
+      // One stable channel per remote WebRTC track, tapped at 16 kHz on one AudioContext, named by the
+      // track→name resolver from Zoom's active-speaker DOM; an unbound channel crosses with no name (the
+      // per-channel lane renames the turn in place when it binds). The SAME module runs in the capture
+      // extension (founder 9 Nov 2026: «port zoom bot capture to the extension - reuse the code»), so the
+      // logic lives once; this host only wires its callbacks to the exposed functions it always used.
+      const makePerTrack = w.VexaBrowserUtils?.createZoomPerTrackCapture;
+      if (!makePerTrack) {
+        w.logBot?.('[pertrack] VexaBrowserUtils.createZoomPerTrackCapture missing; no per-track capture');
+        // A stale or mismatched bundle: no per-track audio at all. Named as its own fault (review of 2584e47f).
+        w.__vexaObservation?.('pertrack', { type: 'pertrack-capture-absent', fault: true, tMs: Date.now() }, Date.now());
+      } else if (!w.__vexaZoomPerTrack) {
+        const cap = makePerTrack({
+          streams: () => (w.__vexaCapturedRemoteAudioStreams || []),
           selfName: botName,
-          log: (m: string) => w.logBot?.('[ZoomSpeakers] ' + m),
-          onSpeakerChange: (name: string | null) => {
-            const tMs = Date.now();
-            if (name) { w.__vexaTrackNamer?.onSpeak(name, tMs, false); w.__vexaSpeakerHint?.(name, tMs, false); }
-            else if (lastActive) { w.__vexaTrackNamer?.onSpeak(lastActive, tMs, true); w.__vexaSpeakerHint?.(lastActive, tMs, true); }
-            lastActive = name;
+          watchSpeakers: !!isZoom,
+          log: (m: string) => w.logBot?.(m),
+          observe: (kind: string, data: any, tMs: number) => w.__vexaObservation?.(kind, data, tMs),
+          onPresence: (live: number) => w.__vexaStreamPresence?.(live),
+          onReady: () => w.__vexaRemoteAudioReady?.(),
+          onSpeakerHint: (name: string, tMs: number, isEnd: boolean) => w.__vexaSpeakerHint?.(name, tMs, isEnd),
+          onAudio: (ch: number, name: string | null, samples: Float32Array, ts: number) => {
+            const arr = Array.from(samples);
+            if (name) w.__vexaNamedAudioData(ch, name, arr, ts);
+            else w.__vexaPerSpeakerAudioData(ch, arr, ts);
           },
         });
+        w.__vexaZoomPerTrack = cap;
+        w.__vexaTrackNamer = cap.resolver;             // diagnostics, as before
+        w.__vexaZoomSpeakers = cap.speakers;           // getState() forensics + teardown, as before
+        w.__vexaTrackCaps = cap.taps;                 // diagnostics + the wiring test, as before
+        w.__vexaMixRescan = cap.rescanHandle;          // teardown clears it; the deaf-guard sees a live lane
       }
       return;
       }
@@ -1046,161 +910,32 @@ export async function startCaptureBridge(
       // inside that mix; combining both double-feeds every word to the transcriber → repeated words. So on
       // Teams mix ONLY the mainAudio track. Jitsi keeps combining all tracks (its topology isn't witnessed).
 
-      // #1192 — report how many connected remote streams are LIVE and carrying data, every rescan.
-      // `__vexaMixSeen` cannot answer this: it is a monotonic id ledger (dedupe for the connect
-      // loop), so it counts streams EVER connected — crossing that number would leave a bot that
-      // once saw a participant unable to resolve left_alone for the rest of the meeting. This walks
-      // the connected stream objects instead and counts the ones whose audio track is `live` and
-      // not `muted` (a remote track mutes when packets stop arriving). Node-side the count is
-      // sticky over a staleness window, so the DTX gap between talk spurts cannot read as an
-      // empty room.
-      const reportStreamPresence = (): void => {
-        let live = 0;
-        for (const s of (w.__vexaMixStreamRefs || []) as Array<any>) {
-          try {
-            const tracks = s?.getAudioTracks ? s.getAudioTracks() : [];
-            for (const t of tracks) {
-              if (t && t.readyState === 'live' && t.muted !== true) { live++; break; }
-            }
-          } catch { /* a stream may have been torn down mid-walk */ }
-        }
-        try { w.__vexaStreamPresence?.(live); } catch { /* presence must never break capture */ }
-      };
-      const setupMix = (): void => {
-        reportStreamPresence();
-        let streams = (w.__vexaCapturedRemoteAudioStreams || []) as Array<any>;
-        if (isTeams && streams.length) {
-          // selectTeamsMixStreams (bundled via VexaBrowserUtils) prefers the server mix and FAILS OPEN
-          // if it never appears — see its doc for why an unconditional preference is the more
-          // dangerous bug. Kept out of this callback so the page and its unit test run one
-          // implementation; a hand-copied twin here would drift from the test on the first edit.
-          const select = w.VexaBrowserUtils?.selectTeamsMixStreams;
-          if (select) {
-            // PRESENCE IS NOT LIVENESS. A mainAudio track that appears and then carries pure silence
-            // passes the absence check forever, so the bot captures nothing while the real tracks sit
-            // mirrored and unused — and the lane's own csrc→pyannote watchdog cannot rescue it,
-            // because that demotion needs ENERGETIC audio to fire. Latch the verdict once (so the
-            // pick cannot oscillate as the fallback's own audio arrives) and keep reporting it.
-            const provedSilent = w.VexaBrowserUtils?.mainAudioProvedSilent;
-            if (!w.__vexaTeamsMainAudioDead && provedSilent?.({
-              captureStartedMs: w.__vexaMixCaptureStartedMs ?? null,
-              energeticMs: w.__vexaMixEnergeticMs || 0,
-              nowMs: Date.now(),
-              silenceMs: mainAudioSilenceMs,
-            })) {
-              w.__vexaTeamsMainAudioDead = true;
-              // SAY IT. The counters showed a healthy-looking bot for the whole of 26040 while it
-              // captured nothing; the only trace was a number nobody was reading. A capture that
-              // has proved dead is a typed observation, so it lands in the tape beside the silence
-              // it is describing and a replay can find it without a human noticing first.
-              w.logBot?.('[mixed] MAIN-AUDIO ABSENT — the picked mix produced no sound; falling back to every track');
-              w.__vexaObservation?.('mixed', {
-                type: 'main-audio-absent',
-                platform: isTeams ? 'teams' : 'mixed',
-                capturedMs: w.__vexaMixCaptureStartedMs ? Date.now() - w.__vexaMixCaptureStartedMs : 0,
-                energeticMs: w.__vexaMixEnergeticMs || 0,
-                framesSeen: w.__vexaMixFrames || 0,
-                silenceMs: mainAudioSilenceMs,
-                tMs: Date.now(),
-              }, Date.now());
-            }
-            const sel = select(streams, {
-              firstMissMs: w.__vexaTeamsNoMainSince ?? null,
-              nowMs: Date.now(),
-              graceMs: mainAudioGraceMs,
-              mainAudioSilent: !!w.__vexaTeamsMainAudioDead,
-              mainAudioCapturedMs: w.__vexaMixCaptureStartedMs ? Date.now() - w.__vexaMixCaptureStartedMs : 0,
-            });
-            if (sel.outcome === 'main-audio') { w.__vexaTeamsNoMainSince = null; }
-            else { w.__vexaTeamsNoMainSince = w.__vexaTeamsNoMainSince || Date.now(); }
-            // Re-emitted on EVERY falling-back rescan, deliberately: the latched one-shot warning it
-            // replaces meant a bot capturing the wrong thing said so once and looked healthy after.
-            if (sel.observation) {
-              w.logBot?.('[mixed] observation ' + JSON.stringify(sel.observation));
-              w.__vexaObservation?.('mixed', sel.observation, Date.now());
-            }
-            streams = sel.streams;
-          }
-        }
-        if (!streams.length) return;
-        // How many streams the mix is built from is a FACT about the meeting's topology, not a
-        // log line: one server-side mix behaves nothing like N per-participant tracks, and the
-        // difference decides how a tape may be read. Emitted on the first mix and again on every
-        // CHANGE (a late track joining), so the tape carries the shape over time rather than one
-        // snapshot taken before everyone arrived.
-        const reportTopology = (): void => {
-          const n = w.__vexaMixSeen ? w.__vexaMixSeen.size : 0;
-          if (w.__vexaMixTopology === n) return;
-          w.__vexaMixTopology = n;
-          w.__vexaObservation?.('mixed', { type: 'mix-topology', streams: n, tMs: Date.now() }, Date.now());
-        };
-        if (!w.__vexaMixCtx) {
-          w.__vexaMixCtx = new (globalThis as any).AudioContext({ sampleRate: 16000 });
-          w.__vexaMixCtx.resume?.();
-          w.__vexaMixDest = w.__vexaMixCtx.createMediaStreamDestination();
-          w.__vexaMixSeen = new Set();
-        }
-        for (const s of streams) {
-          if (!s || w.__vexaMixSeen.has(s.id)) continue;
-          try {
-            w.__vexaMixCtx.createMediaStreamSource(s).connect(w.__vexaMixDest);
-            w.__vexaMixSeen.add(s.id);
-            (w.__vexaMixStreamRefs = w.__vexaMixStreamRefs || []).push(s);
-            w.logBot?.('[mixed] connected remote stream ' + w.__vexaMixSeen.size);
-            reportTopology();
-          } catch { /* a stream may not be connectable yet */ }
-        }
-        if (!w.__vexaMixedCapture && w.__vexaMixSeen.size && w.VexaBrowserUtils?.createMixedAudioCapture) {
-          w.__vexaMixedCapture = true; // guard re-entry while the async create resolves
-          // Meter the mix as it is captured: the silence verdict above needs to know whether the
-          // stream we PICKED ever carried sound, and this callback is the only place that sees it.
-          const meterAndForward = (pcm: Float32Array, tsMs?: number): void => {
-            if (w.__vexaMixCaptureStartedMs === undefined || w.__vexaMixCaptureStartedMs === null) {
-              w.__vexaMixCaptureStartedMs = Date.now();
-            }
-            // Frames seen at all — the difference between a mix that is QUIET and one that is not
-            // there. Both end in the same fallback, but a fixture should not have to infer which.
-            w.__vexaMixFrames = (w.__vexaMixFrames || 0) + 1;
-            let sum = 0;
-            for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
-            if (pcm.length && Math.sqrt(sum / pcm.length) >= mainAudioEnergyRms) {
-              w.__vexaMixEnergeticMs = (w.__vexaMixEnergeticMs || 0) + (pcm.length / 16000) * 1000;
-            }
-            // Stamp each frame with the ACCUMULATED-AUDIO-TIME clock the capture provides (tsMs = the
-            // wall-clock of the audio the frame HOLDS — anchor + samples/rate — on the page clock, the same
-            // domain as the hints' tMs). Passing that through (not Node RECEIPT time, and not Date.now() at
-            // callback time which still carries the ~256ms ScriptProcessor buffer latency) is what lets the
-            // speaker-hint binder align frames to hints; without it ~3/4 of hints missed → misattribution.
-            w.__vexaPerSpeakerAudioData(0, Array.from(pcm), tsMs);
-          };
-          Promise.resolve(w.VexaBrowserUtils.createMixedAudioCapture(w.__vexaMixDest.stream, meterAndForward))
-            .then((cap: any) => {
-              w.__vexaMixedCapture = cap;
-              // THE CLOCK STARTS WHEN CAPTURE STARTS, NOT WHEN AUDIO ARRIVES.
-              //
-              // The silence guard must not depend on the very thing it exists to detect the absence
-              // of. Started here, elapsed time is measured against capture being ALIVE, so a picked
-              // track that delivers NOTHING still arms the capture-all fallback: a mix that carries
-              // no frames at all and a mix that carries silent frames reach the same verdict.
-              //
-              // Anchoring the clock in the PCM callback instead would make absence-of-frames
-              // invisible — no callback, no start time, and every rescan reading "nothing captured
-              // yet, so not evidence of silence" while the meeting produces no transcript at all.
-              // Silence-with-frames is unaffected either way: it sets energeticMs > 0 and exits early.
-              if (w.__vexaMixCaptureStartedMs === undefined || w.__vexaMixCaptureStartedMs === null) {
-                w.__vexaMixCaptureStartedMs = Date.now();
-              }
-              return cap?.start?.();
-            })
-            .then(async () => {
-              await w.__vexaRemoteAudioReady?.();
-              w.logBot?.('[mixed] capture started over ' + w.__vexaMixSeen.size + ' stream(s)');
-            })
-            .catch((e: any) => { w.__vexaMixedCapture = null; w.logBot?.('[mixed] capture start failed: ' + String(e)); });
-        }
-      };
-      setupMix();
-      w.__vexaMixRescan = (globalThis as any).setInterval(setupMix, 2000); // pick up late-arriving tracks
+      // ── the mixed lane: the SHARED module (@vexa/mixed-capture-core createMixedLaneCapture) ───────────
+      // Presence from the stream objects, the Teams mainAudio pick that fails open, the latched silence
+      // verdict, one 16 kHz sum tapped by createMixedAudioCapture with its own capture clock: moved from this
+      // closure unchanged; the capture extension runs the same module (founder 9 Nov 2026: «no shortcuts»).
+      const makeLane = w.VexaBrowserUtils?.createMixedLaneCapture;
+      if (!makeLane) {
+        w.logBot?.('[mixed] VexaBrowserUtils.createMixedLaneCapture missing; no mixed capture');
+        w.__vexaObservation?.('mixed', { type: 'mixed-capture-absent', fault: true, tMs: Date.now() }, Date.now());
+      } else if (!w.__vexaMixedLane) {
+        const lane = makeLane({
+          streams: () => (w.__vexaCapturedRemoteAudioStreams || []),
+          teamsMainAudio: !!isTeams,
+          platform: isTeams ? 'teams' : 'mixed',
+          graceMs: mainAudioGraceMs,
+          silenceMs: mainAudioSilenceMs,
+          energyRms: mainAudioEnergyRms,
+          log: (m: string) => w.logBot?.(m),
+          observe: (kind: string, data: any, tMs: number) => w.__vexaObservation?.(kind, data, tMs),
+          onPresence: (live: number) => w.__vexaStreamPresence?.(live),
+          onReady: () => w.__vexaRemoteAudioReady?.(),
+          // the capture's accumulated-audio clock (tsMs), never receipt time: the hint binder aligns on it
+          onAudio: (pcm: Float32Array, tsMs?: number) => w.__vexaPerSpeakerAudioData(0, Array.from(pcm), tsMs),
+        });
+        w.__vexaMixedLane = lane;
+        w.__vexaMixRescan = lane.rescanHandle;   // teardown clears it; restartMixedCapture keys on it
+      }
 
       // ── the transport sensor (mixed lane, EVERY platform) ────────────────────────────────────
       // RTP labels the server-side mix with the sources it mixed; the sensor turns that into turn
@@ -1390,8 +1125,10 @@ export async function startCaptureBridge(
       try { w.__vexaCsrcPoll?.destroy?.(); w.__vexaCsrcPoll = null; } catch { /* best-effort */ }
       try { w.__vexaJitsiSpeakers?.destroy?.(); w.__vexaJitsiSpeakers = null; } catch { /* best-effort */ }
       try { w.__vexaJitsiChat?.destroy?.(); w.__vexaJitsiChat = null; } catch { /* best-effort */ }
+      try { w.__vexaZoomPerTrack?.stop?.(); w.__vexaZoomPerTrack = null; } catch { /* best-effort */ }
       try { w.__vexaZoomSpeakers?.destroy?.(); w.__vexaZoomSpeakers = null; } catch { /* best-effort */ }
       try { if (w.__vexaMixRescan) { (globalThis as any).clearInterval(w.__vexaMixRescan); w.__vexaMixRescan = null; } } catch { /* */ }
+      // Safety net only: __vexaZoomPerTrack.stop() above already released the taps and the context.
       try {
         if (w.__vexaTrackCaps) {
           for (const e of w.__vexaTrackCaps.values()) {
@@ -1401,6 +1138,7 @@ export async function startCaptureBridge(
         }
       } catch { /* best-effort */ }
       try { w.__vexaTrackCtx?.close?.(); w.__vexaTrackCtx = null; } catch { /* best-effort */ }
+      try { w.__vexaMixedLane?.stop?.(); w.__vexaMixedLane = null; } catch { /* best-effort */ }
       try { if (w.__vexaMixedCapture && typeof w.__vexaMixedCapture.stop === 'function') w.__vexaMixedCapture.stop(); } catch { /* best-effort */ }
       try { w.__vexaMixCtx?.close?.(); } catch { /* best-effort */ }
       try { w.__vexaGmeetSpeakers?.destroy?.(); } catch { /* best-effort */ }
@@ -1423,9 +1161,10 @@ export async function restartMixedCapture(page: Page): Promise<boolean> {
     const w = (globalThis as any) as Record<string, any>;
     if (!w.__vexaMixRescan) return false;   // not the mixed lane (or the bridge is already torn down)
     try {
-      if (w.__vexaMixedCapture && typeof w.__vexaMixedCapture.stop === 'function') w.__vexaMixedCapture.stop();
+      if (w.__vexaMixedLane) w.__vexaMixedLane.restart();   // the lane's next rescan re-creates the tap (and re-signals ready)
+      else if (w.__vexaMixedCapture && typeof w.__vexaMixedCapture.stop === 'function') w.__vexaMixedCapture.stop();
     } catch { /* best-effort: the guard re-runs if this did not take */ }
-    w.__vexaMixedCapture = null;            // the rescan re-creates it (and re-signals ready)
+    w.__vexaMixedCapture = null;
     w.logBot?.('[mixed] capture restart requested (deaf-capture guard)');
     return true;
   }).catch(() => false);
