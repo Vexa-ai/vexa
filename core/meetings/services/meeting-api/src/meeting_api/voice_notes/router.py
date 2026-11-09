@@ -49,6 +49,17 @@ PLATFORM = "voice_note"
 SAMPLE_RATE = 16_000
 HEADER_BYTES = 12
 NAME_FLAG = 0x80000000
+#: A NAMED capture.v1 frame (@vexa/capture-codec): the name flag on the track, then Int32 nameLen, the
+#: UTF-8 name zero-padded to 4 bytes, then the PCM. The extension's per-track Zoom capture sends one per
+#: participant track with its resolved name (card brain:card/66d7eaa642e5, founder 9 Nov: «port zoom bot
+#: capture to the extension»), so the note's per-channel lane gets each speaker on its own channel.
+NAMED_HEADER_BYTES = 16
+MAX_NAME_BYTES = 256
+#: Channels one note may carry (one per participant track): bounded so a sender cannot fan the lane out.
+#: A frame on a higher track is DROPPED (counted), never fatal to the note (review of baa2886d).
+MAX_TRACKS = 64
+#: A named frame carries at least 10 ms of audio, so names cannot dominate the stream's bytes.
+MIN_NAMED_SAMPLES = 160
 #: One frame carries at most a second of audio (a browser sends ~100–250 ms).
 MAX_FRAME_SAMPLES = SAMPLE_RATE
 #: A plausible capture time, epoch ms: 2001-09-09 to 2100-01-01.
@@ -108,18 +119,46 @@ def stream_ttl_sec() -> int:
 
 
 def frame_samples(frame: bytes) -> Optional[int]:
-    """The sample count of a no-name capture.v1 audio frame, or None when it is not one."""
+    """The sample count of a capture.v1 audio frame (no-name or named), or None when it is not one."""
+    parsed = frame_parse(frame)
+    if parsed is None or parsed[1] >= MAX_TRACKS:
+        return None
+    return parsed[0]
+
+
+def frame_parse(frame: bytes) -> Optional[tuple]:
+    """(samples, track) of a capture.v1 audio frame, or None when it is not one. The track is returned
+    unbounded: the door drops a frame on a track past MAX_TRACKS instead of closing the note."""
     n = len(frame)
-    if n < HEADER_BYTES or (n - HEADER_BYTES) % 4:
+    if n < HEADER_BYTES:
         return None
-    track, ts = struct.unpack_from("<id", frame, 0)
+    raw, ts = struct.unpack_from("<Id", frame, 0)
+    track = raw & ~NAME_FLAG
+    header = HEADER_BYTES
+    if raw & NAME_FLAG:
+        if n < NAMED_HEADER_BYTES:
+            return None
+        (name_len,) = struct.unpack_from("<i", frame, HEADER_BYTES)
+        if name_len < 0 or name_len > MAX_NAME_BYTES:
+            return None
+        header = NAMED_HEADER_BYTES + ((name_len + 3) & ~3)
+        if n < header:
+            return None
+        try:
+            bytes(frame[NAMED_HEADER_BYTES:NAMED_HEADER_BYTES + name_len]).decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    if (n - header) % 4:
+        return None
     # The capture time is epoch milliseconds (capture.v1: the sender stamps it, nobody restamps).
-    if track < 0 or track & NAME_FLAG or not math.isfinite(ts) or not EPOCH_MS_MIN <= ts <= EPOCH_MS_MAX:
+    if not math.isfinite(ts) or not EPOCH_MS_MIN <= ts <= EPOCH_MS_MAX:
         return None
-    samples = (n - HEADER_BYTES) // 4
+    samples = (n - header) // 4
+    if raw & NAME_FLAG and samples < MIN_NAMED_SAMPLES:
+        return None
     if samples == 0 or samples > MAX_FRAME_SAMPLES:
         return None
-    return samples
+    return samples, track
 
 
 @runtime_checkable
@@ -279,7 +318,9 @@ def build_router(repo: MeetingRepo, writer: AudioStreamWriter, *,
                                        "received_sec": round(total / SAMPLE_RATE, 2)}))
         last_progress = total
         opened = clock()
-        taken = 0                     # samples this socket took (the pace is per socket)
+        taken = 0                     # audio this socket took, as the longest track's samples (the pace)
+        per_track: dict = {}          # samples per track on this socket
+        dropped_tracks = 0
         last_alive: Optional[float] = None
         text_budget = _Bucket(TEXT_FRAME_BURST, TEXT_FRAMES_PER_SEC, opened)
         try:
@@ -289,10 +330,18 @@ def build_router(repo: MeetingRepo, writer: AudioStreamWriter, *,
                     return
                 data = msg.get("bytes")
                 if data is not None:
-                    n = frame_samples(data)
-                    if n is None:
+                    parsed = frame_parse(data)
+                    if parsed is None:
                         await _refuse(ws, CLOSE_BAD_FRAME, "bad_frame", accepted=True)
                         return
+                    samples, track = parsed
+                    if track >= MAX_TRACKS:
+                        dropped_tracks += 1   # one participant past the bound never ends the note
+                        continue
+                    # Several tracks carry the SAME wall time (one per participant): the note's length and
+                    # its pace follow the longest track, not the sum (review of baa2886d).
+                    per_track[track] = per_track.get(track, 0) + samples
+                    n = max(0, max(per_track.values()) - taken)
                     if total + n > cap_samples:
                         await writer.end(stream, ttl_sec=END_TTL_SEC)
                         await _refuse(ws, CLOSE_CAP_REACHED, "max_duration", accepted=True)
@@ -304,7 +353,8 @@ def build_router(repo: MeetingRepo, writer: AudioStreamWriter, *,
                     if wait > 0:
                         await sleep(wait)
                     await writer.append(stream, data, ttl_sec=ttl)
-                    total = await writer.add_samples(stream, n, ttl_sec=ttl)
+                    if n:
+                        total = await writer.add_samples(stream, n, ttl_sec=ttl)
                     if total - last_progress >= SAMPLE_RATE:
                         last_progress = total
                         await ws.send_text(json.dumps({"type": "progress",
