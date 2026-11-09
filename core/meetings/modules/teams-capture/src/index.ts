@@ -53,6 +53,8 @@ export type {
   TeamsProducerDomTraceNameToken,
 } from './producer-dom-trace.js';
 export { createTeamsChat } from './teams-chat.js';
+export { createTeamsPageCapture } from './page-capture.js';
+export type { TeamsPageCaptureOptions } from './page-capture.js';
 export type { TeamsChat, TeamsChatMessage } from './teams-chat.js';
 export { createTeamsCaptions, teamsCaptionSelectors } from './msteams-captions.js';
 export type {

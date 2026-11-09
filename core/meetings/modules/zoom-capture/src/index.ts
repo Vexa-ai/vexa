@@ -18,4 +18,8 @@ export type { ZoomSpeakers } from './zoom-speakers.js';
 export { createZoomChat } from './zoom-chat.js';
 export type { ZoomChat, ZoomChatMessage } from './zoom-chat.js';
 export { createTrackNameResolver, speakerLabel, TRACK_NAME_DEFAULTS } from './track-name-resolver.js';
+export { createZoomPerTrackCapture } from './per-track-capture.js';
+// Zoom's PageCapture (@vexa/capture-codec's contract, matched by shape): the per-track capture itself.
+export { createZoomPerTrackCapture as createZoomPageCapture } from './per-track-capture.js';
+export type { ZoomPerTrackCapture, ZoomPerTrackCaptureOptions } from './per-track-capture.js';
 export type { TrackNameResolver, TrackNameResolverOptions } from './track-name-resolver.js';

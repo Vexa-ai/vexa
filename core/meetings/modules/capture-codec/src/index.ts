@@ -180,3 +180,30 @@ export function decodeRecordingChunk(buf: ArrayBufferLike, byteOffset = 0, byteL
   const bytes = new Uint8Array(buf as ArrayBuffer, byteOffset + REC_HEADER_BYTES, len - REC_HEADER_BYTES);
   return { seq, isFinal, format, bytes };
 }
+
+/**
+ * PageCapture — one page-side capture, whatever the platform (card brain:card/66d7eaa642e5; founder 9 Nov 2026:
+ * «this should work with all the platforms»). Each platform module implements it from its own capture code
+ * (zoom: createZoomPageCapture, google_meet: createGmeetPageCapture, teams: next); a host (the bot's bridge,
+ * the capture extension) picks the implementation by platform and wires onAudio to its transport.
+ * Rules: channels are 0-based participant channels, stable for a capture; an unbound channel crosses with
+ * name null (the lane renames the turn in place when it binds); silence is gated in the page; pcm is a copy,
+ * 16 kHz; tsMs is the frame's capture start, epoch ms; nothing is read before create; stop() is final.
+ * A platform that rides WebRTC (zoom, teams) needs installRemoteAudioHook at document_start; Meet does not.
+ */
+export interface PageCaptureOptions {
+  onAudio: (channel: number, name: string | null, pcm: Float32Array, tsMs: number) => void;
+  /** The platform's active-speaker edges (name, epoch ms, end?), for a host that names a single stream. */
+  onSpeakerHint?: (name: string, tMs: number, isEnd: boolean) => void;
+  /** The local participant: never a remote channel's name. */
+  selfName?: string;
+  log?: (msg: string) => void;
+  /** Typed observations (kind, payload, tMs). */
+  observe?: (kind: string, data: Record<string, unknown>, tMs: number) => void;
+}
+export interface PageCapture {
+  channels(): number;
+  /** The audio graph's state, as the platform knows it ('running', 'suspended', 'none', or 'unknown'). */
+  contextState(): string;
+  stop(): void;
+}
