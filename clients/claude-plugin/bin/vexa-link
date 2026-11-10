@@ -85,17 +85,19 @@ on_requests() {
   panels=$(printf '%s' "$1" | tr -d '\n' | sed -n 's/.*"panels": *\(\[[^]]*\]\).*/\1/p')
   printf '{"ts":%s,"panels":%s}\n' "$(now_ms)" "${panels:-[]}" > "$dir/panels.json.tmp" && mv "$dir/panels.json.tmp" "$dir/panels.json"
   # {"requests": [...], ...}: one `ui` event per request. A plugin that acks presses itself says so in acks/.plugin
-  # (at most 2 min old): it acks each once the chat took it (acks/<id>, sent by on_acks), and one it never takes Vexa
+  # (at most a minute old): it acks each once the chat took it (acks/<id>, sent by on_acks), and one it never takes Vexa
   # hands over once more. With no such plugin running (an older one), the press is acked here, as before.
   printf '%s' "$1" | tr -d '\n' | sed 's/^.*"requests": *\[//; s/\] *, *"present_until_ms".*$//; s/\]}$//' \
     | awk '{ gsub(/\}, *\{"id"/, "}\n{\"id\""); print }' | while IFS= read -r req; do
       case "$req" in \{\"id\"*)
         id=$(printf '%s' "$req" | sed 's/^{"id": *"\([0-9a-f]*\)".*/\1/')
         append "{\"type\":\"ui\",\"request\":$req}"
-        if [ -z "$(find "$dir/acks/.plugin" -mmin -2 2>/dev/null)" ]; then
-          curl -sS --max-time 10 -o /dev/null -X POST -H "X-API-Key: $key" -H 'Content-Type: application/json' \
-            -d '{"outcome":"submitted"}' "$api/agent/claude/requests/$id/ack" 2>/dev/null
-        fi ;;
+        case "$id" in *[!0-9a-f]*|'') ;; *)
+          if [ -z "$(find "$dir/acks/.plugin" -mmin -1 2>/dev/null)" ]; then
+            curl -sS --max-time 10 -o /dev/null -X POST -H "X-API-Key: $key" -H 'Content-Type: application/json' \
+              -d '{"outcome":"submitted"}' "$api/agent/claude/requests/$id/ack" 2>/dev/null
+          fi ;;
+        esac ;;
       esac
     done
   state running

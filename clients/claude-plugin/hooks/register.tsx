@@ -677,8 +677,8 @@ const linkLog: { at: number; type: string; what: string; decision: string }[] = 
 const parked = new Map<string, Seg[]>()
 
 export const EVENT_MS = 15_000, LINK_STALE_MS = 60_000
-/** how often this plugin tells vexa-link it acks presses itself (acks/.plugin); older than 2 min, vexa-link acks them */
-const PLUGIN_MARK_MS = 30_000
+/** how often this plugin tells vexa-link it acks presses itself (acks/.plugin); older than a minute, vexa-link acks them */
+const PLUGIN_MARK_MS = 20_000
 export const TIMED_OUT = Symbol('timed out')
 /** `p`, or TIMED_OUT once `ms` passed first; `p` itself is not stopped, only no longer waited for */
 export function within<T>($: any, p: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
@@ -736,7 +736,7 @@ async function onLinkEvent($: any, ev: LinkEvent): Promise<void> {
     const dir = await linkDir($)
     const known = UI_ID.test(id)
     // a press Vexa handed over again (its ack had not come back yet), or seen by both lanes at once, is said once: the
-    // id is taken before the first await, so the other lane finds it
+    // id is taken with no await between the look and the take, so the other lane finds it
     if (known && uiSaid.has(id)) return
     if (known) { uiSaid.add(id); if (uiSaid.size > 500) uiSaid.delete(uiSaid.values().next().value!) }
     if (known && await $.fs.exists(`${dir}/said/${id}`)) { await logLink($, 'ui', String(ev.request?.action ?? ''), 'again'); return }
@@ -752,7 +752,7 @@ async function onLinkEvent($: any, ev: LinkEvent): Promise<void> {
       if (!known) return
       try { await $.fs.write(`${dir}/said/${id}`, String(await $.clock.now())) } catch { /* said; a second hand-over may say it again */ }
       try { await $.fs.write(`${dir}/acks/${id}`, 'submitted') } catch { /* an older vexa-link acked it already */ }
-    }, () => { uiSaid.delete(id) })
+    }, () => { void $.clock.sleep(LINK_STALE_MS).then(() => { uiSaid.delete(id) }) })   // refused: tried again in a minute, not every second
     return
   }
   if (ev.type === 'system') {
@@ -914,6 +914,7 @@ async function syncPresses($: any): Promise<void> {
     for (const ev of pressesIn(text, from)) {
       const chat = String(ev.request?.params?.chat ?? '')
       if (chat && chat !== mySession) continue                // another chat's press: the reader in order hands it over
+      if (!UI_ID.test(String(ev.request?.id ?? ''))) continue  // a press it cannot mark said is left to the reader in order
       try { await within($, onLinkEvent($, ev), EVENT_MS) } catch { /* the reader in order tries it again */ }
     }
   } catch { /* the next tick looks again */ } finally {
