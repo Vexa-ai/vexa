@@ -143,6 +143,57 @@ export function isSessionProfilePath(rel: string): boolean {
   return SESSION_PROFILE.leveldbDirs.includes(dir) && LEVELDB_FILE.test(parts[parts.length - 1]);
 }
 
+// ── What a stored session carries ─────────────────────────────────────────
+
+/** LevelDB dirs of the contract's profile that no copy of a session carries any more: Session
+ *  Storage is per-tab state of the browser session that wrote it (the meeting page's included) and
+ *  feeds tab/session restore; a sign-in never needs it. The contract still ALLOWS these paths (an
+ *  older bot or an already-saved account may hold them), so they are dropped here, in every
+ *  direction: never collected for a write-back or an upload, never written on a restore. */
+export const SESSION_STATE_DIRS: readonly string[] = Object.freeze(['Default/Session Storage']);
+
+/** True when `rel` is a SESSION_PROFILE path a stored session still carries (not Session Storage). */
+export function isCarriedProfilePath(rel: string): boolean {
+  return isSessionProfilePath(rel) && !SESSION_STATE_DIRS.includes(rel.split('/').slice(0, -1).join('/'));
+}
+
+const PREFERENCES = 'Default/Preferences';
+/** Chromium's `session.restore_on_startup` value for "open the New Tab page". */
+const RESTORE_NEW_TAB = 5;
+
+/**
+ * The profile's Preferences with the keys that make Chromium bring back an earlier session reset to a
+ * clean start: `profile.exit_type` "Normal" and `profile.exited_cleanly` true (no crashed-session
+ * restore), `session.restore_on_startup` = New Tab page and no `session.startup_urls` (no earlier
+ * tabs or pinned URLs reopened). Every other key (the sign-in's account and settings state) is kept
+ * as it is. Bytes that are not a JSON object, or need no change, come back unchanged.
+ */
+export function normalizePreferences(data: Buffer): Buffer {
+  let prefs: any;
+  try { prefs = JSON.parse(data.toString('utf8')); } catch { return data; }
+  if (!prefs || typeof prefs !== 'object' || Array.isArray(prefs)) return data;
+  const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {});
+  const profile = obj(prefs.profile);
+  const session = obj(prefs.session);
+  if (profile.exit_type === 'Normal' && profile.exited_cleanly === true
+    && session.restore_on_startup === RESTORE_NEW_TAB && !('startup_urls' in session)) return data;
+  prefs.profile = { ...profile, exit_type: 'Normal', exited_cleanly: true };
+  const { startup_urls: _dropped, ...rest } = session;
+  prefs.session = { ...rest, restore_on_startup: RESTORE_NEW_TAB };
+  return Buffer.from(JSON.stringify(prefs), 'utf8');
+}
+
+/** normalizePreferences on the Preferences file of a profile dir, in place (a regular file only). */
+export function normalizeProfileDir(dataDir: string): void {
+  const abs = join(dataDir, ...PREFERENCES.split('/'));
+  try {
+    if (!realDirChain(dataDir, 'Default') || !lstatSync(abs).isFile()) return;
+    const before = readFileSync(abs);
+    const after = normalizePreferences(before);
+    if (after !== before) writeFileSync(abs, after, { mode: 0o600 });
+  } catch { /* no Preferences: nothing to reset */ }
+}
+
 /** One SESSION_PROFILE file found in a profile dir. */
 export interface ProfileFile {
   /** profile-relative, '/'-separated */
@@ -199,6 +250,7 @@ export function collectSessionProfile(dataDir: string): ProfileFile[] {
   };
   for (const f of SESSION_PROFILE.files) consider(f);
   for (const d of SESSION_PROFILE.leveldbDirs) {
+    if (SESSION_STATE_DIRS.includes(d)) continue;   // carried by no copy (isCarriedProfilePath)
     if (!realDirChain(dataDir, d)) continue;
     let names: string[];
     try { names = readdirSync(join(dataDir, ...d.split('/'))).sort(); } catch { continue; }
@@ -215,6 +267,7 @@ export function readSessionProfile(dataDir: string): Array<{ path: string; data:
     let data: Buffer;
     try { data = readFileSync(f.abs); } catch { continue; }
     if (data.length > SESSION_PROFILE.maxFileBytes) continue;
+    if (f.path === PREFERENCES) data = normalizePreferences(data);
     out.push({ path: f.path, data });
   }
   return out;
@@ -227,7 +280,9 @@ export function readSessionProfile(dataDir: string): Array<{ path: string; data:
  * traversal, no absolute or backslash names), every file within `maxFileBytes`, at most `maxFiles`
  * and `maxTotalBytes` together. Directories are created as real directories; an existing symlink,
  * directory or device in the way refuses the write. Throws SessionSyncError('session-restore');
- * returns the number of files written.
+ * returns the number of files written. Of an accepted set, Session Storage (SESSION_STATE_DIRS) is
+ * not written, and Preferences is written normalised (normalizePreferences): an account saved before
+ * either rule opens clean on its next use, with no new sign-in.
  */
 export function writeSessionProfile(dataDir: string, files: ReadonlyArray<{ path: string; data: Buffer }>): number {
   const refuse = (detail: string): never => { throw new SessionSyncError('session-restore', detail); };
@@ -245,7 +300,9 @@ export function writeSessionProfile(dataDir: string, files: ReadonlyArray<{ path
   });
   if (total > SESSION_PROFILE.maxTotalBytes) refuse(`the restored profile is over ${SESSION_PROFILE.maxTotalBytes} bytes`);
   mkdirSync(dataDir, { recursive: true });
+  let written = 0;
   for (const f of files) {
+    if (!isCarriedProfilePath(f.path)) continue;
     const parts = f.path.split('/');
     let cur = dataDir;
     for (const part of parts.slice(0, -1)) {
@@ -259,9 +316,10 @@ export function writeSessionProfile(dataDir: string, files: ReadonlyArray<{ path
     let st;
     try { st = lstatSync(abs); } catch { st = undefined; }
     if (st && !st.isFile()) refuse(`${f.path} exists and is not a regular file`);
-    writeFileSync(abs, f.data, { mode: 0o600 });
+    writeFileSync(abs, f.path === PREFERENCES ? normalizePreferences(f.data) : f.data, { mode: 0o600 });
+    written++;
   }
-  return files.length;
+  return written;
 }
 
 // ── S3 backend ────────────────────────────────────────────────────────────
@@ -372,16 +430,17 @@ export function syncBrowserDataFromS3(config: S3Config, dataDir: string = BROWSE
   let ignored = 0;
   for (const { key, size } of listStoredSession(config, `${base}/`)) {
     const rel = key.startsWith(`${base}/`) ? key.slice(base.length + 1) : '';
-    if (isSessionProfilePath(rel) && size <= SESSION_PROFILE.maxFileBytes) wanted.push(rel);
+    if (isCarriedProfilePath(rel) && size <= SESSION_PROFILE.maxFileBytes) wanted.push(rel);
     else ignored++;
   }
-  if (ignored) console.log(`[s3-sync] ${ignored} stored object(s) outside the session profile left in place, not restored`);
+  if (ignored) console.log(`[s3-sync] ${ignored} stored object(s) a session does not carry (outside the profile, or Session Storage) left in place, not restored`);
   if (!wanted.length) {
     console.log(`[s3-sync] no session profile stored at s3://${config.s3Bucket}/${base}/`);
     return;
   }
   wanted.sort();
   s3Sync(dataDir, base, config, 'down', ['*'], wanted);
+  normalizeProfileDir(dataDir);
 }
 
 /**
@@ -436,6 +495,7 @@ export function loadSessionLocal(srcDir: string, destDataDir: string = BROWSER_D
   if (!existsSync(srcDir)) { console.log(`[session-store] no saved session at ${srcDir}`); return 0; }
   mkdirSync(destDataDir, { recursive: true });
   const n = copyProfile(srcDir, destDataDir, 'load');
+  normalizeProfileDir(destDataDir);
   console.log(`[session-store] Loaded ${n} session profile file(s) ← ${srcDir}`);
   return n;
 }

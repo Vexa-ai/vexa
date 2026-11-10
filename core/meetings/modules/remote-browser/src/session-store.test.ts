@@ -26,7 +26,8 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import {
   syncBrowserDataToS3, syncBrowserDataFromS3, SessionSyncError, SESSION_PROFILE, isSessionProfilePath,
-  collectSessionProfile, readSessionProfile, writeSessionProfile, saveSessionLocal, type S3Config,
+  collectSessionProfile, readSessionProfile, writeSessionProfile, saveSessionLocal, loadSessionLocal, type S3Config,
+  isCarriedProfilePath, normalizePreferences, SESSION_STATE_DIRS,
 } from './session-store';
 
 const fails: string[] = [];
@@ -110,8 +111,9 @@ const stored = [
   ['Default/Session Storage/nested/000001.log', 10], ['Default/Web Data', SESSION_PROFILE.maxFileBytes + 1],
   ['Default/Bookmarks', 10],
 ] as const;
+// Session Storage is a contract path (an older copy may hold it) but no restore carries it any more.
 const allowedStored = ['Default/Cookies', 'Default/Local Storage/leveldb/000003.log', 'Default/Local Storage/leveldb/CURRENT',
-  'Default/Preferences', 'Default/Session Storage/MANIFEST-000001', 'Local State'];
+  'Default/Preferences', 'Local State'];
 writeFileSync(listingFile, JSON.stringify({
   Contents: [
     ...stored.map(([k, size]) => ({ Key: `${base}/${k}`, Size: size })),
@@ -136,7 +138,7 @@ check(excludes.length === 1 && excludes[0] === '*', 'restore excludes everything
 check((syncCall ?? []).indexOf('--exclude') < (syncCall ?? []).indexOf('--include'), 'the exclude-all filter precedes the includes');
 check(JSON.stringify([...includes].sort()) === JSON.stringify([...allowedStored].sort()),
   `restore includes exactly the stored profile paths, got ${JSON.stringify(includes)}`);
-for (const planted of ['Extensions', 'Cache', 'LOCK', 'planted', 'nested', 'Web Data', 'Bookmarks', 'browser-data-other']) {
+for (const planted of ['Extensions', 'Cache', 'LOCK', 'planted', 'nested', 'Web Data', 'Bookmarks', 'browser-data-other', 'Session Storage']) {
   check(!(syncCall ?? []).some((a) => a.includes(planted)), `restore must never name '${planted}'`);
 }
 
@@ -270,6 +272,91 @@ try { writeSessionProfile(linkDir, [good[1]]); } catch (e) { linkErr = e; }
 check(linkErr instanceof SessionSyncError, 'a symlinked parent directory refuses the write');
 check(readdirSync(elsewhere).length === 0, 'nothing is written through a symlinked parent');
 for (const d of [memDir, linkDir, elsewhere]) rmSync(d, { recursive: true, force: true });
+
+// ── 6. no copy carries tab or session-restore state ─────────────────────────
+// A saved account written before this rule: Session Storage files and a Preferences left "crashed",
+// set to restore the last session and to open an old meeting URL on start.
+const oldPrefs = {
+  profile: { exit_type: 'Crashed', exited_cleanly: false, name: 'Bot' },
+  session: { restore_on_startup: 1, startup_urls: ['https://zoom.us/wc/join/111'], other: 'kept' },
+  account_info: [{ email: 'bot@example.test' }],
+  intl: { accept_languages: 'en-US' },
+};
+const isClean = (data: Buffer | string, why: string): void => {
+  let p: any = {};
+  try { p = JSON.parse(String(data)); } catch { check(false, `${why}: Preferences is still JSON`); }
+  check(p.profile?.exit_type === 'Normal' && p.profile?.exited_cleanly === true, `${why}: Preferences says the last exit was clean`);
+  check(p.session?.restore_on_startup === 5 && !('startup_urls' in (p.session ?? {})), `${why}: Preferences opens a New Tab page, no startup URLs`);
+  check(p.session?.other === 'kept' && p.profile?.name === 'Bot' && isDeepStrictEqual(p.account_info, oldPrefs.account_info)
+    && isDeepStrictEqual(p.intl, oldPrefs.intl), `${why}: every other Preferences key is kept as it was`);
+};
+check(isDeepStrictEqual([...SESSION_STATE_DIRS], ['Default/Session Storage']), 'Session Storage is the one dropped LevelDB dir');
+check(isSessionProfilePath('Default/Session Storage/000005.ldb') && !isCarriedProfilePath('Default/Session Storage/000005.ldb'),
+  'Session Storage stays a contract path but is not carried');
+for (const p of [...SESSION_PROFILE.files, 'Default/Local Storage/leveldb/000003.log', 'Default/Local Storage/leveldb/CURRENT']) {
+  check(isCarriedProfilePath(p), `'${p}' is still carried`);
+}
+const cleanPrefs = normalizePreferences(Buffer.from(JSON.stringify(oldPrefs)));
+isClean(cleanPrefs, 'normalizePreferences');
+check(normalizePreferences(cleanPrefs) === cleanPrefs, 'clean Preferences come back unchanged (same bytes)');
+const notJson = Buffer.from('not json');
+check(normalizePreferences(notJson) === notJson, 'Preferences that are not JSON are left as they are');
+
+// 6a. the in-memory restore (a saved bot account over HTTP) cleans an old account without a new sign-in
+const oldSet = [
+  { path: 'Default/Cookies', data: Buffer.from('c') },
+  { path: 'Default/Preferences', data: Buffer.from(JSON.stringify(oldPrefs)) },
+  { path: 'Default/Local Storage/leveldb/000003.log', data: Buffer.from('ls') },
+  { path: 'Default/Session Storage/MANIFEST-000001', data: Buffer.from('m') },
+  { path: 'Default/Session Storage/000005.ldb', data: Buffer.from('tab') },
+];
+const oldDir = mkdtempSync(join(tmpdir(), 'session-store-old-'));
+let oldErr: unknown;
+let oldWrote = -1;
+try { oldWrote = writeSessionProfile(oldDir, oldSet); } catch (e) { oldErr = e; }
+check(!oldErr && oldWrote === 3, `an old saved profile is accepted and restored without Session Storage, wrote ${oldWrote} (${String(oldErr)})`);
+check(!existsSync(join(oldDir, 'Default', 'Session Storage')), 'no Session Storage is written on restore');
+check(readFileSync(join(oldDir, 'Default', 'Cookies'), 'utf8') === 'c', 'the cookies are restored as they were');
+isClean(readFileSync(join(oldDir, 'Default', 'Preferences')), 'restore over HTTP');
+
+// 6b. the write-back never carries Session Storage, and its Preferences is clean
+const liveOld = mkdtempSync(join(tmpdir(), 'session-store-live-'));
+mkdirSync(join(liveOld, 'Default', 'Session Storage'), { recursive: true });
+mkdirSync(join(liveOld, 'Default', 'Local Storage', 'leveldb'), { recursive: true });
+writeFileSync(join(liveOld, 'Default', 'Session Storage', 'MANIFEST-000001'), 'm');
+writeFileSync(join(liveOld, 'Default', 'Session Storage', '000005.ldb'), 'meeting-tab-state');
+writeFileSync(join(liveOld, 'Default', 'Local Storage', 'leveldb', '000003.log'), 'ls');
+writeFileSync(join(liveOld, 'Default', 'Cookies'), 'c');
+writeFileSync(join(liveOld, 'Default', 'Preferences'), JSON.stringify(oldPrefs));
+const wb = readSessionProfile(liveOld);
+check(JSON.stringify(wb.map((f) => f.path)) === JSON.stringify(['Default/Cookies', 'Default/Preferences', 'Default/Local Storage/leveldb/000003.log']),
+  `write-back carries cookies, Preferences and Local Storage only, got ${JSON.stringify(wb.map((f) => f.path))}`);
+isClean(wb.find((f) => f.path === 'Default/Preferences')?.data ?? '', 'write-back');
+check(!collectSessionProfile(liveOld).some((f) => f.path.startsWith('Default/Session Storage/')), 'collect never names Session Storage');
+
+// 6c. the S3 restore of an old stored copy leaves Session Storage in the store and cleans Preferences
+installFakeAws('ok');
+process.env.PATH = withFakePath;
+writeFileSync(listingFile, JSON.stringify({ Contents: oldSet.map((f) => ({ Key: `${base}/${f.path}`, Size: f.data.length })) }));
+resetLog();
+const s3Old = mkdtempSync(join(tmpdir(), 'session-store-s3old-'));
+mkdirSync(join(s3Old, 'Default'), { recursive: true });
+writeFileSync(join(s3Old, 'Default', 'Preferences'), JSON.stringify(oldPrefs));   // what the fake sync "downloaded"
+syncBrowserDataFromS3(config, s3Old);
+const s3Includes = flagValues(calls()[1] ?? [], '--include');
+check(s3Includes.length === 3 && !s3Includes.some((i) => i.includes('Session Storage')), `S3 restore never downloads Session Storage, got ${JSON.stringify(s3Includes)}`);
+isClean(readFileSync(join(s3Old, 'Default', 'Preferences')), 'S3 restore');
+process.env.PATH = realPath;
+rmSync(listingFile, { force: true });
+
+// 6d. a local load cleans Preferences too
+const localSaved = mkdtempSync(join(tmpdir(), 'session-store-localsaved-'));
+const localLive = mkdtempSync(join(tmpdir(), 'session-store-locallive-'));
+mkdirSync(join(localSaved, 'Default'), { recursive: true });
+writeFileSync(join(localSaved, 'Default', 'Preferences'), JSON.stringify(oldPrefs));
+check(loadSessionLocal(localSaved, localLive) === 1, 'local load copies Preferences');
+isClean(readFileSync(join(localLive, 'Default', 'Preferences')), 'local load');
+for (const d of [oldDir, liveOld, s3Old, localSaved, localLive]) rmSync(d, { recursive: true, force: true });
 
 // ── verdict ─────────────────────────────────────────────────────────────────
 for (const d of [work, liveDir, restoreDir, saved]) rmSync(d, { recursive: true, force: true });
