@@ -573,6 +573,8 @@ async function linkDir($: any): Promise<string> {
   return `${localHome}/.vexa/link`
 }
 
+/** a chat that has not been used for this long is no longer a candidate to own the line */
+export const USED_FOR_MS = 7 * 24 * 3600_000
 async function ownsLink($: any): Promise<boolean> {
   if (!mySession) return false
   const now = await $.clock.now()
@@ -580,8 +582,12 @@ async function ownsLink($: any): Promise<boolean> {
     const dir = await linkDir($)
     const used: Record<string, number> = {}
     try {
+      // WHEN EACH CHAT WAS USED, FROM THE LISTING ALONE (10 Nov 2026: one read per chat ever seen, 1696 of them, every
+      // second, made the line crawl for an hour): a file's mtime is the time written into it; a chat unused for
+      // USED_FOR_MS is left out. Only a host that gives no mtime has the file read.
       for (const entry of await $.fs.list(`${dir}/used`)) {
         if (entry.kind !== 'file') continue
+        if (entry.mtimeMs > 0) { if (now - entry.mtimeMs < USED_FOR_MS) used[entry.name] = entry.mtimeMs; continue }
         const ts = Number(String(await $.fs.read(`${dir}/used/${entry.name}`)).trim())
         if (Number.isFinite(ts)) used[entry.name] = ts
       }
