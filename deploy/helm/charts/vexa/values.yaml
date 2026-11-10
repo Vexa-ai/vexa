@@ -1520,6 +1520,16 @@ flows:
   outbound:
     attendeeDomains: ""
     dataStatement: ""
+  # The after-meeting flow (VEXA_FLOWS_POST_MEETING): off unless enabled. On, every completed
+  # meeting starts one model turn that writes a report, then mails the minutes to the organiser
+  # and to attendees in flows.outbound.attendeeDomains, creates accounts for those attendees and
+  # puts the report in their desks. Off, a completed meeting is recorded and the after-meeting
+  # steps run nowhere: no report turn, no minutes or attendee mail, no attendee account. That
+  # holds for versions of post_meeting stored through the flows API and for the same steps filed
+  # under another flow name: they are not loaded, and submitting or activating one is refused.
+  # A flow an admin authors from other steps is not part of this switch.
+  postMeeting:
+    enabled: false
   # Nudges outside the Inbox (VEXA_FLOWS_NUDGES*): off unless enabled; empty dials = [5] min idle
   # floor and [12] deliveries per local day.
   nudges:

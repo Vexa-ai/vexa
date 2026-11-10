@@ -346,6 +346,15 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "pack and starts without it reacts to none of that pack's events, silently, for as long "
         "as nobody looks."),
     "VEXA_JITSI_HOSTS": ("capability", None, "extra Jitsi hosts a meeting link may live on, beyond meet.jit.si."),
+    # ── the after-meeting flow (founder decision 337, 10 Nov 2026: «default off») ──
+    "VEXA_FLOWS_POST_MEETING": (
+        "capability", None,
+        "the after-meeting flow `post_meeting`: one model turn that writes the report, the "
+        "minutes mail, the attendee mail (which creates accounts for attendees in the "
+        "organiser's domain), the call's proposed changes and the drop into desks. UNSET IS OFF: "
+        "a completed meeting is recorded (`meeting_held`, one step, no effect) and nothing else "
+        "runs. `1` registers `post_meeting`. Read once, when the registry is built "
+        "(flows_defs.production.build), so every flows process must carry the same value."),
     # ── nudges: the delivery gate (PRD 0.13.4 D15, D32; S6) ─────────────────
     "VEXA_FLOWS_NUDGES": (
         "capability", None,

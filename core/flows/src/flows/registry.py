@@ -116,6 +116,15 @@ class Registry:
         # `config.v1`, which this engine core does not read. A row it refuses stops being chosen
         # within one refresh; the runs already admitted on it finish.
         self.row_check = None
+        # INSTANCE FLOWS THIS DEPLOYMENT HAS SWITCHED OFF: identity -> why, in words an operator
+        # can act on. One place for the image and the table: `flow` and `flow_by_names` refuse
+        # the name and `refresh_from_db` does not load its rows, so a stored version cannot bring
+        # back what the deployment turned off. See `switch_off`.
+        self.switched_off: dict[str, str] = {}
+        # …AND THE STEPS switched off with them: step name -> why. A flow is a name over steps,
+        # so a switch by name alone is walked around by filing the same steps under another
+        # name. No flow that names one of these is registered, loaded or chosen, in any scope.
+        self.switched_off_steps: dict[str, str] = {}
 
     def step(self, fn: StepFn | None = None, *, needs: "tuple[str, ...] | list[str]" = (),
              absent: "str | dict[str, str] | None" = None, user_allowed: bool = False):
@@ -198,6 +207,7 @@ class Registry:
 
     def flow(self, *, name: str, version: int, on: EventType, steps: list[StepFn],
              params: dict | None = None) -> Flow:
+        self._refuse_switched_off(INSTANCE, name, [fn.__name__ for fn in steps])
         for fn in steps:
             if self.steps.get(fn.__name__) is not fn:
                 raise ValueError(f"unregistered step in flow {name}: {fn.__name__}")
@@ -208,6 +218,48 @@ class Registry:
         self.by_event.setdefault(on.name, []).append(f)
         return f
 
+    def switch_off(self, name: str, why: str, steps: "tuple[str, ...] | list[str]" = ()) -> None:
+        """Switch one INSTANCE flow off for this deployment, whatever version and wherever it
+        came from. Called by the composition (`flows_defs.production.build`), which reads the
+        configuration this engine core does not.
+
+        `match()` is newest-wins across the image and `flow_version`, so not registering the
+        image's version is half a switch: a row stored through the API, on this install or before
+        an upgrade, would still be chosen. From here on no version of `name` is chosen for a new
+        event. A version already loaded keeps its definition, as a retired one does, so the
+        table can still be read; a person's own flow of the same name (`user:<uid>/<name>`) is a
+        different identity and is not touched.
+
+        `steps` are switched off with it, for every flow and every scope: the capability is what
+        the steps DO, and the name is only where the image happens to file them. The steps stay
+        in the vocabulary (`self.steps`) so a page can still describe them; what changes is that
+        no flow naming one is registered, loaded or chosen."""
+        ident = flow_ident(INSTANCE, name)
+        self.switched_off[ident] = why
+        for s in steps:
+            self.switched_off_steps[s] = why
+        for key, f in list(self.flows.items()):
+            if key[0] == ident or set(f.steps) & set(steps):
+                self._unmatch(*key)
+
+    def off_reason(self, scope: str, name: str, steps=()) -> Optional[str]:
+        """Why this flow does not run in this deployment, in the words given to `switch_off`,
+        or None. THE ONE QUESTION every surface asks — submission, activation, the listing and
+        the pages — so none of them can say `active` about a version nothing will choose."""
+        why = self.switched_off.get(flow_ident(scope or INSTANCE, name))
+        if why:
+            return why
+        for s in steps or ():
+            if s in self.switched_off_steps:
+                return self.switched_off_steps[s]
+        return None
+
+    def _refuse_switched_off(self, scope: str, name: str, steps) -> None:
+        why = self.off_reason(scope, name, steps)
+        if why:
+            raise ValueError(f"flow {flow_ident(scope or INSTANCE, name)} is switched off in "
+                             f"this deployment: {why}")
+
     def flow_by_names(self, *, name: str, version: int, on_event: str, step_names: list[str],
                       params: dict | None = None, scope: str = INSTANCE,
                       cron: Optional[str] = None, created_at: float = 0.0) -> Flow:
@@ -216,6 +268,7 @@ class Registry:
 
         `scope` and `cron` are ADR-0046's: a user flow is keyed by its identity
         (`user:<uid>/<name>`), and a flow with a cron is filed under the schedule, not an event."""
+        self._refuse_switched_off(scope or INSTANCE, name, step_names)
         missing = [n for n in step_names if n not in self.steps]
         if missing:
             raise ValueError(f"unknown steps {missing}; known: {sorted(self.steps)}")
@@ -254,6 +307,15 @@ class Registry:
         refused: dict[str, int] = {}
         for scope, name, version, on_event, steps, params, cron, created_at in rows:
             key = (flow_ident(scope, name), version)
+            try:
+                named = _j.loads(steps or "[]")
+            except Exception:  # noqa: BLE001 — an unreadable row is refused further down, as before
+                named = []
+            if self.off_reason(scope, name, named if isinstance(named, list) else []):
+                # Not loaded and not `active`: a version loaded before the switch is unmatched
+                # below, exactly as a retired one is. Named in the warning, never silent.
+                refused["switched_off"] = refused.get("switched_off", 0) + 1
+                continue
             if self.row_check is not None and str(scope or "").startswith("user:"):
                 try:
                     reason = self.row_check(scope, name, _j.loads(steps or "[]"), cron)
@@ -278,7 +340,8 @@ class Registry:
         for key in sorted(self.db_versions - active):
             self._unmatch(*key)
         if refused:
-            _log.warning("flow rows not loaded because the policy no longer allows them: %s",
+            _log.warning("flow rows not loaded because the policy or a deployment switch no "
+                         "longer allows them: %s",
                          ", ".join(f"{k}={v}" for k, v in sorted(refused.items())))
         for s in self.shadowing_versions():
             _log.warning(

@@ -743,6 +743,17 @@ def _refuse(code: int, reason: str, **facts):
     raise HTTPException(status_code=code, detail={"refused": reason, **facts})
 
 
+def _refuse_switched_off(scope: str, name: str, steps=()) -> None:
+    """409 `flow_switched_off` for an instance flow this deployment has switched off, and for any
+    flow, in any scope, naming a step switched off with it
+    (`Registry.switch_off`). The registry would never choose the row, so filing or activating it
+    would be a version that looks live and does nothing; `note` carries the setting that turns
+    it on. Retiring and pausing are narrowings and are never refused."""
+    why = vocab.off_reason(scope, name, steps)
+    if why:
+        _refuse(409, "flow_switched_off", name=name, note=why)
+
+
 def _db_flows(scope_filter: Optional[set] = None) -> list:
     """Every runtime-authored version, oldest first — the `flow_version` table as dicts.
 
@@ -797,8 +808,19 @@ def list_flows(caller: Caller = Depends(subject_or_operator)):
     `last_refusal` (`reason`, `text`, `at`, `next_run_at` — e.g. the daily run limit and when the
     next run can start), so "why didn't it run" has an answer. `shadowing_versions` names any runtime version that
     overrides an image version with fewer steps — the shape of a flow quietly doing less than the
-    code says, surfaced here because nobody reads a startup log until they already suspect it."""
+    code says, surfaced here because nobody reads a startup log until they already suspect it.
+    `switched_off` names each flow this deployment has switched off, its steps and the setting
+    that decides it; those steps carry the same words in `steps_vocabulary`, and a stored version
+    of that flow, or of any flow naming one of the steps, carries them in its own `switched_off`
+    and does not run, whatever its `status`."""
     db_flows = _with_refusals(_db_flows(_readable_scopes(caller)))
+    # A STORED VERSION OF A SWITCHED-OFF FLOW keeps the status its row has and says, beside it,
+    # that it does not run and which setting decides that. `switched_off` below lists every such
+    # flow whether or not a row exists, because the image version is simply absent from `flows`.
+    for f in db_flows:
+        why = vocab.off_reason(f.get("scope") or "instance", f["name"], f.get("steps") or [])
+        if why:
+            f["switched_off"] = why
     code_flows = [{"name": f.name, "version": f.version, "scope": "instance", "on": f.on.name,
                    "trigger": {"kind": "event", "event": f.on.name},
                    "steps": list(f.steps), "source": "image", "status": "active"}
@@ -808,9 +830,13 @@ def list_flows(caller: Caller = Depends(subject_or_operator)):
     # listing rather than only in a startup log, because the log is read when somebody already
     # suspects something and this is the defect where nobody does.
     return {"shadowing_versions": vocab.shadowing_versions(),
+            "switched_off": [{"flow": n, "why": w,
+                              "steps": [s for s, sw in vocab.switched_off_steps.items() if sw == w]}
+                             for n, w in sorted(vocab.switched_off.items())],
             "steps_vocabulary": [
         {"name": n, "doc": " ".join((vocab.steps[n].__doc__ or "undocumented").split()),
-         "user_allowed": n in allowed}
+         "user_allowed": n in allowed,
+         **({"switched_off": vocab.switched_off_steps[n]} if n in vocab.switched_off_steps else {})}
         for n in sorted(vocab.steps)],
         "flows": code_flows + db_flows}
 
@@ -1163,6 +1189,7 @@ def submit_flow(sub: FlowSubmission, x_actor: str = Header(default="api"),
     waiting for them — a "Draft routine · <name> · Turn on" line at the top of the chat it runs in,
     and its switch under Routines in the sidebar — where they read it and turn it on themselves."""
     scope = _author_scope(caller, sub.scope)
+    _refuse_switched_off(scope, sub.name, sub.steps)
     size = len(json.dumps(sub.params, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
     if scope != "instance" and size > SUBMISSION_MAX_BYTES:
         _refuse(413, TOO_LARGE, bytes=size, maximum=SUBMISSION_MAX_BYTES,
@@ -1633,6 +1660,9 @@ def set_flow_status(name: str, version: int, action: str, scope: str = "",
         # narrowing — but never activate or resume one, its own drafts included.
         raise HTTPException(status_code=403, detail=APPROVAL_REFUSAL)
     if st == "active":
+        _stored = db.execute("SELECT steps FROM flow_version WHERE scope=:sc AND name=:n "
+                             "AND version=:v", {"sc": target, "n": name, "v": version})
+        _refuse_switched_off(target, name, json.loads(_stored[0][0] or "[]") if _stored else ())
         _require_session_to_arm(caller, target)
     if st == "active" and target != "instance":
         rows = db.execute("SELECT steps, cron FROM flow_version WHERE scope=:sc AND name=:n "

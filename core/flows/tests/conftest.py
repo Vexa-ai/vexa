@@ -62,6 +62,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 os.environ.setdefault("VEXA_FLOWS_API_KEY", "test-operator-key")
 
+#: THE AFTER-MEETING FLOW IS A CAPABILITY and unset is off (founder decision 337). Almost every
+#: test here is about the full profile, so the suite switches it on, as it names the agent door;
+#: `test_after_meeting_switch.py` unsets it for the contract that is about the default.
+os.environ.setdefault("VEXA_FLOWS_POST_MEETING", "1")
+
 
 # ── the production registry, composed per test ───────────────────────────────────────────────────
 # `fixtures.rig()` builds the FAKE world (`flows_steps.fakes`) against `flows_defs.defs` — the right
