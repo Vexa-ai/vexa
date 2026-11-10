@@ -743,6 +743,17 @@ def _refuse(code: int, reason: str, **facts):
     raise HTTPException(status_code=code, detail={"refused": reason, **facts})
 
 
+def _refuse_switched_off(scope: str, name: str) -> None:
+    """409 `flow_switched_off` for an instance flow this deployment has switched off
+    (`Registry.switch_off`). The registry would never choose the row, so filing it would be a
+    version that looks live and does nothing; `note` carries the setting that turns it on."""
+    from flows.registry import flow_ident
+    ident = flow_ident(scope, name)
+    why = vocab.switched_off.get(ident)
+    if why:
+        _refuse(409, "flow_switched_off", name=name, note=why)
+
+
 def _db_flows(scope_filter: Optional[set] = None) -> list:
     """Every runtime-authored version, oldest first — the `flow_version` table as dicts.
 
@@ -1163,6 +1174,7 @@ def submit_flow(sub: FlowSubmission, x_actor: str = Header(default="api"),
     waiting for them — a "Draft routine · <name> · Turn on" line at the top of the chat it runs in,
     and its switch under Routines in the sidebar — where they read it and turn it on themselves."""
     scope = _author_scope(caller, sub.scope)
+    _refuse_switched_off(scope, sub.name)
     size = len(json.dumps(sub.params, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
     if scope != "instance" and size > SUBMISSION_MAX_BYTES:
         _refuse(413, TOO_LARGE, bytes=size, maximum=SUBMISSION_MAX_BYTES,

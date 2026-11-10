@@ -1524,7 +1524,8 @@ flows:
   # meeting starts one model turn that writes a report, then mails the minutes to the organiser
   # and to attendees in flows.outbound.attendeeDomains, creates accounts for those attendees and
   # puts the report in their desks. Off, a completed meeting is recorded and nothing else runs:
-  # no model call, no mail, no account.
+  # no model call, no mail, no account. Off also covers versions of post_meeting stored through
+  # the flows API: they are not loaded, and submitting one is refused.
   postMeeting:
     enabled: false
   # Nudges outside the Inbox (VEXA_FLOWS_NUDGES*): off unless enabled; empty dials = [5] min idle
