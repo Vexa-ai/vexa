@@ -277,6 +277,8 @@ export VEXA_DISPATCH_SIGNING_KEY="${VEXA_DISPATCH_SIGNING_KEY:-$(/usr/local/bin/
 # flows-api's POST /flows and POST /events, and the service key flows and the gateway share (the
 # gateway's service door on :8002). Pass either to fix it. Flows keeps its tables in the main database:
 # its DSN is built here from DB_* (user and password URL-quoted), unless VEXA_FLOWS_DB_URL is given.
+# The after-meeting flow. The code default is off; Lite keeps it on, as before the switch existed.
+export VEXA_FLOWS_POST_MEETING="${VEXA_FLOWS_POST_MEETING:-1}"
 export VEXA_FLOWS_API_KEY="${VEXA_FLOWS_API_KEY:-$(/usr/local/bin/persisted-secret "$lite_state_dir/flows-api-key")}"
 export VEXA_FLOWS_SERVICE_KEY="${VEXA_FLOWS_SERVICE_KEY:-$(/usr/local/bin/persisted-secret "$lite_state_dir/flows-service-key")}"
 export VEXA_FLOWS_DB_URL="${VEXA_FLOWS_DB_URL:-$(python3 -c 'import os, urllib.parse as u

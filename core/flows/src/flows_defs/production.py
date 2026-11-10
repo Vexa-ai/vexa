@@ -3152,6 +3152,20 @@ def build(reg: Registry, db) -> None:
         field. No mail, no desk card, no downstream effect."""
         return Done({"recorded": True})
 
+    @reg.step
+    def record_meeting_held(ctx: StepCtx):
+        """WHAT A COMPLETED MEETING DOES WHERE THE AFTER-MEETING FLOW IS OFF (founder decision 337,
+        10 Nov 2026: «default off»). Nothing: no model turn, no mail, no account, no desk write.
+
+        It exists for the reason `record_friction` does: `admit()` creates one reaction per
+        matching flow and zero for none, and the completion is read from flows' own table — the
+        timeline's «meeting held» and `first_meeting`'s activation check both select `reaction`
+        by event type. With no flow on `meeting.completed` a held meeting would leave no row and
+        a new person's first-step item would never clear.
+
+        Reaches no domain: `needs` is empty on purpose. Result: {recorded, after_meeting}."""
+        return Done({"recorded": True, "after_meeting": "off"})
+
     # ── the meeting-share invite's mail leg ───────────────────────────────────
     @reg.step(needs=("meetings",))
     def mail_meeting_share(ctx: StepCtx):
@@ -3239,9 +3253,21 @@ def build(reg: Registry, db) -> None:
     # number wherever it came from; a code change that does not clear the highest DB version is
     # inert, which is exactly the defect `Registry.shadowing_versions` now warns about.
     # VERSION 5 — `propose_call_changes` (ADR-0048 decision 7): a call's changes wait for its owner.
-    reg.flow(name="post_meeting", version=5, on=COMPLETED,
-             steps=[s["process_meeting"], s["email_minutes"],
-                    s["email_attendees"], s["propose_call_changes"], s["drop_to_attendees"]])
+    # THE AFTER-MEETING SWITCH (founder decision 337, 10 Nov 2026: «default off»). `post_meeting`
+    # opens with a model turn, mails the minutes and the attendees, and creates accounts for
+    # attendees in the organiser's domain: an install runs it only when it said so
+    # (`VEXA_FLOWS_POST_MEETING`, Helm `flows.postMeeting.enabled`). Off, the completion is still
+    # ONE reaction row — `meeting_held`, one step, no effect — never two and never none. The steps
+    # stay in the vocabulary either way; a flow is switched off by not registering it. A reaction
+    # admitted while the switch was on keeps its flow name: switch off with none in flight.
+    import flows_config as _fc_pm  # noqa: PLC0415
+    if _fc_pm.get_bool("VEXA_FLOWS_POST_MEETING"):
+        reg.flow(name="post_meeting", version=5, on=COMPLETED,
+                 steps=[s["process_meeting"], s["email_minutes"],
+                        s["email_attendees"], s["propose_call_changes"], s["drop_to_attendees"]])
+    else:
+        reg.flow(name="meeting_held", version=1, on=COMPLETED,
+                 steps=[s["record_meeting_held"]])
     # THE QUEUE FLOW THIS FILE KEEPS (PRD decision 42.2). It is one step and produces no effect:
     # what it produces is a REACTION ROW in a state a person can be told about — pending while a
     # call runs. That row is the queue. Its two siblings, the desk cards, are `production_agent`'s.

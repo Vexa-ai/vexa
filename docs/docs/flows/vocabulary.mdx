@@ -137,6 +137,10 @@ THE WHOLE OF THE FLOW SIDE OF PRD 40.9 open-decision 8. `POST /friction` already
 
 #1510's C3 — the same reasoning as `record_friction`, one door over: `POST /friction/{id}/fix` calls `admit()` directly, and this step exists only so THAT admission creates a reaction row `flows_timeline.friction_for_subject` can fold into its `status` field. No mail, no desk card, no downstream effect.
 
+### `record_meeting_held`
+
+WHAT A COMPLETED MEETING DOES WHERE THE AFTER-MEETING FLOW IS OFF (founder decision 337, 10 Nov 2026: «default off»). Nothing: no model turn, no mail, no account, no desk write. It exists for the reason `record_friction` does: `admit()` creates one reaction per matching flow and zero for none, and the completion is read from flows' own table — the timeline's «meeting held» and `first_meeting`'s activation check both select `reaction` by event type. With no flow on `meeting.completed` a held meeting would leave no row and a new person's first-step item would never clear. Reaches no domain: `needs` is empty on purpose. Result: \{recorded, after_meeting\}.
+
 ### `request_meeting_bot`
 
 Send the flow owner's bot into `params.meeting_url` — no agent run (flows phase 0). Use it with a one-shot trigger for "a bot to this meeting at 12:13". The routine must carry the grant `bot.request` (`params.grants`, capped by `_global/POLICIES.md`); without it the step refuses and says so in the routine's chat. A meeting the bot is already in is adopted, not re-sent. Says the outcome in one line in the routine's chat. Result: \{meeting_id, native, platform\}.

@@ -2214,6 +2214,16 @@ tb "flows dials: set values render as their declared keys in the flows Secret" \
   'grep -qx "  VEXA_FLOWS_MAX_HOPS: \"4\"" <<< "$FDIALS_ON" && grep -qx "  VEXA_MAIL_CAPTURE_SMTP: \"capture.example:2525\"" <<< "$FDIALS_ON" && grep -qx "  VEXA_FLOWS_NUDGES: \"1\"" <<< "$FDIALS_ON" && grep -qx "  VEXA_FLOWS_TIMELINE_KEY: \"tl-key-for-render-only\"" <<< "$FDIALS_ON"'
 tb "flows dials (control): unset dials render no key at all" \
   '! grep -qE "VEXA_(FLOWS_MAX_HOPS|MAIL_CAPTURE_SMTP|FLOWS_NUDGES|FLOWS_TIMELINE_KEY|MAIL_RELAY|GRAPH_CLIENT_SECRET):" <<< "$FDIALS_OFF"'
+# The after-meeting flow (founder decision 337, 10 Nov 2026: «default off»): untouched values
+# render no VEXA_FLOWS_POST_MEETING, so flows registers no post_meeting and a completed meeting
+# starts no model turn, no mail and no account; flows.postMeeting.enabled=true renders "1".
+FPM_ON="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.postMeeting.enabled=true --show-only templates/flows.yaml)"
+tb "after-meeting flow: the chart's own values.yaml ships flows.postMeeting.enabled: false" \
+  'python3 -c "import sys, yaml; sys.exit(0 if yaml.safe_load(open(sys.argv[1]))[\"flows\"][\"postMeeting\"][\"enabled\"] is False else 1)" "$CHART/values.yaml"'
+tb "after-meeting flow (default): untouched values render no VEXA_FLOWS_POST_MEETING anywhere in the flows tier" \
+  '! grep -q "VEXA_FLOWS_POST_MEETING" <<< "$FDIALS_OFF"'
+tb "after-meeting flow: flows.postMeeting.enabled=true renders VEXA_FLOWS_POST_MEETING=1 in the flows Secret, once" \
+  '[ "$(grep -cx "  VEXA_FLOWS_POST_MEETING: \"1\"" <<< "$FPM_ON")" -eq 1 ]'
 # flows egress (car 45): the flows Pods reach DNS, the gateway's service door, their database, the
 # credential broker when the relay password is a reference, and the mail hosts, and nothing else.
 # admin-api and crm-api admit their callers, not every chart Pod.

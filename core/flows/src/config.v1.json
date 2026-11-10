@@ -675,6 +675,16 @@
       ]
     },
     {
+      "key": "VEXA_FLOWS_POST_MEETING",
+      "class": "capability",
+      "description": "The after-meeting flow `post_meeting` (founder decision 337: default off): one model turn that writes the report, the minutes mail, the attendee mail (which creates accounts for attendees in the organiser's domain), the call's proposed changes and the drop into desks. Unset is off: a completed meeting is recorded and nothing else runs. `1` turns it on. Helm leaves it unset by default (`flows.postMeeting.enabled: false`); Compose and Lite set `1` unless told otherwise.",
+      "capability": "after_meeting",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
       "key": "VEXA_FLOWS_NUDGES",
       "class": "capability",
       "description": "The delivery gate's worker pass (PRD 0.13.4 D15, S6). Unset is off: nothing is nudged outside the Inbox. `1` turns it on; the pack `flows_defs.nudges` arms the items.",
@@ -817,6 +827,10 @@
     "crm_domain": {
       "description": "This deployment carries the optional CRM (ADR-0047): the flows_defs.crm pack hands workspace references to it.",
       "when_unconfigured": "The crm_references step answers `not_present`. A deployment without the CRM is a product, not a degraded state."
+    },
+    "after_meeting": {
+      "description": "What flows does when a meeting completes: a model turn writes the report, then the minutes and attendee mails go out and the report lands in the attendees' desks.",
+      "when_unconfigured": "No model call, no mail and no account after a meeting. The completion is still recorded as one reaction row (`meeting_held`), which the timeline and the first-meeting item read."
     },
     "nudges": {
       "description": "The delivery gate (PRD 0.13.4 D15, S6): a card or room item waiting on a person reaches them in-app first, then one email after the idle window, then the digest, stopping the moment it is seen.",

@@ -193,6 +193,7 @@ overrides any of these values.
 | `flows.mail.graph.tenantId`, `.clientId`, `.clientSecret`, `.mailbox` | `VEXA_GRAPH_*` |
 | `flows.outbound.attendeeDomains`, `.dataStatement` | `VEXA_FLOWS_ATTENDEE_DOMAINS`, `VEXA_FLOWS_DATA_STATEMENT` |
 | `flows.jitsiHosts` | `VEXA_JITSI_HOSTS`. Use the value that meeting-api and the MCP service have |
+| `flows.postMeeting.enabled` | `VEXA_FLOWS_POST_MEETING`. Off by default on Helm: no report turn, no minutes or attendee mail and no attendee accounts after a meeting. Compose and Lite run it unless the variable is `0` |
 | `flows.nudges.enabled`, `.idleFloorMinutes`, `.budgetCeiling` | `VEXA_FLOWS_NUDGES`, `VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN`, `VEXA_FLOWS_NUDGE_BUDGET_CEILING` |
 | `flows.limits.*` | `VEXA_TIMELINE_SCAN_ROWS`, `VEXA_FLOWS_SCHEDULE_CATCHUP_S`, `VEXA_FLOWS_LOOP_LIMIT`, `VEXA_FLOWS_MAX_HOPS`, `VEXA_FLOWS_USER_*` |
 

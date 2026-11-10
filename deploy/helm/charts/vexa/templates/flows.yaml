@@ -102,6 +102,9 @@ stringData:
   {{- with .Values.flows.jitsiHosts }}
   VEXA_JITSI_HOSTS: {{ . | toString | quote }}
   {{- end }}
+  {{- if (.Values.flows.postMeeting | default dict).enabled }}
+  VEXA_FLOWS_POST_MEETING: "1"
+  {{- end }}
   {{- if $nudges.enabled }}
   VEXA_FLOWS_NUDGES: "1"
   {{- end }}

@@ -1255,6 +1255,9 @@ services:
       - VEXA_FLOWS_CRM_PUBLISH_KEY=${VEXA_FLOWS_CRM_PUBLISH_KEY:-}
       # S6 nudges (D15): off unless VEXA_FLOWS_NUDGES=1 and the flows_defs.nudges pack is loaded
       - VEXA_FLOWS_NUDGES=${VEXA_FLOWS_NUDGES:-}
+      # The after-meeting flow (report turn, minutes and attendee mail). The code default is off;
+      # Compose keeps it on, as before the switch existed. VEXA_FLOWS_POST_MEETING=0 turns it off.
+      - VEXA_FLOWS_POST_MEETING=${VEXA_FLOWS_POST_MEETING:-1}
       - VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN=${VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN:-5}
       - VEXA_FLOWS_NUDGE_BUDGET_CEILING=${VEXA_FLOWS_NUDGE_BUDGET_CEILING:-12}
       # ── the doors (#1453 made these required-explicit) ──────────────────────────────────────
@@ -1430,6 +1433,9 @@ services:
       - VEXA_FLOWS_CRM_PUBLISH_KEY=${VEXA_FLOWS_CRM_PUBLISH_KEY:-}
       # S6 nudges (D15): off unless VEXA_FLOWS_NUDGES=1 and the flows_defs.nudges pack is loaded
       - VEXA_FLOWS_NUDGES=${VEXA_FLOWS_NUDGES:-}
+      # The after-meeting flow (report turn, minutes and attendee mail). The code default is off;
+      # Compose keeps it on, as before the switch existed. VEXA_FLOWS_POST_MEETING=0 turns it off.
+      - VEXA_FLOWS_POST_MEETING=${VEXA_FLOWS_POST_MEETING:-1}
       - VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN=${VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN:-5}
       - VEXA_FLOWS_NUDGE_BUDGET_CEILING=${VEXA_FLOWS_NUDGE_BUDGET_CEILING:-12}
       # ── the doors (#1453 made these required-explicit) ──────────────────────────────────────
@@ -1605,6 +1611,9 @@ services:
       - VEXA_FLOWS_CRM_PUBLISH_KEY=${VEXA_FLOWS_CRM_PUBLISH_KEY:-}
       # S6 nudges (D15): off unless VEXA_FLOWS_NUDGES=1 and the flows_defs.nudges pack is loaded
       - VEXA_FLOWS_NUDGES=${VEXA_FLOWS_NUDGES:-}
+      # The after-meeting flow (report turn, minutes and attendee mail). The code default is off;
+      # Compose keeps it on, as before the switch existed. VEXA_FLOWS_POST_MEETING=0 turns it off.
+      - VEXA_FLOWS_POST_MEETING=${VEXA_FLOWS_POST_MEETING:-1}
       - VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN=${VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN:-5}
       - VEXA_FLOWS_NUDGE_BUDGET_CEILING=${VEXA_FLOWS_NUDGE_BUDGET_CEILING:-12}
       # ── the doors (#1453 made these required-explicit) ──────────────────────────────────────
