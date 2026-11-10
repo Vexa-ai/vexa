@@ -676,6 +676,21 @@ let linkActive = false
 const linkLog: { at: number; type: string; what: string; decision: string }[] = []
 const parked = new Map<string, Seg[]>()
 
+export const EVENT_MS = 15_000, LINK_STALE_MS = 60_000
+export const TIMED_OUT = Symbol('timed out')
+/** `p`, or TIMED_OUT once `ms` passed first; `p` itself is not stopped, only no longer waited for */
+export function within<T>($: any, p: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
+  return Promise.race([p, $.clock.sleep(ms).then(() => TIMED_OUT)])
+}
+/** a read may start when none runs, or when the one running began LINK_STALE_MS ago or more (it is left behind) */
+export function mayRead(reading: boolean, since: number, now: number): boolean {
+  return !reading || now - since >= LINK_STALE_MS
+}
+/** a relay request's id (agent-api claude_relay: uuid4 hex), the only name a said/ or acks/ file takes */
+const UI_ID = /^[0-9a-f]{1,64}$/
+/** the presses this chat has put in already (said/ on disk carries it across a reload and to the next owner) */
+const uiSaid = new Set<string>()
+
 async function logLink($: any, type: string, what: string, decision: string): Promise<void> {
   linkLog.push({ at: await $.clock.now(), type, what: what.slice(0, 120), decision })
   if (linkLog.length > 50) linkLog.splice(0, linkLog.length - 50)
@@ -715,10 +730,24 @@ async function onLinkEvent($: any, ev: LinkEvent): Promise<void> {
   const mt = ev.meeting ?? {}
   const name = mt.title || mt.native_id || 'a call'
   if (ev.type === 'ui') {
+    const id = String(ev.request?.id ?? '')
+    const dir = await linkDir($)
+    const known = UI_ID.test(id)
+    // a press Vexa handed over again (its ack had not come back yet) is not said twice
+    if (known && (uiSaid.has(id) || await $.fs.exists(`${dir}/said/${id}`))) { await logLink($, 'ui', String(ev.request?.action ?? ''), 'again'); return }
     const m = await read($)
     const title = ev.request?.params?.native_id === m.nativeId ? (m.title || m.nativeId) : ''
     await logLink($, 'ui', String(ev.request?.action ?? ''), 'wake')
-    await say($, uiMessage(ev.request, title))
+    if (!(await ownsLink($))) return
+    if (known) { uiSaid.add(id); if (uiSaid.size > 500) uiSaid.delete(uiSaid.values().next().value!) }
+    // THE PRESS IS ACKED ONLY ONCE THE CHAT TOOK IT (card brain:card/8e490542f481): the prompt entered, then the press
+    // is marked said and `acks/<id>` asks vexa-link to tell Vexa. Not awaited here: a chat busy with a long turn takes
+    // it later and must not hold the line's reading. Not taken, it stays unacked and Vexa hands it over once more.
+    void $.prompt.submit({ text: uiMessage(ev.request, title) }).then(async () => {
+      if (!known) return
+      try { await $.fs.write(`${dir}/said/${id}`, String(await $.clock.now())) } catch { /* said; a second hand-over may say it again */ }
+      try { await $.fs.write(`${dir}/acks/${id}`, 'submitted') } catch { /* an older vexa-link acked it already */ }
+    }, () => undefined)
     return
   }
   if (ev.type === 'system') {
@@ -857,9 +886,17 @@ async function flushRecord($: any): Promise<void> {
 }
 
 let linkReading = false
+// A READ THAT HANGS NEVER STOPS THE LINE (10 Nov 2026: a call's handling hung through three brain restarts and the chat
+// read nothing more for an hour, panel presses included): each event is given EVENT_MS, and a read still running after
+// LINK_STALE_MS is left behind: the next tick reads in its place, and the one left behind, if it ever wakes, writes nothing.
+let linkReadingAt = 0
+let linkGen = 0
 async function syncLink($: any): Promise<void> {
-  if (linkReading) return
+  const startedAt = await $.clock.now()
+  if (!mayRead(linkReading, linkReadingAt, startedAt)) return
+  const gen = ++linkGen
   linkReading = true
+  linkReadingAt = startedAt
   try {
     if (!localHome) localHome = String((await $.env.get('HOME')) ?? '')
     const dir = `${localHome}/.vexa/link`
@@ -895,14 +932,19 @@ async function syncLink($: any): Promise<void> {
         ownerCache = { at: -Infinity, owner: '' }
         break
       }
+      if (gen !== linkGen) return                     // left behind: a newer read carries the line
       linkOffset = nl + 1
-      if (ev) { try { await onLinkEvent($, ev); lines++ } catch { /* an event it cannot act on is skipped */ } }
+      if (ev) {
+        try { if (await within($, onLinkEvent($, ev), EVENT_MS) === TIMED_OUT) await logLink($, String(ev.type ?? ''), 'no answer in time', 'skip'); lines++ }
+        catch { /* an event it cannot act on is skipped */ }
+      }
     }
+    if (gen !== linkGen) return
     try { await $.fs.write(`${dir}/offset`, String(linkOffset)) } catch { /* the next owner starts at the end */ }
-    if (lines) await triage($)
-    await flushRecord($)
+    if (lines) await within($, triage($), EVENT_MS)
+    await within($, flushRecord($), EVENT_MS)
   } catch { /* the next tick reads again */ } finally {
-    linkReading = false
+    if (gen === linkGen) linkReading = false
   }
 }
 

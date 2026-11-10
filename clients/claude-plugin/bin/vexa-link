@@ -84,17 +84,32 @@ on_requests() {
   # the chat that listens from these.
   panels=$(printf '%s' "$1" | tr -d '\n' | sed -n 's/.*"panels": *\(\[[^]]*\]\).*/\1/p')
   printf '{"ts":%s,"panels":%s}\n' "$(now_ms)" "${panels:-[]}" > "$dir/panels.json.tmp" && mv "$dir/panels.json.tmp" "$dir/panels.json"
-  # {"requests": [...], ...}: one `ui` event per request, then acked — it is the plugin's now.
+  # {"requests": [...], ...}: one `ui` event per request. Not acked here: the plugin acks a press once the chat took it
+  # (acks/<id>, sent by on_acks); one it never takes Vexa hands over once more.
   printf '%s' "$1" | tr -d '\n' | sed 's/^.*"requests": *\[//; s/\] *, *"present_until_ms".*$//; s/\]}$//' \
     | awk '{ gsub(/\}, *\{"id"/, "}\n{\"id\""); print }' | while IFS= read -r req; do
       case "$req" in \{\"id\"*)
         id=$(printf '%s' "$req" | sed 's/^{"id": *"\([0-9a-f]*\)".*/\1/')
-        append "{\"type\":\"ui\",\"request\":$req}"
-        curl -sS --max-time 10 -o /dev/null -X POST -H "X-API-Key: $key" -H 'Content-Type: application/json' \
-          -d '{"outcome":"submitted"}' "$api/agent/claude/requests/$id/ack" 2>/dev/null ;;
+        case "$id" in *[!0-9a-f]*|'') ;; *) append "{\"type\":\"ui\",\"request\":$req}" ;; esac ;;
       esac
     done
   state running
+}
+
+# The presses the plugin says the chat took (acks/<id>): each acked to Vexa once, then removed; said/ older than a day
+# is forgotten (it only stops a press Vexa handed over twice from being said twice).
+on_acks() {
+  while [ ! -f "$dir/stop" ]; do
+    for f in "$dir"/acks/*; do
+      [ -f "$f" ] || continue
+      id=${f##*/}
+      case "$id" in *[!0-9a-f]*|'') rm -f "$f"; continue ;; esac
+      if curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -X POST -H "X-API-Key: $key" -H 'Content-Type: application/json' \
+          -d '{"outcome":"submitted"}' "$api/agent/claude/requests/$id/ack" 2>/dev/null | grep -q '^2'; then rm -f "$f"; fi
+    done
+    find "$dir/said" -type f -mmin +1440 -delete 2>/dev/null
+    sleep 1
+  done
 }
 
 asks_url() { echo "$api/agent/workspace/file?slug=_global&path=asks/in-this-call.md"; }
@@ -109,6 +124,8 @@ rm -f "$dir/in-this-call.json" "$dir/missing-on_asks.json"
 read_loop on_events events_url &
 read_loop on_asks asks_url &
 read_loop on_requests requests_url &
+mkdir -p "$dir/acks" "$dir/said"
+on_acks &
 trap 'stop; rm -f "$dir/link.pid"' INT TERM
 wait
 rm -f "$dir/link.pid"
