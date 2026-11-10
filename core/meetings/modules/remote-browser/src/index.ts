@@ -35,6 +35,8 @@ export {
   collectSessionProfile,
   readSessionProfile,
   writeSessionProfile,
+  CREDENTIAL_FILES,
+  prepareSignInProfile,
 } from './session-store';
 export type { S3Config, SessionProfileSpec, ProfileFile } from './session-store';
 

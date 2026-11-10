@@ -217,4 +217,7 @@ export {
 } from "./msteams/prejoin-blocked";
 export { joinZoomMeeting, buildZoomWebClientUrl, waitForZoomMeetingAdmission, checkForZoomAdmissionSilent, leaveZoomMeeting, dismissZoomPopups, startZoomRemovalMonitor };
 export { stopZoomIncomingVideo, incomingVideoStep, ZOOM_INCOMING_VIDEO_SELECTORS };
+// Evidence about a Zoom sign-in from the cookie jar — named sign-in cookies, lifetimes, flags; never a value.
+export { describeZoomSignInCookies, ZOOM_SIGNIN_COOKIE_NAMES } from "./zoom/session-diagnostic";
+export type { JarCookie } from "./zoom/session-diagnostic";
 export { joinJitsiMeeting, buildJitsiMeetingUrl, waitForJitsiMeetingAdmission, checkForJitsiAdmissionSilent, leaveJitsiMeeting, startJitsiRemovalMonitor };

@@ -93,7 +93,40 @@ export async function launchPersistentBrowser(
     } catch { /* best-effort */ }
   });
 
+  const page = await keepOneBlankPage(context as BrowserContext);
+  return { context: context as BrowserContext, page, sandboxed };
+}
+
+/** A page's URL as a launch may log it: its host only — `about:blank` and an empty URL as they are. */
+export function pageHost(raw: string): string {
+  if (!raw) return '(empty)';
+  if (raw === 'about:blank') return raw;
+  try { return new URL(raw).hostname || new URL(raw).protocol.replace(/:$/, ''); } catch { return '(unreadable)'; }
+}
+
+/**
+ * The launch hands the caller exactly ONE page, on about:blank. A restored profile can make Chromium
+ * open pages of an earlier run (an old meeting's join URL): every page but the first is closed, and
+ * the first is sent to about:blank before anyone uses it. One line is logged — how many pages were
+ * found and each one's host only (no path, no query). A failed close or navigation is logged and the
+ * launch goes on: this never throws on their account.
+ */
+export async function keepOneBlankPage(
+  context: Pick<BrowserContext, 'pages' | 'newPage'>,
+  log: (line: string) => void = (l) => console.log(l),
+): Promise<Page> {
   const pages = context.pages();
+  log(`[remote-browser] launch: ${pages.length} page(s) open at start: ${pages.map((p) => {
+    try { return pageHost(p.url()); } catch { return '(unreadable)'; }
+  }).join(', ') || 'none'}`);
   const page = pages.length > 0 ? pages[0] : await context.newPage();
-  return { context: context as BrowserContext, page: page as Page, sandboxed };
+  for (const extra of pages.slice(1)) {
+    try { await extra.close(); } catch (e) { log(`[remote-browser] launch: could not close an extra page: ${String((e as Error)?.name || 'error')}`); }
+  }
+  let current = '';
+  try { current = page.url(); } catch { /* read below as not blank */ }
+  if (current !== 'about:blank') {
+    try { await page.goto('about:blank'); } catch (e) { log(`[remote-browser] launch: could not blank the page: ${String((e as Error)?.name || 'error')}`); }
+  }
+  return page;
 }

@@ -15,6 +15,7 @@
  */
 import { readSessionProfile } from '@vexa/remote-browser';
 import type { Invocation } from './config.js';
+import type { LifecycleSink } from './ports.js';
 
 export interface WritebackResult {
   /** session profile files meeting-api accepted */
@@ -52,4 +53,50 @@ export async function writeBackSession(inv: Invocation, dataDir: string, opts: W
     throw new Error(`meeting-api refused the session write-back: HTTP ${res.status} ${detail.slice(0, 200)}`.trim());
   }
   return { sent: files.length };
+}
+
+/**
+ * Did this bot get past sign-in? Only then may its profile go back to the account: a bot that sat on
+ * the platform's sign-in page (or a check) and never reached the meeting holds a signed-out cookie set,
+ * and writing it back would overwrite the account's good one.
+ *
+ * The evidence is what the bot already reports on lifecycle.v1: `awaiting_admission` (it reached the
+ * lobby as itself) or `active` (it was admitted). A bot a person helped in through the live view and
+ * that was then admitted reported `active`, so it writes back — the case where a person signs in once
+ * and the session is saved. A bot that ended while still `joining`, or in `needs_help` entered from
+ * `joining`, reported neither.
+ */
+export interface SignInEvidence {
+  /** reported `awaiting_admission` */
+  lobbyReached: boolean;
+  /** reported `active` */
+  admitted: boolean;
+}
+
+/** The write-back decision as a pure function: a signed-in invocation that got past sign-in. */
+export function shouldWriteBack(authenticated: boolean, evidence: SignInEvidence): boolean {
+  return authenticated && (evidence.admitted || evidence.lobbyReached);
+}
+
+/** Records, from the lifecycle statuses the bot emits, whether it got past sign-in. */
+export function createSignInEvidence(): { observe(status: string): void; evidence(): SignInEvidence } {
+  const e: SignInEvidence = { lobbyReached: false, admitted: false };
+  return {
+    observe(status: string) {
+      if (status === 'awaiting_admission') e.lobbyReached = true;
+      else if (status === 'active') e.admitted = true;
+    },
+    evidence: () => ({ ...e }),
+  };
+}
+
+/** The same sink, telling `onStatus` every status it carries (emit and the reachability-gated first emit). */
+export function observeLifecycle(sink: LifecycleSink, onStatus: (status: string) => void): LifecycleSink {
+  const seen = (status: unknown): void => { try { onStatus(String(status)); } catch { /* never in the way of a report */ } };
+  return {
+    emit(event) { seen(event.status); return sink.emit(event); },
+    ...(sink.emitReachable
+      ? { emitReachable: (event: Parameters<NonNullable<LifecycleSink['emitReachable']>>[0]) => { seen(event.status); return sink.emitReachable!(event); } }
+      : {}),
+  };
 }

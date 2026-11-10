@@ -30,7 +30,7 @@ export const SIGNIN_NAVIGATION_DOMAINS: Record<AuthPlatform, readonly string[]> 
   teams: AUTH_NAVIGATION_DOMAINS.teams,
   zoom: [...AUTH_NAVIGATION_DOMAINS.zoom, 'accounts.google.com', 'login.microsoftonline.com', 'login.live.com'],
 };
-import { saveSessionLocal, cleanStaleLocks, ensureBrowserDataDir } from './session-store';
+import { saveSessionLocal, cleanStaleLocks, ensureBrowserDataDir, prepareSignInProfile } from './session-store';
 
 export interface ProvisionLoginOptions {
   platform: AuthPlatform;
@@ -61,6 +61,7 @@ export async function provisionLogin(opts: ProvisionLoginOptions): Promise<Login
 
   ensureBrowserDataDir(opts.profileDir);
   cleanStaleLocks(opts.profileDir);
+  prepareSignInProfile(opts.profileDir);   // no password manager / autofill where the person types a password
 
   const launch = opts.launch ?? launchPersistentBrowser;
   const { context, page } = await launch({ dataDir: opts.profileDir, args: opts.args ?? getBrowserSessionArgs() });

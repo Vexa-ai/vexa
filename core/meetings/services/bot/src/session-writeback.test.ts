@@ -10,7 +10,10 @@
  *   • the request is a PUT with the bot's MeetingToken, and its body names SESSION_PROFILE files only
  *     — an extension, a cache file, a LevelDB LOCK and a symlink at a profile name are left out;
  *   • the write-back never runs the aws CLI (the bot's storage key is read-only);
- *   • a refusal from meeting-api rejects with its status (the caller logs it; teardown carries on).
+ *   • a refusal from meeting-api rejects with its status (the caller logs it; teardown carries on);
+ *   • only a bot that got past sign-in writes back: admitted or lobby reached ⇒ write; never past
+ *     joining / needs_help from joining ⇒ no write; a guest ⇒ no write. The evidence comes from the
+ *     lifecycle statuses the bot emits, and launchBrowser's teardown asks for it.
  * Run: npx tsx src/session-writeback.test.ts
  */
 import { createServer, type IncomingMessage } from 'node:http';
@@ -21,7 +24,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import { isSessionProfilePath } from '@vexa/remote-browser';
-import { writeBackSession } from './session-writeback.js';
+import { writeBackSession, shouldWriteBack, createSignInEvidence, observeLifecycle } from './session-writeback.js';
 import { parseInvocation, type Invocation } from './config.js';
 
 // src/ → ../../../contracts/session-profile.v1 (meetings/services/bot/src → meetings/contracts/…)
@@ -159,6 +162,45 @@ async function main(): Promise<void> {
     await new Promise<void>((r) => server.close(() => r()));
     rmSync(work, { recursive: true, force: true });
   }
+
+  // ── the write-back decision: only a bot that got past sign-in ──
+  const lane = (statuses: string[]) => { const e = createSignInEvidence(); statuses.forEach((x) => e.observe(x)); return e.evidence(); };
+  const table: Array<[string, boolean, string[], boolean]> = [
+    ['admitted ⇒ write', true, ['joining', 'active'], true],
+    ['lobby reached ⇒ write', true, ['joining', 'awaiting_admission', 'failed'], true],
+    ['helped in through the live view, then admitted ⇒ write', true, ['joining', 'needs_help', 'active', 'completed'], true],
+    ['never past joining ⇒ no write', true, ['joining', 'failed'], false],
+    ['needs_help entered from joining, then ended ⇒ no write', true, ['joining', 'needs_help', 'failed'], false],
+    ['nothing reported ⇒ no write', true, [], false],
+    ['guest invocation ⇒ no write, even admitted', false, ['joining', 'active'], false],
+  ];
+  for (const [name, authenticated, statuses, want] of table) {
+    check(`decision: ${name}`, shouldWriteBack(authenticated, lane(statuses)) === want, JSON.stringify(lane(statuses)));
+  }
+  // wiring: the observed sink sees every status and still delivers each event unchanged
+  const delivered: unknown[] = [];
+  const ev = createSignInEvidence();
+  const observed = observeLifecycle({
+    async emit(e) { delivered.push(e); },
+    async emitReachable(e) { delivered.push(e); return 'reachable'; },
+  }, (st) => ev.observe(st));
+  await observed.emitReachable!({ connection_id: 'c', status: 'joining' } as any);
+  await observed.emit({ connection_id: 'c', status: 'awaiting_admission' } as any);
+  check('the observed sink delivers every event', delivered.length === 2);
+  check('the observed sink records the lobby', ev.evidence().lobbyReached && !ev.evidence().admitted, JSON.stringify(ev.evidence()));
+  const noGate = observeLifecycle({ async emit() {} }, () => { throw new Error('observer fault'); });
+  check('a sink without the reachability gate stays without it', noGate.emitReachable === undefined);
+  let threw = false;
+  try { await noGate.emit({ connection_id: 'c', status: 'active' } as any); } catch { threw = true; }
+  check('an observer fault never stops a report', !threw);
+  // launchBrowser's teardown asks for the decision before writing back (source check; the launch is L4)
+  const bridge = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'capture-bridge.ts'), 'utf8');
+  check('teardown withholds the write-back without sign-in evidence',
+    /!shouldWriteBack\(inv\.authenticated, opts\.signInEvidence\?\.\(\) \?\? \{ lobbyReached: false, admitted: false \}\)/.test(bridge));
+  const index = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8');
+  check('the composition root feeds the lifecycle statuses to the evidence and hands it to the launch',
+    /observeLifecycle\(lifecycleSink, \(status\) => signIn\.observe\(status\)\)/.test(index)
+    && /launchBrowser\(inv, \{ signInEvidence: signIn\.evidence \}\)/.test(index));
 
   if (failed) {
     console.error(`\n❌ session-writeback.test — ${failed} check(s) failed`);

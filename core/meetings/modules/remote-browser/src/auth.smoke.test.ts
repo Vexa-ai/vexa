@@ -11,7 +11,9 @@
  *     flags must carry the CDP debug args so an agent can attach.
  *
  *  2. LOGGED-IN DECISION (validate.ts) — validateLoggedIn returns loggedIn=true
- *     IFF (not bounced to a sign-in URL) AND (a known auth cookie is present).
+ *     IFF (the URL the page SETTLES on is still the account page) AND (a known auth cookie
+ *     has a value). A late redirect, another path, a sign-in page or a page that never settles
+ *     is signed out; the cookie is necessary, never sufficient.
  *     We drive the real function with a stub Playwright Page (url + cookies),
  *     so the AND-matrix is exercised without launching Chromium.
  *
@@ -56,11 +58,15 @@ check(CDP_DEBUG_ARGS.includes('--remote-debugging-port=9222'),
 
 // ── 2. validateLoggedIn decision matrix (stub Page) ──────────────────────────
 type Cookie = { name: string; value: string };
-function makePage(finalUrl: string, cookies: Cookie[]) {
+/** A stand-in Page on a fake clock: `url()` answers by the time waited so far — `timeline` is a list
+ *  of [fromMs, url], the last entry with fromMs <= now wins. */
+function makePage(finalUrl: string | Array<[number, string]>, cookies: Cookie[]) {
+  const timeline: Array<[number, string]> = typeof finalUrl === 'string' ? [[0, finalUrl]] : finalUrl;
+  let now = 0;
   return {
     async goto(_url: string, _opts?: unknown) { /* no-op */ },
-    async waitForTimeout(_ms: number) { /* no-op */ },
-    url() { return finalUrl; },
+    async waitForTimeout(ms: number) { now += ms; },
+    url() { let u = ''; for (const [t, v] of timeline) if (t <= now) u = v; return u; },
     context() { return { async cookies() { return cookies; } }; },
   } as any; // structurally satisfies the bits validateLoggedIn touches
 }
@@ -71,7 +77,7 @@ async function decisionMatrix() {
   const accountUrl = 'https://myaccount.google.com/'; // not a sign-in URL
   const signinUrl = 'https://accounts.google.com/signin'; // a sign-in marker
 
-  // (a) landed on account page + has auth cookie → loggedIn
+  // (a) settled on the account page + has auth cookie → loggedIn
   let r = await validateLoggedIn(makePage(accountUrl, [{ name: goodCookie, value: 'x' }]), google);
   check(r.loggedIn === true, `expected loggedIn=true on account-url + ${goodCookie}; got ${r.detail}`);
 
@@ -86,6 +92,58 @@ async function decisionMatrix() {
   // (d) cookie present but empty value → not a live session
   r = await validateLoggedIn(makePage(accountUrl, [{ name: goodCookie, value: '' }]), google);
   check(r.loggedIn === false, `expected loggedIn=false for empty-value auth cookie; got ${r.detail}`);
+
+  // ── Zoom: the anonymous `_zm_ssid` is set the moment a sign-in page loads ──
+  const zoom: AuthPlatform = 'zoom';
+  const anon = [{ name: '_zm_ssid', value: 'anon' }];
+  const SECRET = 'tok3n-SECRET';
+
+  // (e) late redirect: on the account page at the first read, on sign-in from 4 s → signed out
+  r = await validateLoggedIn(makePage([[0, 'https://zoom.us/profile'], [4000, 'https://zoom.us/signin#/login']], anon), zoom);
+  check(r.loggedIn === false, `late redirect to sign-in must read signed out; got ${r.detail}`);
+
+  // (f) settled on the account page with the cookie → signed in
+  r = await validateLoggedIn(makePage('https://zoom.us/profile', anon), zoom);
+  check(r.loggedIn === true, `settled on zoom.us/profile + cookie must read signed in; got ${r.detail}`);
+
+  // (g) settled on another path of the same site (marketing home, no sign-in marker) → signed out
+  r = await validateLoggedIn(makePage([[0, 'https://zoom.us/'], [1000, 'https://www.zoom.com/']], anon), zoom);
+  check(r.loggedIn === false, `settled on another page of the site must read signed out; got ${r.detail}`);
+  r = await validateLoggedIn(makePage('https://zoom.us/profilex', anon), zoom);
+  check(r.loggedIn === false, `a path that only starts with the account path is not the account page; got ${r.detail}`);
+
+  // (h) anonymous cookie + sign-in page → signed out
+  r = await validateLoggedIn(makePage('https://zoom.us/signin', anon), zoom);
+  check(r.loggedIn === false, `anonymous cookie on the sign-in page must read signed out; got ${r.detail}`);
+
+  // (i) the platform's regional host → signed in
+  r = await validateLoggedIn(makePage([[0, 'https://zoom.us/profile'], [2000, 'https://us05web.zoom.us/profile']], anon), zoom);
+  check(r.loggedIn === true, `regional host us05web.zoom.us/profile must read signed in; got ${r.detail}`);
+  check(/host=us05web\.zoom\.us path=\/profile /.test(r.detail ?? ''), `detail names the settled host and path; got ${r.detail}`);
+
+  // a look-alike host outside the platform's domains → signed out
+  r = await validateLoggedIn(makePage('https://zoom.us.example.com/profile', anon), zoom);
+  check(r.loggedIn === false, `a look-alike host must read signed out; got ${r.detail}`);
+
+  // a page that never settles within the budget → signed out
+  const flapping: Array<[number, string]> = [];
+  for (let t = 0; t <= 20000; t += 1000) flapping.push([t, `https://zoom.us/profile/${t}`]);
+  r = await validateLoggedIn(makePage(flapping, anon), zoom);
+  check(r.loggedIn === false && /settled=false/.test(r.detail ?? ''), `a page that never settles must read signed out; got ${r.detail}`);
+
+  // (j) detail carries no query, no fragment and no cookie value
+  r = await validateLoggedIn(makePage(`https://us05web.zoom.us/profile?code=${SECRET}#token=${SECRET}`, [{ name: '_zm_ssid', value: SECRET }]), zoom);
+  check(!(r.detail ?? '').includes(SECRET) && !(r.detail ?? '').includes('?') && !(r.detail ?? '').includes('#'),
+    `detail must carry no query, fragment or value; got ${r.detail}`);
+  check(r.loggedIn === true, `the account page with a query still reads signed in; got ${r.detail}`);
+
+  // Teams: the web app's own host teams.cloud.microsoft is its account page; Microsoft sign-in is not
+  const teams: AuthPlatform = 'teams';
+  const est = [{ name: 'ESTSAUTHPERSISTENT', value: 'x' }];
+  r = await validateLoggedIn(makePage('https://teams.cloud.microsoft/v2/', est), teams);
+  check(r.loggedIn === true, `teams.cloud.microsoft must read signed in; got ${r.detail}`);
+  r = await validateLoggedIn(makePage('https://login.microsoftonline.com/common/oauth2', est), teams);
+  check(r.loggedIn === false, `Microsoft sign-in must read signed out; got ${r.detail}`);
 
   // sanity: every platform has a login URL + at least one auth cookie defined
   for (const p of ['zoom', 'google', 'teams'] as AuthPlatform[]) {

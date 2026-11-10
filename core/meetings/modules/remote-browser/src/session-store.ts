@@ -152,21 +152,40 @@ export function isSessionProfilePath(rel: string): boolean {
  *  direction: never collected for a write-back or an upload, never written on a restore. */
 export const SESSION_STATE_DIRS: readonly string[] = Object.freeze(['Default/Session Storage']);
 
-/** True when `rel` is a SESSION_PROFILE path a stored session still carries (not Session Storage). */
+/** Files of the contract's profile that hold CREDENTIALS, not a session: saved passwords (Login Data,
+ *  the account-scoped Login Data For Account, their journals) and autofill / payment data (Web Data).
+ *  A bot account carries a session, never a credential: these are never collected for a write-back
+ *  or an upload and never written on a restore — an already-saved profile holding them is restored
+ *  without them. The contract still ALLOWS the paths (fewer of them are sent; it is unchanged). */
+export const CREDENTIAL_FILES: readonly string[] = Object.freeze([
+  'Default/Login Data', 'Default/Login Data-journal',
+  'Default/Login Data For Account', 'Default/Login Data For Account-journal',
+  'Default/Web Data', 'Default/Web Data-journal',
+]);
+
+/** True when `rel` is a SESSION_PROFILE path a stored session still carries (not Session Storage,
+ *  not a credential file). */
 export function isCarriedProfilePath(rel: string): boolean {
-  return isSessionProfilePath(rel) && !SESSION_STATE_DIRS.includes(rel.split('/').slice(0, -1).join('/'));
+  return isSessionProfilePath(rel) && !CREDENTIAL_FILES.includes(rel)
+    && !SESSION_STATE_DIRS.includes(rel.split('/').slice(0, -1).join('/'));
 }
 
 const PREFERENCES = 'Default/Preferences';
-/** Chromium's `session.restore_on_startup` value for "open the New Tab page". */
-const RESTORE_NEW_TAB = 5;
+/** Chromium's `session.restore_on_startup` value for "continue where you left off". */
+const RESTORE_CONTINUE = 1;
 
 /**
- * The profile's Preferences with the keys that make Chromium bring back an earlier session reset to a
- * clean start: `profile.exit_type` "Normal" and `profile.exited_cleanly` true (no crashed-session
- * restore), `session.restore_on_startup` = New Tab page and no `session.startup_urls` (no earlier
- * tabs or pinned URLs reopened). Every other key (the sign-in's account and settings state) is kept
- * as it is. Bytes that are not a JSON object, or need no change, come back unchanged.
+ * The profile's Preferences with the keys that make Chromium bring back an earlier session's PAGES
+ * reset: `profile.exit_type` "Normal" and `profile.exited_cleanly` true (no crashed-session restore)
+ * and no `session.startup_urls` (no pinned URLs reopened). `session.restore_on_startup` is set to
+ * "continue" (1), because that is what keeps SESSION-ONLY cookies across a relaunch: with any other
+ * value Chromium deletes them at start, and Zoom's sign-in cookies (`_zm_ssid`, `_zm_page_auth`,
+ * `cred`) are session-only — measured 10 Nov on bbb: a session-only cookie set in run 1 was present in
+ * run 2 with Normal/1 and gone with Normal/5 (c1481fa2's value, which signed a saved account out).
+ * "Continue" reopens no earlier tab here: the tab state (`Sessions/`, Session Storage) is never
+ * carried, and the launch keeps exactly one page on about:blank (browser.ts keepOneBlankPage).
+ * Every other key (the sign-in's account and settings state) is kept as it is. Bytes that are not a
+ * JSON object, or need no change, come back unchanged.
  */
 export function normalizePreferences(data: Buffer): Buffer {
   let prefs: any;
@@ -175,12 +194,52 @@ export function normalizePreferences(data: Buffer): Buffer {
   const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {});
   const profile = obj(prefs.profile);
   const session = obj(prefs.session);
+  const autofill = obj(prefs.autofill);
   if (profile.exit_type === 'Normal' && profile.exited_cleanly === true
-    && session.restore_on_startup === RESTORE_NEW_TAB && !('startup_urls' in session)) return data;
-  prefs.profile = { ...profile, exit_type: 'Normal', exited_cleanly: true };
+    && session.restore_on_startup === RESTORE_CONTINUE && !('startup_urls' in session)
+    && hasNoCredentialPrefs(prefs)) return data;
+  prefs.profile = { ...profile, exit_type: 'Normal', exited_cleanly: true, password_manager_leak_detection: false };
   const { startup_urls: _dropped, ...rest } = session;
-  prefs.session = { ...rest, restore_on_startup: RESTORE_NEW_TAB };
+  prefs.session = { ...rest, restore_on_startup: RESTORE_CONTINUE };
+  prefs.credentials_enable_service = false;
+  prefs.credentials_enable_autosignin = false;
+  prefs.autofill = { ...autofill, profile_enabled: false, credit_card_enabled: false };
   return Buffer.from(JSON.stringify(prefs), 'utf8');
+}
+
+/**
+ * A bot browser never saves or offers a password, an address or a card: Chromium's own prefs
+ * (names checked in the Chromium binary the bots run, 10 Nov): `credentials_enable_service` (offer to
+ * save passwords), `credentials_enable_autosignin`, `profile.password_manager_leak_detection`,
+ * `autofill.profile_enabled`, `autofill.credit_card_enabled` — all false. Prefs only: nothing about
+ * how the browser presents itself to a site changes.
+ */
+function hasNoCredentialPrefs(prefs: any): boolean {
+  return prefs.credentials_enable_service === false && prefs.credentials_enable_autosignin === false
+    && prefs.profile?.password_manager_leak_detection === false
+    && prefs.autofill?.profile_enabled === false && prefs.autofill?.credit_card_enabled === false;
+}
+
+/**
+ * A fresh sign-in profile (the person types the password there) gets the same Preferences a restore
+ * gets — no password manager, no autofill — before the browser opens on it. An existing Preferences
+ * keeps every other key; a missing one is created. Never throws: a profile it cannot write is logged.
+ */
+export function prepareSignInProfile(dataDir: string): void {
+  try {
+    mkdirSync(join(dataDir, 'Default'), { recursive: true });
+    if (!realDirChain(dataDir, 'Default')) { console.log('[session-store] sign-in profile: Default is not a real directory; prefs not set'); return; }
+    const abs = join(dataDir, 'Default', 'Preferences');
+    let before = Buffer.from('{}');
+    if (existsSync(abs)) {
+      if (!lstatSync(abs).isFile()) { console.log('[session-store] sign-in profile: Preferences is not a regular file; prefs not set'); return; }
+      before = readFileSync(abs);
+    }
+    const after = normalizePreferences(before);
+    if (after !== before || !existsSync(abs)) writeFileSync(abs, after, { mode: 0o600 });
+  } catch (e: any) {
+    console.log(`[session-store] sign-in profile: prefs not set (${String(e?.code || e?.name || 'error')})`);
+  }
 }
 
 /** normalizePreferences on the Preferences file of a profile dir, in place (a regular file only). */
@@ -228,7 +287,7 @@ export function collectSessionProfile(dataDir: string): ProfileFile[] {
   const out: ProfileFile[] = [];
   let total = 0;
   const consider = (rel: string): void => {
-    if (!isSessionProfilePath(rel)) return;
+    if (!isCarriedProfilePath(rel)) return;   // no Session Storage, no credential file
     if (!realDirChain(dataDir, rel.split('/').slice(0, -1).join('/'))) return;
     const abs = join(dataDir, ...rel.split('/'));
     let st;

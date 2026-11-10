@@ -39,7 +39,7 @@ import {
   type Page,
   type BrowserContext,
 } from '@vexa/remote-browser';
-import { getJoinBrowserArgs } from '@vexa/join';
+import { getJoinBrowserArgs, describeZoomSignInCookies } from '@vexa/join';
 import type { RecordingMasterFormat } from '@vexa/recording';
 import { isMixedLanePlatform, isPerTrackLanePlatform, type Invocation } from './config.js';
 import type { BotPipeline } from './pipeline.js';
@@ -47,7 +47,7 @@ import type { BotRecordingSink } from './recording.js';
 import type { TelemetrySink } from './ports.js';
 import type { RemoteAudioActivityTap } from './aloneness.js';
 import { createTtsPlayback } from './tts-playback.js';
-import { writeBackSession } from './session-writeback.js';
+import { writeBackSession, shouldWriteBack, type SignInEvidence } from './session-writeback.js';
 import { restoreSession } from './session-restore.js';
 import { guardMeetingNavigation, meetingNavigationPolicy, pinMeetingHostArgs, type NavigationGuard } from './meeting-navigation.js';
 
@@ -586,7 +586,22 @@ const AUTH_PLATFORM: Partial<Record<Invocation['platform'], AuthPlatform>> = {
   zoom: 'zoom',
 };
 
-export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
+export interface LaunchBrowserOptions {
+  /** Whether this run got past sign-in (session-writeback.ts shouldWriteBack). No evidence ⇒ no write-back. */
+  signInEvidence?: () => SignInEvidence;
+}
+
+/** One evidence line about a signed-in Zoom bot's named sign-in cookies (never a value), at `moment`. */
+async function logZoomSignInCookies(inv: Invocation, context: BrowserContext, moment: string): Promise<void> {
+  if (!inv.authenticated || inv.platform !== 'zoom') return;
+  try {
+    console.log(`[bot] zoom sign-in cookies ${moment}: ${describeZoomSignInCookies(await context.cookies())}`);
+  } catch (e) {
+    console.log(`[bot] zoom sign-in cookies ${moment}: unavailable (${String((e as Error)?.name || 'error')})`);
+  }
+}
+
+export async function launchBrowser(inv: Invocation, opts: LaunchBrowserOptions = {}): Promise<BrowserSession> {
   // Every bot gets its OWN profile dir — concurrent bots sharing one dir die on Chromium's
   // SingletonLock (#478: joining → failed <1s, "Opening in existing browser session").
   // Authenticated: restore the stored session into this bot's dir before launch (index.ts:2313–2347),
@@ -638,6 +653,8 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   const baseArgs = [...getAuthenticatedBrowserArgs(), ...joinArgs];
   const args = [...(authDomains ? withSiteIsolation(baseArgs) : baseArgs), ...pinArgs];
   const { context, page } = await launchPersistentBrowser({ dataDir, args });
+  // What the stored profile gives Chromium, before any navigation (the launch only blanked its page).
+  await logZoomSignInCookies(inv, context, 'at launch (restored profile, before navigation)');
   const navigation = await guardMeetingNavigation(context, navigationPolicy);
 
   // ...and its navigations are held to those domains from before the first one.
@@ -708,6 +725,9 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
     page,
     navigation,
     async close() {
+      const writeBackWanted = inv.authenticated && (inv.userdataS3Path || inv.sessionRestoreUrl);
+      // What a write-back would save, read while the context is still open.
+      if (writeBackWanted) await logZoomSignInCookies(inv, context, 'before write-back');
       await context.close().catch(() => { /* best-effort */ });
       // Write-back on clean teardown (#725): Google rotates session cookies during use, so the
       // durable copy is refreshed from the LIVE profile dir after the context flushes — the next
@@ -717,7 +737,12 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
       // session; no URL in the invocation, no write-back. Clean teardown only: a
       // SIGKILL never reaches close(), so a hard-killed meeting keeps the last durable copy.
       // Failures are attributed warnings, one bounded attempt — teardown never hangs on it.
-      if (inv.authenticated && (inv.userdataS3Path || inv.sessionRestoreUrl)) {
+      // Only a bot that got past sign-in writes back (lobby reached or admitted): one that sat on the
+      // sign-in page holds a signed-out cookie set and would overwrite the account's good one.
+      if (inv.authenticated && (inv.userdataS3Path || inv.sessionRestoreUrl)
+        && !shouldWriteBack(inv.authenticated, opts.signInEvidence?.() ?? { lobbyReached: false, admitted: false })) {
+        console.log('[bot] session write-back withheld: this run never got past sign-in (no lobby, no admission)');
+      } else if (inv.authenticated && (inv.userdataS3Path || inv.sessionRestoreUrl)) {
         try {
           const r = await writeBackSession(inv, dataDir);
           console.log(r.skipped

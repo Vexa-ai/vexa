@@ -27,6 +27,7 @@ import { isMixedLanePlatform, loadInvocation, InvocationError, speakerStreamConf
 import type { Act, LifecycleEvent, TranscriptSegment } from './contracts.js';
 import { createOrchestrator } from './orchestrator.js';
 import { createHttpLifecycleSink } from './adapters/lifecycle-http.js';
+import { createSignInEvidence, observeLifecycle } from './session-writeback.js';
 import { createRedisTranscriptSink, redisClientFrom } from './adapters/transcript-redis.js';
 import { createRedisActsSource, redisActsClientFrom } from './adapters/acts-redis.js';
 import { createBrowserJoinDriver } from './join-driver.js';
@@ -177,9 +178,13 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
 
   // lifecycle.v1: HTTP POST to meeting-api when a callback URL is configured; console-only for
   // self-host (no callback). The HTTP sink retries/backs off and never throws out of emit.
-  const lifecycle: LifecycleSink = inv.meetingApiCallbackUrl
+  const lifecycleSink: LifecycleSink = inv.meetingApiCallbackUrl
     ? createHttpLifecycleSink({ callbackUrl: inv.meetingApiCallbackUrl, token: inv.token })
     : consoleLifecycleSink();
+  // Every status the bot reports also tells whether it got past sign-in (lobby or admission): only
+  // then does a signed-in bot write its profile back (session-writeback.ts shouldWriteBack).
+  const signIn = createSignInEvidence();
+  const lifecycle = observeLifecycle(lifecycleSink, (status) => signIn.observe(status));
 
   // transcript.v1 + acts.v1: redis. Connect LAZILY — constructing the clients does NOT dial
   // redis, so an unreachable broker doesn't crash the composition root; the first publish/
@@ -336,7 +341,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     pipeline = createCallPipeline({ source, engine });
     console.log(`[bot] call: listening in room ${c.room} (cap ${c.maxDurationSec}s)`);
   } else try {
-    session = await launchBrowser(inv);                                   // L4 (O6/VM)
+    session = await launchBrowser(inv, { signInEvidence: signIn.evidence }); // L4 (O6/VM)
     join = withNavigationRefusal(createBrowserJoinDriver(session.page, inv), session.navigation);
     botPipeline = createBotPipeline(inv, transcript, {
       // When recording, every STT round-trip is teed to <session>.stt.jsonl (the capture/STT/assembly

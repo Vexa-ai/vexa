@@ -27,7 +27,7 @@ import { tmpdir } from 'os';
 import {
   syncBrowserDataToS3, syncBrowserDataFromS3, SessionSyncError, SESSION_PROFILE, isSessionProfilePath,
   collectSessionProfile, readSessionProfile, writeSessionProfile, saveSessionLocal, loadSessionLocal, type S3Config,
-  isCarriedProfilePath, normalizePreferences, SESSION_STATE_DIRS,
+  isCarriedProfilePath, normalizePreferences, SESSION_STATE_DIRS, CREDENTIAL_FILES, prepareSignInProfile,
 } from './session-store';
 
 const fails: string[] = [];
@@ -286,29 +286,51 @@ const isClean = (data: Buffer | string, why: string): void => {
   let p: any = {};
   try { p = JSON.parse(String(data)); } catch { check(false, `${why}: Preferences is still JSON`); }
   check(p.profile?.exit_type === 'Normal' && p.profile?.exited_cleanly === true, `${why}: Preferences says the last exit was clean`);
-  check(p.session?.restore_on_startup === 5 && !('startup_urls' in (p.session ?? {})), `${why}: Preferences opens a New Tab page, no startup URLs`);
+  check(p.session?.restore_on_startup === 1 && !('startup_urls' in (p.session ?? {})),
+    `${why}: Preferences continues the session (keeps session-only cookies), no startup URLs`);
+  check(p.credentials_enable_service === false && p.credentials_enable_autosignin === false
+    && p.profile?.password_manager_leak_detection === false
+    && p.autofill?.profile_enabled === false && p.autofill?.credit_card_enabled === false,
+    `${why}: no password manager, no autofill`);
   check(p.session?.other === 'kept' && p.profile?.name === 'Bot' && isDeepStrictEqual(p.account_info, oldPrefs.account_info)
     && isDeepStrictEqual(p.intl, oldPrefs.intl), `${why}: every other Preferences key is kept as it was`);
 };
 check(isDeepStrictEqual([...SESSION_STATE_DIRS], ['Default/Session Storage']), 'Session Storage is the one dropped LevelDB dir');
 check(isSessionProfilePath('Default/Session Storage/000005.ldb') && !isCarriedProfilePath('Default/Session Storage/000005.ldb'),
   'Session Storage stays a contract path but is not carried');
-for (const p of [...SESSION_PROFILE.files, 'Default/Local Storage/leveldb/000003.log', 'Default/Local Storage/leveldb/CURRENT']) {
+for (const p of [...SESSION_PROFILE.files.filter((f) => !CREDENTIAL_FILES.includes(f)), 'Default/Local Storage/leveldb/000003.log', 'Default/Local Storage/leveldb/CURRENT']) {
   check(isCarriedProfilePath(p), `'${p}' is still carried`);
+}
+// A bot account carries a session, never a credential: saved passwords and autofill data are not carried.
+for (const p of ['Default/Login Data', 'Default/Login Data-journal', 'Default/Login Data For Account',
+  'Default/Login Data For Account-journal', 'Default/Web Data']) {
+  check(isSessionProfilePath(p) && !isCarriedProfilePath(p), `'${p}' stays a contract path but is not carried`);
 }
 const cleanPrefs = normalizePreferences(Buffer.from(JSON.stringify(oldPrefs)));
 isClean(cleanPrefs, 'normalizePreferences');
+// An account saved under the New-Tab rule (restore_on_startup 5) is set back to continue: with 5,
+// Chromium deletes session-only cookies (Zoom's sign-in cookies) at start.
+isClean(normalizePreferences(Buffer.from(JSON.stringify({ ...oldPrefs, profile: { ...oldPrefs.profile, exit_type: 'Normal', exited_cleanly: true },
+  session: { restore_on_startup: 5, other: 'kept' } }))), 'a New-Tab profile');
+check(!isSessionProfilePath('Default/Sessions/Session_13300000000000000') && !isSessionProfilePath('Default/Current Session')
+  && !isSessionProfilePath('Default/Current Tabs'), 'no tab-restore file is a profile path (continue reopens nothing)');
 check(normalizePreferences(cleanPrefs) === cleanPrefs, 'clean Preferences come back unchanged (same bytes)');
 const notJson = Buffer.from('not json');
 check(normalizePreferences(notJson) === notJson, 'Preferences that are not JSON are left as they are');
 
 // 6a. the in-memory restore (a saved bot account over HTTP) cleans an old account without a new sign-in
+const PASSWORD_BYTES = 'hunter2-PASSWORD-BYTES';
+const logged: string[] = [];
+const realLog = console.log;
+console.log = (...a: unknown[]) => { logged.push(a.map(String).join(' ')); realLog(...a); };
 const oldSet = [
   { path: 'Default/Cookies', data: Buffer.from('c') },
   { path: 'Default/Preferences', data: Buffer.from(JSON.stringify(oldPrefs)) },
   { path: 'Default/Local Storage/leveldb/000003.log', data: Buffer.from('ls') },
   { path: 'Default/Session Storage/MANIFEST-000001', data: Buffer.from('m') },
   { path: 'Default/Session Storage/000005.ldb', data: Buffer.from('tab') },
+  ...['Default/Login Data', 'Default/Login Data-journal', 'Default/Login Data For Account',
+    'Default/Login Data For Account-journal', 'Default/Web Data'].map((path) => ({ path, data: Buffer.from(PASSWORD_BYTES) })),
 ];
 const oldDir = mkdtempSync(join(tmpdir(), 'session-store-old-'));
 let oldErr: unknown;
@@ -316,6 +338,8 @@ let oldWrote = -1;
 try { oldWrote = writeSessionProfile(oldDir, oldSet); } catch (e) { oldErr = e; }
 check(!oldErr && oldWrote === 3, `an old saved profile is accepted and restored without Session Storage, wrote ${oldWrote} (${String(oldErr)})`);
 check(!existsSync(join(oldDir, 'Default', 'Session Storage')), 'no Session Storage is written on restore');
+check(['Login Data', 'Login Data-journal', 'Login Data For Account', 'Login Data For Account-journal', 'Web Data']
+  .every((n) => !existsSync(join(oldDir, 'Default', n))), 'an old saved set holding credential files is restored without them');
 check(readFileSync(join(oldDir, 'Default', 'Cookies'), 'utf8') === 'c', 'the cookies are restored as they were');
 isClean(readFileSync(join(oldDir, 'Default', 'Preferences')), 'restore over HTTP');
 
@@ -327,12 +351,34 @@ writeFileSync(join(liveOld, 'Default', 'Session Storage', 'MANIFEST-000001'), 'm
 writeFileSync(join(liveOld, 'Default', 'Session Storage', '000005.ldb'), 'meeting-tab-state');
 writeFileSync(join(liveOld, 'Default', 'Local Storage', 'leveldb', '000003.log'), 'ls');
 writeFileSync(join(liveOld, 'Default', 'Cookies'), 'c');
+for (const n of ['Login Data', 'Login Data-journal', 'Login Data For Account', 'Login Data For Account-journal', 'Web Data']) {
+  writeFileSync(join(liveOld, 'Default', n), PASSWORD_BYTES);
+}
 writeFileSync(join(liveOld, 'Default', 'Preferences'), JSON.stringify(oldPrefs));
 const wb = readSessionProfile(liveOld);
 check(JSON.stringify(wb.map((f) => f.path)) === JSON.stringify(['Default/Cookies', 'Default/Preferences', 'Default/Local Storage/leveldb/000003.log']),
   `write-back carries cookies, Preferences and Local Storage only, got ${JSON.stringify(wb.map((f) => f.path))}`);
 isClean(wb.find((f) => f.path === 'Default/Preferences')?.data ?? '', 'write-back');
 check(!collectSessionProfile(liveOld).some((f) => f.path.startsWith('Default/Session Storage/')), 'collect never names Session Storage');
+check(!collectSessionProfile(liveOld).some((f) => CREDENTIAL_FILES.includes(f.path)), 'collect (write-back, operator upload, local save) never names a credential file');
+const savedOut = mkdtempSync(join(tmpdir(), 'session-store-saveout-'));
+saveSessionLocal(savedOut, liveOld);
+check(!existsSync(join(savedOut, 'Default', 'Login Data')) && !existsSync(join(savedOut, 'Default', 'Web Data')), 'a local save carries no credential file');
+const loadedIn = mkdtempSync(join(tmpdir(), 'session-store-loadin-'));
+loadSessionLocal(liveOld, loadedIn);
+check(!existsSync(join(loadedIn, 'Default', 'Login Data')) && !existsSync(join(loadedIn, 'Default', 'Login Data For Account')), 'a local load restores no credential file');
+check(!logged.some((l) => l.includes(PASSWORD_BYTES)), 'no log line carries a credential file\'s content');
+console.log = realLog;
+// a fresh sign-in profile (the person types the password there): no password manager, no autofill
+const signinDir = mkdtempSync(join(tmpdir(), 'session-store-signin-'));
+prepareSignInProfile(signinDir);
+{ const f = JSON.parse(readFileSync(join(signinDir, 'Default', 'Preferences'), 'utf8'));
+  check(f.credentials_enable_service === false && f.credentials_enable_autosignin === false && f.profile?.password_manager_leak_detection === false
+    && f.autofill?.profile_enabled === false && f.autofill?.credit_card_enabled === false, 'a fresh sign-in profile: no password manager, no autofill'); }
+writeFileSync(join(signinDir, 'Default', 'Preferences'), JSON.stringify({ ...oldPrefs, credentials_enable_service: true }));
+prepareSignInProfile(signinDir);
+isClean(readFileSync(join(signinDir, 'Default', 'Preferences')), 'an existing sign-in profile');
+for (const d of [savedOut, loadedIn, signinDir]) rmSync(d, { recursive: true, force: true });
 
 // 6c. the S3 restore of an old stored copy leaves Session Storage in the store and cleans Preferences
 installFakeAws('ok');
