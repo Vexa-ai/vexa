@@ -745,11 +745,10 @@ def _refuse(code: int, reason: str, **facts):
 
 def _refuse_switched_off(scope: str, name: str) -> None:
     """409 `flow_switched_off` for an instance flow this deployment has switched off
-    (`Registry.switch_off`). The registry would never choose the row, so filing it would be a
-    version that looks live and does nothing; `note` carries the setting that turns it on."""
-    from flows.registry import flow_ident
-    ident = flow_ident(scope, name)
-    why = vocab.switched_off.get(ident)
+    (`Registry.switch_off`). The registry would never choose the row, so filing or activating it
+    would be a version that looks live and does nothing; `note` carries the setting that turns
+    it on. Retiring and pausing are narrowings and are never refused."""
+    why = vocab.off_reason(scope, name)
     if why:
         _refuse(409, "flow_switched_off", name=name, note=why)
 
@@ -808,8 +807,18 @@ def list_flows(caller: Caller = Depends(subject_or_operator)):
     `last_refusal` (`reason`, `text`, `at`, `next_run_at` — e.g. the daily run limit and when the
     next run can start), so "why didn't it run" has an answer. `shadowing_versions` names any runtime version that
     overrides an image version with fewer steps — the shape of a flow quietly doing less than the
-    code says, surfaced here because nobody reads a startup log until they already suspect it."""
+    code says, surfaced here because nobody reads a startup log until they already suspect it.
+    `switched_off` names each flow this deployment has switched off and the setting that decides
+    it; a stored version of one carries the same words in its own `switched_off` and does not
+    run, whatever its `status`."""
     db_flows = _with_refusals(_db_flows(_readable_scopes(caller)))
+    # A STORED VERSION OF A SWITCHED-OFF FLOW keeps the status its row has and says, beside it,
+    # that it does not run and which setting decides that. `switched_off` below lists every such
+    # flow whether or not a row exists, because the image version is simply absent from `flows`.
+    for f in db_flows:
+        why = vocab.off_reason(f.get("scope") or "instance", f["name"])
+        if why:
+            f["switched_off"] = why
     code_flows = [{"name": f.name, "version": f.version, "scope": "instance", "on": f.on.name,
                    "trigger": {"kind": "event", "event": f.on.name},
                    "steps": list(f.steps), "source": "image", "status": "active"}
@@ -819,6 +828,7 @@ def list_flows(caller: Caller = Depends(subject_or_operator)):
     # listing rather than only in a startup log, because the log is read when somebody already
     # suspects something and this is the defect where nobody does.
     return {"shadowing_versions": vocab.shadowing_versions(),
+            "switched_off": [{"flow": n, "why": w} for n, w in sorted(vocab.switched_off.items())],
             "steps_vocabulary": [
         {"name": n, "doc": " ".join((vocab.steps[n].__doc__ or "undocumented").split()),
          "user_allowed": n in allowed}
@@ -1645,6 +1655,7 @@ def set_flow_status(name: str, version: int, action: str, scope: str = "",
         # narrowing — but never activate or resume one, its own drafts included.
         raise HTTPException(status_code=403, detail=APPROVAL_REFUSAL)
     if st == "active":
+        _refuse_switched_off(target, name)
         _require_session_to_arm(caller, target)
     if st == "active" and target != "instance":
         rows = db.execute("SELECT steps, cron FROM flow_version WHERE scope=:sc AND name=:n "

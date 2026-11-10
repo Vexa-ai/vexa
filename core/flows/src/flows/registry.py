@@ -230,6 +230,12 @@ class Registry:
         for key in [k for k in self.flows if k[0] == ident]:
             self._unmatch(*key)
 
+    def off_reason(self, scope: str, name: str) -> Optional[str]:
+        """Why this flow does not run in this deployment, in the words given to `switch_off`,
+        or None. THE ONE QUESTION every surface asks — submission, activation, the listing and
+        the pages — so none of them can say `active` about a version nothing will choose."""
+        return self.switched_off.get(flow_ident(scope or INSTANCE, name))
+
     def _refuse_switched_off(self, ident: str) -> None:
         why = self.switched_off.get(ident)
         if why:

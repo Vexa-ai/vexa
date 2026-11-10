@@ -208,6 +208,8 @@ def render(facts: dict) -> str:
         L.append(f"authored-by: {facts['created_by']}")
     if superseded:
         L.append(f"superseded-by: {superseded}")
+    if facts.get("switched_off"):
+        L.append("switched-off: yes")
     L.append("generated: from the code that runs it — edits here are overwritten")
     L.append("---")
     L.append("")
@@ -222,6 +224,13 @@ def render(facts: dict) -> str:
         L.append(">")
         L.append("> New facts are no longer matched to this version. A reaction admitted on it keeps"
                  " the version it was admitted on and runs these steps to the end.")
+        L.append("")
+    if facts.get("switched_off") and not retired:
+        # THE SAME PLACE AND THE SAME REASON as the retirement line: the row says `active`, and
+        # the reader has to learn in the first line that this deployment does not run it.
+        L.append("> **Switched off in this deployment — this version does not run.**")
+        L.append(">")
+        L.append(f"> {facts['switched_off']}")
         L.append("")
     L.append(f"{'Ran' if retired else 'Runs'} when **`{facts['on']}`** happens, in "
              f"{len(facts['steps'])} step"
@@ -454,6 +463,9 @@ def runtime_facts(reg, row: dict, rows: "list[dict] | None" = None) -> dict:
         facts["created_by"] = str(row["created_by"])
     if when(row.get("created_at")):
         facts["created_at"] = when(row["created_at"])
+    why = reg.off_reason(str(row.get("scope") or "instance"), str(row["name"]))
+    if why:
+        facts["switched_off"] = why
     sup = _superseded_by(list(rows or []), row)
     if sup is not None:
         facts["superseded_by"] = sup

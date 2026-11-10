@@ -175,3 +175,94 @@ def test_submitting_a_switched_off_instance_flow_is_refused_with_the_reason(db, 
     assert "VEXA_FLOWS_POST_MEETING" in e.value.detail["note"]
     flows_api._refuse_switched_off("user:7", "post_meeting")
     flows_api._refuse_switched_off("instance", "meeting_held")
+
+
+# ── what the API and the pages SAY about a switched-off flow ─────────────────────────────────────
+# Not being chosen is not enough: an answer of `active` for a version that will never run is the
+# shape of a flow quietly doing less than the listing says.
+
+@pytest.fixture
+def off_api(monkeypatch):
+    """The real app through `TestClient` on a registry built with the switch off."""
+    from fastapi.testclient import TestClient
+    from sqlite_double import SqliteDB
+    from flows_integrations import flows_api
+    db = SqliteDB()
+    monkeypatch.setattr(flows_api, "db", db)
+    monkeypatch.setattr(flows_api, "vocab", _build(db, monkeypatch, None))
+    client = TestClient(flows_api.app, raise_server_exceptions=False)
+    return flows_api, client, {"X-Flows-Operator-Key": flows_api.API_KEY}
+
+
+def _store_as(db, name, version, steps, status):
+    import json
+    db.execute(
+        "INSERT INTO flow_version (scope, name, version, on_event, steps, params, status, "
+        "created_by, created_at) VALUES ('instance', :n, :v, :e, :st, '{}', :s, 'test', 0)",
+        {"n": name, "v": version, "e": COMPLETED, "st": json.dumps(steps), "s": status})
+
+
+def test_activating_a_switched_off_flow_is_refused_and_the_row_stays_a_draft(off_api):
+    flows_api, client, key = off_api
+    _store_as(flows_api.db, "post_meeting", 6, ACTING, "draft")
+    r = client.post("/flows/post_meeting/6/activate?scope=instance", headers=key)
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"]["refused"] == "flow_switched_off"
+    assert "VEXA_FLOWS_POST_MEETING" in r.json()["detail"]["note"]
+    [(status,)] = flows_api.db.execute(
+        "SELECT status FROM flow_version WHERE name='post_meeting' AND version=6")
+    assert status == "draft"
+
+
+def test_retiring_a_switched_off_flow_is_still_allowed(off_api):
+    """A narrowing is never refused: the row left active before an upgrade can be retired."""
+    flows_api, client, key = off_api
+    _store_as(flows_api.db, "post_meeting", 6, ACTING, "active")
+    r = client.post("/flows/post_meeting/6/retire?scope=instance", headers=key)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "retired"
+
+
+def test_submitting_a_switched_off_flow_over_http_is_refused(off_api):
+    flows_api, client, key = off_api
+    r = client.post("/flows", headers=key, json={
+        "name": "post_meeting", "scope": "instance", "steps": ACTING,
+        "trigger": {"kind": "event", "event": COMPLETED}})
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"]["refused"] == "flow_switched_off"
+    assert flows_api.db.execute("SELECT count(*) FROM flow_version")[0][0] == 0
+
+
+def test_the_listing_marks_a_stored_switched_off_version_and_names_the_switch(off_api):
+    flows_api, client, key = off_api
+    _store_as(flows_api.db, "post_meeting", 6, ACTING, "active")
+    _store_as(flows_api.db, "house_record", 1, ["record_meeting_held"], "active")
+    body = client.get("/flows", headers=key).json()
+    by_name = {f["name"]: f for f in body["flows"] if f["source"] == "api"}
+    assert "VEXA_FLOWS_POST_MEETING" in by_name["post_meeting"]["switched_off"]
+    assert "switched_off" not in by_name["house_record"]
+    assert [s["flow"] for s in body["switched_off"]] == ["post_meeting"]
+    assert "VEXA_FLOWS_POST_MEETING" in body["switched_off"][0]["why"]
+
+
+def test_the_listing_of_a_deployment_with_the_switch_on_names_nothing(db, monkeypatch):
+    from fastapi.testclient import TestClient
+    from flows_integrations import flows_api
+    monkeypatch.setattr(flows_api, "db", db)
+    monkeypatch.setattr(flows_api, "vocab", _build(db, monkeypatch, "1"))
+    body = TestClient(flows_api.app).get(
+        "/flows", headers={"X-Flows-Operator-Key": flows_api.API_KEY}).json()
+    assert body["switched_off"] == []
+    assert not [f for f in body["flows"] if "switched_off" in f]
+
+
+def test_the_page_of_a_stored_switched_off_version_says_it_does_not_run(db, monkeypatch):
+    import flows_pages
+    row = {"name": "post_meeting", "version": 6, "on": COMPLETED, "steps": list(ACTING),
+           "params": {}, "status": "active", "created_by": "admin-1", "created_at": 0,
+           "source": "api", "scope": "instance"}
+    off = flows_pages.runtime_pages(_build(db, monkeypatch, None), [row])[0]["body"]
+    assert "switched-off: yes" in off
+    assert "Switched off in this deployment" in off and "VEXA_FLOWS_POST_MEETING" in off
+    on = flows_pages.runtime_pages(_build(db, monkeypatch, "1"), [row])[0]["body"]
+    assert "switched-off" not in on and "Switched off" not in on
