@@ -32,6 +32,7 @@ import {
   makeEphemeralProfileDir,
   removeProfileDir,
   restrictNavigation,
+  withStoredSession,
   authenticatedNavigationDomains,
   withSiteIsolation,
   type AuthPlatform,
@@ -631,7 +632,10 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   // getAuthenticatedBrowserArgs() is the minimal clean set remote-browser uses for signed-in
   // joins; getJoinBrowserArgs() adds the fake-device / autoplay flags the join lane needs. The
   // join args win on conflict (later wins in Chromium arg parsing).
-  const baseArgs = [...getAuthenticatedBrowserArgs(), ...getJoinBrowserArgs()];
+  // The join flags include --incognito (right for a guest: nothing of one meeting reaches the
+  // next). A signed-in bot runs on its restored profile, which an incognito window never reads.
+  const joinArgs = inv.authenticated ? withStoredSession(getJoinBrowserArgs()) : getJoinBrowserArgs();
+  const baseArgs = [...getAuthenticatedBrowserArgs(), ...joinArgs];
   const args = [...(authDomains ? withSiteIsolation(baseArgs) : baseArgs), ...pinArgs];
   const { context, page } = await launchPersistentBrowser({ dataDir, args });
   const navigation = await guardMeetingNavigation(context, navigationPolicy);

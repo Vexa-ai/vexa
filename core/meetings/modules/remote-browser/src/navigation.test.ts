@@ -5,7 +5,7 @@
  */
 import {
   AUTH_NAVIGATION_DOMAINS, authenticatedNavigationDomains, hostAllowed, offList, restrictNavigation,
-  withSiteIsolation, MeetingHostRefused,
+  withSiteIsolation, withStoredSession, MeetingHostRefused,
 } from './navigation';
 
 const fails: string[] = [];
@@ -90,6 +90,14 @@ async function routed() {
   pageHandlers.forEach((fn) => fn(frame('chrome-error://chromewebdata/')));
   check(gone.length === 1 && gone[0] === 'https://attacker.example/landed->about:blank',
     `only the off-list landing is blanked (${gone.join(', ')})`);
+}
+
+// ── a stored-session launch never carries --incognito ─────────────────────────
+{
+  const flags = ['--incognito', '--disable-gpu', '--lang=en-US'];
+  check(withStoredSession(flags).join(' ') === '--disable-gpu --lang=en-US', 'a stored-session launch drops --incognito and keeps every other flag');
+  check(flags.includes('--incognito'), 'the input is not changed (a guest launch keeps the flag)');
+  check(withStoredSession(['--incognito=x', '--no-incognito']).length === 2, 'only the exact flag is dropped');
 }
 
 async function main() {

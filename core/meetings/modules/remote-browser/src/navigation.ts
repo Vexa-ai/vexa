@@ -80,6 +80,16 @@ export function withSiteIsolation(args: readonly string[]): string[] {
   return out;
 }
 
+/**
+ * The flags of a launch that runs on a STORED session: the same flags without `--incognito`.
+ * An incognito window does not read the profile's cookies, so a signed-in bot launched with it
+ * joins as a guest and is shown the platform's sign-in page (claude-rc, 10 Nov 2026: every
+ * signed-in Zoom join). Guest launches keep the flag.
+ */
+export function withStoredSession(args: readonly string[]): string[] {
+  return args.filter((a) => a !== '--incognito');
+}
+
 /** An operator's extra sign-in host (`VEXA_BOT_SIGNIN_EXTRA_HOSTS`): an exact DNS name. Null for an
  *  entry that may not widen the list: a wildcard (`*.example.com`), an IP literal, a single label or
  *  `localhost`. */

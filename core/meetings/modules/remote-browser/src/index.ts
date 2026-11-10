@@ -47,6 +47,7 @@ export { browserEnv, BROWSER_ENV_KEYS, NO_SANDBOX_ARGS, launchWithSandbox } from
 // Where an authenticated browser may navigate (the meeting's host and the platform's domains)
 export {
   restrictNavigation, authenticatedNavigationDomains, AUTH_NAVIGATION_DOMAINS, hostAllowed,
+  withStoredSession,
   withSiteIsolation, MeetingHostRefused,
 } from './navigation';
 export type { LaunchPersistentOptions } from './browser';
