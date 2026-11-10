@@ -463,7 +463,8 @@ def runtime_facts(reg, row: dict, rows: "list[dict] | None" = None) -> dict:
         facts["created_by"] = str(row["created_by"])
     if when(row.get("created_at")):
         facts["created_at"] = when(row["created_at"])
-    why = reg.off_reason(str(row.get("scope") or "instance"), str(row["name"]))
+    why = reg.off_reason(str(row.get("scope") or "instance"), str(row["name"]),
+                         [str(n) for n in (row.get("steps") or [])])
     if why:
         facts["switched_off"] = why
     sup = _superseded_by(list(rows or []), row)

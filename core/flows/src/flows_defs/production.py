@@ -91,6 +91,11 @@ INVITE = EventType("invite.received")
 ONB_PERSON = EventType("onboarding.person.needed")
 ONB_GROUP = EventType("onboarding.group.needed")
 COMPLETED = EventType("meeting.completed")
+#: THE AFTER-MEETING STEPS, in the order `post_meeting` runs them. One list for the two things
+#: that must agree: what the flow is when `VEXA_FLOWS_POST_MEETING` is on, and what is switched
+#: off, under any flow name, when it is not (`Registry.switch_off`).
+AFTER_MEETING_STEPS = ("process_meeting", "email_minutes", "email_attendees",
+                       "propose_call_changes", "drop_to_attendees")
 UPCOMING = EventType("meeting.upcoming")
 MAIL_REPLY = EventType("mail.reply")
 # THE THREE ADDED BY PRD DECISION 42.2 — what is waiting is the set of pending REACTIONS flows
@@ -3258,7 +3263,8 @@ def build(reg: Registry, db) -> None:
     # attendees in the organiser's domain: an install runs it only when it said so
     # (`VEXA_FLOWS_POST_MEETING`, Helm `flows.postMeeting.enabled`). Off, the completion is still
     # ONE reaction row — `meeting_held`, one step, no effect — never two and never none. The steps
-    # stay in the vocabulary either way. OFF COVERS STORED VERSIONS TOO (`Registry.switch_off`):
+    # stay in the vocabulary either way. OFF COVERS THE STEPS, under any flow name and in any
+    # scope: filing them as another flow is refused the same way. AND STORED VERSIONS:
     # `match()` is newest-wins across the image and `flow_version`, so a `post_meeting` row
     # written through the API, here or before an upgrade, is not loaded and a new one is refused
     # at submission. A reaction admitted while the switch was on keeps its flow name: switch off
@@ -3266,12 +3272,13 @@ def build(reg: Registry, db) -> None:
     import flows_config as _fc_pm  # noqa: PLC0415
     if _fc_pm.get_bool("VEXA_FLOWS_POST_MEETING"):
         reg.flow(name="post_meeting", version=5, on=COMPLETED,
-                 steps=[s["process_meeting"], s["email_minutes"],
-                        s["email_attendees"], s["propose_call_changes"], s["drop_to_attendees"]])
+                 steps=[s[n] for n in AFTER_MEETING_STEPS])
     else:
         reg.switch_off("post_meeting", "VEXA_FLOWS_POST_MEETING is not on (Helm: "
-                       "flows.postMeeting.enabled). Set it and restart the flows processes to "
-                       "run the after-meeting flow.")
+                       "flows.postMeeting.enabled), so the after-meeting flow and its steps ("
+                       + ", ".join(AFTER_MEETING_STEPS) + ") do not run here under any flow "
+                       "name. Set it and restart the flows processes to run them.",
+                       steps=AFTER_MEETING_STEPS)
         reg.flow(name="meeting_held", version=1, on=COMPLETED,
                  steps=[s["record_meeting_held"]])
     # THE QUEUE FLOW THIS FILE KEEPS (PRD decision 42.2). It is one step and produces no effect:

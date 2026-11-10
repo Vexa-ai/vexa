@@ -266,3 +266,122 @@ def test_the_page_of_a_stored_switched_off_version_says_it_does_not_run(db, monk
     assert "Switched off in this deployment" in off and "VEXA_FLOWS_POST_MEETING" in off
     on = flows_pages.runtime_pages(_build(db, monkeypatch, "1"), [row])[0]["body"]
     assert "switched-off" not in on and "Switched off" not in on
+
+
+# ── the switch covers the STEPS, under any flow name ─────────────────────────────────────────────
+# A switch by flow name alone is walked around by filing the same steps under another name. Off
+# means the after-meeting steps run nowhere: no flow that names one is chosen, filed or activated.
+
+def test_the_switched_off_steps_are_exactly_the_after_meeting_flows_steps(db, monkeypatch):
+    from flows_defs import production
+    assert list(production.AFTER_MEETING_STEPS) == ACTING
+    on = _build(db, monkeypatch, "1")
+    assert list(on.flows[("post_meeting", 5)].steps) == list(production.AFTER_MEETING_STEPS)
+    assert on.switched_off_steps == {}
+    off = _build(db, monkeypatch, None)
+    assert sorted(off.switched_off_steps) == sorted(ACTING)
+    assert set(ACTING) <= set(off.steps), "the steps stay in the vocabulary; they are marked, not removed"
+
+
+@pytest.mark.parametrize("steps", [["email_minutes"], ["process_meeting", "email_minutes"],
+                                   ["record_meeting_held", "drop_to_attendees"],
+                                   ["propose_call_changes"], ["email_attendees"]])
+def test_off_a_stored_flow_under_another_name_with_an_after_meeting_step_is_not_chosen(
+        db, monkeypatch, caplog, steps):
+    reg = _build(db, monkeypatch, None)
+    _store(db, "ops_minutes", 1, steps)
+    with caplog.at_level("WARNING"):
+        reg.refresh_from_db(db)
+    assert [f.name for f in reg.match(COMPLETED)] == ["meeting_held"]
+    assert ("ops_minutes", 1) not in reg.flows
+    assert "switched_off=1" in caplog.text
+
+
+def test_off_a_persons_own_flow_naming_an_after_meeting_step_is_not_loaded(db, monkeypatch):
+    """`user_flow_steps` in the policy file can widen what a person's flow may name; the
+    deployment's switch still wins."""
+    reg = _build(db, monkeypatch, None)
+    reg.row_check = None
+    _store(db, "mine", 1, ["process_meeting"], scope="user:7", on_event="x.own")
+    reg.refresh_from_db(db)
+    assert reg.match("x.own") == []
+
+
+def test_on_a_stored_flow_under_another_name_runs_as_before(db, monkeypatch):
+    reg = _build(db, monkeypatch, "1")
+    _store(db, "ops_minutes", 1, ["email_minutes"])
+    reg.refresh_from_db(db)
+    assert sorted(f.name for f in reg.match(COMPLETED)) == ["ops_minutes", "post_meeting"]
+
+
+def test_the_registry_refuses_any_flow_naming_a_switched_off_step():
+    from flows import Done, EventType, Registry
+    reg = Registry()
+
+    @reg.step
+    def acts(ctx):
+        return Done({})
+
+    @reg.step
+    def harmless(ctx):
+        return Done({})
+
+    reg.flow(name="already", version=1, on=EventType("x.y"), steps=[harmless, acts])
+    reg.switch_off("named", "TEST_KEY is off", steps=("acts",))
+    assert reg.match("x.y") == [], "a chosen flow naming the step is unmatched"
+    with pytest.raises(ValueError, match="switched off"):
+        reg.flow(name="other", version=1, on=EventType("x.y"), steps=[acts])
+    with pytest.raises(ValueError, match="switched off"):
+        reg.flow_by_names(name="other", version=2, on_event="x.y", step_names=["harmless", "acts"],
+                          scope="user:1")
+    reg.flow(name="fine", version=1, on=EventType("x.y"), steps=[harmless])
+    assert reg.off_reason("instance", "fine", ["harmless"]) is None
+    assert reg.off_reason("user:1", "x", ["acts"]) == "TEST_KEY is off"
+
+
+def test_submitting_or_activating_another_name_with_an_after_meeting_step_is_refused(off_api):
+    flows_api, client, key = off_api
+    r = client.post("/flows", headers=key, json={
+        "name": "ops_minutes", "scope": "instance", "steps": ["email_minutes"],
+        "trigger": {"kind": "event", "event": COMPLETED}})
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"]["refused"] == "flow_switched_off"
+    assert "VEXA_FLOWS_POST_MEETING" in r.json()["detail"]["note"]
+    assert flows_api.db.execute("SELECT count(*) FROM flow_version")[0][0] == 0
+    _store_as(flows_api.db, "ops_minutes", 1, ["email_minutes"], "draft")
+    r = client.post("/flows/ops_minutes/1/activate?scope=instance", headers=key)
+    assert r.status_code == 409, r.text
+    [(status,)] = flows_api.db.execute("SELECT status FROM flow_version WHERE name='ops_minutes'")
+    assert status == "draft"
+
+
+def test_a_flow_of_other_steps_is_still_filed_with_the_switch_off(off_api):
+    flows_api, client, key = off_api
+    r = client.post("/flows", headers=key, json={
+        "name": "house_record", "scope": "instance", "steps": ["record_meeting_held"],
+        "trigger": {"kind": "event", "event": COMPLETED}, "activate": False})
+    assert r.status_code == 201, r.text
+
+
+def test_the_listing_marks_the_steps_and_any_stored_flow_that_names_one(off_api):
+    flows_api, client, key = off_api
+    _store_as(flows_api.db, "ops_minutes", 1, ["email_minutes"], "active")
+    _store_as(flows_api.db, "house_record", 1, ["record_meeting_held"], "active")
+    body = client.get("/flows", headers=key).json()
+    by_name = {f["name"]: f for f in body["flows"] if f["source"] == "api"}
+    assert "VEXA_FLOWS_POST_MEETING" in by_name["ops_minutes"]["switched_off"]
+    assert "switched_off" not in by_name["house_record"]
+    marked = sorted(s["name"] for s in body["steps_vocabulary"] if s.get("switched_off"))
+    assert marked == sorted(ACTING)
+    assert body["switched_off"][0]["steps"] == ACTING
+
+
+def test_the_page_of_another_name_with_an_after_meeting_step_says_it_does_not_run(db, monkeypatch):
+    import flows_pages
+    row = {"name": "ops_minutes", "version": 1, "on": COMPLETED, "steps": ["email_minutes"],
+           "params": {}, "status": "active", "created_by": "admin-1", "created_at": 0,
+           "source": "api", "scope": "instance"}
+    off = flows_pages.runtime_pages(_build(db, monkeypatch, None), [row])[0]["body"]
+    assert "switched-off: yes" in off and "Switched off in this deployment" in off
+    on = flows_pages.runtime_pages(_build(db, monkeypatch, "1"), [row])[0]["body"]
+    assert "switched-off" not in on
