@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { EVENT_MS, LINK_STALE_MS, TIMED_OUT, mayRead, within } from '../hooks/register'
+import { EVENT_MS, LINK_STALE_MS, TIMED_OUT, mayRead, pressesIn, within } from '../hooks/register'
 
 // THE LINE FROM VEXA KEEPS READING (10 Nov 2026, card brain:card/8e490542f481): a chat whose read of the line hung read
 // nothing more for an hour, panel presses included. A read that hangs is left behind; a press is acked once the chat
@@ -73,5 +73,13 @@ test('a press whose id is not a relay id is said but never names a file', async 
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   for (let s = 0; s < 3; s++) { t.running(s * 1_000); await clock.advance(1_000) }
   expect(t.prompts.filter(p => p.includes('«Notes lines»'))).toHaveLength(1)
-  expect(Object.keys(t.files).filter(f => f.includes('/acks/') || f.includes('/said/'))).toEqual([])
+  expect(Object.keys(t.files).filter(f => (f.includes('/acks/') && !f.endsWith('/.plugin')) || f.includes('/said/'))).toEqual([])
+  expect(t.files[`${LINK}/acks/.plugin`]).toBeTruthy()                           // vexa-link leaves the acks to this plugin
+})
+
+test('the press lane finds the presses in what is not read yet, in order, and nothing else', () => {
+  const call = JSON.stringify({ type: 'transcript', meeting: { id: 1 }, index: 1, speaker: 'A', text: 'hello' })
+  const spool = `${call}\n${press('aa01')}\n${call}\n${press('aa02')}\n{"type":"ui","request":{"id":"aa03"`
+  expect(pressesIn(spool, 0).map(e => e.request?.id)).toEqual(['aa01', 'aa02'])        // a line still being written waits
+  expect(pressesIn(spool, spool.indexOf(press('aa02'))).map(e => e.request?.id)).toEqual(['aa02'])
 })

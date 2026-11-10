@@ -677,6 +677,8 @@ const linkLog: { at: number; type: string; what: string; decision: string }[] = 
 const parked = new Map<string, Seg[]>()
 
 export const EVENT_MS = 15_000, LINK_STALE_MS = 60_000
+/** how often this plugin tells vexa-link it acks presses itself (acks/.plugin); older than 2 min, vexa-link acks them */
+const PLUGIN_MARK_MS = 30_000
 export const TIMED_OUT = Symbol('timed out')
 /** `p`, or TIMED_OUT once `ms` passed first; `p` itself is not stopped, only no longer waited for */
 export function within<T>($: any, p: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
@@ -733,21 +735,24 @@ async function onLinkEvent($: any, ev: LinkEvent): Promise<void> {
     const id = String(ev.request?.id ?? '')
     const dir = await linkDir($)
     const known = UI_ID.test(id)
-    // a press Vexa handed over again (its ack had not come back yet) is not said twice
-    if (known && (uiSaid.has(id) || await $.fs.exists(`${dir}/said/${id}`))) { await logLink($, 'ui', String(ev.request?.action ?? ''), 'again'); return }
+    // a press Vexa handed over again (its ack had not come back yet), or seen by both lanes at once, is said once: the
+    // id is taken before the first await, so the other lane finds it
+    if (known && uiSaid.has(id)) return
+    if (known) { uiSaid.add(id); if (uiSaid.size > 500) uiSaid.delete(uiSaid.values().next().value!) }
+    if (known && await $.fs.exists(`${dir}/said/${id}`)) { await logLink($, 'ui', String(ev.request?.action ?? ''), 'again'); return }
     const m = await read($)
     const title = ev.request?.params?.native_id === m.nativeId ? (m.title || m.nativeId) : ''
+    if (!(await ownsLink($))) { uiSaid.delete(id); return }
     await logLink($, 'ui', String(ev.request?.action ?? ''), 'wake')
-    if (!(await ownsLink($))) return
-    if (known) { uiSaid.add(id); if (uiSaid.size > 500) uiSaid.delete(uiSaid.values().next().value!) }
-    // THE PRESS IS ACKED ONLY ONCE THE CHAT TOOK IT (card brain:card/8e490542f481): the prompt entered, then the press
-    // is marked said and `acks/<id>` asks vexa-link to tell Vexa. Not awaited here: a chat busy with a long turn takes
-    // it later and must not hold the line's reading. Not taken, it stays unacked and Vexa hands it over once more.
+    // THE PRESS IS ACKED ONLY ONCE THE CHAT TOOK IT (card brain:card/8e490542f481): `$.prompt.submit` resolves when
+    // the prompt is in the chat (its own turn, now or once the turn running ends); then the press is marked said and
+    // `acks/<id>` asks vexa-link to tell Vexa. Not awaited here: a chat busy with a long turn must not hold the line.
+    // A submit refused lets the press be said again when Vexa hands it over once more.
     void $.prompt.submit({ text: uiMessage(ev.request, title) }).then(async () => {
       if (!known) return
       try { await $.fs.write(`${dir}/said/${id}`, String(await $.clock.now())) } catch { /* said; a second hand-over may say it again */ }
       try { await $.fs.write(`${dir}/acks/${id}`, 'submitted') } catch { /* an older vexa-link acked it already */ }
-    }, () => undefined)
+    }, () => { uiSaid.delete(id) })
     return
   }
   if (ev.type === 'system') {
@@ -886,6 +891,45 @@ async function flushRecord($: any): Promise<void> {
 }
 
 let linkReading = false
+// PRESSES HAVE THEIR OWN LANE (10 Nov 2026: a call's lines took minutes each to handle, and a panel press waited
+// behind them for half an hour). Every second this chat, when it owns the line, looks through what it has not read yet
+// for presses made in its own panel (or in none) and says them at once; the reader in order finds them said and moves
+// on. It also tells vexa-link, every PLUGIN_MARK_MS, that this plugin acks presses itself.
+let pressReading = false
+let pressReadingAt = 0
+let markedAt = -Infinity
+async function syncPresses($: any): Promise<void> {
+  const now = await $.clock.now()
+  if (!localHome || !linkActive || !mayRead(pressReading, pressReadingAt, now)) return
+  pressReading = true
+  pressReadingAt = now
+  try {
+    const dir = `${localHome}/.vexa/link`
+    if (!(await ownsLink($))) return
+    if (now - markedAt >= PLUGIN_MARK_MS) { try { await $.fs.write(`${dir}/acks/.plugin`, String(now)); markedAt = now } catch { /* an older vexa-link: it acks */ } }
+    const text: string = await $.fs.read(`${dir}/events.jsonl`)
+    let from = linkOffset
+    if (from < 0) { try { from = Number(String(await $.fs.read(`${dir}/offset`)).trim()) } catch { from = text.length } }
+    if (!Number.isFinite(from) || from < 0 || from > text.length) from = 0
+    for (const ev of pressesIn(text, from)) {
+      const chat = String(ev.request?.params?.chat ?? '')
+      if (chat && chat !== mySession) continue                // another chat's press: the reader in order hands it over
+      try { await within($, onLinkEvent($, ev), EVENT_MS) } catch { /* the reader in order tries it again */ }
+    }
+  } catch { /* the next tick looks again */ } finally {
+    pressReading = false
+  }
+}
+/** the presses (`ui` events) in the spool from `from` on, in order; other events and lines that do not parse are left */
+export function pressesIn(text: string, from: number): LinkEvent[] {
+  const out: LinkEvent[] = []
+  for (const line of text.slice(from).split('\n')) {
+    if (!/"type": ?"ui"/.test(line)) continue
+    try { const ev = JSON.parse(line); if (ev?.type === 'ui') out.push(ev) } catch { /* a line still being written */ }
+  }
+  return out
+}
+
 // A READ THAT HANGS NEVER STOPS THE LINE (10 Nov 2026: a call's handling hung through three brain restarts and the chat
 // read nothing more for an hour, panel presses included): each event is given EVENT_MS, and a read still running after
 // LINK_STALE_MS is left behind: the next tick reads in its place, and the one left behind, if it ever wakes, writes nothing.
@@ -1299,10 +1343,11 @@ let lastTail = ''
 let lastDirectAt = 0
 let lastTextAt = 0
 let triaging = false
+let triagingAt = 0
 async function triage($: any): Promise<void> {
   const l = await readListener($)
   const m = await read($)
-  if (!l.isOn || triaging) return
+  if (!l.isOn || !mayRead(triaging, triagingAt, await $.clock.now())) return
   const tail = m.segments.slice(-WINDOW)
   const tailText = tail.map(s => `${s.speaker}: ${s.text}`).join('\n')
   if (!tail.length || tailText === lastTail) return
@@ -1312,6 +1357,8 @@ async function triage($: any): Promise<void> {
   const fresh = tail.filter(s => !done.has(s.id) || s.pending)
   if (!fresh.length) return
   triaging = true
+  triagingAt = await $.clock.now()
+  const mine = triagingAt
   try {
     const context = tail.filter(s => !fresh.includes(s)).map(s => `${s.speaker}: ${s.text}`)
     const lines = fresh.map(s => `${s.speaker}: ${s.text}${s.pending ? ' (still being said)' : ''}`)
@@ -1352,7 +1399,7 @@ async function triage($: any): Promise<void> {
   } catch (err) {
     await updateListener($, x => ({ ...x, error: message(err) }))
   } finally {
-    triaging = false
+    if (triagingAt === mine) triaging = false               // a triage left behind does not end a newer one
   }
 }
 
@@ -1850,6 +1897,7 @@ export const register: Register = (on) => {
       $.clock.every(30_000, () => quiet(audit($)))
       $.clock.every(1000, () => quiet(syncLocal($)))
       $.clock.every(1000, () => quiet(syncLink($)))
+      $.clock.every(1000, () => quiet(syncPresses($)))
     }
     return next(e)
   })
