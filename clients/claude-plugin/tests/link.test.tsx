@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { EVENT_MS, LINK_STALE_MS, TIMED_OUT, USED_FOR_MS, mayRead, pressesIn, within } from '../hooks/register'
+import { EVENT_MS, LINK_STALE_MS, TIMED_OUT, mayRead, pressesIn, within } from '../hooks/register'
 
 // THE LINE FROM VEXA KEEPS READING (10 Nov 2026, card brain:card/8e490542f481): a chat whose read of the line hung read
 // nothing more for an hour, panel presses included. A read that hangs is left behind; a press is acked once the chat
@@ -88,16 +88,16 @@ test('the press lane finds the presses in what is not read yet, in order, and no
   expect(pressesIn(spool, spool.indexOf(press('aa02'))).map(e => e.request?.id)).toEqual(['aa02'])
 })
 
-test('who owns the line comes from the listing\'s times: no chat file is read, and a chat unused for a week is no candidate', async ($, on) => {
+test('who owns the line comes from the listing\'s times: no chat file is read; a pinned chat holds however old', async ($, on) => {
   const clock = mock.clock(on)
+  const WEEK = 7 * 24 * 3600_000
   const t = engine(on, `${press('ef56')}\n`, true)
-  t.files[`${LINK}/used/s-test`] = String(USED_FOR_MS + 5_000)                 // this chat, used just now
-  t.files[`${LINK}/used/s-old`] = '1'                                           // a chat last used a week ago
-  t.files[`${LINK}/pinned`] = 's-old'                                           // pinned, but gone for a week
-  await clock.set(USED_FOR_MS + 10_000)
-  t.running(USED_FOR_MS + 10_000)
+  t.files[`${LINK}/used/s-test`] = '1'                                          // this chat, pinned, last typed in a week ago
+  t.files[`${LINK}/used/s-other`] = String(WEEK)                                // another chat, typed in just now
+  t.files[`${LINK}/pinned`] = 's-test'
+  await clock.set(WEEK + 10_000)
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  for (let s = 0; s < 3; s++) { t.running(USED_FOR_MS + 11_000 + s * 1_000); await clock.advance(1_000) }
+  for (let s = 0; s < 3; s++) { t.running(WEEK + 11_000 + s * 1_000); await clock.advance(1_000) }
   expect(t.prompts.filter(p => p.includes('«Notes lines»'))).toHaveLength(1)
   expect(t.usedReads()).toBe(0)
 })
