@@ -12,7 +12,7 @@ help:
 	@echo "  make bot   build the meeting bot from source into vexa/vexa-bot:dev (dev path)"
 	@echo "  make lite  single-container Vexa Lite from the published image"
 	@echo "  make start-local  revive CPU transcription + stack (laptop auto-join)"
-	@echo "  make connect-calendar ICS_URL=…  connect ICS with auto_join + sync"
+	@echo "  make connect-calendar NAME=… ICS_URL=…  one ICS feed per calendar (repeat)"
 	@echo "  make probe full-journey smoke probe of a RUNNING install (SURFACE=compose|lite|helm)"
 	@echo "  make login provision an authenticated-bot session (sign in once; uploads to userdata storage)"
 	@echo "  make down  stop the compose stack"

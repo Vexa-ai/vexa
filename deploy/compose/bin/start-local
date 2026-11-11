@@ -84,7 +84,9 @@ cat <<EOF
     • Run this before meetings. Laptop sleep/reboot through the
       auto-join window (~120s before start → ~10m after) = miss.
     • Anonymous Teams often waits in the lobby — admit the bot.
-    • Connect a calendar: make -C deploy/compose connect-calendar ICS_URL=…
+    • Connect EACH calendar separately (one ICS URL per feed):
+        make connect-calendar NAME=Work ICS_URL=…
+        make connect-calendar NAME=Personal ICS_URL=…
     • CPU Whisper small ≈ one concurrent transcribed meeting.
 ═══════════════════════════════════════════════════════════
 EOF

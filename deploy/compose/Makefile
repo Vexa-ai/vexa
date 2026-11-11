@@ -27,10 +27,11 @@ provision-token:
 start-local:
 	@./bin/start-local
 
-## connect-calendar — idempotent ICS connect (auto_join) + sync now. Requires ICS_URL=…
-## Optional: NAME=Combined BOT_NAME=Vexa API_KEY=… ADMIN_TOKEN=…
+## connect-calendar — idempotent ICS connect (auto_join) + sync now.
+## Requires NAME=… ICS_URL=… (one run per calendar feed). Optional: BOT_NAME API_KEY ADMIN_TOKEN.
 connect-calendar:
-	@test -n "$(ICS_URL)" || (echo "✗ set ICS_URL=… (secret ICS address, not committed)" >&2; exit 1)
+	@test -n "$(ICS_URL)" || (echo "✗ set ICS_URL=… (secret ICS address for this calendar, not committed)" >&2; exit 1)
+	@test -n "$(NAME)" || (echo "✗ set NAME=… (e.g. Work, Personal) — one connection per calendar" >&2; exit 1)
 	@ICS_URL="$(ICS_URL)" NAME="$(NAME)" BOT_NAME="$(BOT_NAME)" API_KEY="$(API_KEY)" ADMIN_TOKEN="$(ADMIN_TOKEN)" ./bin/connect-calendar
 
 ## dashboard-harness — the dashboard FULL-SURFACE proof: send-bot + live WS transcript through the
@@ -275,7 +276,7 @@ endif
 help:
 	@echo "  make up                         # pull and start the stack"
 	@echo "  make start-local                # revive CPU transcription + stack (laptop)"
-	@echo "  make connect-calendar ICS_URL=… # connect ICS feed with auto_join + sync"
+	@echo "  make connect-calendar NAME=… ICS_URL=…  # one ICS feed per calendar (repeat)"
 	@echo "  make down                       # stop/remove containers; keep data volumes"
 	@echo "  make destroy DESTROY=yes        # delete stack data volumes (database, recordings, Redis, agent workspaces)"
 	@echo "  make migrate-storage            # copy and verify recordings from an older MinIO install"

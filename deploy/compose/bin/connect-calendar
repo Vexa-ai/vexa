@@ -7,14 +7,15 @@
 # (calendar {id,name,auto_join,bot_name,ics_url_masked}; sync {last_sync,last_error,counts}).
 # User instruction: "/using-superpowers proceed with the build."
 #
-# Usage:
-#   ICS_URL='https://…/private-…/basic.ics' deploy/compose/bin/connect-calendar
-#   make -C deploy/compose connect-calendar ICS_URL='https://…'
+# Usage (one connection per calendar feed — Google work, Outlook personal, etc.):
+#   NAME=Work ICS_URL='https://…/…ics' deploy/compose/bin/connect-calendar
+#   NAME=Personal ICS_URL='https://…/private-…/basic.ics' make -C deploy/compose connect-calendar
+# Run once per feed (up to 10). Idempotent by NAME: same NAME updates that connection.
 #
 # Env:
-#   ICS_URL      (required) secret ICS address — never printed in full, never written to disk.
+#   ICS_URL      (required) secret ICS address for THIS calendar — never printed in full, never written to disk.
+#   NAME         (required) display name for this connection (e.g. Work, Personal, Outlook-Work).
 #   API_KEY      optional; if unset, mints via provision-token (needs ADMIN_TOKEN in .env).
-#   NAME         calendar display name (default Combined).
 #   BOT_NAME     bot display name for this feed (default Vexa).
 #   API_BASE     gateway base (default http://127.0.0.1:$API_GATEWAY_HOST_PORT from .env).
 #   ADMIN_TOKEN  used only when minting API_KEY (default from .env).
@@ -30,8 +31,8 @@ _envv() {
 
 die() { echo "✗ $*" >&2; exit 1; }
 
-: "${ICS_URL:?set ICS_URL to the secret ICS address (not committed)}"
-NAME="${NAME:-Combined}"
+: "${ICS_URL:?set ICS_URL to the secret ICS address for this calendar (not committed)}"
+: "${NAME:?set NAME to a stable label for this calendar (e.g. Work, Personal)}"
 BOT_NAME="${BOT_NAME:-Vexa}"
 
 GW_PORT="$(_envv API_GATEWAY_HOST_PORT)"; GW_PORT="${GW_PORT:-18056}"
