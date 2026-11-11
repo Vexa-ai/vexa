@@ -14,7 +14,7 @@ COMPOSE  = docker compose -p $(PROJECT) -f docker-compose.yml
 REPO_ROOT := $(abspath ../..)
 BOT_IMAGE ?= vexa/vexa-bot:dev
 
-.PHONY: stack-test stack-test-bot stack-test-mock stack-test-v010 dashboard-harness provision-token up dev digest-audit down destroy help build ps logs bot _preflight _bot_check _creds_check _access _storage_note migrate-storage
+.PHONY: stack-test stack-test-bot stack-test-mock stack-test-v010 dashboard-harness provision-token start-local connect-calendar up dev digest-audit down destroy help build ps logs bot _preflight _bot_check _creds_check _access _storage_note migrate-storage
 
 ## provision-token — mint (idempotently) the self-host dashboard's API token (compose bring-up step 2).
 ## Needs ADMIN_TOKEN (the stack admin secret). Prints ONLY the token, so it pipes into the deploy:
@@ -22,6 +22,16 @@ BOT_IMAGE ?= vexa/vexa-bot:dev
 ##     docker compose -f docker-compose.yml -f docker-compose.dashboard.yml up -d dashboard
 provision-token:
 	@ADMIN_TOKEN="$(ADMIN_TOKEN)" EMAIL="$(EMAIL)" SCOPES="$(SCOPES)" ./bin/provision-token
+
+## start-local — laptop revive: CPU transcription + `make up`, then wait for worker + gateway health.
+start-local:
+	@./bin/start-local
+
+## connect-calendar — idempotent ICS connect (auto_join) + sync now. Requires ICS_URL=…
+## Optional: NAME=Combined BOT_NAME=Vexa API_KEY=… ADMIN_TOKEN=…
+connect-calendar:
+	@test -n "$(ICS_URL)" || (echo "✗ set ICS_URL=… (secret ICS address, not committed)" >&2; exit 1)
+	@ICS_URL="$(ICS_URL)" NAME="$(NAME)" BOT_NAME="$(BOT_NAME)" API_KEY="$(API_KEY)" ADMIN_TOKEN="$(ADMIN_TOKEN)" ./bin/connect-calendar
 
 ## dashboard-harness — the dashboard FULL-SURFACE proof: send-bot + live WS transcript through the
 ## vendored dashboard, against the real stack + the mock bot (deterministic, no browser/STT/meeting).
@@ -264,6 +274,8 @@ endif
 
 help:
 	@echo "  make up                         # pull and start the stack"
+	@echo "  make start-local                # revive CPU transcription + stack (laptop)"
+	@echo "  make connect-calendar ICS_URL=… # connect ICS feed with auto_join + sync"
 	@echo "  make down                       # stop/remove containers; keep data volumes"
 	@echo "  make destroy DESTROY=yes        # delete stack data volumes (database, recordings, Redis, agent workspaces)"
 	@echo "  make migrate-storage            # copy and verify recordings from an older MinIO install"

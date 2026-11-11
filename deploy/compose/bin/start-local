@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# start-local — one-command revive for a laptop self-host: CPU transcription + compose `make up`.
+#
+# Thin wrapper (not a second stack orchestrator). Delegates bring-up to `make up` so _preflight,
+# _bot_check, _creds_check, and _access still run. Calendar auto-join only works while this stack
+# is up through AUTO_JOIN_LEAD_S (~120s) + grace (~10m) around each meeting's scheduled_at.
+#
+# Importers/callers: `make start-local` (root + deploy/compose); laptop operator.
+# Affected API: none (ops); uses docker compose + make up + GET /health.
+# Data schemas: none.
+# User instruction: "/using-superpowers proceed with the build."
+#
+# Usage:
+#   deploy/compose/bin/start-local
+#   make -C deploy/compose start-local
+#   make start-local   # from repo root
+#
+# Env:
+#   COMPOSE_DIR / TX_DIR — override paths (defaults: sibling of this script / ../transcription)
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"                 # deploy/compose
+TX_DIR="${TX_DIR:-$(cd "${ROOT}/../transcription" && pwd)}"
+COMPOSE_ENV="${ROOT}/.env"
+TX_ENV="${TX_DIR}/.env"
+
+_envv() {
+  local file="$1" key="$2"
+  grep -E "^${key}=" "${file}" 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//'
+}
+
+die() { echo "✗ $*" >&2; exit 1; }
+
+echo "→ checking Docker…"
+docker info >/dev/null 2>&1 || die "Docker is not reachable. Open Docker Desktop, then re-run."
+
+[ -f "${COMPOSE_ENV}" ] || die "missing ${COMPOSE_ENV} — copy .env.example or run make up once"
+STT_URL="$(_envv "${COMPOSE_ENV}" TRANSCRIPTION_SERVICE_URL)"
+STT_TOK="$(_envv "${COMPOSE_ENV}" TRANSCRIPTION_SERVICE_TOKEN)"
+[ -n "${STT_URL}" ] && [ -n "${STT_TOK}" ] \
+  || die "TRANSCRIPTION_SERVICE_URL and TRANSCRIPTION_SERVICE_TOKEN must be set in deploy/compose/.env"
+
+GW_PORT="$(_envv "${COMPOSE_ENV}" API_GATEWAY_HOST_PORT)"; GW_PORT="${GW_PORT:-18056}"
+UI_PORT="$(_envv "${COMPOSE_ENV}" TERMINAL_PORT)"; UI_PORT="${UI_PORT:-13000}"
+TX_PORT="$(_envv "${TX_ENV}" TRANSCRIPTION_LB_PORT)"; TX_PORT="${TX_PORT:-8083}"
+
+echo "→ starting CPU transcription (${TX_DIR})…"
+[ -f "${TX_ENV}" ] || die "missing ${TX_ENV}"
+docker compose -f "${TX_DIR}/docker-compose.cpu.yml" --env-file "${TX_ENV}" up -d
+
+echo "→ starting compose stack via make up (published images, preflight intact)…"
+make -C "${ROOT}" up
+
+echo "→ waiting for Whisper worker (model loaded) on :${TX_PORT}…"
+ready=0
+for _ in $(seq 1 60); do
+  body="$(curl -sf "http://127.0.0.1:${TX_PORT}/health" 2>/dev/null || true)"
+  if printf '%s' "${body}" | grep -q '"status":"healthy"'; then
+    ready=1
+    echo "  transcription: ${body}"
+    break
+  fi
+  sleep 2
+done
+[ "${ready}" = 1 ] || die "transcription on :${TX_PORT} never reported healthy (model not loaded?)"
+
+echo "→ waiting for gateway :${GW_PORT}…"
+gw=0
+for _ in $(seq 1 60); do
+  if curl -sf "http://127.0.0.1:${GW_PORT}/health" >/dev/null 2>&1; then gw=1; break; fi
+  sleep 2
+done
+[ "${gw}" = 1 ] || die "gateway on :${GW_PORT} never became healthy"
+
+cat <<EOF
+
+═══════════════════════════════════════════════════════════
+  Local stack ready (calendar auto-join only while this is up).
+    Terminal UI : http://localhost:${UI_PORT}
+    API gateway : http://localhost:${GW_PORT}
+    Transcription: http://127.0.0.1:${TX_PORT} (Whisper worker healthy)
+
+  Operator notes:
+    • Run this before meetings. Laptop sleep/reboot through the
+      auto-join window (~120s before start → ~10m after) = miss.
+    • Anonymous Teams often waits in the lobby — admit the bot.
+    • Connect a calendar: make -C deploy/compose connect-calendar ICS_URL=…
+    • CPU Whisper small ≈ one concurrent transcribed meeting.
+═══════════════════════════════════════════════════════════
+EOF

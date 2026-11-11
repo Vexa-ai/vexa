@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+# connect-calendar — idempotently connect an ICS feed with auto_join and sync now.
+#
+# Callers: deploy/compose/Makefile:connect-calendar → ./bin/connect-calendar;
+#          root Makefile:connect-calendar; operator shell.
+# No existing twin (only a start-local hint string). No local data files — API JSON only
+# (calendar {id,name,auto_join,bot_name,ics_url_masked}; sync {last_sync,last_error,counts}).
+# User instruction: "/using-superpowers proceed with the build."
+#
+# Usage:
+#   ICS_URL='https://…/private-…/basic.ics' deploy/compose/bin/connect-calendar
+#   make -C deploy/compose connect-calendar ICS_URL='https://…'
+#
+# Env:
+#   ICS_URL      (required) secret ICS address — never printed in full, never written to disk.
+#   API_KEY      optional; if unset, mints via provision-token (needs ADMIN_TOKEN in .env).
+#   NAME         calendar display name (default Combined).
+#   BOT_NAME     bot display name for this feed (default Vexa).
+#   API_BASE     gateway base (default http://127.0.0.1:$API_GATEWAY_HOST_PORT from .env).
+#   ADMIN_TOKEN  used only when minting API_KEY (default from .env).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+COMPOSE_ENV="${ROOT}/.env"
+
+_envv() {
+  local key="$1"
+  grep -E "^${key}=" "${COMPOSE_ENV}" 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//'
+}
+
+die() { echo "✗ $*" >&2; exit 1; }
+
+: "${ICS_URL:?set ICS_URL to the secret ICS address (not committed)}"
+NAME="${NAME:-Combined}"
+BOT_NAME="${BOT_NAME:-Vexa}"
+
+GW_PORT="$(_envv API_GATEWAY_HOST_PORT)"; GW_PORT="${GW_PORT:-18056}"
+API_BASE="${API_BASE:-http://127.0.0.1:${GW_PORT}}"
+ADMIN_PORT="$(_envv ADMIN_API_PORT)"; ADMIN_PORT="${ADMIN_PORT:-18057}"
+
+if [ -z "${API_KEY:-}" ]; then
+  ADMIN_TOKEN="${ADMIN_TOKEN:-$(_envv ADMIN_TOKEN)}"
+  [ -n "${ADMIN_TOKEN}" ] || die "set API_KEY or ADMIN_TOKEN (to mint via provision-token)"
+  API_KEY="$(ADMIN_TOKEN="${ADMIN_TOKEN}" ADMIN_API_URL="http://127.0.0.1:${ADMIN_PORT}" \
+    SCOPES=bot,tx "${ROOT}/bin/provision-token")" \
+    || die "provision-token failed — is the stack up?"
+fi
+
+mask_ics() {
+  python3 -c '
+import os, urllib.parse
+u = os.environ["ICS_URL"]
+p = urllib.parse.urlparse(u)
+host = p.hostname or "?"
+path = (p.path or "").rstrip("/")
+tail = path.split("/")[-1] if path else ""
+print(f"{host}/…/{tail}" if tail else host)
+'
+}
+
+H=(-H "X-API-Key: ${API_KEY}" -H "Content-Type: application/json")
+MASKED="$(ICS_URL="${ICS_URL}" mask_ics)"
+
+echo "→ listing calendars…"
+LIST="$(curl -fsS -H "X-API-Key: ${API_KEY}" "${API_BASE}/user/calendars")" || die "GET /user/calendars failed"
+
+CAL_ID="$(NAME="${NAME}" LIST="${LIST}" python3 -c '
+import json, os
+data = json.loads(os.environ["LIST"])
+cals = data.get("calendars") or data if isinstance(data, list) else data.get("calendars", [])
+name = os.environ["NAME"]
+for c in cals:
+    if c.get("name") == name:
+        print(c["id"]); break
+')"
+
+if [ -n "${CAL_ID}" ]; then
+  echo "→ PATCH calendar ${CAL_ID} (name=${NAME}, auto_join=true, feed=${MASKED})…"
+  BODY="$(ICS_URL="${ICS_URL}" BOT_NAME="${BOT_NAME}" NAME="${NAME}" python3 -c '
+import json, os
+print(json.dumps({
+  "name": os.environ["NAME"],
+  "ics_url": os.environ["ICS_URL"],
+  "auto_join": True,
+  "bot_name": os.environ["BOT_NAME"],
+  "enabled": True,
+}))
+')"
+  CONN="$(curl -fsS "${H[@]}" -X PATCH -d "${BODY}" "${API_BASE}/user/calendars/${CAL_ID}")" \
+    || die "PATCH /user/calendars/${CAL_ID} failed"
+else
+  echo "→ POST calendar (name=${NAME}, auto_join=true, feed=${MASKED})…"
+  BODY="$(ICS_URL="${ICS_URL}" BOT_NAME="${BOT_NAME}" NAME="${NAME}" python3 -c '
+import json, os
+print(json.dumps({
+  "name": os.environ["NAME"],
+  "ics_url": os.environ["ICS_URL"],
+  "auto_join": True,
+  "bot_name": os.environ["BOT_NAME"],
+}))
+')"
+  CONN="$(curl -fsS "${H[@]}" -X POST -d "${BODY}" "${API_BASE}/user/calendars")" \
+    || die "POST /user/calendars failed"
+  CAL_ID="$(printf '%s' "${CONN}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')"
+fi
+
+echo "→ sync now…"
+SYNC="$(curl -fsS -H "X-API-Key: ${API_KEY}" -X POST "${API_BASE}/user/calendars/${CAL_ID}/sync")" \
+  || die "POST /user/calendars/${CAL_ID}/sync failed"
+
+echo "→ sampling upcoming meetings…"
+MEETINGS="$(curl -fsS -H "X-API-Key: ${API_KEY}" "${API_BASE}/meetings?limit=20")" || MEETINGS='{}'
+
+python3 - <<'PY' "${CONN:-{}}" "${SYNC}" "${MEETINGS}" "${CAL_ID}" "${MASKED}"
+import json, sys, urllib.parse
+conn_raw, sync_raw, meetings_raw, cal_id, masked = sys.argv[1:6]
+sync = json.loads(sync_raw)
+meetings = json.loads(meetings_raw)
+rows = meetings.get("meetings") or meetings.get("data") or []
+if isinstance(meetings, list):
+    rows = meetings
+
+print()
+print("═══════════════════════════════════════════════════════════")
+print(f"  Calendar id   : {cal_id}")
+print(f"  ICS (masked)  : {masked}")
+print(f"  auto_join     : true (requested)")
+print(f"  last_sync     : {sync.get('last_sync')}")
+print(f"  last_error    : {sync.get('last_error')}")
+counts = sync.get("counts") or {}
+print(f"  counts        : created={counts.get('created',0)} updated={counts.get('updated',0)} cancelled={counts.get('cancelled',0)}")
+print("  Upcoming sample (platform / host / status):")
+shown = 0
+joinable = 0
+for m in rows:
+    status = m.get("status") or ""
+    if status in ("completed", "failed", "cancelled"):
+        continue
+    platform = m.get("platform") or "?"
+    url = m.get("constructed_meeting_url") or m.get("meeting_url") or ""
+    host = urllib.parse.urlparse(url).hostname or "(no url)"
+    title = m.get("title") or ""
+    data = m.get("data")
+    if not title and isinstance(data, dict):
+        title = data.get("title") or ""
+    title = (title or "")[:40]
+    print(f"    - [{status}] {platform} @ {host}  {title}")
+    shown += 1
+    if platform and platform != "unknown" and host != "(no url)":
+        joinable += 1
+    if shown >= 10:
+        break
+if shown == 0:
+    print("    (none listed — feed empty, outside window, or sync still catching up)")
+print()
+if sync.get("last_error"):
+    print("  ⚠ sync reported last_error — fix the feed, then re-run.")
+elif joinable == 0:
+    print("  ⚠ no joinable platform≠unknown with a URL in this sample.")
+    print("    Check the ICS includes Meet/Zoom/Teams links (LOCATION/DESCRIPTION/URL).")
+else:
+    print(f"  ✓ {joinable} joinable meeting(s) in sample.")
+print("  Reminder: admit anonymous Teams bots from the lobby.")
+print("═══════════════════════════════════════════════════════════")
+PY
