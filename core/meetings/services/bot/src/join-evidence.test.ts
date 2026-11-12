@@ -547,6 +547,9 @@ async function runFixtures(): Promise<void> {
     check('D367: no answer, no field', !('platform_response' in (buildJoinEvidence('denied', 'joining', { detail: 'x' }) ?? {})));
     const odd = platformResponseOf({ call: 7, status: '403', body: 'y'.repeat(9000), page_text: ' ', cookie: 'SID=1' });
     check('D367: only the four fields, typed, capped', JSON.stringify(odd) === JSON.stringify({ body: 'y'.repeat(PLATFORM_RESPONSE_MAX_CHARS) }), JSON.stringify(odd)?.slice(0, 80));
+    const pos = platformResponseOf({ status: 403, refused_at: 'before_cta', cta: 'none' });
+    check('D367 1c: refusal position and button ride as fixed keys', pos?.refused_at === 'before_cta' && pos?.cta === 'none');
+    check('D367 1c: anything else is dropped', JSON.stringify(platformResponseOf({ status: 403, refused_at: 'soon', cta: 'Ask Jane' })) === JSON.stringify({ status: 403 }));
     check('D367: nothing usable is undefined', platformResponseOf({ status: 99 }) === undefined && platformResponseOf('403') === undefined);
   }
   console.log(`\n=== summary: ${passed} passed, ${failed} failed ===`);

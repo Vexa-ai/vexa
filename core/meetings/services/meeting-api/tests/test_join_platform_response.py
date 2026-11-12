@@ -109,3 +109,15 @@ def test_no_key_no_digest(monkeypatch):
     monkeypatch.delenv("VEXA_EVIDENCE_DIGEST_KEY")
     out = clean_platform_response({"status": 403, "body": '[[7,"x"]]', "page_text": "Jane Smith"})
     assert out == {"status": 403, "codes": [7]}
+
+
+def test_1c_refusal_position_and_button_are_kept_as_fixed_keys_only():
+    """D367 1c, fixtures from doc:meet-joining-what-happens section 0."""
+    open_room_bbb = clean_platform_response({"call": "ResolveMeetingSpace", "status": 403, "refused_at": "before_cta", "cta": "none",
+                                             "body": '[7,"The caller does not have permission"]'})
+    assert open_room_bbb == {"call": "ResolveMeetingSpace", "status": 403, "codes": [7], "refused_at": "before_cta", "cta": "none",
+                             "body_digest": open_room_bbb["body_digest"]}
+    knock_refused = clean_platform_response({"call": "CreateMeetingDevice", "status": 403, "refused_at": "after_cta", "cta": "ask_to_join"})
+    assert knock_refused["refused_at"] == "after_cta" and knock_refused["cta"] == "ask_to_join"
+    junk = clean_platform_response({"status": 403, "refused_at": "later", "cta": "Ask to join (Jane)"})
+    assert junk == {"status": 403}

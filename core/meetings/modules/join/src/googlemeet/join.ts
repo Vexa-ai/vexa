@@ -15,7 +15,7 @@ import { HumanizedInteractor, MOCAP_LIBRARY } from "./humanized";
 import { AdmissionError } from "../shared/admission";
 import { PINNED_UI_LOCALE, checkUiLocale } from "../shared/ui-locale";
 import { redactMeetingUrl, rethrowRedacted } from "../shared/url-redaction";
-import { watchGoogleJoinRefusal, throwIfGoogleJoinRefused } from "./refusal";
+import { watchGoogleJoinRefusal, throwIfGoogleJoinRefused, noteLobbyCta } from "./refusal";
 
 /** Thrown when authenticated mode detects a signed-out browser profile. Extends AdmissionError so
  *  the JoinDriver's single `instanceof` catch maps the typed `auth_session_missing` outcome to a
@@ -440,6 +440,7 @@ export async function joinGoogleMeeting(
       "authenticated join CTA",
       refused("lobby, authenticated join CTA")
     );
+    noteLobbyCta(page, ctaSelector);
 
     // Signed-out guard: a guest lobby (name input rendered) means the persisted
     // browser profile is signed out — fail closed with a typed error instead of
@@ -491,13 +492,14 @@ export async function joinGoogleMeeting(
       log("Camera already off or not found.");
     }
 
-    const { handle: joinHandle } = await waitForLobbyCta(
+    const { handle: joinHandle, selector: joinSelector } = await waitForLobbyCta(
       page,
       googleJoinButtonSelectors,
       60000,
       "join button",
       refused("lobby, join button")
     );
+    noteLobbyCta(page, joinSelector);
     await clickHandle(joinHandle!, "ask_to_join");
     log(`${botName} joined the Google Meet Meeting.`);
 

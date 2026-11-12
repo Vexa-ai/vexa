@@ -23,6 +23,9 @@ export interface PlatformResponse {
   status?: number;
   body?: string;
   page_text?: string;
+  /** D367 1c: whether the refusal came before the lobby offered a button, or after it, and which button. */
+  refused_at?: "before_cta" | "after_cta";
+  cta?: "ask_to_join" | "join_now" | "switch_here" | "other" | "none";
 }
 /** The most of any one platform-response field carried out of the browser. */
 export const PLATFORM_RESPONSE_MAX_CHARS = 2000;

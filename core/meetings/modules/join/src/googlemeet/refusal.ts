@@ -144,6 +144,21 @@ const refusedCall = new WeakMap<object, string>();
 // Per page: what the refusing call answered (call, status, body), for the evidence (D367).
 const refusedAnswer = new WeakMap<object, PlatformResponse>();
 const bodyRead = new WeakMap<object, Promise<void>>();
+// Per page: the lobby button this knock found (a selector key, never page text), D367 1c.
+const lobbyCta = new WeakMap<object, NonNullable<PlatformResponse["cta"]>>();
+
+/** The selector key of a lobby button the join flow matched: which offer the room made. */
+export function ctaKeyOf(selector: string): NonNullable<PlatformResponse["cta"]> {
+  if (/Ask to join/.test(selector)) return "ask_to_join";
+  if (/Switch here/.test(selector)) return "switch_here";
+  if (/Join now|has-text\("Join"\)/.test(selector)) return "join_now";
+  return "other";
+}
+
+/** The join flow found the lobby's button (call right after waitForLobbyCta returns). */
+export function noteLobbyCta(page: Page, selector: string): void {
+  try { lobbyCta.set(page as unknown as object, ctaKeyOf(selector)); } catch { /* never breaks a join */ }
+}
 const cap = (s: string) => s.slice(0, PLATFORM_RESPONSE_MAX_CHARS);
 const watched = new WeakSet<object>();
 
@@ -178,6 +193,7 @@ export function resetGoogleJoinRefusal(page: Page): void {
   refusedCall.delete(page as unknown as object);
   refusedAnswer.delete(page as unknown as object);
   bodyRead.delete(page as unknown as object);
+  lobbyCta.delete(page as unknown as object);
 }
 
 /** What Meet returned for the current knock's refusal: the refusing answer and the refusal element's text. */
@@ -188,6 +204,9 @@ export async function googleJoinRefusalResponse(page: Page): Promise<PlatformRes
   await Promise.race([bodyRead.get(key) ?? Promise.resolve(), new Promise((r) => { timer = setTimeout(r, 2000); })]);
   if (timer) clearTimeout(timer);
   const out: PlatformResponse = { ...(refusedAnswer.get(key) ?? {}) };
+  const cta = lobbyCta.get(key);
+  out.refused_at = cta ? "after_cta" : "before_cta";
+  out.cta = cta ?? "none";
   for (const selector of googleJoinRefusedIndicators) {
     const el = page.locator(selector).first();
     if (await el.isVisible().catch(() => false)) {

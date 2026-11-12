@@ -561,6 +561,11 @@ def clean_platform_response(raw: Any) -> Optional[Dict[str, Any]]:
         d = _digest(body)
         if d:
             out["body_digest"] = d
+    # D367 1c: where the refusal came relative to the lobby's button, and which button (fixed keys only)
+    if raw.get("refused_at") in ("before_cta", "after_cta"):
+        out["refused_at"] = raw["refused_at"]
+    if raw.get("cta") in ("ask_to_join", "join_now", "switch_here", "other", "none"):
+        out["cta"] = raw["cta"]
     page = raw.get("page_text")
     if isinstance(page, str) and page.strip():
         lines = _known_lines(page)

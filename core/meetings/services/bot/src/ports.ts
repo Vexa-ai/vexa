@@ -60,7 +60,8 @@ export interface JoinSignals {
   detail?: string;
   /** What the platform itself returned at a refusal (D367): the refusing call, its HTTP status and
    *  body, and the refusal element's text. Same shape for every platform; meeting-api redacts it. */
-  platformResponse?: { call?: string; status?: number; body?: string; page_text?: string };
+  platformResponse?: { call?: string; status?: number; body?: string; page_text?: string;
+    refused_at?: string; cta?: string };
 }
 
 /** Drives the platform join. The real adapter wraps @vexa/join.joinMeeting + admission
