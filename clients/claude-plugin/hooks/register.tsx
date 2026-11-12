@@ -1026,8 +1026,12 @@ async function syncLink($: any): Promise<void> {
       // stopping on it (review of 03d59f594, HIGH: a wake for a chat that never owns the line stalled every event
       // behind it); its press still counts as that chat's latest use.
       if (chat && chat !== mySession) {
-        try { await $.fs.write(`${dir}/used/${chat}`, String(await $.clock.now())) } catch { /* not counted */ }
-        ownerCache = { at: -Infinity, owner: '' }
+        // a panel press makes its chat the latest used (the line follows the person); a flow's wake for a desk role does
+        // not, so a wake never moves the live-call line to a desk chat, or to one closed a moment ago (re-review, MEDIUM)
+        if (!ev?.request?.params?.role) {
+          try { await $.fs.write(`${dir}/used/${chat}`, String(await $.clock.now())) } catch { /* not counted */ }
+          ownerCache = { at: -Infinity, owner: '' }
+        }
         linkOffset = nl + 1
         continue
       }
