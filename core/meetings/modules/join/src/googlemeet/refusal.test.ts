@@ -10,7 +10,7 @@
  */
 import {
   knockUntilGoogleAccepts, GoogleJoinRefusedError, GOOGLE_JOIN_MAX_KNOCKS, GOOGLE_JOIN_REFUSED,
-  GOOGLE_JOIN_REKNOCK_BACKOFF_MS, googleKnockConfig,
+  GOOGLE_JOIN_REKNOCK_BACKOFF_MS, googleKnockConfig, watchGoogleJoinRefusal, throwIfGoogleJoinRefused,
 } from './refusal';
 import { AdmissionError } from '../shared/admission';
 import { waitForAnySelector, waitForLobbyCta } from './join';
@@ -49,6 +49,30 @@ const fast = { sleep: async () => {} };
     check('… message names the refusal and the knock count',
       err?.message?.startsWith(`${GOOGLE_JOIN_REFUSED}: Google Meet refused the join on ${GOOGLE_JOIN_MAX_KNOCKS} of ${GOOGLE_JOIN_MAX_KNOCKS} knocks`) &&
       /never received a request/.test(err.message), err?.message);
+  }
+
+  // D367: what Meet returned rides the refusal — the refusing call, its status and body, and the refusal
+  // element's text only; and the last knock's answer survives the re-knock loop.
+  {
+    let onResponse: ((r: any) => void) | undefined;
+    const fake: any = {
+      on: (ev: string, cb: any) => { if (ev === 'response') onResponse = cb; },
+      locator: () => ({ first: () => ({ isVisible: async () => true, innerText: async () => "You can't join this video call" }) }),
+    };
+    watchGoogleJoinRefusal(fake);
+    onResponse!({ status: () => 403, url: () => 'https://meet.google.com/$rpc/google.rtc.meetings.v1.MeetingSpaceService/ResolveMeetingSpace',
+                  text: async () => '[[7,"denied",["MEETING_SPACE_RESTRICTED"]]]' });
+    const err = await throwIfGoogleJoinRefused(fake, 'test').catch((e) => e);
+    const pr = err?.platformResponse;
+    check('refusal carries the call, status, body and the refusal element text',
+      pr?.call === 'ResolveMeetingSpace' && pr?.status === 403 && /MEETING_SPACE_RESTRICTED/.test(pr?.body ?? '') &&
+      pr?.page_text === "You can't join this video call", JSON.stringify(pr));
+    const last = await knockUntilGoogleAccepts(page, 900_000, async () => { throw err; }, Date.now, fast).catch((e) => e);
+    check('… and the last knock\'s answer survives the re-knock loop', last?.platformResponse === pr, JSON.stringify(last?.platformResponse));
+    const big = 'x'.repeat(5000);
+    onResponse!({ status: () => 403, url: () => '/$rpc/x.MeetingDeviceService/CreateMeetingDevice', text: async () => big });
+    const err2 = await throwIfGoogleJoinRefused(fake, 'test').catch((e) => e);
+    check('… the body is capped in the browser', (err2?.platformResponse?.body ?? '').length === 2000, String(err2?.platformResponse?.body?.length));
   }
 
   // A host denial, a lobby timeout or a crash is not re-knocked.

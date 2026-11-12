@@ -33,6 +33,8 @@ import {
   classifyJoinFailure,
   cleanDetail,
   DETAIL_MAX_CHARS,
+  PLATFORM_RESPONSE_MAX_CHARS,
+  platformResponseOf,
   type JoinFailureAttribution,
   type JoinFailureReason,
 } from './join-evidence.js';
@@ -537,6 +539,16 @@ async function runFixtures(): Promise<void> {
   check('NaN / negative timings are discarded rather than persisted',
     buildJoinEvidence('error', 'joining', { totalMs: Number.NaN, timeInLobbyMs: -5 })?.timings === undefined);
 
+  // D367: what the platform returned rides the evidence, one shape for every platform, typed and capped.
+  {
+    const answer = { call: 'ResolveMeetingSpace', status: 403, body: '[[7,"denied"]]', page_text: "You can't join this video call" };
+    const ev = buildJoinEvidence('denied', 'joining', { detail: 'google_meet_join_refused: x', platformResponse: answer });
+    check('D367: the platform answer rides the evidence as platform_response', JSON.stringify(ev?.platform_response) === JSON.stringify(answer), JSON.stringify(ev));
+    check('D367: no answer, no field', !('platform_response' in (buildJoinEvidence('denied', 'joining', { detail: 'x' }) ?? {})));
+    const odd = platformResponseOf({ call: 7, status: '403', body: 'y'.repeat(9000), page_text: ' ', cookie: 'SID=1' });
+    check('D367: only the four fields, typed, capped', JSON.stringify(odd) === JSON.stringify({ body: 'y'.repeat(PLATFORM_RESPONSE_MAX_CHARS) }), JSON.stringify(odd)?.slice(0, 80));
+    check('D367: nothing usable is undefined', platformResponseOf({ status: 99 }) === undefined && platformResponseOf('403') === undefined);
+  }
   console.log(`\n=== summary: ${passed} passed, ${failed} failed ===`);
   if (failed > 0) process.exit(1);
   console.log('\n✅ join-evidence (L2): the taxonomy classifies, the attribution axis is gate-ready, every failure class replays, and the reporter is fail-open.');

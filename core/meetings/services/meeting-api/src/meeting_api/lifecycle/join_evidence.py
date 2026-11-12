@@ -415,6 +415,7 @@ def build_join_evidence(
     lobby_budget_ms: Optional[int] = None,
     node: Optional[str] = None,
     screenshot_key: Optional[str] = None,
+    platform_response: Any = None,
 ) -> Dict[str, Any]:
     """Assemble the ``meeting.data['join_evidence']`` block.
 
@@ -459,7 +460,117 @@ def build_join_evidence(
         evidence["node"] = node
     if isinstance(screenshot_key, str) and _SCREENSHOT_KEY.match(screenshot_key):
         evidence["screenshot_key"] = screenshot_key
+    answered = clean_platform_response(platform_response)
+    if answered:
+        evidence["platform_response"] = answered
     return evidence
+
+
+# ── WHAT THE PLATFORM RETURNED (D367, card brain:card/9095fe9ee7c0) ─────────────────────────────────────────────
+# ALLOWLIST, never a redactor (review of 63478b49, F1: a blocklist let JSON-quoted and digit-free tokens through).
+# Nothing free-form from the platform is stored. From the body: only its machine codes (UPPER_SNAKE reasons, a
+# google.rpc detail type's last name, small integers) and a digest that groups identical answers. From the page:
+# the refusal text only when it is one of the known refusal sentences; any other text is stored as its digest.
+import hashlib as _hashlib
+
+#: The most codes kept from one body.
+PLATFORM_CODES_MAX = 20
+#: The only words ever kept from a body (re-review of 7ea448c9: a pattern let names and tokens through as
+#: "codes"). gRPC's canonical status names and google.rpc detail types; a new platform word is added here,
+#: by a reviewed change, never learned from a response.
+KNOWN_PLATFORM_CODES = frozenset({
+    "OK", "CANCELLED", "UNKNOWN", "INVALID_ARGUMENT", "DEADLINE_EXCEEDED", "NOT_FOUND", "ALREADY_EXISTS",
+    "PERMISSION_DENIED", "RESOURCE_EXHAUSTED", "FAILED_PRECONDITION", "ABORTED", "OUT_OF_RANGE",
+    "UNIMPLEMENTED", "INTERNAL", "UNAVAILABLE", "DATA_LOSS", "UNAUTHENTICATED",
+    "ErrorInfo", "BadRequest", "PreconditionFailure", "QuotaFailure", "RetryInfo", "ResourceInfo",
+    "DebugInfo", "Help", "LocalizedMessage", "RequestInfo",
+})
+_WORD = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
+# an integer kept only as a JSPB status (the first element: [[7,… or [7,…) or under a known code key
+_JSPB_STATUS = re.compile(r"^\s*\[+\s*(\d{1,2})\s*,")
+_KEYED_INT = re.compile(r"\"(?:code|errorCode|error_code|status|statusCode)\"\s*:\s*(\d{1,5})\b")
+
+
+def _digest(text: str) -> Optional[str]:
+    """A keyed digest (HMAC-SHA256 with ``VEXA_EVIDENCE_DIGEST_KEY``, 16 hex): it groups identical answers
+    without being matchable against a dictionary. No key, no digest."""
+    import hmac
+    import os
+
+    key = (os.getenv("VEXA_EVIDENCE_DIGEST_KEY") or "").encode()
+    if not key:
+        return None
+    return hmac.new(key, text.encode("utf-8", "replace"), _hashlib.sha256).hexdigest()[:16]
+
+
+def platform_codes(text: Any) -> list:
+    """The known codes in a platform's answer: the JSPB status and integers under a known code key, then the
+    words on :data:`KNOWN_PLATFORM_CODES`, in order of first appearance, at most :data:`PLATFORM_CODES_MAX`."""
+    if not isinstance(text, str):
+        return []
+    found: list = []
+    m = _JSPB_STATUS.match(text)
+    if m:
+        found.append(int(m.group(1)))
+    for k in _KEYED_INT.finditer(text):
+        if int(k.group(1)) not in found:
+            found.append(int(k.group(1)))
+    for w in _WORD.finditer(text):
+        word = w.group(0)
+        if word not in KNOWN_PLATFORM_CODES:
+            tail = word.rsplit(".", 1)[-1]
+            word = tail if tail in KNOWN_PLATFORM_CODES else None
+        if word and word not in found:
+            found.append(word)
+        if len(found) >= PLATFORM_CODES_MAX:
+            break
+    return found[:PLATFORM_CODES_MAX]
+
+
+#: Refusal sentences a platform shows, stored verbatim when the page shows only these.
+KNOWN_REFUSAL_TEXT = frozenset({
+    "You can't join this video call",
+    "You can\u2019t join this video call",
+    "No one can join a meeting unless invited or admitted by the host",
+    "Returning to home screen",
+})
+
+
+def _known_lines(text: str) -> list:
+    return [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+
+def clean_platform_response(raw: Any) -> Optional[Dict[str, Any]]:
+    """The stored ``platform_response``: ``call`` (a word), ``status`` (an HTTP status), ``codes`` and
+    ``body_digest`` from the body, and ``page_text`` (known refusal sentences only) or ``page_text_digest``.
+    No free text from the platform is ever stored; anything else the producer sent is dropped."""
+    if not isinstance(raw, Mapping):
+        return None
+    out: Dict[str, Any] = {}
+    call = raw.get("call")
+    if isinstance(call, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,119}", call):
+        out["call"] = call
+    status = raw.get("status")
+    if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599:
+        out["status"] = status
+    body = raw.get("body")
+    if isinstance(body, str) and body.strip():
+        codes = platform_codes(body)
+        if codes:
+            out["codes"] = codes
+        d = _digest(body)
+        if d:
+            out["body_digest"] = d
+    page = raw.get("page_text")
+    if isinstance(page, str) and page.strip():
+        lines = _known_lines(page)
+        if lines and all(ln in KNOWN_REFUSAL_TEXT for ln in lines):
+            out["page_text"] = "\n".join(lines)
+        else:
+            d = _digest(page.strip())
+            if d:
+                out["page_text_digest"] = d
+    return out or None
 
 
 #: A Kubernetes node name (DNS-1123 subdomain).
@@ -515,6 +626,7 @@ def normalize_evidence(raw: Any, *, default_stage: Optional[str] = None) -> Opti
             lobby_budget_ms=raw.get("lobby_budget_ms"),
             node=raw.get("node"),
             screenshot_key=raw.get("screenshot_key"),
+            platform_response=raw.get("platform_response"),
         )
     except Exception:  # noqa: BLE001 — a malformed payload degrades the evidence, nothing else
         return None

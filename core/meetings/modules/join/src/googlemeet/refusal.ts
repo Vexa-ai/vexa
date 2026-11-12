@@ -24,7 +24,7 @@
  */
 import { Page } from "playwright";
 import { log } from "../_host";
-import { AdmissionError } from "../shared/admission";
+import { AdmissionError, PLATFORM_RESPONSE_MAX_CHARS, type PlatformResponse } from "../shared/admission";
 import { googleJoinRefusedIndicators } from "./selectors";
 
 /** Reason code at the head of every refusal message; join evidence reads it as a platform refusal. */
@@ -141,6 +141,10 @@ const REFUSING_RPC = /(MeetingSpaceService\/ResolveMeetingSpace|MeetingDeviceSer
 // Per page: the refused call of the CURRENT knock ("<call> answered HTTP 403"), and whether the
 // response listener is already attached. WeakMap/WeakSet so nothing outlives the page.
 const refusedCall = new WeakMap<object, string>();
+// Per page: what the refusing call answered (call, status, body), for the evidence (D367).
+const refusedAnswer = new WeakMap<object, PlatformResponse>();
+const bodyRead = new WeakMap<object, Promise<void>>();
+const cap = (s: string) => s.slice(0, PLATFORM_RESPONSE_MAX_CHARS);
 const watched = new WeakSet<object>();
 
 /**
@@ -159,6 +163,11 @@ export function watchGoogleJoinRefusal(page: Page): void {
         const what = `${call.split("/")[1]} answered HTTP 403`;
         refusedCall.set(key, what);
         log(`🚫 Google Meet refused the join: ${what}`);
+        const answer: PlatformResponse = { call: call.split("/")[1], status: 403 };
+        refusedAnswer.set(key, answer);
+        bodyRead.set(key, Promise.resolve().then(() => response.text())
+          .then((t) => { if (typeof t === "string" && t) answer.body = cap(t); })
+          .catch(() => { /* a body we cannot read is simply absent */ }));
       }
     } catch { /* a response we cannot read is not evidence */ }
   });
@@ -167,6 +176,27 @@ export function watchGoogleJoinRefusal(page: Page): void {
 /** Forget the previous knock's refusal before knocking again on the same page. */
 export function resetGoogleJoinRefusal(page: Page): void {
   refusedCall.delete(page as unknown as object);
+  refusedAnswer.delete(page as unknown as object);
+  bodyRead.delete(page as unknown as object);
+}
+
+/** What Meet returned for the current knock's refusal: the refusing answer and the refusal element's text. */
+export async function googleJoinRefusalResponse(page: Page): Promise<PlatformResponse | undefined> {
+  const key = page as unknown as object;
+  // the body is read off the network answer; wait for it briefly, never past 2 s
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([bodyRead.get(key) ?? Promise.resolve(), new Promise((r) => { timer = setTimeout(r, 2000); })]);
+  if (timer) clearTimeout(timer);
+  const out: PlatformResponse = { ...(refusedAnswer.get(key) ?? {}) };
+  for (const selector of googleJoinRefusedIndicators) {
+    const el = page.locator(selector).first();
+    if (await el.isVisible().catch(() => false)) {
+      const t = await el.innerText().catch(() => "");
+      if (t && t.trim()) out.page_text = cap(t.trim());
+      break;
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** What shows Meet refused this knock, or null. Either signal alone is enough. */
@@ -202,7 +232,9 @@ export async function throwIfGoogleJoinRefused(page: Page, context: string): Pro
   const evidence = await checkForGoogleJoinRefused(page);
   if (evidence) {
     log(`🚫 Google Meet refused the join (${evidence}, ${context})`);
-    throw new GoogleJoinRefusedError(evidence);
+    const err = new GoogleJoinRefusedError(evidence);
+    err.platformResponse = await googleJoinRefusalResponse(page).catch(() => undefined);
+    throw err;
   }
 }
 
@@ -234,7 +266,9 @@ export async function knockUntilGoogleAccepts(
       const maxKnocks = opts.maxKnocks ?? GOOGLE_JOIN_MAX_KNOCKS;
       // A wait that would use up the budget leaves no time to knock: report the refusal now.
       if (attempt >= maxKnocks || deadline - now() <= wait) {
-        throw new GoogleJoinRefusedError(e.evidence, attempt);
+        const last = new GoogleJoinRefusedError(e.evidence, attempt);
+        last.platformResponse = e.platformResponse;   // the last knock's answer, as Meet gave it
+        throw last;
       }
       log(`🔁 Google Meet refused knock ${attempt} of ${maxKnocks} (${e.evidence}); knocking again${wait ? ` in ${Math.round(wait / 1000)} s` : ""}${opts.freshen ? " as a fresh guest" : ""}`);
       if (wait > 0) await sleep(wait);

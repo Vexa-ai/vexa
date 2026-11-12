@@ -14,8 +14,23 @@
  */
 export type AdmissionOutcome = "denial" | "lobby_timeout" | "join_failure" | "auth_session_missing";
 
+/** What the platform itself returned when it refused (D367, card brain:card/9095fe9ee7c0): one shape for
+ *  every platform. `call`/`status`/`body` are the refusing network answer; `page_text` is the text of the
+ *  refusal element only, never the whole page (a lobby page can name the people in the call). Raw here,
+ *  capped; meeting-api redacts before anything is stored. */
+export interface PlatformResponse {
+  call?: string;
+  status?: number;
+  body?: string;
+  page_text?: string;
+}
+/** The most of any one platform-response field carried out of the browser. */
+export const PLATFORM_RESPONSE_MAX_CHARS = 2000;
+
 export class AdmissionError extends Error {
   readonly outcome: AdmissionOutcome;
+  /** What the platform returned, when the refusal was observed with one. */
+  platformResponse?: PlatformResponse;
   constructor(outcome: AdmissionOutcome, message: string) {
     super(message);
     this.name = "AdmissionError";

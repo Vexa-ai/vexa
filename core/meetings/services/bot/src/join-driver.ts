@@ -158,7 +158,7 @@ export function createBrowserJoinDriver(
           return {
             outcome: admissionOutcomeToJoinOutcome(e.outcome),
             reason: e.message,
-            signals: signals({ detail: e.message }),
+            signals: signals({ detail: e.message, ...(e.platformResponse ? { platformResponse: e.platformResponse } : {}) }),
           };
         }
         signals({ detail: String(e) });   // park them for the orchestrator's catch, then re-raise
