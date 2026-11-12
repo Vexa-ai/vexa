@@ -256,7 +256,14 @@ export async function pressContinueAsGuestIfPresent(
   const hit = await firstVisibleSelector(page, googleContinueAsGuestSelectors);
   if (!hit) return false;
   pressedGuestStep.add(page);
-  await click(hit.handle, "continue_as_guest");
+  try {
+    await click(hit.handle, "continue_as_guest");
+  } catch (e) {
+    // A failed press must not change how the join ends: the wait carries on to its normal
+    // 120 s «Could not locate name input» miss (which monitoring counts and which records the labels).
+    log(`«Continue as guest» press failed (${e instanceof Error ? e.message.slice(0, 120) : "unknown"}); continuing the name-field wait.`);
+    return false;
+  }
   log(`Pressed «Continue as guest» on the pre-join guest step (via ${hit.selector}).`);
   return true;
 }

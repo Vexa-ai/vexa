@@ -78,7 +78,17 @@ function mockPage(o: { guest: boolean; nameAfterGuest: boolean; guestSticks?: bo
       await waitForAnySelector(page as any, googleNameInputSelectors, 60, 'name input',
         async () => { await pressContinueAsGuestIfPresent(page as any, async () => { n++; }); }, true);
     } catch { /* expected miss */ }
-    assert(n === 1, `sticky guest button: pressed once, not ${n} times`);
+    assert(n === 1, `sticky guest button: pressed exactly once (got ${n})`);
+  }
+  // 3b. a press that throws does not change how the wait ends
+  {
+    const page = mockPage({ guest: true, nameAfterGuest: false, labels: ['Continue as guest'] });
+    let msg = '';
+    try {
+      await waitForAnySelector(page as any, googleNameInputSelectors, 40, 'name input',
+        async () => { await pressContinueAsGuestIfPresent(page as any, async () => { throw new Error('element is detached'); }); }, true);
+    } catch (e: any) { msg = String(e?.message || e); }
+    assert(msg.startsWith('Could not locate name input'), 'failed press: the wait still ends as the normal name-input miss');
   }
   // 4. a name-field miss records the visible text-button labels
   {
