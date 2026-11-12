@@ -3,6 +3,7 @@ import { log, randomDelay, callJoiningCallback } from "../_host";
 import { BotConfig } from "../_host";
 import {
   googleNameInputSelectors,
+  googleContinueAsGuestSelectors,
   googleJoinButtonSelectors,
   googleMicrophoneButtonSelectors,
   googleCameraButtonSelectors,
@@ -15,7 +16,7 @@ import { HumanizedInteractor, MOCAP_LIBRARY } from "./humanized";
 import { AdmissionError } from "../shared/admission";
 import { PINNED_UI_LOCALE, checkUiLocale } from "../shared/ui-locale";
 import { redactMeetingUrl, rethrowRedacted } from "../shared/url-redaction";
-import { watchGoogleJoinRefusal, throwIfGoogleJoinRefused } from "./refusal";
+import { watchGoogleJoinRefusal, throwIfGoogleJoinRefused, noteLobbyCta } from "./refusal";
 
 /** Thrown when authenticated mode detects a signed-out browser profile. Extends AdmissionError so
  *  the JoinDriver's single `instanceof` catch maps the typed `auth_session_missing` outcome to a
@@ -222,7 +223,8 @@ export async function waitForAnySelector(
   selectors: string[],
   timeoutMs: number,
   label: string,
-  guard?: () => Promise<void>
+  guard?: () => Promise<void>,
+  recordButtonsOnMiss = false
 ): Promise<{ handle: ElementHandle<Element>; selector: string }> {
   const started = Date.now();
   do {
@@ -235,7 +237,35 @@ export async function waitForAnySelector(
     await page.waitForTimeout(SELECTOR_POLL_MS);
   } while (Date.now() - started < timeoutMs);
 
-  throw new Error(await describeSelectorMiss(page, selectors, timeoutMs, label, null));
+  // A miss is never blind: when asked, record the visible text-button labels (the same structural
+  // scan the lobby CTA wait uses; button labels only, never page text).
+  let labels: string[] | null = null;
+  if (recordButtonsOnMiss) {
+    try { labels = (await scanLobbyPrimaryCta(page)).labels; } catch { labels = null; }
+  }
+  throw new Error(await describeSelectorMiss(page, selectors, timeoutMs, label, labels));
+}
+
+/** Press «Continue as guest» when, and only when, the guest step is on screen. At most once per page. */
+const pressedGuestStep = new WeakSet<Page>();
+export async function pressContinueAsGuestIfPresent(
+  page: Page,
+  click: (handle: ElementHandle<Element>, label: string) => Promise<void>
+): Promise<boolean> {
+  if (pressedGuestStep.has(page)) return false;
+  const hit = await firstVisibleSelector(page, googleContinueAsGuestSelectors);
+  if (!hit) return false;
+  pressedGuestStep.add(page);
+  try {
+    await click(hit.handle, "continue_as_guest");
+  } catch (e) {
+    // A failed press must not change how the join ends: the wait carries on to its normal
+    // 120 s «Could not locate name input» miss (which monitoring counts and which records the labels).
+    log(`«Continue as guest» press failed (${e instanceof Error ? e.message.slice(0, 120) : "unknown"}); continuing the name-field wait.`);
+    return false;
+  }
+  log(`Pressed «Continue as guest» on the pre-join guest step (via ${hit.selector}).`);
+  return true;
 }
 
 /**
@@ -440,6 +470,7 @@ export async function joinGoogleMeeting(
       "authenticated join CTA",
       refused("lobby, authenticated join CTA")
     );
+    noteLobbyCta(page, ctaSelector);
 
     // Signed-out guard: a guest lobby (name input rendered) means the persisted
     // browser profile is signed out — fail closed with a typed error instead of
@@ -463,12 +494,17 @@ export async function joinGoogleMeeting(
     // Anonymous flow: enter bot name and ask to join
     log("Attempting to find name input field...");
 
+    const refusedAtName = refused("lobby, name input");
     const { handle: nameHandle, selector: nameFieldSelector } = await waitForAnySelector(
       page,
       googleNameInputSelectors,
       120000,
       "name input",
-      refused("lobby, name input")
+      async () => {
+        await refusedAtName();
+        await pressContinueAsGuestIfPresent(page, clickHandle);
+      },
+      true
     );
     log("Name input field found.");
 
@@ -491,13 +527,14 @@ export async function joinGoogleMeeting(
       log("Camera already off or not found.");
     }
 
-    const { handle: joinHandle } = await waitForLobbyCta(
+    const { handle: joinHandle, selector: joinSelector } = await waitForLobbyCta(
       page,
       googleJoinButtonSelectors,
       60000,
       "join button",
       refused("lobby, join button")
     );
+    noteLobbyCta(page, joinSelector);
     await clickHandle(joinHandle!, "ask_to_join");
     log(`${botName} joined the Google Meet Meeting.`);
 

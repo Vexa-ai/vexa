@@ -91,6 +91,27 @@ export interface JoinEvidence {
   node?: string;
   /** Where the join-failure screenshot was stored (meeting-api's answer); absent when none was. */
   screenshot_key?: string;
+  /** What the platform itself returned at the refusal (D367), capped; meeting-api redacts it. */
+  platform_response?: { call?: string; status?: number; body?: string; page_text?: string;
+    refused_at?: 'before_cta' | 'after_cta'; cta?: 'ask_to_join' | 'join_now' | 'switch_here' | 'other' | 'none' };
+}
+
+/** The most of any one platform-response text carried in the evidence. */
+export const PLATFORM_RESPONSE_MAX_CHARS = 2000;
+
+/** The platform's answer, kept to its four known fields, each typed and capped; undefined when empty. */
+export function platformResponseOf(raw: unknown): JoinEvidence['platform_response'] {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v.slice(0, PLATFORM_RESPONSE_MAX_CHARS) : undefined);
+  const out: NonNullable<JoinEvidence['platform_response']> = {};
+  const call = text(r.call); if (call) out.call = call.slice(0, 120);
+  if (Number.isInteger(r.status) && (r.status as number) >= 100 && (r.status as number) <= 599) out.status = r.status as number;
+  const body = text(r.body); if (body) out.body = body;
+  const page = text(r.page_text); if (page) out.page_text = page;
+  if (r.refused_at === 'before_cta' || r.refused_at === 'after_cta') out.refused_at = r.refused_at;
+  if (typeof r.cta === 'string' && ['ask_to_join', 'join_now', 'switch_here', 'other', 'none'].includes(r.cta)) out.cta = r.cta as never;
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** Cap the free-text platform signal so a stack trace can never bloat `meeting.data`. Mirrors the
@@ -295,6 +316,8 @@ export function buildJoinEvidence(
     if (Object.keys(timings).length > 0) evidence.timings = timings;
     const budget = millis(signals.lobbyBudgetMs);
     if (budget !== undefined) evidence.lobby_budget_ms = budget;
+    const answered = platformResponseOf(signals.platformResponse);
+    if (answered) evidence.platform_response = answered;
     return evidence;
   } catch {
     return undefined;

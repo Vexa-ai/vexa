@@ -10,7 +10,7 @@
  */
 import {
   knockUntilGoogleAccepts, GoogleJoinRefusedError, GOOGLE_JOIN_MAX_KNOCKS, GOOGLE_JOIN_REFUSED,
-  GOOGLE_JOIN_REKNOCK_BACKOFF_MS, googleKnockConfig,
+  GOOGLE_JOIN_REKNOCK_BACKOFF_MS, googleKnockConfig, watchGoogleJoinRefusal, throwIfGoogleJoinRefused, noteLobbyCta, resetGoogleJoinRefusal, ctaKeyOf,
 } from './refusal';
 import { AdmissionError } from '../shared/admission';
 import { waitForAnySelector, waitForLobbyCta } from './join';
@@ -49,6 +49,62 @@ const fast = { sleep: async () => {} };
     check('… message names the refusal and the knock count',
       err?.message?.startsWith(`${GOOGLE_JOIN_REFUSED}: Google Meet refused the join on ${GOOGLE_JOIN_MAX_KNOCKS} of ${GOOGLE_JOIN_MAX_KNOCKS} knocks`) &&
       /never received a request/.test(err.message), err?.message);
+  }
+
+  // D367: what Meet returned rides the refusal — the refusing call, its status and body, and the refusal
+  // element's text only; and the last knock's answer survives the re-knock loop.
+  {
+    let onResponse: ((r: any) => void) | undefined;
+    const fake: any = {
+      on: (ev: string, cb: any) => { if (ev === 'response') onResponse = cb; },
+      locator: () => ({ first: () => ({ isVisible: async () => true, innerText: async () => "You can't join this video call" }) }),
+    };
+    watchGoogleJoinRefusal(fake);
+    onResponse!({ status: () => 403, url: () => 'https://meet.google.com/$rpc/google.rtc.meetings.v1.MeetingSpaceService/ResolveMeetingSpace',
+                  text: async () => '[[7,"denied",["MEETING_SPACE_RESTRICTED"]]]' });
+    const err = await throwIfGoogleJoinRefused(fake, 'test').catch((e) => e);
+    const pr = err?.platformResponse;
+    check('refusal carries the call, status, body and the refusal element text',
+      pr?.call === 'ResolveMeetingSpace' && pr?.status === 403 && /MEETING_SPACE_RESTRICTED/.test(pr?.body ?? '') &&
+      pr?.page_text === "You can't join this video call", JSON.stringify(pr));
+    const last = await knockUntilGoogleAccepts(page, 900_000, async () => { throw err; }, Date.now, fast).catch((e) => e);
+    check('… and the last knock\'s answer survives the re-knock loop', last?.platformResponse === pr, JSON.stringify(last?.platformResponse));
+    const big = 'x'.repeat(5000);
+    onResponse!({ status: () => 403, url: () => '/$rpc/x.MeetingDeviceService/CreateMeetingDevice', text: async () => big });
+    const err2 = await throwIfGoogleJoinRefused(fake, 'test').catch((e) => e);
+    check('… the body is capped in the browser', (err2?.platformResponse?.body ?? '').length === 2000, String(err2?.platformResponse?.body?.length));
+  }
+
+  // D367 1c: where the refusal came relative to the lobby's button, and which button (doc:meet-joining-what-happens
+  // section 0: an OPEN room from bbb is refused at ResolveMeetingSpace, before any button; a room that lets
+  // guests knock offers «Ask to join» first).
+  {
+    let onResponse: ((r: any) => void) | undefined;
+    const mk = (): any => ({
+      on: (ev: string, cb: any) => { if (ev === 'response') onResponse = cb; },
+      locator: () => ({ first: () => ({ isVisible: async () => false, innerText: async () => '' }) }),
+    });
+    const before = mk();
+    watchGoogleJoinRefusal(before);
+    onResponse!({ status: () => 403, url: () => '/$rpc/x.MeetingSpaceService/ResolveMeetingSpace', text: async () => '[7,"The caller does not have permission"]' });
+    const e1 = await throwIfGoogleJoinRefused(before, 'test').catch((e) => e);
+    check('1c: refused at lobby load → before_cta, no button, ResolveMeetingSpace',
+      e1?.platformResponse?.refused_at === 'before_cta' && e1?.platformResponse?.cta === 'none' && e1?.platformResponse?.call === 'ResolveMeetingSpace',
+      JSON.stringify(e1?.platformResponse));
+    const after = mk();
+    watchGoogleJoinRefusal(after);
+    noteLobbyCta(after, '//button[.//span[text()="Ask to join"]]');
+    onResponse!({ status: () => 403, url: () => '/$rpc/x.MeetingDeviceService/CreateMeetingDevice', text: async () => '[7]' });
+    const e2 = await throwIfGoogleJoinRefused(after, 'test').catch((e) => e);
+    check('1c: refused at the knock after «Ask to join» → after_cta, ask_to_join, CreateMeetingDevice',
+      e2?.platformResponse?.refused_at === 'after_cta' && e2?.platformResponse?.cta === 'ask_to_join' && e2?.platformResponse?.call === 'CreateMeetingDevice',
+      JSON.stringify(e2?.platformResponse));
+    resetGoogleJoinRefusal(after);
+    onResponse!({ status: () => 403, url: () => '/$rpc/x.MeetingSpaceService/ResolveMeetingSpace', text: async () => '[7]' });
+    const e3 = await throwIfGoogleJoinRefused(after, 'test').catch((e) => e);
+    check('1c: a new knock forgets the last knock\'s button', e3?.platformResponse?.refused_at === 'before_cta', JSON.stringify(e3?.platformResponse));
+    check('1c: selector keys', ctaKeyOf('button:has-text("Join now")') === 'join_now' && ctaKeyOf('button:has-text("Join")') === 'join_now'
+      && ctaKeyOf('button:has-text("Switch here")') === 'switch_here' && ctaKeyOf('button[jsname]:not([aria-label]):has(span)') === 'other');
   }
 
   // A host denial, a lobby timeout or a crash is not re-knocked.
