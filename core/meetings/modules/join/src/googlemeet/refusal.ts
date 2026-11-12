@@ -210,7 +210,7 @@ export async function googleJoinRefusalResponse(page: Page): Promise<PlatformRes
   for (const selector of googleJoinRefusedIndicators) {
     const el = page.locator(selector).first();
     if (await el.isVisible().catch(() => false)) {
-      const t = await el.innerText().catch(() => "");
+      const t = await el.innerText({ timeout: 500 }).catch(() => "");
       if (t && t.trim()) out.page_text = cap(t.trim());
       break;
     }
