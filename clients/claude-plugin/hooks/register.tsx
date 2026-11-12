@@ -419,6 +419,45 @@ async function poll($: any): Promise<void> {
 // own store and reads Vexa's tools over HTTP (Vexa's MCP endpoint), registering each as a tool of its
 // own that forwards the call: Vexa works in this chat, and in every later one as the plugin starts.
 const SETUP = 'vexa_setup'
+
+// A DESK IS WOKEN BY ITS ROLE, NOT ITS CHAT (Software desk, 12 Nov 2026, card brain:card/7d789ad1cee0: «we want agents to own
+// their desks and reflexes»). A desk chat says which desk it is with `desk_role`; this chat then keeps
+// ~/.vexa/link/roles/<role>.json = {session, at_ms, seen} fresh, and vexa-link reports it on every read of the relay
+// (`claims=`). The relay hands a flow's wake for that role to the session holding it (params.chat), and syncPresses
+// below already gives a press stamped with this chat's session to this chat. A newer claim wins; the relay's answer
+// (roles-status.json) tells a chat it lost the role, and it stops claiming.
+export const DESK_ROLE = 'desk_role'
+const DESK_ROLE_TOOL = `mcp__vexa-live__${DESK_ROLE}`
+export const ROLE_RE = /^[a-z][a-z0-9_-]{0,30}$/
+const ROLE_BEAT_MS = 30_000
+const heldRoles = new Map<string, number>()   // role → when this chat claimed it (ms)
+export async function claimRole($: any, role: string): Promise<string> {
+  if (!ROLE_RE.test(role)) return `Vexa: «${role}» is not a desk role (lower case, e.g. software).`
+  if (!mySession) return 'Vexa: this chat has no session id yet; try again in a moment.'
+  const now = await $.clock.now()
+  heldRoles.set(role, now)
+  await $.fs.write(`${await linkDir($)}/roles/${role}.json`, JSON.stringify({ session: mySession, at_ms: now, seen: now }))
+  return `Vexa: this chat holds desk role ${role}; a flow's wake for desk:${role} comes here while the line runs.`
+}
+/** keep this chat's claims fresh; drop one another chat took (here or as the relay says) */
+export async function beatRoles($: any): Promise<void> {
+  if (!heldRoles.size) return
+  const dir = await linkDir($)
+  const now = await $.clock.now()
+  let status: any = null
+  try { status = JSON.parse(await $.fs.read(`${dir}/roles-status.json`)) } catch { status = null }
+  const gone = new Set<string>()
+  if (status && now - Number(status.ts ?? 0) < 120_000) {
+    for (const x of status.roles?.lost ?? []) if (x && String(x.holder ?? '') !== mySession) gone.add(String(x.role ?? ''))
+    for (const x of status.roles?.refused ?? []) if (x) gone.add(String(x.role ?? ''))
+  }
+  for (const [role, at] of [...heldRoles]) {
+    let mine = true
+    try { mine = String(JSON.parse(await $.fs.read(`${dir}/roles/${role}.json`))?.session ?? '') === mySession } catch { mine = true }
+    if (!mine || gone.has(role)) { heldRoles.delete(role); continue }
+    await $.fs.write(`${dir}/roles/${role}.json`, JSON.stringify({ session: mySession, at_ms: at, seen: now }))
+  }
+}
 let vexaKey = ''
 let vexaEmail = ''
 let mcpSessionId = ''
@@ -1876,6 +1915,12 @@ export const register: Register = (on) => {
       inputSchema: { type: 'object', properties: { action: { enum: ['start', 'status'] }, code: { type: 'string', description: 'The pairing code, VX-XXXX-XXXX, when the person has one.' } } },
     })
     await $.tool.register({
+      name: DESK_ROLE,
+      description: 'Say which Vexa desk this chat is (its role in desks:registry, e.g. software, ceo, meet-join). A flow that wakes '
+        + 'desk:<role> then reaches this chat, whichever session id it has; a newer claim of the same role takes it over.',
+      inputSchema: { type: 'object', properties: { role: { type: 'string', pattern: '^[a-z][a-z0-9_-]{0,30}$' } }, required: ['role'] },
+    })
+    await $.tool.register({
       name: CALIBRATE,
       description: "Replay a labelled transcript fixture through the listener's small-model filter with the given rules (or the current "
         + 'ones) and return precision, recall, per-call latency and the misses. No meeting needed.',
@@ -1904,6 +1949,7 @@ export const register: Register = (on) => {
       $.clock.every(1000, () => quiet(syncLocal($)))
       $.clock.every(1000, () => quiet(syncLink($)))
       $.clock.every(1000, () => quiet(syncPresses($)))
+      $.clock.every(ROLE_BEAT_MS, () => quiet(beatRoles($)))
     }
     return next(e)
   })
@@ -1976,6 +2022,9 @@ export const register: Register = (on) => {
   on('tool.call', { tool: `mcp__vexa-live__${SETUP}` }, async ($, e) => ({ result: JSON.stringify(await setup($, e)) }))
     .catch(($, e, next) => (next.called ? next(e) : { deny: 'Vexa setup failed; try again.' }))
 
+  on('tool.call', { tool: DESK_ROLE_TOOL }, async ($, e) => ({ result: await claimRole($, String((e as any).role ?? '').trim()) }))
+    .catch(($, e, next) => (next.called ? next(e) : { deny: 'The desk role was not recorded; try again.' }))
+
   on('tool.call', { tool: CONFIGURE_TOOL }, async ($, e) => ({ result: JSON.stringify(await configure($, e)) }))
     .catch(($, e, next) => (next.called ? next(e) : { deny: 'The Vexa listener control failed; try again.' }))
 
@@ -1990,7 +2039,7 @@ export const register: Register = (on) => {
   // only for a read-only tool or the listener's own controls; speaking and leaving always ask the
   // person; the rest goes to the session's decider as it would without us.
   on('tool.check', async ($, e, next) => {
-    if (e.tool === CONFIGURE_TOOL || e.tool === CALIBRATE_TOOL) return { decision: 'allow', reason: "Vexa Live's own control" }
+    if (e.tool === CONFIGURE_TOOL || e.tool === CALIBRATE_TOOL || e.tool === DESK_ROLE_TOOL) return { decision: 'allow', reason: "Vexa Live's own control" }
     // The plugin opening its web panel in the browser pane, for the panel origin it just got from
     // panel_link: the person decides (founder, 24 Oct), in Claude Code's own dialog — a hook's ask
     // goes to a person, not to auto mode's classifier. Once they said Yes, the same origin opens silently.

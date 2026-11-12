@@ -78,12 +78,38 @@ on_events() {
   printf '%s\n' "$1" | sed '1d' | while IFS= read -r line; do [ -n "$line" ] && append "$line"; done
   state running
 }
-requests_url() { echo "$api/agent/claude/requests/next?wait_ms=25000"; }
+# The desk roles this machine's chats hold (~/.vexa/link/roles/<role>.json, kept fresh by each chat's plugin), sent on
+# every read so the relay hands a flow's wake for desk:<role> to the chat holding it: role:session:at_ms, at most 16, only
+# claims seen in the last 3 minutes, and only well-formed ones (one bad claim would make the relay refuse the whole read).
+claims() {
+  now=$(now_ms); out=""; n=0
+  for f in "$dir"/roles/*.json; do
+    [ -f "$f" ] || continue
+    role=$(basename "$f" .json)
+    case "$role" in [a-z]*) ;; *) continue ;; esac
+    case "$role" in *[!a-z0-9_-]*) continue ;; esac
+    [ "${#role}" -le 31 ] || continue
+    j=$(tr -d '\n' < "$f")
+    session=$(printf '%s' "$j" | sed -n 's/.*"session": *"\([A-Za-z0-9_.-]*\)".*/\1/p')
+    at=$(printf '%s' "$j" | sed -n 's/.*"at_ms": *\([0-9]*\).*/\1/p')
+    seen=$(printf '%s' "$j" | sed -n 's/.*"seen": *\([0-9]*\).*/\1/p')
+    [ -n "$session" ] && [ -n "$at" ] && [ -n "$seen" ] || continue
+    [ "${#session}" -le 64 ] && [ "${#at}" -le 15 ] || continue
+    [ $((now - seen)) -le 180000 ] || continue
+    n=$((n + 1)); [ "$n" -le 16 ] || break
+    out="${out:+$out,}$role:$session:$at"
+  done
+  printf '%s' "$out"
+}
+requests_url() { c=$(claims); echo "$api/agent/claude/requests/next?wait_ms=25000${c:+&claims=$c}"; }
 on_requests() {
   # The chats whose Vexa panel is open now (the relay answers them on every poll): the plugin picks
   # the chat that listens from these.
   panels=$(printf '%s' "$1" | tr -d '\n' | sed -n 's/.*"panels": *\(\[[^]]*\]\).*/\1/p')
   printf '{"ts":%s,"panels":%s}\n' "$(now_ms)" "${panels:-[]}" > "$dir/panels.json.tmp" && mv "$dir/panels.json.tmp" "$dir/panels.json"
+  # What the relay said about the roles claimed (held, lost to whom, refused, unverified): the plugin drops a lost one.
+  roles=$(printf '%s' "$1" | tr -d '\n' | sed -n 's/.*"roles": *\({.*}\) *} *$/\1/p')
+  [ -n "$roles" ] && printf '{"ts":%s,"roles":%s}\n' "$(now_ms)" "$roles" > "$dir/roles-status.json.tmp" && mv "$dir/roles-status.json.tmp" "$dir/roles-status.json"
   # {"requests": [...], ...}: one `ui` event per request. A plugin that acks presses itself says so in acks/.plugin
   # (at most a minute old): it acks each once the chat took it (acks/<id>, sent by on_acks), and one it never takes Vexa
   # hands over once more. With no such plugin running (an older one), the press is acked here, as before.
@@ -133,7 +159,7 @@ rm -f "$dir/in-this-call.json" "$dir/missing-on_asks.json"
 read_loop on_events events_url &
 read_loop on_asks asks_url &
 read_loop on_requests requests_url &
-mkdir -p "$dir/acks" "$dir/said"
+mkdir -p "$dir/acks" "$dir/said" "$dir/roles"
 on_acks &
 trap 'stop; rm -f "$dir/link.pid"' INT TERM
 wait
