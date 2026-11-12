@@ -389,6 +389,14 @@ export const googleMicrophoneButtonSelectors: string[] = [
 // could not fill its name. The lobby has exactly one editable text input, so
 // match by structure/role; keep the English aria-label + placeholder as
 // fallbacks.
+// Guest step (seen 12 Nov 2026): some pre-join pages show «Continue as guest» / «Or sign in to join»
+// BEFORE the name field. It is the button a person presses to join as a guest; pressing it changes
+// nothing about how the bot presents itself. English text: the UI locale is pinned (#856).
+export const googleContinueAsGuestSelectors: string[] = [
+  'button:has-text("Continue as guest")',
+  '[role="button"]:has-text("Continue as guest")'
+];
+
 export const googleNameInputSelectors: string[] = [
   // Locale-agnostic: the single text input in the pre-join lobby form.
   'input[jsname][type="text"]',

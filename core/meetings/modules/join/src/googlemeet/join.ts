@@ -3,6 +3,7 @@ import { log, randomDelay, callJoiningCallback } from "../_host";
 import { BotConfig } from "../_host";
 import {
   googleNameInputSelectors,
+  googleContinueAsGuestSelectors,
   googleJoinButtonSelectors,
   googleMicrophoneButtonSelectors,
   googleCameraButtonSelectors,
@@ -222,7 +223,8 @@ export async function waitForAnySelector(
   selectors: string[],
   timeoutMs: number,
   label: string,
-  guard?: () => Promise<void>
+  guard?: () => Promise<void>,
+  recordButtonsOnMiss = false
 ): Promise<{ handle: ElementHandle<Element>; selector: string }> {
   const started = Date.now();
   do {
@@ -235,7 +237,28 @@ export async function waitForAnySelector(
     await page.waitForTimeout(SELECTOR_POLL_MS);
   } while (Date.now() - started < timeoutMs);
 
-  throw new Error(await describeSelectorMiss(page, selectors, timeoutMs, label, null));
+  // A miss is never blind: when asked, record the visible text-button labels (the same structural
+  // scan the lobby CTA wait uses; button labels only, never page text).
+  let labels: string[] | null = null;
+  if (recordButtonsOnMiss) {
+    try { labels = (await scanLobbyPrimaryCta(page)).labels; } catch { labels = null; }
+  }
+  throw new Error(await describeSelectorMiss(page, selectors, timeoutMs, label, labels));
+}
+
+/** Press «Continue as guest» when, and only when, the guest step is on screen. At most once per page. */
+const pressedGuestStep = new WeakSet<Page>();
+export async function pressContinueAsGuestIfPresent(
+  page: Page,
+  click: (handle: ElementHandle<Element>, label: string) => Promise<void>
+): Promise<boolean> {
+  if (pressedGuestStep.has(page)) return false;
+  const hit = await firstVisibleSelector(page, googleContinueAsGuestSelectors);
+  if (!hit) return false;
+  pressedGuestStep.add(page);
+  await click(hit.handle, "continue_as_guest");
+  log(`Pressed «Continue as guest» on the pre-join guest step (via ${hit.selector}).`);
+  return true;
 }
 
 /**
@@ -464,12 +487,17 @@ export async function joinGoogleMeeting(
     // Anonymous flow: enter bot name and ask to join
     log("Attempting to find name input field...");
 
+    const refusedAtName = refused("lobby, name input");
     const { handle: nameHandle, selector: nameFieldSelector } = await waitForAnySelector(
       page,
       googleNameInputSelectors,
       120000,
       "name input",
-      refused("lobby, name input")
+      async () => {
+        await refusedAtName();
+        await pressContinueAsGuestIfPresent(page, clickHandle);
+      },
+      true
     );
     log("Name input field found.");
 
