@@ -22,6 +22,7 @@
 #   running <pid>   another vexa-link already carries the events          (exit 0)
 #   revoked         the person ended the line (connector removed, key revoked) (exit 2)
 set -u
+export LC_ALL=C   # byte ranges in the claim checks below: [a-z] means a-z on every sh (review of 03d59f594)
 api=${1:?api_url}
 key=${VEXA_LISTEN_KEY:?VEXA_LISTEN_KEY}
 dir="${HOME:-/tmp}/.vexa/link"

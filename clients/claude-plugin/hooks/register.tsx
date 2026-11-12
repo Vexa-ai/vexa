@@ -786,7 +786,10 @@ async function onLinkEvent($: any, ev: LinkEvent): Promise<void> {
     if (known && await $.fs.exists(`${dir}/said/${id}`)) { await logLink($, 'ui', String(ev.request?.action ?? ''), 'again'); return }
     const m = await read($)
     const title = ev.request?.params?.native_id === m.nativeId ? (m.title || m.nativeId) : ''
-    if (!(await ownsLink($))) { uiSaid.delete(id); return }
+    // a press addressed to this chat (its panel, or a flow's wake for the desk role it holds) is this chat's whoever owns
+    // the line (review of 03d59f594, HIGH); a press for no chat goes to the line's owner
+    const forMe = Boolean(mySession) && String(ev.request?.params?.chat ?? '') === mySession
+    if (!forMe && !(await ownsLink($))) { uiSaid.delete(id); return }
     await logLink($, 'ui', String(ev.request?.action ?? ''), 'wake')
     // THE PRESS IS ACKED ONLY ONCE THE CHAT TOOK IT (card brain:card/8e490542f481): `$.prompt.submit` resolves when
     // the prompt is in the chat (its own turn, now or once the turn running ends); then the press is marked said and
@@ -949,15 +952,18 @@ async function syncPresses($: any): Promise<void> {
   pressReadingAt = now
   try {
     const dir = `${localHome}/.vexa/link`
-    if (!(await ownsLink($))) return
+    const owner = await ownsLink($)
     if (now - markedAt >= PLUGIN_MARK_MS) { try { await $.fs.write(`${dir}/acks/.plugin`, String(now)); markedAt = now } catch { /* an older vexa-link: it acks */ } }
     const text: string = await $.fs.read(`${dir}/events.jsonl`)
-    let from = linkOffset
+    // the owner reads from where the line is; any other chat reads the whole spool (≤1 MB) for presses addressed to it,
+    // which said/ keeps from being said twice
+    let from = owner ? linkOffset : 0
     if (from < 0) { try { from = Number(String(await $.fs.read(`${dir}/offset`)).trim()) } catch { from = text.length } }
     if (!Number.isFinite(from) || from < 0 || from > text.length) from = 0
     for (const ev of pressesIn(text, from)) {
       const chat = String(ev.request?.params?.chat ?? '')
-      if (chat && chat !== mySession) continue                // another chat's press: the reader in order hands it over
+      if (chat && chat !== mySession) continue                // another chat's press: that chat takes it itself
+      if (!chat && !owner) continue                           // a press for no chat: the line's owner takes it
       if (!UI_ID.test(String(ev.request?.id ?? ''))) continue  // a press it cannot mark said is left to the reader in order
       try { await within($, onLinkEvent($, ev), EVENT_MS) } catch { /* the reader in order tries it again */ }
     }
@@ -1016,10 +1022,14 @@ async function syncLink($: any): Promise<void> {
       // A press made in another chat's panel belongs to that chat: it becomes the most recent one,
       // and it takes the press from here on its next read.
       const chat = ev?.type === 'ui' ? String(ev.request?.params?.chat ?? '') : ''
+      // A press for another chat: that chat takes it itself (syncPresses), so the line steps over it rather than
+      // stopping on it (review of 03d59f594, HIGH: a wake for a chat that never owns the line stalled every event
+      // behind it); its press still counts as that chat's latest use.
       if (chat && chat !== mySession) {
-        try { await $.fs.write(`${dir}/used/${chat}`, String(await $.clock.now())) } catch { /* not handed over */ }
+        try { await $.fs.write(`${dir}/used/${chat}`, String(await $.clock.now())) } catch { /* not counted */ }
         ownerCache = { at: -Infinity, owner: '' }
-        break
+        linkOffset = nl + 1
+        continue
       }
       if (gen !== linkGen) return                     // left behind: a newer read carries the line
       linkOffset = nl + 1
