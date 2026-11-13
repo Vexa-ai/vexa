@@ -1871,9 +1871,10 @@ export function vexaAnswer(x: { panel: boolean; line: 'running' | 'started' | 'o
 let linkChild: any = null
 async function startLink($: any): Promise<'started' | string> {
   let t: any
-  // A start code, not the key (bug #7, card a5934431aa38): the code is worth nothing once vexa-link spends it, so no
-  // transcript or log holds the line's key. An older Vexa that answers a key still starts the line.
-  try { t = await call($, 'listen_token', { code: true }) } catch (err) { return `Vexa did not give this chat a line (${message(err)})` }
+  // A start code or a key, as this Vexa answers (bug #7, card a5934431aa38): a deployment that serves the code exchange
+  // sets VEXA_LISTEN_TOKEN_CODE_ONLY and answers a code, worth nothing once vexa-link spends it; one that does not yet
+  // (Paris on 13 Nov: /user/listen-code/exchange answers 404) answers the key. vexa-link takes either.
+  try { t = await call($, 'listen_token', {}) } catch (err) { return `Vexa did not give this chat a line (${message(err)})` }
   if (!(t?.code || t?.key) || !t?.api_url) return 'Vexa did not give this chat a line (no code in its answer)'
   if (!localHome) localHome = String((await $.env.get('HOME')) ?? '')
   // The line lives as long as this chat's Vexa Live: its loop is the child's life.

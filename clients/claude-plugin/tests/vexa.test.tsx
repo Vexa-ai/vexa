@@ -83,7 +83,7 @@ test('/vexa: the panel opens, the line starts with a listen key, the live call i
   expect(stop.text).toBe('Vexa: stopped listening in this chat.')
 })
 
-test('/vexa starts the line with a one-time code, never the key (bug #7)', async ($, on) => {
+test('/vexa starts the line with the one-time code a code-only Vexa answers (bug #7)', async ($, on) => {
   mock.clock(on)
   mock.store(on)
   const calls: { tool: string; args: any }[] = []
@@ -104,7 +104,7 @@ test('/vexa starts the line with a one-time code, never the key (bug #7)', async
   expect(spawned[0].argv[1]).toMatch(/\/bin\/vexa-link$/)
   expect(spawned[0].argv[2]).toBe('https://claude-rc.dev.vexa.ai')
   expect(spawned[0].env).toEqual({ VEXA_LINK_CODE: 'k3y5t4rt' })
-  expect(calls.find(c => c.tool === 'listen_token')?.args).toEqual({ code: true })
+  expect(calls.find(c => c.tool === 'listen_token')?.args).toEqual({})
   expect(r.text).toMatch(/^Vexa: panel open · line from Vexa started · /)
   expect(r.text).not.toContain('k3y5t4rt')
   const stop: any = await $.command.run({ command: 'vexa', args: 'stop' } as any)
