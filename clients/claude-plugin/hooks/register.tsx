@@ -1871,11 +1871,13 @@ export function vexaAnswer(x: { panel: boolean; line: 'running' | 'started' | 'o
 let linkChild: any = null
 async function startLink($: any): Promise<'started' | string> {
   let t: any
-  try { t = await call($, 'listen_token', {}) } catch (err) { return `Vexa did not give this chat a line (${message(err)})` }
-  if (!t?.key || !t?.api_url) return 'Vexa did not give this chat a line (no key in its answer)'
+  // A start code, not the key (bug #7, card a5934431aa38): the code is worth nothing once vexa-link spends it, so no
+  // transcript or log holds the line's key. An older Vexa that answers a key still starts the line.
+  try { t = await call($, 'listen_token', { code: true }) } catch (err) { return `Vexa did not give this chat a line (${message(err)})` }
+  if (!(t?.code || t?.key) || !t?.api_url) return 'Vexa did not give this chat a line (no code in its answer)'
   if (!localHome) localHome = String((await $.env.get('HOME')) ?? '')
   // The line lives as long as this chat's Vexa Live: its loop is the child's life.
-  linkChild = $.process.spawn({ argv: ['sh', `${$.plugin.root}/bin/vexa-link`, String(t.api_url)], env: { VEXA_LISTEN_KEY: String(t.key) } })
+  linkChild = $.process.spawn({ argv: ['sh', `${$.plugin.root}/bin/vexa-link`, String(t.api_url)], env: t.code ? { VEXA_LINK_CODE: String(t.code) } : { VEXA_LISTEN_KEY: String(t.key) } })
   const child = linkChild
   void (async () => {
     try { for await (const piece of child) await logLink($, 'link', String(piece.text).trim(), 'said') } catch (err) { await logLink($, 'link', message(err), 'failed') }

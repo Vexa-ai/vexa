@@ -83,6 +83,34 @@ test('/vexa: the panel opens, the line starts with a listen key, the live call i
   expect(stop.text).toBe('Vexa: stopped listening in this chat.')
 })
 
+test('/vexa starts the line with a one-time code, never the key (bug #7)', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  const calls: { tool: string; args: any }[] = []
+  const spawned: any[] = []
+  engine(on, { isConnected: true, server: 'plugin:vexa:vexa' }, calls, [], { HOME: '/home/u' }, ['panel_link', 'listen_token', 'get_meeting_transcript', 'list_meetings', 'whats_waiting'], true, false, (e: any) => {
+    if (e.tool === 'listen_token') return text({ code: 'k3y5t4rt', api_url: 'https://claude-rc.dev.vexa.ai' })
+    if (e.tool === 'list_meetings') return text({ meetings: [{ id: 41, platform: 'google_meet', native_meeting_id: 'abc-defg-hij', status: 'active', data: { title: 'Acme pricing call' } }] })
+    return undefined
+  })
+  on('fs.write', () => ({ value: undefined }))
+  on('fs.list', () => ({ value: [] }))
+  on('process.spawn', async function* (_: unknown, e: any) { spawned.push(e); return { value: { code: 0, signal: null } } })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const r: any = await $.command.run({ command: 'vexa', args: '' } as any)
+  expect(calls.find(c => c.tool === 'panel_link')?.args.next).toMatch(/^\/panel(\/meeting\/google_meet\/abc-defg-hij)?\?surface=claude-panel/)
+  expect(spawned).toHaveLength(1)
+  expect(spawned[0].argv.slice(0, 1)).toEqual(['sh'])
+  expect(spawned[0].argv[1]).toMatch(/\/bin\/vexa-link$/)
+  expect(spawned[0].argv[2]).toBe('https://claude-rc.dev.vexa.ai')
+  expect(spawned[0].env).toEqual({ VEXA_LINK_CODE: 'k3y5t4rt' })
+  expect(calls.find(c => c.tool === 'listen_token')?.args).toEqual({ code: true })
+  expect(r.text).toMatch(/^Vexa: panel open · line from Vexa started · /)
+  expect(r.text).not.toContain('k3y5t4rt')
+  const stop: any = await $.command.run({ command: 'vexa', args: 'stop' } as any)
+  expect(stop.text).toBe('Vexa: stopped listening in this chat.')
+})
+
 test("a connector's Vexa is used through Claude Code's connection, and told the plugin is here", async ($, on) => {
   const clock = mock.clock(on)
   const calls: { server?: string; tool: string; args: any }[] = []

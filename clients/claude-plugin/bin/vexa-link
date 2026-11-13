@@ -1,9 +1,12 @@
 #!/bin/sh
 # vexa-link — the one line from the person's Vexa to this Claude, kept open for the whole chat.
 #
-#   VEXA_LISTEN_KEY=<key> sh vexa-link <api_url>
+#   VEXA_LINK_CODE=<code> sh vexa-link <api_url>      (listen_token with code: true; bug #7, card a5934431aa38)
+#   VEXA_LISTEN_KEY=<key> sh vexa-link <api_url>      (an older listen_token answer: still taken)
 #
-# The key and the address come from the Vexa tool `listen_token`. The key is the line's session: Vexa
+# The code and the address come from the Vexa tool `listen_token`. The code is single-use and lives two minutes: this
+# script spends it at POST <api_url>/user/listen-code/exchange for the line's key, so a chat only ever holds something
+# worth nothing after this start (card e6cacb938f54). The key is the line's session: Vexa
 # renews it on every read, so it lasts as long as the line runs, and it ends only when the person
 # revokes it (removes the Vexa connector, revokes the key). Two long reads run side by side and
 # append every event, one JSON object per line, to ~/.vexa/link/events.jsonl, where the Vexa Live
@@ -21,17 +24,29 @@
 # prints and exits only when it cannot go on:
 #   running <pid>   another vexa-link already carries the events          (exit 0)
 #   revoked         the person ended the line (connector removed, key revoked) (exit 2)
+#   unreachable     Vexa did not answer while the code could still be spent    (exit 3)
+#   code-spent      something spent this code first                            (exit 4)
+#   code-expired    the code is past its two minutes: get a new one            (exit 5)
 set -u
 export LC_ALL=C   # byte ranges in the claim checks below: [a-z] means a-z on every sh (review of 03d59f594)
 api=${1:?api_url}
-key=${VEXA_LISTEN_KEY:?VEXA_LISTEN_KEY}
+start_code=${VEXA_LINK_CODE:-}
+key=${VEXA_LISTEN_KEY:-}
+unset VEXA_LINK_CODE VEXA_LISTEN_KEY
+[ -n "$start_code" ] || [ -n "$key" ] || { echo "VEXA_LINK_CODE (or VEXA_LISTEN_KEY) is required" >&2; exit 64; }
 dir="${HOME:-/tmp}/.vexa/link"
 spool="$dir/events.jsonl"
 mkdir -p "$dir"
-if [ -f "$dir/link.pid" ] && kill -0 "$(cat "$dir/link.pid" 2>/dev/null)" 2>/dev/null; then
-  echo "running $(cat "$dir/link.pid")"; exit 0
+# Taken atomically (noclobber), so the same command run twice at once cannot spend its code twice; a start that finds a
+# line running spends no code.
+take_pid() { ( set -C; echo $$ > "$dir/link.pid" ) 2>/dev/null; }
+if ! take_pid; then
+  if kill -0 "$(cat "$dir/link.pid" 2>/dev/null)" 2>/dev/null; then
+    echo "running $(cat "$dir/link.pid")"; exit 0
+  fi
+  rm -f "$dir/link.pid"
+  take_pid || { echo "running $(cat "$dir/link.pid" 2>/dev/null)"; exit 0; }
 fi
-echo $$ > "$dir/link.pid"
 rm -f "$dir/stop"
 version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$(dirname "$0")/../.claude-plugin/plugin.json" 2>/dev/null | head -n 1)
 
@@ -43,6 +58,27 @@ append() {
   printf '%s\n' "$1" >> "$spool"
 }
 stop() { [ -f "$dir/stop" ] || touch "$dir/stop"; }
+
+# The code buys the key, once (card e6cacb938f54). No answer yet: asked again while the code can still live; a Vexa that
+# never answered has not spent it. The key stays in this script's memory: never exported, in no file, on no command line.
+leave() { rm -f "$dir/link.pid"; state "$1"; echo "$1"; exit "$2"; }
+buy_key() {
+  tries=0
+  while :; do
+    bought=$(printf '{"code":"%s"}' "$start_code" | curl -sS --max-time 15 -w '\n%{http_code}' -X POST \
+      -H 'Content-Type: application/json' --data-binary @- "$api/user/listen-code/exchange" 2>/dev/null)
+    case "$(printf '%s\n' "$bought" | tail -n 1)" in
+      200|201) key=$(printf '%s\n' "$bought" | sed -n 's/.*"key": *"\([^"]*\)".*/\1/p' | head -n 1); unset bought
+        [ -n "$key" ] && return 0
+        leave unreachable 3 ;;
+      409) leave code-spent 4 ;;
+      410) leave code-expired 5 ;;
+      *) tries=$((tries + 1))
+        [ "$tries" -ge 7 ] && leave unreachable 3
+        sleep 5 ;;
+    esac
+  done
+}
 
 # A refusal ends the line only when it holds: three in a row, five seconds apart. A gateway being
 # swapped can refuse a read or two while its key check comes back; the person's revoke refuses every one.
@@ -155,6 +191,8 @@ on_asks() {
   n=0; while [ "$n" -lt 720 ] && [ ! -f "$dir/stop" ]; do sleep 5; n=$((n + 1)); done
 }
 
+[ -n "$start_code" ] && buy_key
+start_code=""
 state running
 rm -f "$dir/in-this-call.json" "$dir/missing-on_asks.json"
 read_loop on_events events_url &

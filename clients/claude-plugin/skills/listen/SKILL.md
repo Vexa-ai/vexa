@@ -33,12 +33,16 @@ tab, bring it to the front and show the pane (`preview_start` with the panel's a
 browser. Never paste that link into the chat: it signs them in. If the line from Vexa isn't running
 yet, start it in the same answer. Answer with the tool calls alone, no text.
 
-Then, once per chat, start the line from Vexa: call `listen_token` (it answers `key`, `api_url`;
-use only those) and run, with the Bash tool and `run_in_background: true`:
+Then, once per chat, start the line from Vexa: call `listen_token` with `code: true` (it answers `code`,
+`api_url`; use only those) and run at once, with the Bash tool and `run_in_background: true`:
 
 ```
-VEXA_LISTEN_KEY=<key> sh "${CLAUDE_PLUGIN_ROOT}/bin/vexa-link" <api_url>
+VEXA_LINK_CODE=<code> sh "${CLAUDE_PLUGIN_ROOT}/bin/vexa-link" <api_url>
 ```
+
+The code works once and for two minutes; the script spends it for the line's key, which no chat ever holds. It prints
+`code-expired` when it was too late (call `listen_token` again) and `code-spent` when something used it first. An older
+Vexa that answers `key` instead: `VEXA_LISTEN_KEY=<key> sh "${CLAUDE_PLUGIN_ROOT}/bin/vexa-link" <api_url>`.
 
 One runs per Mac, whichever chat starts it; `running <pid>` means one already runs: fine. Vexa
 talks to the most recently used chat among those with the Vexa panel open, so opening the panel here
