@@ -673,8 +673,8 @@ async def request_bot(
     auth_userdata_path: Optional[str] = (
         f"bot-account:{bot_account_id}" if bot_account_id else (auth_cfg.userdata_path if auth_cfg else None)
     )
-    if respawn_of is not None and authenticated:
-        raise ValueError("a Meet respawn is for an anonymous bot")
+    if respawn_of is not None and authenticated and bot_account_id is None:
+        raise ValueError("a Meet respawn is anonymous or joins as a bot account")
     auth_s3: dict[str, Optional[str]] = {}
     if auth_cfg is not None:
         auth_s3 = {
@@ -804,7 +804,13 @@ async def request_bot(
     )
     if respawn_of is not None:
         # The meeting already exists and is already counted: only this run's admission is new.
-        await repo.merge_meeting_data(respawn_of["id"], {"service_authority": authority_record})
+        # A signed-in pod (D402) records its account on the row, as a first spawn does: the busy check,
+        # the signed-out hook and the room memory read it there.
+        await repo.merge_meeting_data(respawn_of["id"], {
+            "service_authority": authority_record,
+            **({"auth_userdata_path": auth_userdata_path, "bot_account_id": bot_account_id}
+               if bot_account_id else {}),
+        })
         row = respawn_of
     elif reused_row is not None:
         # continue_meeting reopens an EXISTING terminal row (no new active row inserted), so it is not

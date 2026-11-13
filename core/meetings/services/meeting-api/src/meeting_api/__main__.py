@@ -818,7 +818,19 @@ def _attach_background_loops(
                 token_secret=os.getenv("ADMIN_TOKEN") or None,
                 redis_url=os.getenv("REDIS_URL"),
                 redis_grant=bot_redis.grant if bot_redis is not None else None,
+                resolve_account=_signed_in_account,
             )
+
+        async def _signed_in_account(row):
+            # D402: the pod after an anonymous refusal joins as a free company Meet account.
+            accounts = getattr(app.state, "bot_accounts", None)
+            if accounts is None:
+                return None
+
+            async def _busy(account):
+                return await meeting_repo.find_active_by_userdata(f"bot-account:{account['id']}") is not None
+            return await accounts.resolve_for_spawn(row["user_id"], row["platform"], "default",
+                                                    room="needs_sign_in", busy=_busy)
 
         while True:
             try:

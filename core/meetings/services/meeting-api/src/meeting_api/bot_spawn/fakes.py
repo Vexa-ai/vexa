@@ -102,6 +102,19 @@ class InMemoryMeetingRepo:
                         "end_time": m.get("end_time"), "updated_at": m.get("updated_at")}
         return None
 
+    async def room_history(self, platform, native_meeting_id, since) -> list:
+        from datetime import datetime, timezone
+
+        from .room_memory import HISTORY_LIMIT
+
+        def created(m):
+            t = datetime.fromisoformat(str(m["created_at"]).replace("Z", "+00:00"))
+            return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+        rows = [dict(m) for m in self._meetings.values()
+                if m["platform"] == platform and m["native_meeting_id"] == native_meeting_id
+                and created(m) >= since]
+        return sorted(rows, key=lambda m: (created(m), m["id"]), reverse=True)[:HISTORY_LIMIT]
+
     async def find_latest(self, user_id, platform, native_meeting_id) -> Optional[dict]:
         rows = [
             m for m in self._meetings.values()

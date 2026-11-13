@@ -52,9 +52,17 @@ def _refused(sid, node="node-a"):
     )
 
 
-def _due(repo, runtime, *, after_s=120):
+ACCOUNT = {"id": "c0ffee" + "0" * 26, "owner": "company", "platform": "google", "state": "ok"}
+
+
+async def _company(_row):
+    return ACCOUNT
+
+
+def _due(repo, runtime, *, after_s=120, resolve_account=_company):
     later = datetime.now(timezone.utc) + timedelta(seconds=after_s)
-    return _run(meet_respawn.respawn_due(repo, runtime, token_secret=SECRET, redis_url="r", now=later))
+    return _run(meet_respawn.respawn_due(repo, runtime, token_secret=SECRET, redis_url="r", now=later,
+                                         resolve_account=resolve_account))
 
 
 @pytest.fixture
@@ -127,6 +135,7 @@ def test_refusal_keeps_the_meeting_joining_and_the_next_pod_avoids_the_node(worl
     assert row["status"] == "joining", "nobody is told the meeting failed"
     block = row["data"]["meet_respawn"]
     assert block["state"] == "pending" and len(block["attempts"]) == 1
+    assert block["signed_in_pod"] is True and block["attempts"][0]["signed_in"] is False   # D402
     assert block["attempts"][0]["node"] == "node-a"
     assert block["attempts"][0]["workload_id"] == first_workload
 
@@ -145,6 +154,9 @@ def test_refusal_keeps_the_meeting_joining_and_the_next_pod_avoids_the_node(worl
     assert row["data"]["meet_respawn"]["state"] == "running"
     sid2 = _session(repo, mid)
     assert sid2 != sid1 and row["bot_container_id"] != first_workload
+    # D402: the next pod joins SIGNED-IN as the company account, and the row records it.
+    assert row["data"]["bot_account_id"] == ACCOUNT["id"]
+    assert row["data"]["auth_userdata_path"] == f"bot-account:{ACCOUNT['id']}"
 
     # The new bot reports in over the same row and is admitted.
     assert client.post(LIFECYCLE, json=_event(sid2, "joining")).status_code == 200
@@ -153,23 +165,36 @@ def test_refusal_keeps_the_meeting_joining_and_the_next_pod_avoids_the_node(worl
     assert repo._meetings[mid]["status"] == "active"
 
 
-def test_the_last_pod_applies_the_refusal(world):
+def test_a_refused_signed_in_pod_applies_the_refusal_and_no_anonymous_pod_follows(world):
+    """D402: anonymous pod 1 refused → signed-in pod 2 → refused too → the meeting fails. Never a third,
+    anonymous, pod (the default policy still says 3 pods)."""
     repo, runtime, client = world
     mid, sid = _joining(world)
-    for pod, node in enumerate(("node-a", "node-b"), start=2):
-        assert client.post(LIFECYCLE, json=_refused(sid, node=node)).json().get("respawn") == "scheduled"
-        assert _due(repo, runtime) == 1
-        sid = _session(repo, mid)
-        assert client.post(LIFECYCLE, json=_event(sid, "joining")).status_code == 200
-    assert runtime.specs[2]["avoidNodes"] == ["node-a", "node-b"]
-
-    r = client.post(LIFECYCLE, json=_refused(sid, node="node-c"))
+    assert client.post(LIFECYCLE, json=_refused(sid, node="node-a")).json().get("respawn") == "scheduled"
+    assert _due(repo, runtime) == 1
+    sid = _session(repo, mid)
+    assert client.post(LIFECYCLE, json=_event(sid, "joining")).status_code == 200
+    r = client.post(LIFECYCLE, json=_refused(sid, node="node-b"))
     assert r.status_code == 200 and "respawn" not in r.json(), r.text
     row = repo._meetings[mid]
     assert row["status"] == "failed"
-    assert row["data"]["meet_respawn"]["state"] == "exhausted"
-    assert len(row["data"]["meet_respawn"]["attempts"]) == 3
-    assert len(runtime.specs) == 3, "three pods, no fourth"
+    block = row["data"]["meet_respawn"]
+    assert block["state"] == "exhausted"
+    assert [a["signed_in"] for a in block["attempts"]] == [False, True]
+    assert len(runtime.specs) == 2, "two pods: anonymous, then signed-in; no third"
+
+
+def test_no_free_account_for_the_signed_in_pod_fails_the_meeting(world):
+    repo, runtime, client = world
+    mid, sid = _joining(world)
+    assert client.post(LIFECYCLE, json=_refused(sid)).json().get("respawn") == "scheduled"
+
+    async def none_free(_row):
+        return None
+    assert _due(repo, runtime, resolve_account=none_free) == 0
+    row = repo._meetings[mid]
+    assert row["status"] == "failed" and row["data"]["meet_respawn"]["state"] == "exhausted"
+    assert len(runtime.specs) == 1, "no anonymous retry instead"
 
 
 def test_no_pod_starts_past_the_window(world):

@@ -211,6 +211,27 @@ class SqlAlchemyMeetingRepo:
                 "updated_at": _iso_utc(row.updated_at),
             }
 
+    async def room_history(self, platform, native_meeting_id, since) -> list:
+        """Every person's meetings of one room created at or after ``since``, newest first, at most
+        room_memory.HISTORY_LIMIT (bot_spawn/room_memory.py reads only their join outcomes)."""
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting
+        from .room_memory import HISTORY_LIMIT
+
+        async with self._session_factory() as db:
+            stmt = (
+                select(Meeting)
+                .where(
+                    Meeting.platform == platform,
+                    Meeting.platform_specific_id == native_meeting_id,
+                    Meeting.created_at >= since.replace(tzinfo=None),
+                )
+                .order_by(Meeting.created_at.desc(), Meeting.id.desc())
+                .limit(HISTORY_LIMIT)
+            )
+            return [_row_to_dict(m) for m in (await db.execute(stmt)).scalars().all()]
+
     async def find_latest(self, user_id, platform, native_meeting_id) -> Optional[dict]:
         from sqlalchemy import select
 

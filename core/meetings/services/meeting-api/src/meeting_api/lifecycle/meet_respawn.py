@@ -19,7 +19,13 @@ So a refused bot is not the end of the meeting. When its terminal callback says
     ``VEXA_MEET_RESPAWN_WINDOW_S`` (default 900 s) after the first, the last refusal is applied as the
     meeting's terminal, as before.
 
-Only an anonymous Meet bot qualifies: a signed-in bot would rejoin as the same account. The state is
+D402 (13 Nov 2026): a Google refusal is per room and deterministic, so the pod after an anonymous
+refusal joins SIGNED-IN with a company bot account, and that is the last pod: there are no anonymous
+retries. A signed-in pod refused, or no free account, applies the refusal as the terminal. The refused
+attempt on the row is also the room's memory (bot_spawn/room_memory.py): the room's next bot starts
+signed-in.
+
+Only an anonymous FIRST bot starts the block: a signed-in one would rejoin as the same account. The state is
 one block on the meeting row, written only here and by the stop route (``cancelled``):
 
     data.meet_respawn = {
@@ -207,8 +213,10 @@ async def on_bot_terminal(repo: Any, body: Mapping[str, Any], *, now: Optional[d
     pol = policy()
     now = now or _now()
     ev = _raw_evidence(body)
+    signed_in = bool(block.get("signed_in_pod"))
     attempt = {
         "session_uid": session_uid,
+        "signed_in": signed_in,
         "workload_id": row.get("bot_container_id"),
         "node": ev.get("node") if isinstance(ev.get("node"), str) else None,
         "screenshot_key": ev.get("screenshot_key") if isinstance(ev.get("screenshot_key"), str) else None,
@@ -221,14 +229,14 @@ async def on_bot_terminal(repo: Any, body: Mapping[str, Any], *, now: Optional[d
     delay = pol.delay_before(pod_next)
     next_at = now + timedelta(seconds=delay)
     new_block = {**block, "attempts": attempts}
-    if not pol.enabled or pod_next > pol.pods or (next_at - first_at).total_seconds() > pol.window_s:
+    if not pol.enabled or signed_in or (next_at - first_at).total_seconds() > pol.window_s:
         new_block.update(state=EXHAUSTED)
         new_block.pop("next_at", None)
         await _write(repo, row["id"], new_block)
         log_event("meet_respawn_exhausted", audience="user", level="warning", span="lifecycle.callback",
                   meeting_id=str(row["id"]), fields={"pods": len(attempts), "node": attempt["node"]})
         return None
-    new_block.update(state=PENDING, next_at=_iso(next_at))
+    new_block.update(state=PENDING, next_at=_iso(next_at), signed_in_pod=True)
     if not await _write(repo, row["id"], new_block):
         return None   # unrecorded → apply the terminal, never strand the meeting on a retry nobody runs
     log_event("meet_respawn_scheduled", audience="user", level="warning", span="lifecycle.callback",
@@ -256,13 +264,17 @@ async def respawn_due(
     token_secret: Optional[str] = None,
     redis_url: Optional[str] = None,
     redis_grant: Any = None,
+    resolve_account: Any = None,
     now: Optional[datetime] = None,
 ) -> int:
     """Start the next pod for every meeting whose respawn is due. Returns how many were started.
 
     Run single-flight across replicas (``__main__``'s ``_guarded``). A row is marked ``spawning``
     before its spawn, so a slow spawn is never doubled by the next tick; a spawn that cannot start
-    lands the row on its terminal through ``request_bot``'s own failure path."""
+    lands the row on its terminal through ``request_bot``'s own failure path.
+
+    ``resolve_account(row)`` answers the company bot account the signed-in pod joins as (None, or a
+    raise, when there is none free): without one the refusal lands as the terminal."""
     from ..bot_spawn.service import MeetingStopped, request_bot
 
     lister = getattr(repo, "list_meet_respawns", None)
@@ -286,6 +298,23 @@ async def respawn_due(
         if not await _write(repo, row["id"], {**block, "state": SPAWNING}):
             continue
         spawn = dict(block.get("spawn") or {})
+        account = None
+        if block.get("signed_in_pod"):
+            try:
+                account = await resolve_account(row) if resolve_account is not None else None
+            except Exception:  # noqa: BLE001 — every account busy, or the store cannot answer
+                account = None
+            if account is None:
+                await repo.fail_meeting(
+                    meeting_id=row["id"],
+                    reason="Google Meet refused the anonymous bot and no Vexa bot account was free to join signed-in",
+                    failure_stage="joining",
+                    completion_reason=REFUSED_COMPLETION_REASON,
+                    data={KEY: {**block, "state": EXHAUSTED}},
+                )
+                log_event("meet_respawn_no_account", audience="user", level="warning",
+                          span="meetings.meet_respawn", meeting_id=str(row["id"]), fields={"pod": pod})
+                continue
         try:
             await request_bot(
                 repo, runtime,
@@ -300,6 +329,7 @@ async def respawn_due(
                 redis_url=redis_url,
                 redis_grant=redis_grant,
                 respawn_of=row,
+                bot_account=account,
                 avoid_nodes=tried_nodes(block) or None,
                 **{k: spawn[k] for k in SPAWN_FIELDS if k in spawn},
             )

@@ -7,6 +7,8 @@ semantics), the runtime (`FakeRuntimeClient`), meeting-api's Redis (fakeredis un
 """
 from __future__ import annotations
 
+import asyncio
+
 import base64
 import json
 from urllib.parse import urlsplit
@@ -513,11 +515,27 @@ def test_the_default_falls_back_to_a_usable_company_account(rig):
     company = rig.seed("company")
     _spawn(rig)
     assert "authenticated" not in _inv(rig)  # admins policy: a person who is no admin
+    # D402: a Meet room nobody has seen joins anonymous, even with a usable company account …
     r = _spawn(rig, uid=PERSON_ADMIN, native="abc-defg-hik")
+    assert "bot_account_id" not in rig.repo._meetings[r.json()["id"]]["data"]
+    # … and a room that refused an anonymous bot joins as the company account from the first try.
+    _refused_room(rig, "abc-defg-hil")
+    r = _spawn(rig, uid=PERSON_ADMIN, native="abc-defg-hil")
     assert rig.repo._meetings[r.json()["id"]]["data"]["bot_account_id"] == company["id"]
     rig.policy = "none"
-    r = _spawn(rig, uid=PERSON_ADMIN, native="abc-defg-hil")
+    _refused_room(rig, "abc-defg-him")
+    r = _spawn(rig, uid=PERSON_ADMIN, native="abc-defg-him")
     assert "bot_account_id" not in rig.repo._meetings[r.json()["id"]]["data"]
+
+
+def _refused_room(rig, native):
+    """A past meeting of the room (another person's) whose anonymous bot Meet refused an hour ago."""
+    from datetime import datetime, timedelta, timezone
+    at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    m = asyncio.run(rig.repo.create_meeting(user_id=OTHER, platform="google_meet", native_meeting_id=native,
+                                            data={"meet_respawn": {"state": "exhausted",
+                                                                   "attempts": [{"at": at, "signed_in": False}]}}))
+    rig.repo._meetings[m["id"]].update(status="failed", created_at=at)
 
 
 def test_an_explicit_account_is_held_to_every_rule(rig):

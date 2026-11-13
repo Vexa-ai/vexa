@@ -487,13 +487,21 @@ class BotAccounts:
         return {"account_id": account_id, "deleted": True}
 
     # ── the meeting bot ───────────────────────────────────────────────────────────────────────
-    async def resolve_for_spawn(self, user_id: int, meeting_platform: str, choice: Optional[str]) -> Optional[dict]:
+    async def resolve_for_spawn(self, user_id: int, meeting_platform: str, choice: Optional[str], *,
+                                room: Optional[str] = None, busy=None) -> Optional[dict]:
         """The bot account a ``POST /bots`` joins as, or ``None`` (a guest bot, as before).
 
         ``choice``: an account id, ``"default"`` (also when absent) or ``"none"``. ``default`` is the
         caller's most recently verified ``ok`` account for the platform, else a company account
         usable to them, else none — and a store that cannot answer is none, never a failed spawn. An
-        explicit id is held to every rule: configured, visible, usable, same platform, signed in."""
+        explicit id is held to every rule: configured, visible, usable, same platform, signed in.
+
+        ``room`` (a Google Meet room's verdict, bot_spawn/room_memory.py; None elsewhere) narrows
+        ``default`` for a COMPANY account (D402): the caller's own account still comes first; a company
+        account only for a room that ``needs_sign_in`` — the first one ``busy`` (an async
+        account → bool, one live bot per account) does not hold — and none for a room an anonymous
+        bot gets into or one never seen. A room that needs sign-in with every company account busy
+        is a 409: an anonymous bot there is refused for certain."""
         choice = "default" if choice is None else choice
         if choice == "none":
             return None
@@ -536,12 +544,24 @@ class BotAccounts:
         own = newest([a for a in ok if a.get("owner") == mine])
         if own is not None:
             return own
+        if room is not None and room != "needs_sign_in":
+            return None                                   # anonymous admits here, or nobody knows yet
         company = [a for a in ok if a.get("owner") == "company"]
         if not company:
             return None
         roles = await self.admin.roles(user_id)
         policy = self.policy()
-        return newest([a for a in company if usable(a, user_id=user_id, policy=policy, roles=roles)])
+        mine_ok = [a for a in company if usable(a, user_id=user_id, policy=policy, roles=roles)]
+        if room is None:
+            return newest(mine_ok)
+        for a in sorted(mine_ok, key=lambda a: a.get("verified_at") or "", reverse=True):
+            if busy is None or not await busy(a):
+                return a
+        if not mine_ok:
+            return None
+        raise BotAccountRefused(409, (
+            "this Google Meet room admits only signed-in bots and every Vexa bot account is in another "
+            "meeting right now; send the bot again when one is free"))
 
     async def restore_files(self, account_id: str) -> list:
         _account, files = await self._get_account(account_id, actor="meeting-api")
