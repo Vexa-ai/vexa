@@ -848,8 +848,14 @@ async def request_bot(
         # The account this run joins as; None clears a prior run's, so a continued guest run is not
         # mistaken for an account's bot by the restore, the write-back or the signed-out hook.
         reopen_patch["bot_account_id"] = bot_account_id
-        # A continued run starts its own respawn budget; None clears a prior run's.
-        reopen_patch[meet_respawn.KEY] = respawn_block
+        # A continued run starts its own respawn budget. A run with none (signed-in) closes the prior
+        # run's block but KEEPS its attempts: they are the room's memory (review M1, D402).
+        prior_block = (reused_row.get("data") or {}).get(meet_respawn.KEY)
+        if respawn_block is not None:
+            reopen_patch[meet_respawn.KEY] = respawn_block
+        elif isinstance(prior_block, dict):
+            closed = {k: v for k, v in prior_block.items() if k != "next_at"}
+            reopen_patch[meet_respawn.KEY] = {**closed, "state": meet_respawn.EXHAUSTED}
         row = await repo.reopen_meeting(meeting_id=reused_row["id"], data_patch=reopen_patch)
     else:
         meeting_data: dict[str, Any] = {}

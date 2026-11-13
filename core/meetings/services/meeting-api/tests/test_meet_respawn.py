@@ -270,3 +270,18 @@ def test_a_next_pod_that_cannot_start_fails_the_meeting(world):
     runtime._fail = True
     assert _due(repo, runtime) == 0
     assert repo._meetings[mid]["status"] == "failed"
+
+
+def test_a_continued_signed_in_run_keeps_the_rooms_refusal(world):
+    """Review M1: continue_meeting on a refused row, signed-in this time, must not erase the attempts."""
+    repo, runtime, client = world
+    mid, sid = _joining(world)
+    assert client.post(LIFECYCLE, json=_refused(sid)).json().get("respawn") == "scheduled"
+
+    async def none_free(_row):
+        return None
+    _due(repo, runtime, resolve_account=none_free)            # the meeting fails, refused
+    assert repo._meetings[mid]["status"] == "failed"
+    _spawn(repo, runtime, continue_meeting=True, bot_account=ACCOUNT)
+    block = repo._meetings[mid]["data"]["meet_respawn"]
+    assert block["state"] == "exhausted" and [a["signed_in"] for a in block["attempts"]] == [False]

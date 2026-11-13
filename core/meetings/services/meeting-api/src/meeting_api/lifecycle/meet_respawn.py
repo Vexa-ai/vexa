@@ -241,7 +241,7 @@ async def on_bot_terminal(repo: Any, body: Mapping[str, Any], *, now: Optional[d
         return None   # unrecorded → apply the terminal, never strand the meeting on a retry nobody runs
     log_event("meet_respawn_scheduled", audience="user", level="warning", span="lifecycle.callback",
               meeting_id=str(row["id"]),
-              fields={"pod": pod_next, "of": pol.pods, "delay_s": delay, "refused_on_node": attempt["node"]})
+              fields={"pod": pod_next, "of": 2, "signed_in": True, "delay_s": delay, "refused_on_node": attempt["node"]})
     return new_block
 
 
@@ -307,7 +307,7 @@ async def respawn_due(
             if account is None:
                 await repo.fail_meeting(
                     meeting_id=row["id"],
-                    reason="Google Meet refused the anonymous bot and no Vexa bot account was free to join signed-in",
+                    reason="Google Meet refused the anonymous bot and no Vexa bot account was available to join signed-in",
                     failure_stage="joining",
                     completion_reason=REFUSED_COMPLETION_REASON,
                     data={KEY: {**block, "state": EXHAUSTED}},

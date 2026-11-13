@@ -82,11 +82,11 @@ def test_room_verdict_reads_every_persons_rows_of_that_room_only():
     assert asyncio.run(rm.room_verdict(repo, "zoom", "aaa-bbbb-ccc", NOW)) is None
 
 
-def test_a_lookup_that_fails_never_fails_the_spawn():
+def test_a_lookup_that_fails_reads_unseen_never_fails_the_spawn():
     class Broken:
         async def room_history(self, *a):
             raise RuntimeError("db down")
-    assert asyncio.run(rm.room_verdict(Broken(), "google_meet", "aaa-bbbb-ccc", NOW)) is None
+    assert asyncio.run(rm.room_verdict(Broken(), "google_meet", "aaa-bbbb-ccc", NOW)) == rm.UNSEEN
 
 
 # ── resolve_for_spawn follows the room ──────────────────────────────────────────────────────────────
@@ -144,3 +144,8 @@ def test_the_callers_own_account_still_comes_first_and_none_means_anonymous():
     ba = _ba([_acct(1), own])
     assert asyncio.run(ba.resolve_for_spawn(7, "google_meet", None, room=rm.UNSEEN))["id"] == own["id"]
     assert asyncio.run(ba.resolve_for_spawn(7, "google_meet", "none", room=rm.NEEDS_SIGN_IN)) is None
+
+
+def test_many_signed_in_rows_do_not_push_the_refusal_out():
+    rows = [admitted(timedelta(hours=h), signed_in=True) for h in range(1, 120)] + [refused(timedelta(days=6))]
+    assert len(rows) < rm.HISTORY_LIMIT and rm.verdict(rows, NOW) == rm.NEEDS_SIGN_IN

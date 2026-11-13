@@ -219,9 +219,15 @@ class SqlAlchemyMeetingRepo:
         from ..sessions.models import Meeting
         from .room_memory import HISTORY_LIMIT
 
+        # Only the fields the verdict reads (review Low: never every person's whole `data`).
         async with self._session_factory() as db:
             stmt = (
-                select(Meeting)
+                select(
+                    Meeting.status, Meeting.start_time, Meeting.end_time, Meeting.updated_at,
+                    Meeting.data["meet_respawn"]["attempts"].label("attempts"),
+                    Meeting.data["auth_userdata_path"].astext.label("auth_userdata_path"),
+                    Meeting.data["completion_reason"].astext.label("completion_reason"),
+                )
                 .where(
                     Meeting.platform == platform,
                     Meeting.platform_specific_id == native_meeting_id,
@@ -230,7 +236,12 @@ class SqlAlchemyMeetingRepo:
                 .order_by(Meeting.created_at.desc(), Meeting.id.desc())
                 .limit(HISTORY_LIMIT)
             )
-            return [_row_to_dict(m) for m in (await db.execute(stmt)).scalars().all()]
+            return [{
+                "status": r.status, "start_time": _iso_utc(r.start_time), "end_time": _iso_utc(r.end_time),
+                "updated_at": _iso_utc(r.updated_at),
+                "data": {"meet_respawn": {"attempts": r.attempts if isinstance(r.attempts, list) else []},
+                         "auth_userdata_path": r.auth_userdata_path, "completion_reason": r.completion_reason},
+            } for r in (await db.execute(stmt)).all()]
 
     async def find_latest(self, user_id, platform, native_meeting_id) -> Optional[dict]:
         from sqlalchemy import select

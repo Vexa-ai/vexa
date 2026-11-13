@@ -24,8 +24,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Optional
 
 WINDOW_DAYS = 30
-#: Rows read at most per decision (newest first): a room's last month of bots, bounded.
-HISTORY_LIMIT = 50
+#: Rows read at most per decision (newest first): a room's last month of bots, bounded. Wide on purpose
+#: (review M2): later signed-in rows decide nothing and must not push the refusal out of view; each row
+#: is a handful of fields, never its whole data.
+HISTORY_LIMIT = 500
 NEEDS_SIGN_IN, ANONYMOUS_OK, UNSEEN = "needs_sign_in", "anonymous_ok", "unseen"
 REFUSED = "platform_join_refused"
 #: Row statuses an admitted bot's meeting goes through (a start_time is set on admission).
@@ -79,8 +81,8 @@ def verdict(rows: Iterable[Mapping[str, Any]], now: Optional[datetime] = None) -
 
 async def room_verdict(repo: Any, platform: str, native_meeting_id: str,
                        now: Optional[datetime] = None) -> Optional[str]:
-    """The verdict for a Google Meet room, or None when this isn't a Meet room or the repo can't say
-    (a lookup that fails never fails a spawn: the bot then joins as it did before this rule)."""
+    """The verdict for a Google Meet room, or None when this isn't a Meet room (or a repo without the
+    read). A lookup that fails never fails a spawn: the room reads ``unseen`` (review Low)."""
     if platform != "google_meet" or not native_meeting_id:
         return None
     reader = getattr(repo, "room_history", None)
@@ -89,6 +91,6 @@ async def room_verdict(repo: Any, platform: str, native_meeting_id: str,
     now = now or datetime.now(timezone.utc)
     try:
         rows = await reader(platform, native_meeting_id, since(now))
-    except Exception:  # noqa: BLE001
-        return None
+    except Exception:  # noqa: BLE001 — the room cannot be read: anonymous, as for a room never seen
+        return UNSEEN
     return verdict(rows, now)
