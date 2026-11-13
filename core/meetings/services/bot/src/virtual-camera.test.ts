@@ -108,13 +108,13 @@ async function browserSide(): Promise<void> {
     check('getUserMedia({video}) → one video track', r.videoTracks === 1, String(r.videoTracks));
     check('frame is 1280x720', r.size[0] === 1280 && r.size[1] === 720, String(r.size));
     check('center shows the avatar (Aimable blue)', near(r.center, [0, 76, 250]), String(r.center));
-    check('corner is the navy background', near(r.corner, [12, 29, 63]), String(r.corner));
+    check('corner is the light steel blue background', near(r.corner, [201, 212, 230]), String(r.corner));
     check('addTrack swaps outgoing video for the canvas', r.swappedOnAdd === true);
     check('replaceTrack swaps outgoing video for the canvas', r.swappedOnReplace === true);
 
     check('meet: no forced video line in an audio-only offer', r.offersVideo === false);
     const b = await probe(null, url);
-    if (b) check('no avatar → blank navy tile (not Chrome test pattern)', near(b.center, [12, 29, 63]), String(b.center));
+    if (b) check('no avatar → blank light steel blue tile (not Chrome test pattern)', near(b.center, [201, 212, 230]), String(b.center));
   } finally {
     server.close();
   }
