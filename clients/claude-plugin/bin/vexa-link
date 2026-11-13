@@ -51,8 +51,16 @@ if ! take_pid; then
   if kill -0 "$held" 2>/dev/null; then
     echo "running $held"; exit 0
   fi
-  # a stale file is moved aside by one start only (mv is atomic): the other finds it gone and loses the take
-  mv "$dir/link.pid" "$dir/link.pid.stale.$$" 2>/dev/null && rm -f "$dir/link.pid.stale.$$"
+  # A stale file is moved aside, then checked: if what was moved is not the dead pid read above, another start took
+  # link.pid in between, so it is put back and this start yields (re-review of 7f918007, M).
+  if mv "$dir/link.pid" "$dir/link.pid.stale.$$" 2>/dev/null; then
+    if [ "$(cat "$dir/link.pid.stale.$$" 2>/dev/null)" = "$held" ]; then
+      rm -f "$dir/link.pid.stale.$$"
+    else
+      mv "$dir/link.pid.stale.$$" "$dir/link.pid" 2>/dev/null
+      echo "running $(cat "$dir/link.pid" 2>/dev/null)"; exit 0
+    fi
+  fi
   take_pid || { echo "running $(cat "$dir/link.pid" 2>/dev/null)"; exit 0; }
 fi
 trap 'stop; drop_pid' INT TERM       # set once the pid is ours, before the code is spent (review L5)
