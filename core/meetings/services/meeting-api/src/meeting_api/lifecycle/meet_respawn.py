@@ -229,14 +229,18 @@ async def on_bot_terminal(repo: Any, body: Mapping[str, Any], *, now: Optional[d
     delay = pol.delay_before(pod_next)
     next_at = now + timedelta(seconds=delay)
     new_block = {**block, "attempts": attempts}
-    if not pol.enabled or signed_in or (next_at - first_at).total_seconds() > pol.window_s:
+    from ..bot_spawn.room_memory import routing_on
+    routed = routing_on()
+    if (not pol.enabled or signed_in or pod_next > pol.pods
+            or (next_at - first_at).total_seconds() > pol.window_s):
         new_block.update(state=EXHAUSTED)
         new_block.pop("next_at", None)
         await _write(repo, row["id"], new_block)
         log_event("meet_respawn_exhausted", audience="user", level="warning", span="lifecycle.callback",
                   meeting_id=str(row["id"]), fields={"pods": len(attempts), "node": attempt["node"]})
         return None
-    new_block.update(state=PENDING, next_at=_iso(next_at), signed_in_pod=True)
+    # Routing on (D402): the pod after an anonymous refusal joins signed-in. Off: anonymous, as before.
+    new_block.update(state=PENDING, next_at=_iso(next_at), signed_in_pod=routed)
     if not await _write(repo, row["id"], new_block):
         return None   # unrecorded → apply the terminal, never strand the meeting on a retry nobody runs
     log_event("meet_respawn_scheduled", audience="user", level="warning", span="lifecycle.callback",
@@ -273,8 +277,10 @@ async def respawn_due(
     before its spawn, so a slow spawn is never doubled by the next tick; a spawn that cannot start
     lands the row on its terminal through ``request_bot``'s own failure path.
 
-    ``resolve_account(row)`` answers the company bot account the signed-in pod joins as (None, or a
-    raise, when there is none free): without one the refusal lands as the terminal."""
+    ``resolve_account(row)`` answers the company bot account the signed-in pod joins as. It RAISES when
+    every account is busy: the refusal lands as the terminal. It answers None when no company account is
+    usable by this person at all (``VEXA_COMPANY_BOT_USE``): the pod then joins anonymously, as before
+    D402, within the old pod budget — routing never leaves a person worse off than without it."""
     from ..bot_spawn.service import MeetingStopped, request_bot
 
     lister = getattr(repo, "list_meet_respawns", None)
@@ -300,11 +306,15 @@ async def respawn_due(
         spawn = dict(block.get("spawn") or {})
         account = None
         if block.get("signed_in_pod"):
+            busy = False
             try:
                 account = await resolve_account(row) if resolve_account is not None else None
             except Exception:  # noqa: BLE001 — every account busy, or the store cannot answer
-                account = None
-            if account is None:
+                account, busy = None, True
+            if account is None and not busy:
+                block = {**block, "signed_in_pod": False}       # nobody this person may use: anonymous
+                await _write(repo, row["id"], {**block, "state": SPAWNING})
+            if account is None and busy:
                 await repo.fail_meeting(
                     meeting_id=row["id"],
                     reason="Google Meet refused the anonymous bot and no Vexa bot account was available to join signed-in",

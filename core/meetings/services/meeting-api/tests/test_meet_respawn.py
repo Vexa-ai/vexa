@@ -65,6 +65,12 @@ def _due(repo, runtime, *, after_s=120, resolve_account=_company):
                                          resolve_account=resolve_account))
 
 
+@pytest.fixture(autouse=True)
+def _routing(monkeypatch):
+    """The D402 tests run with per-room routing on; test_routing_off_* switch it off."""
+    monkeypatch.setenv("VEXA_MEET_ROOM_ROUTING", "1")
+
+
 @pytest.fixture
 def world():
     repo, runtime, pub = InMemoryMeetingRepo(), FakeRuntimeClient(), InMemoryCommandPublisher()
@@ -190,7 +196,7 @@ def test_no_free_account_for_the_signed_in_pod_fails_the_meeting(world):
     assert client.post(LIFECYCLE, json=_refused(sid)).json().get("respawn") == "scheduled"
 
     async def none_free(_row):
-        return None
+        raise RuntimeError("every company bot account is in another meeting")
     assert _due(repo, runtime, resolve_account=none_free) == 0
     row = repo._meetings[mid]
     assert row["status"] == "failed" and row["data"]["meet_respawn"]["state"] == "exhausted"
@@ -279,9 +285,44 @@ def test_a_continued_signed_in_run_keeps_the_rooms_refusal(world):
     assert client.post(LIFECYCLE, json=_refused(sid)).json().get("respawn") == "scheduled"
 
     async def none_free(_row):
-        return None
+        raise RuntimeError("busy")
     _due(repo, runtime, resolve_account=none_free)            # the meeting fails, refused
     assert repo._meetings[mid]["status"] == "failed"
     _spawn(repo, runtime, continue_meeting=True, bot_account=ACCOUNT)
     block = repo._meetings[mid]["data"]["meet_respawn"]
     assert block["state"] == "exhausted" and [a["signed_in"] for a in block["attempts"]] == [False]
+
+
+async def _nobody_usable(_row):
+    return None
+
+
+def test_a_person_who_may_use_no_company_account_keeps_the_old_anonymous_pods(world):
+    """VEXA_COMPANY_BOT_USE=admins at the cut-over: a customer gets the old anonymous respawns, never a
+    terminal for an account they could not have used."""
+    repo, runtime, client = world
+    mid, sid = _joining(world)
+    assert client.post(LIFECYCLE, json=_refused(sid, node="node-a")).json().get("respawn") == "scheduled"
+    assert _due(repo, runtime, resolve_account=_nobody_usable) == 1
+    row = repo._meetings[mid]
+    assert "bot_account_id" not in row["data"] or row["data"]["bot_account_id"] is None
+    sid = _session(repo, mid)
+    assert client.post(LIFECYCLE, json=_event(sid, "joining")).status_code == 200
+    assert client.post(LIFECYCLE, json=_refused(sid, node="node-b")).json().get("respawn") == "scheduled"
+    assert _due(repo, runtime, resolve_account=_nobody_usable) == 1
+    sid = _session(repo, mid)
+    assert client.post(LIFECYCLE, json=_event(sid, "joining")).status_code == 200
+    r = client.post(LIFECYCLE, json=_refused(sid, node="node-c"))
+    assert "respawn" not in r.json() and repo._meetings[mid]["status"] == "failed"
+    assert len(runtime.specs) == 3, "the old budget: three anonymous pods"
+
+
+def test_routing_off_keeps_the_old_anonymous_pods(world, monkeypatch):
+    monkeypatch.delenv("VEXA_MEET_ROOM_ROUTING", raising=False)
+    repo, runtime, client = world
+    mid, sid = _joining(world)
+    assert client.post(LIFECYCLE, json=_refused(sid)).json().get("respawn") == "scheduled"
+    assert repo._meetings[mid]["data"]["meet_respawn"]["signed_in_pod"] is False
+    assert _due(repo, runtime) == 1                      # a company account exists, but routing is off
+    row = repo._meetings[mid]
+    assert not row["data"].get("bot_account_id"), "routing off: the next pod is anonymous"

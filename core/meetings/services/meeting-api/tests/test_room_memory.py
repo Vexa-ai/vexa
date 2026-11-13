@@ -11,6 +11,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _routing(monkeypatch):
+    monkeypatch.setenv("VEXA_MEET_ROOM_ROUTING", "1")
+
 from meeting_api.bot_spawn import room_memory as rm
 from meeting_api.bot_spawn.fakes import InMemoryMeetingRepo
 
@@ -149,3 +154,12 @@ def test_the_callers_own_account_still_comes_first_and_none_means_anonymous():
 def test_many_signed_in_rows_do_not_push_the_refusal_out():
     rows = [admitted(timedelta(hours=h), signed_in=True) for h in range(1, 120)] + [refused(timedelta(days=6))]
     assert len(rows) < rm.HISTORY_LIMIT and rm.verdict(rows, NOW) == rm.NEEDS_SIGN_IN
+
+
+def test_routing_off_reads_every_meet_room_as_anonymous(monkeypatch):
+    monkeypatch.delenv("VEXA_MEET_ROOM_ROUTING", raising=False)
+    class Never:
+        async def room_history(self, *a):
+            raise AssertionError("routing off reads no history")
+    assert asyncio.run(rm.room_verdict(Never(), "google_meet", "aaa-bbbb-ccc", NOW)) == rm.ANONYMOUS_OK
+    assert rm.routing_on({"VEXA_MEET_ROOM_ROUTING": "true"}) and not rm.routing_on({})

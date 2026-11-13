@@ -511,7 +511,8 @@ def test_none_or_no_account_spawns_todays_guest_bot(rig):
     assert "authenticated" not in _inv(rig)
 
 
-def test_the_default_falls_back_to_a_usable_company_account(rig):
+def test_the_default_falls_back_to_a_usable_company_account(rig, monkeypatch):
+    monkeypatch.setenv("VEXA_MEET_ROOM_ROUTING", "1")
     company = rig.seed("company")
     _spawn(rig)
     assert "authenticated" not in _inv(rig)  # admins policy: a person who is no admin
@@ -752,3 +753,13 @@ def test_a_key_path_with_no_file_yet_is_not_configured_and_never_refuses_the_boo
            "VEXA_BOT_ACCOUNTS_KEY_FILE": str(tmp_path / "absent" / "key")}
     assert broker_from_env(env) is None
     assert "bot_accounts_unconfigured" in capsys.readouterr().out
+
+
+def test_routing_off_a_default_meet_bot_never_takes_a_company_account(rig, monkeypatch):
+    """Cut-over S2 / RB-R: with the routing flag off every Meet bot joins anonymously, even an admin's in a
+    room that refused one."""
+    monkeypatch.delenv("VEXA_MEET_ROOM_ROUTING", raising=False)
+    rig.seed("company")
+    _refused_room(rig, "abc-defg-hin")
+    r = _spawn(rig, uid=PERSON_ADMIN, native="abc-defg-hin")
+    assert "bot_account_id" not in rig.repo._meetings[r.json()["id"]]["data"]

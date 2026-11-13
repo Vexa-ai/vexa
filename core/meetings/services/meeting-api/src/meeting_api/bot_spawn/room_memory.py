@@ -34,6 +34,18 @@ REFUSED = "platform_join_refused"
 _ADMITTED = frozenset({"active", "stopping", "completed"})
 
 
+#: The per-room routing switch (Launch cut-over S2/S11, card a306e4436db8). OFF — the default — every Meet bot
+#: joins as before this rule: anonymously by default (no company account), with the old anonymous
+#: respawns. ON — D402: the room decides. Flipping it back off is the rollback (RB-R).
+ROUTING_ENV = "VEXA_MEET_ROOM_ROUTING"
+
+
+def routing_on(env: Optional[Mapping[str, str]] = None) -> bool:
+    import os
+    raw = ((env if env is not None else os.environ).get(ROUTING_ENV) or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
 def _t(v: Any) -> Optional[datetime]:
     if not isinstance(v, str) or not v:
         return None
@@ -85,6 +97,8 @@ async def room_verdict(repo: Any, platform: str, native_meeting_id: str,
     read). A lookup that fails never fails a spawn: the room reads ``unseen`` (review Low)."""
     if platform != "google_meet" or not native_meeting_id:
         return None
+    if not routing_on():
+        return ANONYMOUS_OK                               # routing off: a default Meet bot joins anonymously
     reader = getattr(repo, "room_history", None)
     if reader is None:
         return None
