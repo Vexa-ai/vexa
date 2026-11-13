@@ -4,7 +4,7 @@
  *
  *   • an authenticated invocation with sessionRestoreUrl is a valid invocation.v1;
  *   • the restore is a GET to exactly that URL with the bot's MeetingToken, and a good answer (a
- *     session-profile.v1 WritebackBody golden) writes exactly its profile paths into the dir;
+ *     session-profile.v1 WritebackBody golden) writes exactly its carried profile paths into the dir (no Session Storage, no credential file);
  *   • an answer naming one path outside the profile, or a traversal path, is refused whole —
  *     nothing is written — as a typed SessionSyncError('session-restore');
  *   • an HTTP error, a non-JSON answer and an off-contract answer are the same typed failure, the one
@@ -19,7 +19,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SessionSyncError, readSessionProfile } from '@vexa/remote-browser';
+import { SessionSyncError, readSessionProfile, CREDENTIAL_FILES } from '@vexa/remote-browser';
 import { restoreSession } from './session-restore.js';
 import { parseInvocation, type Invocation } from './config.js';
 
@@ -33,6 +33,12 @@ const check = (name: string, cond: boolean, detail = ''): void => {
 };
 
 const b64 = (s: string): string => Buffer.from(s).toString('base64');
+/** Session Storage: per-tab state that feeds tab restore, carried by no stored session (remote-browser
+ *  SESSION_STATE_DIRS). With CREDENTIAL_FILES (saved passwords, autofill) it is never written on a
+ *  restore, though the session-profile.v1 contract still allows both. */
+const SESSION_STATE_DIR = 'Default/Session Storage';
+const notCarried = (p: string): boolean =>
+  CREDENTIAL_FILES.includes(p) || p.split('/').slice(0, -1).join('/') === SESSION_STATE_DIR;
 
 async function main(): Promise<void> {
   console.log('session restore');
@@ -87,13 +93,18 @@ async function main(): Promise<void> {
     status = 200; answer = golden;
     const dir = freshDir();
     const n = await restoreSession(live, dir);
-    check('the restore wrote every file of the answer', n === goldenPaths.length, `${n} vs ${goldenPaths.length}`);
+    const carried = goldenPaths.filter((p) => !notCarried(p));
+    const dropped = goldenPaths.filter(notCarried).sort();
+    check('the golden holds one Session Storage file and one credential file, so both drops are exercised',
+      JSON.stringify(dropped) === JSON.stringify(['Default/Login Data For Account', 'Default/Session Storage/000005.ldb']),
+      JSON.stringify(dropped));
+    check('the restore wrote every carried file of the answer, and nothing else', n === carried.length, `${n} vs ${carried.length}`);
     check('one request reached meeting-api', seen.length === 1, String(seen.length));
     check("a GET to exactly the invocation's sessionRestoreUrl",
       seen[0]?.method === 'GET' && seen[0]?.url === '/mapi/internal/browser-session/conn-1234', `${seen[0]?.method} ${seen[0]?.url}`);
     check("authenticated with the bot's MeetingToken", seen[0]?.auth === 'Bearer meeting-token-for-session', String(seen[0]?.auth));
     const back = readSessionProfile(dir).map((f) => f.path).sort();
-    check('the dir now holds exactly the profile paths of the answer', JSON.stringify(back) === JSON.stringify([...goldenPaths].sort()),
+    check('the dir now holds exactly the carried profile paths of the answer (no Session Storage, no credential file)', JSON.stringify(back) === JSON.stringify([...carried].sort()),
       JSON.stringify(back));
 
     // ── refused whole ──
