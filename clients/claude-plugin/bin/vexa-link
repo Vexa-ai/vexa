@@ -27,6 +27,9 @@
 #   unreachable     Vexa did not answer while the code could still be spent    (exit 3)
 #   code-spent      something spent this code first                            (exit 4)
 #   code-expired    the code is past its two minutes: get a new one            (exit 5)
+#   no-exchange     this Vexa does not spend start codes (404/405)              (exit 6)
+#   code-refused    Vexa refused the code for another reason                   (exit 7)
+#   no-key          Vexa answered the exchange with no key                     (exit 8)
 set -u
 export LC_ALL=C   # byte ranges in the claim checks below: [a-z] means a-z on every sh (review of 03d59f594)
 api=${1:?api_url}
@@ -34,19 +37,25 @@ start_code=${VEXA_LINK_CODE:-}
 key=${VEXA_LISTEN_KEY:-}
 unset VEXA_LINK_CODE VEXA_LISTEN_KEY
 [ -n "$start_code" ] || [ -n "$key" ] || { echo "VEXA_LINK_CODE (or VEXA_LISTEN_KEY) is required" >&2; exit 64; }
+case "$start_code" in *[!A-Za-z0-9_-]*) echo "VEXA_LINK_CODE is not a start code" >&2; exit 64 ;; esac
 dir="${HOME:-/tmp}/.vexa/link"
 spool="$dir/events.jsonl"
 mkdir -p "$dir"
 # Taken atomically (noclobber), so the same command run twice at once cannot spend its code twice; a start that finds a
 # line running spends no code.
 take_pid() { ( set -C; echo $$ > "$dir/link.pid" ) 2>/dev/null; }
+# link.pid is removed only by the start whose pid it holds (review of 3a895a81, M3)
+drop_pid() { [ "$(cat "$dir/link.pid" 2>/dev/null)" = "$$" ] && rm -f "$dir/link.pid"; return 0; }
 if ! take_pid; then
-  if kill -0 "$(cat "$dir/link.pid" 2>/dev/null)" 2>/dev/null; then
-    echo "running $(cat "$dir/link.pid")"; exit 0
+  held=$(cat "$dir/link.pid" 2>/dev/null)
+  if kill -0 "$held" 2>/dev/null; then
+    echo "running $held"; exit 0
   fi
-  rm -f "$dir/link.pid"
+  # a stale file is moved aside by one start only (mv is atomic): the other finds it gone and loses the take
+  mv "$dir/link.pid" "$dir/link.pid.stale.$$" 2>/dev/null && rm -f "$dir/link.pid.stale.$$"
   take_pid || { echo "running $(cat "$dir/link.pid" 2>/dev/null)"; exit 0; }
 fi
+trap 'stop; drop_pid' INT TERM       # set once the pid is ours, before the code is spent (review L5)
 rm -f "$dir/stop"
 version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$(dirname "$0")/../.claude-plugin/plugin.json" 2>/dev/null | head -n 1)
 
@@ -58,24 +67,28 @@ append() {
   printf '%s\n' "$1" >> "$spool"
 }
 stop() { [ -f "$dir/stop" ] || touch "$dir/stop"; }
+# curl with the key on a pipe (-K -), never on its command line where any local user's ps reads it (review H1)
+kcurl() { printf 'header = "X-API-Key: %s"\n' "$key" | curl -K - "$@"; }
 
 # The code buys the key, once (card e6cacb938f54). No answer yet: asked again while the code can still live; a Vexa that
 # never answered has not spent it. The key stays in this script's memory: never exported, in no file, on no command line.
-leave() { rm -f "$dir/link.pid"; state "$1"; echo "$1"; exit "$2"; }
+leave() { drop_pid; state "$1"; echo "$1"; exit "$2"; }
 buy_key() {
   tries=0
   while :; do
-    bought=$(printf '{"code":"%s"}' "$start_code" | curl -sS --max-time 15 -w '\n%{http_code}' -X POST \
+    bought=$(printf '{"code":"%s"}' "$start_code" | curl -sS --max-time 10 -w '\n%{http_code}' -X POST \
       -H 'Content-Type: application/json' --data-binary @- "$api/user/listen-code/exchange" 2>/dev/null)
     case "$(printf '%s\n' "$bought" | tail -n 1)" in
       200|201) key=$(printf '%s\n' "$bought" | sed -n 's/.*"key": *"\([^"]*\)".*/\1/p' | head -n 1); unset bought
         [ -n "$key" ] && return 0
-        leave unreachable 3 ;;
+        leave no-key 8 ;;
       409) leave code-spent 4 ;;
       410) leave code-expired 5 ;;
-      *) tries=$((tries + 1))
-        [ "$tries" -ge 7 ] && leave unreachable 3
+      404|405) leave no-exchange 6 ;;                     # this Vexa does not spend codes yet
+      000|429|5??) tries=$((tries + 1))                   # no answer: asked again, at most ~75 s, inside the two minutes
+        [ "$tries" -ge 5 ] && leave unreachable 3
         sleep 5 ;;
+      *) leave code-refused 7 ;;
     esac
   done
 }
@@ -86,7 +99,7 @@ REFUSALS=3
 read_loop() {   # name url-builder
   fails=0; refused=0
   while [ ! -f "$dir/stop" ]; do
-    body=$(curl -sS --max-time 40 -w '\n%{http_code}' -H "X-API-Key: $key" "$($2)" 2>/dev/null)
+    body=$(kcurl -sS --max-time 40 -w '\n%{http_code}' "$($2)" 2>/dev/null)
     code=$(printf '%s\n' "$body" | tail -n 1)
     text=$(printf '%s\n' "$body" | sed '$d')
     case "$code" in
@@ -157,7 +170,7 @@ on_requests() {
         append "{\"type\":\"ui\",\"request\":$req}"
         case "$id" in *[!0-9a-f]*|'') ;; *)
           if [ -z "$(find "$dir/acks/.plugin" -mmin -1 2>/dev/null)" ]; then
-            curl -sS --max-time 10 -o /dev/null -X POST -H "X-API-Key: $key" -H 'Content-Type: application/json' \
+            kcurl -sS --max-time 10 -o /dev/null -X POST -H 'Content-Type: application/json' \
               -d '{"outcome":"submitted"}' "$api/agent/claude/requests/$id/ack" 2>/dev/null
           fi ;;
         esac ;;
@@ -174,7 +187,7 @@ on_acks() {
       [ -f "$f" ] || continue
       id=${f##*/}
       case "$id" in *[!0-9a-f]*|'') rm -f "$f"; continue ;; esac
-      code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -X POST -H "X-API-Key: $key" -H 'Content-Type: application/json' \
+      code=$(kcurl -sS --max-time 10 -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
           -d '{"outcome":"submitted"}' "$api/agent/claude/requests/$id/ack" 2>/dev/null)
       case "$code" in 2*|4*) rm -f "$f" ;; esac             # done, or one Vexa will not take: not asked again
     done
@@ -200,9 +213,8 @@ read_loop on_asks asks_url &
 read_loop on_requests requests_url &
 mkdir -p "$dir/acks" "$dir/said" "$dir/roles"
 on_acks &
-trap 'stop; rm -f "$dir/link.pid"' INT TERM
 wait
-rm -f "$dir/link.pid"
+drop_pid
 reason=$(cat "$dir/exit" 2>/dev/null); rm -f "$dir/exit"
 state "${reason:-stopped}"
 case "$reason" in

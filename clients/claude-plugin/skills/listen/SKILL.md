@@ -42,8 +42,9 @@ VEXA_LINK_CODE=<code> sh "${CLAUDE_PLUGIN_ROOT}/bin/vexa-link" <api_url>
 VEXA_LISTEN_KEY=<key> sh "${CLAUDE_PLUGIN_ROOT}/bin/vexa-link" <api_url>
 ```
 
-A code works once and for two minutes; the script spends it for the line's key, which no chat then holds. It prints
-`code-expired` when it was too late (call `listen_token` again) and `code-spent` when something used it first.
+A code works once and for two minutes; the script spends it for the line's key, which no chat then holds. If it prints
+anything but `running <pid>` (code-expired, code-spent, unreachable, no-exchange, code-refused, no-key), call
+`listen_token` again and start it with the new answer; never run the same code twice.
 
 One runs per Mac, whichever chat starts it; `running <pid>` means one already runs: fine. Vexa
 talks to the most recently used chat among those with the Vexa panel open, so opening the panel here

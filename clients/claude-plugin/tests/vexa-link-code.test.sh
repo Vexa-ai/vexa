@@ -7,7 +7,7 @@ set -u
 here=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d); trap 'kill $srv 2>/dev/null; rm -rf "$work"' EXIT
 cat > "$work/fake.py" <<'PY'
-import http.server, json, sys
+import http.server, json, sys, time
 exchange = int(sys.argv[2])                 # how the exchange answers
 seen = open(sys.argv[3], "a")
 class H(http.server.BaseHTTPRequestHandler):
@@ -24,6 +24,7 @@ class H(http.server.BaseHTTPRequestHandler):
         self.do_GET()
     def do_GET(self):
         seen.write("read " + str(self.headers.get("X-API-Key")) + "\n"); seen.flush()
+        time.sleep(1)                       # a read stays open, as a long poll does: its curl is visible to ps
         self.send_response(200); self.end_headers()
         if "workspace/file" in self.path:
             self.wfile.write(json.dumps({"path": "asks/in-this-call.md", "content": "---\nlines: 6\n---\n"}).encode())
@@ -64,4 +65,24 @@ out=$(VEXA_LINK_CODE=abc123 sh "$here/bin/vexa-link" "http://127.0.0.1:$port")
 kill $holder $srv 2>/dev/null; wait $srv 2>/dev/null
 [ "$out" = "running $holder" ] && ! grep -q exchange "$work/twice.seen" && echo "ok   a running line spends no code" \
   || { echo "FAIL twice: $out $(cat "$work/twice.seen")"; fail=1; }
+# the bought key is on no command line while the line runs (review of 3a895a81, H1)
+export HOME="$work/argv"; mkdir -p "$HOME"; : > "$work/argv.seen"
+port=$((23000 + $$ % 20000)); python3 "$work/fake.py" $port 201 "$work/argv.seen" & srv=$!; sleep 0.5
+VEXA_LINK_CODE=abc123 sh "$here/bin/vexa-link" "http://127.0.0.1:$port" > "$work/argv.out" 2>&1 & link=$!
+leak=0; i=0; while [ $i -lt 20 ]; do ps -eo args | grep -v grep | grep -q 'KEY-BOUGHT-123' && leak=1; sleep 0.2; i=$((i + 1)); done
+touch "$HOME/.vexa/link/stop"; kill $link 2>/dev/null; wait $link 2>/dev/null; kill $srv 2>/dev/null; wait $srv 2>/dev/null
+grep -q '^read KEY-BOUGHT-123$' "$work/argv.seen" && [ $leak = 0 ] && echo "ok   the key is on no command line" \
+  || { echo "FAIL key on a command line (leak=$leak) or never sent"; fail=1; }
+# a Vexa without the exchange route says so at once, not «unreachable» half a minute later (M2)
+t0=$(date +%s); start noexchange 404 "VEXA_LINK_CODE=abc123" 2 exit6; t1=$(date +%s)
+grep -q '^no-exchange$' "$work/noexchange.out" && [ $((t1 - t0)) -lt 8 ] && echo "ok   no-exchange at once" || { echo "FAIL no-exchange: $(cat "$work/noexchange.out")"; fail=1; }
+start refused 400 "VEXA_LINK_CODE=abc123" 2 exit7
+start badcode 201 "VEXA_LINK_CODE=a\"b" 2 exit64
+# a start that loses the exchange never removes the winner's pid file (M3)
+export HOME="$work/pidown"; mkdir -p "$HOME/.vexa/link"; sleep 300 & other=$!
+: > "$work/pidown.seen"; port=$((24000 + $$ % 20000)); python3 "$work/fake.py" $port 409 "$work/pidown.seen" & srv=$!; sleep 0.5
+VEXA_LINK_CODE=abc123 sh "$here/bin/vexa-link" "http://127.0.0.1:$port" > /dev/null 2>&1
+kill $srv 2>/dev/null; wait $srv 2>/dev/null
+[ ! -f "$HOME/.vexa/link/link.pid" ] && echo "ok   a spent code leaves no pid behind" || { echo "FAIL pid left: $(cat "$HOME/.vexa/link/link.pid")"; fail=1; }
+kill $other 2>/dev/null
 exit $fail
