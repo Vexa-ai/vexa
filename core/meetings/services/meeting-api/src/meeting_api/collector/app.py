@@ -536,6 +536,10 @@ def build_router(
             "noted": noted if signal == "noted" else [],
             "new_lines": len(segments) - start, "next_index": len(segments)})
 
+    # vexa-link's one stream of the person's calls (`link_events.py`).
+    from . import link_events as _link_events
+    _link_events.install(router, store=store, resolve_user=_resolve_user_id, log_event=log_event)
+
     # A planned meeting belongs to schedule/preparation surfaces until a bot run claims it.
     # Keep the set explicit so list pagination can exclude plans in SQL rather than making
     # clients discard rows after a page has already been cut.

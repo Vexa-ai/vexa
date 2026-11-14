@@ -508,6 +508,14 @@
     },
     {
       "method": "GET",
+      "path": "/link/events",
+      "scopes": [
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
       "path": "/transcripts/{platform}/{native_meeting_id}/signal",
       "scopes": [
         "tx"
