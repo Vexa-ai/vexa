@@ -104,3 +104,22 @@ def test_someone_elses_meeting_is_404():
     r = TestClient(create_app(store, redis=None)).get(URL, headers={"x-user-id": "8"},
                                                       params={"timeout_sec": 1})
     assert r.status_code == 404
+
+
+def test_a_listener_s_call_stamps_the_meeting_and_answers_in_text_for_a_script():
+    """`vexa-listen` (a shell script) reads the text form, and each of its calls is the panel's
+    «Listening» heartbeat: `listener_state` / `listener_ts` on the meeting's metadata."""
+    store, mid = _store([_seg(0, "Morning all."), _seg(1, "Claude, read me the action items.", speaker="Bob")])
+    r = TestClient(create_app(store, redis=None)).get(URL, headers=HEAD,
+                                                     params={"timeout_sec": 1, "listener": 1, "format": "text"})
+    assert r.status_code == 200
+    assert r.text.splitlines() == ["addressed 2", "Bob: Claude, read me the action items."]
+    meta = store._meetings[mid]["data"]["metadata"]
+    assert meta["listener_state"] == "listening" and meta["listener_mode"] == "script" and meta["listener_ts"] > 0
+
+
+def test_when_the_meeting_ends_the_listener_stamp_says_off():
+    store, mid = _store([_seg(0, "Bye.")], status="completed")
+    r = TestClient(create_app(store, redis=None)).get(URL, headers=HEAD, params={"timeout_sec": 1, "listener": 1, "format": "text"})
+    assert r.text.splitlines() == ["ended 1"]
+    assert store._meetings[mid]["data"]["metadata"]["listener_state"] == "off"

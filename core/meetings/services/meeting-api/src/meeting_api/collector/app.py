@@ -31,7 +31,7 @@ gateway's contextvars (the cross-hop trace ``test_tracing.py`` asserts).
 """
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Literal, Optional
 
 import asyncio
 import json
@@ -40,7 +40,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from ..regime import require_person, shared_meeting_readable
 from ..workspace_write import require_writable
@@ -395,6 +395,12 @@ def build_router(
             "previous answer.")),
         timeout_sec: int = Query(SIGNAL_WAIT_MAX_S, ge=1, le=SIGNAL_WAIT_MAX_S, description=(
             f"How long to wait for a line addressed to Claude (1-{SIGNAL_WAIT_MAX_S} s).")),
+        listener: bool = Query(False, description=(
+            "This call is a listener's (`vexa-listen`): stamp the meeting's `listener_state` / "
+            "`listener_ts` so the panel shows it is being listened to.")),
+        format: Literal["json", "text"] = Query("json", description=(
+            "`text`: the first line is `<signal> <next_index>`, then one `speaker: text` line per "
+            "addressed line — for a shell script.")),
         x_user_id: Optional[str] = Header(default=None),
         x_user_workspaces: Optional[str] = Header(default=None),
     ):
@@ -423,9 +429,21 @@ def build_router(
                 break
             await asyncio.sleep(min(SIGNAL_POLL_S, max(0.0, deadline - time.monotonic())))
         signal = "addressed" if addressed else "ended" if ended else "quiet"
+        if listener and doc.get("id") is not None:
+            # The listener's heartbeat: every call (at most SIGNAL_WAIT_MAX_S apart) restamps it.
+            try:
+                await store.annotate_meeting(user_id, int(doc["id"]), metadata={
+                    "listener_state": "off" if ended else "listening",
+                    "listener_ts": int(time.time() * 1000), "listener_mode": "script"})
+            except Exception:  # noqa: BLE001 — the signal is answered whether or not the stamp lands
+                pass
         log_event("transcript_signal", audience="user", span="transcripts.signal", user_id=user_id,
                   meeting_id=f"{platform}/{native_meeting_id}",
                   fields={"signal": signal, "new_lines": len(segments) - start})
+        if format == "text":
+            body = "\n".join([f"{signal} {len(segments)}"]
+                              + [f"{a['speaker'] or '?'}: {a['text'] or ''}" for a in addressed])
+            return PlainTextResponse(body + "\n")
         return JSONResponse(content={
             "platform": platform, "native_meeting_id": native_meeting_id,
             "status": doc.get("status"), "signal": signal, "lines": addressed,

@@ -126,6 +126,34 @@
             }
           },
           {
+            "description": "This call is a listener's (`vexa-listen`): stamp the meeting's `listener_state` / `listener_ts` so the panel shows it is being listened to.",
+            "in": "query",
+            "name": "listener",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "This call is a listener's (`vexa-listen`): stamp the meeting's `listener_state` / `listener_ts` so the panel shows it is being listened to.",
+              "title": "Listener",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "`text`: the first line is `<signal> <next_index>`, then one `speaker: text` line per addressed line \u2014 for a shell script.",
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "json",
+              "description": "`text`: the first line is `<signal> <next_index>`, then one `speaker: text` line per addressed line \u2014 for a shell script.",
+              "enum": [
+                "json",
+                "text"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          },
+          {
             "in": "header",
             "name": "x-user-id",
             "required": false,

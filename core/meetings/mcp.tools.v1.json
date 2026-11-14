@@ -67,7 +67,9 @@
       },
       "arguments": [
         "since_index",
-        "timeout_sec"
+        "timeout_sec",
+        "listener",
+        "format"
       ]
     }
   ]
