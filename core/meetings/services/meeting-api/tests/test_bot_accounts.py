@@ -342,12 +342,14 @@ def test_list_marks_mine_and_usable_under_each_policy(rig):
         body = rig.client.get("/bot-accounts", headers=rig.as_(uid)).json()
         return body["company_bot_use"], {a["id"]: (a["mine"], a["usable"]) for a in body["accounts"]}
 
-    assert listing(OWNER) == ("admins", {mine["id"]: (True, True), company["id"]: (False, False)})
+    # A company account is listed only to someone who may use or manage it (S1a break-it M-b).
+    assert listing(OWNER) == ("admins", {mine["id"]: (True, True)})
     assert listing(PERSON_ADMIN)[1] == {company["id"]: (False, True)}
     rig.policy = "all"
     assert listing(OWNER)[1][company["id"]] == (False, True)
     rig.policy = "none"
-    assert listing(PERSON_ADMIN)[1][company["id"]] == (False, False)
+    assert company["id"] not in listing(PERSON_ADMIN)[1]
+    assert listing(ADMIN_ACCOUNT)[1][company["id"]] == (False, False)     # the admin account manages it
     assert listing(ADMIN_ACCOUNT)[1][company["id"]] == (False, False)
 
 
@@ -913,3 +915,45 @@ async def test_off_meet_a_default_bot_skips_a_busy_company_account_and_is_a_gues
     live.add(b["id"])
     assert await pick() is None
     assert await rig.ba.resolve_for_spawn(OWNER, "zoom", None, room=None, busy=busy) is None  # a customer: none, as before
+
+
+
+# ── S1a break-it pass (run s1a-storm-20261114T173117Z): M-a a hung broker never slows a customer's bot; M-b a
+#    customer never sees a company account ────────────────────────────────────────────────────────────────────
+import asyncio as _asyncio
+import time as _time
+
+from meeting_api.bot_accounts import service as _service
+
+
+async def test_with_sessions_narrowed_a_customer_default_bot_never_asks_the_broker(rig):
+    _admins(rig)
+    rig.seed("company", platform="zoom")
+    before = len(rig.broker.calls)
+    assert await rig.ba.resolve_for_spawn(OWNER, "zoom", None, room=None) is None
+    assert len(rig.broker.calls) == before
+    assert (await rig.ba.resolve_for_spawn(PERSON_ADMIN, "zoom", None, room=None)) is not None   # an admin still gets one
+
+
+async def test_a_hung_broker_makes_a_default_bot_a_guest_within_the_bound(rig, monkeypatch):
+    _admins(rig)
+    monkeypatch.setattr(_service, "DEFAULT_LIST_TIMEOUT_S", 0.2)
+
+    async def hang(*a, **kw):
+        await _asyncio.sleep(30)
+    monkeypatch.setattr(rig.broker, "list", hang)
+    t0 = _time.monotonic()
+    assert await rig.ba.resolve_for_spawn(PERSON_ADMIN, "zoom", None, room=None) is None
+    assert _time.monotonic() - t0 < 2
+
+
+@pytest.mark.parametrize("who", ["admins", "admin_account"])
+def test_a_customer_listing_shows_no_company_account(rig, who):
+    rig.ba.settings = Settings(callback_base=BASE, sessions_who=who)
+    rig.policy = "admins"
+    company = rig.seed("company")
+    mine = rig.seed(f"user:{OWNER}")
+    seen = {a["id"] for a in rig.client.get("/bot-accounts", headers=rig.as_(OWNER)).json()["accounts"]}
+    assert company["id"] not in seen and mine["id"] in seen
+    admin_seen = {a["id"] for a in rig.client.get("/bot-accounts", headers=rig.as_(PERSON_ADMIN)).json()["accounts"]}
+    assert company["id"] in admin_seen
