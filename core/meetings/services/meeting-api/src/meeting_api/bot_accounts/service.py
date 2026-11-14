@@ -12,6 +12,8 @@ Nothing here logs a token, a cookie or a profile byte.
 """
 from __future__ import annotations
 
+import asyncio
+
 import json
 import os
 import re
@@ -93,6 +95,9 @@ def _iso(ts: float) -> str:
 
 
 SESSIONS_WHO_ENV = "VEXA_BROWSER_BOTS_WHO"
+#: How long a DEFAULT spawn waits for the broker's listing (S1a break-it M-a): a hung broker makes the bot a guest,
+#: never a slow spawn. An explicit account id still waits the client's own timeout (the caller asked for it).
+DEFAULT_LIST_TIMEOUT_S = 2.0
 SESSIONS_ADMIN_ONLY = "browser sessions are open only to this deployment's admin account"
 SESSIONS_ADMINS_ONLY = "browser sessions are open only to this deployment's admins"
 
@@ -224,6 +229,10 @@ class BotAccounts:
             raise BotAccountRefused(503, str(e)) from None
         policy = self.policy()
         roles = await self.admin.roles(user_id) if any(a.get("owner") == "company" for a in accounts) else {}
+        # A company account is listed only to someone who may use it or manage it (S1a break-it M-b): to everyone
+        # else it does not exist, as for another person's account.
+        accounts = [a for a in accounts if a.get("owner") != "company"
+                    or usable(a, user_id=user_id, policy=policy, roles=roles) or self._manages_company(roles)]
         out = [{**a, "mine": a.get("owner") == mine,
                 "usable": usable(a, user_id=user_id, policy=policy, roles=roles)} for a in accounts]
         return {"accounts": out, "company_bot_use": policy}
@@ -571,11 +580,21 @@ class BotAccounts:
         if self.broker is None or platform is None:
             return None
         mine = owner_of(user_id)
+        if getattr(getattr(self, "settings", None), "sessions_who", "all") != "all":
+            # S1a break-it M-a: with sessions narrowed, a person who may open none holds no account this deployment
+            # let them make, so a default bot for them needs a company account or nothing; when none may be theirs
+            # either, the broker is not asked at all and the spawn is as fast as bot_account "none".
+            roles = await self.admin.roles(user_id)
+            if not self._manages_company(roles) and not usable(
+                    {"owner": "company"}, user_id=user_id, policy=self.policy(), roles=roles):
+                return None
         try:
-            accounts = await self.broker.list([mine, "company"], actor=mine)
-        except BrokerError as e:
+            accounts = await asyncio.wait_for(self.broker.list([mine, "company"], actor=mine),
+                                              DEFAULT_LIST_TIMEOUT_S)
+        except (BrokerError, asyncio.TimeoutError) as e:
             log_event("bot_account_default_unavailable", audience="system", level="warning",
-                      span="bot_accounts", user_id=user_id, fields={"error": str(e)})
+                      span="bot_accounts", user_id=user_id,
+                      fields={"error": "timeout" if isinstance(e, asyncio.TimeoutError) else str(e)})
             return None
         ok = [a for a in accounts if a.get("platform") == platform and a.get("state") == "ok"]
 
