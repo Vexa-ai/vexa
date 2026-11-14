@@ -1,6 +1,7 @@
 """Who may use and who may manage a company bot account.
 
-* **Use** — ``VEXA_COMPANY_BOT_USE`` (``all`` | ``admins`` | ``none``, default ``admins``). The
+* **Use** — ``VEXA_COMPANY_BOT_USE`` (``all`` | ``admins`` | ``admin_account`` | ``none``, default
+  ``admins``; ``admin_account`` opens company accounts to the deployment's admin account alone). The
   company's statement of the rule is ``_global/POLICIES.md`` ``company_bot_use``; this env carries it
   to meeting-api until meeting-api reads policies itself. An unknown value reads as ``admins``.
 * **Create / delete / sign in again** — only the deployment's admin account (admin-api
@@ -17,7 +18,7 @@ import os
 import time
 from typing import Any, Callable, Optional, Protocol
 
-POLICY_VALUES = ("all", "admins", "none")
+POLICY_VALUES = ("all", "admins", "admin_account", "none")
 DEFAULT_POLICY = "admins"
 ROLES_CACHE_TTL_S = 30.0
 
@@ -99,7 +100,8 @@ def owner_of(user_id: int) -> str:
 
 def usable(account: dict, *, user_id: int, policy: str, roles: dict) -> bool:
     """May this person send a bot as ``account``? Theirs, or a company account the policy opens to
-    them (``all``, or ``admins`` and they are an admin or the admin account)."""
+    them (``all``; ``admins`` and they are an admin or the admin account; ``admin_account`` and they are
+    the admin account)."""
     if account.get("owner") == owner_of(user_id):
         return True
     if account.get("owner") != "company":
@@ -108,4 +110,6 @@ def usable(account: dict, *, user_id: int, policy: str, roles: dict) -> bool:
         return True
     if policy == "admins":
         return bool(roles.get("is_admin") or roles.get("admin_account"))
+    if policy == "admin_account":
+        return bool(roles.get("admin_account"))
     return False

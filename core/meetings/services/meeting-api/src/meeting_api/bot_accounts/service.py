@@ -91,6 +91,16 @@ def _iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+SESSIONS_WHO_ENV = "VEXA_BROWSER_BOTS_WHO"
+SESSIONS_ADMIN_ONLY = "browser sessions are open only to this deployment's admin account"
+
+
+def _sessions_who(raw: Optional[str]) -> str:
+    """Unset or empty is ``all``; ``admin_account`` narrows; any other value narrows too (fail closed)."""
+    v = (raw or "").strip().lower()
+    return "all" if v in ("", "all") else "admin_account"
+
+
 @dataclass(frozen=True)
 class Settings:
     #: meeting-api's own base URL on the bots network — the same ``MEETING_API_URL`` bot_spawn builds
@@ -102,6 +112,10 @@ class Settings:
     host_template: str = "vexa-{workload_id}"
     #: ``VEXA_BOT_SIGNIN_EXTRA_HOSTS``, parsed (``parse_signin_extra_hosts``).
     signin_extra_hosts: tuple = ()
+    #: ``VEXA_BROWSER_BOTS_WHO``: who may open a browser session or check a stored account. ``all`` (the
+    #: default: anyone ``browser_bots`` serves) or ``admin_account`` (the deployment's admin account alone;
+    #: everyone else is refused 403 before any workload starts). Anything else reads as ``admin_account``.
+    sessions_who: str = "all"
 
     @classmethod
     def from_env(cls, env: Optional[dict] = None) -> "Settings":
@@ -120,6 +134,7 @@ class Settings:
             check_timeout_s=_int("VEXA_BOT_ACCOUNTS_CHECK_TIMEOUT_S", 180),
             host_template=(env.get("VEXA_BOT_ACCOUNTS_WORKLOAD_HOST") or "vexa-{workload_id}"),
             signin_extra_hosts=parse_signin_extra_hosts(env.get(SIGNIN_EXTRA_HOSTS_ENV)),
+            sessions_who=_sessions_who(env.get(SESSIONS_WHO_ENV)),
         )
 
 
@@ -208,8 +223,18 @@ class BotAccounts:
         return {"accounts": out, "company_bot_use": policy}
 
     # ── browser sessions ──────────────────────────────────────────────────────────────────────
+    async def _sessions_allowed(self, user_id: int) -> None:
+        """``VEXA_BROWSER_BOTS_WHO=admin_account``: anyone but the admin account is refused before any
+        workload starts. Roles fail closed (an admin-api that cannot answer is neither role)."""
+        if self.settings.sessions_who == "all":
+            return
+        roles = await self.admin.roles(user_id)
+        if not roles.get("admin_account"):
+            raise BotAccountRefused(403, SESSIONS_ADMIN_ONLY)
+
     async def open_session(self, user_id: int, body: dict) -> dict:
         self._require()
+        await self._sessions_allowed(user_id)
         platform = body.get("platform")
         if platform not in PLATFORMS:
             raise BotAccountRefused(422, f"platform must be one of {', '.join(PLATFORMS)}")
@@ -395,6 +420,7 @@ class BotAccounts:
 
     # ── verify ────────────────────────────────────────────────────────────────────────────────
     async def verify(self, user_id: int, account_id: str) -> dict:
+        await self._sessions_allowed(user_id)
         account, _ = await self._get_account(account_id, actor=owner_of(user_id))
         if not self._visible(account, user_id):
             raise BotAccountRefused(404, "no such bot account")

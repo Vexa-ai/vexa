@@ -763,3 +763,62 @@ def test_routing_off_a_default_meet_bot_never_takes_a_company_account(rig, monke
     _refused_room(rig, "abc-defg-hin")
     r = _spawn(rig, uid=PERSON_ADMIN, native="abc-defg-hin")
     assert "bot_account_id" not in rig.repo._meetings[r.json()["id"]]["data"]
+
+
+
+# ── S1 (prod rung MVP0): sessions and company accounts open to the admin account alone ───────────
+from meeting_api.bot_accounts.policy import usable
+from meeting_api.bot_accounts.service import SESSIONS_ADMIN_ONLY, _sessions_who
+
+
+def _admin_only(rig):
+    rig.ba.settings = Settings(callback_base=BASE, sessions_who="admin_account")
+    rig.policy = "admin_account"
+    return rig
+
+
+@pytest.mark.parametrize("uid", [OWNER, OTHER, PERSON_ADMIN])
+def test_with_sessions_for_the_admin_account_nobody_else_opens_one_and_no_workload_starts(rig, uid):
+    _admin_only(rig)
+    before = len(rig.runtime.specs)
+    for owner in ("me", "company"):
+        r = rig.open(uid, owner=owner)
+        assert r.status_code == 403, r.text
+        assert SESSIONS_ADMIN_ONLY in r.text
+    assert len(rig.runtime.specs) == before
+
+
+def test_with_sessions_for_the_admin_account_the_admin_account_still_opens_one(rig):
+    _admin_only(rig)
+    r = rig.open(ADMIN_ACCOUNT, owner="company")
+    assert r.status_code in (200, 201), r.text
+    assert len(rig.runtime.specs) == 1
+
+
+def test_with_sessions_for_the_admin_account_nobody_else_checks_a_stored_account(rig):
+    _admin_only(rig)
+    aid = rig.seed("company")["id"] if isinstance(rig.seed("company"), dict) else None
+    acc = rig.broker.accounts
+    any_id = next(iter(acc)) if isinstance(acc, dict) else "a" * 32
+    before = len(rig.runtime.specs)
+    r = rig.client.post(f"/bot-accounts/{any_id}/verify", headers=rig.as_(PERSON_ADMIN))
+    assert r.status_code == 403, r.text
+    assert len(rig.runtime.specs) == before
+
+
+def test_company_use_admin_account_opens_company_accounts_to_the_admin_account_alone():
+    company, mine = {"owner": "company"}, {"owner": f"user:{OWNER}"}
+    assert usable(company, user_id=ADMIN_ACCOUNT, policy="admin_account", roles={"admin_account": True})
+    assert not usable(company, user_id=PERSON_ADMIN, policy="admin_account", roles={"is_admin": True})
+    assert not usable(company, user_id=OWNER, policy="admin_account", roles={})
+    assert usable(mine, user_id=OWNER, policy="admin_account", roles={})          # their own, as before
+    from meeting_api.bot_accounts.policy import company_bot_use
+    assert company_bot_use({"VEXA_COMPANY_BOT_USE": "admin_account"}) == "admin_account"
+
+
+def test_sessions_who_reads_all_by_default_and_narrows_on_anything_else():
+    assert _sessions_who(None) == "all" and _sessions_who("") == "all" and _sessions_who(" ALL ") == "all"
+    for v in ("admin_account", "admins", "nobody", "x"):
+        assert _sessions_who(v) == "admin_account"
+    assert Settings.from_env({}).sessions_who == "all"
+    assert Settings.from_env({"VEXA_BROWSER_BOTS_WHO": "admin_account"}).sessions_who == "admin_account"
