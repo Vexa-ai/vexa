@@ -375,6 +375,13 @@
       "description": "the meeting-bot image the `meeting-bot` profile spawns (vexaai/vexa-bot:v012)"
     },
     {
+      "key": "SIGNED_IN_BROWSER_IMAGE",
+      "class": "defaulted",
+      "default": "(unset: no meeting-bot-signed-in profile; every bot runs BROWSER_IMAGE)",
+      "targets": [],
+      "description": "the image of the meeting-bot-signed-in profile (profiles.py): the bot a company bot account signs in as, and the browser session it is signed in through. Unset, that profile does not exist and meeting-api never asks for it (VEXA_SIGNED_IN_BOT_PROFILE unset)."
+    },
+    {
       "key": "BOT_ALONE_SILENCE_WINDOW_MS",
       "class": "defaulted",
       "default": "600000",

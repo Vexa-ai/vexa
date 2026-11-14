@@ -822,3 +822,16 @@ def test_sessions_who_reads_all_by_default_and_narrows_on_anything_else():
         assert _sessions_who(v) == "admin_account"
     assert Settings.from_env({}).sessions_who == "all"
     assert Settings.from_env({"VEXA_BROWSER_BOTS_WHO": "admin_account"}).sessions_who == "admin_account"
+
+
+
+def test_a_browser_session_runs_as_the_signed_in_profile_when_one_is_named(rig, monkeypatch):
+    monkeypatch.setenv("VEXA_SIGNED_IN_BOT_PROFILE", "meeting-bot-signed-in")
+    assert rig.open(OWNER).status_code in (200, 201)
+    assert rig.runtime.specs[-1]["profile"] == "meeting-bot-signed-in"
+
+
+def test_a_browser_session_is_a_meeting_bot_when_none_is_named(rig, monkeypatch):
+    monkeypatch.delenv("VEXA_SIGNED_IN_BOT_PROFILE", raising=False)
+    assert rig.open(OWNER).status_code in (200, 201)
+    assert rig.runtime.specs[-1]["profile"] == "meeting-bot"

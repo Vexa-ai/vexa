@@ -18,6 +18,7 @@ continue_meeting / max-bots / join-retry are P3 — NOT here; ``request_bot`` le
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Optional
 
@@ -200,6 +201,18 @@ def build_invocation(
     return invocation
 
 
+SIGNED_IN_PROFILE_ENV = "VEXA_SIGNED_IN_BOT_PROFILE"
+
+
+def bot_profile(*, signed_in: bool, env: Optional[dict] = None) -> str:
+    """The runtime profile a bot runs as: ``meeting-bot``, or, for a bot signed in as a bot account (and
+    a browser session), the profile ``VEXA_SIGNED_IN_BOT_PROFILE`` names (the runtime's
+    ``meeting-bot-signed-in``, its own image). Unset: every bot is ``meeting-bot``, as before."""
+    env = os.environ if env is None else env
+    named = (env.get(SIGNED_IN_PROFILE_ENV) or "").strip()
+    return named if (signed_in and named) else "meeting-bot"
+
+
 def build_workload_spec(
     *,
     workload_id: str,
@@ -222,7 +235,7 @@ def build_workload_spec(
         env.update({k: str(v) for k, v in extra_env.items()})
     spec: dict[str, Any] = {
         "workloadId": workload_id,
-        "profile": "meeting-bot",
+        "profile": bot_profile(signed_in=bool(invocation.get("authenticated"))),
         "env": env,
     }
     if callback_url:
