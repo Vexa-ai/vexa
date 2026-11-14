@@ -52,6 +52,23 @@
         "method": "POST",
         "path": "/voice-notes/recorder"
       }
+    },
+    {
+      "name": "wait_for_signal",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "meetings"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/transcripts/{platform}/{native_meeting_id}/signal"
+      },
+      "arguments": [
+        "since_index",
+        "timeout_sec"
+      ]
     }
   ]
 }

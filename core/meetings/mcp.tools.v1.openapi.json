@@ -76,6 +76,91 @@
         "summary": "Get Recording"
       }
     },
+    "/transcripts/{platform}/{native_meeting_id}/signal": {
+      "get": {
+        "description": "Wait until someone in a live meeting addresses Claude by name, then return those lines.\n\nFollow a live call without polling: call it in a loop, passing `next_index` back as\n`since_index`, and speak only when `signal` is `addressed`. It blocks up to `timeout_sec`\nand answers with ONE of: `addressed` \u2014 `lines` holds only the new lines that say \"Claude\"\n(or \u00ab\u041a\u043b\u043e\u0434\u00bb) as a word; `quiet` \u2014 nothing addressed Claude, `new_lines` counts what was said;\n`ended` \u2014 the meeting is over (any addressed lines in the last stretch included). Read the\nwhole transcript with get_meeting_transcript when you need the context.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "platform",
+            "required": true,
+            "schema": {
+              "title": "Platform",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "native_meeting_id",
+            "required": true,
+            "schema": {
+              "title": "Native Meeting Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The first segment index not yet seen: 0 to start, then the `next_index` of the previous answer.",
+            "in": "query",
+            "name": "since_index",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "The first segment index not yet seen: 0 to start, then the `next_index` of the previous answer.",
+              "minimum": 0,
+              "title": "Since Index",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "How long to wait for a line addressed to Claude (1-25 s).",
+            "in": "query",
+            "name": "timeout_sec",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "description": "How long to wait for a line addressed to Claude (1-25 s).",
+              "maximum": 25,
+              "minimum": 1,
+              "title": "Timeout Sec",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-user-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-user-workspaces",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Workspaces"
+            }
+          }
+        ],
+        "summary": "Wait For Signal"
+      }
+    },
     "/voice-notes/recorder": {
       "post": {
         "description": "Open the voice-note recorder in the person's Minutes tab, so they can dictate a note\nthat is transcribed like a meeting. You cannot record or hear audio yourself: this only\nasks the person's open Minutes tab to start the recorder, and they speak and press Stop.\nCall it when the person asks to record, dictate or take a voice note. It is refused in a\nrun with nobody present (a routine or background flow). Afterwards the note is a meeting\nwith platform voice_note: find it with list_meetings and read it with\nget_meeting_transcript.",

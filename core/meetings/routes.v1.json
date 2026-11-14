@@ -507,6 +507,15 @@
       "shared": "allow"
     },
     {
+      "method": "GET",
+      "path": "/transcripts/{platform}/{native_meeting_id}/signal",
+      "scopes": [
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
+    },
+    {
       "method": "POST",
       "path": "/transcripts/{platform}/{native_meeting_id}/share",
       "scopes": [

@@ -33,8 +33,10 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
+import asyncio
 import json
 import re
+import time
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, Response
@@ -51,6 +53,14 @@ from .obs import TraceMiddleware as _DefaultTraceMiddleware
 from .obs import log_event as _default_log_event
 from .ports import RedisBus, TranscriptStore
 
+
+#: `wait_for_signal`: a line ADDRESSES Claude when it says its name as a word, either spelling.
+ADDRESSED = re.compile(r"(?<!\w)(?:claude|клод)(?!\w)", re.IGNORECASE)
+#: The longest one wait may block. Under the gateway's buffered forward (30 s), so the gateway's
+#: answer, not its timeout, is what a caller sees.
+SIGNAL_WAIT_MAX_S = 25
+#: How often a waiting call re-reads the transcript.
+SIGNAL_POLL_S = 2.0
 
 #: What `DELETE /meetings/...` does while the meeting's bot is still in it or finishing.
 DELETE_LIVE_ENV = "VEXA_MEETING_DELETE_LIVE"
@@ -309,19 +319,9 @@ def build_router(
         )
         return JSONResponse(content={"query": q, "hits": hits, "count": len(hits)})
 
-    # --- GET /transcripts/{platform}/{native_meeting_id} → api.v1 TranscriptionResponse ---
-    @router.get("/transcripts/{platform}/{native_meeting_id}")
-    async def get_transcript(
-        platform: str,
-        native_meeting_id: str,
-        request: Request,
-        include_gaps: bool = Query(False, description=(
-            "Add a top-level `gaps` list: stretches of captured audio that were never transcribed, "
-            "with their place on the meeting's clock. Off by default, so the document is unchanged.")),
-        x_user_id: Optional[str] = Header(default=None),
-        x_user_workspaces: Optional[str] = Header(default=None),
-    ):
-        user_id = _resolve_user_id(x_user_id)
+    async def _room_transcript(user_id, platform: str, native_meeting_id: str,
+                               x_user_workspaces: Optional[str], span: str) -> dict:
+        """The transcript document a room link names for this caller — 404 when there is none."""
         doc = await store.get_transcript(user_id, platform, native_meeting_id)
         if doc is None:
             # A MEETING SENT INTO A WORKSPACE IS ITS MEMBERS' TOO (#1783, founder's call 2026-10-14):
@@ -342,7 +342,7 @@ def build_router(
                 "transcript_not_found",
                 audience="system",
                 level="warning",
-                span="transcripts.get",
+                span=span,
                 user_id=user_id,
                 meeting_id=f"{platform}/{native_meeting_id}",
             )
@@ -350,6 +350,23 @@ def build_router(
                 status_code=404,
                 detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
             )
+        return doc
+
+    # --- GET /transcripts/{platform}/{native_meeting_id} → api.v1 TranscriptionResponse ---
+    @router.get("/transcripts/{platform}/{native_meeting_id}")
+    async def get_transcript(
+        platform: str,
+        native_meeting_id: str,
+        request: Request,
+        include_gaps: bool = Query(False, description=(
+            "Add a top-level `gaps` list: stretches of captured audio that were never transcribed, "
+            "with their place on the meeting's clock. Off by default, so the document is unchanged.")),
+        x_user_id: Optional[str] = Header(default=None),
+        x_user_workspaces: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        doc = await _room_transcript(user_id, platform, native_meeting_id, x_user_workspaces,
+                                     "transcripts.get")
         shared_meeting_readable(request, doc)
         if include_gaps:
             await _attach_gaps(doc)
@@ -363,6 +380,56 @@ def build_router(
             fields={"segments": len(doc.get("segments", []))},
         )
         return JSONResponse(content=doc)
+
+    # --- GET /transcripts/{platform}/{native_meeting_id}/signal → wait for Claude to be addressed.
+    # The connector-only listener (no Claude Code plugin): one call blocks until a line names Claude,
+    # the meeting ends, or the wait is over — so an agent wakes a few times a minute, not per poll.
+    # Deterministic on purpose: no model reads the lines here (a Claude-door account spends none).
+    @router.get("/transcripts/{platform}/{native_meeting_id}/signal")
+    async def wait_for_signal(
+        platform: str,
+        native_meeting_id: str,
+        request: Request,
+        since_index: int = Query(0, ge=0, description=(
+            "The first segment index not yet seen: 0 to start, then the `next_index` of the "
+            "previous answer.")),
+        timeout_sec: int = Query(SIGNAL_WAIT_MAX_S, ge=1, le=SIGNAL_WAIT_MAX_S, description=(
+            f"How long to wait for a line addressed to Claude (1-{SIGNAL_WAIT_MAX_S} s).")),
+        x_user_id: Optional[str] = Header(default=None),
+        x_user_workspaces: Optional[str] = Header(default=None),
+    ):
+        """Wait until someone in a live meeting addresses Claude by name, then return those lines.
+
+        Follow a live call without polling: call it in a loop, passing `next_index` back as
+        `since_index`, and speak only when `signal` is `addressed`. It blocks up to `timeout_sec`
+        and answers with ONE of: `addressed` — `lines` holds only the new lines that say "Claude"
+        (or «Клод») as a word; `quiet` — nothing addressed Claude, `new_lines` counts what was said;
+        `ended` — the meeting is over (any addressed lines in the last stretch included). Read the
+        whole transcript with get_meeting_transcript when you need the context."""
+        user_id = _resolve_user_id(x_user_id)
+        deadline = time.monotonic() + timeout_sec
+        while True:
+            doc = await _room_transcript(user_id, platform, native_meeting_id, x_user_workspaces,
+                                         "transcripts.signal")
+            shared_meeting_readable(request, doc)
+            segments = doc.get("segments") or []
+            start = min(since_index, len(segments))
+            addressed = [{"index": i, "speaker": seg.get("speaker"), "text": seg.get("text"),
+                          "start": seg.get("start")}
+                         for i, seg in enumerate(segments[start:], start)
+                         if ADDRESSED.search(str(seg.get("text") or ""))]
+            ended = doc.get("status") in ("completed", "failed")
+            if addressed or ended or time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(min(SIGNAL_POLL_S, max(0.0, deadline - time.monotonic())))
+        signal = "addressed" if addressed else "ended" if ended else "quiet"
+        log_event("transcript_signal", audience="user", span="transcripts.signal", user_id=user_id,
+                  meeting_id=f"{platform}/{native_meeting_id}",
+                  fields={"signal": signal, "new_lines": len(segments) - start})
+        return JSONResponse(content={
+            "platform": platform, "native_meeting_id": native_meeting_id,
+            "status": doc.get("status"), "signal": signal, "lines": addressed,
+            "new_lines": len(segments) - start, "next_index": len(segments)})
 
     # A planned meeting belongs to schedule/preparation surfaces until a bot run claims it.
     # Keep the set explicit so list pagination can exclude plans in SQL rather than making
