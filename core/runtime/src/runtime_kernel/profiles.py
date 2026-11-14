@@ -339,10 +339,44 @@ def configured_credentials(env: Optional[Mapping[str, str]] = None) -> tuple[Cre
 WORKER_CAPABILITIES = ("CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "KILL", "SETGID", "SETUID")
 
 
+#: The profile a SIGNED-IN meeting bot and a browser session run as (prod rung MVP0): the meeting-bot
+#: profile with its own image, ``SIGNED_IN_BROWSER_IMAGE``. Registered only when that image is named, so
+#: a deployment that names none has exactly the profiles it had; every other bot keeps ``BROWSER_IMAGE``.
+SIGNED_IN_PROFILE = "meeting-bot-signed-in"
+
+
+def _meeting_bot_profile(name: str, image: str, bot_tuning_env: dict) -> "Profile":
+    """The meeting-bot profile under ``name`` with ``image``: placement and resources stay the
+    meeting-bot's (``_profile_scheduling`` / ``_profile_resources`` keyed "meeting-bot")."""
+    return Profile(
+        name=name,
+        runnable=Runnable(
+            image=image,
+            command=None,
+            # A meeting bot joins DOCKER_NETWORK (meeting-api for its callbacks and uploads,
+            # redis for its streams) and is given no model credential.
+            labels={CLASS_LABEL: "bot"},
+            # The node an attempt ran on, for the join retry's placement (k8s only).
+            node_name_env=NODE_NAME_ENV,
+            # As a process-backend child it joins no host group: it brings up its own
+            # display and audio server (deploy/lite/bin/vexa-bot-launch). It may create user
+            # namespaces, which its browser's sandbox needs; no other child may.
+            scheduling=_profile_scheduling("meeting-bot"),
+            user_namespaces=True,
+            # The bot image runs as a non-root uid (Chromium will not sandbox a root browser).
+            run_as_non_root=True,
+        ),
+        idle_timeout_sec=0,  # 0 ⇒ managed externally; enforcement skips it
+        base_env=bot_tuning_env,
+        resources=_profile_resources("meeting-bot"),
+    )
+
+
 def default_registry() -> ProfileRegistry:
     """The real, deployment-shaped registry. Images come from env (no `:latest` fallback — a missing
     image surfaces as an empty string the backend rejects, matching 0.11's fail-visible stance)."""
     browser_image = os.environ.get("BROWSER_IMAGE", "")
+    signed_in_image = os.environ.get("SIGNED_IN_BROWSER_IMAGE", "").strip()
     agent_image = os.environ.get("AGENT_IMAGE", "")
     # Workers run their OWN image (see worker_image_for — core/agent/worker/Dockerfile, not the
     # agent-api image). The Docker backend ensures it is present at startup, pulling it when absent
@@ -383,28 +417,9 @@ def default_registry() -> ProfileRegistry:
             # empty makes docker (omit Cmd) and k8s (omit --command) both boot the image entrypoint
             # identically. The process backend (lite) never uses this default — it sets BOT_COMMAND
             # to its in-container launcher (deploy/lite/bin/vexa-bot-launch), applied below.
-            "meeting-bot": Profile(
-                name="meeting-bot",
-                runnable=Runnable(
-                    image=browser_image,
-                    command=None,
-                    # A meeting bot joins DOCKER_NETWORK (meeting-api for its callbacks and uploads,
-                    # redis for its streams) and is given no model credential.
-                    labels={CLASS_LABEL: "bot"},
-                    # The node an attempt ran on, for the join retry's placement (k8s only).
-                    node_name_env=NODE_NAME_ENV,
-                    # As a process-backend child it joins no host group: it brings up its own
-                    # display and audio server (deploy/lite/bin/vexa-bot-launch). It may create user
-                    # namespaces, which its browser's sandbox needs; no other child may.
-                    scheduling=_profile_scheduling("meeting-bot"),
-                    user_namespaces=True,
-                    # The bot image runs as a non-root uid (Chromium will not sandbox a root browser).
-                    run_as_non_root=True,
-                ),
-                idle_timeout_sec=0,  # 0 ⇒ managed externally; enforcement skips it
-                base_env=bot_tuning_env,
-                resources=_profile_resources("meeting-bot"),
-            ),
+            "meeting-bot": _meeting_bot_profile("meeting-bot", browser_image, bot_tuning_env),
+            **({SIGNED_IN_PROFILE: _meeting_bot_profile(SIGNED_IN_PROFILE, signed_in_image, bot_tuning_env)}
+               if signed_in_image else {}),
             # Claude Code agent — the in-container worker harness (worker): consumes the
             # dispatch from env, runs the governed turn over the mounted workspace, XADDs UnitEvents to
             # unit:<id>:out, serves unit:<id>:in until idle. Continuity is the session file in the
@@ -449,6 +464,7 @@ def default_registry() -> ProfileRegistry:
 # venv/PYTHONPATH/cwd before exec'ing the same workload (the process backend requires a command).
 _COMMAND_OVERRIDE_ENV = {
     "meeting-bot": "BOT_COMMAND",
+    SIGNED_IN_PROFILE: "BOT_COMMAND",
     "agent": "AGENT_WORKER_COMMAND",
 }
 

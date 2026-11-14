@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
+from ..bot_spawn.invocation import bot_profile
 from ..obs import log_event
 from ..webhooks import ssrf
 from . import sessions as S
@@ -194,7 +195,7 @@ class BotAccounts:
 
         spec = {
             "workloadId": workload_id,
-            "profile": "meeting-bot",
+            "profile": bot_profile(signed_in=True),
             "env": {"VEXA_BROWSER_SESSION": json.dumps(env_payload, separators=(",", ":"))},
             "maxLifetimeSec": int(lifetime_s),
         }
