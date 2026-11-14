@@ -78,7 +78,7 @@
     },
     "/transcripts/{platform}/{native_meeting_id}/signal": {
       "get": {
-        "description": "Wait until someone in a live meeting addresses Claude by name, then return those lines.\n\nFollow a live call without polling: call it in a loop, passing `next_index` back as\n`since_index`, and speak only when `signal` is `addressed`. It blocks up to `timeout_sec`\nand answers with ONE of: `addressed` \u2014 `lines` holds only the new lines that say \"Claude\"\n(or \u00ab\u041a\u043b\u043e\u0434\u00bb) as a word; `quiet` \u2014 nothing addressed Claude, `new_lines` counts what was said;\n`ended` \u2014 the meeting is over (any addressed lines in the last stretch included). Read the\nwhole transcript with get_meeting_transcript when you need the context.",
+        "description": "Wait until someone in a live meeting addresses Claude by name, then return those lines.\n\nFollow a live call without polling: call it in a loop, passing `next_index` back as\n`since_index`, and speak only when `signal` is `addressed`. It blocks up to `timeout_sec`\nand answers with ONE of: `addressed` \u2014 `lines` holds only the new lines that say \"Claude\"\n(or \u00ab\u041a\u043b\u043e\u0434\u00bb) as a word; `quiet` \u2014 nothing addressed Claude, `new_lines` counts what was said;\n`ended` \u2014 the meeting is over (any addressed lines in the last stretch included). With\n`notes`, also `noted` \u2014 `noted` holds the new lines worth keeping on the meeting page, each\nwith its `kinds` (decision, commitment, price, date, new); at most one such answer a minute,\nthe lines in between batched into it. Read the whole transcript with get_meeting_transcript\nwhen you need the context.",
         "parameters": [
           {
             "in": "path",
@@ -138,13 +138,25 @@
             }
           },
           {
-            "description": "`text`: the first line is `<signal> <next_index>`, then one `speaker: text` line per addressed line \u2014 for a shell script.",
+            "description": "Also wake with `noted` on decisions, commitments, prices, dates and new names, at most once per 60 s per meeting (the meeting's owner only): so the agent keeps the meeting page and its entities current during the call.",
+            "in": "query",
+            "name": "notes",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Also wake with `noted` on decisions, commitments, prices, dates and new names, at most once per 60 s per meeting (the meeting's owner only): so the agent keeps the meeting page and its entities current during the call.",
+              "title": "Notes",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "`text`: the first line is `<signal> <next_index>`, then one `speaker: text` line per addressed line, or `[kinds] speaker: text` per noted line \u2014 for a shell script.",
             "in": "query",
             "name": "format",
             "required": false,
             "schema": {
               "default": "json",
-              "description": "`text`: the first line is `<signal> <next_index>`, then one `speaker: text` line per addressed line \u2014 for a shell script.",
+              "description": "`text`: the first line is `<signal> <next_index>`, then one `speaker: text` line per addressed line, or `[kinds] speaker: text` per noted line \u2014 for a shell script.",
               "enum": [
                 "json",
                 "text"

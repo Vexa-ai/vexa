@@ -123,3 +123,57 @@ def test_when_the_meeting_ends_the_listener_stamp_says_off():
     r = TestClient(create_app(store, redis=None)).get(URL, headers=HEAD, params={"timeout_sec": 1, "listener": 1, "format": "text"})
     assert r.text.splitlines() == ["ended 1"]
     assert store._meetings[mid]["data"]["metadata"]["listener_state"] == "off"
+
+
+def test_notes_wake_on_what_the_meeting_page_keeps_with_its_kinds():
+    """`notes=1` (founder, 2026-10-25): the listener also keeps the meeting page and its entities
+    current during the call, so decisions, commitments, prices, dates and new names wake it too."""
+    store, mid = _store([
+        _seg(0, "Morning all."),
+        _seg(1, "We decided to launch on the 14th."),
+        _seg(2, "I'll send the contract to Northwind by Friday.", speaker="Bob"),
+        _seg(3, "The price is $4,000 a month."),
+        _seg(4, "Договорились, пришлю до пятницы.", speaker="Ира"),
+        _seg(5, "Sounds good."),
+    ])
+    r = TestClient(create_app(store, redis=None)).get(URL, headers=HEAD, params={"timeout_sec": 1, "notes": 1})
+    body = r.json()
+    assert body["signal"] == "noted" and body["next_index"] == 6
+    kinds = {n["index"]: n["kinds"] for n in body["noted"]}
+    assert set(kinds) == {1, 2, 3, 4}
+    assert "decision" in kinds[1] and "date" in kinds[1]
+    assert "commitment" in kinds[2] and "new" in kinds[2] and "date" in kinds[2]
+    assert kinds[3] == ["price"]
+    assert "decision" in kinds[4] and "commitment" in kinds[4]
+    meta = store._meetings[mid]["data"]["metadata"]
+    assert meta["listener_noted_index"] == 6 and meta["listener_noted_ts"] > 0
+
+
+def test_noted_comes_at_most_once_a_minute_and_batches_what_waited():
+    store, mid = _store([_seg(0, "We agreed on the budget."), _seg(1, "Deadline is next week.")])
+    client = TestClient(create_app(store, redis=None))
+    assert client.get(URL, headers=HEAD, params={"timeout_sec": 1, "notes": 1}).json()["signal"] == "noted"
+    store._meetings[mid]["segments"]["s-2"] = _seg(2, "Let's go with the annual plan.")
+    second = client.get(URL, headers=HEAD, params={"timeout_sec": 1, "notes": 1, "since_index": 2}).json()
+    assert second["signal"] == "quiet", "a second noted answer within the minute waits"
+    store._meetings[mid]["data"]["metadata"]["listener_noted_ts"] -= 61_000
+    store._meetings[mid]["segments"]["s-3"] = _seg(3, "Approved at 20% off.")
+    third = client.get(URL, headers=HEAD, params={"timeout_sec": 1, "notes": 1, "since_index": 4}).json()
+    assert third["signal"] == "noted" and [n["index"] for n in third["noted"]] == [2, 3]
+
+
+def test_a_name_heard_before_is_not_new_and_claude_outranks_noted():
+    segs = [_seg(0, "I talked to Northwind."), _seg(1, "Northwind liked it, Claude, what next?")]
+    store, _ = _store(segs)
+    body = TestClient(create_app(store, redis=None)).get(URL, headers=HEAD, params={"timeout_sec": 1, "notes": 1}).json()
+    assert body["signal"] == "addressed" and body["noted"] == []
+    from meeting_api.collector.app import noted_lines
+    assert [n["index"] for n in noted_lines(segs, 0)] == [0]
+
+
+def test_noted_in_text_for_the_script_and_off_without_notes():
+    store, _ = _store([_seg(0, "We decided on Tuesday.")])
+    client = TestClient(create_app(store, redis=None))
+    assert client.get(URL, headers=HEAD, params={"timeout_sec": 1}).json()["signal"] == "quiet"
+    r = client.get(URL, headers=HEAD, params={"timeout_sec": 1, "notes": 1, "listener": 1, "format": "text"})
+    assert r.text.splitlines() == ["noted 1", "[decision,date] Anna: We decided on Tuesday."]

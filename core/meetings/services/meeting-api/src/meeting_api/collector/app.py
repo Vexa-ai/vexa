@@ -56,6 +56,65 @@ from .ports import RedisBus, TranscriptStore
 
 #: `wait_for_signal`: a line ADDRESSES Claude when it says its name as a word, either spelling.
 ADDRESSED = re.compile(r"(?<!\w)(?:claude|клод)(?!\w)", re.IGNORECASE)
+#: `wait_for_signal` with `notes=1`: a line is NOTED when it carries what the meeting page should keep —
+#: a decision, a commitment, a price, a date, or a name not heard before in the call. Word rules, no
+#: model (a Claude-door account spends none), English and Russian.
+_DAYS = (r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|"
+         r"понедельник\w*|вторник\w*|сред[ауые]|четверг\w*|пятниц\w*|суббот\w*|воскресень\w*|завтра")
+NOTED_RULES = (
+    ("decision", re.compile(
+        r"\b(?:decided|decide on|agreed|agree on|let's go with|we(?:'ll| will) go with|approved|signed off|"
+        r"settled on|договорились|решили|решено|согласовали|утвердили|остановимся на|остановились на)\b",
+        re.IGNORECASE)),
+    ("commitment", re.compile(
+        r"\b(?:i(?:'ll| will)|we(?:'ll| will)|i'm going to) (?:send|share|do|prepare|write|draft|check|"
+        r"follow|get|set up|book|call|email|review|fix|ship|own|handle|take)\b|\baction items?\b|"
+        r"\bnext steps?\b|\bfollow[- ]up\b|\bby (?:" + _DAYS + r"|end of (?:the )?(?:day|week|month))\b|"
+        r"\b(?:беру на себя|сделаю|пришлю|отправлю|подготовлю|напишу|проверю|созвонимся)\b|"
+        r"\bдо (?:" + _DAYS + r")\b", re.IGNORECASE)),
+    ("price", re.compile(
+        r"[$€£₽]\s?\d|\b\d[\d,.]*\s?(?:k|dollars?|euros?|bucks|usd|eur|gbp|percent|руб\w*|тыс\w*|"
+        r"долл\w*|евро|процент\w*)\b|\d\s?%", re.IGNORECASE)),
+    ("date", re.compile(
+        r"\b(?:" + _DAYS + r"|january|february|march|april|june|july|august|september|october|"
+        r"november|december|next (?:week|month|quarter)|deadline|q[1-4]|январ\w*|феврал\w*|март\w*|"
+        r"апрел\w*|ма[йяе]|июн\w*|июл\w*|август\w*|сентябр\w*|октябр\w*|ноябр\w*|декабр\w*|"
+        r"дедлайн|срок\w*)\b|\b\d{1,2}(?:st|nd|rd|th)\b", re.IGNORECASE)),
+)
+#: A name: a capitalized word in the middle of a sentence (people, companies, projects).
+_MID_SENTENCE_NAME = re.compile(r"(?<=[\w,;:] )([A-ZА-ЯЁ][\w'’-]{2,})")
+_NOT_NAMES = frozenset({"claude", "клод", "i'm", "i'll", "i've", "i'd", "okay", "ok", "vexa"})
+#: The fewest seconds between two `noted` answers for one meeting: what is noted in between waits and
+#: comes in the next answer, so the agent updates the page about once a minute, not on every line.
+NOTED_MIN_GAP_S = 60
+#: The most noted lines one answer carries (the newest; the first answer may catch up a whole call).
+NOTED_MAX_LINES = 40
+
+
+def _names(text: str) -> set:
+    date = NOTED_RULES[-1][1]
+    return {m.lower() for m in _MID_SENTENCE_NAME.findall(text)
+            if m.lower() not in _NOT_NAMES and not date.fullmatch(m)}
+
+
+def noted_lines(segments: list, start: int) -> list:
+    """The lines from `start` on that carry something for the meeting page, each with its kinds."""
+    known: set = set()
+    found = []
+    for i, seg in enumerate(segments):
+        text = str(seg.get("text") or "")
+        names = _names(text)
+        if i >= start:
+            kinds = [kind for kind, rule in NOTED_RULES if rule.search(text)]
+            if names - known:
+                kinds.append("new")
+            if kinds:
+                found.append({"index": i, "speaker": seg.get("speaker"), "text": seg.get("text"),
+                              "start": seg.get("start"), "kinds": kinds})
+        known |= names | {str(seg.get("speaker") or "").lower()}
+    return found[-NOTED_MAX_LINES:]
+
+
 #: The longest one wait may block. Under the gateway's buffered forward (30 s), so the gateway's
 #: answer, not its timeout, is what a caller sees.
 SIGNAL_WAIT_MAX_S = 25
@@ -398,9 +457,13 @@ def build_router(
         listener: bool = Query(False, description=(
             "This call is a listener's (`vexa-listen`): stamp the meeting's `listener_state` / "
             "`listener_ts` so the panel shows it is being listened to.")),
+        notes: bool = Query(False, description=(
+            "Also wake with `noted` on decisions, commitments, prices, dates and new names, at most "
+            f"once per {NOTED_MIN_GAP_S} s per meeting (the meeting's owner only): so the agent "
+            "keeps the meeting page and its entities current during the call.")),
         format: Literal["json", "text"] = Query("json", description=(
             "`text`: the first line is `<signal> <next_index>`, then one `speaker: text` line per "
-            "addressed line — for a shell script.")),
+            "addressed line, or `[kinds] speaker: text` per noted line — for a shell script.")),
         x_user_id: Optional[str] = Header(default=None),
         x_user_workspaces: Optional[str] = Header(default=None),
     ):
@@ -410,14 +473,28 @@ def build_router(
         `since_index`, and speak only when `signal` is `addressed`. It blocks up to `timeout_sec`
         and answers with ONE of: `addressed` — `lines` holds only the new lines that say "Claude"
         (or «Клод») as a word; `quiet` — nothing addressed Claude, `new_lines` counts what was said;
-        `ended` — the meeting is over (any addressed lines in the last stretch included). Read the
-        whole transcript with get_meeting_transcript when you need the context."""
+        `ended` — the meeting is over (any addressed lines in the last stretch included). With
+        `notes`, also `noted` — `noted` holds the new lines worth keeping on the meeting page, each
+        with its `kinds` (decision, commitment, price, date, new); at most one such answer a minute,
+        the lines in between batched into it. Read the whole transcript with get_meeting_transcript
+        when you need the context."""
         user_id = _resolve_user_id(x_user_id)
         deadline = time.monotonic() + timeout_sec
+        # Where noting stands for this meeting lives on the meeting itself (`listener_noted_index`,
+        # `listener_noted_ts`), so a restarted script, or another chat, carries on where it left off.
+        notes_from: Optional[int] = None
+        notes_ready = False
+        noted: list = []
         while True:
             doc = await _room_transcript(user_id, platform, native_meeting_id, x_user_workspaces,
                                          "transcripts.signal")
             shared_meeting_readable(request, doc)
+            if notes and notes_from is None and doc.get("id") is not None:
+                row = await store.annotate_meeting(user_id, int(doc["id"]), metadata={})
+                meta = ((row or {}).get("data") or {}).get("metadata") or {}
+                notes_from = int(meta.get("listener_noted_index") or 0)
+                notes_ready = row is not None and "error" not in row
+                last = int(meta.get("listener_noted_ts") or 0)
             segments = doc.get("segments") or []
             start = min(since_index, len(segments))
             addressed = [{"index": i, "speaker": seg.get("speaker"), "text": seg.get("text"),
@@ -425,16 +502,23 @@ def build_router(
                          for i, seg in enumerate(segments[start:], start)
                          if ADDRESSED.search(str(seg.get("text") or ""))]
             ended = doc.get("status") in ("completed", "failed")
-            if addressed or ended or time.monotonic() >= deadline:
+            if notes_ready and time.time() * 1000 - last >= NOTED_MIN_GAP_S * 1000:
+                noted = noted_lines(segments, min(notes_from or 0, len(segments)))
+            if addressed or ended or noted or time.monotonic() >= deadline:
                 break
             await asyncio.sleep(min(SIGNAL_POLL_S, max(0.0, deadline - time.monotonic())))
-        signal = "addressed" if addressed else "ended" if ended else "quiet"
-        if listener and doc.get("id") is not None:
+        signal = "addressed" if addressed else "ended" if ended else "noted" if noted else "quiet"
+        stamp: dict = {}
+        if listener:
             # The listener's heartbeat: every call (at most SIGNAL_WAIT_MAX_S apart) restamps it.
+            stamp.update({"listener_state": "off" if ended else "listening",
+                          "listener_ts": int(time.time() * 1000), "listener_mode": "script"})
+        if signal == "noted":
+            stamp.update({"listener_noted_index": len(segments),
+                          "listener_noted_ts": int(time.time() * 1000)})
+        if stamp and doc.get("id") is not None:
             try:
-                await store.annotate_meeting(user_id, int(doc["id"]), metadata={
-                    "listener_state": "off" if ended else "listening",
-                    "listener_ts": int(time.time() * 1000), "listener_mode": "script"})
+                await store.annotate_meeting(user_id, int(doc["id"]), metadata=stamp)
             except Exception:  # noqa: BLE001 — the signal is answered whether or not the stamp lands
                 pass
         log_event("transcript_signal", audience="user", span="transcripts.signal", user_id=user_id,
@@ -442,11 +526,14 @@ def build_router(
                   fields={"signal": signal, "new_lines": len(segments) - start})
         if format == "text":
             body = "\n".join([f"{signal} {len(segments)}"]
-                              + [f"{a['speaker'] or '?'}: {a['text'] or ''}" for a in addressed])
+                              + [f"{a['speaker'] or '?'}: {a['text'] or ''}" for a in addressed]
+                              + ([f"[{','.join(n['kinds'])}] {n['speaker'] or '?'}: {n['text'] or ''}"
+                                  for n in noted] if signal == "noted" else []))
             return PlainTextResponse(body + "\n")
         return JSONResponse(content={
             "platform": platform, "native_meeting_id": native_meeting_id,
             "status": doc.get("status"), "signal": signal, "lines": addressed,
+            "noted": noted if signal == "noted" else [],
             "new_lines": len(segments) - start, "next_index": len(segments)})
 
     # A planned meeting belongs to schedule/preparation surfaces until a bot run claims it.

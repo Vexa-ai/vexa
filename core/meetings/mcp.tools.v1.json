@@ -69,6 +69,7 @@
         "since_index",
         "timeout_sec",
         "listener",
+        "notes",
         "format"
       ]
     }
