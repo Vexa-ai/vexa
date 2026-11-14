@@ -510,6 +510,7 @@
       "method": "GET",
       "path": "/link/events",
       "scopes": [
+        "bot",
         "tx"
       ],
       "shared": "refuse"
@@ -518,6 +519,7 @@
       "method": "GET",
       "path": "/transcripts/{platform}/{native_meeting_id}/signal",
       "scopes": [
+        "bot",
         "tx"
       ],
       "mcp_reentry": true,
