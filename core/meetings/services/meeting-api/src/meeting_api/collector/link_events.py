@@ -18,6 +18,7 @@ import asyncio
 import base64
 import json
 import time
+import zlib
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Header, Query
@@ -33,6 +34,10 @@ RUNNING = ("requested", "joining", "awaiting_admission", "active", "needs_help",
 RECENT = 20
 #: The most events one answer carries; the rest come in the next.
 MAX_EVENTS = 200
+#: How many of a call's newest finished lines the cursor remembers, by segment id and a hash of their
+#: words: a line finished late, or re-worded after it went out, is sent (again) while it is among them.
+#: The cursor stays well under the 4 KB query cap (two 8-character hashes per line).
+RECENT_FINALS = 24
 
 
 def encode_cursor(state: dict) -> str:
@@ -47,6 +52,22 @@ def decode_cursor(cursor: str) -> Optional[dict]:
         return state if isinstance(state, dict) else None
     except ValueError:
         return None
+
+
+def _finals(segments: list) -> list:
+    """A call's finished lines, in transcript order. A live draft (`completed` false) is not yet what
+    was said: it is re-worded and merged as it settles, so sending it once by position sent first
+    drafts and never the words (call 284, 3 Nov: «Обновить ноут с этого звонка» reached the listener
+    as «Слышишь, можно...»)."""
+    return [s for s in segments if s.get("completed") is not False]
+
+
+def _h(value: Any) -> str:
+    return format(zlib.crc32(str(value).encode()), "08x")
+
+
+def _line_key(seg: dict) -> str:
+    return _h(seg.get("segment_id") or seg.get("start"))
 
 
 def _meeting(row: dict) -> dict:
@@ -67,8 +88,9 @@ def install(router: APIRouter, *, store: Any, resolve_user: Callable[[Optional[s
     ):
         """The person's calls as events, one JSON object per line after a first line `cursor <c>`:
         `{"type": "system", "event": "status", "meeting": {...}, "status", "previous"}` when a call
-        changes state, `{"type": "transcript", "meeting": {...}, "index", "speaker", "text"}` per new
-        line in a running call. Blocks up to `timeout_sec` until there is something; pass the cursor
+        changes state, `{"type": "transcript", "meeting": {...}, "index", "segment_id", "start",
+        "absolute_start_time", "speaker", "text"}` per line a running call finished (`index` counts
+        finished lines; a line re-worded after it went out comes again under its segment_id). Blocks up to `timeout_sec` until there is something; pass the cursor
         back each time."""
         user_id = resolve_user(x_user_id)
         held = decode_cursor(cursor)
@@ -96,15 +118,33 @@ def install(router: APIRouter, *, store: Any, resolve_user: Callable[[Optional[s
                 live.append(row)
                 doc = await store.get_transcript_by_id(user_id, int(row["id"]))
                 segments = (doc or {}).get("segments") or []
-                if first or mid not in read_to:
-                    read_to[mid] = len(segments) if first else 0
-                for i in range(int(read_to[mid]), len(segments)):
+                finals = _finals(segments)
+                if first or not isinstance(read_to.get(mid), dict):
+                    # The first read starts at the end (so does a cursor from before segment ids);
+                    # a call that starts while the link runs is read from its first line.
+                    skip = finals if (first or mid in read_to) else []
+                    read_to[mid] = {"n": len(skip), "h": {_line_key(x): _h(x.get("text") or "")
+                                                         for x in skip[-RECENT_FINALS:]}}
+                mark = read_to[mid]
+                sent_to, known = int(mark.get("n") or 0), dict(mark.get("h") or {})
+                lo, upto = max(0, sent_to - RECENT_FINALS), len(finals)
+                for i in range(lo, len(finals)):
+                    seg = finals[i]
+                    key, words = _line_key(seg), _h(seg.get("text") or "")
+                    if known.get(key) == words:
+                        continue                  # already sent with these words
                     if len(events) >= MAX_EVENTS:
+                        upto = i
                         break                     # the rest comes in the next answer
-                    seg = segments[i]
+                    known[key] = words
+                    if not str(seg.get("text") or "").strip():
+                        continue
                     events.append({"type": "transcript", "meeting": _meeting(row), "index": i,
+                                   "segment_id": seg.get("segment_id"), "start": seg.get("start"),
+                                   "absolute_start_time": seg.get("absolute_start_time"),
                                    "speaker": seg.get("speaker"), "text": seg.get("text")})
-                    read_to[mid] = i + 1
+                keep = {_line_key(x) for x in finals[max(0, upto - RECENT_FINALS):upto]}
+                read_to[mid] = {"n": upto, "h": {k: v for k, v in known.items() if k in keep}}
             first = False
             # A call that ended and was reported once is forgotten; the cursor stays small.
             current = {str(r.get("id")) for r in rows}

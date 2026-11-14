@@ -46,6 +46,7 @@ def test_first_read_reports_running_calls_and_starts_at_the_end_then_streams_new
     store._meetings[mid]["segments"]["s-1"] = _seg(1, "Claude, what's the price?", speaker="Bob")
     cursor, events = _read(client, cursor)
     assert events == [{"type": "transcript", "meeting": events[0]["meeting"], "index": 1,
+                       "segment_id": "s-1", "start": 1.0, "absolute_start_time": None,
                        "speaker": "Bob", "text": "Claude, what's the price?"}]
     cursor, events = _read(client, cursor)
     assert events == [], "nothing new: the read waits, then answers empty"
@@ -78,3 +79,62 @@ def test_a_bad_cursor_starts_over_and_events_are_capped(monkeypatch):
     assert len(events) == 3
     cursor, events = _read(client, cursor)
     assert [e["index"] for e in events] == [2, 3, 4], "what did not fit comes in the next answer"
+
+
+def _draft(i, text, speaker="Anna"):
+    return {**_seg(i, text, speaker), "completed": False}
+
+
+def _live_call(store):
+    mid = store.seed_meeting(user_id=USER, platform="google_meet", native_meeting_id="dwz-pacf-jmf",
+                             status="active", segments=[_seg(0, "Так, окей, слушатель работает.")])
+    client = TestClient(create_app(store, redis=None))
+    cursor, _ = _read(client)
+    return mid, client, cursor
+
+
+def test_a_draft_is_not_sent_and_the_finished_words_arrive_once_with_their_segment_id():
+    """Call 284, 3 Nov 12:46Z: the listener got the first draft of each line and never the words."""
+    store = InMemoryTranscriptStore()
+    mid, client, cursor = _live_call(store)
+    store._meetings[mid]["segments"]["s-1"] = _draft(1, "Слышишь, можно")
+    cursor, events = _read(client, cursor)
+    assert events == [], "a draft is not what was said yet"
+    store._meetings[mid]["segments"]["s-1"] = _seg(1, "Обновить ноут с этого звонка.")
+    cursor, events = _read(client, cursor)
+    assert [(e["segment_id"], e["index"], e["text"]) for e in events] == [
+        ("s-1", 1, "Обновить ноут с этого звонка.")]
+    cursor, events = _read(client, cursor)
+    assert events == []
+
+
+def test_a_line_finished_after_a_later_one_is_still_sent():
+    store = InMemoryTranscriptStore()
+    mid, client, cursor = _live_call(store)
+    store._meetings[mid]["segments"]["s-1"] = _draft(1, "Обнови")
+    store._meetings[mid]["segments"]["s-2"] = _seg(2, "Новый ноут звонка.")
+    cursor, events = _read(client, cursor)
+    assert [e["segment_id"] for e in events] == ["s-2"]
+    store._meetings[mid]["segments"]["s-1"] = _seg(1, "Ну обнови.")
+    cursor, events = _read(client, cursor)
+    assert [(e["segment_id"], e["text"]) for e in events] == [("s-1", "Ну обнови.")]
+
+
+def test_a_finished_line_reworded_later_goes_out_again_under_its_segment_id():
+    store = InMemoryTranscriptStore()
+    mid, client, cursor = _live_call(store)
+    store._meetings[mid]["segments"]["s-1"] = _seg(1, "Обновить нутс.")
+    cursor, events = _read(client, cursor)
+    store._meetings[mid]["segments"]["s-1"] = _seg(1, "Обновить ноут с этого звонка.")
+    cursor, events = _read(client, cursor)
+    assert [(e["segment_id"], e["text"]) for e in events] == [("s-1", "Обновить ноут с этого звонка.")]
+
+
+def test_the_cursor_stays_small_on_a_long_call():
+    store = InMemoryTranscriptStore()
+    mid, client, cursor = _live_call(store)
+    for i in range(1, 600):
+        store._meetings[mid]["segments"][f"s-{i}"] = _seg(i, f"line {i}")
+    for _ in range(5):
+        cursor, events = _read(client, cursor)
+    assert len(cursor) < 1200, len(cursor)
