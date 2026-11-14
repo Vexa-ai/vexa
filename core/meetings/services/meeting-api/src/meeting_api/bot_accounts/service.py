@@ -94,12 +94,16 @@ def _iso(ts: float) -> str:
 
 SESSIONS_WHO_ENV = "VEXA_BROWSER_BOTS_WHO"
 SESSIONS_ADMIN_ONLY = "browser sessions are open only to this deployment's admin account"
+SESSIONS_ADMINS_ONLY = "browser sessions are open only to this deployment's admins"
 
 
 def _sessions_who(raw: Optional[str]) -> str:
-    """Unset or empty is ``all``; ``admin_account`` narrows; any other value narrows too (fail closed)."""
+    """Unset or empty is ``all``; ``admins`` (instance admins or the admin account) and ``admin_account``
+    narrow; any other value narrows to ``admin_account`` (fail closed)."""
     v = (raw or "").strip().lower()
-    return "all" if v in ("", "all") else "admin_account"
+    if v in ("", "all"):
+        return "all"
+    return "admins" if v == "admins" else "admin_account"
 
 
 @dataclass(frozen=True)
@@ -114,8 +118,9 @@ class Settings:
     #: ``VEXA_BOT_SIGNIN_EXTRA_HOSTS``, parsed (``parse_signin_extra_hosts``).
     signin_extra_hosts: tuple = ()
     #: ``VEXA_BROWSER_BOTS_WHO``: who may open a browser session or check a stored account. ``all`` (the
-    #: default: anyone ``browser_bots`` serves) or ``admin_account`` (the deployment's admin account alone;
-    #: everyone else is refused 403 before any workload starts). Anything else reads as ``admin_account``.
+    #: default: anyone ``browser_bots`` serves), ``admins`` (instance admins or the admin account; they may
+    #: also sign in and delete company accounts) or ``admin_account`` (the deployment's admin account alone);
+    #: everyone else is refused 403 before any workload starts. Anything else reads as ``admin_account``.
     sessions_who: str = "all"
 
     @classmethod
@@ -224,14 +229,23 @@ class BotAccounts:
         return {"accounts": out, "company_bot_use": policy}
 
     # ── browser sessions ──────────────────────────────────────────────────────────────────────
+    def _manages_company(self, roles: dict) -> bool:
+        """May this person sign in or delete a company account? The admin account always; an instance
+        admin only where ``VEXA_BROWSER_BOTS_WHO=admins``. Roles fail closed (``policy.NO_ROLES``)."""
+        if roles.get("admin_account") is True:
+            return True
+        return self.settings.sessions_who == "admins" and roles.get("is_admin") is True
+
     async def _sessions_allowed(self, user_id: int) -> None:
-        """``VEXA_BROWSER_BOTS_WHO=admin_account``: anyone but the admin account is refused before any
-        workload starts. Roles fail closed (an admin-api that cannot answer is neither role)."""
+        """``VEXA_BROWSER_BOTS_WHO=admins``: anyone but an instance admin or the admin account is refused
+        before any workload starts; ``admin_account``: anyone but the admin account. Roles fail closed
+        (an admin-api that cannot answer is neither role)."""
         if self.settings.sessions_who == "all":
             return
         roles = await self.admin.roles(user_id)
-        if not roles.get("admin_account"):
-            raise BotAccountRefused(403, SESSIONS_ADMIN_ONLY)
+        if not self._manages_company(roles):
+            raise BotAccountRefused(403, SESSIONS_ADMINS_ONLY if self.settings.sessions_who == "admins"
+                                    else SESSIONS_ADMIN_ONLY)
 
     async def open_session(self, user_id: int, body: dict) -> dict:
         self._require()
@@ -261,7 +275,7 @@ class BotAccounts:
             display_name = display_name or account.get("display_name")
         if owner == "company":
             roles = await self.admin.roles(user_id)
-            if not roles.get("admin_account"):
+            if not self._manages_company(roles):
                 raise BotAccountRefused(403, "only the admin account may sign in a company bot account")
 
         now = self.clock()
@@ -502,7 +516,7 @@ class BotAccounts:
             raise BotAccountRefused(404, "no such bot account")
         if account["owner"] == "company":
             roles = await self.admin.roles(user_id)
-            if not roles.get("admin_account"):
+            if not self._manages_company(roles):
                 raise BotAccountRefused(403, "only the admin account may delete a company bot account")
         try:
             await self.broker.delete(account_id, actor=account["owner"])

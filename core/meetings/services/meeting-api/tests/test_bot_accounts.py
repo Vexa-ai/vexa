@@ -818,8 +818,9 @@ def test_company_use_admin_account_opens_company_accounts_to_the_admin_account_a
 
 def test_sessions_who_reads_all_by_default_and_narrows_on_anything_else():
     assert _sessions_who(None) == "all" and _sessions_who("") == "all" and _sessions_who(" ALL ") == "all"
-    for v in ("admin_account", "admins", "nobody", "x"):
+    for v in ("admin_account", "nobody", "x", "admin"):
         assert _sessions_who(v) == "admin_account"
+    assert _sessions_who("admins") == "admins" and _sessions_who(" Admins ") == "admins"
     assert Settings.from_env({}).sessions_who == "all"
     assert Settings.from_env({"VEXA_BROWSER_BOTS_WHO": "admin_account"}).sessions_who == "admin_account"
 
@@ -835,3 +836,62 @@ def test_a_browser_session_is_a_meeting_bot_when_none_is_named(rig, monkeypatch)
     monkeypatch.delenv("VEXA_SIGNED_IN_BOT_PROFILE", raising=False)
     assert rig.open(OWNER).status_code in (200, 201)
     assert rig.runtime.specs[-1]["profile"] == "meeting-bot"
+
+
+
+# ── VEXA_BROWSER_BOTS_WHO=admins: an instance admin is the bots' admin (founder, his existing account) ──
+from meeting_api.bot_accounts.service import SESSIONS_ADMINS_ONLY
+from meeting_api.bot_accounts.policy import NO_ROLES
+
+
+def _admins(rig):
+    rig.ba.settings = Settings(callback_base=BASE, sessions_who="admins")
+    rig.policy = "admins"
+    return rig
+
+
+@pytest.mark.parametrize("uid", [PERSON_ADMIN, ADMIN_ACCOUNT])
+def test_with_sessions_for_admins_an_instance_admin_or_the_admin_account_signs_in_a_company_account(rig, uid):
+    _admins(rig)
+    r = rig.open(uid, owner="company")
+    assert r.status_code == 201, r.text
+    assert r.json()["owner"] == "company" and len(rig.runtime.specs) == 1
+
+
+@pytest.mark.parametrize("uid", [OWNER, OTHER])
+def test_with_sessions_for_admins_a_customer_is_refused_and_no_workload_starts(rig, uid):
+    _admins(rig)
+    for owner in ("me", "company"):
+        r = rig.open(uid, owner=owner)
+        assert r.status_code == 403, r.text
+        assert SESSIONS_ADMINS_ONLY in r.text
+    company = rig.seed("company")
+    assert rig.client.post(f"/bot-accounts/{company['id']}/verify", headers=rig.as_(uid)).status_code == 403
+    assert rig.client.delete(f"/bot-accounts/{company['id']}", headers=rig.as_(uid)).status_code in (403, 404)
+    assert rig.broker.accounts and len(rig.runtime.specs) == 0
+
+
+def test_with_sessions_for_admins_an_instance_admin_deletes_a_company_account(rig):
+    _admins(rig)
+    company = rig.seed("company")
+    r = rig.client.delete(f"/bot-accounts/{company['id']}", headers=rig.as_(PERSON_ADMIN))
+    assert r.status_code == 200, r.text
+
+
+def test_with_sessions_for_admins_roles_that_cannot_be_read_refuse(rig):
+    _admins(rig)
+
+    class Silent:
+        async def roles(self, user_id):
+            return dict(NO_ROLES)
+    rig.ba.admin = Silent()
+    assert rig.open(PERSON_ADMIN, owner="company").status_code == 403
+    assert len(rig.runtime.specs) == 0
+
+
+@pytest.mark.parametrize("who", ["all", "admin_account"])
+def test_outside_admins_an_instance_admin_still_cannot_sign_in_or_delete_a_company_account(rig, who):
+    rig.ba.settings = Settings(callback_base=BASE, sessions_who=who)
+    assert rig.open(PERSON_ADMIN, owner="company").status_code == 403
+    company = rig.seed("company")
+    assert rig.client.delete(f"/bot-accounts/{company['id']}", headers=rig.as_(PERSON_ADMIN)).status_code == 403
