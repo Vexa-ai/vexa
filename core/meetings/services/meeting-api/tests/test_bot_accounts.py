@@ -895,3 +895,21 @@ def test_outside_admins_an_instance_admin_still_cannot_sign_in_or_delete_a_compa
     assert rig.open(PERSON_ADMIN, owner="company").status_code == 403
     company = rig.seed("company")
     assert rig.client.delete(f"/bot-accounts/{company['id']}", headers=rig.as_(PERSON_ADMIN)).status_code == 403
+
+
+
+# ── S1 review M3: off Meet, a default bot never shares a company account with a live bot ─────────────
+async def test_off_meet_a_default_bot_skips_a_busy_company_account_and_is_a_guest_when_all_are(rig):
+    a = rig.seed("company", platform="zoom", verified_at="2026-10-02T00:00:00Z")
+    b = rig.seed("company", platform="zoom", verified_at="2026-10-01T00:00:00Z")
+    live = set()
+
+    async def busy(account):
+        return account["id"] in live
+    pick = lambda: rig.ba.resolve_for_spawn(PERSON_ADMIN, "zoom", None, room=None, busy=busy)
+    assert (await pick())["id"] == a["id"]
+    live.add(a["id"])
+    assert (await pick())["id"] == b["id"]
+    live.add(b["id"])
+    assert await pick() is None
+    assert await rig.ba.resolve_for_spawn(OWNER, "zoom", None, room=None, busy=busy) is None  # a customer: none, as before
