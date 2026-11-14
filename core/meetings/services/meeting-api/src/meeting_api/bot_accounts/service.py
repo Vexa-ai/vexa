@@ -594,7 +594,12 @@ class BotAccounts:
         policy = self.policy()
         mine_ok = [a for a in company if usable(a, user_id=user_id, policy=policy, roles=roles)]
         if room is None:
-            return newest(mine_ok)
+            # Off Meet (S1 review M3): one live bot per company account here too; every one busy is a
+            # guest bot, as before there was a company account.
+            for a in sorted(mine_ok, key=lambda a: a.get("verified_at") or "", reverse=True):
+                if busy is None or not await busy(a):
+                    return a
+            return None
         for a in sorted(mine_ok, key=lambda a: a.get("verified_at") or "", reverse=True):
             if busy is None or not await busy(a):
                 return a
