@@ -203,8 +203,8 @@ def _segment_to_api(seg: dict) -> dict:
 # get the segment identity wrong. Keyed on ``(meeting_id, segment_id)`` (the partial unique index
 # ``ix_transcription_meeting_segment``): a re-write lands as an UPDATE, never a duplicate row.
 _SEGMENT_UPSERT_SQL = """
-    INSERT INTO transcriptions (meeting_id, start_time, end_time, text, speaker, language, session_uid, segment_id, source, created_at)
-    VALUES (:mid, :start, :end, :text, :speaker, :lang, :uid, :segid, :source, :created)
+    INSERT INTO transcriptions (meeting_id, start_time, end_time, text, speaker, language, segment_id, source, created_at)
+    VALUES (:mid, :start, :end, :text, :speaker, :lang, :segid, :source, :created)
     ON CONFLICT (meeting_id, segment_id) WHERE segment_id IS NOT NULL
     DO UPDATE SET text = EXCLUDED.text, speaker = EXCLUDED.speaker,
                   start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time,
@@ -246,7 +246,7 @@ def _segment_upsert_rows(meeting_id, segments) -> "list[dict]":
         rows.append({
             "mid": int(meeting_id), "start": start, "end": end,
             "text": seg.get("text") or "", "speaker": seg.get("speaker"),
-            "lang": seg.get("language"), "uid": seg.get("session_uid"),
+            "lang": seg.get("language"),
             "segid": str(sid), "source": seg.get("source"), "created": _dt.utcnow(),
         })
     return rows

@@ -111,7 +111,7 @@ def test_crud_meeting_transcription_session_roundtrip(engine):
         s.flush()
         s.add(Transcription(meeting_id=m.id, start_time=19.0, end_time=34.0,
                             text="Hello, this is the transcript", speaker="Alice",
-                            language="en", session_uid="sess-1", segment_id="seg-1"))
+                            language="en", segment_id="seg-1"))
         s.add(MeetingSession(meeting_id=m.id, session_uid="sess-1"))
         s.commit()
         mid = m.id

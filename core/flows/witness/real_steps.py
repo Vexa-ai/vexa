@@ -70,7 +70,7 @@ def stop_bot(api_key: str, platform: str, native: str) -> None:
     http("DELETE", f"{GATEWAY}/bots/{platform}/{native}", {"X-API-Key": api_key})
 
 
-def inject_fixture_transcript(meeting_id: int, session_uid: str) -> int:
+def inject_fixture_transcript(meeting_id: int) -> int:
     """The honest double: this stack runs no whisper, so the 'transcription' is a fixture —
     injected through the same table the collector writes."""
     lines = [
@@ -83,8 +83,8 @@ def inject_fixture_transcript(meeting_id: int, session_uid: str) -> int:
         (44.5, 50.0, "Anna", "Open question for next time: do we invite risk & compliance to the pilot?"),
     ]
     sql = "; ".join(
-        "INSERT INTO transcriptions (meeting_id,start_time,end_time,text,speaker,language,session_uid,segment_id,created_at) "
-        f"VALUES ({meeting_id},{a},{b},'{t.replace(chr(39), chr(39)*2)}','{sp}','en','{session_uid}','fix-{i}',now())"
+        "INSERT INTO transcriptions (meeting_id,start_time,end_time,text,speaker,language,segment_id,created_at) "
+        f"VALUES ({meeting_id},{a},{b},'{t.replace(chr(39), chr(39)*2)}','{sp}','en','fix-{i}',now())"
         for i, (a, b, sp, t) in enumerate(lines))
     subprocess.run(["docker", "exec", "vexa-v012-postgres-1", "psql", "-U", "postgres", "-d", "vexa",
                     "-c", sql], check=True, capture_output=True)
