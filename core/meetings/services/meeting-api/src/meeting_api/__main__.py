@@ -984,6 +984,12 @@ def _attach_background_loops(
                 "until the next boot retries it"
             )
 
+    from .bot_spawn.env_flags import env_flag as _env_flag
+    # MEETING_API_FTS_BOOT_INDEX (default on): whether this process builds the transcript FTS index at
+    # boot. Off where the serving role does not own `transcriptions` (prod: CREATE INDEX fails on every
+    # boot) and where serving processes run no DDL (G2).
+    fts_boot_index = _env_flag("MEETING_API_FTS_BOOT_INDEX", default=True)
+
     @asynccontextmanager
     async def lifespan(_app):
         tasks = [
@@ -1003,8 +1009,12 @@ def _attach_background_loops(
               if bot_redis is not None else []),
             *([asyncio.create_task(_bot_accounts_reaper_loop(), name="bot-accounts-reaper")]
               if bot_accounts_live else []),
-            asyncio.create_task(_ensure_fts_index_once(), name="ensure-fts-index"),
+            *([asyncio.create_task(_ensure_fts_index_once(), name="ensure-fts-index")]
+              if fts_boot_index else []),
         ]
+        if not fts_boot_index:
+            log.info("transcript FTS boot index task not started: MEETING_API_FTS_BOOT_INDEX is off "
+                     "(the schema owner builds ix_transcription_text_fts; a serving process runs no DDL)")
         log.info("meeting-api background loops started: %s", [t.get_name() for t in tasks])
         try:
             yield
