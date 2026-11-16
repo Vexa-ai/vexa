@@ -93,11 +93,13 @@ class InMemoryMeetingRepo:
                 return dict(m)
         return None
 
-    async def count_active_by_userdata(self, userdata_s3_path, exclude_meeting_id=None) -> int:
+    async def count_active_by_userdata(self, userdata_s3_path, exclude_meeting_id=None,
+                                       newer_than_meeting_id=None) -> int:
         return sum(1 for m in self._meetings.values()
-                   if m["status"] in _ACTIVE_STATUSES
+                   if m["status"] in (*_ACTIVE_STATUSES, "stopping")
                    and m.get("data", {}).get("auth_userdata_path") == userdata_s3_path
-                   and (exclude_meeting_id is None or m.get("id") != exclude_meeting_id))
+                   and (exclude_meeting_id is None or m.get("id") != exclude_meeting_id)
+                   and (newer_than_meeting_id is None or (m.get("id") or 0) > newer_than_meeting_id))
 
     async def latest_auth_session(self, userdata_s3_path) -> Optional[dict]:
         # self.sessions is append-ordered, i.e. session-start order.

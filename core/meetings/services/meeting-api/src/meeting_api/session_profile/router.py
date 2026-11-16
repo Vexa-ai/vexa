@@ -9,8 +9,9 @@ rotated session reaches the store. Four checks, in this order, each before the n
    (``meeting_token.admit_session``, the rule the lifecycle callback and the uploads apply). 401.
 2. **Authenticated mode** — ``BOT_AUTHENTICATED`` with a complete store (``auth_session_config``).
    Off: 409. Misconfigured, or the bots' pair reusing a storage root key: 503.
-3. **The live authenticated bot** — the token's session must be the newest session spawned on the
-   deployment's identity (``MeetingRepo.latest_auth_session``) and belong to the token's meeting;
+3. **The live authenticated bot** — the token's session must be the newest session of the token's
+   meeting (a bot account: ``get_meeting_by_session``; many bots may share one account) or, for the
+   deployment-wide profile, the newest spawned on its identity (``MeetingRepo.latest_auth_session``);
    its meeting must be live, or have ended less than ``WRITEBACK_GRACE_S`` ago (the bot writes back
    on teardown, after its terminal callback). A bot superseded by a later spawn, or one whose
    meeting ended long ago, is refused. 403.
@@ -87,7 +88,7 @@ def build_router(
     clock: Optional[Callable[[], datetime]] = None,
     bot_accounts: Any = None,
 ) -> APIRouter:
-    """The write-back route over the meeting repo (``latest_auth_session``) and a session writer.
+    """The write-back route over the meeting repo (``get_meeting_by_session`` / ``latest_auth_session``) and a session writer.
 
     ``bot_accounts`` (``meeting_api.bot_accounts.BotAccounts``): a meeting spawned with a bot account
     (``meeting.data.bot_account_id``) writes back to that account in the credential broker instead
@@ -188,10 +189,11 @@ def build_router(
 
         if account_id:
             others = await meeting_repo.count_active_by_userdata(f"bot-account:{account_id}",
-                                                                 exclude_meeting_id=meeting_id)
+                                                                 newer_than_meeting_id=meeting_id)
             if others:
-                # Other bots still use this account: they hold newer-or-equal sign-ins. Only the last one
-                # out writes back, so an older profile never replaces a newer one (founder: «fix that»).
+                # A NEWER live bot on this account restored a newer-or-equal sign-in and will write it back
+                # itself: this older one defers, so an older profile never replaces a newer one (founder:
+                # «fix that»). The newest live bot always writes, so an always-busy account still refreshes.
                 log_event("session_writeback_deferred", audience="system", span="session.writeback",
                           meeting_id=str(meeting_id), fields={"bot_account_id": account_id, "others": others})
                 return {"written": 0, "bytes": 0, "deferred": "other bots still use this account"}

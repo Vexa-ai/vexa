@@ -73,8 +73,9 @@ exist, be the caller's or a usable company one (404 / 403), match the platform (
 (409, naming the remedy `browser_session_open`).
 
 With an account the spawn is authenticated without the deployment knob: `auth_userdata_path` =
-`bot-account:<id>` (so `find_active_by_userdata` → `AuthSessionBusy` serializes one live bot per
-account, and `latest_auth_session` binds the restore and the write-back to it),
+`bot-account:<id>` (an account serves up to `VEXA_BOT_ACCOUNT_MAX_MEETINGS` (default 10) live meetings at
+once, counted by `count_active_by_userdata`; the restore and the write-back bind to the live bot of the
+token's own meeting; `AuthSessionBusy` still serializes only the deployment-wide `BOT_AUTHENTICATED` profile),
 `meeting.data.bot_account_id` = the id, and the invocation carries `sessionRestoreUrl` and
 `sessionWritebackUrl` (both meeting-api's `/internal/browser-session/<session_uid>`) and no userdata
 path or S3 key. Without one, `BOT_AUTHENTICATED` works exactly as before. The auto-join sweep spawns

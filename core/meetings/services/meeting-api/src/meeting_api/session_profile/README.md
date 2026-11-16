@@ -22,7 +22,8 @@ path); it derives none.
 |---|---|
 | `Authorization: Bearer <MeetingToken>` admitted for exactly `session_uid` (`meeting_token.admit_session`) | 401 |
 | `BOT_AUTHENTICATED` on, store complete, bots' pair not a storage root key or secret (`bot_spawn.auth_session_config`) | 409 off · 503 misconfigured |
-| the session is the newest one spawned on the identity (`MeetingRepo.latest_auth_session`), of the token's meeting, and the meeting is live or ended < `WRITEBACK_GRACE_S` (600 s) ago | 403 |
+| the session is the newest one of the token's meeting (a bot account: `MeetingRepo.get_meeting_by_session`; the `BOT_AUTHENTICATED` profile: the newest spawned on the identity, `MeetingRepo.latest_auth_session`), and the meeting is live or ended < `WRITEBACK_GRACE_S` (600 s) ago | 403 |
+| a bot account with a NEWER live bot on it (`count_active_by_userdata(newer_than_meeting_id=…)`) | 200 `deferred`, nothing written: the newer bot writes back |
 | body ≤ `MAX_BODY_BYTES` | 413 |
 | every entry exactly `{path, data}`; every path a SESSION_PROFILE path named once (no traversal, absolute, backslash or control characters); each file ≤ `maxFileBytes`; all ≤ `maxFiles` / `maxTotalBytes` — one bad entry refuses the whole body | 422 |
 

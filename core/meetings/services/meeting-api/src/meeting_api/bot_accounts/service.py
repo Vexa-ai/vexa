@@ -46,7 +46,7 @@ PLATFORM_LABELS = {"google": "Google", "microsoft": "Microsoft", "zoom": "Zoom"}
 ACCOUNT_ID = re.compile(r"^[a-f0-9]{32}$")
 SESSION_ID = ACCOUNT_ID
 #: The prefix of the per-identity key a bot-account spawn carries (``meeting.data.auth_userdata_path``),
-#: so ``find_active_by_userdata`` / ``latest_auth_session`` serialize and bind per account.
+#: so ``count_active_by_userdata`` counts the live meetings on one account (the per-account cap).
 USERDATA_KEY_PREFIX = "bot-account:"
 SIGNED_OUT_REMEDY = "browser_session_open"
 #: Live meetings one bot account may serve at once (founder, 16 Nov 2026: a cap «for example 10» → «yep»).
@@ -54,7 +54,6 @@ DEFAULT_ACCOUNT_MEETING_CAP = 10
 
 
 def account_meeting_cap(env=None) -> int:
-    import os
     raw = ((env if env is not None else os.environ).get("VEXA_BOT_ACCOUNT_MAX_MEETINGS") or "").strip()
     try:
         v = int(raw) if raw else DEFAULT_ACCOUNT_MEETING_CAP
@@ -710,6 +709,10 @@ class BotAccounts:
                     "detail": f"bot account {choice} is signed out — sign it in again",
                     "bot_account": {"id": choice, "state": account.get("state"), "remedy": SIGNED_OUT_REMEDY},
                 })
+            if load is not None and await load(account) >= account_meeting_cap():
+                raise BotAccountRefused(409, (
+                    f"bot account {choice} is already in {account_meeting_cap()} meetings, its limit; "
+                    "send the bot without naming an account and Vexa picks a free one"))
             return account
         if self.broker is None or platform is None:
             return None

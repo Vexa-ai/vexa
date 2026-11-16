@@ -658,6 +658,32 @@ def test_two_bots_on_one_account_both_restore_and_only_the_last_one_out_writes_b
     assert dict(rig.broker.files[acct["id"]]) == {"Default/Cookies": b"newest"}
 
 
+def test_the_newest_bot_writes_back_even_while_an_older_one_is_live(rig):
+    """Review M2: an always-busy account still refreshes: the newest live bot writes, older ones defer."""
+    acct = rig.seed(f"user:{OWNER}")
+    assert _spawn(rig).status_code == 201
+    older = _inv(rig)
+    assert _spawn(rig, native="abc-defg-hik").status_code == 201
+    newer = _inv(rig)
+    w = rig.client.put(urlsplit(newer["sessionWritebackUrl"]).path, headers={"Authorization": f"Bearer {newer['token']}"},
+                       json=_files_body({"Default/Cookies": b"newer"}))
+    assert w.status_code == 200 and not w.json().get("deferred"), w.text
+    assert dict(rig.broker.files[acct["id"]]) == {"Default/Cookies": b"newer"}
+    w = rig.client.put(urlsplit(older["sessionWritebackUrl"]).path, headers={"Authorization": f"Bearer {older['token']}"},
+                       json=_files_body({"Default/Cookies": b"older"}))
+    assert w.status_code == 200 and w.json().get("deferred"), w.text
+    assert dict(rig.broker.files[acct["id"]]) == {"Default/Cookies": b"newer"}
+
+
+def test_an_explicit_account_at_its_limit_is_refused_plainly(rig, monkeypatch):
+    """Review M3: the per-account cap holds for an explicitly named account too."""
+    monkeypatch.setenv("VEXA_BOT_ACCOUNT_MAX_MEETINGS", "1")
+    acct = rig.seed(f"user:{OWNER}")
+    assert _spawn(rig, bot_account=acct["id"]).status_code == 201
+    r = _spawn(rig, native="abc-defg-hik", bot_account=acct["id"])
+    assert r.status_code == 409 and "limit" in r.text
+
+
 def test_a_bot_that_found_its_account_signed_out_flips_it_and_the_meeting_says_so(rig):
     acct, mid, inv = _spawned(rig)
     cb = "/bots/internal/callback/lifecycle"

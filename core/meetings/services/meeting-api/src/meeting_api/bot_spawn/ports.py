@@ -63,15 +63,15 @@ class MeetingRepo(Protocol):
     async def find_active_by_userdata(self, userdata_s3_path: str) -> Optional[dict]:
         """Any user's ACTIVE meeting whose spawn carried this ``userdata_s3_path``
         (``meeting.data.auth_userdata_path``), or ``None``. The per-identity serialization
-        boundary for authenticated bots: one stored browser session = one Google identity =
-        one live cookie jar, so a second concurrent spawn against the same path is refused
-        (→ HTTP 409, ``AuthSessionBusy``) — running one identity from N containers/IPs at
-        once is both an account-risk signal and a write-back race. Cross-user by design:
-        the identity is deployment-scoped, not per-user."""
+        boundary for the deployment-wide ``BOT_AUTHENTICATED`` profile: a second concurrent spawn on
+        it is refused (→ HTTP 409, ``AuthSessionBusy``). Bot accounts (``bot-account:<id>``) are NOT
+        serialized: they are capped by ``count_active_by_userdata`` (founder, 16 Nov 2026).
+        Cross-user by design: the identity is deployment-scoped, not per-user."""
         ...
 
     async def count_active_by_userdata(self, userdata_s3_path: str,
-                                       exclude_meeting_id: Optional[int] = None) -> int:
+                                       exclude_meeting_id: Optional[int] = None,
+                                       newer_than_meeting_id: Optional[int] = None) -> int:
         """How many live meetings (any user) carry this ``auth_userdata_path`` — the load on one bot
         account, for the per-account cap and for «last bot out writes the profile back»."""
         ...
