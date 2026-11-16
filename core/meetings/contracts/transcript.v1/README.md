@@ -5,7 +5,7 @@ persists it; the gateway forwards the live bundle to the dashboard. Both languag
 this schema (P4).
 
 ## Shapes (`$defs`)
-- **`TranscriptSegment`** — `segment_id · speaker · text · start/end (sec)` + optional `language ·
+- **`TranscriptSegment`** - `segment_id · speaker · text · start/end (sec; epoch or capture offset by producer, wall-clock use is absolute_*)` + optional `language ·
   completed · absolute_* · source` (attribution) · `confidence` · `words`.
 - **Bus stream** (bot → collector): `SessionStart` → `Transcription` (confirmed batches) → `SessionEnd`.
   Beside them, `ChatSendResult` — the outcome of one acts.v1 `chat_send` that carried an `id`
