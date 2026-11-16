@@ -82,6 +82,9 @@ export interface LifecycleEvent {
     detail?: string;
     timings?: { time_to_lobby_ms?: number; time_in_lobby_ms?: number; total_ms?: number };
     lobby_budget_ms?: number;
+    /** The node this attempt ran on, and the stored join-failure screenshot (additive, #ruling 2c388e4). */
+    node?: string;
+    screenshot_key?: string;
   };
 }
 

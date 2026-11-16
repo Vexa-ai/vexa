@@ -59,7 +59,7 @@ afford. `state: ready` is claimable now; `state: prepared` after the maintainer 
 items (no issue number) are declared direction — ask, don't claim. Then read the chosen issue
 in full: the body is a worked delivery spec whose acceptance table **guarantees merge** when
 its rows are presented. Claim by commenting on the issue — the full loop (claiming, the
-two-artifact PR, value signing): https://docs.vexa.ai/governance/delivery
+two-artifact PR, value checks): https://docs.vexa.ai/governance/delivery
 
 In a checkout, start at https://github.com/Vexa-ai/vexa/blob/main/AGENTS.md (read natively by
 most coding agents).

@@ -42,6 +42,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from test_link_loop import FakeScaffolds, _ctx, _rig  # noqa: E402
 
+pytestmark = pytest.mark.usefixtures("meetings_hold_no_row")
+
 
 @pytest.fixture(autouse=True)
 def scaffolds(monkeypatch):

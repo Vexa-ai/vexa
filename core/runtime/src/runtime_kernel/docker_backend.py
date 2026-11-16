@@ -221,8 +221,9 @@ class DockerBackend:
         runnable: Runnable,
         env: dict[str, str],
         resources: Optional[Resources] = None,
+        avoid_nodes: tuple[str, ...] = (),
     ) -> WorkloadHandle:
-        """``resources`` is accepted and NOT enforced here — the enforcement boundary is k8s-only,
+        """``avoid_nodes`` is accepted and ignored: this substrate is one host. ``resources`` is accepted and NOT enforced here — the enforcement boundary is k8s-only,
         and this backend claims no parity with it. Compose/Lite have no admission controller
         demanding a declared request+limit, and translating the intent into ``HostConfig.Memory``
         would introduce an OOM-kill ceiling on live meeting bots that run unbounded today: a

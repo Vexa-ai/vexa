@@ -60,6 +60,13 @@ export interface OrchestratorDeps {
    *  additionalProperties:true, so this is additive.
    *  Returns `undefined` when nothing degraded. MUST NOT throw. */
   degraded?: () => Record<string, unknown> | undefined;
+  /** The cluster node this pod runs on (VEXA_NODE_NAME). Rides every pre-active `join_evidence`, so
+   *  the control plane can place a retry on another node. Empty/absent ⇒ not reported. */
+  nodeName?: string;
+  /** Upload ONE join-failure screenshot and resolve with its stored key (join-screenshot.ts).
+   *  Consulted on a failed join (not admitted, or the join threw) before the terminal report.
+   *  MUST NOT throw and must settle quickly — it delays the terminal by at most its own bound. */
+  failureScreenshot?: () => Promise<string | undefined>;
   /** Producer clock for lifecycle facts. Injected by tests; each logical event is stamped once
    *  before the lifecycle adapter performs any HTTP retry. */
   now?: () => string;
@@ -114,6 +121,26 @@ function joinEvidenceFor(
     return evidence ? { join_evidence: evidence } : {};
   } catch {
     return {};
+  }
+}
+
+/** Add what this ATTEMPT was — its node, and the stored screenshot of the screen it ended on — to a
+ *  pre-active terminal's evidence. Additive; with no evidence block there is nothing to add to. */
+function withAttempt(out: Partial<LifecycleEvent>, node: string | undefined,
+                     screenshotKey?: string): Partial<LifecycleEvent> {
+  if (!out.join_evidence) return out;
+  const ev = { ...out.join_evidence };
+  if (node) ev.node = node;
+  if (screenshotKey) ev.screenshot_key = screenshotKey;
+  return { ...out, join_evidence: ev };
+}
+
+/** The join-failure screenshot's key, or undefined. Never throws, whatever the dep does. */
+async function failureShot(deps: OrchestratorDeps): Promise<string | undefined> {
+  try {
+    return await deps.failureScreenshot?.();
+  } catch {
+    return undefined;
   }
 }
 
@@ -331,7 +358,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
           // `stopped_while_joining` → attribution `user_action`. This row shares its `failed`
           // status with real defects, and counting it as one is precisely how a raw failed-status
           // rate stops meaning anything: the user ended this run themselves.
-          ...joinEvidenceFor('stopped', stage, driverSignals(deps.join), abortDetail),
+          ...withAttempt(joinEvidenceFor('stopped', stage, driverSignals(deps.join), abortDetail), deps.nodeName),
         });
         unsubscribe();
         return { exitCode: 0, status: 'failed', completionReason: 'stopped' };
@@ -346,9 +373,10 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
       // The driver parked its measurements before re-raising, so even this path is evidenced —
       // typically as `navigation_failure` (system_fault) off the transport marker in the message.
       const crashDetail = String(e);
+      const crashShot = await failureShot(deps);
       await emit('failed', {
         failure_stage: 'joining', completion_reason: 'join_failure', reason: crashDetail, exit_code: 1,
-        ...joinEvidenceFor('error', 'joining', driverSignals(deps.join), crashDetail),
+        ...withAttempt(joinEvidenceFor('error', 'joining', driverSignals(deps.join), crashDetail), deps.nodeName, crashShot),
       });
       return { exitCode: 1, status: 'failed', completionReason: 'join_failure' };
     }
@@ -367,9 +395,11 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
       // the two from disagreeing — and it is the field the taxonomy reads to tell a lobby expiry
       // from a bot that never got there, the exact conflation #1058 measured.
       const stage = cur === 'awaiting_admission' || cur === 'needs_help' ? 'awaiting_admission' : 'joining';
+      // The screen the join ended on, moved off the pod before it dies (one upload, bounded).
+      const shot = await failureShot(deps);
       await emit('failed', {
         failure_stage: stage, completion_reason: reason, reason: reasonText, exit_code: 1,
-        ...joinEvidenceFor(outcome, stage, joinSignals, reasonText),
+        ...withAttempt(joinEvidenceFor(outcome, stage, joinSignals, reasonText), deps.nodeName, shot),
       });
       return { exitCode: 1, status: 'failed', completionReason: reason };
     }

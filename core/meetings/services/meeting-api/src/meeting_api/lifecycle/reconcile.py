@@ -585,6 +585,12 @@ async def synthesize_terminal_for_dead_workload(
         return False
     if not info or not info.get("session_uid"):
         return False
+    if info.get("respawn_retired"):
+        # A pod Google Meet refused, while the meeting waits for its next pod (meet_respawn.py):
+        # this workload's end is that attempt's end, not the meeting's.
+        log.info("runtime-callback: workload %s is a refused Meet attempt; meeting %s awaits its next pod",
+                 workload_id, info.get("meeting_id"))
+        return False
     status = info.get("status")
     stop_requested = bool(info.get("stop_requested"))
     if status in _PRE_ACTIVE_STATUSES:

@@ -316,9 +316,10 @@ is refused.
 | `PUT /user/webhook` adds the webhook config (`webhook_url`, `webhook_secret_set`, masked `webhook_secret`, `webhook_events`) to the account record it returned in 0.12. The record's `data` never carries a stored credential. | New top-level fields | Nothing; read either. See [Webhooks](/webhooks). |
 | `/admin/users*` reads show stored credentials as `api_key_set`, `token_set` and `ics_url_set` with a masked tail. | Credential values missing | Store credentials where you write them; reads never return them. |
 | agent-api accepts a user only from the gateway's signed identity. `VEXA_AGENT_DEFAULT_SUBJECT` and `VEXA_REQUIRE_GATEWAY_IDENTITY` are gone. | `401` on direct calls to agent-api | Call it through the gateway (`/agent/*` with an API key). |
-| The live WebSocket `/ws` applies the REST key scopes on the gateway and meeting-api. On 0.12 any valid key opened the socket and subscribed to the meetings it owned, so a `bot`-only key streamed transcripts. | A key that cannot read meeting status is closed with `4403`; a key without the `tx` scope gets `insufficient_scope` on transcript subscribe | Give those callers keys with the scopes the matching REST routes need. See [Authentication → Scopes](/authentication#scopes) and [What changed in 0.13.4: auth](/changes-0-13-4-auth). |
-| `/ws` and the bot-account live view no longer take the key in the URL (`?api_key=`). | `api_key_query_removed` error frame, then close `4401` | Send the key in the `X-API-Key` header, or from a browser in the subprotocol list (`["vexa.v1", "vexa.key.<key>"]`). See [What changed in 0.13.4: auth](/changes-0-13-4-auth). |
+| The live WebSocket `/ws` applies the REST key scopes on the gateway and meeting-api. Every route takes `bot` or `tx`, so a `bot`-only key opens the socket and subscribes to the meetings it owns, as on 0.12. | Only a `browser`-only key gets `insufficient_scope` and is closed with `4403` | Nothing for a `bot` or `tx` key; no caller needs a new key. See [Authentication → Scopes](/authentication#scopes) and [What changed in 0.13.4: auth](/changes-0-13-4-auth). |
+| Deprecated: `/ws` still takes the key in the URL (`?api_key=`) until 0.13.6. The bot-account live view no longer does. | `/ws`: none until 0.13.6 (logged `ws_query_key_deprecated`). Live view: `api_key_query_removed` error frame, then close `4401` | Send the key in the `X-API-Key` header, or from a browser in the subprotocol list (`["vexa.v1", "vexa.key.<key>"]`). See [What changed in 0.13.4: auth](/changes-0-13-4-auth). |
 | A webhook URL, calendar feed or personal transcription endpoint that points at a private or internal address is refused when saved. | `422` | Use a public address. |
+| A personal transcription endpoint is checked when it is saved and again when a bot is sent. `PUT /user/transcription` sends it one short audio request, through the outbound URL guard, before saving; `POST /bots` checks the saved endpoint, not the deployment's, before any meeting row exists. 0.12 stored any URL and token unchecked, and a bot sent to a broken one joined and produced no transcript. | Saving: `422` with `error: transcription_endpoint_rejected` and a `kind` (`unauthorized`, `exhausted`, `invalid_endpoint`, `internal_address`); a working save answers with `probe: {"ok": true}`, one that can't be reached still saves with `probe.kind: "unreachable"`. Sending a bot: a saved endpoint that has stopped working refuses `POST /bots` with `503`, and no bot joins | Fix the URL or token and save again. See [Settings](/api/settings#transcription-backend). |
 | A webhook is delivered under the 0.13 guard, whenever its URL was saved. 0.12 also delivered to shared (100.64/10), documentation and benchmarking addresses. | Deliveries to a URL saved on 0.12 that resolves into those ranges are recorded `blocked` | Re-save the webhook with a public address. |
 | Deleting a meeting whose bot is still in it can stop the bot and delete at the end (`202 deletion_scheduled`): `VEXA_MEETING_DELETE_LIVE=stop` on meeting-api. The default, `refuse`, keeps the 0.12 answer. | Default: `409` until the meeting ends, as on 0.12 | Set `stop` to let a delete end the meeting. |
 | A person who set no language can get the languages of their recent meetings: `VEXA_LANGUAGE_HISTORY_TIER=on` on meeting-api, ranked above `DEFAULT_TRANSCRIPTION_*`. Off by default, as 0.12 had no such tier. | None by default | Turn it on to cut wrong-language windows for multilingual people. |
@@ -329,7 +330,9 @@ is refused.
 
 There are none. `VEXA_WS_SCOPE_MODE`, `VEXA_WEBHOOK_STORED_URL_POLICY` and
 `VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S` are not read; a service that is still given one names it at
-start (`config_key_removed`), and a Helm values file that still sets `compat.*` is refused. See
+start (`config_key_removed`), and a Helm values file that still sets `compat.*` is refused. Until
+0.13.6, `/ws` still takes a key in the URL (`?api_key=`), as fixed behaviour, not a setting; 0.13.6
+turns it off. Upgrade with no meeting in flight. See
 [What changed in 0.13.4: auth](/changes-0-13-4-auth).
 
 ### Redis password and per-workload users
@@ -348,6 +351,20 @@ start (`config_key_removed`), and a Helm values file that still sets `compat.*` 
     users can set `REDIS_WORKLOAD_ACL=shared` on agent-api and meeting-api; then every workload uses
     the services' connection, which is safe only where every person on the instance trusts every
     other. Any other value stops both services at boot.
+
+### Flows runs in every profile
+
+- **Hits:** Helm installs that left `flows.enabled` at its old default (`false`) or set it, and every
+  Vexa Lite. Booked bots start from Flows' clock, so it is required.
+- **If you skip it:** a values file that still sets `flows.enabled: false` stops the render with
+  `flows.enabled: false is no longer supported`. On a default install there is nothing to skip: the
+  chart renders flows-api and flows-worker and generates both their keys (the service key and the
+  operator key, `flows.apiKey`), keeping them across upgrades. Lite runs both in its container.
+- **Do:** on Helm, remove `flows.enabled` from your values. When a GitOps tool renders the chart with
+  `helm template`, set `flows.apiKey` (or `flows.existingSecret`) and `secrets.flowsServiceKey`, since
+  a render cannot read the release's Secret. If your database user may not create tables in the main
+  database, read [Flows database](/deployment-kubernetes#flows-database) first. On Lite, keep the
+  `vexa-lite-state` volume: Flows' keys are kept there.
 
 ### Flows database with `sslmode=verify-ca`
 

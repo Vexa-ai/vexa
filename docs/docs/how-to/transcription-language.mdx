@@ -128,6 +128,7 @@ and in the Helm values table ([`deploy/helm/README.md`](https://github.com/Vexa-
 | What you see | Why | What to do |
 |---|---|---|
 | `422` on `POST /bots`, `PUT …/config` or `PUT /user/transcription` | A code is not a two- or three-letter lower-case code, a list repeats a code, or `language` is not in the list | Fix the value the message names |
+| `422` on `PUT /user/transcription` with `error: transcription_endpoint_rejected` | The write set a `url` or `token`, and the endpoint failed its test before saving: `kind` says why (`unauthorized`, `exhausted`, `invalid_endpoint`, `internal_address`). Nothing was saved, including a language sent in the same write | Fix the URL or token, or send the language on its own. See [Settings → transcription backend](/api/settings#transcription-backend) |
 | `409` on a live change: "the bot is not listening yet" | The bot is still starting, or has left. Nothing was changed | Retry once the bot is in the meeting |
 | `403` on a live change | You are neither the meeting's owner nor an owner or contributor of its workspace | Ask the owner |
 | `404` on a live change | No running bot you can see for this meeting | Check the meeting id and that the bot is running |
@@ -214,7 +215,7 @@ The person's default is in identity. The meeting level is on the request.
   `test_a_workspace_reader_is_refused_and_nothing_is_sent`, `test_somebody_outside_the_meeting_cannot_see_it`,
   `test_an_unconfirmable_role_is_a_503_never_a_guess`. In the terminal, a reader gets no control
   (`meetingLanguage.test.tsx`), but the server check is what enforces it.
-- **The key's scope.** The route is a `bot`-scope row in the meetings route table, checked at the gateway
+- **The key's scope.** The route is a scoped row (`bot` · `tx`) in the meetings route table, checked at the gateway
   and again by meeting-api (`route_scopes`).
 - **The person's default** is written only through the person's own key on `PUT /user/transcription`. It
   crosses to meeting-api only on the internal bot-context door, which needs the internal secret.

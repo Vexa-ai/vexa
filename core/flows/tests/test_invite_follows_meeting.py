@@ -106,6 +106,63 @@ def test_the_bot_carries_the_invites_workspace_and_falls_back_when_it_is_refused
         assert isinstance(out, Done) and [c.get("workspace_id") for c in calls] == want
 
 
+def _invited_run(monkeypatch, state, asked):
+    """`run_meeting` over the refs the real invite schedule fires `invite_join` with, the bot
+    answering `state`; returns `at(seconds after the start)`."""
+    from flows import StepCtx
+    from flows_steps import meeting
+    db, clock, reg = _rig()
+    _send(db, reg, clock, _ics(), "m1")
+    clock.advance(86400 - 60 + 1)
+    assert keyed.fire_due(db, reg, clock) == 1
+    refs = json.loads(db.execute(
+        "SELECT subject_refs FROM reaction WHERE event_type = 'keyed.due'")[0][0])
+    assert "transcribe_s" not in refs and refs["start"] == START
+
+    def http(method, url, headers, body=None, timeout=20):
+        asked.append(method)
+        return (200, {**state, "segments": [{"text": "hi"}]}) if method == "GET" else (200, {})
+    monkeypatch.setattr(meeting, "http", http)
+
+    class R:
+        reaction_id = "r"
+    prior = {"ensure_user": {"uid": "7"},
+             "dispatch_bot": {"meeting_id": 9, "native": "abc-defg-hij", "platform": "google_meet"}}
+
+    def at(seconds):
+        ctx = StepCtx(reaction=R(), effect_key="e", prior=prior, clock_now=START + seconds,
+                      scratch={})
+        ctx.reaction.subject_refs = refs
+        return meeting.run_meeting(ctx)
+    return at
+
+
+def test_an_invited_bot_stays_until_the_meeting_ends(monkeypatch):
+    """brain:card/d7faa9c3946c. No invite carries `transcribe_s`, and `run_meeting` read its absence
+    as 45 seconds: an invited bot was asked to leave 45 s after the start, so `invite_join` recorded
+    the first minute of every meeting."""
+    from flows import Done, Wait
+    asked, state = [], {"status": "active"}
+    at = _invited_run(monkeypatch, state, asked)
+    for minutes in (1, 30, 90):
+        assert isinstance(at(minutes * 60), Wait), f"{minutes} min in"
+    assert "DELETE" not in asked, "nobody asked the bot to leave a meeting that is still running"
+    state["status"] = "completed"                     # the meeting ended; the bot left on its own
+    assert at(91 * 60) == Done({"segments": 1})
+
+
+def test_an_invited_bot_that_never_reports_the_end_is_blocked_at_the_ceiling(monkeypatch):
+    """Factory review of #1997. A Wait spends no attempt, so a bot whose status never left `active`
+    was polled forever. Past the bot's own backstop plus a grace, the row is Blocked and says why."""
+    from flows import Block, Wait
+    from flows_steps import meeting
+    at = _invited_run(monkeypatch, {"status": "active"}, [])
+    assert isinstance(at(4 * 3600), Wait), "inside the bot's own 4 h backstop: a long meeting"
+    out = at(5 * 3600)                              # past the backstop plus its 30 min grace
+    assert isinstance(out, Block) and out.deadline_s == meeting.STOP_DEADLINE_S
+    assert "abc-defg-hij" in out.reason and "never reported the meeting ended" in out.reason
+
+
 def test_an_invite_that_arrives_after_the_meeting_started_still_sends_the_bot():
     """Invite the bot to a meeting already running (forwarded mid-meeting): the fire time is in the
     past when the row is armed, so lateness counts from when the row was armed, not from the slot.

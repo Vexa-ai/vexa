@@ -597,6 +597,14 @@ _FIXTURES = [
         ("awaiting_admission_rejected", "exogenous_platform"),
     ),
     (
+        "meet-refused-every-pod",
+        ["joining"],
+        {"status": "failed", "exit_code": 1, "completion_reason": "awaiting_admission_rejected",
+         "reason": "google_meet_join_refused: Google Meet refused the join on 5 of 5 knocks "
+                   "(CreateMeetingDevice answered HTTP 403); the host never received a request to admit the bot"},
+        ("platform_join_refused", "system_fault"),
+    ),
+    (
         "signed-out-profile",
         ["joining"],
         {"status": "failed", "exit_code": 1, "completion_reason": "auth_session_missing",

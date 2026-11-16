@@ -50,6 +50,8 @@ runtime-confirmed destroy, or a bot too old to send one). Either way the row get
 """
 from __future__ import annotations
 
+import re
+
 from enum import Enum
 from typing import Any, Dict, Mapping, Optional
 
@@ -107,11 +109,15 @@ class JoinFailureReason(str, Enum):
       value is deliberately NOT the sealed ``api.v1`` ``stopped_before_admission``). It lands with status
       ``failed`` because the bot never became active, and it is emphatically NOT a failure of ours —
       counting it as one is exactly what makes a raw failed-status rate meaningless.
+    * :attr:`PLATFORM_JOIN_REFUSED` — the platform refused the bot before any host saw a request
+      (Google Meet: CreateMeetingDevice 403, "You can't join this video call"), on every bot pod
+      meeting-api tried (lifecycle/meet_respawn.py). Owner: us (founder ruling, 1 Nov 2026).
     * :attr:`UNKNOWN` — the signals do not support any of the above. ``detail`` carries whatever the
       producer did observe. Never a synonym for "probably X".
     """
 
     AWAITING_ADMISSION_REJECTED = "awaiting_admission_rejected"
+    PLATFORM_JOIN_REFUSED = "platform_join_refused"
     AWAITING_ADMISSION_TIMEOUT = "awaiting_admission_timeout"
     AUTH_SESSION_MISSING = "auth_session_missing"
     NEVER_REACHED_LOBBY = "never_reached_lobby"
@@ -178,6 +184,7 @@ LOBBY_EXPIRY_FRACTION = 0.9
 _REASON_BY_COMPLETION_REASON: Dict[str, JoinFailureReason] = {
     "auth_session_missing": JoinFailureReason.AUTH_SESSION_MISSING,
     "awaiting_admission_rejected": JoinFailureReason.AWAITING_ADMISSION_REJECTED,
+    "platform_join_refused": JoinFailureReason.PLATFORM_JOIN_REFUSED,
     "awaiting_admission_timeout": JoinFailureReason.AWAITING_ADMISSION_TIMEOUT,
     # A pre-active `stopped` is the USER ending the run while the bot was still knocking (the
     # orchestrator's withdraw branch, and `reconcile._pre_active_completion_reason` under
@@ -193,6 +200,8 @@ _ATTRIBUTION_BY_REASON: Dict[JoinFailureReason, JoinFailureAttribution] = {
     # Someone/something on the far side said no. Default to the HOST (a moderator denying is the
     # overwhelmingly common case); a platform-policy refusal is detected below and reattributed.
     JoinFailureReason.AWAITING_ADMISSION_REJECTED: JoinFailureAttribution.HOST_ACTION,
+    # The platform refused every bot pod before a host saw a request. Ours (founder, 1 Nov 2026).
+    JoinFailureReason.PLATFORM_JOIN_REFUSED: JoinFailureAttribution.SYSTEM_FAULT,
     # Nobody answered the knock. The host's call — unless the evidence says our admission flow is
     # what broke, which is detected below.
     JoinFailureReason.AWAITING_ADMISSION_TIMEOUT: JoinFailureAttribution.HOST_ACTION,
@@ -404,6 +413,8 @@ def build_join_evidence(
     time_in_lobby_ms: Optional[int] = None,
     total_ms: Optional[int] = None,
     lobby_budget_ms: Optional[int] = None,
+    node: Optional[str] = None,
+    screenshot_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Assemble the ``meeting.data['join_evidence']`` block.
 
@@ -442,7 +453,19 @@ def build_join_evidence(
     budget = _positive_int(lobby_budget_ms)
     if budget is not None:
         evidence["lobby_budget_ms"] = budget
+    # Where the attempt ran and what its page last showed (the bot reports both on a failed join).
+    # Kept only in their exact shapes: a node name, and the key the screenshot route returned.
+    if isinstance(node, str) and _NODE_NAME.match(node):
+        evidence["node"] = node
+    if isinstance(screenshot_key, str) and _SCREENSHOT_KEY.match(screenshot_key):
+        evidence["screenshot_key"] = screenshot_key
     return evidence
+
+
+#: A Kubernetes node name (DNS-1123 subdomain).
+_NODE_NAME = re.compile(r"^(?=.{1,253}$)[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$")
+#: The key ``POST /internal/join-evidence/screenshot`` returns: join-evidence/<meeting id>/<session uid>.png.
+_SCREENSHOT_KEY = re.compile(r"^join-evidence/[0-9]+/[A-Za-z0-9_-]{1,128}\.png$")
 
 
 def normalize_evidence(raw: Any, *, default_stage: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -490,6 +513,8 @@ def normalize_evidence(raw: Any, *, default_stage: Optional[str] = None) -> Opti
             time_in_lobby_ms=timings.get("time_in_lobby_ms"),
             total_ms=timings.get("total_ms"),
             lobby_budget_ms=raw.get("lobby_budget_ms"),
+            node=raw.get("node"),
+            screenshot_key=raw.get("screenshot_key"),
         )
     except Exception:  # noqa: BLE001 — a malformed payload degrades the evidence, nothing else
         return None

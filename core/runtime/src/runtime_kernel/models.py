@@ -5,7 +5,9 @@ from __future__ import annotations
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from .pod_scheduling import validate_avoid_nodes
 
 
 class RuntimeState(str, Enum):
@@ -56,6 +58,15 @@ class WorkloadSpec(BaseModel):
     idleTimeoutSec: Optional[int] = None
     maxLifetimeSec: Optional[int] = None
     backend: Optional[BackendKind] = None
+    #: Nodes the k8s backend should place this workload away from (a preferred anti-affinity): a
+    #: meeting's next join attempt after Google Meet refused one on these nodes. Ignored by docker
+    #: and process. At most 10, each a node name (pod_scheduling.validate_avoid_nodes).
+    avoidNodes: Optional[list[str]] = None
+
+    @field_validator("avoidNodes")
+    @classmethod
+    def _avoid_nodes(cls, value: Optional[list[str]]) -> Optional[list[str]]:
+        return None if value is None else validate_avoid_nodes(value)
 
 
 class WorkloadStatus(BaseModel):

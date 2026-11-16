@@ -1305,12 +1305,13 @@ const CONFIG_ADOPTED = [
     // `flows-mailbox`'s always was (same reasoning: one declaration, one lane scanned for it).
     // HELM IS flows.yaml, all three Deployments and the flows Secret read as one surface (the
     // Secret's stringData, the DSN `export` and the vexa.flowsMail* helpers included, see
-    // helmTextKeys). lite is null: there is no supervisord program for flows.
+    // helmTextKeys). LITE IS [program:flows-api] (ADR-0052 §3, Flows in every profile); its
+    // [program:flows-worker] carries the same environment and is unchecked for the same reason.
     service: "flows-api",
     decl: "core/flows/src/config.v1.json",
     preflight: "core/flows/src/config_preflight.py",
     scan: ["core/flows/src"],
-    compose: "flows-api", helm: ["flows.yaml"], lite: null,
+    compose: "flows-api", helm: ["flows.yaml"], lite: "flows-api",
   },
   {
     // The optional CRM (ADR-0047). ONE DECLARATION, THREE PROCESSES of one image: `crm-init` (the

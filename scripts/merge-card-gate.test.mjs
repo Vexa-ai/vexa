@@ -515,13 +515,14 @@ test("S2: a revocation past the first 1,000 comments is read, and a pass cut off
 // ── S6: the verdict is bound to the head its check is posted for ────────────────────────────────
 
 // A stand-in for the GitHub API: one PR, its comments, reviews and the maintainer set.
-function fakeApi({ head, author = "maint", comments = [], reviews = [], labels = ["state: value-signed"] }) {
+function fakeApi({ head, author = "maint", comments = [], reviews = [], labels = [], files = ["docs/x.md"], checkRuns = [] }) {
   const api = (path) => {
     api.calls.push(path);
     let m;
     if (/\/pulls\/\d+$/.test(path))
       return { number: 4242, draft: false, user: { login: author }, head: { sha: head }, labels: labels.map((name) => ({ name })), comments: comments.length };
-    if ((m = path.match(/\/pulls\/\d+\/files\?per_page=100&page=(\d+)$/))) return m[1] === "1" ? [{ filename: "docs/x.md" }] : [];
+    if ((m = path.match(/\/pulls\/\d+\/files\?per_page=100&page=(\d+)$/))) return m[1] === "1" ? files.map((filename) => ({ filename })) : [];
+    if (/\/commits\/[0-9a-f]+\/check-runs\?per_page=100$/.test(path)) return { check_runs: checkRuns };
     if ((m = path.match(/\/collaborators\/([^/]+)\/permission$/))) return { permission: MAINTAINERS.has(m[1]) ? "write" : "read" };
     if (/\/pulls\/\d+\/reviews/.test(path)) return reviews;
     if ((m = path.match(/\/issues\/\d+\/comments\?per_page=100&page=(\d+)$/))) return comments.slice((m[1] - 1) * 100, m[1] * 100);
@@ -531,6 +532,41 @@ function fakeApi({ head, author = "maint", comments = [], reviews = [], labels =
   return api;
 }
 const passes = (sha) => comment("maint", [marker("architecture", sha, "pass"), marker("security", sha, "pass")].join("\n"));
+
+// ── #1935: the Value row is value-fsm alone; no label is read ─────────────────────────────
+
+const valueFsm = (conclusion) => [{ name: "value-fsm", status: "completed", conclusion, started_at: "2026-10-30T00:00:00Z" }];
+const runtimeCard = (opts) =>
+  gate.card(4242, { api: fakeApi({ head: HEAD, comments: [passes(HEAD)], files: ["core/x.py"], ...opts }), expectedHead: HEAD, readClosing: () => [] });
+
+test("value row passes on value-fsm green with no label", async () => {
+  const c = await runtimeCard({ checkRuns: valueFsm("success") });
+  assert.equal(c.valueOk, true);
+  assert.equal(c.valueWhy, "value-fsm green on head");
+  assert.equal(c.ok, true);
+  assert.match(renderCard(c), /\| \*\*Value\*\* \| ✅ \| value-fsm green on head \|/);
+});
+
+test("fails when value-fsm is red", async () => {
+  // with and without the retired label: the label is never read, so it changes nothing
+  for (const labels of [[], ["state: value-signed"]]) {
+    const c = await runtimeCard({ labels, checkRuns: valueFsm("failure") });
+    assert.equal(c.valueOk, false, `labels=${JSON.stringify(labels)}`);
+    assert.equal(c.valueWhy, "value-fsm is failure on head — value-fsm must be green");
+    assert.equal(c.diffOk, true);
+    assert.equal(c.ok, false);
+    assert.match(renderCard(c), /\| \*\*Value\*\* \| ❌ \| value-fsm is failure on head — value-fsm must be green \|/);
+  }
+});
+
+test("non-runtime passes with no label", async () => {
+  const api = fakeApi({ head: HEAD, comments: [passes(HEAD)] });
+  const c = await gate.card(4242, { api, expectedHead: HEAD, readClosing: () => [] });
+  assert.equal(c.valueOk, true);
+  assert.equal(c.valueWhy, "non-runtime — no value-fsm leg");
+  assert.equal(c.ok, true);
+  assert.equal(api.calls.some((p) => /check-runs/.test(p)), false, "a non-runtime PR has no value-fsm leg to read");
+});
 
 test("S6: a run judges the head its check is posted for; if the PR moved on, it fails and leaves the sticky card alone", async () => {
   const same = await gate.card(4242, { api: fakeApi({ head: HEAD, comments: [passes(HEAD)] }), expectedHead: HEAD, readClosing: () => [] });

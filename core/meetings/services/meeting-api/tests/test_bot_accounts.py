@@ -466,9 +466,9 @@ def test_a_signed_identity_reaches_the_socket_and_the_view_with_the_bot_scope(mo
         assert ws.receive_bytes() == b"RFB 003.008\n"
     rig.upstream.files = {f"http://vexa-bs-{sid}:6080/vnc.html": (200, "text/html", b"<html/>")}
     assert rig.client.get(f"/bot-accounts/sessions/{sid}/view/vnc.html", headers=signed(["bot"])).status_code == 200
-    assert rig.client.get(f"/bot-accounts/sessions/{sid}/view/vnc.html", headers=signed(["tx"])).status_code == 403
+    assert rig.client.get(f"/bot-accounts/sessions/{sid}/view/vnc.html", headers=signed(["browser"])).status_code == 403
     with pytest.raises(Exception):
-        with rig.client.websocket_connect(f"/bot-accounts/sessions/{sid}/vnc", headers=signed(["tx"])):
+        with rig.client.websocket_connect(f"/bot-accounts/sessions/{sid}/vnc", headers=signed(["browser"])):
             pass
 
 

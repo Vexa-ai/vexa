@@ -3,5 +3,5 @@
   `browser_session`, and `400` for a `.` or `..` meeting id or an encoded `/` or `\` in the path, before the
   request is authorized; any other character in a meeting id, `?` and `#` included, is passed on as part of
   the id. The calendar sync routes (`/user/calendars/{id}/sync`) refuse a `.` or `..` id the same way.
-  meeting-api also checks the key's scopes against the route a request reached, so a `tx`-only key is
-  refused on bot routes there as well as at the gateway.
+  meeting-api also checks the key's scopes against the route a request reached, so a `browser`-only key is
+  refused there as well as at the gateway.

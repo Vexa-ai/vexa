@@ -130,7 +130,7 @@ your desk one tab away. When the link cannot be used, the terminal says why inst
 | The live transcript stream (`tc:meeting:{id}`) | meeting-api's collector. agent-api and the gateway only read it. |
 
 **Contracts and routes.** The meetings route table `core/meetings/routes.v1.json` carries the four new
-owner routes (`tx` scope). `ws.v1` gains the `subscription_revoked` error code and a golden. The
+owner routes (scopes `bot` · `tx`; ownership decides). `ws.v1` gains the `subscription_revoked` error code and a golden. The
 terminal's SSE event `access-revoked` is agent-api ↔ terminal. The API reference is in
 [Meetings API › Share a meeting](/api/meetings#share-a-meeting).
 

@@ -9,7 +9,8 @@
   session older than 30 days, is asked to sign in again; admin-api bounds such credentials on boot
   (MIGRATION-0011).
 - **Browsers send the websocket key in the subprotocol list.** `new WebSocket(url, ["vexa.v1",
-  "vexa.key.<key>"])`. A key in the URL (`/ws?api_key=`) is refused. See
+  "vexa.key.<key>"])`. A key in the URL (`/ws?api_key=`) still works for clients built against
+  0.12, deprecated: 0.13.6 turns it off (see [What changed in 0.13.4: auth](/changes-0-13-4-auth)). See
   [Stream a transcript](/how-to/stream-transcript).
 - **Canvas views cannot open WebRTC**, and the local-dev Minutes routes are no longer built into
   production images.

@@ -6,7 +6,8 @@ from the repo root provisions PostgreSQL + a storage sidecar (versitygw) and run
 ## Why
 
 Everything except the datastores runs in one container — gateway, admin, meeting-api, runtime,
-agent control plane, redis, and the X11/audio stack. No Docker socket, no per-service
+agent control plane, flows (flows-api and flows-worker: booked bots start from its clock), redis,
+and the X11/audio stack. No Docker socket, no per-service
 containers. The runtime uses the **process backend**: meeting bots and agent workers run as
 **child processes** inside the container, not socket-spawned containers.
 

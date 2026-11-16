@@ -81,6 +81,9 @@ export interface JoinDriver {
    *  pre-active ABORT (the user stopped us mid-lobby, so the join never returns at all). MUST NOT
    *  throw — the orchestrator calls it while already handling a failure. */
   lastSignals?(): JoinSignals | undefined;
+  /** A PNG of the page as it is now, for the join-failure evidence (join-screenshot.ts). OPTIONAL —
+   *  a driver with no page (a call, a voice note) has none. MUST NOT throw. */
+  screenshot?(): Promise<Buffer | undefined>;
 }
 
 /** The capture → lane → STT → transcript/recording engine. The orchestrator starts/stops

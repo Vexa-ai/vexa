@@ -29,8 +29,9 @@ labels: ["state: prepared"]
 ### Docs surface (D6c — the change isn't delivered until the docs tell it)
 <!-- Name the pages this change must touch and at what altitude — quickstart step / how-to /
      reference / concept. Rarely one line: the same truth usually lands in several places, each
-     written for its reader. The validator signs the docs STORY too: right pages, right level,
-     consistent with how the docs already teach. "No docs impact" must be argued, not assumed. -->
+     written for its reader. The diff review checks the docs STORY too (and a live validation,
+     when run): right pages, right level, consistent with how the docs already teach. "No docs
+     impact" must be argued, not assumed. -->
 
 ### The components (validation waypoints of the ONE PR that delivers this issue)
 - [ ] **C1** — <business-named waypoint>
@@ -49,8 +50,8 @@ labels: ["state: prepared"]
 | A1 |  |  |  |
 | A- | No-regression: touched lanes + repo gates green at head | — | CI at head sha |
 
-### How this issue closes (the live validation — the human part)
-<!-- Scale to the observation: speaker behavior 2–5 people; join/API one operator; a parser none. Never more humans than the observation needs. A non-author signs the value attestation; the originating reporter is the preferred signer. -->
+### Live validation (optional, credited — the human part)
+<!-- Scale to the observation: speaker behavior 2–5 people; join/API one operator; a parser none. Never more humans than the observation needs. A non-author is invited to validate the value live: optional, credited, never a merge step (D9). The originating reporter is the preferred validator. -->
 
 ### Authorship
 Any tools, agents included — this issue is written to be handed to one. No agent co-author

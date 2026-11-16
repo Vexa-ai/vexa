@@ -11,7 +11,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import flows_defs.production as production
+
+pytestmark = pytest.mark.usefixtures("meetings_hold_no_row")
 
 FIX = Path(__file__).parent / "fixtures" / "s5-call-valeriia"
 CALL = json.loads((FIX / "transcript.json").read_text())

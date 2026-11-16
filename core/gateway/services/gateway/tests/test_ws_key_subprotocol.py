@@ -1,15 +1,15 @@
-"""The websocket key travels in a header or the subprotocol list, never in the URL (ws.v1 § Connect).
+"""The websocket key travels in a header or the subprotocol list (ws.v1 § Connect).
 
 A browser `WebSocket` cannot set `x-api-key`, so it names `["vexa.v1", "vexa.key.<key>"]` and the
 edge answers `vexa.v1` — the key is in `Sec-WebSocket-Protocol`, which no access log prints. A key in
-the URL (`?api_key=`) is refused with `api_key_query_removed` and close 4401, whatever else the socket
-carries, and the frame says what to do instead and where to read.
+the URL (`?api_key=`) is DEPRECATED: still a credential so 0.12 clients keep working, taken last,
+logged `ws_query_key_deprecated` with a running count and never the key, until COMPAT_REMOVED_IN.
 """
 from __future__ import annotations
 
 from typing import Optional
 
-from gateway import multiplex as mx
+from gateway import changed, multiplex as mx
 from gateway.multiplex import _run_multiplex
 from gateway.ws_auth import SUBPROTOCOL, without_vexa, ws_credential
 from conftest import FakeAuthorizer, FakeRedis
@@ -52,40 +52,50 @@ async def test_the_header_wins_and_nothing_is_answered_when_nothing_was_offered(
     assert {"type": "pong"} in ws.sent and ws.accepted_with is None
 
 
-QUERY_REFUSAL = {
-    "type": "error", "error": "api_key_query_removed", "changed_in": "0.13.4",
-    "do_instead": ("send the key in the x-api-key header, or (a browser) in the subprotocol list: "
-                   "new WebSocket(url, ['vexa.v1', 'vexa.key.' + key])"),
-    "docs": "https://docs.vexa.ai/changes-0-13-4-auth",
-}
+def _deprecated(events):
+    return [kw["fields"] for name, kw in events if name == "ws_query_key_deprecated"]
 
 
-async def test_a_key_in_the_url_is_refused_with_what_to_do_instead(monkeypatch):
+async def test_a_key_in_the_url_still_connects_and_each_use_is_counted(monkeypatch):
+    """0.12 clients (the hosted dashboard, ASWF DNA, clients built from our docs) keep working."""
     events = []
     monkeypatch.setattr(mx, "log_event", lambda name, **kw: events.append((name, kw)))
-    ws = _ProtoWS(query=API_KEY)
-    await _run_multiplex(ws, _auth(), FakeRedis())
-    assert ws.sent == [QUERY_REFUSAL] and ws.close_code == 4401
-    refused = [kw for name, kw in events if name == "ws_query_key_refused"]
-    assert refused and API_KEY not in repr(refused)
-
-
-async def test_a_key_in_the_url_is_refused_even_beside_a_valid_header_or_subprotocol():
-    for ws in (_ProtoWS(query=API_KEY, api_key=API_KEY),
-               _ProtoWS(query="x", subprotocols=[SUBPROTOCOL, f"vexa.key.{API_KEY}"])):
+    monkeypatch.setattr(changed, "COMPAT_USE", {})
+    for n in (1, 2):
+        ws = _ProtoWS(query=API_KEY)
         await _run_multiplex(ws, _auth(), FakeRedis())
-        assert ws.sent == [QUERY_REFUSAL] and ws.close_code == 4401
-        assert {"type": "pong"} not in ws.sent
+        assert {"type": "pong"} in ws.sent and ws.close_code is None, ws.sent
+        assert not [f for f in ws.sent if f.get("type") == "error"]
+        logged = _deprecated(events)
+        assert len(logged) == n and logged[-1]["count"] == n
+    assert logged[-1]["removed_in"] == changed.COMPAT_REMOVED_IN == "0.13.6"
+    assert API_KEY not in repr(events)               # the key itself is never in a log line
+
+
+async def test_a_wrong_key_in_the_url_is_refused_4401_like_any_wrong_key():
+    ws = _ProtoWS(query="vxa_bot_nobody")
+    await _run_multiplex(ws, _auth(), FakeRedis())
+    assert ws.close_code == 4401 and ws.sent[0]["error"] == "invalid_api_key"
+
+
+async def test_a_header_or_subprotocol_key_wins_over_the_url_and_is_not_counted(monkeypatch):
+    events = []
+    monkeypatch.setattr(mx, "log_event", lambda name, **kw: events.append((name, kw)))
+    for ws in (_ProtoWS(query="vxa_bot_nobody", api_key=API_KEY),
+               _ProtoWS(query="vxa_bot_nobody", subprotocols=[SUBPROTOCOL, f"vexa.key.{API_KEY}"])):
+        await _run_multiplex(ws, _auth(), FakeRedis())
+        assert {"type": "pong"} in ws.sent and ws.close_code is None
+    assert not _deprecated(events)
 
 
 def test_ws_v1_entries_never_travel_upstream():
     assert without_vexa(["binary", SUBPROTOCOL, f"vexa.key.{API_KEY}"]) == ["binary"]
 
 
-def test_the_order_is_header_then_subprotocol_and_the_url_is_never_a_credential():
-    ws = _ProtoWS(api_key="from-header", subprotocols=["vexa.key.from-proto"])
-    assert ws_credential(ws)[::2] == ("from-header", "header")
-    ws = _ProtoWS(subprotocols=["vexa.key.from-proto"])
-    assert ws_credential(ws)[::2] == ("from-proto", "subprotocol")
+def test_the_order_is_header_then_subprotocol_then_the_deprecated_url():
     ws = _ProtoWS(api_key="from-header", subprotocols=["vexa.key.from-proto"], query="from-query")
-    assert ws_credential(ws)[::2] == (None, "query")
+    assert ws_credential(ws)[::2] == ("from-header", "header")
+    ws = _ProtoWS(subprotocols=["vexa.key.from-proto"], query="from-query")
+    assert ws_credential(ws)[::2] == ("from-proto", "subprotocol")
+    ws = _ProtoWS(query="from-query")
+    assert ws_credential(ws)[::2] == ("from-query", "query")

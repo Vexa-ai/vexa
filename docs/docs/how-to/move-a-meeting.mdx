@@ -36,7 +36,7 @@ desk, those go in the file too; a workspace file whose name or size a bundle can
 and named in the status line, never dropped silently. In meetings-only mode (no agent), the export
 says it was made without the workspace and the page.
 
-**API** (key scope `tx`):
+**API** (any API key, `bot` or `tx`):
 
 ```bash
 curl -H "X-API-Key: $VEXA_API_KEY" -OJ \
@@ -76,7 +76,7 @@ choose the file, and you see the title, time, platform, speakers, number of segm
 their sizes, and anything this deployment will not restore, before anything is written. **Import**
 creates the meeting.
 
-**API** (key scope `tx`), the zip as the request body:
+**API** (any API key, `bot` or `tx`), the zip as the request body:
 
 ```bash
 # preview: what would be created, nothing is written
@@ -174,7 +174,7 @@ refused rather than produced without it).
    or dot-folders) and the meeting's page on the caller's desk. `204` when there is neither.
 2. **Export request.** The Terminal's export route (its own, so the bytes are never re-encoded) calls
    the gateway's `GET /meetings/{meeting_id}/export`, or `POST` with the parts as the body. The
-   gateway checks the key holds `tx` against the `core/meetings/routes.v1.json` row and forwards
+   gateway checks the key holds `bot` or `tx` against the `core/meetings/routes.v1.json` row and forwards
    with the signed identity — for these three bundle routes as a STREAM (`_forward_meeting_bundle`):
    the body relayed as it arrives, the answer chunk by chunk with its length and file name, under
    the bundle hop's own deadline (`BUNDLE_TIMEOUT`, ten minutes between chunks) instead of the
@@ -228,8 +228,8 @@ refused rather than produced without it).
 
 **Contracts and routes:** `deploy/contracts/meeting-bundle.v1` (schema, goldens, `validate.mjs`,
 README, and `bundle_codec.py`, the codec both services vendor verbatim); `core/meetings/routes.v1.json`
-rows `GET` and `POST /meetings/{meeting_id}/export` and `POST /meetings/import`, scope `tx`; the agent's
-`GET /agent/meeting/bundle-parts` and `POST /agent/meeting/bundle-restore` behind its forward (`tx`),
+rows `GET` and `POST /meetings/{meeting_id}/export` and `POST /meetings/import`, scopes `bot` · `tx`; the agent's
+`GET /agent/meeting/bundle-parts` and `POST /agent/meeting/bundle-restore` behind its forward (`bot` · `tx`),
 the restore a `person` verb in `core/agent/routes.v1.json`. **Configuration:** none — the limits are the contract's, and the
 bundle's deployment id is derived from the deployment's existing `ADMIN_TOKEN` secret (an HMAC, so it
 is stable, distinct per deployment, and reveals nothing).
@@ -245,15 +245,15 @@ is stable, distinct per deployment, and reveals nothing).
 | P9 — domain doors | meetings never calls agent-api and agent-api adds no new door: the person's client carries the agent half between them, and agent-api's only meetings read is the access check it already makes | `gate:domain-doors` |
 | No duplication across the two services | one codec, vendored byte-for-byte from the contract into both, with its schema | `gate:fact-parity` (`meeting-bundle-codec`, `meeting-bundle-schema`) |
 | P18 — fail loud | every refusal is a typed code with a sentence and a `meeting_bundle_refused` log event; an export that cannot read a recording is refused, never produced without it; a failed import is rolled back and raised | `test_meeting_bundle.py` (refusal and rollback tests) |
-| P20 — complete mediation, default deny | both rows are scoped `tx` at the gateway and again in meeting-api; export is owner-only; import writes only the caller's own row. Dropping a file into a chat adds no route and no permission: it calls the same import route with the person's own session | `gate:access` scope matrix, the deny tests below |
+| P20 — complete mediation, default deny | both rows are scoped `bot` · `tx` (any API key; `browser` is refused) at the gateway and again in meeting-api; export is owner-only; import writes only the caller's own row. Dropping a file into a chat adds no route and no permission: it calls the same import route with the person's own session | `gate:access` scope matrix, the deny tests below |
 | P18 — a refusal reaches the person | a bundle dropped into a chat that the importer refuses is shown as a card with the importer's code and sentence, never attached instead and never silent | `chatBundleDrop.test.tsx` |
 | P23 — one writer per carrier | the bundle file is a registered data carrier with meeting-api as its one writer; an import writes the meeting through the writers that already own each part, adding none | `gate:dataflow` (`architecture.calm.json`, `meeting-bundle-file`) |
 | No duplication | the import reuses the transcript-import write (one definition of a segment upsert) and the recordings record shape; the codec is the only reader and writer of the format | review |
 
 **Security:**
 
-- **Who can do what.** Export: the meeting's owner, with a `tx` key — the agent half too. Import: any
-  `tx` key, into that key's own account only. Restore: the owner of the meeting imported from that
+- **Who can do what.** Export: the meeting's owner, with any API key — the agent half too. Import: any
+  API key, into that key's own account only. Restore: the owner of the meeting imported from that
   file, a person (an unwatched delegated worker is refused), once.
 - **At each hop.** The gateway authorizes the key against the route row and signs the identity;
   meeting-api verifies the signature, re-checks the row's scopes, and the store applies the owner

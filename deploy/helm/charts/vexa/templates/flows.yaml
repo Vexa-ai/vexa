@@ -1,3 +1,8 @@
+{{- /* FLOWS IS REQUIRED IN EVERY PROFILE (ADR-0052 §3, founder 2026-11-01): booked bots start from its
+clock, so a chart without it would accept bookings and start none of them. */}}
+{{- if not .Values.flows.enabled }}
+{{- fail "flows.enabled: false is no longer supported — Flows is required in every profile (booked bots start from its clock, ADR-0052). Remove flows.enabled from your values; the chart generates its keys and keeps its tables in the main database (docs: deployment-kubernetes#flows-database)" }}
+{{- end }}
 {{- if .Values.flows.enabled }}
 # Vexa Minutes — the flows tier: reaction engine (worker), mail integration
 # (mailbox) and the management API. Behavior (prompts + flow definitions) is
@@ -134,7 +139,16 @@ stringData:
   secrets.existingSecretName with flows.apiKey empty): then it is not rendered here, and every
   consumer reads it from that Secret by name. */}}
   {{- if not (include "vexa.flowsApiKeyExistingSecret" .) }}
-  VEXA_FLOWS_API_KEY: {{ .Values.flows.apiKey | quote }}
+  {{- /* Left empty, the operator key is the one the release's flows Secret already holds (lookup, so an
+  upgrade keeps it), else a new one: flows refuses to start without it, so an empty key is a crash
+  loop, never a disabled feature. `helm template` cannot look it up and mints a new value each render:
+  set flows.apiKey or flows.existingSecret when a GitOps tool renders the chart. */}}
+  {{- $flowsCurrent := (lookup "v1" "Secret" .Release.Namespace (include "vexa.componentName" (list . "flows"))) | default dict }}
+  {{- $flowsApiKey := .Values.flows.apiKey | default ((get ((get $flowsCurrent "data") | default dict) "VEXA_FLOWS_API_KEY") | b64dec) | default (randAlphaNum 64) }}
+  {{- if lt (len $flowsApiKey) 32 }}
+  {{- fail "flows.apiKey must be 32+ bytes — mint one with `openssl rand -hex 32`, or leave it empty and the chart generates one" }}
+  {{- end }}
+  VEXA_FLOWS_API_KEY: {{ $flowsApiKey | quote }}
   {{- end }}
 ---
 apiVersion: apps/v1

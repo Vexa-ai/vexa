@@ -21,6 +21,14 @@ the runtime-wide ``RUNTIME_K8S_NODE_SELECTOR`` / ``RUNTIME_K8S_TOLERATIONS`` exa
 profile's own node selector or tolerations, when set, replace the runtime-wide value for that field.
 
 Only the k8s backend applies this; the docker and process backends have no scheduler to tell.
+
+ONE caller hint is the exception: ``WorkloadSpec.avoidNodes``, the nodes a meeting's earlier join
+attempts ran on. When Google Meet refuses a bot's knock, meeting-api spawns the next attempt and asks
+the runtime to place it elsewhere (founder ruling, 1 Nov 2026: retry from different nodes before the
+user is told it failed). It is narrow by construction: at most :data:`MAX_AVOID_NODES` node names,
+each validated as a node name, rendered as a PREFERRED node anti-affinity (:func:`apply_avoid_nodes`),
+never a required one. A required rule with every node tried would leave the Pod unschedulable, and
+the cluster autoscaler would buy a node for it. Every other placement field stays the operator's.
 """
 from __future__ import annotations
 
@@ -56,6 +64,10 @@ _QUALIFIED_NAME_PART = re.compile(r"^([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]$")
 _TOLERATION_FIELDS = frozenset({"key", "operator", "value", "effect", "tolerationSeconds"})
 _TOLERATION_OPERATORS = frozenset({"Equal", "Exists"})
 _TAINT_EFFECTS = frozenset({"", "NoSchedule", "PreferNoSchedule", "NoExecute"})
+#: How many nodes one spec may ask to avoid: a meeting's join attempts are bounded far below this.
+MAX_AVOID_NODES = 10
+#: The node label a preferred anti-affinity keys on (set by the kubelet on every node).
+HOSTNAME_LABEL = "kubernetes.io/hostname"
 #: Kubernetes reserves this prefix for its own critical classes (system-node-critical,
 #: system-cluster-critical). A spawned workload must never preempt those.
 _RESERVED_PRIORITY_PREFIX = "system-"
@@ -94,6 +106,36 @@ class PodScheduling:
 
 def _dns1123_subdomain(value: object) -> bool:
     return isinstance(value, str) and 0 < len(value) <= 253 and bool(_DNS1123_SUBDOMAIN.match(value))
+
+
+def validate_avoid_nodes(nodes: object) -> list[str]:
+    """``WorkloadSpec.avoidNodes`` as a clean list, or ``ValueError`` naming what is wrong. A Node's
+    name is a DNS-1123 subdomain (at most 253 characters); duplicates are dropped, order kept."""
+    if not isinstance(nodes, list):
+        raise ValueError("avoidNodes must be a list of Kubernetes node names")
+    if len(nodes) > MAX_AVOID_NODES:
+        raise ValueError(f"avoidNodes names {len(nodes)} nodes; at most {MAX_AVOID_NODES} are allowed")
+    clean: list[str] = []
+    for node in nodes:
+        if not _dns1123_subdomain(node):
+            raise ValueError(f"avoidNodes: {node!r} is not a Kubernetes node name "
+                             f"(a lowercase DNS-1123 subdomain of at most 253 characters)")
+        if node not in clean:
+            clean.append(node)
+    return clean
+
+
+def apply_avoid_nodes(pod_spec: dict, nodes) -> None:
+    """Lay a PREFERRED anti-affinity to ``nodes`` onto a Pod ``spec`` (in place). Merges with any
+    affinity already there: required terms, pod (anti-)affinity and other preferred terms are kept,
+    this term is appended. No nodes ⇒ the spec is left as it is."""
+    if not nodes:
+        return
+    term = {"weight": 100, "preference": {"matchExpressions": [
+        {"key": HOSTNAME_LABEL, "operator": "NotIn", "values": list(nodes)}]}}
+    affinity = pod_spec.setdefault("affinity", {})
+    node_affinity = affinity.setdefault("nodeAffinity", {})
+    node_affinity.setdefault("preferredDuringSchedulingIgnoredDuringExecution", []).append(term)
 
 
 def _qualified_name(value: object) -> bool:
