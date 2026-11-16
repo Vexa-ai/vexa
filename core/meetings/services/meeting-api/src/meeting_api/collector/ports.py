@@ -109,6 +109,18 @@ class TranscriptStore(Protocol):
         owner-scoped: a row owned by another user returns ``None`` (404), never another tenant's data."""
         ...
 
+    async def listen_calls(
+        self, user_id: int, *, member_workspaces: "Optional[set[str]]" = None,
+        held_ids: "tuple | list | set" = (), statuses: "tuple | list" = (),
+    ) -> "list[dict]":
+        """The listening tick's one narrow read (``link_events``): the caller's calls in ``statuses``
+        on each access branch, plus every ``held_ids`` call whatever its state, each as ``{id, user_id,
+        status, platform, native_meeting_id, title, workspace_id, access, mark}`` — ``access`` the
+        three-way label (``share_access.access_of``) or None, ``mark`` where its transcript last moved
+        (None: unknown, read it). Never the transcript, never the ``data`` blob. A held call the caller
+        cannot read comes back as ``{id, access: None}`` and nothing else."""
+        ...
+
     async def list_meetings(
         self,
         user_id: int,

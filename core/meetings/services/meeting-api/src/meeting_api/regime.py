@@ -117,10 +117,13 @@ def refuse_shared(request: HTTPConnection) -> None:
             return
         # …AND READING ONE MEETING'S TRANSCRIPT, which the route then allows only for a meeting bound
         # to a workspace inside the turn's ceiling (`shared_meeting_readable`). Search and lists stay
-        # refused: they range over the person's own meetings.
+        # refused: they range over the person's own meetings. The live stream `/link/events` is let
+        # through the same way and FILTERS its calls to those `shared_meeting_readable` admits
+        # (design mvp1-shared-listen §2), so a shared turn hears only the ceiling's workspace calls.
         path = request.scope.get("path", "")
         if (request.scope.get("type") == "http" and request.scope.get("method") == "GET"
-                and path.startswith("/transcripts/") and not path.startswith("/transcripts/search")):
+                and ((path.startswith("/transcripts/") and not path.startswith("/transcripts/search"))
+                     or path.rstrip("/") == "/link/events")):
             request.state.shared_turn = True
             return
         if request.scope.get("type") == "websocket":

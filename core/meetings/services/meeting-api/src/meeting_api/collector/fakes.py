@@ -16,6 +16,7 @@ run OFFLINE (no docker), exactly like the gateway lane's port-fakes.
 from __future__ import annotations
 
 import json
+import zlib
 from typing import Optional
 
 from . import share_access
@@ -213,6 +214,37 @@ class InMemoryTranscriptStore:
         )
         # Same decision, two uses: whether the read is allowed, and which tier of ``data`` it carries.
         return await self._transcript_doc(mid, viewer_is_owner=is_owner) if authorized else None
+
+    async def listen_calls(self, user_id, *, member_workspaces=None, held_ids=(),
+                           statuses=()) -> "list[dict]":
+        """Mirror of the SqlAlchemy store's narrow listening read: running calls on each access branch
+        plus the held ids, each with its access label and a feed mark. The fake's mark is a digest of
+        the call's segments (the durable dict and the live hash), so a test that edits a segment in
+        place moves it exactly as a feed append does in production."""
+        held = {int(i) for i in (held_ids or ())}
+        out = []
+        for mid, m in sorted(self._meetings.items()):
+            data = m.get("data") if isinstance(m.get("data"), dict) else {}
+            access = None if share_access.deleted(data) else share_access.access_of(
+                m.get("user_id"), data, user_id, member_workspaces)
+            running = m["status"] in tuple(statuses or ())
+            if mid not in held and not (running and access):
+                continue
+            if access is None:
+                out.append({"id": mid, "access": None})   # held, not theirs: its id alone (H1)
+                continue
+            mark = None
+            if access and running:
+                parts = json.dumps(m.get("segments") or {}, sort_keys=True, default=str)
+                if self._redis is not None:
+                    raw = await self._redis.hgetall(f"meeting:{mid}:segments")
+                    parts += json.dumps({str(k): str(v) for k, v in (raw or {}).items()}, sort_keys=True)
+                mark = format(zlib.crc32(parts.encode()), "08x")
+            out.append({"id": mid, "user_id": m.get("user_id"), "status": m["status"],
+                        "platform": m["platform"], "native_meeting_id": m["native_meeting_id"],
+                        "title": data.get("title") or "", "workspace_id": data.get("workspace_id"),
+                        "access": access, "mark": mark})
+        return out
 
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
                             member_workspaces=None, list_view=False, meeting_id=None, slim=False,

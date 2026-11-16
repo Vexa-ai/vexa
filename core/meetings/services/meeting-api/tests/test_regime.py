@@ -230,3 +230,13 @@ def test_a_workspace_principals_bot_is_keyed_to_its_payer(client, monkeypatch):
               {"platform": "google_meet", "native_meeting_id": "abc-defg-hij", "workspace_id": "ws_1"},
               {identity_token.HEADER: identity_token.sign(KEY, claims)})
     assert seen.get("user_id") == 7, (r.status_code, r.text[:300], seen.get("user_id"))
+
+
+def test_a_shared_turn_reaches_the_live_stream_which_filters_it(client):
+    """`/link/events` is not refused a shared turn (design mvp1-shared-listen §2): the route filters
+    its calls to those bound to a workspace inside the turn's ceiling (tests/test_link_events.py)."""
+    from meeting_api.identity_token import SHARED_REFUSAL
+
+    r = _send(client, "GET", "/link/events?timeout_sec=1", None,
+              _signed(regime="human", workspaces=["ws_1"], shared=True))
+    assert not (r.status_code == 403 and r.json().get("detail") == SHARED_REFUSAL), r.text

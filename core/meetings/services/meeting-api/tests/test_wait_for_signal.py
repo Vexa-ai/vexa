@@ -177,3 +177,50 @@ def test_noted_in_text_for_the_script_and_off_without_notes():
     assert client.get(URL, headers=HEAD, params={"timeout_sec": 1}).json()["signal"] == "quiet"
     r = client.get(URL, headers=HEAD, params={"timeout_sec": 1, "notes": 1, "listener": 1, "format": "text"})
     assert r.text.splitlines() == ["noted 1", "[decision,date] Anna: We decided on Tuesday."]
+
+
+# ── shared listening (policy P12): a person a call is shared with listens; only the owner stamps ──
+import threading
+import time as _time
+
+OWNER = 8
+
+
+def _shared(segments, viewers=(USER,)):
+    store = InMemoryTranscriptStore()
+    mid = store.seed_meeting(user_id=OWNER, platform="google_meet", native_meeting_id="abc-defg-hij",
+                             status="active", data={"transcript_viewers": list(viewers)},
+                             segments=segments)
+    return store, mid
+
+
+def test_a_person_the_call_is_shared_with_is_signalled_and_stamps_nothing():
+    store, mid = _shared([_seg(0, "Morning."), _seg(1, "Claude, what did we decide?")])
+    r = TestClient(create_app(store, redis=None)).get(
+        URL, headers=HEAD, params={"timeout_sec": 1, "listener": True, "notes": True})
+    assert r.status_code == 200 and r.json()["signal"] == "addressed", r.text
+    assert "metadata" not in store._meetings[mid]["data"], "listener/notes write only for the owner"
+
+
+def test_a_stranger_is_not_signalled():
+    store, _ = _shared([_seg(0, "Claude, hi.")], viewers=())
+    r = TestClient(create_app(store, redis=None)).get(URL, headers=HEAD, params={"timeout_sec": 1})
+    assert r.status_code == 404
+
+
+def test_a_person_removed_mid_wait_gets_404_within_five_seconds(monkeypatch):
+    """Design §4: the wait re-reads through the access rule each tick (N = 5 s)."""
+    monkeypatch.setattr(collector_app, "SIGNAL_POLL_S", 2.0)
+    from meeting_api.collector import share_access
+    store, mid = _shared([_seg(0, "Quiet talk.")])
+    client = TestClient(create_app(store, redis=None))
+    box = {}
+    th = threading.Thread(target=lambda: box.update(r=client.get(
+        URL, headers=HEAD, params={"timeout_sec": 20, "since_index": 1})))
+    th.start()
+    _time.sleep(0.5)
+    removed_at = _time.monotonic()
+    share_access.remove_viewer(store._meetings[mid]["data"], USER)
+    th.join(25)
+    assert _time.monotonic() - removed_at <= 5.0
+    assert box["r"].status_code == 404, box["r"].text
