@@ -351,7 +351,7 @@ class DockerBackend:
             return None  # exists, but it is ANOTHER stack's container — not ours to touch
         return WorkloadHandle(id=workload_id, impl=name)
 
-    def list_workload_containers(self) -> list[dict]:
+    def list_workload_containers(self, workload_id: Optional[str] = None) -> list[dict]:
         """Discover the workload containers THIS backend spawned — running or exited — for boot
         re-adoption (the orphaned-live-bot fix): every ``start()`` stamps ``runtime.managed=true`` +
         ``runtime.workload_id``, so a label filter recovers them after the runtime process was
@@ -397,7 +397,7 @@ class DockerBackend:
                             break
         except Exception as e:  # noqa: BLE001 — discovery is a boot aid; it must never crash the boot
             logger.warning("workload container discovery failed: %s", e)
-        return list(found.values())
+        return [info for wid, info in found.items() if workload_id is None or wid == workload_id]
 
     def _adoptable(self, workload_id: str, c: dict) -> dict:
         """Shape one /containers/json entry as an adoption record for the kernel."""

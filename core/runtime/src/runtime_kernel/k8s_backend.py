@@ -808,7 +808,7 @@ class K8sBackend:
             return None
         return WorkloadHandle(id=workload_id, impl=name)
 
-    def list_workload_containers(self) -> list[dict]:
+    def list_workload_containers(self, workload_id: Optional[str] = None) -> list[dict]:
         """Discover the workload Pods THIS backend spawned — for boot re-adoption. Label-selected
         only (``runtime.managed=true`` and this runtime's ``runtime.instance``): a name-prefix
         fallback is unsafe in a shared namespace (the chart's own service Pods can share the prefix),
@@ -819,10 +819,12 @@ class K8sBackend:
         as this runtime's (find/stop reach it), so adoption takes it too — otherwise meeting-api
         sees the live bot as untracked and, after its escalation window, fails the meeting under it.
         ``RUNTIME_K8S_ADOPT_UNLABELLED=false`` leaves them out (two releases sharing a namespace
-        across an upgrade)."""
+        across an upgrade). ``workload_id`` narrows both selectors to that workload's label."""
         selectors = [f"{MANAGED_LABEL}=true,{INSTANCE_LABEL}={k8s_label_value(self._instance)}"]
         if adopt_unlabelled():
             selectors.append(f"{MANAGED_LABEL}=true,!{INSTANCE_LABEL}")
+        if workload_id is not None:
+            selectors = [f"{s},{WORKLOAD_ID_LABEL}={k8s_label_value(workload_id)}" for s in selectors]
         out: list[dict] = []
         seen: set[str] = set()
         for selector in selectors:

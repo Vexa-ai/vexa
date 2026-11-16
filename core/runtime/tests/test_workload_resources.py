@@ -295,7 +295,8 @@ def _spawned_pod(monkeypatch, registry, spec: WorkloadSpec) -> dict:
     Secret is owned by the Pod it feeds)."""
     api = FakeApi().install(monkeypatch)
     _runtime(K8sBackend(namespace="ns"), registry).create(spec)
-    assert api.calls[0][:2] == ("POST", "/api/v1/namespaces/ns/pods")
+    # (a create first looks the id up by its label: another runtime instance may hold its Pod)
+    assert [c[:2] for c in api.calls if c[0] != "GET"][0] == ("POST", "/api/v1/namespaces/ns/pods")
     return api.submitted[0]
 
 

@@ -97,7 +97,16 @@ class Runtime:
         self.store.set(WorkloadRecord(spec=spec, status=status, owner=self.owner_resolver(spec)))
 
     def _record(self, workload_id: str) -> WorkloadRecord:
+        """The workload's record. One this process holds none of is looked for on the substrate
+        first: during a rollout two runtime instances serve at once (maxSurge 1), so a bot the old
+        instance spawned after the new one booted, or a keep-alive create the Service routes to the
+        other instance, is a Pod this process never saw. Adopting it here, instead of answering 404
+        or creating a second record over it, keeps one sender of its callbacks (the instance that
+        created it: an adopted record carries no callbackUrl), and leaves the new instance
+        accounting for it once the old one is gone."""
         record = self.store.get(workload_id)
+        if record is None and self.adopt(workload_id):
+            record = self.store.get(workload_id)
         if record is None:
             raise KeyError(workload_id)
         return record
@@ -119,7 +128,7 @@ class Runtime:
                     self._handles[workload_id] = h
         return h
 
-    def adopt(self) -> int:
+    def adopt(self, workload_id: Optional[str] = None) -> int:
         """Boot-time re-adoption (the orphaned-live-bot fix): ask the backend for the workload
         containers it spawned that still exist on the substrate, re-attach live handles, and
         re-register any record the (in-memory) store lost across the restart — so
@@ -129,19 +138,22 @@ class Runtime:
         A still-running container re-registers as ``running``; an exited one as ``stopped`` with
         its real exit code (EVIDENCE the control plane's lifecycle decisions can act on). Records
         a durable store kept only get their handle re-attached. Returns the number of records
-        re-registered. Never raises — adoption must not block the boot."""
+        re-registered. Never raises — adoption must not block the boot.
+
+        ``workload_id`` narrows it to that one workload (the lookup of an id this process holds no
+        record of, see ``_record``). A record the store already holds is never replaced."""
         lister = getattr(self.backend, "list_workload_containers", None)
         if lister is None:
             return 0
         try:
-            discovered = lister()
+            discovered = lister() if workload_id is None else lister(workload_id=workload_id)
         except Exception:  # noqa: BLE001 — discovery failure must not block the boot
             return 0
         adopted = 0
         for info in discovered:
             wid = info.get("workload_id")
             name = info.get("name")
-            if not wid or not name:
+            if not wid or not name or (workload_id is not None and wid != workload_id):
                 continue
             self._handles.setdefault(wid, WorkloadHandle(id=wid, impl=name))
             if self.store.get(wid) is not None:
@@ -256,6 +268,8 @@ class Runtime:
         return status
 
     def list(self) -> list[WorkloadStatus]:
+        # Workloads another instance spawned since this one booted (a rollout overlap) are listed too.
+        self.adopt()
         return [self.get(r.spec.workloadId) for r in self.store.list()]
 
     def stop(self, workload_id: str, reason: StopReason = StopReason.stopped) -> WorkloadStatus:
