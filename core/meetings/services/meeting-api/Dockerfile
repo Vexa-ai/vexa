@@ -8,25 +8,32 @@
 # lifecycle.v1 / webhook.v1 / runtime.v1 / schedule.v1 schemas BY PATH at import (walking up from
 # the module to find `meetings/contracts/...` and `runtime/contracts/...`), so those frozen
 # contract files must be vendored into the image alongside src/.
+# uv is a build tool only: it resolves the venv in this stage (uv via PyPI, ghcr.io is unreachable in this
+# build env; 0.13.4, past GHSA-hq85-5cpj-mr62) and never enters the final image.
+FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f AS build
+RUN pip install --no-cache-dir uv==0.13.4
+ENV UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/opt/venv
+WORKDIR /app
+COPY core/meetings/services/meeting-api/pyproject.toml core/meetings/services/meeting-api/uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-install-project --no-dev --group production
+
 FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
 
-# Finalized WebM duration/cues; stream-copy only, no re-encoding.
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+# Finalized WebM duration/cues; stream-copy only, no re-encoding. The same RUN upgrades the base's
+# Debian packages to their current security fixes (apt, libapt-pkg, zlib1g).
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+ && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 
-# uv via PyPI (ghcr.io is unreachable in this build env) — pinned for deterministic resolves.
-RUN pip install --no-cache-dir uv==0.11.33
-
-ENV UV_LINK_MODE=copy \
-    UV_PROJECT_ENVIRONMENT=/opt/venv \
-    PYTHONUNBUFFERED=1 \
+ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/src \
     PATH=/opt/venv/bin:$PATH
 
 WORKDIR /app
 
+COPY --from=build /opt/venv /opt/venv
 COPY core/meetings/services/meeting-api/pyproject.toml core/meetings/services/meeting-api/uv.lock ./
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev --group production
 
 # The shipped source (src/ on PYTHONPATH).
 COPY core/meetings/services/meeting-api/src ./src
