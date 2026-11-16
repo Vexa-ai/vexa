@@ -3,7 +3,7 @@
 Serves ``runtime_kernel.api.create_app(Runtime(backend=<env-selected>, profiles=default_registry()))``
 — the runtime.v1 operation surface that spawns bot/agent workloads. The backend is chosen by
 ``RUNTIME_BACKEND`` (default ``docker``): ``docker`` talks to the host socket API (compose mounts
-``/var/run/docker.sock``), ``k8s`` spawns Pods via kubectl under the runtime's ServiceAccount/RBAC
+``/var/run/docker.sock``), ``k8s`` spawns Pods through the API server under the runtime's ServiceAccount/RBAC
 (deploy/helm), ``process`` runs child processes. Images come from env (BROWSER_IMAGE / AGENT_IMAGE).
 
 Exposed via ``app`` (PEP 562, built on first access) so ``uvicorn runtime_kernel.api:app`` /
@@ -94,14 +94,14 @@ def _start_ticker(scheduler) -> None:
 
 def _build_backend(network_envs: tuple[str, ...] = ()):
     """Select the spawn backend from ``RUNTIME_BACKEND`` (default ``docker``). compose/desktop run
-    ``docker`` (host socket API); a k8s deployment runs ``k8s`` (spawns Pods via kubectl under the
+    ``docker`` (host socket API); a k8s deployment runs ``k8s`` (spawns Pods through the API server under the
     runtime's ServiceAccount/RBAC — see deploy/helm runtime RBAC). ``process`` is the no-container
     fallback. Same Backend port across all three, so the runtime.v1 lifecycle is identical."""
     kind = os.getenv("RUNTIME_BACKEND", "docker").strip().lower()
     if kind == "k8s":
         from .k8s_backend import K8sBackend
 
-        # Namespace is injected via the downward API (POD_NAMESPACE); None ⇒ kubectl's current ns.
+        # Namespace is injected via the downward API (POD_NAMESPACE); None ⇒ the Pod's own (its ServiceAccount's).
         return K8sBackend(namespace=os.getenv("POD_NAMESPACE") or None)
     if kind == "process":
         from .process_backend import ProcessBackend

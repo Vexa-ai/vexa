@@ -41,7 +41,7 @@ meetingApi:
 
 runtime:
   replicaCount: 1
-  backend: "k8s"          # exercise the real cloud spawn path (SA + RBAC + kubectl in-image)
+  backend: "k8s"          # exercise the real cloud spawn path (SA + RBAC + the API server over HTTPS)
 
 agentApi:
   replicaCount: 1

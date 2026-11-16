@@ -6,7 +6,7 @@
       "key": "RUNTIME_BACKEND",
       "class": "defaulted",
       "default": "docker",
-      "description": "spawn backend: docker (host socket API), k8s (Pods via kubectl under the runtime's RBAC), process (child processes — lite)",
+      "description": "spawn backend: docker (host socket API), k8s (Pods through the API server under the runtime's ServiceAccount and RBAC), process (child processes — lite)",
       "targets": [
         "helm",
         "lite"
@@ -68,7 +68,7 @@
     {
       "key": "POD_NAMESPACE",
       "class": "defaulted",
-      "default": "(unset — kubectl's current namespace)",
+      "default": "(unset — the runtime Pod's own namespace, from its ServiceAccount)",
       "description": "k8s backend namespace, injected via the downward API",
       "targets": [
         "helm"
@@ -158,7 +158,7 @@
       "key": "RUNTIME_K8S_TOLERATIONS",
       "class": "defaulted",
       "default": "(chart's global.tolerations, JSON — the runtime's own tolerations)",
-      "description": "k8s backend: JSON array of toleration objects stamped onto every SPAWNED Pod's spec so a bare `kubectl run` bot/agent Pod (not a Deployment child) tolerates the same taints the runtime does — else it strands Pending forever on an all-tainted pool (#673). Empty [] ⇒ no tolerations; malformed JSON is fatal at spawn (a silently dropped constraint is the bug)",
+      "description": "k8s backend: JSON array of toleration objects stamped onto every SPAWNED Pod's spec so a bare bot/agent Pod (not a Deployment child) tolerates the same taints the runtime does — else it strands Pending forever on an all-tainted pool (#673). Empty [] ⇒ no tolerations; malformed JSON is fatal at spawn (a silently dropped constraint is the bug)",
       "targets": [
         "helm"
       ]
@@ -176,7 +176,7 @@
       "key": "RUNTIME_K8S_NODE_SELECTOR",
       "class": "defaulted",
       "default": "(chart's global.nodeSelector, JSON — the runtime's own nodeSelector)",
-      "description": "k8s backend: JSON object of node-label selectors stamped onto every SPAWNED Pod's spec so a bare `kubectl run` bot/agent Pod schedules onto the same pool the runtime does. Empty {} ⇒ no selector; malformed JSON is fatal at spawn (#673)",
+      "description": "k8s backend: JSON object of node-label selectors stamped onto every SPAWNED Pod's spec so a bare bot/agent Pod schedules onto the same pool the runtime does. Empty {} ⇒ no selector; malformed JSON is fatal at spawn (#673)",
       "targets": [
         "helm"
       ]
