@@ -65,18 +65,30 @@ def _signed(**delegation) -> dict:
 
 # What agent-api mints for each kind of turn (`dispatch.build_unit_env`, `delegation.mint_delegation`):
 # a mail turn and a signal turn run least-privilege (no grants), a routine runs autonomous.
-MAIL = _signed(regime="autonomous", workspaces=[], unit=f"{CHAT}-mail")
-SIGNAL = _signed(regime="autonomous", workspaces=[], unit=f"{CHAT}-signal")
-ROUTINE = _signed(regime="autonomous", workspaces=["7"], unit=f"{CHAT}-auto")
-GRANTED_ROUTINE = _signed(regime="autonomous", workspaces=["7"], unit=f"{CHAT}-auto",
-                          grants=["bot.request", "bot.stop", "flow.retire_self"],
-                          flow="user:7/stop-at-1300")
-WATCHED = _signed(regime="human", workspaces="*", unit=CHAT)
-PERSON = _signed()
+# The delegations are kept here; each test signs its tokens when it runs (the `turn` fixture), since a
+# token signed at import expires (60 s TTL) before a long suite reaches this file.
+DELEGATIONS = {
+    "mail": dict(regime="autonomous", workspaces=[], unit=f"{CHAT}-mail"),
+    "signal": dict(regime="autonomous", workspaces=[], unit=f"{CHAT}-signal"),
+    "routine": dict(regime="autonomous", workspaces=["7"], unit=f"{CHAT}-auto"),
+    "granted_routine": dict(regime="autonomous", workspaces=["7"], unit=f"{CHAT}-auto",
+                            grants=["bot.request", "bot.stop", "flow.retire_self"],
+                            flow="user:7/stop-at-1300"),
+    "watched_turn": dict(regime="human", workspaces="*", unit=CHAT),
+    "person": {},
+}
 INTERNAL_TIER = {"X-User-Id": str(USER), "X-Internal-Secret": INTERNAL}
 
-UNATTENDED = {"mail": MAIL, "signal": SIGNAL, "routine": ROUTINE}
-ATTENDED = {"watched_turn": WATCHED, "person": PERSON, "internal_tier": INTERNAL_TIER}
+UNATTENDED = ("mail", "signal", "routine")
+ATTENDED = ("watched_turn", "person", "internal_tier")
+
+
+@pytest.fixture
+def turn():
+    """The request headers of each kind of turn, signed now."""
+    def headers(who: str) -> dict:
+        return dict(INTERNAL_TIER) if who == "internal_tier" else _signed(**DELEGATIONS[who])
+    return headers
 
 
 def _send(client, verb, headers):
@@ -86,36 +98,36 @@ def _send(client, verb, headers):
 
 @pytest.mark.parametrize("verb", sorted(VERBS))
 @pytest.mark.parametrize("who", sorted(UNATTENDED))
-def test_an_unattended_turn_cannot_act_on_the_live_bot(verb, who):
+def test_an_unattended_turn_cannot_act_on_the_live_bot(verb, who, turn):
     client, bus = _app()
-    r = _send(client, verb, UNATTENDED[who])
+    r = _send(client, verb, turn(who))
     assert r.status_code == 403, r.text
     assert r.json()["detail"] == REFUSAL
     assert bus.published == [], "nothing may reach the bot's command channel"
 
 
 @pytest.mark.parametrize("verb", ["config", "chat"])
-def test_a_routine_granted_every_verb_still_cannot_reconfigure_or_chat(verb):
+def test_a_routine_granted_every_verb_still_cannot_reconfigure_or_chat(verb, turn):
     """`bot.stop` is the only grant a live-bot verb honours; no grant opens config or chat."""
     client, bus = _app()
-    r = _send(client, verb, GRANTED_ROUTINE)
+    r = _send(client, verb, turn("granted_routine"))
     assert r.status_code == 403 and r.json()["detail"] == REFUSAL, r.text
     assert bus.published == []
 
 
-def test_a_routine_its_person_granted_bot_stop_stops_the_bot():
+def test_a_routine_its_person_granted_bot_stop_stops_the_bot(turn):
     """Flows phase 0: "stop the bot at 13:00", granted by name when the person made the routine."""
     client, bus = _app()
-    r = _send(client, "stop", GRANTED_ROUTINE)
+    r = _send(client, "stop", turn("granted_routine"))
     assert r.status_code < 300, r.text
     assert any('"leave"' in msg for _, msg in bus.published)
 
 
 @pytest.mark.parametrize("verb", sorted(VERBS))
 @pytest.mark.parametrize("who", sorted(ATTENDED))
-def test_the_person_and_a_turn_they_watch_keep_every_verb(verb, who):
+def test_the_person_and_a_turn_they_watch_keep_every_verb(verb, who, turn):
     client, bus = _app()
-    r = _send(client, verb, ATTENDED[who])
+    r = _send(client, verb, turn(who))
     assert r.status_code < 300, r.text
     assert bus.published, "the act reached the bot's command channel"
 
@@ -150,7 +162,7 @@ def test_every_mutating_live_bot_route_is_in_the_guarded_table():
         "`dependencies=[Depends(live_bot_guard(method, path))]`")
 
 
-def test_every_mutating_live_bot_route_refuses_a_mail_turn():
+def test_every_mutating_live_bot_route_refuses_a_mail_turn(turn):
     """Behavioural, over whatever the app serves: a route listed in the table but not wired to its
     guard is caught here too."""
     client, _ = _app()
@@ -159,5 +171,5 @@ def test_every_mutating_live_bot_route_refuses_a_mail_turn():
     for method, path in sorted(routes):
         url = path.replace("{platform}", PLAT).replace("{native_meeting_id}", NATIVE)
         url = url.replace("{request_id}", "r1")
-        r = client.request(method, url, headers=MAIL, json={"text": "x", "language": "en"})
+        r = client.request(method, url, headers=turn("mail"), json={"text": "x", "language": "en"})
         assert r.status_code == 403 and r.json().get("detail") == REFUSAL, (method, path, r.text)
