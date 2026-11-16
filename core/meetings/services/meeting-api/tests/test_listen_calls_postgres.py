@@ -95,10 +95,12 @@ async def test_the_narrow_read_labels_each_branch_and_reads_held_calls_whatever_
         # held ids come back whatever their status or access: ended, a stranger's, a room's
         held = {r["id"]: r for r in await store.listen_calls(
             ME, held_ids=[done, stranger, room, deleted, 987654], statuses=())}
-        assert {i: (r["status"], r["access"]) for i, r in held.items()} == {
-            done: ("completed", "owner"), stranger: ("active", None), room: ("active", None),
-            deleted: ("active", None)}
-        assert all(r["mark"] is None for r in held.values()), "no feed mark outside a running call"
+        assert {i: (r.get("status"), r["access"]) for i, r in held.items()} == {
+            done: ("completed", "owner"), stranger: (None, None), room: (None, None),
+            deleted: (None, None)}
+        assert held[done]["mark"] is None, "no feed mark outside a running call"
+        for i in (stranger, room, deleted):
+            assert held[i] == {"id": i, "access": None}, "a held call they cannot read: its id alone (H1)"
         # a room's call is read through its workspace, never as owned
         via_ws = {r["id"]: r for r in await store.listen_calls(
             ME, member_workspaces={"ws_room"}, statuses=RUNNING)}

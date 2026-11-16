@@ -583,14 +583,19 @@ class SqlAlchemyTranscriptStore:
             access = None if share_access.deleted({"artifact_deletion": r.deletion}) else share_access.access_of(
                 r.user_id, None, user_id, member_workspaces, room=r.room, is_viewer=bool(r.is_viewer),
                 workspace_id=r.workspace_id)
-            if access is None and r.id not in held:
-                continue    # a room's row on the owner branch, a deleted one: not this caller's to follow
+            if access is None:
+                # Not this caller's to read: a room's row on the owner branch or a deleted one is not
+                # followed at all; a HELD one (a cursor names it, perhaps forged) answers its id alone,
+                # no column of it (code review H1).
+                if r.id in held:
+                    rows[r.id] = {"id": r.id, "access": None}
+                continue
             rows[r.id] = {"id": r.id, "user_id": r.user_id, "status": r.status, "platform": r.platform,
                           "native_meeting_id": r.platform_specific_id, "title": r.title or "",
                           "workspace_id": r.workspace_id, "access": access, "mark": None}
         # The feed marks, one pipelined round trip, for the calls a reader may follow. A failed read
         # leaves the mark unknown, which only means "read the transcript" (never more access).
-        follow = [i for i, row in rows.items() if row["access"] and row["status"] in running]
+        follow = [i for i, row in rows.items() if row["access"] and row.get("status") in running]
         if follow and self._redis is not None:
             try:
                 async with self._redis.pipeline(transaction=False) as pipe:

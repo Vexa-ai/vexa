@@ -22,6 +22,15 @@ panel's «Listening»; a call shared with them is never stamped. Deterministic, 
 Load (design §3): each tick is ONE narrow read (``store.listen_calls``: owner, room mark, viewers,
 workspace, deletion, status — no blob) of the running calls and the held ones, and a call's
 transcript is read only when its feed moved since the cursor (``mark``).
+
+The cursor is the caller's to forge (unsigned on purpose: no key to keep). Nothing in it is trusted:
+every id it holds is re-checked by the same access rule each tick, a call the caller cannot read
+(or that does not exist) answers only ``access_ended`` with its id, and the store's held read hands
+back no column of such a row but its id (code review H1). The cursor never outgrows the 4 KB query
+cap: past ``CURSOR_BUDGET`` each call remembers fewer recent lines (``w``), so it degrades instead of
+failing (M1). One pod's pool is shared: at most ``LINK_PER_USER`` open reads per person (429 beyond,
+counted in Redis, refused when Redis cannot count) and ``LINK_DB_CONCURRENCY`` reads' database work
+at a time (M2).
 """
 from __future__ import annotations
 
@@ -29,6 +38,7 @@ import asyncio
 import base64
 import json
 import time
+import weakref
 import zlib
 from typing import Any, Callable, Optional
 
@@ -53,6 +63,51 @@ MAX_EVENTS = 200
 #: words: a line finished late, or re-worded after it went out, is sent (again) while it is among them.
 #: The cursor stays well under the 4 KB query cap (two 8-character hashes per line).
 RECENT_FINALS = 24
+#: The longest cursor this route answers: under the 4096-character `cursor` query cap, with room.
+CURSOR_BUDGET = 3800
+#: The most held calls one cursor may name; the rest of a forged list is ignored.
+MAX_HELD = 32
+#: Open /link/events reads one person may hold at once (one vexa-link, plus one restarting).
+LINK_PER_USER = 2
+#: How long an open-read count outlives a process that died holding it.
+LINK_OPEN_TTL_S = 60
+#: Reads whose database work runs at once in this process. Per pod: prod runs 3 meeting-api replicas
+#: with a pool of 5 + 10 each (45 connections), so listening holds at most 3 x 6 = 18 of them at once
+#: and the rest of meeting-api always keeps 27.
+LINK_DB_CONCURRENCY = 6
+
+_gates: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+_local_open: dict = {}
+
+
+def _db_gate() -> asyncio.Semaphore:
+    """This event loop's gate on tick database work (one per loop: a semaphore binds to its loop)."""
+    loop = asyncio.get_running_loop()
+    gate = _gates.get(loop)
+    if gate is None:
+        gate = _gates[loop] = asyncio.Semaphore(LINK_DB_CONCURRENCY)
+    return gate
+
+
+def fit_cursor(state: dict, budget: int = None) -> str:
+    """The cursor for ``state``, no longer than ``budget``: while it is too long, every call remembers
+    fewer of its recent lines (its ``h``, newest kept, and its window ``w``), down to none. A shorter
+    window only narrows how far back a late-finished or re-worded line is still sent."""
+    budget = CURSOR_BUDGET if budget is None else budget
+    out = encode_cursor(state)
+    marks = [m for m in (state.get("m") or {}).values() if isinstance(m, dict)]
+    while len(out) > budget:
+        widest = max((int(m.get("w", RECENT_FINALS)) for m in marks), default=0)
+        if widest <= 0:
+            break
+        keep = widest // 2
+        for m in marks:
+            if int(m.get("w", RECENT_FINALS)) > keep:
+                items = list((m.get("h") or {}).items())
+                m["h"] = dict(items[-keep:]) if keep else {}
+                m["w"] = keep
+        out = encode_cursor(state)
+    return out
 
 
 def encode_cursor(state: dict) -> str:
@@ -93,16 +148,50 @@ def _meeting(row: dict, access: Optional[str] = None) -> dict:
             "access": access}
 
 
-def _ended(mid: str, row: Optional[dict], access: Optional[str]) -> dict:
-    """The one event a call that can no longer be read leaves with. Its title is not repeated: the
-    caller may not read the call any more."""
-    meeting = {"id": int(mid) if mid.isdigit() else mid, "platform": (row or {}).get("platform"),
-               "native_id": (row or {}).get("native_meeting_id"), "title": "", "access": access}
-    return {"type": "system", "event": "access_ended", "meeting": meeting}
+def _ended(mid: str) -> dict:
+    """The one event a call that can no longer be read leaves with: its id and nothing else, the same
+    for a call that was revoked, deleted, never theirs or never existed (a forged cursor learns
+    nothing from it)."""
+    return {"type": "system", "event": "access_ended", "meeting": {"id": int(mid) if mid.isdigit() else mid}}
+
+
+class _Busy(Exception):
+    pass
+
+
+async def _open(counter: Any, user_id: int) -> str:
+    """Count one open read for ``user_id``; refuse past ``LINK_PER_USER``. Counted in Redis so every
+    pod sees it; a Redis that does not answer refuses (fails closed). Without a Redis (the in-memory
+    stores) it is counted in this process."""
+    key = f"link:open:{user_id}"
+    if counter is None:
+        if _local_open.get(key, 0) >= LINK_PER_USER:
+            raise _Busy()
+        _local_open[key] = _local_open.get(key, 0) + 1
+        return key
+    try:
+        n = await counter.incr(key)
+        await counter.expire(key, LINK_OPEN_TTL_S)
+    except Exception as e:  # noqa: BLE001 — cannot count: refuse
+        raise _Busy() from e
+    if int(n) > LINK_PER_USER:
+        await _close(counter, key)
+        raise _Busy()
+    return key
+
+
+async def _close(counter: Any, key: str) -> None:
+    if counter is None:
+        _local_open[key] = max(0, _local_open.get(key, 0) - 1)
+        return
+    try:
+        await counter.decr(key)
+    except Exception:  # noqa: BLE001 — the TTL ends a count no one could take back
+        pass
 
 
 def install(router: APIRouter, *, store: Any, resolve_user: Callable[[Optional[str]], int],
-            log_event: Callable[..., Any]) -> None:
+            log_event: Callable[..., Any], counter: Any = None) -> None:
     @router.get("/link/events")
     async def link_events(
         request: Request,
@@ -118,11 +207,24 @@ def install(router: APIRouter, *, store: Any, resolve_user: Callable[[Optional[s
         changes state, `{"type": "transcript", "meeting": {...}, "index", "segment_id", "start",
         "absolute_start_time", "speaker", "text"}` per line a running call finished (`index` counts
         finished lines; a line re-worded after it went out comes again under its segment_id), and
-        `{"type": "system", "event": "access_ended", "meeting": {...}}` once when a call they followed
+        `{"type": "system", "event": "access_ended", "meeting": {"id"}}` once when a call they followed
         can no longer be read by them. `meeting.access` is `owner`, `viewer` (shared with them) or
         `workspace` (bound to a workspace of theirs). Blocks up to `timeout_sec` until there is
         something; pass the cursor back each time."""
         user_id = resolve_user(x_user_id)
+        try:
+            slot = await _open(counter, user_id)
+        except _Busy:
+            log_event("link_events_busy", audience="system", level="warning", span="link.events",
+                      user_id=user_id)
+            return PlainTextResponse("too many open reads\n", status_code=429,
+                                     headers={"Retry-After": str(int(LINK_POLL_S) + 1)})
+        try:
+            return await _serve(request, cursor, timeout_sec, user_id, x_user_workspaces)
+        finally:
+            await _close(counter, slot)
+
+    async def _serve(request, cursor, timeout_sec, user_id, x_user_workspaces):
         # Workspace membership is the header set when this read opened (the gateway's); a member
         # removed meanwhile still reads until this read ends (≤ LINK_WAIT_MAX_S, design §4).
         member_workspaces = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
@@ -140,6 +242,8 @@ def install(router: APIRouter, *, store: Any, resolve_user: Callable[[Optional[s
             return access
 
         def audit_end(mid: str, mark: Any, reason: str, owner_id: Any = None) -> None:
+            if not str(mid).isdigit():
+                return
             if isinstance(mark, dict) and mark.get("a") in ("v", "w"):
                 log_event("listen_shared_end", audience="system", span="link.events", user_id=user_id,
                           meeting_id=mid, fields={"reason": reason, "access": _LONG[mark["a"]],
@@ -147,25 +251,28 @@ def install(router: APIRouter, *, store: Any, resolve_user: Callable[[Optional[s
 
         held = decode_cursor(cursor)
         first = held is None
-        read_to: dict = dict((held or {}).get("m") or {})
-        seen: dict = dict((held or {}).get("s") or {})
+        read_to: dict = (held or {}).get("m") if isinstance((held or {}).get("m"), dict) else {}
+        seen: dict = (held or {}).get("s") if isinstance((held or {}).get("s"), dict) else {}
+        # Only plain ids, at most MAX_HELD: the rest of a forged cursor is dropped, not answered.
+        ids = sorted({k for k in set(seen) | set(read_to) if str(k).isdigit()}, key=int)[:MAX_HELD]
+        seen = {k: v for k, v in seen.items() if k in ids}
+        read_to = {k: v for k, v in read_to.items() if k in ids}
         deadline = time.monotonic() + timeout_sec
         events: list = []
         live: list = []
         while True:
-            held_ids = [int(k) for k in set(seen) | set(read_to) if str(k).isdigit()]
-            rows = await store.listen_calls(user_id, member_workspaces=member_workspaces,
-                                            held_ids=held_ids, statuses=RUNNING)
+            held_ids = [int(k) for k in set(seen) | set(read_to)]
+            async with _db_gate():
+                rows = await store.listen_calls(user_id, member_workspaces=member_workspaces,
+                                                held_ids=held_ids, statuses=RUNNING)
             by_id = {str(r.get("id")): r for r in rows}
             # A call followed until now that this caller can no longer read: one event, then gone.
             for mid in sorted(set(seen) | set(read_to)):
                 row = by_id.get(mid)
                 if row is not None and admitted(row):
                     continue
-                prior = read_to.get(mid)
-                was = _LONG.get(prior.get("a")) if isinstance(prior, dict) else None
-                events.append(_ended(mid, row, was))
-                audit_end(mid, prior, "revoked", (row or {}).get("user_id"))
+                events.append(_ended(mid))
+                audit_end(mid, read_to.get(mid), "revoked")
                 seen.pop(mid, None)
                 read_to.pop(mid, None)
             live = []
@@ -189,9 +296,10 @@ def install(router: APIRouter, *, store: Any, resolve_user: Callable[[Optional[s
                 if (not first and mark is not None and row.get("mark") is not None
                         and mark.get("c") == row["mark"]):
                     continue                      # its transcript has not moved: nothing to read
-                doc = await store.get_transcript_by_id(user_id, int(row["id"]), member_workspaces)
+                async with _db_gate():
+                    doc = await store.get_transcript_by_id(user_id, int(row["id"]), member_workspaces)
                 if doc is None:                   # gone between the two reads: the same as revoked
-                    events.append(_ended(mid, row, access))
+                    events.append(_ended(mid))
                     audit_end(mid, mark, "revoked", row.get("user_id"))
                     seen.pop(mid, None)
                     read_to.pop(mid, None)
@@ -210,7 +318,8 @@ def install(router: APIRouter, *, store: Any, resolve_user: Callable[[Optional[s
                                   user_id=user_id, meeting_id=mid,
                                   fields={"access": access, "owner_id": row.get("user_id")})
                 sent_to, known = int(mark.get("n") or 0), dict(mark.get("h") or {})
-                lo, upto = max(0, sent_to - RECENT_FINALS), len(finals)
+                window = max(0, min(RECENT_FINALS, int(mark.get("w", RECENT_FINALS))))
+                lo, upto = max(0, sent_to - window), len(finals)
                 for i in range(lo, len(finals)):
                     seg = finals[i]
                     key, words = _line_key(seg), _h(seg.get("text") or "")
@@ -226,9 +335,19 @@ def install(router: APIRouter, *, store: Any, resolve_user: Callable[[Optional[s
                                    "segment_id": seg.get("segment_id"), "start": seg.get("start"),
                                    "absolute_start_time": seg.get("absolute_start_time"),
                                    "speaker": seg.get("speaker"), "text": seg.get("text")})
-                keep = {_line_key(x) for x in finals[max(0, upto - RECENT_FINALS):upto]}
-                read_to[mid] = {"n": upto, "h": {k: v for k, v in known.items() if k in keep},
-                                "a": _SHORT[access]}
+                # The window the cursor vouches for: the newest finished lines, contiguous back from
+                # `upto`, whose words are known (a cursor that had to shrink knows fewer). In
+                # transcript order, so fit_cursor keeps the newest when it must shrink further.
+                recent = [_line_key(x) for x in finals[max(0, upto - RECENT_FINALS):upto]]
+                width = 0
+                for k in reversed(recent):
+                    if k not in known:
+                        break
+                    width += 1
+                covered = recent[len(recent) - width:]
+                read_to[mid] = {"n": upto, "h": {k: known[k] for k in covered}, "a": _SHORT[access]}
+                if width < RECENT_FINALS:
+                    read_to[mid]["w"] = width
                 if upto == len(finals) and row.get("mark") is not None:
                     read_to[mid]["c"] = row["mark"]   # everything up to this mark is sent
             first = False
@@ -245,13 +364,14 @@ def install(router: APIRouter, *, store: Any, resolve_user: Callable[[Optional[s
             if access != share_access.OWNER:
                 continue                          # only the owner's call shows «Listening» (owner-only stamp)
             try:
-                await store.annotate_meeting(user_id, int(row["id"]), metadata={
-                    "listener_state": "listening", "listener_ts": now_ms, "listener_mode": "link"})
+                async with _db_gate():
+                    await store.annotate_meeting(user_id, int(row["id"]), metadata={
+                        "listener_state": "listening", "listener_ts": now_ms, "listener_mode": "link"})
             except Exception:  # noqa: BLE001 — the events are answered whether or not the stamp lands
                 pass
         log_event("link_events", audience="user", span="link.events", user_id=user_id,
                   fields={"events": len(events), "live": len(live),
                           "shared": sum(1 for _, a in live if a != share_access.OWNER)})
-        body = [f"cursor {encode_cursor({'m': read_to, 's': seen})}"]
+        body = [f"cursor {fit_cursor({'m': read_to, 's': seen})}"]
         body += [json.dumps(e, ensure_ascii=False) for e in events]
         return PlainTextResponse("\n".join(body) + "\n")

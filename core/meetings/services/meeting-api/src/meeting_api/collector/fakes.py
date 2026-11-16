@@ -230,6 +230,9 @@ class InMemoryTranscriptStore:
             running = m["status"] in tuple(statuses or ())
             if mid not in held and not (running and access):
                 continue
+            if access is None:
+                out.append({"id": mid, "access": None})   # held, not theirs: its id alone (H1)
+                continue
             mark = None
             if access and running:
                 parts = json.dumps(m.get("segments") or {}, sort_keys=True, default=str)

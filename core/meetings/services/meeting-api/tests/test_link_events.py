@@ -268,9 +268,7 @@ def test_a_person_removed_mid_call_is_cut_within_five_seconds(monkeypatch):
     th.join(25)
     cursor, events = box["result"]
     assert _time.monotonic() - removed_at <= 5.0, box["elapsed"]
-    assert events == [{"type": "system", "event": "access_ended",
-                       "meeting": {"id": mid, "platform": "google_meet", "native_id": "shr-call-abc",
-                                   "title": "", "access": "viewer"}}]
+    assert events == [{"type": "system", "event": "access_ended", "meeting": {"id": mid}}]
     assert log.named("listen_shared_end")[0]["fields"]["reason"] == "revoked"
     monkeypatch.setattr(link_events, "LINK_POLL_S", 0.01)
     cursor, events = _read_as(client, HEAD, cursor)
@@ -389,3 +387,174 @@ def test_a_shared_turn_hears_only_calls_bound_to_its_ceilings_workspaces():
     assert [e["meeting"]["native_id"] for e in events] == ["team-call"]
     _, events = _read_as(_app(store, shared_turn=True), {**turn, "x-user-delegation-workspaces": "*"})
     assert events == [], "an unbounded ceiling admits nothing (the shared_meeting_readable rule)"
+
+
+# ── code review (non-author) H1 · M1 · M2 ───────────────────────────────────────────────────────────
+import asyncio as _asyncio
+
+import httpx as _httpx
+
+
+def _forged(ids):
+    return link_events.encode_cursor({"s": {str(i): "active" for i in ids},
+                                      "m": {str(i): {"n": 0, "h": {}, "a": "v"} for i in ids}})
+
+
+def test_a_forged_cursor_naming_other_peoples_calls_learns_their_ids_back_and_nothing_else():
+    """H1: user 7 forges a cursor holding user 99's calls. Each comes back as access_ended with its id
+    alone — no platform, native id, title, owner or status — exactly as an id that never existed."""
+    store = InMemoryTranscriptStore()
+    theirs = [store.seed_meeting(user_id=99, platform="google_meet", native_meeting_id=f"zzz-secr-et{i}",
+                                 status=s, data={"title": f"Board {i}", "workspace_id": "ws_99"},
+                                 segments=[_seg(0, "Confidential.")])
+              for i, s in enumerate(("active", "completed", "awaiting_admission"))]
+    client = _app(store)
+    _, events = _read_as(client, HEAD, _forged(theirs + [424242]))
+    assert events == [{"type": "system", "event": "access_ended", "meeting": {"id": i}}
+                       for i in sorted(theirs + [424242])]
+    assert not any(x in json.dumps(events) for x in ("zzz-secr", "Board", "google_meet", "99", "Confidential"))
+
+
+def test_enumerating_350_ids_with_forged_cursors_reveals_nothing():
+    store = InMemoryTranscriptStore()
+    for i in range(350):
+        store.seed_meeting(user_id=1000 + i % 7, platform=("zoom", "google_meet", "teams")[i % 3],
+                           native_meeting_id=f"nat-{i:04d}-x", status=("active", "completed")[i % 2],
+                           data={"title": f"T{i}", "transcript_viewers": [5]})
+    client = _app(store)
+    seen_ids, leaked = [], []
+    for lo in range(1, 351, link_events.MAX_HELD):
+        _, events = _read_as(client, HEAD, _forged(range(lo, min(lo + link_events.MAX_HELD, 351))))
+        for e in events:
+            assert e["event"] == "access_ended" and set(e) == {"type", "event", "meeting"}, e
+            assert set(e["meeting"]) == {"id"}, e
+            seen_ids.append(e["meeting"]["id"])
+        leaked += [x for x in ("nat-", "T1", "zoom", "google_meet", "teams") if x in json.dumps(events)]
+    assert sorted(seen_ids) == list(range(1, 351)) and leaked == []
+
+
+def test_a_forged_cursor_is_cut_to_max_held_ids():
+    store = InMemoryTranscriptStore()
+    cursor = link_events.encode_cursor({"s": {str(i): "active" for i in range(1, 120)}})
+    _, events = _read_as(_app(store), HEAD, cursor)
+    assert len(events) == link_events.MAX_HELD
+
+
+def test_eight_calls_with_long_transcripts_keep_the_cursor_under_the_cap_and_lose_no_line():
+    """M1: a cursor past its budget remembers fewer recent lines per call instead of answering 422."""
+    store = InMemoryTranscriptStore()
+    mids = [store.seed_meeting(user_id=USER, platform="zoom", native_meeting_id=f"c{k}", status="active",
+                               segments=[_seg(i, f"call {k} line {i}") for i in range(60)])
+            for k in range(8)]
+    client = _app(store)
+    cursor, _ = _read_as(client, HEAD)
+    assert len(cursor) <= link_events.CURSOR_BUDGET
+    got = []
+    for step in range(60, 66):
+        for k, mid in enumerate(mids):
+            store._meetings[mid]["segments"][f"s-{step}"] = _seg(step, f"call {k} line {step}")
+        cursor, events = _read_as(client, HEAD, cursor)
+        assert len(cursor) <= link_events.CURSOR_BUDGET < 4096, len(cursor)
+        got += [e["text"] for e in events if e["type"] == "transcript"]
+    assert sorted(got) == sorted(f"call {k} line {i}" for k in range(8) for i in range(60, 66)), \
+        "every new line once, none again"
+    # a late re-wording inside the narrowed window still goes out
+    store._meetings[mids[0]]["segments"]["s-65"] = _seg(65, "call 0 line 65, reworded")
+    cursor, events = _read_as(client, HEAD, cursor)
+    assert [e["text"] for e in events] == ["call 0 line 65, reworded"]
+
+
+def test_fit_cursor_shrinks_windows_newest_kept():
+    state = {"s": {}, "m": {str(i): {"n": 50, "a": "o", "h": {f"k{j:02d}": "x" * 8 for j in range(24)}}
+                            for i in range(8)}}
+    out = link_events.fit_cursor(state, budget=1500)
+    back = link_events.decode_cursor(out)
+    assert len(out) <= 1500
+    for m in back["m"].values():
+        assert list(m["h"]) == [f"k{j:02d}" for j in range(24 - m["w"], 24)]
+
+
+class _Counter:
+    """The open-read count's Redis: incr/expire/decr, optionally failing."""
+    def __init__(self, broken=False):
+        self.n, self.broken = {}, broken
+
+    async def incr(self, k):
+        if self.broken:
+            raise ConnectionError("redis down")
+        self.n[k] = self.n.get(k, 0) + 1
+        return self.n[k]
+
+    async def expire(self, k, s):
+        return True
+
+    async def decr(self, k):
+        self.n[k] -= 1
+        return self.n[k]
+
+
+def _async_app(store, counter, log=None):
+    from fastapi import APIRouter, FastAPI
+    router = APIRouter()
+    link_events.install(router, store=store, resolve_user=lambda h: int(h), log_event=log or _Log(),
+                        counter=counter)
+    app = FastAPI()
+    app.include_router(router)
+    return _httpx.AsyncClient(transport=_httpx.ASGITransport(app=app), base_url="http://m")
+
+
+def test_a_person_holds_at_most_two_open_reads_counted_in_redis(monkeypatch):
+    """M2: the third concurrent read of one person is 429 (the count is in Redis, so it holds across
+    replicas); another person is not affected; a read that ends gives its place back."""
+    monkeypatch.setattr(link_events, "LINK_POLL_S", 0.05)
+    store, counter = InMemoryTranscriptStore(), _Counter()
+
+    async def go():
+        async with _async_app(store, counter) as c:
+            get = lambda uid, t: c.get("/link/events", params={"timeout_sec": t}, headers={"x-user-id": str(uid)})  # noqa: E731
+            held = [_asyncio.create_task(get(USER, 2)) for _ in range(2)]
+            await _asyncio.sleep(0.3)
+            third, other = await get(USER, 1), await get(OWNER, 1)
+            done = await _asyncio.gather(*held)
+            after = await get(USER, 1)
+            return third, other, done, after
+    third, other, done, after = _asyncio.run(go())
+    assert third.status_code == 429 and third.headers.get("retry-after")
+    assert other.status_code == 200 and [r.status_code for r in done] == [200, 200]
+    assert after.status_code == 200 and counter.n == {f"link:open:{USER}": 0, f"link:open:{OWNER}": 0}
+
+
+def test_a_redis_that_cannot_count_refuses_the_read():
+    async def go():
+        async with _async_app(InMemoryTranscriptStore(), _Counter(broken=True)) as c:
+            return await c.get("/link/events", params={"timeout_sec": 1}, headers={"x-user-id": "7"})
+    assert _asyncio.run(go()).status_code == 429
+
+
+def test_tick_database_work_is_gated_per_process(monkeypatch):
+    """M2: at most LINK_DB_CONCURRENCY reads' store calls run at once (here 2, for 8 listeners)."""
+    monkeypatch.setattr(link_events, "LINK_DB_CONCURRENCY", 2)
+    monkeypatch.setattr(link_events, "LINK_POLL_S", 0.05)
+    store = InMemoryTranscriptStore()
+    for u in range(8):
+        store.seed_meeting(user_id=100 + u, platform="zoom", native_meeting_id=f"g{u}", status="active",
+                           segments=[_seg(0, "x")])
+    state = {"now": 0, "peak": 0}
+    real = store.listen_calls
+
+    async def slow(*a, **kw):
+        state["now"] += 1
+        state["peak"] = max(state["peak"], state["now"])
+        await _asyncio.sleep(0.05)
+        try:
+            return await real(*a, **kw)
+        finally:
+            state["now"] -= 1
+    store.listen_calls = slow
+
+    async def go():
+        async with _async_app(store, _Counter()) as c:
+            return await _asyncio.gather(*[c.get("/link/events", params={"timeout_sec": 1},
+                                                 headers={"x-user-id": str(100 + u)}) for u in range(8)])
+    rs = _asyncio.run(go())
+    assert all(r.status_code == 200 for r in rs) and state["peak"] == 2

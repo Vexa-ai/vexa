@@ -553,7 +553,9 @@ def build_router(
 
     # vexa-link's one stream of the person's calls (`link_events.py`).
     from . import link_events as _link_events
-    _link_events.install(router, store=store, resolve_user=_resolve_user_id, log_event=log_event)
+    # The per-person open-read count lives in the store's Redis (shared by every replica).
+    _link_events.install(router, store=store, resolve_user=_resolve_user_id, log_event=log_event,
+                         counter=getattr(store, "_redis", None))
 
     # A planned meeting belongs to schedule/preparation surfaces until a bot run claims it.
     # Keep the set explicit so list pagination can exclude plans in SQL rather than making

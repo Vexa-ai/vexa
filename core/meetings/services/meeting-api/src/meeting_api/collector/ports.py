@@ -117,7 +117,8 @@ class TranscriptStore(Protocol):
         on each access branch, plus every ``held_ids`` call whatever its state, each as ``{id, user_id,
         status, platform, native_meeting_id, title, workspace_id, access, mark}`` — ``access`` the
         three-way label (``share_access.access_of``) or None, ``mark`` where its transcript last moved
-        (None: unknown, read it). Never the transcript, never the ``data`` blob."""
+        (None: unknown, read it). Never the transcript, never the ``data`` blob. A held call the caller
+        cannot read comes back as ``{id, access: None}`` and nothing else."""
         ...
 
     async def list_meetings(
