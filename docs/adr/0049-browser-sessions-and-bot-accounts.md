@@ -61,8 +61,8 @@ What already existed, checked in the tree on 2026-10-13:
    the caller may use, then a guest bot as before. The bot restores the profile from meeting-api with
    its MeetingToken (`GET /internal/browser-session/{session_uid}`, session-profile.v1) instead of
    holding a store key, and writes the rotated session back to the same account. An account serves
-   up to VEXA_BOT_ACCOUNT_MAX_MEETINGS (default 10) live meetings at once, and the newest live bot on it
-   writes back (amended 16 Nov 2026, founder). A signed-out join flips the account to `signed_out`, and the meeting's data names the
+   up to VEXA_BOT_ACCOUNT_MAX_MEETINGS (default 10) live meetings at once; every bot writes its whole
+   profile back and the last write wins (amended 16 Nov 2026, founder). A signed-out join flips the account to `signed_out`, and the meeting's data names the
    remedy (`browser_session_open`) so the agent can offer "sign in again" in one tap.
 4. **The company bot** is a bot account owned by `company`. The admin account creates and deletes
    it. Who may use it is the company's policy `company_bot_use: all | admins | none`, default

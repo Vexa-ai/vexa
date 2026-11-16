@@ -631,48 +631,22 @@ def test_the_write_back_of_an_account_bot_goes_to_the_account(rig):
     assert bad.status_code == 422
 
 
-def test_two_bots_on_one_account_both_restore_and_only_the_last_one_out_writes_back(rig):
-    """Founder, 16 Nov 2026: many bots per account, and a write-back never lets an older profile replace a
-    newer one: while another bot still uses the account, a leaving bot's write-back is deferred."""
+def test_two_bots_on_one_account_both_restore_and_both_write_back_last_wins(rig):
+    """Founder, 16 Nov 2026: many bots per account. Each restores the account's profile; each write-back
+    replaces the whole stored profile and the last one wins, with nothing deferred or starved."""
     acct = rig.seed(f"user:{OWNER}")
     assert _spawn(rig).status_code == 201
     first = _inv(rig)
-    r2 = _spawn(rig, native="abc-defg-hik")
-    assert r2.status_code == 201, r2.text
+    assert _spawn(rig, native="abc-defg-hik").status_code == 201
     second = _inv(rig)
-    for inv in (first, second):   # each live bot restores the account's profile
+    for inv in (first, second):
         r = rig.client.get(urlsplit(inv["sessionRestoreUrl"]).path, headers={"Authorization": f"Bearer {inv['token']}"})
         assert r.status_code == 200, r.text
-    # the first bot leaves while the second is still in its meeting: deferred, nothing written
-    w = rig.client.put(urlsplit(first["sessionWritebackUrl"]).path, headers={"Authorization": f"Bearer {first['token']}"},
-                       json=_files_body({"Default/Cookies": b"older"}))
-    assert w.status_code == 200 and w.json().get("deferred"), w.text
-    assert dict(rig.broker.files[acct["id"]]) != {"Default/Cookies": b"older"}
-    # end the first meeting; the second bot is now the last one out and writes back
-    first_mid = next(m["id"] for m in rig.repo._meetings.values()
-                     if m.get("native_meeting_id") not in ("abc-defg-hik",) and (m.get("data") or {}).get("bot_account_id"))
-    rig.repo._meetings[first_mid]["status"] = "completed"
-    w = rig.client.put(urlsplit(second["sessionWritebackUrl"]).path, headers={"Authorization": f"Bearer {second['token']}"},
-                       json=_files_body({"Default/Cookies": b"newest"}))
-    assert w.status_code == 200 and not w.json().get("deferred"), w.text
-    assert dict(rig.broker.files[acct["id"]]) == {"Default/Cookies": b"newest"}
-
-
-def test_the_newest_bot_writes_back_even_while_an_older_one_is_live(rig):
-    """Review M2: an always-busy account still refreshes: the newest live bot writes, older ones defer."""
-    acct = rig.seed(f"user:{OWNER}")
-    assert _spawn(rig).status_code == 201
-    older = _inv(rig)
-    assert _spawn(rig, native="abc-defg-hik").status_code == 201
-    newer = _inv(rig)
-    w = rig.client.put(urlsplit(newer["sessionWritebackUrl"]).path, headers={"Authorization": f"Bearer {newer['token']}"},
-                       json=_files_body({"Default/Cookies": b"newer"}))
-    assert w.status_code == 200 and not w.json().get("deferred"), w.text
-    assert dict(rig.broker.files[acct["id"]]) == {"Default/Cookies": b"newer"}
-    w = rig.client.put(urlsplit(older["sessionWritebackUrl"]).path, headers={"Authorization": f"Bearer {older['token']}"},
-                       json=_files_body({"Default/Cookies": b"older"}))
-    assert w.status_code == 200 and w.json().get("deferred"), w.text
-    assert dict(rig.broker.files[acct["id"]]) == {"Default/Cookies": b"newer"}
+    for inv, jar in ((second, b"second"), (first, b"first")):
+        w = rig.client.put(urlsplit(inv["sessionWritebackUrl"]).path, headers={"Authorization": f"Bearer {inv['token']}"},
+                           json=_files_body({"Default/Cookies": jar}))
+        assert w.status_code == 200 and w.json().get("written") == 1, w.text
+    assert dict(rig.broker.files[acct["id"]]) == {"Default/Cookies": b"first"}
 
 
 def test_an_explicit_account_at_its_limit_is_refused_plainly(rig, monkeypatch):

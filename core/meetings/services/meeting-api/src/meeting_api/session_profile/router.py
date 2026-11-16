@@ -188,15 +188,9 @@ def build_router(
             raise HTTPException(status_code=422, detail=str(e))
 
         if account_id:
-            others = await meeting_repo.count_active_by_userdata(f"bot-account:{account_id}",
-                                                                 newer_than_meeting_id=meeting_id)
-            if others:
-                # A NEWER live bot on this account restored a newer-or-equal sign-in and will write it back
-                # itself: this older one defers, so an older profile never replaces a newer one (founder:
-                # «fix that»). The newest live bot always writes, so an always-busy account still refreshes.
-                log_event("session_writeback_deferred", audience="system", span="session.writeback",
-                          meeting_id=str(meeting_id), fields={"bot_account_id": account_id, "others": others})
-                return {"written": 0, "bytes": 0, "deferred": "other bots still use this account"}
+            # Many bots may share one account. Each uploads a WHOLE signed-in profile that replaces the stored one
+            # in one put, and every live bot's profile is valid, so the last write simply wins: no deferral (a
+            # deferral starved an always-busy account of any write-back; review 16 Nov 2026).
             try:
                 await bot_accounts.write_back(account_id, files)
             except Exception as e:  # noqa: BLE001 — any store failure is one attributed 502

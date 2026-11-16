@@ -186,8 +186,7 @@ class SqlAlchemyMeetingRepo:
             m = (await db.execute(stmt)).scalars().first()
             return _row_to_dict(m) if m else None
 
-    async def count_active_by_userdata(self, userdata_s3_path, exclude_meeting_id=None,
-                                       newer_than_meeting_id=None) -> int:
+    async def count_active_by_userdata(self, userdata_s3_path, exclude_meeting_id=None) -> int:
         from sqlalchemy import func, select
 
         from ..sessions.models import Meeting
@@ -203,8 +202,6 @@ class SqlAlchemyMeetingRepo:
             )
             if exclude_meeting_id is not None:
                 stmt = stmt.where(Meeting.id != exclude_meeting_id)
-            if newer_than_meeting_id is not None:
-                stmt = stmt.where(Meeting.id > newer_than_meeting_id)
             return int((await db.execute(stmt)).scalar() or 0)
 
     async def latest_auth_session(self, userdata_s3_path) -> Optional[dict]:
