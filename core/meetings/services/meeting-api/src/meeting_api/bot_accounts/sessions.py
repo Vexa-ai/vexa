@@ -10,6 +10,8 @@ still signed in. Both are records, never rows:
                        token_hash, expires_at}
     botsession:user:<user_id>   the one open session a person may hold (SET NX)
     botsessions:open  sorted set of ``session:<id>`` / ``check:<id>`` by expiry, the reaper's index
+                      and the deployment-wide count of browser pods (``admit``: at most N at once)
+    botsession:opens:<user_id>  sorted set of this person's opens by time (``rate_hit``: N per window)
 
 Each record lives ``timeout + RECORD_MARGIN_S`` so the reaper still finds an expired one and stops its
 workload. The workload's bearer is random and stored only as its SHA-256; it is compared with
@@ -32,6 +34,7 @@ SESSION_PREFIX = "botsession:"
 CHECK_PREFIX = "botcheck:"
 USER_PREFIX = "botsession:user:"
 OPEN_INDEX = "botsessions:open"
+RATE_PREFIX = "botsession:opens:"
 #: How long a record outlives its own expiry, so the reaper can still stop its workload.
 RECORD_MARGIN_S = 300
 OPEN_STATUSES = ("starting", "ready")
@@ -79,6 +82,8 @@ class SessionStore(Protocol):
     async def index(self, member: str, expires_at: float) -> None: ...
     async def expired(self, now: float) -> list[str]: ...
     async def unindex(self, member: str) -> None: ...
+    async def admit(self, member: str, expires_at: float, *, cap: int) -> bool: ...
+    async def rate_hit(self, user_id: int, now: float, *, window_s: int, limit: int) -> bool: ...
 
 
 def _key(kind: str, record_id: str) -> str:
@@ -127,6 +132,28 @@ class RedisSessionStore:
     async def unindex(self, member):
         await self._r.zrem(OPEN_INDEX, member)
 
+    async def admit(self, member, expires_at, *, cap):
+        """Index ``member`` only while the deployment holds fewer than ``cap`` open sessions and checks.
+        Add first, then count: two replicas racing for the last place may both be refused, never both
+        admitted, so the cap holds across every meeting-api replica sharing this Redis."""
+        await self._r.zadd(OPEN_INDEX, {member: float(expires_at)})
+        if int(await self._r.zcard(OPEN_INDEX)) > int(cap):
+            await self._r.zrem(OPEN_INDEX, member)
+            return False
+        return True
+
+    async def rate_hit(self, user_id, now, *, window_s, limit):
+        """Count one open for ``user_id`` unless it already made ``limit`` in the last ``window_s``."""
+        key = f"{RATE_PREFIX}{int(user_id)}"
+        await self._r.zremrangebyscore(key, "-inf", float(now) - window_s)
+        member = f"{float(now):.6f}:{secrets.token_hex(4)}"
+        await self._r.zadd(key, {member: float(now)})
+        await self._r.expire(key, max(1, int(window_s)))
+        if int(await self._r.zcard(key)) > int(limit):
+            await self._r.zrem(key, member)
+            return False
+        return True
+
 
 class InMemorySessionStore:
     """``SessionStore`` in a dict — the app factory's default and a test double. TTLs are kept and
@@ -136,6 +163,7 @@ class InMemorySessionStore:
         self._clock = clock
         self._kv: dict[str, tuple[float, str]] = {}
         self._index: dict[str, float] = {}
+        self._opens: dict[int, list[float]] = {}
 
     def _get(self, key):
         hit = self._kv.get(key)
@@ -175,3 +203,17 @@ class InMemorySessionStore:
 
     async def unindex(self, member):
         self._index.pop(member, None)
+
+    async def admit(self, member, expires_at, *, cap):
+        if member not in self._index and len(self._index) >= int(cap):
+            return False
+        self._index[member] = float(expires_at)
+        return True
+
+    async def rate_hit(self, user_id, now, *, window_s, limit):
+        recent = [t for t in self._opens.get(int(user_id), []) if t > float(now) - window_s]
+        if len(recent) >= int(limit):
+            self._opens[int(user_id)] = recent
+            return False
+        self._opens[int(user_id)] = recent + [float(now)]
+        return True

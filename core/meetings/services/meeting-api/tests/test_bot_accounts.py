@@ -257,9 +257,10 @@ def test_a_workload_that_stops_before_saving_fails_the_session(rig):
     assert rig.open().status_code == 201  # the hold is released
 
 
-def test_a_company_session_needs_the_admin_account(rig):
+def test_a_company_session_needs_the_admin_account_or_an_instance_admin(rig):
     assert rig.open(owner="company").status_code == 403
-    assert rig.open(uid=PERSON_ADMIN, owner="company").status_code == 403
+    # P14 (rev 4.1): under VEXA_BROWSER_BOTS_WHO=all (the default) an instance admin manages company accounts.
+    assert rig.open(uid=PERSON_ADMIN, owner="company").status_code == 201
     r = rig.open(uid=ADMIN_ACCOUNT, owner="company")
     assert r.status_code == 201 and r.json()["owner"] == "company"
 
@@ -348,7 +349,7 @@ def test_list_marks_mine_and_usable_under_each_policy(rig):
     rig.policy = "all"
     assert listing(OWNER)[1][company["id"]] == (False, True)
     rig.policy = "none"
-    assert company["id"] not in listing(PERSON_ADMIN)[1]
+    assert listing(PERSON_ADMIN)[1][company["id"]] == (False, False)      # under `all` an instance admin manages it
     assert listing(ADMIN_ACCOUNT)[1][company["id"]] == (False, False)     # the admin account manages it
     assert listing(ADMIN_ACCOUNT)[1][company["id"]] == (False, False)
 
@@ -358,7 +359,7 @@ def test_delete(rig):
     company = rig.seed("company")
     theirs = rig.seed(f"user:{OTHER}")
     assert rig.client.delete(f"/bot-accounts/{theirs['id']}", headers=rig.as_(OWNER)).status_code == 404
-    assert rig.client.delete(f"/bot-accounts/{company['id']}", headers=rig.as_(PERSON_ADMIN)).status_code == 403
+    assert rig.client.delete(f"/bot-accounts/{company['id']}", headers=rig.as_(OWNER)).status_code == 403
     assert rig.client.delete(f"/bot-accounts/{mine['id']}", headers=rig.as_(OWNER)).json() == {
         "account_id": mine["id"], "deleted": True}
     assert rig.client.delete(f"/bot-accounts/{company['id']}", headers=rig.as_(ADMIN_ACCOUNT)).status_code == 200
@@ -891,7 +892,7 @@ def test_with_sessions_for_admins_roles_that_cannot_be_read_refuse(rig):
     assert len(rig.runtime.specs) == 0
 
 
-@pytest.mark.parametrize("who", ["all", "admin_account"])
+@pytest.mark.parametrize("who", ["admin_account"])
 def test_outside_admins_an_instance_admin_still_cannot_sign_in_or_delete_a_company_account(rig, who):
     rig.ba.settings = Settings(callback_base=BASE, sessions_who=who)
     assert rig.open(PERSON_ADMIN, owner="company").status_code == 403
@@ -962,7 +963,7 @@ def test_a_customer_listing_shows_no_company_account(rig, who):
 # ── GET /bot-accounts answers manages_company: the panel shows company buttons from it alone (L4 review M3) ──
 @pytest.mark.parametrize("who,uid,want", [
     ("admins", PERSON_ADMIN, True), ("admins", ADMIN_ACCOUNT, True), ("admins", OWNER, False),
-    ("all", PERSON_ADMIN, False), ("all", ADMIN_ACCOUNT, True), ("admin_account", PERSON_ADMIN, False),
+    ("all", PERSON_ADMIN, True), ("all", ADMIN_ACCOUNT, True), ("all", OWNER, False), ("admin_account", PERSON_ADMIN, False),
     ("admin_account", ADMIN_ACCOUNT, True), ("bogus", PERSON_ADMIN, False),
 ])
 def test_the_list_answers_manages_company_as_every_company_action_is_checked(rig, who, uid, want):
@@ -985,3 +986,216 @@ def test_the_list_answers_manages_company_false_when_roles_cannot_be_read(rig):
             return dict(NO_ROLES)
     rig.ba.admin = Silent()
     assert rig.client.get("/bot-accounts", headers=rig.as_(PERSON_ADMIN)).json()["manages_company"] is False
+
+
+# ── P14 · signed-in bots for all (doc:deliver/s1a-design rev 4.1) ─────────────────────────────────────────────
+from meeting_api.bot_accounts.service import BROWSERS_FULL
+
+
+def _all(rig, **kw):
+    rig.ba.settings = Settings(callback_base=BASE, sessions_who="all", **kw)
+    return rig
+
+
+def _check(rig, uid, aid):
+    return rig.client.post(f"/bot-accounts/{aid}/verify", headers=rig.as_(uid))
+
+
+def test_p14_under_all_a_customer_signs_in_their_own_and_company_accounts_stay_with_admins(rig):
+    _all(rig)
+    assert rig.open(OWNER).status_code == 201                          # their own: yes
+    assert rig.open(OTHER, owner="company").status_code == 403          # a company one: no
+    company = rig.seed("company")
+    assert rig.client.delete(f"/bot-accounts/{company['id']}", headers=rig.as_(OTHER)).status_code == 403
+    assert rig.open(PERSON_ADMIN, owner="company").status_code == 201   # an instance admin: yes
+    assert rig.client.delete(f"/bot-accounts/{company['id']}", headers=rig.as_(PERSON_ADMIN)).status_code == 200
+
+
+def test_p14_admin_account_mode_stays_narrow_for_company_accounts(rig):
+    rig.ba.settings = Settings(callback_base=BASE, sessions_who="admin_account")
+    assert rig.open(PERSON_ADMIN, owner="company").status_code == 403
+    assert rig.open(ADMIN_ACCOUNT, owner="company").status_code == 201
+
+
+def test_p14_a_check_takes_the_one_browser_claim(rig):
+    _all(rig)
+    acct = rig.seed(f"user:{OWNER}")
+    r = _check(rig, OWNER, acct["id"])
+    assert r.status_code == 202, r.text
+    assert rig.open(OWNER).status_code == 409                           # a check open: no second browser
+    assert _check(rig, OWNER, acct["id"]).status_code == 409
+    assert rig.open(OTHER).status_code == 201                           # somebody else is unaffected
+
+
+def test_p14_a_session_blocks_a_check(rig):
+    _all(rig)
+    acct = rig.seed(f"user:{OWNER}")
+    assert rig.open(OWNER).status_code == 201
+    assert _check(rig, OWNER, acct["id"]).status_code == 409
+
+
+def test_p14_a_check_result_releases_the_claim(rig):
+    _all(rig)
+    acct = rig.seed(f"user:{OWNER}")
+    cid = _check(rig, OWNER, acct["id"]).json()["check_id"]
+    token = rig.last_env()["token"]
+    r = rig.client.post(f"/internal/bot-accounts/checks/{cid}", headers={"Authorization": f"Bearer {token}"},
+                        json={"logged_in": True, "detail": "ok"})
+    assert r.status_code == 200, r.text
+    assert asyncio.run(rig.redis.get(f"botsession:user:{OWNER}")) is None
+    assert rig.open(OWNER).status_code == 201                           # no 180 s wait
+
+
+def test_p14_the_reaper_releases_an_expired_checks_claim(rig):
+    _all(rig)
+    acct = rig.seed(f"user:{OWNER}")
+    cid = _check(rig, OWNER, acct["id"]).json()["check_id"]
+    now = rig.ba.clock()
+    rig.ba.clock = lambda: now + 10_000
+    assert asyncio.run(rig.ba.reap()) == 1
+    assert f"bc-{cid}" in rig.runtime.deleted
+    # The claim's own Redis TTL has not run out (fakeredis keeps real time): only the reaper freed it.
+    assert asyncio.run(rig.redis.get(f"botsession:user:{OWNER}")) is None
+    rig.ba.clock = lambda: now
+    assert rig.open(OWNER).status_code == 201
+
+
+def test_p14_a_stale_claim_whose_check_is_gone_is_taken_over(rig):
+    _all(rig)
+    asyncio.run(rig.redis.set(f"botsession:user:{OWNER}", "e" * 32, ex=600))   # a claim with no record
+    assert rig.open(OWNER).status_code == 201
+
+
+def test_p14_a_failed_check_spawn_releases_the_claim(rig):
+    _all(rig)
+    acct = rig.seed(f"user:{OWNER}")
+    rig.runtime._fail = True
+    assert _check(rig, OWNER, acct["id"]).status_code == 502
+    rig.runtime._fail = False
+    assert rig.open(OWNER).status_code == 201
+
+
+def test_p14_the_deployment_ceiling_is_a_429_before_any_workload(rig):
+    _all(rig, max_browsers=10)
+    users = list(range(1000, 1011))
+    for uid in users[:10]:
+        assert rig.open(uid).status_code == 201
+    before = len(rig.runtime.specs)
+    r = rig.open(users[10])
+    assert r.status_code == 429 and BROWSERS_FULL in r.text
+    assert len(rig.runtime.specs) == before
+    acct = rig.seed(f"user:{users[10]}")
+    assert _check(rig, users[10], acct["id"]).status_code == 429        # a check counts the same
+    assert asyncio.run(rig.redis.get(f"botsession:user:{users[10]}")) is None   # the refused claim is released
+    assert asyncio.run(rig.redis.zcard("botsessions:open")) == 10
+    # One closes: the next fits.
+    open_ids = asyncio.run(rig.redis.zrange("botsessions:open", 0, -1))
+    rid = open_ids[0].split(":", 1)[1]
+    owner = json.loads(asyncio.run(rig.redis.get(f"botsession:{rid}")))["user_id"]
+    assert rig.client.delete(f"/bot-accounts/sessions/{rid}", headers=rig.as_(owner)).status_code == 200
+    assert rig.open(users[10]).status_code == 201
+
+
+def test_p14_the_ceiling_holds_across_replicas_sharing_redis(rig):
+    """Two meeting-api replicas over one Redis: the cap is the deployment's, not each process's."""
+    _all(rig, max_browsers=2)
+    other = BotAccounts(broker=rig.broker, runtime=rig.runtime, store=RedisSessionStore(rig.redis),
+                        admin=rig.ba.admin, upstream=rig.upstream, settings=rig.ba.settings,
+                        policy=lambda: rig.policy)
+    assert rig.open(1001).status_code == 201
+    asyncio.run(other.open_session(1002, {"platform": "google"}))
+    from meeting_api.bot_accounts import BotAccountRefused
+    with pytest.raises(BotAccountRefused) as e:
+        asyncio.run(other.open_session(1003, {"platform": "google"}))
+    assert e.value.status == 429
+    assert rig.open(1004).status_code == 429
+
+
+def test_p14_the_seventh_open_in_an_hour_is_a_429(rig):
+    _all(rig, opens_per_hour=6)
+    acct = rig.seed(f"user:{OWNER}")
+    for i in range(6):
+        if i % 2:
+            r = _check(rig, OWNER, acct["id"])
+            rid = r.json()["check_id"]
+            rig.client.post(f"/internal/bot-accounts/checks/{rid}",
+                            headers={"Authorization": f"Bearer {rig.last_env()['token']}"},
+                            json={"logged_in": True, "detail": ""})
+        else:
+            r = rig.open(OWNER)
+            assert rig.client.delete(f"/bot-accounts/sessions/{r.json()['session_id']}",
+                                     headers=rig.as_(OWNER)).status_code == 200
+        assert r.status_code in (201, 202), (i, r.text)
+    before = len(rig.runtime.specs)
+    r = rig.open(OWNER)
+    assert r.status_code == 429 and "in the last hour" in r.text
+    assert _check(rig, OWNER, acct["id"]).status_code == 429
+    assert len(rig.runtime.specs) == before
+    assert asyncio.run(rig.redis.zcard("botsessions:open")) == 0       # a refused open holds no ceiling place
+    assert rig.open(OTHER).status_code == 201                           # per person
+
+
+def test_p14_the_hourly_window_slides():
+    from meeting_api.bot_accounts import InMemorySessionStore
+
+    async def go(store):
+        assert all([await store.rate_hit(1, 1000.0 + i, window_s=3600, limit=2) for i in range(2)])
+        assert not await store.rate_hit(1, 1100.0, window_s=3600, limit=2)
+        assert await store.rate_hit(1, 1000.0 + 3601, window_s=3600, limit=2)
+        assert await store.admit("session:a", 1.0, cap=1) and not await store.admit("session:b", 1.0, cap=1)
+        await store.unindex("session:a")
+        assert await store.admit("session:b", 1.0, cap=1)
+    asyncio.run(go(InMemorySessionStore()))
+    asyncio.run(go(RedisSessionStore(fakeredis.aioredis.FakeRedis(decode_responses=True))))
+
+
+def test_p14_settings_read_the_bounds_from_env():
+    s = Settings.from_env({})
+    assert (s.max_browsers, s.opens_per_hour, s.max_accounts_per_owner) == (10, 6, 3)
+    s = Settings.from_env({"VEXA_BOT_ACCOUNTS_MAX_BROWSERS": "4", "VEXA_BOT_ACCOUNTS_OPENS_PER_HOUR": "2",
+                           "VEXA_BOT_ACCOUNTS_MAX_PER_OWNER": "1"})
+    assert (s.max_browsers, s.opens_per_hour, s.max_accounts_per_owner) == (4, 2, 1)
+
+
+def test_p14_at_most_three_saved_accounts_per_owner_and_platform(rig):
+    _all(rig)
+    for _ in range(3):
+        rig.seed(f"user:{OWNER}", platform="google")
+    rig.seed(f"user:{OWNER}", platform="zoom")
+    rig.seed(f"user:{OTHER}", platform="google")
+    before = len(rig.runtime.specs)
+    r = rig.open(OWNER)                                                 # a new google account: refused early
+    assert r.status_code == 409 and "at most 3" in r.text
+    assert len(rig.runtime.specs) == before
+    assert rig.open(OWNER, platform="zoom").status_code == 201          # another platform has room
+    rig.client.delete(f"/bot-accounts/sessions/{rig.last_env()['session_id']}", headers=rig.as_(OWNER))
+    existing = next(a for a in rig.broker.accounts.values() if a["owner"] == f"user:{OWNER}" and a["platform"] == "google")
+    assert rig.open(OWNER, account_id=existing["id"]).status_code == 201   # signing one in again is not a new one
+
+
+def test_p14_the_cap_is_checked_again_at_save(rig):
+    _all(rig)
+    rig.seed(f"user:{OWNER}", platform="google")
+    rig.seed(f"user:{OWNER}", platform="google")
+    sid = rig.open(OWNER).json()["session_id"]                          # two saved: room for one
+    token = rig.last_env()["token"]
+    rig.seed(f"user:{OWNER}", platform="google")                        # a third lands meanwhile
+    r = rig.save(sid, token)
+    assert r.status_code == 409 and "at most 3" in r.text
+    assert sum(1 for a in rig.broker.accounts.values() if a["owner"] == f"user:{OWNER}") == 3
+
+
+def test_p14_an_explicit_bot_account_respects_the_feature_switch(rig, monkeypatch):
+    acct = rig.seed(f"user:{OWNER}", platform="google")
+    monkeypatch.setenv("VEXA_FEATURES", "")
+    r = rig.client.post("/bots", headers=rig.as_(OWNER),
+                        json={"platform": "google_meet", "native_meeting_id": "abc-defg-hij",
+                              "bot_account": acct["id"]})
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"]["reason"] == "feature_disabled"
+    assert not any("VEXA_BOT_CONFIG" in s["env"] for s in rig.runtime.specs)
+    monkeypatch.setenv("VEXA_FEATURES", "browser_bots")
+    r = rig.client.post("/bots", headers=rig.as_(OWNER),
+                        json={"platform": "google_meet", "native_meeting_id": "abc-defg-hij",
+                              "bot_account": acct["id"]})
+    assert r.status_code == 201, r.text

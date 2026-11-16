@@ -25,6 +25,7 @@ from typing import Any, Callable, Optional
 from ..bot_spawn.invocation import bot_profile
 from ..obs import log_event
 from ..webhooks import ssrf
+from . import feature as _feature
 from . import sessions as S
 from .broker import (
     NOT_CONFIGURED,
@@ -100,6 +101,13 @@ SESSIONS_WHO_ENV = "VEXA_BROWSER_BOTS_WHO"
 DEFAULT_LIST_TIMEOUT_S = 2.0
 SESSIONS_ADMIN_ONLY = "browser sessions are open only to this deployment's admin account"
 SESSIONS_ADMINS_ONLY = "browser sessions are open only to this deployment's admins"
+#: P14 (doc:deliver/s1a-design rev 4.1): the cost bounds that make sessions safe to open to everyone.
+MAX_BROWSERS_ENV = "VEXA_BOT_ACCOUNTS_MAX_BROWSERS"
+OPENS_PER_HOUR_ENV = "VEXA_BOT_ACCOUNTS_OPENS_PER_HOUR"
+MAX_PER_OWNER_ENV = "VEXA_BOT_ACCOUNTS_MAX_PER_OWNER"
+OPENS_WINDOW_S = 3600
+BROWSERS_FULL = "every sign-in browser on this deployment is in use — try again in a few minutes"
+OPENS_EXHAUSTED = "you have opened {limit} sign-in or check browsers in the last hour — try again later"
 
 
 def _sessions_who(raw: Optional[str]) -> str:
@@ -127,6 +135,13 @@ class Settings:
     #: also sign in and delete company accounts) or ``admin_account`` (the deployment's admin account alone);
     #: everyone else is refused 403 before any workload starts. Anything else reads as ``admin_account``.
     sessions_who: str = "all"
+    #: ``VEXA_BOT_ACCOUNTS_MAX_BROWSERS``: sign-in plus check workloads open at once across the deployment
+    #: (each 1 CPU, 2.5 GB); one more is a 429 before any workload starts.
+    max_browsers: int = 10
+    #: ``VEXA_BOT_ACCOUNTS_OPENS_PER_HOUR``: sign-in sessions plus checks one person may start per hour; 429 over it.
+    opens_per_hour: int = 6
+    #: ``VEXA_BOT_ACCOUNTS_MAX_PER_OWNER``: saved accounts one owner may hold per platform; a new one over it is 409.
+    max_accounts_per_owner: int = 3
 
     @classmethod
     def from_env(cls, env: Optional[dict] = None) -> "Settings":
@@ -146,6 +161,9 @@ class Settings:
             host_template=(env.get("VEXA_BOT_ACCOUNTS_WORKLOAD_HOST") or "vexa-{workload_id}"),
             signin_extra_hosts=parse_signin_extra_hosts(env.get(SIGNIN_EXTRA_HOSTS_ENV)),
             sessions_who=_sessions_who(env.get(SESSIONS_WHO_ENV)),
+            max_browsers=_int(MAX_BROWSERS_ENV, 10),
+            opens_per_hour=_int(OPENS_PER_HOUR_ENV, 6),
+            max_accounts_per_owner=_int(MAX_PER_OWNER_ENV, 3),
         )
 
 
@@ -161,6 +179,8 @@ class BotAccounts:
     resolver: Optional[Callable[[str], list]] = None
     clock: Callable[[], float] = time.time
     policy: Callable[[], str] = company_bot_use
+    #: Whether ``VEXA_FEATURES`` serves ``browser_bots`` (read on every call, as the route gate does).
+    feature_on: Callable[[], bool] = _feature.switched_on
 
     # ── shared ────────────────────────────────────────────────────────────────────────────────
     @property
@@ -244,10 +264,12 @@ class BotAccounts:
     # ── browser sessions ──────────────────────────────────────────────────────────────────────
     def _manages_company(self, roles: dict) -> bool:
         """May this person sign in or delete a company account? The admin account always; an instance
-        admin only where ``VEXA_BROWSER_BOTS_WHO=admins``. Roles fail closed (``policy.NO_ROLES``)."""
+        admin where ``VEXA_BROWSER_BOTS_WHO`` is ``admins`` or ``all`` (P14: opening sessions to everyone
+        keeps company accounts with the instance admins); ``admin_account`` stays the admin account alone.
+        Roles fail closed (``policy.NO_ROLES``)."""
         if roles.get("admin_account") is True:
             return True
-        return self.settings.sessions_who == "admins" and roles.get("is_admin") is True
+        return self.settings.sessions_who in ("admins", "all") and roles.get("is_admin") is True
 
     async def _sessions_allowed(self, user_id: int) -> None:
         """``VEXA_BROWSER_BOTS_WHO=admins``: anyone but an instance admin or the admin account is refused
@@ -259,6 +281,54 @@ class BotAccounts:
         if not self._manages_company(roles):
             raise BotAccountRefused(403, SESSIONS_ADMINS_ONLY if self.settings.sessions_who == "admins"
                                     else SESSIONS_ADMIN_ONLY)
+
+    async def _claim(self, user_id: int, record_id: str, *, ttl: int, now: float) -> None:
+        """One open browser per person: a sign-in session or a check, whichever came first. A claim whose
+        record is no longer open (finished, expired, gone) is released and taken over."""
+        held = await self.store.claim_user(user_id, record_id, ttl_s=ttl)
+        if held is None:
+            return
+        prior = await self.store.load("session", held)
+        open_statuses = S.OPEN_STATUSES
+        if prior is None:
+            prior, open_statuses = await self.store.load("check", held), S.CHECK_OPEN
+        if prior is not None and prior.get("status") in open_statuses and prior.get("expires_ts", 0) > now:
+            raise BotAccountRefused(409, f"you already have an open browser session ({held}) — close it first")
+        await self.store.release_user(user_id, held)
+        if await self.store.claim_user(user_id, record_id, ttl_s=ttl) is not None:
+            raise BotAccountRefused(409, "you already have an open browser session — close it first")
+
+    async def _admit(self, user_id: int, record_id: str, member: str, *, expires_ts: float, now: float) -> None:
+        """The cost bounds, after the claim and before any workload: the deployment's open browsers (the
+        reaper's index, admitted under the cap), then this person's opens per hour. Over either, nothing
+        is held (no index entry, no claim; a refusal at the ceiling spends none of their hourly opens)
+        and the answer is 429."""
+        if not await self.store.admit(member, expires_ts, cap=self.settings.max_browsers):
+            await self.store.release_user(user_id, record_id)
+            log_event("browser_session_ceiling", audience="system", level="warning", span="bot_accounts",
+                      user_id=user_id, fields={"max_browsers": self.settings.max_browsers})
+            raise BotAccountRefused(429, BROWSERS_FULL)
+        if not await self.store.rate_hit(user_id, now, window_s=OPENS_WINDOW_S,
+                                         limit=self.settings.opens_per_hour):
+            await self.store.unindex(member)
+            await self.store.release_user(user_id, record_id)
+            log_event("browser_session_rate_limited", audience="system", level="warning", span="bot_accounts",
+                      user_id=user_id, fields={"limit": self.settings.opens_per_hour})
+            raise BotAccountRefused(429, OPENS_EXHAUSTED.format(limit=self.settings.opens_per_hour))
+
+    async def _owner_platform_count(self, owner: str, platform: str) -> int:
+        broker = self._require()
+        try:
+            rows = await broker.list([owner], actor=owner)
+        except BrokerError as e:
+            raise BotAccountRefused(503, str(e)) from None
+        return sum(1 for a in rows if a.get("owner") == owner and a.get("platform") == platform)
+
+    async def _room_for_new_account(self, owner: str, platform: str) -> None:
+        cap = self.settings.max_accounts_per_owner
+        if await self._owner_platform_count(owner, platform) >= cap:
+            raise BotAccountRefused(409, f"at most {cap} saved {PLATFORM_LABELS[platform]} bot accounts per owner "
+                                         "— delete one, or sign an existing one in again")
 
     async def open_session(self, user_id: int, body: dict) -> dict:
         self._require()
@@ -290,24 +360,21 @@ class BotAccounts:
             roles = await self.admin.roles(user_id)
             if not self._manages_company(roles):
                 raise BotAccountRefused(403, "only the admin account may sign in a company bot account")
+        if account_id is None:
+            # Early answer for the saved-account cap; save_profile checks it again, under the claim.
+            await self._room_for_new_account(owner, platform)
 
         now = self.clock()
         timeout = self.settings.session_timeout_s
         ttl = timeout + S.RECORD_MARGIN_S
         session_id = S.new_id()
-        held = await self.store.claim_user(user_id, session_id, ttl_s=ttl)
-        if held is not None:
-            prior = await self.store.load("session", held)
-            if prior is not None and prior.get("status") in S.OPEN_STATUSES and prior.get("expires_ts", 0) > now:
-                raise BotAccountRefused(409, f"you already have an open browser session ({held}) — close it first")
-            await self.store.release_user(user_id, held)
-            if await self.store.claim_user(user_id, session_id, ttl_s=ttl) is not None:
-                raise BotAccountRefused(409, "you already have an open browser session — close it first")
+        expires_ts = now + timeout
+        await self._claim(user_id, session_id, ttl=ttl, now=now)
+        await self._admit(user_id, session_id, f"session:{session_id}", expires_ts=expires_ts, now=now)
 
         token = S.new_token()
         vnc_password = S.new_vnc_password()
         workload_id = f"bs-{session_id}"
-        expires_ts = now + timeout
         record = {
             "session_id": session_id, "user_id": int(user_id), "owner": owner, "platform": platform,
             "display_name": display_name, "account_id": account_id, "workload_id": workload_id,
@@ -316,7 +383,6 @@ class BotAccounts:
             "expires_at": _iso(expires_ts), "expires_ts": expires_ts,
         }
         await self.store.save("session", session_id, record, ttl_s=ttl)
-        await self.store.index(f"session:{session_id}", expires_ts)
         env_payload = {
             "mode": "signin", "session_id": session_id, "platform": platform, "token": token,
             "vnc_password": vnc_password,
@@ -429,6 +495,9 @@ class BotAccounts:
                 raise BotAccountRefused(409, "the bot account's owner or platform differs")
             display_name = display_name or current.get("display_name")
         else:
+            # P14: at most max_accounts_per_owner saved accounts per owner and platform. The person's one
+            # open browser (the claim) serialises this count against their own saves.
+            await self._room_for_new_account(owner, platform)
             account_id = new_account_id()
         account = {"owner": owner, "platform": platform,
                    "display_name": display_name or f"{PLATFORM_LABELS[platform]} bot account",
@@ -460,15 +529,17 @@ class BotAccounts:
         timeout = self.settings.check_timeout_s
         ttl = timeout + S.RECORD_MARGIN_S
         check_id = S.new_id()
+        expires_ts = now + timeout
+        # A check is a browser too: the same one-per-person claim and the same cost bounds as a session.
+        await self._claim(user_id, check_id, ttl=ttl, now=now)
+        await self._admit(user_id, check_id, f"check:{check_id}", expires_ts=expires_ts, now=now)
         token = S.new_token()
         workload_id = f"bc-{check_id}"
-        expires_ts = now + timeout
         rec = {"check_id": check_id, "user_id": int(user_id), "account_id": account_id,
                "platform": account["platform"], "workload_id": workload_id, "status": "checking",
                "detail": None, "token_hash": S.token_hash(token), "expires_at": _iso(expires_ts),
                "expires_ts": expires_ts}
         await self.store.save("check", check_id, rec, ttl_s=ttl)
-        await self.store.index(f"check:{check_id}", expires_ts)
         base = self.settings.callback_base
         env_payload = {
             "mode": "verify", "session_id": check_id, "platform": account["platform"], "token": token,
@@ -482,6 +553,7 @@ class BotAccounts:
             rec.update(status="failed")
             await self.store.save("check", check_id, rec, ttl_s=ttl)
             await self.store.unindex(f"check:{check_id}")
+            await self.store.release_user(user_id, check_id)
             raise
         log_event("bot_account_check_started", audience="user", span="bot_accounts", user_id=user_id,
                   fields={"account_id": account_id, "check_id": check_id})
@@ -518,6 +590,7 @@ class BotAccounts:
         ttl = max(1, int(rec["expires_ts"] - self.clock()) + S.RECORD_MARGIN_S)
         await self.store.save("check", check_id, rec, ttl_s=ttl)
         await self.store.unindex(f"check:{check_id}")
+        await self.store.release_user(rec["user_id"], check_id)
         log_event("bot_account_verified", audience="user", span="bot_accounts", user_id=rec["user_id"],
                   fields={"account_id": rec["account_id"], "state": state})
         return {"account_id": rec["account_id"], "state": state}, rec.get("workload_id")
@@ -563,6 +636,10 @@ class BotAccounts:
         if choice != "default":
             if not isinstance(choice, str) or not ACCOUNT_ID.match(choice):
                 raise BotAccountRefused(422, "bot_account must be a bot account id, 'default' or 'none'")
+            if not self.feature_on():
+                # VEXA_FEATURES without browser_bots closes the explicit signed-in path too, with the
+                # /bot-accounts routes' own refusal body.
+                raise BotAccountRefused(403, _feature.refusal())
             if platform is None:
                 raise BotAccountRefused(422, f"a {meeting_platform} bot cannot join as a bot account")
             account, _ = await self._get_account(choice, actor=owner_of(user_id))
@@ -679,6 +756,7 @@ class BotAccounts:
                 else:
                     rec.update(status="closed", detail="the check expired")
                     await self.store.save(kind, rid, rec, ttl_s=S.RECORD_MARGIN_S)
+                    await self.store.release_user(rec["user_id"], rid)
                 reaped += 1
             await self.store.unindex(member)
         return reaped
