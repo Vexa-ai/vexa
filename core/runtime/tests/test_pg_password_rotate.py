@@ -162,6 +162,35 @@ def test_exec_sends_stdin_on_channel_0_and_returns_the_status(sa, monkeypatch, c
     assert "does not exist" in err and "secret" not in err             # the statement line is never shown
 
 
+def test_the_exec_websocket_ignores_https_proxy(monkeypatch, tmp_path):
+    """websockets >= 15 reads HTTPS_PROXY by default: the exec connect passes proxy=None, so a proxy
+    in the environment never sees the API server's token or the stdin."""
+    import websockets.sync.client as wsc
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.setenv("https_proxy", "http://proxy.invalid:3128")
+    seen = {}
+
+    def connect(url, **kw):
+        seen.update(url=url, **kw)
+        return "ws"
+    monkeypatch.setattr(wsc, "connect", connect)
+    monkeypatch.setattr(rot.ssl, "create_default_context", lambda cafile: ("ctx", cafile))
+    assert rot._connect("wss://10.96.0.1:443/x", "tok", str(tmp_path / "ca.crt")) == "ws"
+    assert "proxy" in seen and seen["proxy"] is None
+    assert seen["additional_headers"] == {"Authorization": "Bearer tok"}
+    assert seen["ssl"] == ("ctx", str(tmp_path / "ca.crt"))
+
+
+def test_the_installed_websockets_takes_a_proxy_argument():
+    """The proxy=None above is a real parameter of the locked websockets (17.2), not ignored."""
+    import inspect
+
+    import websockets.sync.client as wsc
+
+    assert "proxy" in inspect.signature(wsc.connect).parameters
+
+
 def test_exec_reads_the_exit_code_of_a_failed_command(sa, monkeypatch):
     status = {"status": "Failure", "reason": "NonZeroExitCode",
               "details": {"causes": [{"reason": "ExitCode", "message": "3"}]}}

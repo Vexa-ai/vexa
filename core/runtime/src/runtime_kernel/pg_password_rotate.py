@@ -76,8 +76,11 @@ def restart(ns: str, deployment: str, now: Optional[str] = None) -> None:
 def _connect(url: str, token: str, cafile: str):
     from websockets.sync.client import connect          # in uv.lock (runtime dependency)
 
+    # proxy=None: websockets >= 15 reads HTTPS_PROXY from the environment by default; the exec goes
+    # straight to the API server, as every other call does (k8s_backend._api: trust_env=False).
     return connect(url, ssl=ssl.create_default_context(cafile=cafile), subprotocols=["v4.channel.k8s.io"],
-                   additional_headers={"Authorization": f"Bearer {token}"}, open_timeout=30, close_timeout=5)
+                   additional_headers={"Authorization": f"Bearer {token}"}, open_timeout=30, close_timeout=5,
+                   proxy=None)
 
 
 def exec_stdin(ns: str, pod: str, container: str, command: list[str], stdin: bytes,
