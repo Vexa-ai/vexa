@@ -723,14 +723,36 @@ securityContext:
 {{- end -}}
 
 {{/*
+The runtime's spawn backend, as the runtime itself reads RUNTIME_BACKEND (trimmed, lower-cased), so
+the chart and the runtime can never disagree: `K8s` is k8s here too (its ServiceAccount, RBAC and
+non-root Pod), not a root Pod with no ServiceAccount. Anything but k8s or docker fails the render.
+*/}}
+{{- define "vexa.runtimeBackend" -}}
+{{- $b := (.Values.runtime.backend | default "" | toString | trim | lower) -}}
+{{- if not (has $b (list "k8s" "docker")) -}}
+{{- fail (printf "runtime.backend must be k8s or docker, got %q" (toString .Values.runtime.backend)) -}}
+{{- end -}}
+{{- $b -}}
+{{- end -}}
+
+{{/*
 The pod securityContext for a Vexa image that runs as 10001 but whose workload here needs root: the
 runtime on the docker backend, which opens the container engine's socket. The global pod context
-plus uid and gid 0; the global values win where both are set. Same `deliver` gate.
+(seccomp and the rest) plus uid and gid 0, and uid and gid 0 win over any global uid or gid: the
+workload cannot run without them. A global runAsNonRoot: true contradicts it, so the render fails
+and names the conflict instead of rendering a Pod the kubelet would refuse. Same `deliver` gate.
 */}}
 {{- define "vexa.rootPodSecurityContext" -}}
 {{- if eq (include "vexa.securityContextDeliver" .) "true" -}}
+{{- $global := .Values.global.podSecurityContext | default dict -}}
+{{- if $global.runAsNonRoot -}}
+{{- fail "runtime.backend=docker runs the runtime as root (it opens the container engine's socket), and global.podSecurityContext.runAsNonRoot is true: use runtime.backend=k8s, or unset runAsNonRoot" -}}
+{{- end -}}
+{{- $ctx := deepCopy $global -}}
+{{- $_ := set $ctx "runAsUser" 0 -}}
+{{- $_ := set $ctx "runAsGroup" 0 -}}
 securityContext:
-  {{- toYaml (merge (deepCopy (.Values.global.podSecurityContext | default dict)) (dict "runAsUser" 0 "runAsGroup" 0)) | nindent 2 }}
+  {{- toYaml $ctx | nindent 2 }}
 {{- end -}}
 {{- end -}}
 

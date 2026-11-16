@@ -24,7 +24,7 @@ spec:
         {{- end }}
     spec:
       enableServiceLinks: false
-      {{- if eq .Values.runtime.backend "k8s" }}
+      {{- if eq (include "vexa.runtimeBackend" .) "k8s" }}
       # The k8s backend only calls the API server (kubectl, its ServiceAccount): it holds no engine
       # socket and starts no process as another uid, so it runs as the chart's unprivileged uid, the
       # image's USER. The docker backend asks for root to open the engine's socket.
@@ -36,7 +36,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if eq .Values.runtime.backend "k8s" }}
+      {{- if eq (include "vexa.runtimeBackend" .) "k8s" }}
       # The runtime spawns bot/agent Pods via kubectl — bind the SA carrying the pod-spawn RBAC.
       serviceAccountName: {{ include "vexa.componentName" (list . "runtime") }}
       {{- end }}
@@ -54,14 +54,14 @@ spec:
           env:
             {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
             - name: RUNTIME_BACKEND
-              value: {{ .Values.runtime.backend | quote }}
-            {{- if eq .Values.runtime.backend "k8s" }}
+              value: {{ include "vexa.runtimeBackend" . | quote }}
+            {{- if eq (include "vexa.runtimeBackend" .) "k8s" }}
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
             {{- end }}
-            {{- if eq .Values.runtime.backend "docker" }}
+            {{- if eq (include "vexa.runtimeBackend" .) "docker" }}
             # The spawned bot/worker join the runtime's namespace network. On k8s the kernel resolves
             # services by DNS; DOCKER_NETWORK only matters for the docker backend (single-node fallback).
             - name: DOCKER_NETWORK
@@ -139,7 +139,7 @@ spec:
             # token to the model proxy (deployment-model-proxy.yaml) instead of a key.
             - name: LOG_LEVEL
               value: {{ .Values.runtime.logLevel | default "info" | quote }}
-            {{- if eq .Values.runtime.backend "k8s" }}
+            {{- if eq (include "vexa.runtimeBackend" .) "k8s" }}
             # Scheduling parity for SPAWNED Pods (#673). A `kubectl run` bot/agent Pod is not a child of
             # this Deployment, so it inherits none of the nodeSelector/tolerations applied below at the
             # pod spec (:143-154). Hand the runtime its OWN scheduling constraints as JSON so the spawn
@@ -242,10 +242,10 @@ spec:
             {{- with .Values.runtime.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if or (eq .Values.runtime.backend "docker") (include "vexa.extraCA.enabled" .) }}
+          {{- if or (eq (include "vexa.runtimeBackend" .) "docker") (include "vexa.extraCA.enabled" .) }}
           volumeMounts:
           {{- end }}
-          {{- if eq .Values.runtime.backend "docker" }}
+          {{- if eq (include "vexa.runtimeBackend" .) "docker" }}
             - name: docker-sock
               mountPath: /var/run/docker.sock
           {{- end }}
@@ -273,11 +273,11 @@ spec:
             timeoutSeconds: 5
           resources:
             {{- toYaml .Values.runtime.resources | nindent 12 }}
-      {{- if or (eq .Values.runtime.backend "docker") (include "vexa.extraCA.enabled" .) }}
+      {{- if or (eq (include "vexa.runtimeBackend" .) "docker") (include "vexa.extraCA.enabled" .) }}
       volumes:
       {{- end }}
         {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{ end }}
-      {{- if eq .Values.runtime.backend "docker" }}
+      {{- if eq (include "vexa.runtimeBackend" .) "docker" }}
         - name: docker-sock
           hostPath:
             path: /var/run/docker.sock

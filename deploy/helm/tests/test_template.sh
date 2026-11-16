@@ -2432,6 +2432,15 @@ tb "runtime (k8s backend, the default) runs as uid 10001, non-root" \
   'ctx="$(RT_POD <<< "$RENDER")"; grep -qx "        runAsNonRoot: true" <<< "$ctx" && grep -qx "        runAsUser: 10001" <<< "$ctx"'
 tb "runtime (control): the docker backend asks for root (the image's USER is 10001)" \
   'ctx="$(RT_POD <<< "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set runtime.backend=docker)")"; ! has runAsNonRoot <<< "$ctx" && grep -qx "        runAsUser: 0" <<< "$ctx"'
+tb "runtime (docker backend): uid and gid 0 win over a global podSecurityContext uid/gid" \
+  'ctx="$(RT_POD <<< "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set runtime.backend=docker --set global.podSecurityContext.runAsUser=1234 --set global.podSecurityContext.runAsGroup=1234)")"; grep -qx "        runAsUser: 0" <<< "$ctx" && grep -qx "        runAsGroup: 0" <<< "$ctx" && grep -qx "          type: RuntimeDefault" <<< "$ctx"'
+tb "runtime (docker backend): a global runAsNonRoot fails the render and names the conflict" \
+  'out="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set runtime.backend=docker --set global.podSecurityContext.runAsNonRoot=true 2>&1)"; [ $? -ne 0 ] && grep -q "global.podSecurityContext.runAsNonRoot is true" <<< "$out"'
+RT_K8S_MIXED="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set runtime.backend=K8s)"
+tb "runtime: backend K8s (any case) is the k8s backend: non-root uid 10001, its ServiceAccount, RUNTIME_BACKEND=k8s" \
+  'ctx="$(RT_POD <<< "$RT_K8S_MIXED")"; grep -qx "        runAsNonRoot: true" <<< "$ctx" && grep -qx "        runAsUser: 10001" <<< "$ctx" && grep -q "serviceAccountName: vexa-vexa-runtime" <<< "$RT_K8S_MIXED" && grep -A1 "name: RUNTIME_BACKEND" <<< "$RT_K8S_MIXED" | grep -q "value: \"k8s\""'
+tb "runtime: a backend that is neither k8s nor docker fails the render" \
+  'out="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set runtime.backend=podman 2>&1)"; [ $? -ne 0 ] && grep -q "runtime.backend must be k8s or docker" <<< "$out"'
 tb "runtime: the OpenShift profile renders no runtime securityContext" \
   '[ -z "$(RT_POD <<< "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" -f "$CHART/values-openshift.yaml" --set agentApi.workspaces.storageClassName=rwx-class)")" ]'
 # P24 / K5: every Pod the chart renders, with every optional component on, runs under a seccomp

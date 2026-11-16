@@ -1,4 +1,4 @@
-{{- if and .Values.runtime.enabled (eq .Values.runtime.backend "k8s") }}
+{{- if and .Values.runtime.enabled (eq (include "vexa.runtimeBackend" .) "k8s") }}
 # Pod-spawn RBAC for the runtime's K8sBackend (kubectl run/get/delete of bot + agent-worker Pods).
 apiVersion: v1
 kind: ServiceAccount

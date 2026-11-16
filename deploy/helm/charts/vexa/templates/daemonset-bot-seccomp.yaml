@@ -7,7 +7,7 @@ directory: no capability, no privilege escalation, a read-only root filesystem.
 */ -}}
 {{- $sandbox := .Values.runtime.botSandbox | default dict }}
 {{- $installer := $sandbox.installer | default dict }}
-{{- if and .Values.runtime.enabled (eq .Values.runtime.backend "k8s") $sandbox.enabled $installer.enabled }}
+{{- if and .Values.runtime.enabled (eq (include "vexa.runtimeBackend" .) "k8s") $sandbox.enabled $installer.enabled }}
 {{- $placement := .Values.runtime.workloadScheduling | default dict }}
 {{- $bot := get $placement "meetingBot" | default dict }}
 {{- $profile := $sandbox.localhostProfile | default "vexa/seccomp-userns.json" }}

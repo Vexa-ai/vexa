@@ -29,7 +29,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # every module is verified by go.sum and the Go checksum database. The only change to the release is
 # the x/net and x/text bump (and what MVS raises with them: x/crypto, x/sys, x/term, x/sync, x/mod,
 # x/tools). The version is stamped as upstream does, so scanners still match the kubectl release.
-# When a kubectl release ships those versions, this stage goes back to the release binary.
+# EXCEPTION (P9, recorded 2026-11-16, expires 2026-11-23): this in-house kubectl build is a dated
+# exception, not a standing way to ship kubectl. It ends at the first of: a kubectl release ships
+# golang.org/x/net >= 0.62 and golang.org/x/text >= 0.43 (this stage then goes back to the release
+# binary), or the runtime stops shipping kubectl (its K8sBackend calls the API server itself). Past the
+# expiry with neither done, the image counts as failing the security gate. Its labels name what was bumped.
 FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f AS kubectl
 ARG KUBECTL_VERSION=v1.35.10
 ARG KUBECTL_SRC_SHA256=3049a97c6be1aed0cefe5db304d6a6ff1a440c95bcd031a7a9b6976049f40730
@@ -55,13 +59,18 @@ WORKDIR /src
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     set -eux; \
     go get "golang.org/x/net@${X_NET_VERSION}" "golang.org/x/text@${X_TEXT_VERSION}"; \
+    mods="$(go list -m golang.org/x/net golang.org/x/text golang.org/x/crypto golang.org/x/sys golang.org/x/term golang.org/x/sync golang.org/x/mod golang.org/x/tools | tr '\n' ' ')"; \
+    test "$mods" = "golang.org/x/net v0.62.0 golang.org/x/text v0.43.0 golang.org/x/crypto v0.58.0 golang.org/x/sys v0.49.0 golang.org/x/term v0.47.0 golang.org/x/sync v0.24.0 golang.org/x/mod v0.41.0 golang.org/x/tools v0.51.0 " \
+      || { echo "the bumped modules differ from the image label ai.vexa.kubectl.bumped-modules: $mods" >&2; exit 1; }; \
     minor="${KUBECTL_VERSION#v1.}"; minor="${minor%%.*}"; ld="-s -w"; \
     for p in k8s.io/client-go/pkg/version k8s.io/component-base/version; do \
-      ld="$ld -X $p.gitVersion=${KUBECTL_VERSION} -X $p.gitMajor=1 -X $p.gitMinor=${minor} -X $p.gitTreeState=clean"; \
+      ld="$ld -X $p.gitVersion=${KUBECTL_VERSION} -X $p.gitMajor=1 -X $p.gitMinor=${minor} -X $p.gitTreeState=dirty"; \
     done; \
     go build -trimpath -ldflags "$ld" -o /out/kubectl ./cmd/kubectl; \
     /out/kubectl version --client | grep -qx "Client Version: ${KUBECTL_VERSION}"; \
-    go version -m /out/kubectl | grep -E "golang.org/x/(net|text)\s" | tee /dev/stderr | grep -q "x/net\s${X_NET_VERSION}"
+    go version -m /out/kubectl | grep -E "golang.org/x/(net|text)\s" | tee /out/x-modules.txt >&2; \
+    grep -q "golang.org/x/net\s${X_NET_VERSION}\s" /out/x-modules.txt; \
+    grep -q "golang.org/x/text\s${X_TEXT_VERSION}\s" /out/x-modules.txt
 
 FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
 
@@ -80,6 +89,10 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=kubectl /out/kubectl /usr/local/bin/kubectl
+# What the kubectl in this image is: the v1.35.10 source release, not its binary (the exception above).
+LABEL ai.vexa.kubectl.source="kubernetes v1.35.10 kubernetes-src.tar.gz (sha256 3049a97c6be1aed0cefe5db304d6a6ff1a440c95bcd031a7a9b6976049f40730), go1.26.11, gitTreeState=dirty" \
+      ai.vexa.kubectl.bumped-modules="golang.org/x/net v0.56.0=>v0.62.0, golang.org/x/text v0.39.0=>v0.43.0, golang.org/x/crypto v0.53.0=>v0.58.0, golang.org/x/sys v0.46.0=>v0.49.0, golang.org/x/term v0.44.0=>v0.47.0, golang.org/x/sync v0.21.0=>v0.24.0, golang.org/x/mod v0.37.0=>v0.41.0, golang.org/x/tools v0.47.0=>v0.51.0" \
+      ai.vexa.kubectl.exception="P9 in-house build, recorded 2026-11-16, expires 2026-11-23; ends when a kubectl release ships x/net >= 0.62 and x/text >= 0.43"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/src \
