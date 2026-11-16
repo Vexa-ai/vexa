@@ -12,6 +12,7 @@ still signed in. Both are records, never rows:
     botsessions:open  sorted set of ``session:<id>`` / ``check:<id>`` by expiry, the reaper's index
                       and the deployment-wide count of browser pods (``admit``: at most N at once)
     botsession:opens:<user_id>  sorted set of this person's opens by time (``rate_hit``: N per window)
+    botaccount:savelock:<owner>:<platform>  the count-and-save lock of a new saved account (SET NX EX)
 
 Each record lives ``timeout + RECORD_MARGIN_S`` so the reaper still finds an expired one and stops its
 workload. The workload's bearer is random and stored only as its SHA-256; it is compared with
@@ -35,6 +36,7 @@ CHECK_PREFIX = "botcheck:"
 USER_PREFIX = "botsession:user:"
 OPEN_INDEX = "botsessions:open"
 RATE_PREFIX = "botsession:opens:"
+LOCK_PREFIX = "botaccount:savelock:"
 #: How long a record outlives its own expiry, so the reaper can still stop its workload.
 RECORD_MARGIN_S = 300
 OPEN_STATUSES = ("starting", "ready")
@@ -84,6 +86,8 @@ class SessionStore(Protocol):
     async def unindex(self, member: str) -> None: ...
     async def admit(self, member: str, expires_at: float, *, cap: int) -> bool: ...
     async def rate_hit(self, user_id: int, now: float, *, window_s: int, limit: int) -> bool: ...
+    async def lock(self, key: str, *, ttl_s: int) -> Optional[str]: ...
+    async def unlock(self, key: str, token: str) -> None: ...
 
 
 def _key(kind: str, record_id: str) -> str:
@@ -154,6 +158,18 @@ class RedisSessionStore:
             return False
         return True
 
+    async def lock(self, key, *, ttl_s):
+        """A token when ``key``'s lock was free (held at most ``ttl_s``), else ``None``."""
+        token = secrets.token_hex(16)
+        if await self._r.set(f"{LOCK_PREFIX}{key}", token, nx=True, ex=max(1, int(ttl_s))):
+            return token
+        return None
+
+    async def unlock(self, key, token):
+        k = f"{LOCK_PREFIX}{key}"
+        if _text(await self._r.get(k)) == token:
+            await self._r.delete(k)
+
 
 class InMemorySessionStore:
     """``SessionStore`` in a dict — the app factory's default and a test double. TTLs are kept and
@@ -217,3 +233,16 @@ class InMemorySessionStore:
             return False
         self._opens[int(user_id)] = recent + [float(now)]
         return True
+
+    async def lock(self, key, *, ttl_s):
+        k = f"{LOCK_PREFIX}{key}"
+        if self._get(k) is not None:
+            return None
+        token = secrets.token_hex(16)
+        self._kv[k] = (self._clock() + ttl_s, token)
+        return token
+
+    async def unlock(self, key, token):
+        k = f"{LOCK_PREFIX}{key}"
+        if self._get(k) == token:
+            self._kv.pop(k, None)

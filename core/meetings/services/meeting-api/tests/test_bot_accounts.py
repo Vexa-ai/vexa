@@ -1151,10 +1151,10 @@ def test_p14_the_hourly_window_slides():
 
 def test_p14_settings_read_the_bounds_from_env():
     s = Settings.from_env({})
-    assert (s.max_browsers, s.opens_per_hour, s.max_accounts_per_owner) == (10, 6, 3)
+    assert (s.max_browsers, s.opens_per_hour, s.max_accounts_per_owner, s.max_company_accounts) == (10, 6, 3, 20)
     s = Settings.from_env({"VEXA_BOT_ACCOUNTS_MAX_BROWSERS": "4", "VEXA_BOT_ACCOUNTS_OPENS_PER_HOUR": "2",
-                           "VEXA_BOT_ACCOUNTS_MAX_PER_OWNER": "1"})
-    assert (s.max_browsers, s.opens_per_hour, s.max_accounts_per_owner) == (4, 2, 1)
+                           "VEXA_BOT_ACCOUNTS_MAX_PER_OWNER": "1", "VEXA_BOT_ACCOUNTS_MAX_COMPANY": "7"})
+    assert (s.max_browsers, s.opens_per_hour, s.max_accounts_per_owner, s.max_company_accounts) == (4, 2, 1, 7)
 
 
 def test_p14_at_most_three_saved_accounts_per_owner_and_platform(rig):
@@ -1199,3 +1199,94 @@ def test_p14_an_explicit_bot_account_respects_the_feature_switch(rig, monkeypatc
                         json={"platform": "google_meet", "native_meeting_id": "abc-defg-hij",
                               "bot_account": acct["id"]})
     assert r.status_code == 201, r.text
+
+
+# ── P14 review 4493930b6: F1 default path gated, F2 company cap, F3 save lock, F4 cap check after the claim ──
+async def test_p14_f1_a_default_bot_is_a_guest_when_browser_bots_is_off(rig, monkeypatch):
+    rig.seed(f"user:{OWNER}", platform="zoom")
+    rig.seed("company", platform="zoom")
+    assert (await rig.ba.resolve_for_spawn(OWNER, "zoom", None, room=None)) is not None
+    assert (await rig.ba.resolve_for_spawn(PERSON_ADMIN, "zoom", None, room=None)) is not None
+    monkeypatch.setenv("VEXA_FEATURES", "")
+    calls = len(rig.broker.calls)
+    assert await rig.ba.resolve_for_spawn(OWNER, "zoom", None, room=None) is None             # own account
+    assert await rig.ba.resolve_for_spawn(PERSON_ADMIN, "zoom", "default", room=None) is None  # company account
+    assert await rig.ba.resolve_for_spawn(PERSON_ADMIN, "google_meet", "default",
+                                          room="needs_sign_in") is None                       # auto-join / respawn
+    assert len(rig.broker.calls) == calls                                                     # broker not asked
+
+
+def test_p14_f1_default_post_bots_joins_as_a_guest_when_browser_bots_is_off(rig, monkeypatch):
+    rig.seed(f"user:{OWNER}", platform="google")
+    monkeypatch.setenv("VEXA_FEATURES", "")
+    r = rig.client.post("/bots", headers=rig.as_(OWNER),
+                        json={"platform": "google_meet", "native_meeting_id": "abc-defg-hij"})
+    assert r.status_code == 201, r.text
+    assert "bot_account_id" not in rig.repo._meetings[r.json()["id"]]["data"]
+
+
+def test_p14_f2_company_accounts_have_their_own_cap(rig):
+    _all(rig, max_accounts_per_owner=3, max_company_accounts=5)
+    for _ in range(4):
+        rig.seed("company", platform="google")
+    assert rig.open(PERSON_ADMIN, owner="company").status_code == 201       # 4 < 5: room, though over 3
+    rig.client.delete(f"/bot-accounts/sessions/{rig.last_env()['session_id']}", headers=rig.as_(PERSON_ADMIN))
+    rig.seed("company", platform="google")
+    r = rig.open(PERSON_ADMIN, owner="company")
+    assert r.status_code == 409 and "at most 5" in r.text
+
+
+def test_p14_f2_the_company_default_cap_is_20():
+    assert BotAccounts(broker=None, runtime=None)._account_cap("company") == 20
+    assert BotAccounts(broker=None, runtime=None)._account_cap(f"user:{OWNER}") == 3
+
+
+async def test_p14_f3_two_admins_saving_company_accounts_cannot_overshoot(rig, monkeypatch):
+    _all(rig, max_company_accounts=3)
+    for _ in range(2):
+        rig.seed("company", platform="google")
+    s1 = await rig.ba.open_session(PERSON_ADMIN, {"platform": "google", "owner": "company"})
+    t1 = json.loads(rig.runtime.specs[-1]["env"]["VEXA_BROWSER_SESSION"])["token"]
+    s2 = await rig.ba.open_session(ADMIN_ACCOUNT, {"platform": "google", "owner": "company"})
+    t2 = json.loads(rig.runtime.specs[-1]["env"]["VEXA_BROWSER_SESSION"])["token"]
+    real_put = rig.broker.put
+
+    async def slow_put(*a, **kw):
+        await asyncio.sleep(0.1)                  # both saves have counted before either lands, without the lock
+        return await real_put(*a, **kw)
+    monkeypatch.setattr(rig.broker, "put", slow_put)
+    from meeting_api.bot_accounts import BotAccountRefused
+    files = list(PROFILE.items())
+    out = await asyncio.gather(rig.ba.save_profile(s1["session_id"], t1, files),
+                               rig.ba.save_profile(s2["session_id"], t2, files), return_exceptions=True)
+    refused = [o for o in out if isinstance(o, BotAccountRefused)]
+    assert len(refused) == 1 and refused[0].status == 409 and "at most 3" in str(refused[0].detail)
+    assert sum(1 for a in rig.broker.accounts.values() if a["owner"] == "company") == 3
+    assert await rig.redis.get("botaccount:savelock:company:google") is None          # released
+
+
+async def test_p14_f3_the_save_lock_is_per_owner_and_platform_and_token_bound():
+    from meeting_api.bot_accounts import InMemorySessionStore
+    for store in (InMemorySessionStore(), RedisSessionStore(fakeredis.aioredis.FakeRedis(decode_responses=True))):
+        a = await store.lock("company:google", ttl_s=30)
+        assert a and await store.lock("company:google", ttl_s=30) is None
+        assert await store.lock("company:zoom", ttl_s=30)
+        await store.unlock("company:google", "not-the-token")
+        assert await store.lock("company:google", ttl_s=30) is None
+        await store.unlock("company:google", a)
+        assert await store.lock("company:google", ttl_s=30)
+
+
+def test_p14_f4_the_cap_check_comes_after_the_claim_and_the_hourly_limit(rig):
+    _all(rig, opens_per_hour=2)
+    for _ in range(3):
+        rig.seed(f"user:{OWNER}", platform="google")
+    calls = lambda: sum(1 for c in rig.broker.calls if c[0] == "list")
+    assert rig.open(OWNER).status_code == 409 and rig.open(OWNER).status_code == 409   # each spends an open
+    assert asyncio.run(rig.redis.get(f"botsession:user:{OWNER}")) is None              # the claim is released
+    assert asyncio.run(rig.redis.zcard("botsessions:open")) == 0                       # and the ceiling place
+    before = calls()
+    r = rig.open(OWNER)
+    assert r.status_code == 429                                                        # the limit, before the broker
+    assert calls() == before
+    assert len(rig.runtime.specs) == 0

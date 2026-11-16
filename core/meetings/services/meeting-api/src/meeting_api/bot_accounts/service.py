@@ -105,6 +105,10 @@ SESSIONS_ADMINS_ONLY = "browser sessions are open only to this deployment's admi
 MAX_BROWSERS_ENV = "VEXA_BOT_ACCOUNTS_MAX_BROWSERS"
 OPENS_PER_HOUR_ENV = "VEXA_BOT_ACCOUNTS_OPENS_PER_HOUR"
 MAX_PER_OWNER_ENV = "VEXA_BOT_ACCOUNTS_MAX_PER_OWNER"
+MAX_COMPANY_ENV = "VEXA_BOT_ACCOUNTS_MAX_COMPANY"
+#: How long a save holds its (owner, platform) lock at most, and how long another save waits for it.
+SAVE_LOCK_TTL_S = 30
+SAVE_LOCK_WAIT_S = 10.0
 OPENS_WINDOW_S = 3600
 BROWSERS_FULL = "every sign-in browser on this deployment is in use — try again in a few minutes"
 OPENS_EXHAUSTED = "you have opened {limit} sign-in or check browsers in the last hour — try again later"
@@ -142,6 +146,9 @@ class Settings:
     opens_per_hour: int = 6
     #: ``VEXA_BOT_ACCOUNTS_MAX_PER_OWNER``: saved accounts one owner may hold per platform; a new one over it is 409.
     max_accounts_per_owner: int = 3
+    #: ``VEXA_BOT_ACCOUNTS_MAX_COMPANY``: saved company accounts per platform (the company is one owner shared by
+    #: every bot that needs a signed-in seat, so it gets its own, wider cap); a new one over it is 409.
+    max_company_accounts: int = 20
 
     @classmethod
     def from_env(cls, env: Optional[dict] = None) -> "Settings":
@@ -164,6 +171,7 @@ class Settings:
             max_browsers=_int(MAX_BROWSERS_ENV, 10),
             opens_per_hour=_int(OPENS_PER_HOUR_ENV, 6),
             max_accounts_per_owner=_int(MAX_PER_OWNER_ENV, 3),
+            max_company_accounts=_int(MAX_COMPANY_ENV, 20),
         )
 
 
@@ -316,6 +324,25 @@ class BotAccounts:
                       user_id=user_id, fields={"limit": self.settings.opens_per_hour})
             raise BotAccountRefused(429, OPENS_EXHAUSTED.format(limit=self.settings.opens_per_hour))
 
+    async def _lock(self, key: str) -> str:
+        deadline = time.monotonic() + SAVE_LOCK_WAIT_S
+        while True:
+            token = await self.store.lock(key, ttl_s=SAVE_LOCK_TTL_S)
+            if token is not None:
+                return token
+            if time.monotonic() >= deadline:
+                raise BotAccountRefused(409, "another bot account is being saved for this owner — try again")
+            await asyncio.sleep(0.05)
+
+    @staticmethod
+    async def _put(broker: BrokerClient, account_id: str, account: dict, files: list, owner: str) -> dict:
+        try:
+            return await broker.put(account_id, account=account, files=files, actor=owner)
+        except BrokerConflict:
+            raise BotAccountRefused(409, "the bot account's owner or platform differs") from None
+        except BrokerError as e:
+            raise BotAccountRefused(502, str(e)) from None
+
     async def _owner_platform_count(self, owner: str, platform: str) -> int:
         broker = self._require()
         try:
@@ -324,8 +351,11 @@ class BotAccounts:
             raise BotAccountRefused(503, str(e)) from None
         return sum(1 for a in rows if a.get("owner") == owner and a.get("platform") == platform)
 
+    def _account_cap(self, owner: str) -> int:
+        return self.settings.max_company_accounts if owner == "company" else self.settings.max_accounts_per_owner
+
     async def _room_for_new_account(self, owner: str, platform: str) -> None:
-        cap = self.settings.max_accounts_per_owner
+        cap = self._account_cap(owner)
         if await self._owner_platform_count(owner, platform) >= cap:
             raise BotAccountRefused(409, f"at most {cap} saved {PLATFORM_LABELS[platform]} bot accounts per owner "
                                          "— delete one, or sign an existing one in again")
@@ -360,9 +390,6 @@ class BotAccounts:
             roles = await self.admin.roles(user_id)
             if not self._manages_company(roles):
                 raise BotAccountRefused(403, "only the admin account may sign in a company bot account")
-        if account_id is None:
-            # Early answer for the saved-account cap; save_profile checks it again, under the claim.
-            await self._room_for_new_account(owner, platform)
 
         now = self.clock()
         timeout = self.settings.session_timeout_s
@@ -371,6 +398,15 @@ class BotAccounts:
         expires_ts = now + timeout
         await self._claim(user_id, session_id, ttl=ttl, now=now)
         await self._admit(user_id, session_id, f"session:{session_id}", expires_ts=expires_ts, now=now)
+        if account_id is None:
+            # Early answer for the saved-account cap, after the claim and the hourly limit so the broker
+            # listing is bounded like the browsers; save_profile checks it again under the save lock.
+            try:
+                await self._room_for_new_account(owner, platform)
+            except BotAccountRefused:
+                await self.store.unindex(f"session:{session_id}")
+                await self.store.release_user(user_id, session_id)
+                raise
 
         token = S.new_token()
         vnc_password = S.new_vnc_password()
@@ -494,20 +530,24 @@ class BotAccounts:
             if current.get("owner") != owner or current.get("platform") != platform:
                 raise BotAccountRefused(409, "the bot account's owner or platform differs")
             display_name = display_name or current.get("display_name")
-        else:
-            # P14: at most max_accounts_per_owner saved accounts per owner and platform. The person's one
-            # open browser (the claim) serialises this count against their own saves.
-            await self._room_for_new_account(owner, platform)
-            account_id = new_account_id()
         account = {"owner": owner, "platform": platform,
-                   "display_name": display_name or f"{PLATFORM_LABELS[platform]} bot account",
                    "created_by": owner_of(rec["user_id"])}
-        try:
-            stored = await broker.put(account_id, account=account, files=files, actor=owner)
-        except BrokerConflict:
-            raise BotAccountRefused(409, "the bot account's owner or platform differs") from None
-        except BrokerError as e:
-            raise BotAccountRefused(502, str(e)) from None
+        if account_id:
+            account["display_name"] = display_name or f"{PLATFORM_LABELS[platform]} bot account"
+            stored = await self._put(broker, account_id, account, files, owner)
+        else:
+            # P14: at most _account_cap(owner) saved accounts per owner and platform. The count and the save
+            # run under one Redis lock per (owner, platform), so two saves (two admins adding company
+            # accounts, on any replica) cannot both pass the count.
+            account_id = new_account_id()
+            account["display_name"] = display_name or f"{PLATFORM_LABELS[platform]} bot account"
+            lock_key = f"{owner}:{platform}"
+            lock = await self._lock(lock_key)
+            try:
+                await self._room_for_new_account(owner, platform)
+                stored = await self._put(broker, account_id, account, files, owner)
+            finally:
+                await self.store.unlock(lock_key, lock)
         rec["account_id"] = account_id
         await self._finish(rec, "saved", None)
         log_event("bot_account_saved", audience="user", span="bot_accounts", user_id=rec["user_id"],
@@ -659,6 +699,10 @@ class BotAccounts:
                 })
             return account
         if self.broker is None or platform is None:
+            return None
+        if not self.feature_on():
+            # VEXA_FEATURES without browser_bots: a default bot (POST /bots, auto-join, Meet respawn) joins
+            # as a guest and never takes a saved own or company account.
             return None
         mine = owner_of(user_id)
         if getattr(getattr(self, "settings", None), "sessions_who", "all") != "all":
