@@ -508,22 +508,18 @@ class SqlAlchemyTranscriptStore:
             if not meeting:
                 return None
             data = meeting.data if isinstance(meeting.data, dict) else {}
-            deletion_state = data.get("artifact_deletion") or {}
-            if deletion_state and deletion_state.get("state", "completed") == "completed":
+            if share_access.deleted(data):
                 return None
-            is_owner = share_access.owns(meeting.user_id, data, user_id)            # (a) owner
-            authorized = (
-                is_owner
-                or user_id in (data.get("transcript_viewers") or [])                # (c) transcript-share
-                or (bool(member_workspaces) and data.get("workspace_id") in member_workspaces)  # (b) bound ws member
-            )
-            if not authorized:
+            # The one access rule (share_access.access_of: a owner · c transcript-share · b bound
+            # workspace member), the same one /link/events and /signal answer by; never written out here.
+            access = share_access.access_of(meeting.user_id, data, user_id, member_workspaces)
+            if access is None:
                 return None
             pg = await self._transcript_pg_part(db, meeting)
         # Session closed (transaction ended, connection returned to pool) BEFORE the Redis merge (#508).
-        # The response projection reuses branch (a) above — the SAME decision that authorized this
+        # The response projection reuses the label above — the SAME decision that authorized this
         # read decides which tier of the blob it may carry, so the two can never disagree.
-        return await self._merge_live_segments(pg, viewer_is_owner=is_owner)
+        return await self._merge_live_segments(pg, viewer_is_owner=access == share_access.OWNER)
 
     async def listen_calls(self, user_id, *, member_workspaces=None, held_ids=(),
                            statuses=()) -> "list[dict]":

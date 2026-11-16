@@ -203,17 +203,13 @@ class InMemoryTranscriptStore:
         if m is None:
             return None
         data = m.get("data") if isinstance(m.get("data"), dict) else {}
-        deletion = data.get("artifact_deletion") or {}
-        if deletion and deletion.get("state", "completed") == "completed":
+        if share_access.deleted(data):
             return None
-        is_owner = share_access.owns(m.get("user_id"), m.get("data"), user_id)
-        authorized = (
-            is_owner
-            or user_id in (data.get("transcript_viewers") or [])
-            or (bool(member_workspaces) and data.get("workspace_id") in member_workspaces)
-        )
+        access = share_access.access_of(m.get("user_id"), data, user_id, member_workspaces)
         # Same decision, two uses: whether the read is allowed, and which tier of ``data`` it carries.
-        return await self._transcript_doc(mid, viewer_is_owner=is_owner) if authorized else None
+        if access is None:
+            return None
+        return await self._transcript_doc(mid, viewer_is_owner=access == share_access.OWNER)
 
     async def listen_calls(self, user_id, *, member_workspaces=None, held_ids=(),
                            statuses=()) -> "list[dict]":
