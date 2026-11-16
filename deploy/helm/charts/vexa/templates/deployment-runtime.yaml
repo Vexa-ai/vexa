@@ -26,11 +26,11 @@ spec:
       enableServiceLinks: false
       {{- if eq .Values.runtime.backend "k8s" }}
       # The k8s backend only calls the API server (kubectl, its ServiceAccount): it holds no engine
-      # socket and starts no process as another uid, so it runs as the chart's unprivileged uid. The
-      # docker backend keeps root (the image's user) to open the engine's socket.
+      # socket and starts no process as another uid, so it runs as the chart's unprivileged uid, the
+      # image's USER. The docker backend asks for root to open the engine's socket.
       {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
       {{- else }}
-      {{- include "vexa.podSecurityContext" . | nindent 6 }}
+      {{- include "vexa.rootPodSecurityContext" . | nindent 6 }}
       {{- end }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:

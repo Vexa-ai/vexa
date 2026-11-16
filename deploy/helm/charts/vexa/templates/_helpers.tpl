@@ -723,6 +723,18 @@ securityContext:
 {{- end -}}
 
 {{/*
+The pod securityContext for a Vexa image that runs as 10001 but whose workload here needs root: the
+runtime on the docker backend, which opens the container engine's socket. The global pod context
+plus uid and gid 0; the global values win where both are set. Same `deliver` gate.
+*/}}
+{{- define "vexa.rootPodSecurityContext" -}}
+{{- if eq (include "vexa.securityContextDeliver" .) "true" -}}
+securityContext:
+  {{- toYaml (merge (deepCopy (.Values.global.podSecurityContext | default dict)) (dict "runAsUser" 0 "runAsGroup" 0)) | nindent 2 }}
+{{- end -}}
+{{- end -}}
+
+{{/*
 The pod securityContext for a third-party image the chart runs as it ships (postgres, redis,
 pgbouncer): only the seccomp profile of global.podSecurityContext (RuntimeDefault by default), so a
 uid or fsGroup an operator sets for Vexa's own images never reaches an upstream entrypoint. Same

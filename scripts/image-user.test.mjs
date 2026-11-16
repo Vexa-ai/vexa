@@ -22,8 +22,6 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Images that run as root, each with the reason it must. */
 const ROOT_BY_DESIGN = {
-  "core/runtime/Dockerfile":
-    "the chart's docker backend holds the container engine as root; Compose and the chart's k8s backend run it as uid 10001 (Compose through the socket's group)",
   "core/agent/services/agent-api/Dockerfile":
     "moves and re-homes workspace trees that root-run workers and per-subject uids write in the shared store",
   "core/agent/worker/Dockerfile":
@@ -51,6 +49,8 @@ const HELM_COMPONENTS = {
   "clients/terminal/Dockerfile": ["terminal"],
   "core/flows/Dockerfile": ["flows-worker", "flows-mailbox", "flows-api"],
   "core/agent/services/credential-broker/Dockerfile": ["credential-broker"],
+  // values-test.yaml runs the k8s backend; the docker backend's pod asks for uid 0 (test_template.sh).
+  "core/runtime/Dockerfile": ["runtime"],
 };
 
 const dockerfiles = execFileSync("git", ["ls-files"], { cwd: ROOT, encoding: "utf8" })

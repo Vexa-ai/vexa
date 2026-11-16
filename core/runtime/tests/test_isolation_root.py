@@ -23,7 +23,7 @@ import pytest
 from runtime_kernel import isolation as iso
 from runtime_kernel.isolation import SUBJECT_UID_BASE, UID_BASE, WORKLOAD_UID_BASE, IsolationRefused
 from runtime_kernel.process_backend import ProcessBackend
-from runtime_kernel.profiles import CredentialFile, Runnable
+from runtime_kernel.profiles import MODEL_ROUTE_ENV, ROUTE_SUBSCRIPTION, CredentialFile, Runnable
 
 pytestmark = pytest.mark.skipif(os.geteuid() != 0 or not sys.platform.startswith("linux"),
                                 reason="needs a root runtime on Linux")
@@ -119,8 +119,20 @@ def test_the_profiles_credential_files_land_in_the_childs_own_home(lab):
     os.chmod(cred, 0o600)
     runnable = Runnable(command=_cmd(REPORT), credential_mounts=True, credential_files=(
         CredentialFile(source=str(cred), target="/unused", home_path=".claude/.credentials.json"),))
-    r = _run(lab, "w-cred", runnable, _env(lab))
+    r = _run(lab, "w-cred", runnable, {**_env(lab), MODEL_ROUTE_ENV: ROUTE_SUBSCRIPTION})
     assert r["cred"] == '{"t": 1}'
+
+
+def test_without_the_subscription_route_the_profiles_credential_files_are_refused(lab):
+    """The same profile on a spec whose model route is not the subscription (none, or the model proxy
+    route): no credential file reaches the child's HOME (profiles.hands_subscription)."""
+    cred = lab["root"] / "cred.json"
+    cred.write_text('{"t": 1}')
+    os.chmod(cred, 0o600)
+    runnable = Runnable(command=_cmd(REPORT), credential_mounts=True, credential_files=(
+        CredentialFile(source=str(cred), target="/unused", home_path=".claude/.credentials.json"),))
+    assert _run(lab, "w-cred-none", runnable, _env(lab))["cred"] is None
+    assert _run(lab, "w-cred-proxy", runnable, {**_env(lab), MODEL_ROUTE_ENV: "proxy"})["cred"] is None
 
 
 def test_concurrent_children_cannot_read_each_other_or_the_runtime(lab):

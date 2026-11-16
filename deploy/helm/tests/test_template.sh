@@ -2425,13 +2425,13 @@ if command -v openssl >/dev/null 2>&1; then
   unset NOT_ED OWN_PUB ST_PIN
 fi
 # P24: the runtime on the k8s backend only calls the API server, so it runs as the chart's
-# unprivileged uid; the docker backend keeps the image's root to open the engine's socket, and the
+# unprivileged uid (the image's USER); the docker backend asks for uid 0 to open the engine's socket, and the
 # OpenShift profile leaves every context to the SCC.
 RT_POD() { awk 'BEGIN{RS="\n---\n"} /kind: Deployment/ && /component: runtime\n/' | awk '/^    spec:/{p=1} p && /^      securityContext:/{s=1; next} s && /^        /{print; next} s{exit}'; }
 tb "runtime (k8s backend, the default) runs as uid 10001, non-root" \
   'ctx="$(RT_POD <<< "$RENDER")"; grep -qx "        runAsNonRoot: true" <<< "$ctx" && grep -qx "        runAsUser: 10001" <<< "$ctx"'
-tb "runtime (control): the docker backend keeps the image's root" \
-  '! RT_POD <<< "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set runtime.backend=docker)" | has runAsNonRoot'
+tb "runtime (control): the docker backend asks for root (the image's USER is 10001)" \
+  'ctx="$(RT_POD <<< "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set runtime.backend=docker)")"; ! has runAsNonRoot <<< "$ctx" && grep -qx "        runAsUser: 0" <<< "$ctx"'
 tb "runtime: the OpenShift profile renders no runtime securityContext" \
   '[ -z "$(RT_POD <<< "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" -f "$CHART/values-openshift.yaml" --set agentApi.workspaces.storageClassName=rwx-class)")" ]'
 # P24 / K5: every Pod the chart renders, with every optional component on, runs under a seccomp
