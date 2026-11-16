@@ -38,14 +38,17 @@ def _stamp_for(refs, monkeypatch_setting=None):
     # in the same process. A test that passes alone and fails in the suite is the visible half of
     # that; a test that PASSES in the suite because somebody else's stub is still there is the
     # dangerous half.
-    saved = {"setting": production.setting, "meeting_start": mt.meeting_start}
+    saved = {"setting": production.setting, "meeting_start": mt.meeting_start,
+             "meeting_row": mt.meeting_row}
     production.setting = monkeypatch_setting or (lambda uid, key: "")   # no timezone -> UTC
     mt.meeting_start = lambda uid, mid, native=None: None
+    mt.meeting_row = lambda uid, mid, native=None: None                 # no recorded page
     try:
         return production._note_path(_Ctx(refs), refs["uid"], refs.get("title"))
     finally:
         production.setting = saved["setting"]
         mt.meeting_start = saved["meeting_start"]
+        mt.meeting_row = saved["meeting_row"]
 
 
 def _path_from(path: str) -> str:

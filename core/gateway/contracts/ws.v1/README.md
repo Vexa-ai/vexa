@@ -11,18 +11,19 @@ SDKs, and any client build against.
 - **Connect:** `ws(s)://<host>/ws` with the key in the `x-api-key:<token>` header, **or** — for a
   client that cannot set a header, such as a browser — in the subprotocol list:
   `new WebSocket(url, ["vexa.v1", "vexa.key.<token>"])`; the server answers `vexa.v1`. The key then
-  rides in `Sec-WebSocket-Protocol`, never in the URL. A key in the URL (`?api_key=<token>`) is
-  refused: `{type:"error", error:"api_key_query_removed", changed_in, do_instead, docs}` then close
-  `4401`, whatever else the request carries. Missing key → `{type:"error", error:"missing_api_key"}` then close `4401`; a key that
+  rides in `Sec-WebSocket-Protocol`, never in the URL. The `?api_key=<token>` query is
+  **deprecated**: still accepted, taken after the header and the subprotocol, logged as
+  `ws_query_key_deprecated` (never the key), and removed in 0.13.6, after which it is refused with
+  `{type:"error", error:"api_key_query_removed", changed_in, do_instead, docs}` and close `4401`.
+  Missing key → `{type:"error", error:"missing_api_key"}` then close `4401`; a key that
   resolves to nobody → `invalid_api_key`, close `4401`; the key cannot be resolved now →
-  `auth_unavailable`, close `4503`. The socket is held to the REST routes' key scopes: a key that may
-  read no meeting status (`GET /meetings`, `GET /bots/status`) → `insufficient_scope` (with
-  `changed_in`, `do_instead`, `docs`), close `4403`.
+  `auth_unavailable`, close `4503`. Any key holding `bot` or `tx` opens the socket; a
+  `browser`-only key gets `insufficient_scope`, close `4403`.
 - **Client → server:** `SubscribeRequest` `{action:"subscribe", meetings:[{platform, native_id}]}`
-  (and `UnsubscribeRequest`). A subscription streams the meeting's transcript, so it takes the
-  scopes `GET /transcripts/{platform}/{native_meeting_id}` takes (`tx`); otherwise `insufficient_scope`
-  and the socket stays open. Authorization is delegated to the collector
-  (`POST /ws/authorize-subscribe`, which checks the same scopes) — you only receive meetings your key may read.
+  (and `UnsubscribeRequest`). Authorization is delegated to the collector
+  (`POST /ws/authorize-subscribe`): you only receive meetings your key may read (its own, a meeting
+  bound to a workspace it belongs to, a meeting shared with it). Any valid key may subscribe: one
+  key sends bots and reads what it owns, and ownership, workspace and share checks are the boundary.
 - **Live re-authorization:** access is re-checked while the socket is open, not only at subscribe.
   Every ~15 s the gateway asks `POST /ws/authorize-subscribe` again for the meetings this socket is
   subscribed to; a meeting that no longer passes (the owner removed the reader, turned a share link
@@ -82,9 +83,9 @@ Shapes are pinned by main's gate test. To re-verify: `node gateway/contracts/ws.
 (goldens ≡ `$defs`). A deliberate main change → update the schema/goldens + `pnpm seal:contracts`
 on a `lane:contract` PR; a breaking change opens `ws.v2`, leaving `ws.v1` until no consumer pins it.
 
-**Re-sealed in place in 0.13.4 (a recorded exception to P4).** Refusing `?api_key=` is a breaking
-change, which this rule would open as `ws.v2`. The founder ruled to change `ws.v1` in place and keep
-one socket protocol: «вычищай, пожалуйста, все… Нужно чтобы все было состояло из минимального
-количества примитивов». The change is the `api_key_query_removed` code, the `changed_in` / `do_instead`
-/ `docs` fields on `Error`, and the removed query-key credential; see
-[What changed in 0.13.4: auth](https://docs.vexa.ai/changes-0-13-4-auth).
+**Re-sealed in place in 0.13.4.** The founder ruled to keep one socket protocol and change `ws.v1` in
+place: «вычищай, пожалуйста, все… Нужно чтобы все было состояло из минимального количества
+примитивов». 0.13.4 adds the `vexa.key.<key>` subprotocol, and the `api_key_query_removed` code and the
+`changed_in` / `do_instead` / `docs` fields on `Error`. It keeps the URL key 0.12 clients rely on as
+deprecated, so no client already deployed breaks; 0.13.6 turns it off.
+See [What changed in 0.13.4: auth](https://docs.vexa.ai/changes-0-13-4-auth).

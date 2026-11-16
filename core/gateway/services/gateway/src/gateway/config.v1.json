@@ -92,7 +92,8 @@
       ],
       "targets": [
         "compose",
-        "helm"
+        "helm",
+        "lite"
       ]
     },
     {
@@ -102,7 +103,8 @@
       "description": "flows-api's base URL (the name flows' mcp.tools.v1 manifest binds for the edge, base_url_env), for the door's inbound leg (/to-flows/*): the signals service's wake and the terminal's sign-in mail present X-Internal-Secret to the door, never to flows, and the door forwards the allow-listed calls (FLOWS_INBOUND) with the flows key.",
       "targets": [
         "compose",
-        "helm"
+        "helm",
+        "lite"
       ]
     },
     {
@@ -121,6 +123,15 @@
       "default": "8002",
       "description": "The service door's own port. No deploy surface publishes it: only the flows tier, the signals service and the terminal reach it, inside the deployment's network.",
       "targets": []
+    },
+    {
+      "key": "VEXA_GATEWAY_SERVICE_DOOR_HOST",
+      "class": "defaulted",
+      "default": "",
+      "description": "The address the service door listens on. Empty: the edge's own HOST. Lite sets 127.0.0.1, since every caller of its door (flows-api, flows-worker) is in the same container.",
+      "targets": [
+        "lite"
+      ]
     },
     {
       "key": "VEXA_JITSI_HOSTS",

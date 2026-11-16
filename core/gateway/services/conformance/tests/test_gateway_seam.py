@@ -279,19 +279,18 @@ async def test_ws_empty_api_key_is_rejected():
     assert ws.close_code == 4401
 
 
-async def test_ws_query_param_api_key_is_refused():
-    """A key in the URL (?api_key=) is never a credential: api_key_query_removed (with what to do
-    instead and where to read) + close 4401, and no subscribe is acked."""
+async def test_ws_query_param_api_key_is_deprecated_but_still_a_credential():
+    """A key in the URL (?api_key=), as 0.12 clients send it, still authenticates and subscribes
+    until COMPAT_REMOVED_IN (logged ws_query_key_deprecated); the ack conforms to ws.v1."""
     ws = FakeWebSocket(inbound=[json.dumps(SUBSCRIBE)], api_key=None)
     ws.query_params = {"api_key": WS_API_KEY}
     h = WSMultiplexHarness(ws, FakeRedis(), FakeAuthorizer(AUTH_MAP))
     await h.run()
-    assert ws.sent and ws.sent[0]["error"] == "api_key_query_removed", f"frames={ws.sent}"
-    assert ws.sent[0]["changed_in"] == "0.13.4" and ws.sent[0]["do_instead"]
-    assert ws.sent[0]["docs"] == "https://docs.vexa.ai/changes-0-13-4-auth"
-    assert_ws_conforms("Error", ws.sent[0])
-    assert ws.close_code == 4401
-    assert not any(f.get("type") == "subscribed" for f in ws.sent)
+    assert not [f for f in ws.sent if f.get("type") == "error"], f"frames={ws.sent}"
+    acks = [f for f in ws.sent if f.get("type") == "subscribed"]
+    assert acks and acks[0]["meetings"], f"frames={ws.sent}"
+    assert_ws_conforms("Subscribed", acks[0])
+    assert ws.close_code != 4401
 
 
 async def test_ws_authz_service_error_yields_error_frame_not_empty_ack():

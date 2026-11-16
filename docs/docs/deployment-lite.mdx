@@ -90,6 +90,7 @@ One supervisord tree runs the services a compose deployment spreads across conta
 | **gateway** (`:8056`), **terminal** (`:3001`), **agent-api** (`:8100`) | the three published front doors |
 | **meeting-api, admin-api, runtime** | loopback-only (`127.0.0.1`) — reach them with `docker exec` |
 | **mcp** (`:8010`) | the MCP server, loopback-only; the gateway serves it at `/mcp` |
+| **flows-api** (`:8200`), **flows-worker** | Flows, loopback-only: the worker owns time (schedules, and the start of every booked bot); both reach the other services only through the gateway's service door (`:8002`, not published) |
 | **valkey** | in-container Redis-compatible store, loopback-only |
 
 Bots and agent workers are **not** supervisord programs — the runtime spawns them as child
@@ -139,6 +140,12 @@ To run agents on a Codex subscription, mount your `auth.json` into the container
 `HOST_CODEX_CREDENTIALS` to its path inside the container. `make lite` does not do this for you. The
 runtime copies the file into each worker's private home as `~/.codex/auth.json`, where the harness and
 the Codex CLI read it.
+
+Flows runs in every Lite container: booked bots start from its clock. The entrypoint keeps its two
+keys in `/var/lib/vexa/state` (`flows-api-key`, `flows-service-key`), or takes `VEXA_FLOWS_API_KEY`
+and `VEXA_FLOWS_SERVICE_KEY` from `.env`. Its tables live in the Lite database; the DSN is built from
+the `DB_*` settings unless you set `VEXA_FLOWS_DB_URL`. Invitations by email (the bot mailbox) are not
+part of Lite.
 
 ## Persistence and upgrade
 
@@ -200,7 +207,7 @@ appears on a command line.
    the runtime caller credential, Valkey's password). It writes Valkey's config and the rendered
    supervisor config into the root-only `/run/vexa`, then hands off to supervisord.
 2. **Services.** supervisord starts Valkey, admin-api, the runtime, meeting-api, agent-api, the gateway,
-   the MCP server and the terminal. Only the runtime, agent-api and meeting-api hold the runtime caller
+   flows-api and flows-worker, the MCP server and the terminal. Only the runtime, agent-api and meeting-api hold the runtime caller
    credential.
 3. **The runtime starts clean.** Its launcher drops every inherited variable the runtime's `config.v1`
    does not declare, so no service secret reaches the runtime or anything it spawns.

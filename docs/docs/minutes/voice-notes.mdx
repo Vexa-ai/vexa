@@ -46,7 +46,7 @@ of it was paused. A voice note counts toward your number of concurrent bots.
 | What you see | Why | What to do |
 |---|---|---|
 | *Microphone access was refused…* | the browser denied the microphone | allow it in the browser's site settings, then record again |
-| *Your key cannot record voice notes (it needs the bot scope).* | your sign-in key has no `bot` scope | ask your administrator |
+| *Your key cannot record voice notes (it needs the bot scope).* | your sign-in key is `browser`-only (any `bot` or `tx` key records) | ask your administrator |
 | *This voice note has already ended.* | the note was stopped elsewhere, or timed out | start a new note |
 | *The connection to the recorder closed. What was sent is kept.* | the network dropped | start a new note; the transcript so far stays |
 | *Your sign-in was not accepted for recording. Sign out, sign in again, and retry.* | the recorder refused the sign-in the page sent | sign out and in again |
@@ -65,7 +65,7 @@ the microphone go.
 
 1. **Open the recorder.** The empty chat's *Record a voice note* suggestion, or the agent's
    `record_voice_note` tool, raises one event in the tab, and the recorder starts. The tool is
-   `POST /voice-notes/recorder` on meeting-api (scope `bot`): it creates nothing and answers
+   `POST /voice-notes/recorder` on meeting-api (any API key; a `browser`-only key is refused): it creates nothing and answers
    `{"status": "awaiting_user", "ui_action": "open_voice_note", "instruction": …}`; the terminal acts on
    the tool call the way it does for `connection_request`. In a run with nobody present (a routine, a
    background flow, a meeting run) the tool is refused with `human_session_required`.
@@ -77,7 +77,7 @@ the microphone go.
    time (the same frame the extension and the bot use).
 4. **Stream.** The frames go over the same-origin socket `/voice-notes/{id}/stream`. The terminal
    server takes the upgrade only from its own origin and only with your session cookie, adds your key
-   from that cookie and relays the socket to the gateway, which authorizes the upgrade (scope `bot`,
+   from that cookie and relays the socket to the gateway, which authorizes the upgrade (any API key; a `browser`-only key is refused,
    and your per-user request budget), signs your identity onto the hop and relays it to meeting-api.
 5. **Buffer.** meeting-api checks the note is yours and live, validates each frame, counts the audio
    against the cap and appends the frame to the note's Redis stream. Audio is taken at up to 1.5×
@@ -156,8 +156,8 @@ The raw audio exists only in the note's Redis stream, and only as long as the bo
 
 ### Security
 
-**Who can do what.** Only the note's owner can stream into it, and only with a key that has the `bot`
-scope. A worker's delegation token cannot open the socket. The agent's `record_voice_note` tool only
+**Who can do what.** Only the note's owner can stream into it, and only with an API key (`bot` or `tx`;
+a `browser`-only key is refused). A worker's delegation token cannot open the socket. The agent's `record_voice_note` tool only
 asks the person's open tab to start the recorder: it creates no note, carries no audio, and is
 refused to a worker running with nobody present.
 

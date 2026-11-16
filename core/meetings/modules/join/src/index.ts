@@ -9,6 +9,7 @@
 import type { Page } from "playwright";
 import { joinGoogleMeeting } from "./googlemeet/join";
 import { waitForGoogleMeetingAdmission, checkForGoogleAdmissionSilent } from "./googlemeet/admission";
+import { knockUntilGoogleAccepts, googleKnockConfig } from "./googlemeet/refusal";
 import { prepareForRecording, leaveGoogleMeet } from "./googlemeet/leave";
 import { startGoogleRemovalMonitor } from "./googlemeet/removal";
 import { joinMicrosoftTeams } from "./msteams/join";
@@ -151,10 +152,14 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
         page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
       );
     } else if (platform === "google_meet") {
-      await joinGoogleMeeting(page, opts.meetingUrl, botConfig.botName!, botConfig);
-      admitted = await waitForGoogleMeetingAdmission(
-        page, botConfig.automaticLeave!.waitingRoomTimeout, botConfig,
-      );
+      // Meet can refuse a knock outright ("You can't join this video call"); that refusal is
+      // flaky, so knock again within the same lobby budget, waiting longer each time and, for an
+      // anonymous bot, as a fresh guest (googlemeet/refusal.ts).
+      const knock = googleKnockConfig();
+      admitted = await knockUntilGoogleAccepts(page, botConfig.automaticLeave!.waitingRoomTimeout!, async (remainingMs) => {
+        await joinGoogleMeeting(page, opts.meetingUrl, botConfig.botName!, botConfig);
+        return waitForGoogleMeetingAdmission(page, remainingMs, botConfig);
+      }, Date.now, { freshen: !botConfig.authenticated && knock.wipe, backoffMs: knock.backoffMs, maxKnocks: knock.maxKnocks });
     } else {
       // Explicit refusal, never a fallthrough: an unknown platform used to silently run the GOOGLE
       // MEET join flow against whatever URL it was handed — the wrong flow on the wrong site, failing
@@ -183,6 +188,9 @@ export { joinGoogleMeeting, waitForGoogleMeetingAdmission, checkForGoogleAdmissi
 // (AuthSessionError, an AdmissionError subclass) as the permanent `auth_session_missing` — never
 // collapsed into a transient (retried) `join_failure` (G1).
 export { AdmissionError } from "./shared/admission";
+// Meet refusing the knock itself ("You can't join this video call") — a typed `denial` whose message
+// starts with GOOGLE_JOIN_REFUSED, after GOOGLE_JOIN_MAX_KNOCKS knocks (googlemeet/refusal.ts).
+export { GoogleJoinRefusedError, GOOGLE_JOIN_REFUSED, GOOGLE_JOIN_MAX_KNOCKS, GOOGLE_JOIN_REKNOCK_BACKOFF_MS, googleKnockConfig } from "./googlemeet/refusal";
 export type { AdmissionOutcome } from "./shared/admission";
 export { AuthSessionError };
 // The English pin and its check (shared/ui-locale.ts): a meeting page rendered in another language

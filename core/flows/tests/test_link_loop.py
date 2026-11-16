@@ -22,6 +22,8 @@ import flows_config
 import pytest
 from flows import Done, Reaction, Registry, StepCtx, StepError
 
+pytestmark = pytest.mark.usefixtures("meetings_hold_no_row")
+
 
 @pytest.fixture(autouse=True)
 def _person_settings_are_declared(monkeypatch):

@@ -211,7 +211,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          # flows is opt-in (values.yaml: flows.enabled=false) but it is a RELEASE image, so the
+          # flows is required (values.yaml: flows.enabled=true, ADR-0052) and it is a RELEASE image, so the
           # pinned-render assertion has to see it: rendered with the tier on, its six containers
           # must follow global.imageTag like every other component. Until 2026-09-03 flows.image
           # was a flat string that ignored global.imageTag entirely and defaulted to :dev.

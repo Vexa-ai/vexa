@@ -327,20 +327,26 @@ def friction_sink(db, *, since: float = 0.0, kind: str = "", subject: str = "", 
 
 
 def fetch_meetings(uid: str) -> list[dict]:
-    """This person's meeting rows, or `[]`. NEVER raises: the flows half is the half that matters,
-    and a gateway hiccup must degrade the timeline, not empty it."""
+    """This person's meeting rows, or `[]` when there are none or the meetings domain is not
+    deployed. A door that had a moment RAISES `StepError` (brain:card/4310908cf3b3) and the route
+    answers 503: a day with no meetings in it, read off a 503, is a wrong answer an agent repeats to
+    the person as fact."""
+    from flows import StepError
     uid = str(uid or "").strip()
     if not uid:
         return []
     try:
         from flows_steps.common import http, meetings_door
-        # `meetings_door()` raises `MeetingsDomainAbsent` where the domain is not deployed, and it
-        # lands in the same `except` as a gateway hiccup — deliberately one policy, not two: for a
-        # READ whose contract is already "degrade, never empty", an absent domain and an
-        # unreachable one produce the same honest answer (no meetings in the window). The
+        # `meetings_door()` raises `MeetingsDomainAbsent` where the domain is not deployed: that is a
+        # supported configuration, and no meetings in the window is its honest answer. The
         # distinction that matters is on the WRITE side, where a step must not knock at all.
         from flows_steps.common import door_headers
-        _st, body = http("GET", f"{meetings_door()}/meetings", door_headers(uid))
+        from flows_steps.meeting import raise_if_unavailable
+        door = f"{meetings_door()}/meetings"
+        st, body = http("GET", door, door_headers(uid))
+        raise_if_unavailable("GET", door, st, body)
+    except StepError:
+        raise               # a gateway that did not answer is not a person with no meetings
     except Exception:  # noqa: BLE001 — see docstring
         return []
     if isinstance(body, dict):

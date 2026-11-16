@@ -1,8 +1,9 @@
 """log_scrub.py — a credential in a query string never reaches a log line (security review 2026-10-17, M7).
 
-`/ws` and the VNC relay refuse a key in the URL (`?api_key=<key>`, `ws_auth.py`), but the request
-that carried it is still logged: uvicorn's access line and its WebSocket line both print the full path
-with its query, so a client that puts its key there would leave it in every access log it passes.
+The VNC relay refuses a key in the URL (`?api_key=<key>`), and `/ws` still takes one from 0.12 clients
+until `changed.COMPAT_REMOVED_IN` (`ws_auth.py`); either way the request that carried it is logged:
+uvicorn's access line and its WebSocket line both print the full path with its query, so a client that
+puts its key there would leave it in every access log it passes.
 
 This filter rewrites those records before any handler formats them: the VALUE of `api_key`, `token`,
 `access_token`, `key` and `apikey` query parameters becomes `[redacted]`, in the message and in every

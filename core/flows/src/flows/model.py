@@ -101,6 +101,19 @@ class StepError(Exception):
         self.retryable = retryable
 
 
+class Unavailable(StepError):
+    """A SERVICE THE STEP READS IS HAVING A MOMENT (a 5xx, a 429): parked like a `Wait`, burning NO
+    attempt, every `wait_s`, until `deadline_s` after this step first met it; then failed with the
+    reason. `MAX_ATTEMPTS` over `BACKOFF_S` is about 23 minutes, shorter than an upgrade window.
+    Every other `StepError` (a refused ticket, a crash) keeps that budget."""
+
+    def __init__(self, detail: str, *, wait_s: float = 60.0,
+                 deadline_s: float = 6 * 3600.0) -> None:
+        super().__init__(detail, retryable=True)
+        self.wait_s = float(wait_s)
+        self.deadline_s = float(deadline_s)
+
+
 def _no_checkpoint() -> None:
     """The default `checkpoint`: a step called OUTSIDE the loop — which every unit test does — has
     no lease to renew and no row to save into, and must still run unchanged."""

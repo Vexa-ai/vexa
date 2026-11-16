@@ -143,6 +143,9 @@ export BOT_STT_TIMEOUT_SEC="${BOT_STT_TIMEOUT_SEC:-}"
 export BOT_TRANSCRIPTION_LATENCY="${BOT_TRANSCRIPTION_LATENCY:-}"
 export BOT_STT_CONFIDENCE_FILTER="${BOT_STT_CONFIDENCE_FILTER:-}"
 export BOT_TRANSCRIPT_RECONFIRM_SEC="${BOT_TRANSCRIPT_RECONFIRM_SEC:-}"
+export VEXA_GOOGLE_JOIN_MAX_KNOCKS="${VEXA_GOOGLE_JOIN_MAX_KNOCKS:-}"
+export VEXA_GOOGLE_REKNOCK_BACKOFF_MS="${VEXA_GOOGLE_REKNOCK_BACKOFF_MS:-}"
+export VEXA_GOOGLE_REKNOCK_WIPE="${VEXA_GOOGLE_REKNOCK_WIPE:-}"
 
 export TRANSCRIPTION_SERVICE_URL="${TRANSCRIPTION_SERVICE_URL:-}"
 export TRANSCRIPTION_SERVICE_TOKEN="${TRANSCRIPTION_SERVICE_TOKEN:-}"
@@ -269,6 +272,16 @@ if [ "${VEXA_DISPATCH_SIGNING_KEY:-}" = "dev-dispatch-signing-key" ]; then
     unset VEXA_DISPATCH_SIGNING_KEY
 fi
 export VEXA_DISPATCH_SIGNING_KEY="${VEXA_DISPATCH_SIGNING_KEY:-$(/usr/local/bin/persisted-secret "$lite_state_dir/dispatch-signing-key")}"
+# FLOWS (ADR-0052 §3: required in every profile; booked bots start from its clock). Two keys, minted on
+# the first boot and kept in $VEXA_LITE_STATE_DIR like the two above: the operator key that gates
+# flows-api's POST /flows and POST /events, and the service key flows and the gateway share (the
+# gateway's service door on :8002). Pass either to fix it. Flows keeps its tables in the main database:
+# its DSN is built here from DB_* (user and password URL-quoted), unless VEXA_FLOWS_DB_URL is given.
+export VEXA_FLOWS_API_KEY="${VEXA_FLOWS_API_KEY:-$(/usr/local/bin/persisted-secret "$lite_state_dir/flows-api-key")}"
+export VEXA_FLOWS_SERVICE_KEY="${VEXA_FLOWS_SERVICE_KEY:-$(/usr/local/bin/persisted-secret "$lite_state_dir/flows-service-key")}"
+export VEXA_FLOWS_DB_URL="${VEXA_FLOWS_DB_URL:-$(python3 -c 'import os, urllib.parse as u
+e, q = os.environ, (lambda s: u.quote(s, safe=""))
+print("postgresql+pg8000://%s:%s@%s:%s/%s" % (q(e["DB_USER"]), q(e["DB_PASSWORD"]), e["DB_HOST"], e["DB_PORT"], q(e["DB_NAME"])))')}"
 # Read by no Lite program; minted per boot like the internal tier so no published value is exported.
 export JWT_SECRET="${JWT_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
 

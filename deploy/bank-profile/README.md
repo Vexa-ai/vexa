@@ -71,4 +71,6 @@ cluster and network.
 - **The mock bot.** No browser, no real meeting, no audio through STT: the bot's join, capture and
   transcription paths are not exercised (the STT stub is only reached for TLS and egress).
 - **S3 is plain HTTP**, in the bank's namespace, with one key for both buckets.
-- **Flows is off** (it needs `CREATEDB` or a pre-created database; see the install guide).
+- **Flows runs but is not exercised.** Flows is on in every profile (ADR-0052), in the main database
+  with no `CREATEDB`; the journey sends no booked bot, so its clock is rendered and installed, not
+  driven.

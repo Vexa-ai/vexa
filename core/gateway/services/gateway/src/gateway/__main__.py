@@ -28,7 +28,7 @@ def main() -> None:
         return
 
     from .adapters import build_production_app, load_signing_key
-    from .service_door import build_door_app, door_port
+    from .service_door import build_door_app, door_host, door_port
 
     edge = build_production_app()
     door = build_door_app(identity_key=load_signing_key(
@@ -45,7 +45,7 @@ def main() -> None:
             return None
 
     servers = [_Server(uvicorn.Config(edge, host=host, port=port, log_level=log_level)),
-               _Server(uvicorn.Config(door, host=host, port=door_port(), log_level=log_level))]
+               _Server(uvicorn.Config(door, host=door_host(host), port=door_port(), log_level=log_level))]
 
     async def _serve() -> None:
         loop = asyncio.get_running_loop()

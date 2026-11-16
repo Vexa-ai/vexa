@@ -29,7 +29,8 @@
       "default": "127.0.0.1",
       "targets": [
         "compose",
-        "helm"
+        "helm",
+        "lite"
       ]
     },
     {
@@ -39,7 +40,8 @@
       "default": "18200",
       "targets": [
         "compose",
-        "helm"
+        "helm",
+        "lite"
       ]
     },
     {
@@ -48,7 +50,8 @@
       "description": "The engine's Postgres DSN — the two tables the whole engine is. REQUIRED-EXPLICIT, not a capability: flows without a database is not a deployment, so there is nothing optional to be tri-stated. It used to fall back to a dogfood container lookup in `flows_steps.common.db_url`; a guessed DSN on a host running more than one stack does not fail, it addresses somebody else's data (decision 18d). `sqlite://` is the offline dialect the suite and gate:health run on.",
       "targets": [
         "compose",
-        "helm"
+        "helm",
+        "lite"
       ]
     },
     {
@@ -58,7 +61,8 @@
       "secret": true,
       "targets": [
         "compose",
-        "helm"
+        "helm",
+        "lite"
       ],
       "forbidden_values": [
         "vexa-internal-secret",
@@ -97,7 +101,8 @@
       "secret": true,
       "targets": [
         "compose",
-        "helm"
+        "helm",
+        "lite"
       ],
       "forbidden_values": [
         "vexa-internal-secret",
@@ -154,7 +159,8 @@
       "description": "identity, through the gateway's service door: `http://<gateway>:8002/identity`. The door forwards only the identity calls on the flows allow-list (address ↔ id, ensure a person, settings, is-admin, a room's principal, a bearer's validation). NO HOST-PORT DEFAULT: `http://localhost:18057` is not 'unconfigured', it is A DIFFERENT DEPLOYMENT'S service on any host running two stacks — found live 2026-09-03. A deployment default may name the SERVICE and lives in the deploy surface, never in code.",
       "targets": [
         "compose",
-        "helm"
+        "helm",
+        "lite"
       ]
     },
     {
@@ -164,7 +170,8 @@
       "capability": "meetings",
       "targets": [
         "compose",
-        "helm"
+        "helm",
+        "lite"
       ]
     },
     {
@@ -174,7 +181,8 @@
       "capability": "agent_domain",
       "targets": [
         "compose",
-        "helm"
+        "helm",
+        "lite"
       ]
     },
     {
@@ -194,7 +202,8 @@
       "capability": "terminal_link",
       "targets": [
         "compose",
-        "helm"
+        "helm",
+        "lite"
       ]
     },
     {

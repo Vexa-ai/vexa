@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, Security, status
+from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 from sqlalchemy import delete, func
@@ -1178,19 +1179,37 @@ def create_app() -> FastAPI:
 
     @app.put("/user/transcription")
     async def set_user_transcription(update: TranscriptionPrefsUpdate,
-                                     user: User = Depends(get_current_user_for_update),
+                                     user: User = Depends(get_current_user),
                                      db: AsyncSession = Depends(get_db)):
         """Set the caller's transcription backend override. ``token`` is a SECRET — masked on read.
 
         A person's own endpoint is a destination this deployment's bots send meeting audio to, so it
         is held to the outbound URL guard: an internal or private address is refused here (422) and
         by the bot at every request. The deployment's own STT (env or platform setting) is not."""
+        from .ssrf import SSRFError, validate_url
+
+        class _TranscriptionRejected(Exception):
+            """The endpoint is refused: nothing is stored, the caller gets the typed 422 below."""
+            def __init__(self, kind: str, http_status, reason: str):
+                super().__init__(reason)
+                self.kind, self.http_status, self.reason = kind, http_status, reason
+
+        def _rejected(exc: _TranscriptionRejected) -> JSONResponse:
+            logger.info("transcription endpoint rejected user=%s kind=%s status=%s",
+                        user.id, exc.kind, exc.http_status)
+            # `detail` is a STRING (every client renders it as one; the terminal shows it as-is);
+            # the typed fields sit beside it. Neither the URL nor the token is in any of them.
+            return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, content={
+                "detail": exc.reason, "error": "transcription_endpoint_rejected",
+                "kind": exc.kind, "status": exc.http_status})
+
         url = (update.url or "").strip()
         if url:
-            from .ssrf import SSRFError, validate_url
             try:
                 validate_url(url, what="url", resolve=False)
             except SSRFError as exc:
+                if "internal or private" in str(exc):
+                    return _rejected(_TranscriptionRejected("internal_address", None, str(exc)))
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
         fields = update.model_dump(exclude_unset=True)
         language_fields = {k: fields.pop(k) for k in ("language", "allowed_languages") if k in fields}
@@ -1202,8 +1221,59 @@ def create_app() -> FastAPI:
                 transcription_language_mod.apply(stored, language_fields)
             except transcription_language_mod.Refused as refused:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(refused))
+        endpoint_changes = "url" in fields or "token" in fields
+        cleaned = validate_config_fields(dict(fields)) if endpoint_changes else {}
+
+        def _merged_endpoint(row: User) -> tuple:
+            """The (url, token) the person would END UP with: this write merged over what is saved."""
+            prefs = (row.data if isinstance(row.data, dict) else {}).get("transcription_prefs") or {}
+            merged = apply_config_update(prefs, cleaned)
+            return (merged.get("url") or "", merged.get("token") or "")
+
+        async def _judge(endpoint: tuple):
+            """Probe the merged endpoint. Returns the `probe` note to answer with, or raises the typed
+            422 (nothing stored). A config fault (bad/missing token, unfunded, wrong path) and an
+            internal address refuse; `unreachable` is liveness, not config, so it saves (same rule
+            as the env gate) and is reported in the response."""
+            import asyncio  # noqa: PLC0415
+            from . import transcription_probe as probe_mod  # noqa: PLC0415
+            url, token = endpoint
+            if not url:
+                return None
+            try:
+                verdict = await asyncio.to_thread(probe_mod.probe_endpoint, url, token)
+            except SSRFError as exc:
+                raise _TranscriptionRejected("internal_address", None, str(exc))
+            if not verdict["ok"] and probe_mod.is_config_fault(verdict["kind"]):
+                raise _TranscriptionRejected(verdict["kind"], verdict.get("status"), verdict["reason"])
+            if not verdict["ok"]:
+                return {"ok": False, "kind": verdict["kind"]}
+            return {"ok": True}
+
+        probe_note = None
+        probed = None
+        if endpoint_changes:
+            # Probed BEFORE the row lock is taken below: a slow endpoint must not hold the user's
+            # row (and a transaction) for up to the probe timeout.
+            probed = _merged_endpoint(user)
+            try:
+                probe_note = await _judge(probed)
+            except _TranscriptionRejected as exc:
+                return _rejected(exc)
+        user = await get_current_user_for_update(user, db)
+        if endpoint_changes and _merged_endpoint(user) != probed:
+            # A concurrent write changed the other half (url or token) between the probe and the
+            # lock: what would be stored is not what was judged, so it is judged again, under the
+            # lock, before anything is written. Nothing ever lands unprobed.
+            try:
+                probe_note = await _judge(_merged_endpoint(user))
+            except _TranscriptionRejected as exc:
+                return _rejected(exc)
         await _put_user_prefs(fields, "transcription_prefs", user, db, language_fields=language_fields)
-        return await get_user_transcription(user)
+        view = await get_user_transcription(user)
+        if probe_note:
+            view["probe"] = probe_note
+        return view
 
     @app.get("/user/transcription")
     async def get_user_transcription(user: User = Depends(get_current_user)):

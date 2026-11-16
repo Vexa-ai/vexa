@@ -24,6 +24,8 @@ from flows import Done, Reaction, Registry, StepCtx
 
 from test_attendee_drop import PRIOR, REFS, Store, _rig  # noqa: F401 — the drop's own rig, reused
 
+pytestmark = pytest.mark.usefixtures("meetings_hold_no_row")
+
 
 @pytest.fixture(autouse=True)
 def scaffolds(monkeypatch):

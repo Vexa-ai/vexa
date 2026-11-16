@@ -85,3 +85,11 @@ reinforced at choke point 2. AGENTS.md "How you work the checkout" links the sec
 `docs/docs/governance/delivery.mdx`: five new rows — D-L0/D-L1 (**TO BUILD**, #689/#690),
 D-L2 (**TO BUILD**, #690), D-L3 (**have** #686 regression test / **TO BUILD** rerun rule), and
 D-L4 (**have** choke point 2 / **TO BUILD** #690 rehearsal probe).
+
+## Amendment 2026-10-30 — D-L4's second placement is the approve gate (#1935)
+
+D-L4's «(final witness; sign/approve)» now reads «(final witness; approve gate, the diff review)».
+D-L4's second human placement is the approve gate (the diff review); the value sign-off is retired
+(#1935), and a non-author validation is optional and credited. The human still appears exactly
+twice: choke point 1 (the merge card) and choke point 2 (the release witness pass). The rehearsal
+obligation and the D-L4 enforcement-map row are unchanged.

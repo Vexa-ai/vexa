@@ -68,7 +68,13 @@
         },
         "idleTimeoutSec": { "type": "integer", "minimum": 0 },
         "maxLifetimeSec": { "type": "integer", "minimum": 0 },
-        "backend": { "$ref": "#/$defs/Backend" }
+        "backend": { "$ref": "#/$defs/Backend" },
+        "avoidNodes": {
+          "type": "array",
+          "maxItems": 10,
+          "items": { "type": "string", "minLength": 1, "maxLength": 253, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" },
+          "description": "Kubernetes node names to place this workload away from: a preferred anti-affinity on kubernetes.io/hostname, never required. A meeting's next join attempt after Google Meet refused one on these nodes. The k8s backend applies it; docker and process ignore it. A name that is not a node name, or more than 10, refuses the spec"
+        }
       }
     },
     "WorkloadStatus": {

@@ -485,6 +485,39 @@
       ]
     },
     {
+      "key": "VEXA_GOOGLE_JOIN_MAX_KNOCKS",
+      "class": "defaulted",
+      "default": "(unset \u2014 bot default 10)",
+      "description": "Google Meet: knocks per join when Meet refuses the knock (integer 1..20; invalid \u2192 10); forwarded to spawned bots",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "VEXA_GOOGLE_REKNOCK_BACKOFF_MS",
+      "class": "defaulted",
+      "default": "(unset \u2014 no extra wait)",
+      "description": "Google Meet: comma-separated extra wait in ms before knocks 2..n, last value repeats (each 0..120000, total <= 600000; invalid \u2192 none); forwarded to spawned bots",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "VEXA_GOOGLE_REKNOCK_WIPE",
+      "class": "defaulted",
+      "default": "(unset \u2014 off)",
+      "description": "Google Meet: 1 or true wipes the anonymous guest's Google cookies and storage before a re-knock; forwarded to spawned bots",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
       "key": "BOT_STT_CONFIDENCE_FILTER",
       "class": "defaulted",
       "default": "(unset — the always-on low-confidence rule only)",

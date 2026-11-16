@@ -292,11 +292,11 @@ def test_post_chat_believes_only_the_gateways_signed_identity():
     assert pub.published == []
 
 
-def test_post_chat_needs_the_bot_scope_on_the_signed_identity():
+def test_post_chat_needs_bot_or_tx_on_the_signed_identity():
     client, repo, pub, signed = _guarded()
     _seed(repo)
-    assert client.post(f"/bots/{PLAT}/{NATIVE}/chat", headers=signed(["tx"]),
-                       json={"text": "no bot scope"}).status_code == 403
+    assert client.post(f"/bots/{PLAT}/{NATIVE}/chat", headers=signed(["browser"]),
+                       json={"text": "no bot or tx scope"}).status_code == 403
     assert pub.published == []
     r = client.post(f"/bots/{PLAT}/{NATIVE}/chat", headers=signed(["bot"]), json={"text": "mine"})
     assert r.status_code == 200, r.text

@@ -358,6 +358,24 @@ _SRC = pathlib.Path(__file__).resolve().parents[1] / "src"
 _REAL_ROOT = routes_manifest._repo_root()
 
 
+# --- one key does everything its owner may do (#1922, one_key_scope) ------------------------------
+
+def test_every_scoped_row_in_every_carried_manifest_takes_exactly_bot_and_tx():
+    """The bot/tx split must not come back: every scoped row declares exactly ["bot","tx"]."""
+    import json
+    carried = {d: p for d, p in routes_manifest.manifest_paths(_REAL_ROOT).items() if p.is_file()}
+    assert {"meetings", "identity"} <= set(carried), carried
+    wrong = [(domain, row.get("method"), row.get("path"), row["scopes"])
+             for domain, path in carried.items()
+             for row in json.loads(path.read_text()).get("routes", [])
+             if row.get("scopes") and sorted(row["scopes"]) != ["bot", "tx"]]
+    assert not wrong, wrong
+
+
+def test_the_assembled_table_has_one_scope_set():
+    assert {v for v in ROUTE_SCOPES.values() if v} == {frozenset({"bot", "tx"})}
+
+
 def _cut(tmp_path, domains):
     """A repo root carrying only `domains`' manifests, copied from the real ones."""
     root = _REAL_ROOT

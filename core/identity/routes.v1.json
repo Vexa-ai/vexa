@@ -10,7 +10,8 @@
       "method": "GET",
       "path": "/user/calendar",
       "scopes": [
-        "bot"
+        "bot",
+        "tx"
       ],
       "shared": "refuse"
     },
@@ -18,7 +19,8 @@
       "method": "PUT",
       "path": "/user/calendar",
       "scopes": [
-        "bot"
+        "bot",
+        "tx"
       ],
       "shared": "refuse"
     },
@@ -26,7 +28,8 @@
       "method": "GET",
       "path": "/user/calendars",
       "scopes": [
-        "bot"
+        "bot",
+        "tx"
       ],
       "shared": "refuse"
     },
@@ -34,7 +37,8 @@
       "method": "POST",
       "path": "/user/calendars",
       "scopes": [
-        "bot"
+        "bot",
+        "tx"
       ],
       "shared": "refuse"
     },
@@ -42,7 +46,8 @@
       "method": "DELETE",
       "path": "/user/calendars/{calendar_id}",
       "scopes": [
-        "bot"
+        "bot",
+        "tx"
       ],
       "shared": "refuse"
     },
@@ -50,7 +55,8 @@
       "method": "PATCH",
       "path": "/user/calendars/{calendar_id}",
       "scopes": [
-        "bot"
+        "bot",
+        "tx"
       ],
       "shared": "refuse"
     },

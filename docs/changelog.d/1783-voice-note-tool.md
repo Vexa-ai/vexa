@@ -1,6 +1,6 @@
 - **Minutes · a voice note starts from a suggestion or from the agent.** An empty chat suggests
   *Record a voice note*, and asking the agent to record one opens the recorder in your tab through the
-  new MCP tool `record_voice_note` (`POST /voice-notes/recorder`, scope `bot`). The tool records
+  new MCP tool `record_voice_note` (`POST /voice-notes/recorder`, any API key). The tool records
   nothing itself and is refused in a run with nobody present. The chats rail no longer has a
   microphone button; it still shows a running clock, with Stop, while a note records. The composer's
   microphone is unchanged: it dictates into the message box.

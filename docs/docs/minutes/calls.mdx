@@ -177,7 +177,7 @@ join after the sixth hour cannot redeem it, and their join fails.
 
 | Route | Service | Who may call it |
 |---|---|---|
-| `POST /bots {"platform":"vexa_call"}` | meeting-api | a person with the `bot` scope; the caller becomes the owner |
+| `POST /bots {"platform":"vexa_call"}` | meeting-api | a person with any API key (`bot` or `tx`); the caller becomes the owner |
 | `GET /agent/sessions/{s}/call` | agent-api | any participant of the session |
 | `POST /agent/sessions/{s}/call` | agent-api | an owner or member; only for their own room |
 | `POST /agent/sessions/{s}/call/token` | agent-api | any participant; a viewer's token cannot publish |

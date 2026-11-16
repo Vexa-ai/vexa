@@ -206,6 +206,7 @@ def build_workload_spec(
     invocation: dict,
     callback_url: Optional[str] = None,
     extra_env: Optional[dict[str, str]] = None,
+    avoid_nodes: Optional[list[str]] = None,
 ) -> dict:
     """Wrap ``invocation`` as the bot's ONE config env var (``VEXA_BOT_CONFIG``) inside a ``runtime.v1``
     ``WorkloadSpec`` (``profile="meeting-bot"``). The bot image resolves from the kernel's profile
@@ -226,5 +227,9 @@ def build_workload_spec(
     }
     if callback_url:
         spec["callbackUrl"] = callback_url
+    # Nodes a refused earlier attempt ran on (lifecycle/meet_respawn.py): the runtime prefers others,
+    # never requires it. Sent only on a respawn, so a first spawn's spec is unchanged.
+    if avoid_nodes:
+        spec["avoidNodes"] = list(dict.fromkeys(avoid_nodes))[-10:]
     conforms_workload_spec(spec)
     return spec

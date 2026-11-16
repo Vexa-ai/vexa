@@ -54,12 +54,13 @@ one arc, and each arc has a gate.
                     └───────────────┬───────────────┘
                                     │  a PR: value bundle + diff
                     ┌───────────────▼───────────────┐
-                    │  6. PROVE (D8 · D9 · D10 · D12│  non-author witnesses value; channels
+                    │  6. PROVE (D8 · D9 · D10 · D12│  value-fsm green on head; channels
                     │     ) + SECURE (D-S)          │  corroborate; diff passes review+security
+                    │                               │  (a live non-author validation is optional and credited)
                     └───────────────┬───────────────┘
-                                    │  value-signed + acceptance floor met
+                                    │  value-fsm green + acceptance floor met
                     ┌───────────────▼───────────────┐
-                    │  7. RELEASE   (D15)           │  batch signed PRs → ship → credit signers
+                    │  7. RELEASE   (D15)           │  batch merged PRs → ship → credit authors + validators
                     └───────────────┬───────────────┘
                                     │  shipped value
         ┌───────────────────────────▼────────────────────────────────┐
@@ -73,9 +74,10 @@ one arc, and each arc has a gate.
 ```
 
 **In one sentence:** the world's feedback becomes a prepared, harnessed, merge-guaranteed issue on
-an ordered roadmap; a human takes it on a heartbeat lease, delivers it with an agent in the
-harnessed loop, and a *different* human witnesses the value — corroborated by instruments, never
-on authority alone — after which it ships in a batch and the loop closes back to whoever raised it.
+an ordered roadmap; a human takes it on a heartbeat lease and delivers it with an agent in the
+harnessed loop. It merges once the automated value check (value-fsm) and a *different* human's diff
+review are green, never on authority alone. A live non-author validation is invited and credited,
+not awaited. Then it ships in a batch and the loop closes back to whoever raised it.
 
 ## 2. Meta
 
@@ -114,7 +116,7 @@ component's early validation names its fixture(s); new seams ship a range, not a
 authorities.** A **maintainer** exclusively (1) **approves an issue as `ready`** — the stamp that
 puts it on the guaranteed path — and (2) **merges PRs** — checks the bundle against the acceptance
 table + the closing security bundle and honors the promise. **Everything else is species-neutral**:
-preparing, proposing, claiming, delivering, heartbeating, validating as the non-author, signing,
+preparing, proposing, claiming, delivering, heartbeating, validating as the non-author,
 authoring probes — contributors and maintainers do all of it under identical rules ("ours
 included"). Why exactly these two: `ready` is where the project's guarantee is *issued*, merge is
 where it is *honored* — a promise needs an accountable guarantor; everything before and after
@@ -128,8 +130,8 @@ issue body IS the constitution applied). **DELIVER** — a prepared issue is bui
 in the harnessed loop and proven. Because this constitution is public, both phases are open to
 both species; only the `ready` stamp and the merge are maintainer acts. · *Source:* dual-track
 discovery/delivery (Cagan); open governance. · *Gate:* the state machine — `incoming → prepared`
-is PREPARE (anyone); `prepared → ready` is the maintainer stamp; `ready → claimed → value-signed`
-is DELIVER (anyone); `value-signed → merged` is the maintainer honoring the promise. Each phase
+is PREPARE (anyone); `prepared → ready` is the maintainer stamp; `ready → claimed → awaiting-evaluation`
+is DELIVER (anyone); merge on a green merge card is the maintainer honoring the promise. Each phase
 has its operational protocol below: [PREPARE](#prepare-protocol) (queue item → prepared
 issue) and [TAKE](#take-protocol) (delivered PR → verdict against the floor).
 
@@ -202,7 +204,7 @@ preparation: *would splitting duplicate the same diff across issues?* → bundle
 staple independent diffs into one PR?* → split. This is D8's precondition: issue=PR one-to-one
 only works if the issue is shaped like exactly one change. **The perceiver bounds the atom —
 platform-facing behavior is per-platform:** a Meet user's value is Meet working; they will not
-debug Teams, and a validator can only sign the platform they sit on. Issues about in-meeting
+debug Teams, and a validator can only validate the platform they sit on. Issues about in-meeting
 behavior are prepared one per platform even when the engine diff is shared: the first platform
 issue claimed carries the shared-engine change, its siblings reference it (`same-setup`) and
 validate their own platform's fixtures and live leg. · *Source:* single responsibility
@@ -231,14 +233,14 @@ surface up front — which pages, at which altitudes — and the PR carries the 
 code diff. A real docs change is rarely one line: the same truth usually lands in several places
 at several levels (the quickstart step that touches it, the how-to that walks it, the reference
 that specifies it, the concept page that explains why), each written for its reader. The human
-validator's signature covers the docs too, and it is judgment work no checker replaces: does the
+review covers the docs too (and so does a live validation, when one is run), and it is judgment work no checker replaces: does the
 update *follow the docs story* — right pages, right altitude, consistent with how the docs already
 teach, explained from the angles a reader actually arrives from — not merely "words were edited
 somewhere". A docs-less capability or a story-breaking page is an incomplete delivery, same as a
 red acceptance row. · *Source:* documentation as part of done (DoD discipline); Diátaxis — the
 four documentation modes are different readers, not duplication. · *Gate:* prepared-issue template
 requires the "docs surface" section before `ready`; the PR template's bundle includes the docs
-diff; the value attestation includes the docs-story check.
+diff; the diff review includes the docs-story check.
 
 **D7 — Every defect indicts a principle or founds one.** Each fix names the architecture principle
 it restores (verbatim) and the gate that should have caught it; a defect covered by no principle
@@ -303,7 +305,7 @@ read (#686). · *Gate:* a durable regression test on the fixed gate (here-string
 **have** (#686) / **[TO BUILD: rerun-discipline check]**
 
 **D-L4 — Human placement: the human appears exactly twice.** The final **witness pass** and the
-**sign / approve** gates — and nothing else. Everything before is **agent-self-served** — the agent
+**approve** gate (the diff review) — and nothing else. Everything before is **agent-self-served** — the agent
 drives its own browser session, raw-protocol clients, synthetic and dead-URL meetings, in-bot
 screenshots — and **rehearses the demo path end-to-end minutes before the human walks it**. A human
 asked to admit a bot and handed a dead tunnel, a stale session, or a cold-start model is a scarce
@@ -339,13 +341,15 @@ me — I witness the value."* Everything measurable is captured by machine along
 validation is **multichannel**: what the bot did (logs, FSM, egress), what the user saw (the
 eyeball, screenshots, transcript), what the instruments recorded (counters, test output). The
 validator is any competent non-author — a maintainer, another contributor, or the originating
-reporter, who is the *preferred* signer for a fix that closes their own report. **Humans mistake,
+reporter, who is the *preferred* validator for a fix that closes their own report. **Humans mistake,
 so the human's observation carries no distinctive authority — it is harnessed in the same paradigm
-as every other channel**: a green PR requires the channels to *corroborate*, not the human to
-*assert*, and a human/instrument divergence is a first-class finding that blocks merge until
-reconciled. · *Source:* triangulation / converging evidence; segregation of duties; no single
-oracle. · *Gate:* `gate:value-signed` — green only on a non-author attestation whose multichannel
-bundle is internally consistent. **[TO BUILD: value-gate bot]**
+as every other channel**: a validation counts only when its channels *corroborate*, not when the
+human *asserts*, and a human/instrument divergence is a first-class finding (D11), filed and
+credited. It does not block merge by itself; it reaches the merge card through a red value-fsm, a
+`fail` pass marker or a changes-requested review. · *Source:* triangulation / converging evidence;
+segregation of duties; no single oracle. · *Gate:* the merge card's Value row: value-fsm green on
+the head (non-runtime PRs: no value-fsm leg). No human sign-off is a merge gate; a non-author
+validation is optional and credited (#1935).
 
 **D10 — Acceptance is a pre-declared experiment that guarantees merge — a floor, never a ceiling
 on value.** Each issue publishes observations that, if presented, **guarantee** the PR merges — a
@@ -400,7 +404,7 @@ agent co-authors; the attestation signer is the accountable author. **[TO BUILD:
 
 **D14 — The tracker is the CI of the human loop.** Labels are truth, not decoration: a state label
 means exactly what it says, enforced by the state machine (`incoming → prepared → ready → claimed
-→ awaiting-evaluation → value-signed → closed-with-release`). Nothing is claimed before `ready`;
+→ awaiting-evaluation → closed-with-release`). Nothing is claimed before `ready`;
 community-authored issues enter the same machine. · *Source:* explicit value stream (Lean);
 make-illegal-states-unrepresentable (Wlaschin). · *Gate:* a label bot enforces legal transitions;
 `ready` is the maintainer stamp. **[TO BUILD: label bot]**
@@ -426,22 +430,22 @@ production-critical, `good first issue` only when truly zero-prerequisite.**
 
 | Dimension | Tags | Rule |
 |---|---|---|
-| `state:` | `incoming` · `needs-info` · `prepared` · `ready` · `claimed` · `awaiting-evaluation` · `value-signed` | exactly one, always; transitions only via the machine; `ready` = maintainer stamp; `claimed` = live lease; closure carries no state |
+| `state:` | `incoming` · `needs-info` · `prepared` · `ready` · `claimed` · `awaiting-evaluation` | exactly one, always; transitions only via the machine; `ready` = maintainer stamp; `claimed` = live lease; closure carries no state |
 | `declined:` | `out-of-scope` · `superseded` · `wont-fix` · `too-far` · `stale` | exactly one, on closed-without-merge only (D17) |
 | `kind:` | `fix-request` · `evaluation-request` · `probe` | the prepared ask's contract shape; legacy `type: bug\|feature\|docs` stays as the raw signal's nature — an issue carries both |
 | `area:` | existing taxonomy + `security` | routing; any number |
 | flags | `P0` · `good first issue` · `help wanted` | strict meanings; never inflate. **Canonical spellings — `good first issue` and `help wanted`, with spaces, are the only accepted forms** (GitHub's newcomer-discovery UI promotes exactly these names); hyphenated or underscored variants (`good-first`, `good-first-issue`, `help-wanted`) are never created and never applied |
 
 Invariants the bots enforce: one `state:` at all times; illegal transitions reverted; `ready`
-maintainer-only on a passing template check; `claimed` only with a live lease; a PR merges only if
-its issue is `value-signed` + security green; `incoming` >3 days alarms; `needs-info` quiet 14
+maintainer-only on a passing template check; `claimed` only with a live lease; a PR merges only on
+a green merge card; `incoming` >3 days alarms; `needs-info` quiet 14
 days → proposed `declined: stale`; every closed-without-merge issue carries one `declined:` reason.
 
 ## 10. Release and closure
 
-**D15 — Release closes the loop, fast.** A maintainer batches a few value-signed PRs, runs the
+**D15 — Release closes the loop, fast.** A maintainer batches a few merged PRs, runs the
 release machinery (image set, gates, VM-validated) and the closing security bundle, ships, and the
-notes credit every signer — including INVALIDATED ones. The release loop and the contribution loop
+notes credit every author and validator — including INVALIDATED ones. The release loop and the contribution loop
 are the same loop. · *Source:* small batches, fast flow (Accelerate/DORA); continuous delivery.
 · *Gate:* release-set + `release/vm-validated` + maintainer-security-bundle required statuses;
 notes generated from signed bundles.
@@ -524,8 +528,7 @@ Every open issue carries exactly one `state:` label:
 | `state: prepared` | Full delivery spec, code-grounded; awaiting the maintainer's ready stamp |
 | `state: ready` | Maintainer-stamped — claimable now |
 | `state: claimed` | Someone is on it (heartbeat lease, D14b: renew by activity; ~4h silence releases) |
-| `state: awaiting-evaluation` | Delivered — waiting for a non-author to validate the value live |
-| `state: value-signed` | A non-author witnessed the value; merge proceeds |
+| `state: awaiting-evaluation` | Delivered — PR open, under TAKE and the merge card (a live validation is invited; optional, credited) |
 | `state: accepted` | Feature acknowledged into the queue, not yet prepared |
 | `state: incident-thread` | User-facing thread of a hosted/ops incident — open for the reporter; fix tracked in the ops lane |
 | `state: needs-info` | A real, dated question pending; ~14 quiet days → honest stale-close |
@@ -566,7 +569,7 @@ State it before writing the body:
 - Adjacent-but-different-diff work → a `same-setup:` note naming the batch, never a merge.
 - **Platform rule (the perceiver bounds the atom):** in-meeting behavior prepares ONE issue per
   platform, even when the engine diff is shared — a Meet user won't debug Teams, and a validator
-  signs only the platform they sit on. The first platform issue claimed carries the shared-engine
+  validates only the platform they sit on. The first platform issue claimed carries the shared-engine
   change; siblings reference it and validate their own platform's fixtures + live leg.
 
 #### Step 4 — Write the body (template sections, in order)
@@ -604,7 +607,7 @@ State it before writing the body:
    impact" must be argued, never assumed.
 10. **Live bar** (D12) — scaled to the observation: speaker behavior 2–5 people, join/API one
     operator, a parser none. Never more humans than the observation requires.
-11. **Validation request** (D9) — the preferred signer is the originating reporter(s), named;
+11. **Validation request** (D9; optional, credited) — the preferred validator is the originating reporter(s), named;
     any competent non-author qualifies. Multichannel: what the bot did, what the human saw, what
     the instruments recorded — channels must corroborate.
 12. **Principle check** (D7, fix-requests only) — the architecture principle this defect indicts
@@ -621,7 +624,7 @@ State it before writing the body:
 #### Step 6 — Self-audit, then emit
 Run the gate checklist: value sentence(s) witnessable · every Target exists · every component has
 a harness + fixture range · table rows discriminating/controlled/anchored/complete · row per
-value · deployments declared · docs surface named · live bar scaled · preferred signer named ·
+value · deployments declared · docs surface named · live bar scaled · preferred validator named ·
 D5b verdict stated · D7 check present (fixes). Then emit, in order:
 1. the D5b verdict, 2. the full issue body, 3. the label set, 4. the supersede/close list with
 drafted comments, 5. open questions for the maintainer — anything you could not ground in code or
@@ -701,18 +704,18 @@ attempt, and never let a table defect read as a contributor failure.
 
 Credit what is verifiably right FIRST, and say what you verified ("checked, correct" beats
 silence). Findings carry `file:line` and the failure scenario, never adjectives. On a
-contributor's first PR, post the validation-protocol explanation (the two human layers and
-the exact path to merge) so nothing surprises them after the fixes — the review comment is
+contributor's first PR, post the validation-protocol explanation (the human diff review that
+gates merge, the optional live validation that is credited, and the exact path to merge) so nothing surprises them after the fixes — the review comment is
 also the onboarding.
 
 #### Step 6 — The verdict (exactly one)
 
 Every verdict names the **head sha it examined** — a later push renders the endorsement visibly historical, the same way GitHub dismisses stale approvals (#621: a TAKE praised a head the author replaced hours later, and the stale endorsement stood while the architecture changed underneath it).
 
-- **Floor met + diff sound** → arrange the value validation: a **non-author** runs it live
-  (preferred signer: the originating reporter, D16/D9), multichannel evidence corroborating,
-  attestation naming setup + build provenance (D12b). On the signature: merge, label
-  `state: value-signed`, credit author AND validator.
+- **Floor met + diff sound** → approve, and merge once the merge card is green. Invite a
+  non-author live validation (preferred validator: the originating reporter, D16/D9; multichannel,
+  setup + build provenance named, D12b). It is optional, runs before or after merge, and is
+  credited. Credit author AND validator.
 - **Floor not met** → CHANGES_REQUESTED with the row-by-row map from step 2 and the exact,
   finite path to merge — then restate the promise: present the table and this merges. Nothing
   beyond the floor may be demanded (value beyond it is welcomed and credited, never required).
@@ -723,9 +726,9 @@ Every verdict names the **head sha it examined** — a later push renders the en
 
 #### Step 7 — After merge: close the loop
 
-`value-signed` → ships in the next release batch (D15) → the issue closes **with the
+Merged → ships in the next release batch (D15) → the issue closes **with the
 release**, the close-back names the fix and invites the reporter who validated (D16), and
-release notes credit authors and signers by name. An issue closed without its reporter
+release notes credit authors and validators by name. An issue closed without its reporter
 hearing about it is an unclosed loop.
 
 #### Honesty rules (override everything)
@@ -773,7 +776,7 @@ code**. Cross-check tool answers (CLI state, cached reads) against a second sour
 deterministic failure rerun as a flake burns builds and hides the bug (v0.12.9's SIGPIPE gate, #686).
 
 **Rehearse before the human (`D-L4`).** The human appears exactly twice — the witness pass and the
-sign/approve gates. Everything else the agent self-serves (own browser session, raw-protocol clients,
+approve gate (the diff review). Everything else the agent self-serves (own browser session, raw-protocol clients,
 synthetic and dead-URL meetings, in-bot screenshots), and the agent **runs the demo path end-to-end
 minutes before the human walks it** (`make probe` is the rehearsal, #690). A human handed a dead
 tunnel or a cold model is a wasted oracle.
@@ -807,31 +810,31 @@ Two laws fall out of the ladder:
   treated as an incident (the v0.12.1 lesson: a machinery-green release was published as if
   value-witnessed; the witness was still unsigned).
 
-### The human signature
+### The human validation (optional, credited)
 
-Before merge, a **non-author** signs what they witnessed **above the automation line** — after
-the **author's own witness**: the author runs their change live first and their run is the
+A **non-author** may validate what they witness **above the automation line**: optional and
+credited (D9), not a step before merge. It comes after the **author's own witness**: the author runs their change live first and their run is the
 bundle's first row; you never ask another human to witness value you haven't witnessed yourself.
 Where every acceptance row sits at or below the automation line (behavior `pr-value`/L3.5 proves
-on the PR's sha), the machine rows stand as the live witness and the non-author signs the
-*review of the evidence*, not a re-run.
+on the PR's sha), the machine rows stand as the live witness, and a non-author who validates
+reviews the evidence rather than re-running it.
 
 The attestation is **multichannel** — what the bot did (logs), what the human saw (the meeting,
 the transcript), what the instruments recorded (test output, API responses) — and the channels
-must **corroborate**: a human/instrument divergence blocks merge until reconciled, as a finding
-in its own right (D9). Per **D12b** it names its setup and build provenance: deployment, repo
-sha, fresh-clone or long-lived, env deltas from stock. Per **D6c** it covers the docs story.
+must **corroborate**: a human/instrument divergence is a finding in its own right (D9/D11),
+filed and credited; it does not block merge by itself. Per **D12b** it names its setup and build provenance: deployment, repo
+sha, fresh-clone or long-lived, env deltas from stock. Per **D6c**, when run, it covers the docs story too.
 Validators are credited in release notes alongside authors; the originating reporter is the
-preferred signer (D16); an invalidation is a first-class, credited result (D11).
+preferred validator (D16); an invalidation is a first-class, credited result (D11).
 
 ## Integration — the merge bar
 
 Main is **always releasable, never auto-released**. A PR enters it when: the acceptance floor is
 presented (TAKE, step 2 — machine rows + contributor rows) · the diff passes review + the named
 security checks (D-S) · **an architecture pass and a security pass are on record for the PR's
-head sha** (every PR, below) · the value is signed (D9) · sealed-contract changes rode `lane:contract`
-with a human review · the full CI gate suite is green **and `pr-value` is green when the PR
-touches a runtime surface** — the machine contract between every PR and main
+head sha** (every PR, below) · **`value-fsm` (pr-value) is green on the head sha**, or the PR is non-runtime
+and has no value-fsm leg; no human sign-off (D9) · sealed-contract changes rode `lane:contract`
+with a human review · the full CI gate suite is green — the machine contract between every PR and main
 ([the live map](/governance/arch-compliance)). **Merge is the promise to the contributor,
 honored.**
 
@@ -880,7 +883,7 @@ admin on the repo) carries its marker for the PR's current head sha:
 
 **A release is the promise to users** — a batch event, distinct from merge:
 
-1. **Batch** — the value-signed merges since the last release, cut on the version milestone.
+1. **Batch** — the merges since the last release, cut on the version milestone.
 2. **Validate together** — the release machinery proves the batch as a whole (the compose stack
    bot-ready end-to-end, L4 evidence); individually-proven changes can still interfere.
 3. **Publish** — images built and pushed; **tags move per the declared tag policy** (`:v012`
@@ -1020,7 +1023,7 @@ acts (D-R0); everything else in the cycle is species-neutral.
 
 You are running one maintenance cycle over Vexa-ai/vexa. Input: the open PRs, the tracker, the
 board. Output: every open PR advanced exactly one honest state (or explicitly left, with why),
-and a release verdict. You never lower a floor, never merge unsigned value, never let silence
+and a release verdict. You never lower a floor, never merge on a red merge card, never let silence
 rot a claim.
 
 **Step 1 — sweep every open PR, oldest first, and classify:**
@@ -1035,11 +1038,12 @@ rot a claim.
 - **Changes requested** → heartbeat check: active → wait; silent days → one nudge (issue +
   Discord); silent past the lease → release the claim, mark the PR draft, thank the author,
   requeue the issue.
-- **Floor met, awaiting validation** → drive it: ping the preferred signer (the reporter);
-  no signer in reach → recruit any competent non-author (the lane names the species); an
-  owner-only leg → surface it to the owner explicitly per [Asking the human](#asking-the-human),
-  never let it wait silently.
-- **Value-signed** → merge same-day (the promise, honored), label, credit in the thread.
+- **Floor met, merge card red** → name the red row and drive it: re-run value-fsm, post the pass
+  markers, or review. If a leg only the owner can supply is missing, surface it to the owner per
+  [Asking the human](#asking-the-human); never let it wait silently. Invite a live validation in
+  parallel (preferred validator: the reporter; else any competent non-author). It is credited and
+  never a merge hold.
+- **Merge card green** → merge same-day (the promise, honored), credit in the thread.
 
 **Step 2 — cross-PR invariants:** two PRs on one issue → the earlier claim holds, the later
 gets an honest note (and its novel value, if any, becomes a fork on the issue). One PR spanning
@@ -1047,10 +1051,10 @@ two issues → split request (D8). Every touched issue/PR leaves the cycle with 
 `state:` label.
 
 **Step 3 — release ripeness.** After merges, ask: is a release due? Triggers, any one
-sufficient: a P0 fix merged (ship fast) · the value-signed backlog reaches a batch worth
+sufficient: a P0 fix merged (ship fast) · the merged backlog reaches a batch worth
 validating together · a milestone checkpoint or time-box arrives. Ripe → run the
 [ship bar](#release--the-ship-bar) end to end: batch → validate together → publish + move tags
-per policy → notes crediting authors and signers → close-backs to every reporter → milestone
+per policy → notes crediting authors and validators → close-backs to every reporter → milestone
 tick. Not ripe → say what would make it ripe.
 
 **Step 4 — report facts.** End the cycle with the dashboard, not adjectives — its FIRST line
@@ -1076,7 +1080,7 @@ silence is released, never punished · every decline names its reopen condition 
 | D3/D4 business meaning + code grounding | preparation review checklist | **have** (manual) |
 | D5/D6 issue shape | issue template with required sections | **have** (`.github/ISSUE_TEMPLATE/3-prepared-issue.md`) |
 | D5b bundle-by-diff | split/bundle test at preparation review; one acceptance row per stated value | **have** (template note + manual review) / **TO BUILD** (row-per-value in bundle checker) |
-| D6c docs ride the change; docs declare their release; docs story human-validated | `docs-current` (product-surface PR updates docs/ or declares `docs: none`) · `gate:docs-version` (docs stamp == appVersion) · attestation covers the docs story | **have** (CI: `docs-current-gate` + `gate:docs-version`, [ADR-0032](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0032-docs-currency-gates.md)) / **TO BUILD** (content-accuracy stays human) |
+| D6c docs ride the change; docs declare their release; docs story human-reviewed | `docs-current` (product-surface PR updates docs/ or declares `docs: none`) · `gate:docs-version` (docs stamp == appVersion) · the diff review covers the docs story | **have** (CI: `docs-current-gate` + `gate:docs-version`, [ADR-0032](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0032-docs-currency-gates.md)) / **TO BUILD** (content-accuracy stays human) |
 | D12b deployment named + setup provenance | "deployments to validate" required before `ready`; attestation names setup + build provenance | **have** (templates) / **TO BUILD** (bundle checker flags rows with no named deployment) |
 | D7 principle check on fixes | fix-request template section | **have** (prepared-issue template) |
 | D-L0/D-L1 debug ≠ deliver + assembled-probe exit criterion | the standing hot loop (`make probe`) + a pre-tag real-spawn leg, so the packaging pipeline is never the debugger | **TO BUILD** (#689 real-spawn leg · #690 `make probe`; [ADR-0033](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0033-the-two-loops-debug-flake-human.md)) |
@@ -1085,9 +1089,9 @@ silence is released, never punished · every decline names its reopen condition 
 | D-L4 human placement — exactly twice + rehearsal | agent-rehearsable probe is the rehearsal; choke point 2 names the witness moment | **have** (choke point 2 named) / **TO BUILD** (#690 agent-rehearsable probe) |
 | D8 bundle + diff | PR template requires the observation bundle | **have** (`.github/pull_request_template.md`) |
 | D-S security lanes | contributor security status + maintainer bundle · **merge-time:** a maintainer security pass on the head sha, every PR | **TO BUILD** (status) / **have** (maintainer practice; CI: `merge-card` Security row) |
-| D9 value-signed, corroborated | `gate:value-signed` checks non-author + channel consistency (merge-time) · **release-time:** `value-gate` requires every batch PR pr-value-green/value-signed | **have** (CI: `merge-card-gate` merge-time, `release-value-gate` release-time; [ADR-0029](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0029-release-witness-and-value-gates-enforced.md)/[ADR-0030](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0030-merge-card-value-and-diff-gate.md)) |
+| D9 value, corroborated | merge-time: `merge-card` Value row = value-fsm green on head (non-runtime: no leg) · release-time: `value-gate` requires every batch PR pr-value-green (non-runtime: gates-green) · non-author validation optional and credited | **have** (CI: `merge-card-gate` merge-time, `release-value-gate` release-time; [ADR-0029](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0029-release-witness-and-value-gates-enforced.md)/[ADR-0030](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0030-merge-card-value-and-diff-gate.md)) |
 | D10 acceptance floor | bundle-vs-table check (merge-time) · **release-time:** guarantee line 8 enforced by `value-gate` | **TO BUILD** (bundle checker) / **have** (CI: `release-value-gate`) |
-| Merge bar — value + diff accepted (choke point 1) | `merge-card` required status check: value-fsm green + `state: value-signed` (value) AND a fresh non-author review approval, or maintainer self-review when the author holds the commit bit (diff) | **have** (CI: `merge-card-gate`, [ADR-0030](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0030-merge-card-value-and-diff-gate.md)) |
+| Merge bar — value + diff accepted (choke point 1) | `merge-card` required status check: value-fsm green on head (non-runtime: no value-fsm leg) (value) AND a fresh non-author review approval, or maintainer self-review when the author holds the commit bit (diff) | **have** (CI: `merge-card-gate`, [ADR-0030](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0030-merge-card-value-and-diff-gate.md)) |
 | Merge bar — architecture + security passes on every PR | `merge-card` rows: a maintainer's `vexa-pass:architecture` and `vexa-pass:security` markers for the current head sha (`verdict=pass`, or `verdict=waived` with `waived-by=<maintainer>`), leading the comment; a pass comment re-runs the card (`merge-card-pass`); findings never on the PR | **have** (CI: `merge-card-gate`, [ADR-0030 amendment](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0030-merge-card-value-and-diff-gate.md#amendment-2026-10-08--architecture-and-security-passes)) |
 | Contributor onboarding — explain the change | PR template + CONTRIBUTING recommend Discord; `pr-welcome` nudges first-timers (recommended, never a gate) | **have** (templates + CI) |
 | D11 both verdicts credited | release-notes generation from bundles | **TO BUILD** |

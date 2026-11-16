@@ -209,14 +209,16 @@ def test_22_ws_no_unsolicited_frames(stack):
         )
 
 
-# ── 3 · the 0.10 query-param handshake is refused with what to do instead ──────────────────────────
+# ── 3 · the 0.10/0.12 query-param handshake still works, deprecated until 0.13.6 ──────────────────
 
-def test_31_ws_query_param_key_is_refused_with_what_to_do(stack):
-    """A 0.10 client that authenticated with `?api_key=` is told, in one frame, that the key goes in
-    the X-API-Key header (or the vexa.key.<key> subprotocol), then the socket closes 4401."""
+def test_31_ws_query_param_key_is_still_accepted(stack):
+    """A client that authenticates with `?api_key=` (the 0.10 dashboard, clients built from the 0.12
+    docs) still gets a working socket until 0.13.6: a ping is answered, no error frame."""
     api_key = _api_key(stack)
     with WS(f"{_ws_base(stack)}/ws?api_key={api_key}", timeout=15) as ws:
-        frame = _recv_json(ws, timeout=10)
-    assert frame.get("error") == "api_key_query_removed", frame
-    assert frame.get("changed_in") == "0.13.4" and frame.get("do_instead")
-    assert frame.get("docs") == "https://docs.vexa.ai/changes-0-13-4-auth"
+        ws.send_text(json.dumps({"action": "ping"}))
+        frames = []
+        while not any(f.get("type") == "pong" for f in frames) and len(frames) < 5:
+            frames.append(_recv_json(ws, timeout=10))
+    assert any(f.get("type") == "pong" for f in frames), frames
+    assert not [f for f in frames if f.get("type") == "error"], frames

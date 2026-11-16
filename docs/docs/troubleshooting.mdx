@@ -26,6 +26,14 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
   it. Admit it like any guest. A run that ended in the lobby says so:
   [`awaiting_admission_timeout` or `awaiting_admission_rejected`](/troubleshooting/completion-reasons),
   and `automatic_leave.max_wait_for_admission` sets how long it waits.
+- **Google Meet refuses the join (`google_meet_join_refused`)**: Meet sometimes refuses a guest
+  join by itself. You'll see "You can't join this video call", or HTTP 403 from
+  `ResolveMeetingSpace` or `CreateMeetingDevice`. No host was asked, so admitting the bot can't
+  fix it. The bot re-knocks up to 3 times by itself. If Meet refuses every knock, the run ends
+  `awaiting_admission_rejected`, its reason text (`data.reason`) starts with
+  `google_meet_join_refused`, and the failure is attributed to the platform, not to your host.
+  Send the bot again later. Details:
+  [A join Google Meet refuses](/troubleshooting/completion-reasons#a-join-google-meet-refuses-google_meet_join_refused).
 - **Teams bot never asks to join (`teams_prejoin_blocked`)** — Teams refuses a guest name that
   contains anything other than letters, numbers, spaces and `- ' . _ @`, such as parentheses or a
   colon. Teams then keeps **Join now** disabled, so no host sees a request to admit the bot. The run

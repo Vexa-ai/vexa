@@ -100,9 +100,9 @@ def test_a_caller_the_edge_does_not_accept_is_refused_before_any_dial(headers, e
     assert dialer.calls == []
 
 
-def test_a_key_without_the_bot_scope_is_refused():
+def test_a_browser_only_key_is_refused():
     dialer = FakeDialer()
-    user = {**VALID_USER, "scopes": ["tx"]}
+    user = {**VALID_USER, "scopes": ["browser"]}
     with _client(dialer, user=user).websocket_connect(PATH, headers={"x-api-key": VALID_KEY}) as ws:
         assert ws.receive_json() == {"type": "error", "error": "insufficient_scope"}
         with pytest.raises(WebSocketDisconnect) as e:
