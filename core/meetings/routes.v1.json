@@ -513,7 +513,7 @@
         "bot",
         "tx"
       ],
-      "shared": "refuse"
+      "shared": "allow"
     },
     {
       "method": "GET",
