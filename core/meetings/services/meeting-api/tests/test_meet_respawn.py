@@ -224,6 +224,38 @@ def test_pool_exhausted_keeps_the_old_anonymous_budget(world):
     assert [a["signed_in"] for a in repo._meetings[mid]["data"]["meet_respawn"]["attempts"]] == [False] * 3
 
 
+async def _pool_busy(_row):
+    return None   # what production answers when every company account is in another meeting
+
+
+def test_a_busy_pool_answering_none_joins_as_a_guest(world):
+    repo, runtime, client = world
+    mid, sid = _joining(world)
+    assert client.post(LIFECYCLE, json=_refused(sid)).json().get("respawn") == "scheduled"
+    assert _due(repo, runtime, resolve_account=_pool_busy) == 1
+    row = repo._meetings[mid]
+    assert row["status"] == "joining" and not row["data"].get("bot_account_id")
+    assert row["data"]["meet_respawn"]["signed_in_pod"] is False
+
+
+def test_an_account_freed_by_the_third_pod_is_taken(world):
+    """Pod 2 finds the pool busy and joins as a guest; refused again, pod 3 gets the freed account."""
+    repo, runtime, client = world
+    mid, sid = _joining(world)
+    assert client.post(LIFECYCLE, json=_refused(sid, node="node-a")).json().get("respawn") == "scheduled"
+    assert _due(repo, runtime, resolve_account=_pool_busy) == 1
+    sid = _session(repo, mid)
+    assert client.post(LIFECYCLE, json=_event(sid, "joining")).status_code == 200
+    r = client.post(LIFECYCLE, json=_refused(sid, node="node-b")).json()
+    assert r.get("respawn") == "scheduled"
+    assert repo._meetings[mid]["data"]["meet_respawn"]["signed_in_pod"] is True
+    assert _due(repo, runtime, resolve_account=_company) == 1
+    row = repo._meetings[mid]
+    assert row["data"].get("bot_account_id") == ACCOUNT["id"]
+    assert [a["signed_in"] for a in row["data"]["meet_respawn"]["attempts"]] == [False, False]
+    assert len(runtime.specs) == 3
+
+
 def test_no_pod_starts_past_the_window(world):
     repo, runtime, client = world
     mid, sid = _joining(world)

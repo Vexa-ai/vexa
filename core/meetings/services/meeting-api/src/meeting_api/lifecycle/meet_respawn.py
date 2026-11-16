@@ -245,7 +245,8 @@ async def on_bot_terminal(repo: Any, body: Mapping[str, Any], *, now: Optional[d
         return None   # unrecorded → apply the terminal, never strand the meeting on a retry nobody runs
     log_event("meet_respawn_scheduled", audience="user", level="warning", span="lifecycle.callback",
               meeting_id=str(row["id"]),
-              fields={"pod": pod_next, "of": 2, "signed_in": True, "delay_s": delay, "refused_on_node": attempt["node"]})
+              fields={"pod": pod_next, "of": pol.pods, "signed_in": routed, "delay_s": delay,
+                      "refused_on_node": attempt["node"]})
     return new_block
 
 
@@ -307,17 +308,21 @@ async def respawn_due(
         if block.get("signed_in_pod"):
             try:
                 account = await resolve_account(row) if resolve_account is not None else None
-            except Exception as e:  # noqa: BLE001 — every account busy, or the store cannot answer
+            except Exception as e:  # noqa: BLE001 — the account store or the busy check failed
                 account = None
-                log_event("meet_respawn_pool_busy", audience="user", level="warning",
+                log_event("meet_respawn_account_error", audience="system", level="error",
                           span="meetings.meet_respawn", meeting_id=str(row["id"]),
                           fields={"pod": pod, "error": type(e).__name__})
             if account is None:
-                # No free account this person may use: the pod joins anonymously, within the old pod
-                # budget. A guest still has a chance (Google refuses guests per knock); failing the
-                # meeting here would leave the person worse off than without routing.
+                # No free account this person may use (every one busy, none usable, or the store failed):
+                # the pod joins anonymously, within the old pod budget. A guest still has a chance (Google
+                # refuses guests per knock); failing the meeting here would leave the person worse off
+                # than without routing.
                 block = {**block, "signed_in_pod": False}
-                await _write(repo, row["id"], {**block, "state": SPAWNING})
+                if not await _write(repo, row["id"], {**block, "state": SPAWNING}):
+                    continue   # unrecorded guest pod would be counted as signed-in; the next tick retries
+                log_event("meet_respawn_as_guest", audience="user", level="warning",
+                          span="meetings.meet_respawn", meeting_id=str(row["id"]), fields={"pod": pod})
         try:
             await request_bot(
                 repo, runtime,
