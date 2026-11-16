@@ -12,6 +12,8 @@ dependencies = [
     "redis>=5,<6",
     "croniter>=2,<6",
     "requests-unixsocket>=0.3,<0.5",
+    # the K8sBackend calls the API server with it (also what requests-unixsocket is built on)
+    "requests>=2.32,<3",
 ]
 
 [dependency-groups]

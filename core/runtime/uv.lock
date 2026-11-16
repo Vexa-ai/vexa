@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 
 [[package]]
@@ -982,6 +982,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "redis" },
     { name = "referencing" },
+    { name = "requests" },
     { name = "requests-unixsocket" },
 ]
 
@@ -1003,6 +1004,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "redis", specifier = ">=5,<6" },
     { name = "referencing", specifier = ">=0.30,<0.40" },
+    { name = "requests", specifier = ">=2.32,<3" },
     { name = "requests-unixsocket", specifier = ">=0.3,<0.5" },
 ]
 

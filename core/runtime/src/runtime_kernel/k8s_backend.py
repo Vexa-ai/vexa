@@ -1,9 +1,12 @@
-"""K8sBackend — runs a workload as a real Kubernetes Pod (the cluster substrate). Uses the kubectl CLI
-via subprocess (no client lib), matching the DockerBackend approach. Implements the same Backend port,
-so the kernel's runtime.v1 lifecycle is identical to process/docker. A workload is a bare Pod with
-restart=Never; the kernel owns restart policy, so the Pod must not resurrect itself.
+"""K8sBackend — runs a workload as a real Kubernetes Pod (the cluster substrate). It calls the API
+server itself, over HTTPS with the runtime Pod's ServiceAccount (token, CA, namespace), through
+``requests`` — no client library and no kubectl binary in the image, as the DockerBackend speaks the
+engine's socket API. Four calls, all core v1: create (a Pod, a Secret), get (a Pod), list (Pods by
+label), delete (a Pod). Implements the same Backend port, so the kernel's runtime.v1 lifecycle is
+identical to process/docker. A workload is a bare Pod with restart=Never; the kernel owns restart
+policy, so the Pod must not resurrect itself.
 
-The spawn submits a COMPLETE Pod manifest (``build_pod`` → ``kubectl create -f -``). Owning the whole
+The spawn submits a COMPLETE Pod manifest (``build_pod`` → ``POST …/pods``). Owning the whole
 object is what lets a container carry CPU/memory requests and limits — the declaration a namespace
 ResourceQuota admits on — WITHOUT a partial ``kubectl run --overrides`` containers entry, whose JSON
 merge replaces the generated container wholesale and strips its image, env and command."""
@@ -11,12 +14,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
-import subprocess
 import time
 from typing import Optional
+from urllib.parse import quote
 
 from . import pod_scheduling, workload_env
 from .backend import WorkloadHandle
@@ -76,14 +80,14 @@ GPU_RESOURCE = "nvidia.com/gpu"
 
 # The runtime's OWN scheduling constraints, serialized as JSON by the chart from
 # global.tolerations / global.nodeSelector (see deployment-runtime.yaml). A spawned workload is a bare
-# `kubectl run` Pod — NOT a Deployment child — so it inherits none of the runtime Deployment's
+# Pod — NOT a Deployment child — so it inherits none of the runtime Deployment's
 # scheduling directives; on an all-tainted pool it sits Pending forever and the meeting silently fails.
 # These knobs let the spawn override carry the runtime's own constraints so the Pod schedules wherever
 # the runtime itself is allowed to run.
 TOLERATIONS_ENV = "RUNTIME_K8S_TOLERATIONS"      # JSON array of toleration objects
 NODE_SELECTOR_ENV = "RUNTIME_K8S_NODE_SELECTOR"  # JSON object of node-label selectors
 # File-shaped credentials for spawned workloads: a harness that reads a SUBSCRIPTION file (codex:
-# ~/.codex/auth.json) gets it from a Secret, since a bare `kubectl run` Pod inherits no mounts. JSON
+# ~/.codex/auth.json) gets it from a Secret, since a bare Pod inherits no mounts. JSON
 # array of {"secret": <name>, "file": <the one key>, "mountPath": <the file's path>}, mounted read-only
 # — a token refresh cannot persist, so keep the Secret fresh operator-side.
 #
@@ -293,11 +297,63 @@ def _runtime_scheduling_env() -> dict[str, str]:
             if os.environ.get(k)}
 
 
-def _kubectl(*args: str, check: bool = True, stdin: Optional[str] = None) -> subprocess.CompletedProcess:
-    r = subprocess.run(["kubectl", *args], capture_output=True, text=True, input=stdin)
-    if check and r.returncode != 0:
-        raise RuntimeError(f"kubectl {' '.join(args)} failed: {r.stderr.strip()}")
-    return r
+log = logging.getLogger("runtime_kernel.k8s")
+
+#: The runtime Pod's ServiceAccount, as the kubelet mounts it: the bearer token (rotated by the
+#: kubelet, so it is read for every call), the cluster CA the API server's certificate is checked
+#: against, and the Pod's namespace.
+SA_DIR = "/var/run/secrets/kubernetes.io/serviceaccount"
+#: One API call never waits longer than this (connect + read).
+API_TIMEOUT_S = 30.0
+
+
+class ApiError(RuntimeError):
+    """The API server answered a call with an error status (its Status object's reason and message)."""
+
+    def __init__(self, method: str, path: str, status: int, obj: dict) -> None:
+        self.status = status
+        self.reason = str(obj.get("reason") or "")
+        super().__init__(f"k8s API {method} {path}: {status} {self.reason}: {obj.get('message') or ''}".rstrip(": "))
+
+
+def _api_base() -> str:
+    """The API server inside the cluster: the kubernetes Service the kubelet names in every Pod's env."""
+    host = (os.environ.get("KUBERNETES_SERVICE_HOST") or "").strip()
+    if not host:
+        raise RuntimeError("k8s backend: KUBERNETES_SERVICE_HOST is unset; the runtime reaches the API "
+                           "server only from inside the cluster, under its ServiceAccount")
+    port = (os.environ.get("KUBERNETES_SERVICE_PORT") or "443").strip()
+    return f"https://[{host}]:{port}" if ":" in host else f"https://{host}:{port}"
+
+
+def _sa_namespace() -> str:
+    try:
+        with open(os.path.join(SA_DIR, "namespace")) as f:
+            return f.read().strip() or "default"
+    except OSError:
+        return "default"
+
+
+def _api(method: str, path: str, *, body: Optional[dict] = None,
+         params: Optional[dict] = None) -> tuple[int, dict]:
+    """One call to the API server: (HTTP status, the decoded JSON body, {} when there is none). An
+    error status is returned, not raised: each caller decides what it means. A call that never got an
+    answer (connection, TLS, timeout) raises."""
+    import requests                                      # the image's HTTP client (uv.lock)
+
+    with open(os.path.join(SA_DIR, "token")) as f:
+        token = f.read().strip()
+    try:
+        r = requests.request(method, _api_base() + path, json=body, params=params, timeout=API_TIMEOUT_S,
+                             verify=os.path.join(SA_DIR, "ca.crt"),
+                             headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
+    except requests.RequestException as exc:
+        raise RuntimeError(f"k8s API {method} {path}: {exc}") from exc
+    try:
+        obj = r.json()
+    except ValueError:
+        obj = {}
+    return r.status_code, obj if isinstance(obj, dict) else {}
 
 
 def _secret_class(env: dict[str, str]) -> set[str]:
@@ -330,7 +386,7 @@ def pod_overrides(env: dict[str, str], *, container_name: str,
       * the workspace store mount set (WP-A1.1): the store PVC (``VEXA_WORKSPACE_MOUNT_SOURCE`` = the
         claim name on k8s) exposes every in-store workspace via per-mount subPath volumeMounts;
       * the runtime's scheduling constraints (``RUNTIME_K8S_TOLERATIONS`` / ``RUNTIME_K8S_NODE_SELECTOR``)
-        so the bare ``kubectl run`` Pod — which inherits none of the runtime Deployment's scheduling —
+        so the bare Pod — which inherits none of the runtime Deployment's scheduling —
         lands where the runtime itself is allowed to run instead of stranding Pending on a tainted pool.
 
     The overlay is built whenever EITHER seam is present; returns None only when neither is (nothing
@@ -338,7 +394,7 @@ def pod_overrides(env: dict[str, str], *, container_name: str,
     PVC, so a volumes-only early return would silently drop its tolerations and re-create the bug.
     ``credential_mounts`` (the profile's, never the spec's) decides whether the runtime's
     credential-file Secrets are mounted, and only into a workload whose model route is the
-    subscription (``profiles.hands_subscription``). Pure/env-driven → unit-tested offline (no kubectl)."""
+    subscription (``profiles.hands_subscription``). Pure/env-driven → unit-tested offline (no cluster)."""
     pvc = env.get("VEXA_WORKSPACE_MOUNT_SOURCE")
     root = env.get("VEXA_WORKSPACE_MOUNT_TARGET")
     volumes, volume_mounts = k8s_volume_mounts(env, pvc_name=pvc or "", store_target=root or "")
@@ -576,8 +632,32 @@ class K8sBackend:
     def _pname(self, workload_id: str) -> str:
         return k8s_name(f"{self._prefix}{workload_id}")  # always a DNS-1123 label (the container's too)
 
-    def _ns_args(self) -> list[str]:
-        return ["-n", self._ns] if self._ns else []
+    def _path(self, resource: str, name: Optional[str] = None) -> str:
+        """``/api/v1/namespaces/<ns>/<resource>[/<name>]``: the namespace given, else the Pod's own."""
+        ns = self._ns or _sa_namespace()
+        return f"/api/v1/namespaces/{quote(ns, safe='')}/{resource}" + (f"/{quote(name, safe='')}" if name else "")
+
+    def _post(self, resource: str, obj: dict) -> dict:
+        """Create one object (verb create); any error status raises ApiError (409 AlreadyExists too)."""
+        path = self._path(resource)
+        status, out = _api("POST", path, body=obj)
+        if status not in (200, 201, 202):
+            raise ApiError("POST", path, status, out)
+        return out
+
+    def _delete_pod(self, name: str, grace_sec: Optional[int] = None) -> None:
+        """Delete a Pod (verb delete) without waiting for it to go; gone already is fine. ``grace_sec``
+        0 is the forced delete; None is the Pod's own grace period. Never raises: every caller treats
+        a delete as best effort and reads the Pod back when it needs to know."""
+        path = self._path("pods", name)
+        try:
+            status, out = _api("DELETE", path, body=None if grace_sec is None else
+                               {"apiVersion": "v1", "kind": "DeleteOptions", "gracePeriodSeconds": int(grace_sec)})
+        except Exception as exc:  # noqa: BLE001
+            log.warning("delete pod %s: %s", name, exc)
+            return
+        if status not in (200, 202, 404):
+            log.warning("%s", ApiError("DELETE", path, status, out))
 
     def start(
         self,
@@ -623,13 +703,12 @@ class K8sBackend:
             secret_env=(secret_name, tuple(sorted(hidden))) if hidden else None,
             avoid_nodes=tuple(avoid_nodes),
         )
-        manifest = json.dumps(pod)
         self._exited.pop(name, None)
         try:
-            self._create(name, workload_id, manifest, secret_name, hidden)
+            self._create(name, workload_id, pod, secret_name, hidden)
             return WorkloadHandle(id=workload_id, impl=name)
-        except RuntimeError as exc:
-            if "AlreadyExists" not in str(exc):
+        except ApiError as exc:
+            if exc.status != 409:                        # 409 AlreadyExists: the name is taken
                 raise
         # The name is deterministic, so a workload id that ran before (a chat's next turn) finds its
         # previous Pod still there. Ours and finished: remove it and start again. Ours and still
@@ -642,21 +721,20 @@ class K8sBackend:
             if (existing.get("status") or {}).get("phase") not in TERMINAL_PHASES:
                 return WorkloadHandle(id=workload_id, impl=name)
             self._delete_and_wait(name)
-        self._create(name, workload_id, manifest, secret_name, hidden)
+        self._create(name, workload_id, pod, secret_name, hidden)
         return WorkloadHandle(id=workload_id, impl=name)
 
-    def _create(self, name: str, workload_id: str, manifest: str, secret_name: Optional[str],
+    def _create(self, name: str, workload_id: str, pod: dict, secret_name: Optional[str],
                 hidden: dict[str, str]) -> None:
         """Create the Pod, then (when it has secret-class env) its Secret, owned by the Pod so the
         cluster deletes it with the Pod. The Pod's container waits for the Secret it references; a
         Secret that cannot be created takes the Pod down with it. The Secret is named per
         incarnation, so the runtime only ever creates Secrets: it never reads or deletes one."""
+        created = self._post("pods", pod)
         if not secret_name:
-            _kubectl("create", "-f", "-", *self._ns_args(), stdin=manifest)
             return
-        r = _kubectl("create", "-f", "-", "-o", "json", *self._ns_args(), stdin=manifest)
         try:
-            uid = ((json.loads(r.stdout or "{}").get("metadata") or {}).get("uid")
+            uid = ((created.get("metadata") or {}).get("uid")
                    or ((self._pod(name) or {}).get("metadata") or {}).get("uid"))
             if not uid:
                 raise RuntimeError(f"pod {name} has no uid to own its env Secret")
@@ -670,19 +748,19 @@ class K8sBackend:
                 },
                 "stringData": dict(hidden),
             }
-            _kubectl("create", "-f", "-", *self._ns_args(), stdin=json.dumps(secret))
+            self._post("secrets", secret)
         except Exception:
-            _kubectl("delete", "pod", name, "--ignore-not-found", "--wait=false", *self._ns_args(), check=False)
+            self._delete_pod(name)
             raise
 
     def _pod(self, name: str) -> Optional[dict]:
-        r = _kubectl("get", "pod", name, "-o", "json", *self._ns_args(), check=False)
-        if r.returncode != 0:
-            return None
+        """The Pod object (verb get), or None when the API server does not answer it with one."""
         try:
-            return json.loads(r.stdout)
-        except ValueError:
+            status, obj = _api("GET", self._path("pods", name))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("get pod %s: %s", name, exc)
             return None
+        return obj if status == 200 and obj else None
 
     def _ours(self, pod: dict, workload_id: str) -> bool:
         """Spawned by this runtime for this workload: the managed label, this workload id (the
@@ -698,8 +776,7 @@ class K8sBackend:
         return labels.get(INSTANCE_LABEL) in (None, k8s_label_value(self._instance))
 
     def _delete_and_wait(self, name: str, timeout: float = 60.0) -> None:
-        _kubectl("delete", "pod", name, "--ignore-not-found", "--wait=true", f"--timeout={int(timeout)}s",
-                 *self._ns_args(), check=False)
+        self._delete_pod(name)
         deadline = time.time() + timeout
         while self._pod(name) is not None:
             if time.time() > deadline:
@@ -710,8 +787,7 @@ class K8sBackend:
         """Re-derive a handle for a workload whose in-process handle was lost (restart): the Pod
         name is deterministic (``prefix + workload_id``); an existing Pod (any phase) is found."""
         name = self._pname(workload_id)
-        r = _kubectl("get", "pod", name, "-o", "name", *self._ns_args(), check=False)
-        if r.returncode != 0:
+        if self._pod(name) is None:
             return None
         return WorkloadHandle(id=workload_id, impl=name)
 
@@ -741,15 +817,11 @@ class K8sBackend:
 
     def _list_by_selector(self, selector: str) -> list[dict]:
         try:
-            r = _kubectl(
-                "get", "pods", "-l", selector,
-                "-o", "json",
-                *self._ns_args(), check=False,
-            )
-            if r.returncode != 0:
+            status, listed = _api("GET", self._path("pods"), params={"labelSelector": selector})
+            if status != 200:
                 return []
             out = []
-            for pod in json.loads(r.stdout).get("items", []):
+            for pod in listed.get("items") or []:
                 meta = pod.get("metadata", {})
                 # The annotation carries the id verbatim; the label may be its safe form (and a Pod
                 # from before the annotation carries only the label, which was then the id itself).
@@ -780,10 +852,10 @@ class K8sBackend:
         name = h._impl  # type: ignore[attr-defined]
         if name in self._exited:
             return self._exited[name]
-        r = _kubectl("get", "pod", name, "-o", "json", *self._ns_args(), check=False)
-        if r.returncode != 0:
+        pod = self._pod(name)
+        if pod is None:
             return 0                                     # gone (deleted/never-found) → no longer running
-        status = json.loads(r.stdout).get("status", {})
+        status = pod.get("status", {})
         phase = status.get("phase")
         if phase not in TERMINAL_PHASES:
             return None                                  # still scheduling / running
@@ -798,17 +870,14 @@ class K8sBackend:
         # The exit is now observed (the kernel records it from this answer): the finished Pod is
         # removed so finished workloads do not pile up, and its code is kept for later polls.
         self._exited[name] = code
-        _kubectl("delete", "pod", name, "--ignore-not-found", "--wait=false", *self._ns_args(), check=False)
+        self._delete_pod(name)
         return code
 
     def terminate(self, h: WorkloadHandle) -> None:      # graceful: SIGTERM + grace, then SIGKILL
-        _kubectl("delete", "pod", h._impl, f"--grace-period={_stop_grace_sec()}", "--wait=false",
-                 *self._ns_args(), check=False)  # type: ignore[attr-defined]
+        self._delete_pod(h._impl, grace_sec=_stop_grace_sec())  # type: ignore[attr-defined]
 
     def kill(self, h: WorkloadHandle) -> None:           # force: immediate SIGKILL + drop the object
-        _kubectl("delete", "pod", h._impl, "--grace-period=0", "--force", "--wait=false",
-                 *self._ns_args(), check=False)  # type: ignore[attr-defined]
+        self._delete_pod(h._impl, grace_sec=0)  # type: ignore[attr-defined]
 
     def cleanup(self, h: WorkloadHandle) -> None:
-        _kubectl("delete", "pod", h._impl, "--ignore-not-found", "--grace-period=0", "--force",
-                 "--wait=false", *self._ns_args(), check=False)  # type: ignore[attr-defined]
+        self._delete_pod(h._impl, grace_sec=0)  # type: ignore[attr-defined]
