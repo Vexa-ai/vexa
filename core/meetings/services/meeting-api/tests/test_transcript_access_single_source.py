@@ -82,6 +82,7 @@ def _sql_store(data):
 
 @pytest.mark.parametrize("row,caller,ws", CASES)
 async def test_the_sql_read_agrees_with_access_of(row, caller, ws):
+    pytest.importorskip("sqlalchemy")   # the production group (the image); the dev-only env skips
     data = dict(ROWS[row])
     store, seen = _sql_store(data)
     got = await store.get_transcript_by_id(caller, 1, ws)
