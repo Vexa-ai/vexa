@@ -128,8 +128,8 @@ def test_a_default_meet_join_follows_the_room():
     assert run(rm.NEEDS_SIGN_IN)["id"] == f"{2:032x}"           # newest first
 
 
-def test_a_busy_account_is_skipped_and_all_busy_is_a_409():
-    from meeting_api.bot_accounts.service import BotAccountRefused
+def test_a_busy_account_is_skipped_and_all_busy_is_a_guest():
+    """One live bot per account; every account busy is a guest bot, never a refusal (16 Nov 2026)."""
     ba = _ba([_acct(1), _acct(2, verified="2026-11-13T10:00:00Z")])
 
     async def two_busy(a):
@@ -139,9 +139,8 @@ def test_a_busy_account_is_skipped_and_all_busy_is_a_409():
         return True
     got = asyncio.run(ba.resolve_for_spawn(7, "google_meet", "default", room=rm.NEEDS_SIGN_IN, busy=two_busy))
     assert got["id"] == f"{1:032x}"
-    with pytest.raises(BotAccountRefused) as e:
-        asyncio.run(ba.resolve_for_spawn(7, "google_meet", "default", room=rm.NEEDS_SIGN_IN, busy=all_busy))
-    assert e.value.status == 409
+    assert asyncio.run(ba.resolve_for_spawn(7, "google_meet", "default", room=rm.NEEDS_SIGN_IN,
+                                            busy=all_busy)) is None
 
 
 def test_the_callers_own_account_still_comes_first_and_none_means_anonymous():

@@ -668,7 +668,7 @@ class BotAccounts:
         account only for a room that ``needs_sign_in`` — the first one ``busy`` (an async
         account → bool, one live bot per account) does not hold — and none for a room an anonymous
         bot gets into or one never seen. A room that needs sign-in with every company account busy
-        is a 409: an anonymous bot there is refused for certain."""
+        gets a guest bot: Google refuses anonymous guests per knock, not for certain."""
         choice = "default" if choice is None else choice
         if choice == "none":
             return None
@@ -747,11 +747,14 @@ class BotAccounts:
         for a in sorted(mine_ok, key=lambda a: a.get("verified_at") or "", reverse=True):
             if busy is None or not await busy(a):
                 return a
-        if not mine_ok:
-            return None
-        raise BotAccountRefused(409, (
-            "this Google Meet room admits only signed-in bots and every Vexa bot account is in another "
-            "meeting right now; send the bot again when one is free"))
+        if mine_ok:
+            # Every company account is in another meeting: a guest bot, not a refusal. Google refuses an
+            # anonymous guest per knock, not per room (16 Nov 2026, bbb: 5 of 6 anonymous bots reached the
+            # lobby of rooms where a guest had been refused; brain:card/92f6d3a39e03), so a guest still
+            # has a chance.
+            log_event("bot_account_pool_busy", audience="system", level="warning", span="bot_accounts",
+                      user_id=user_id, fields={"accounts": len(mine_ok)})
+        return None
 
     async def restore_files(self, account_id: str) -> list:
         _account, files = await self._get_account(account_id, actor="meeting-api")

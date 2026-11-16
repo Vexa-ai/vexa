@@ -277,10 +277,9 @@ async def respawn_due(
     before its spawn, so a slow spawn is never doubled by the next tick; a spawn that cannot start
     lands the row on its terminal through ``request_bot``'s own failure path.
 
-    ``resolve_account(row)`` answers the company bot account the signed-in pod joins as. It RAISES when
-    every account is busy: the refusal lands as the terminal. It answers None when no company account is
-    usable by this person at all (``VEXA_COMPANY_BOT_USE``): the pod then joins anonymously, as before
-    D402, within the old pod budget — routing never leaves a person worse off than without it."""
+    ``resolve_account(row)`` answers the company bot account the signed-in pod joins as, or None. On None,
+    or a raise (every account busy, the store cannot answer), the pod joins anonymously, as before D402,
+    within the old pod budget — routing never leaves a person worse off than without it."""
     from ..bot_spawn.service import MeetingStopped, request_bot
 
     lister = getattr(repo, "list_meet_respawns", None)
@@ -306,25 +305,19 @@ async def respawn_due(
         spawn = dict(block.get("spawn") or {})
         account = None
         if block.get("signed_in_pod"):
-            busy = False
             try:
                 account = await resolve_account(row) if resolve_account is not None else None
-            except Exception:  # noqa: BLE001 — every account busy, or the store cannot answer
-                account, busy = None, True
-            if account is None and not busy:
-                block = {**block, "signed_in_pod": False}       # nobody this person may use: anonymous
+            except Exception as e:  # noqa: BLE001 — every account busy, or the store cannot answer
+                account = None
+                log_event("meet_respawn_pool_busy", audience="user", level="warning",
+                          span="meetings.meet_respawn", meeting_id=str(row["id"]),
+                          fields={"pod": pod, "error": type(e).__name__})
+            if account is None:
+                # No free account this person may use: the pod joins anonymously, within the old pod
+                # budget. A guest still has a chance (Google refuses guests per knock); failing the
+                # meeting here would leave the person worse off than without routing.
+                block = {**block, "signed_in_pod": False}
                 await _write(repo, row["id"], {**block, "state": SPAWNING})
-            if account is None and busy:
-                await repo.fail_meeting(
-                    meeting_id=row["id"],
-                    reason="Google Meet refused the anonymous bot and no Vexa bot account was available to join signed-in",
-                    failure_stage="joining",
-                    completion_reason=REFUSED_COMPLETION_REASON,
-                    data={KEY: {**block, "state": EXHAUSTED}},
-                )
-                log_event("meet_respawn_no_account", audience="user", level="warning",
-                          span="meetings.meet_respawn", meeting_id=str(row["id"]), fields={"pod": pod})
-                continue
         try:
             await request_bot(
                 repo, runtime,

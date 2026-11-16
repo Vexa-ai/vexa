@@ -190,17 +190,38 @@ def test_a_refused_signed_in_pod_applies_the_refusal_and_no_anonymous_pod_follow
     assert len(runtime.specs) == 2, "two pods: anonymous, then signed-in; no third"
 
 
-def test_no_free_account_for_the_signed_in_pod_fails_the_meeting(world):
+def test_no_free_account_for_the_signed_in_pod_joins_as_a_guest(world):
+    """Pool exhausted: the next pod joins anonymously instead of failing the meeting (16 Nov 2026)."""
     repo, runtime, client = world
     mid, sid = _joining(world)
     assert client.post(LIFECYCLE, json=_refused(sid)).json().get("respawn") == "scheduled"
 
     async def none_free(_row):
         raise RuntimeError("every company bot account is in another meeting")
-    assert _due(repo, runtime, resolve_account=none_free) == 0
+    assert _due(repo, runtime, resolve_account=none_free) == 1
     row = repo._meetings[mid]
-    assert row["status"] == "failed" and row["data"]["meet_respawn"]["state"] == "exhausted"
-    assert len(runtime.specs) == 1, "no anonymous retry instead"
+    assert row["status"] == "joining" and not row["data"].get("bot_account_id")
+    block = row["data"]["meet_respawn"]
+    assert block["state"] == "running" and block["signed_in_pod"] is False
+    assert len(runtime.specs) == 2, "an anonymous retry, not a failed meeting"
+
+
+def test_pool_exhausted_keeps_the_old_anonymous_budget(world):
+    """Every pod finds the pool busy: three anonymous pods, then the refusal lands, as before D402."""
+    repo, runtime, client = world
+    mid, sid = _joining(world)
+
+    async def none_free(_row):
+        raise RuntimeError("busy")
+    for node in ("node-a", "node-b"):
+        assert client.post(LIFECYCLE, json=_refused(sid, node=node)).json().get("respawn") == "scheduled"
+        assert _due(repo, runtime, resolve_account=none_free) == 1
+        sid = _session(repo, mid)
+        assert client.post(LIFECYCLE, json=_event(sid, "joining")).status_code == 200
+    r = client.post(LIFECYCLE, json=_refused(sid, node="node-c"))
+    assert "respawn" not in r.json() and repo._meetings[mid]["status"] == "failed"
+    assert len(runtime.specs) == 3
+    assert [a["signed_in"] for a in repo._meetings[mid]["data"]["meet_respawn"]["attempts"]] == [False] * 3
 
 
 def test_no_pod_starts_past_the_window(world):
@@ -286,11 +307,18 @@ def test_a_continued_signed_in_run_keeps_the_rooms_refusal(world):
 
     async def none_free(_row):
         raise RuntimeError("busy")
-    _due(repo, runtime, resolve_account=none_free)            # the meeting fails, refused
+    _due(repo, runtime, resolve_account=none_free)            # pool busy: pod 2 joins as a guest
+    sid = _session(repo, mid)
+    assert client.post(LIFECYCLE, json=_event(sid, "joining")).status_code == 200
+    assert client.post(LIFECYCLE, json=_refused(sid, node="node-b")).json().get("respawn") == "scheduled"
+    _due(repo, runtime, resolve_account=none_free)            # pod 3, a guest
+    sid = _session(repo, mid)
+    assert client.post(LIFECYCLE, json=_event(sid, "joining")).status_code == 200
+    client.post(LIFECYCLE, json=_refused(sid, node="node-c"))  # the old budget is spent: refused
     assert repo._meetings[mid]["status"] == "failed"
     _spawn(repo, runtime, continue_meeting=True, bot_account=ACCOUNT)
     block = repo._meetings[mid]["data"]["meet_respawn"]
-    assert block["state"] == "exhausted" and [a["signed_in"] for a in block["attempts"]] == [False]
+    assert block["state"] == "exhausted" and [a["signed_in"] for a in block["attempts"]] == [False] * 3
 
 
 async def _nobody_usable(_row):
