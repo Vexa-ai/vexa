@@ -957,3 +957,31 @@ def test_a_customer_listing_shows_no_company_account(rig, who):
     assert company["id"] not in seen and mine["id"] in seen
     admin_seen = {a["id"] for a in rig.client.get("/bot-accounts", headers=rig.as_(PERSON_ADMIN)).json()["accounts"]}
     assert company["id"] in admin_seen
+
+
+# ── GET /bot-accounts answers manages_company: the panel shows company buttons from it alone (L4 review M3) ──
+@pytest.mark.parametrize("who,uid,want", [
+    ("admins", PERSON_ADMIN, True), ("admins", ADMIN_ACCOUNT, True), ("admins", OWNER, False),
+    ("all", PERSON_ADMIN, False), ("all", ADMIN_ACCOUNT, True), ("admin_account", PERSON_ADMIN, False),
+    ("admin_account", ADMIN_ACCOUNT, True), ("bogus", PERSON_ADMIN, False),
+])
+def test_the_list_answers_manages_company_as_every_company_action_is_checked(rig, who, uid, want):
+    from meeting_api.bot_accounts.service import _sessions_who
+    rig.ba.settings = Settings(callback_base=BASE, sessions_who=_sessions_who(who))
+    for seeded in (False, True):          # before the first company account exists, and after
+        if seeded:
+            rig.seed("company")
+        body = rig.client.get("/bot-accounts", headers=rig.as_(uid)).json()
+        assert body["manages_company"] is want, (who, uid, seeded, body)
+    if want:                              # what the list says is what the action does
+        assert rig.open(uid, owner="company").status_code == 201
+
+
+def test_the_list_answers_manages_company_false_when_roles_cannot_be_read(rig):
+    _admins(rig)
+
+    class Silent:
+        async def roles(self, user_id):
+            return dict(NO_ROLES)
+    rig.ba.admin = Silent()
+    assert rig.client.get("/bot-accounts", headers=rig.as_(PERSON_ADMIN)).json()["manages_company"] is False

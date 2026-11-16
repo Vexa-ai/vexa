@@ -228,14 +228,18 @@ class BotAccounts:
         except BrokerError as e:
             raise BotAccountRefused(503, str(e)) from None
         policy = self.policy()
-        roles = await self.admin.roles(user_id) if any(a.get("owner") == "company" for a in accounts) else {}
+        # Roles are read on every list, company accounts or none: `manages_company` below answers whether «add»
+        # signs in a company account, which the page needs before the first one exists. Fail closed (NO_ROLES).
+        roles = await self.admin.roles(user_id)
         # A company account is listed only to someone who may use it or manage it (S1a break-it M-b): to everyone
         # else it does not exist, as for another person's account.
         accounts = [a for a in accounts if a.get("owner") != "company"
                     or usable(a, user_id=user_id, policy=policy, roles=roles) or self._manages_company(roles)]
         out = [{**a, "mine": a.get("owner") == mine,
                 "usable": usable(a, user_id=user_id, policy=policy, roles=roles)} for a in accounts]
-        return {"accounts": out, "company_bot_use": policy}
+        # manages_company: the one answer to «may this person sign in, sign in again and delete a COMPANY account»,
+        # the same _manages_company every company action is checked by; the panel shows its buttons from it alone.
+        return {"accounts": out, "company_bot_use": policy, "manages_company": self._manages_company(roles)}
 
     # ── browser sessions ──────────────────────────────────────────────────────────────────────
     def _manages_company(self, roles: dict) -> bool:
