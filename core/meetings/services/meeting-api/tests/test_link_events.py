@@ -138,3 +138,254 @@ def test_the_cursor_stays_small_on_a_long_call():
     for _ in range(5):
         cursor, events = _read(client, cursor)
     assert len(cursor) < 1200, len(cursor)
+
+
+# ── shared listening (policy P12, design mvp1-shared-listen) ─────────────────────────────────────
+# Anyone a call is shared with listens from their own account, by the finished-transcript rule:
+# owner · a person it was shared with (transcript_viewers) · a member of its bound workspace.
+import threading
+import time as _time
+
+OWNER = 8
+
+
+class _Log:
+    def __init__(self):
+        self.lines = []
+
+    def __call__(self, event, **kw):
+        self.lines.append((event, kw))
+        return {}
+
+    def named(self, event):
+        return [kw for e, kw in self.lines if e == event]
+
+
+def _app(store, log=None, shared_turn=False):
+    kw = {"log_event": log} if log is not None else {}
+    app = create_app(store, redis=None, **kw)
+    if shared_turn:
+        @app.middleware("http")
+        async def _shared(request, call_next):   # what regime.refuse_shared marks for a shared turn
+            request.state.shared_turn = True
+            return await call_next(request)
+    return TestClient(app)
+
+
+def _read_as(client, headers, cursor="", timeout=1):
+    r = client.get("/link/events", headers=headers, params={"cursor": cursor, "timeout_sec": timeout})
+    assert r.status_code == 200, r.text
+    lines = r.text.splitlines()
+    return lines[0].split(" ", 1)[1], [json.loads(x) for x in lines[1:]]
+
+
+def _shared_call(store, *, viewers=(USER,), workspace=None, native="shr-call-abc", segments=None):
+    data = {"transcript_viewers": list(viewers), "title": "Their call"}
+    if workspace:
+        data["workspace_id"] = workspace
+    return store.seed_meeting(user_id=OWNER, platform="google_meet", native_meeting_id=native,
+                              status="active", data=data, segments=segments or [_seg(0, "Hi all.")])
+
+
+def test_a_call_shared_with_me_streams_to_me_as_a_viewer_and_is_not_stamped():
+    store, log = InMemoryTranscriptStore(), _Log()
+    mid = _shared_call(store)
+    client = _app(store, log)
+    cursor, events = _read_as(client, HEAD)
+    assert [(e["type"], e.get("status"), e["meeting"]["access"]) for e in events] == [
+        ("system", "active", "viewer")]
+    assert events[0]["meeting"] == {"id": mid, "platform": "google_meet", "native_id": "shr-call-abc",
+                                    "title": "Their call", "access": "viewer"}
+    assert "metadata" not in store._meetings[mid]["data"], "a shared call is never stamped as listened to"
+    store._meetings[mid]["segments"]["s-1"] = _seg(1, "Claude, the price?", speaker="Bob")
+    cursor, events = _read_as(client, HEAD, cursor)
+    assert [(e["type"], e["text"], e["meeting"]["access"]) for e in events] == [
+        ("transcript", "Claude, the price?", "viewer")]
+    started = log.named("listen_shared")
+    assert len(started) == 1 and started[0]["user_id"] == USER and started[0]["meeting_id"] == str(mid)
+    assert started[0]["fields"] == {"access": "viewer", "owner_id": OWNER}
+    _read_as(client, HEAD, cursor)
+    assert len(log.named("listen_shared")) == 1, "audited once per (listener, call)"
+
+
+def test_a_workspace_bound_call_streams_to_its_members_only():
+    store = InMemoryTranscriptStore()
+    _shared_call(store, viewers=(), workspace="ws_team")
+    _, events = _read_as(_app(store), {**HEAD, "x-user-workspaces": "ws_other,ws_team"})
+    assert [(e["status"], e["meeting"]["access"]) for e in events] == [("active", "workspace")]
+    _, events = _read_as(_app(store), {**HEAD, "x-user-workspaces": "ws_other"})
+    assert events == [], "not a member: nothing"
+
+
+def test_a_viewer_of_one_call_hears_nothing_of_the_owners_other_call():
+    store = InMemoryTranscriptStore()
+    _shared_call(store, native="call-a")
+    b = store.seed_meeting(user_id=OWNER, platform="zoom", native_meeting_id="call-b", status="active",
+                           data={"title": "Private board call"}, segments=[_seg(0, "Secret.")])
+    client = _app(store)
+    cursor, events = _read_as(client, HEAD)
+    store._meetings[b]["segments"]["s-1"] = _seg(1, "Claude, more secrets.")
+    cursor, more = _read_as(client, HEAD, cursor)
+    assert all(e["meeting"]["native_id"] == "call-a" for e in events + more)
+    assert "Private board call" not in json.dumps(events + more) and "Secret" not in json.dumps(events + more)
+
+
+def test_the_owners_own_call_is_still_marked_owner_and_stamped():
+    store = InMemoryTranscriptStore()
+    mid = store.seed_meeting(user_id=USER, platform="zoom", native_meeting_id="mine", status="active",
+                             data={"transcript_viewers": [OWNER]})
+    _, events = _read_as(_app(store), HEAD)
+    assert events[0]["meeting"]["access"] == "owner"
+    assert store._meetings[mid]["data"]["metadata"]["listener_mode"] == "link"
+
+
+def _held_read(client, headers, cursor, timeout):
+    """A long-poll held open on a thread, so the test can change the call while it waits."""
+    box = {}
+
+    def run():
+        t0 = _time.monotonic()
+        box["result"] = _read_as(client, headers, cursor, timeout)
+        box["elapsed"] = _time.monotonic() - t0
+    th = threading.Thread(target=run)
+    th.start()
+    return th, box
+
+
+def test_a_person_removed_mid_call_is_cut_within_five_seconds(monkeypatch):
+    """Design §4: the next tick's access check refuses (N = 5 s: a 2 s tick and one read)."""
+    monkeypatch.setattr(link_events, "LINK_POLL_S", 2.0)
+    from meeting_api.collector import share_access
+    store, log = InMemoryTranscriptStore(), _Log()
+    mid = _shared_call(store)
+    client = _app(store, log)
+    cursor, _ = _read_as(client, HEAD)
+    th, box = _held_read(client, HEAD, cursor, 20)
+    _time.sleep(0.5)
+    removed_at = _time.monotonic()
+    assert share_access.remove_viewer(store._meetings[mid]["data"], USER)
+    store._meetings[mid]["segments"]["s-9"] = _seg(9, "Said after the removal.")
+    th.join(25)
+    cursor, events = box["result"]
+    assert _time.monotonic() - removed_at <= 5.0, box["elapsed"]
+    assert events == [{"type": "system", "event": "access_ended",
+                       "meeting": {"id": mid, "platform": "google_meet", "native_id": "shr-call-abc",
+                                   "title": "", "access": "viewer"}}]
+    assert log.named("listen_shared_end")[0]["fields"]["reason"] == "revoked"
+    monkeypatch.setattr(link_events, "LINK_POLL_S", 0.01)
+    cursor, events = _read_as(client, HEAD, cursor)
+    assert events == [], "nothing more of that call, ever"
+
+
+def test_a_revoked_link_and_a_deleted_transcript_end_access_too():
+    from meeting_api.collector import share_access
+    store = InMemoryTranscriptStore()
+    mid = _shared_call(store, viewers=())
+    data = store._meetings[mid]["data"]
+    data["share_grants"] = [{"id": "g1", "mode": "open"}]
+    data["transcript_viewers"], data["share_viewers"] = [USER], [{"user_id": USER, "grant_id": "g1"}]
+    client = _app(store)
+    cursor, events = _read_as(client, HEAD)
+    assert events and events[0]["meeting"]["access"] == "viewer"
+    assert share_access.revoke_grant(data, "g1")
+    cursor, events = _read_as(client, HEAD, cursor)
+    assert [e["event"] for e in events] == ["access_ended"]
+    # the owner deletes the transcript of their own call: their own stream lets it go too
+    own = store.seed_meeting(user_id=USER, platform="zoom", native_meeting_id="mine2", status="active")
+    cursor, events = _read_as(client, HEAD, cursor)
+    store._meetings[own]["data"]["artifact_deletion"] = {"state": "completed"}
+    cursor, events = _read_as(client, HEAD, cursor)
+    assert [(e["event"], e["meeting"]["id"]) for e in events] == [("access_ended", own)]
+
+
+def test_a_member_removed_from_the_workspace_keeps_the_held_read_then_sees_nothing():
+    """Design §4: membership is the header the read opened with, so it holds until that read ends
+    (N = 25 s, LINK_WAIT_MAX_S); the next read, without the workspace, sees the call end."""
+    assert link_events.LINK_WAIT_MAX_S == 25
+    store = InMemoryTranscriptStore()
+    mid = _shared_call(store, viewers=(), workspace="ws_team")
+    member = {**HEAD, "x-user-workspaces": "ws_team"}
+    client = _app(store)
+    cursor, events = _read_as(client, member)
+    assert events[0]["meeting"]["access"] == "workspace"
+    th, box = _held_read(client, member, cursor, 2)
+    _time.sleep(0.2)
+    store._meetings[mid]["segments"]["s-1"] = _seg(1, "Still a member for this read.")
+    th.join(10)
+    cursor, events = box["result"]
+    assert [e.get("text") for e in events] == ["Still a member for this read."]
+    removed = {**HEAD, "x-user-workspaces": ""}
+    cursor, events = _read_as(client, removed, cursor)
+    assert [e["event"] for e in events] == ["access_ended"]
+    store._meetings[mid]["segments"]["s-2"] = _seg(2, "After the removal.")
+    cursor, events = _read_as(client, removed, cursor)
+    assert events == []
+
+
+def test_an_ended_shared_call_is_reported_once_and_audited_as_ended():
+    store, log = InMemoryTranscriptStore(), _Log()
+    mid = _shared_call(store)
+    client = _app(store, log)
+    cursor, _ = _read_as(client, HEAD)
+    store._meetings[mid]["status"] = "completed"
+    cursor, events = _read_as(client, HEAD, cursor)
+    assert [(e["event"], e["status"], e["meeting"]["access"]) for e in events] == [
+        ("status", "completed", "viewer")]
+    assert [x["fields"]["reason"] for x in log.named("listen_shared_end")] == ["ended"]
+    cursor, events = _read_as(client, HEAD, cursor)
+    assert events == []
+
+
+def test_my_running_call_is_found_however_many_newer_calls_a_workspace_has():
+    """Design §2(5): running calls are read by their own status filter, not from the 20 newest rows,
+    so a busy workspace cannot push a listener's own running call out."""
+    store = InMemoryTranscriptStore()
+    mine = store.seed_meeting(user_id=USER, platform="zoom", native_meeting_id="mine-old", status="active",
+                              created_at="2026-01-01T00:00:00Z")
+    for i in range(40):
+        store.seed_meeting(user_id=OWNER, platform="zoom", native_meeting_id=f"ws-{i}", status="completed",
+                           data={"workspace_id": "ws_busy"}, created_at=f"2026-06-{10 + i % 18:02d}T00:00:00Z")
+    _, events = _read_as(_app(store), {**HEAD, "x-user-workspaces": "ws_busy"})
+    assert [e["meeting"]["id"] for e in events] == [mine]
+
+
+def test_a_transcript_is_read_only_when_its_feed_moved():
+    """Design §3: a tick reads the narrow access row; the transcript only when its mark moved."""
+    store = InMemoryTranscriptStore()
+    mid = _shared_call(store)
+    reads = []
+    real = store.get_transcript_by_id
+
+    async def counted(*a, **kw):
+        reads.append(a[1])
+        return await real(*a, **kw)
+    store.get_transcript_by_id = counted
+    client = _app(store)
+    cursor, _ = _read_as(client, HEAD)
+    n = len(reads)
+    for _ in range(3):
+        cursor, events = _read_as(client, HEAD, cursor)
+        assert events == []
+    assert len(reads) == n, "nothing moved: no transcript read in three quiet reads"
+    store._meetings[mid]["segments"]["s-1"] = _draft(1, "Clau")
+    cursor, events = _read_as(client, HEAD, cursor)
+    assert events == [] and len(reads) > n
+    n = len(reads)
+    store._meetings[mid]["segments"]["s-1"] = _seg(1, "Claude, settle this.")   # settles in place
+    cursor, events = _read_as(client, HEAD, cursor)
+    assert [e["text"] for e in events] == ["Claude, settle this."] and len(reads) > n
+
+
+def test_a_shared_turn_hears_only_calls_bound_to_its_ceilings_workspaces():
+    """Design §2(2): a turn other people read is not refused the stream; its calls are FILTERED to
+    those `regime.shared_meeting_readable` admits (bound to a workspace inside the ceiling)."""
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(user_id=USER, platform="zoom", native_meeting_id="private", status="active")
+    _shared_call(store, native="shared-to-me")
+    store.seed_meeting(user_id=USER, platform="zoom", native_meeting_id="team-call", status="active",
+                       data={"workspace_id": "ws_1"})
+    turn = {**HEAD, "x-user-workspaces": "ws_1", "x-user-delegation-workspaces": "ws_1"}
+    _, events = _read_as(_app(store, shared_turn=True), turn)
+    assert [e["meeting"]["native_id"] for e in events] == ["team-call"]
+    _, events = _read_as(_app(store, shared_turn=True), {**turn, "x-user-delegation-workspaces": "*"})
+    assert events == [], "an unbounded ceiling admits nothing (the shared_meeting_readable rule)"

@@ -381,7 +381,17 @@ def build_router(
     async def _room_transcript(user_id, platform: str, native_meeting_id: str,
                                x_user_workspaces: Optional[str], span: str) -> dict:
         """The transcript document a room link names for this caller — 404 when there is none."""
+        doc, _owned = await _room_transcript_owned(user_id, platform, native_meeting_id,
+                                                   x_user_workspaces, span)
+        return doc
+
+    async def _room_transcript_owned(user_id, platform: str, native_meeting_id: str,
+                                     x_user_workspaces: Optional[str], span: str) -> "tuple[dict, bool]":
+        """``_room_transcript`` and whether the caller is the meeting's personal OWNER: the
+        native-keyed read matches the caller's own rows only (``_owned``), so a document found there
+        is theirs; one found through the access union (a share, a workspace) is not."""
         doc = await store.get_transcript(user_id, platform, native_meeting_id)
+        owned = doc is not None
         if doc is None:
             # A MEETING SENT INTO A WORKSPACE IS ITS MEMBERS' TOO (#1783, founder's call 2026-10-14):
             # a member asking by the meeting link got 404, because the link resolves to the caller's
@@ -409,7 +419,7 @@ def build_router(
                 status_code=404,
                 detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
             )
-        return doc
+        return doc, owned
 
     # --- GET /transcripts/{platform}/{native_meeting_id} → api.v1 TranscriptionResponse ---
     @router.get("/transcripts/{platform}/{native_meeting_id}")
@@ -478,6 +488,11 @@ def build_router(
         with its `kinds` (decision, commitment, price, date, new); at most one such answer a minute,
         the lines in between batched into it. Read the whole transcript with get_meeting_transcript
         when you need the context."""
+        # Anyone the call is shared with listens (policy P12, design mvp1-shared-listen §2): its owner,
+        # a person it was shared with, a member of the workspace it is bound to — the finished-
+        # transcript rule, re-checked on every re-read, so a removed person gets 404 within one tick.
+        # `listener` and `notes` write onto the meeting, so they act only for its OWNER (`owned`); for
+        # anyone else they are ignored. (The docstring is the MCP tool's text: kept as the slice has it.)
         user_id = _resolve_user_id(x_user_id)
         deadline = time.monotonic() + timeout_sec
         # Where noting stands for this meeting lives on the meeting itself (`listener_noted_index`,
@@ -486,10 +501,10 @@ def build_router(
         notes_ready = False
         noted: list = []
         while True:
-            doc = await _room_transcript(user_id, platform, native_meeting_id, x_user_workspaces,
-                                         "transcripts.signal")
+            doc, owned = await _room_transcript_owned(user_id, platform, native_meeting_id,
+                                                      x_user_workspaces, "transcripts.signal")
             shared_meeting_readable(request, doc)
-            if notes and notes_from is None and doc.get("id") is not None:
+            if notes and owned and notes_from is None and doc.get("id") is not None:
                 row = await store.annotate_meeting(user_id, int(doc["id"]), metadata={})
                 meta = ((row or {}).get("data") or {}).get("metadata") or {}
                 notes_from = int(meta.get("listener_noted_index") or 0)
@@ -509,11 +524,11 @@ def build_router(
             await asyncio.sleep(min(SIGNAL_POLL_S, max(0.0, deadline - time.monotonic())))
         signal = "addressed" if addressed else "ended" if ended else "noted" if noted else "quiet"
         stamp: dict = {}
-        if listener:
+        if listener and owned:
             # The listener's heartbeat: every call (at most SIGNAL_WAIT_MAX_S apart) restamps it.
             stamp.update({"listener_state": "off" if ended else "listening",
                           "listener_ts": int(time.time() * 1000), "listener_mode": "script"})
-        if signal == "noted":
+        if signal == "noted" and owned:
             stamp.update({"listener_noted_index": len(segments),
                           "listener_noted_ts": int(time.time() * 1000)})
         if stamp and doc.get("id") is not None:

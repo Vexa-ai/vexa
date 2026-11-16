@@ -42,6 +42,41 @@ def owns(row_user_id, data, user_id) -> bool:
     return row_user_id == user_id and not (isinstance(data, dict) and data.get(ROOM_PRINCIPAL))
 
 
+#: How a caller reads a meeting: its personal owner, a person it was shared with (a redeemed grant,
+#: ``transcript_viewers``), or a member of the workspace it is bound to. The finished-transcript rule
+#: (``adapters.get_transcript_by_id``: a · c · b) is the listening rule too (policy P12, design
+#: mvp1-shared-listen §1): live and finished answer by one rule.
+OWNER, VIEWER, WORKSPACE = "owner", "viewer", "workspace"
+
+
+def deleted(data) -> bool:
+    """The owner deleted this meeting's transcript (``artifact_deletion`` completed): nobody reads it,
+    the owner included — the same test ``get_transcript_by_id`` applies."""
+    stamp = (data or {}).get("artifact_deletion") if isinstance(data, dict) else None
+    return bool(stamp) and isinstance(stamp, dict) and stamp.get("state", "completed") == "completed"
+
+
+def access_of(row_user_id, data, user_id, member_workspaces=None, *, room=None, is_viewer=None,
+              workspace_id=None) -> "Optional[str]":
+    """``OWNER`` / ``VIEWER`` / ``WORKSPACE`` — how ``user_id`` reads this meeting — or None when it may
+    not (deleted, or none of the three). The SAME three-way rule ``get_transcript_by_id`` authorizes
+    by, as a label. A narrow SQL row passes the three facts it read instead of ``data`` (``room``, the
+    room mark; ``is_viewer``, ``transcript_viewers @> uid``; ``workspace_id``)."""
+    data = data if isinstance(data, dict) else {}
+    if room is None:
+        room = data.get(ROOM_PRINCIPAL)
+    if row_user_id == user_id and not room:
+        return OWNER
+    if is_viewer is None:
+        is_viewer = user_id in (data.get("transcript_viewers") or [])
+    if is_viewer:
+        return VIEWER
+    ws = workspace_id if workspace_id is not None else data.get("workspace_id")
+    if member_workspaces and ws and ws in member_workspaces:
+        return WORKSPACE
+    return None
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 

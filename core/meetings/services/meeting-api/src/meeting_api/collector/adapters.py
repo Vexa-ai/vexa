@@ -525,6 +525,85 @@ class SqlAlchemyTranscriptStore:
         # read decides which tier of the blob it may carry, so the two can never disagree.
         return await self._merge_live_segments(pg, viewer_is_owner=is_owner)
 
+    async def listen_calls(self, user_id, *, member_workspaces=None, held_ids=(),
+                           statuses=()) -> "list[dict]":
+        """ONE narrow read per listening tick (design mvp1-shared-listen §2-§3): the caller's RUNNING
+        calls (``status`` in ``statuses``) on each access branch — owner, transcript viewer, member of
+        the bound workspace — plus every call in ``held_ids`` (the listener's cursor) whatever its
+        status or access now. Each row carries what the access rule reads and nothing else: owner,
+        room mark, ``transcript_viewers @> uid``, ``workspace_id``, deletion state, status, title; no
+        blob crosses the wire, no transcript is read. ``access`` is ``share_access.access_of`` on
+        those facts (None: this caller may no longer read it). ``mark`` is where the call's transcript
+        feed (``tc:meeting:{id}``, every segment write appends there, a draft settling included) last
+        moved, or None when unknown: a reader re-reads the transcript only when it changed.
+
+        Each branch is its own index-served select (owner: the active partial unique index; viewer:
+        ix_meeting_transcript_viewers_gin; workspace: ix_meeting_workspace_*), joined by UNION ALL with
+        no ORDER BY, so a tick never sorts or detoasts an account's history (#800)."""
+        from sqlalchemy import Integer, String, any_, bindparam, func, literal_column, select, text, union_all
+        from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+
+        from .models import Meeting
+
+        viewers_expr = Meeting.data.op("->", return_type=JSONB)(literal_column("'transcript_viewers'"))
+        is_viewer = viewers_expr.op("@>")(func.to_jsonb(user_id))
+        workspace_expr = Meeting.data.op("->>", return_type=String)(literal_column("'workspace_id'"))
+        cols = [
+            Meeting.id, Meeting.user_id, Meeting.status, Meeting.platform, Meeting.platform_specific_id,
+            Meeting.data.op("->>", return_type=String)(literal_column("'title'")).label("title"),
+            workspace_expr.label("workspace_id"),
+            Meeting.data.op("->>", return_type=String)(
+                literal_column("'{}'".format(share_access.ROOM_PRINCIPAL))).label("room"),
+            Meeting.data.op("->", return_type=JSONB)(literal_column("'artifact_deletion'")).label("deletion"),
+            is_viewer.label("is_viewer"),
+        ]
+        running = tuple(sorted(statuses or ()))
+        branches = []
+        if running:
+            branches.append(select(*cols).where(
+                Meeting.user_id == user_id, text("status NOT IN ('completed', 'failed')"),
+                Meeting.status.in_(running)))
+            branches.append(select(*cols).where(is_viewer, Meeting.status.in_(running)))
+            if member_workspaces:
+                branches.append(select(*cols).where(
+                    workspace_expr.in_(sorted(member_workspaces)), Meeting.status.in_(running)))
+        held = sorted({int(i) for i in (held_ids or ())})
+        if held:
+            branches.append(select(*cols).where(
+                Meeting.id == any_(bindparam("held_ids", held, type_=ARRAY(Integer)))))
+        if not branches:
+            return []
+        stmt = branches[0] if len(branches) == 1 else union_all(*branches)
+        async with self._session_factory() as db:
+            got = (await db.execute(stmt)).all()
+        rows: dict = {}
+        for r in got:
+            if r.id in rows:
+                continue
+            access = None if share_access.deleted({"artifact_deletion": r.deletion}) else share_access.access_of(
+                r.user_id, None, user_id, member_workspaces, room=r.room, is_viewer=bool(r.is_viewer),
+                workspace_id=r.workspace_id)
+            if access is None and r.id not in held:
+                continue    # a room's row on the owner branch, a deleted one: not this caller's to follow
+            rows[r.id] = {"id": r.id, "user_id": r.user_id, "status": r.status, "platform": r.platform,
+                          "native_meeting_id": r.platform_specific_id, "title": r.title or "",
+                          "workspace_id": r.workspace_id, "access": access, "mark": None}
+        # The feed marks, one pipelined round trip, for the calls a reader may follow. A failed read
+        # leaves the mark unknown, which only means "read the transcript" (never more access).
+        follow = [i for i, row in rows.items() if row["access"] and row["status"] in running]
+        if follow and self._redis is not None:
+            try:
+                async with self._redis.pipeline(transaction=False) as pipe:
+                    for i in follow:
+                        pipe.xrevrange(f"tc:meeting:{i}", count=1)
+                    tails = await pipe.execute()
+                for i, tail in zip(follow, tails):
+                    last = tail[0][0] if tail else ""
+                    rows[i]["mark"] = last.decode() if isinstance(last, (bytes, bytearray)) else str(last)
+            except Exception:  # noqa: BLE001 — unknown mark → the reader reads
+                pass
+        return list(rows.values())
+
     async def list_meetings(self, user_id, *, status=None, platform=None, limit=None, offset=None,
                             member_workspaces=None, list_view=False, meeting_id=None, slim=False,
                             metadata_filter=None):
