@@ -101,8 +101,11 @@ def _build_backend(network_envs: tuple[str, ...] = ()):
     if kind == "k8s":
         from .k8s_backend import K8sBackend
 
-        # Namespace is injected via the downward API (POD_NAMESPACE); None ⇒ the Pod's own (its ServiceAccount's).
-        return K8sBackend(namespace=os.getenv("POD_NAMESPACE") or None)
+        from .k8s_backend import _sa_namespace
+
+        # Namespace: the downward API's POD_NAMESPACE, else the Pod's own (its ServiceAccount's),
+        # resolved at boot so a runtime with neither refuses to start instead of guessing.
+        return K8sBackend(namespace=os.getenv("POD_NAMESPACE") or _sa_namespace())
     if kind == "process":
         from .process_backend import ProcessBackend
 

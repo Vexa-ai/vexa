@@ -41,13 +41,13 @@ def wire(monkeypatch):
     """Capture every HTTPS request; answer from a queue (default 200 {})."""
     sent, answers = [], []
 
-    def request(method, url, **kw):
-        sent.append({"method": method, "url": url, **kw})
+    def request(session, method, url, **kw):
+        sent.append({"method": method, "url": url, "trust_env": session.trust_env, **kw})
         a = answers.pop(0) if answers else _Resp(200, {})
         if isinstance(a, Exception):
             raise a
         return a
-    monkeypatch.setattr(requests, "request", request)
+    monkeypatch.setattr(requests.Session, "request", request)
     return sent, answers
 
 
@@ -93,6 +93,28 @@ def test_a_call_with_no_answer_raises_and_a_body_that_is_not_json_is_empty(sa, w
         k8s_backend._api("GET", "/x")
     answers.append(_Resp(503, text_only=True))
     assert k8s_backend._api("GET", "/x") == (503, {})
+
+
+def test_the_environment_cannot_reroute_the_call_or_replace_the_token(sa, wire, monkeypatch, tmp_path):
+    """HTTPS_PROXY, a ~/.netrc and REQUESTS_CA_BUNDLE are ignored: the Session does not trust the env."""
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/tmp/other-ca.pem")
+    (tmp_path / ".netrc").write_text("machine 10.96.0.1 login x password stolen\n")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    k8s_backend._api("GET", "/x")
+    (r,) = wire[0]
+    assert r["trust_env"] is False and "proxies" not in r
+    assert r["headers"]["Authorization"] == "Bearer tok-1" and r["verify"] == str(sa / "ca.crt")
+
+
+def test_with_no_namespace_anywhere_the_backend_refuses_by_name(sa, wire):
+    (sa / "namespace").unlink()
+    with pytest.raises(RuntimeError, match="no namespace given"):
+        K8sBackend()._pod("p")
+    (sa / "namespace").write_text("  \n")
+    with pytest.raises(RuntimeError, match="is empty"):
+        K8sBackend().start("mtg-1", Runnable(image="img"), {})
+    assert wire[0] == []
 
 
 def test_the_namespace_is_the_given_one_else_the_pods_own(sa, wire):
@@ -189,6 +211,27 @@ def test_terminate_deletes_with_the_stop_grace_and_kill_and_cleanup_with_zero(mo
     grace = [(body or {}).get("gracePeriodSeconds") for _, body in api.deletes]
     assert grace == [25, 0, 0]
     assert all(body["kind"] == "DeleteOptions" for _, body in api.deletes)
+
+
+def test_an_api_outage_is_an_unknown_state_never_an_exit(monkeypatch, caplog):
+    """L1: a 5xx or no answer while polling says nothing about the Pod: exit_code is None (still
+    running, asked again), never 0; only a 404 is gone."""
+    api = FakeApi().install(monkeypatch)
+    be = K8sBackend(namespace="ns")
+    h = be.start("mtg-1", Runnable(image="img"), {})
+    api.fail[("GET", "pods")] = (503, "ServiceUnavailable")
+    with caplog.at_level(logging.WARNING, logger="runtime_kernel.k8s"):
+        assert be.exit_code(h) is None
+    assert "503 ServiceUnavailable" in caplog.text and h._impl in api.pods and not api.deletes
+
+    def no_answer(method, path, **kw):
+        raise RuntimeError("k8s API GET: timed out")
+    monkeypatch.setattr(k8s_backend, "_api", no_answer)
+    assert be.exit_code(h) is None
+    api.install(monkeypatch)
+    del api.fail[("GET", "pods")]
+    api.pods.pop(h._impl)
+    assert be.exit_code(h) == 0
 
 
 def test_an_observed_exit_deletes_the_pod_with_its_own_grace(monkeypatch):

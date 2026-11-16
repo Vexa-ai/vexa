@@ -984,6 +984,7 @@ dependencies = [
     { name = "referencing" },
     { name = "requests" },
     { name = "requests-unixsocket" },
+    { name = "websockets" },
 ]
 
 [package.dev-dependencies]
@@ -1006,6 +1007,7 @@ requires-dist = [
     { name = "referencing", specifier = ">=0.30,<0.40" },
     { name = "requests", specifier = ">=2.32,<3" },
     { name = "requests-unixsocket", specifier = ">=0.3,<0.5" },
+    { name = "websockets", specifier = ">=13,<18" },
 ]
 
 [package.metadata.requires-dev]

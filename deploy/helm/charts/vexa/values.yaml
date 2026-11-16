@@ -723,7 +723,7 @@ runtime:
   # Secret: API keys reach no worker (H5/W1), and the render fails on any of those.
   workerSecretMounts: []
   # backend selects the spawn substrate (runtime __main__._build_backend):
-  #   k8s    → Pods via kubectl under the runtime SA/RBAC (this chart's RBAC). The real cloud path.
+  #   k8s    → Pods through the API server under the runtime SA/RBAC (this chart's RBAC). The real cloud path.
   #   docker → host /var/run/docker.sock (single-node k3s fallback; mounts the socket — see below).
   #   process→ child processes (no containers).
   backend: "k8s"
@@ -860,7 +860,7 @@ runtime:
   # nodeSelector via the RUNTIME_K8S_* env below). Omit `labelSelector` and the runtime's own pod
   # selector is injected. See global.topologySpreadConstraints.
   # topologySpreadConstraints: []
-  # Scheduling for the Pods the runtime SPAWNS (backend=k8s). A `kubectl run` bot/agent Pod is NOT a
+  # Scheduling for the Pods the runtime SPAWNS (backend=k8s). A spawned bot/agent Pod is NOT a
   # child of the runtime Deployment, so it does NOT inherit global.nodeSelector/global.tolerations —
   # on an all-tainted pool (dedicated / spot / GPU node pools) every spawn strands Pending and the
   # meeting silently fails (#673). By DEFAULT (leave these unset) spawned Pods inherit the runtime's

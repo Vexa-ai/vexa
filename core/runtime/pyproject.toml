@@ -14,6 +14,8 @@ dependencies = [
     "requests-unixsocket>=0.3,<0.5",
     # the K8sBackend calls the API server with it (also what requests-unixsocket is built on)
     "requests>=2.32,<3",
+    # the postgres-password hook's exec into the postgres Pod (pg_password_rotate; also uvicorn's)
+    "websockets>=13,<18",
 ]
 
 [dependency-groups]

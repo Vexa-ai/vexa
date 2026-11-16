@@ -25,7 +25,7 @@ spec:
     spec:
       enableServiceLinks: false
       {{- if eq (include "vexa.runtimeBackend" .) "k8s" }}
-      # The k8s backend only calls the API server (kubectl, its ServiceAccount): it holds no engine
+      # The k8s backend only calls the API server (HTTPS, its ServiceAccount): it holds no engine
       # socket and starts no process as another uid, so it runs as the chart's unprivileged uid, the
       # image's USER. The docker backend asks for root to open the engine's socket.
       {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
@@ -37,7 +37,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- if eq (include "vexa.runtimeBackend" .) "k8s" }}
-      # The runtime spawns bot/agent Pods via kubectl — bind the SA carrying the pod-spawn RBAC.
+      # The runtime spawns bot/agent Pods through the API server — bind the SA carrying the pod-spawn RBAC.
       serviceAccountName: {{ include "vexa.componentName" (list . "runtime") }}
       {{- end }}
       {{- with include "vexa.extraCA.initContainer" . }}
@@ -140,7 +140,7 @@ spec:
             - name: LOG_LEVEL
               value: {{ .Values.runtime.logLevel | default "info" | quote }}
             {{- if eq (include "vexa.runtimeBackend" .) "k8s" }}
-            # Scheduling parity for SPAWNED Pods (#673). A `kubectl run` bot/agent Pod is not a child of
+            # Scheduling parity for SPAWNED Pods (#673). A spawned bot/agent Pod is not a child of
             # this Deployment, so it inherits none of the nodeSelector/tolerations applied below at the
             # pod spec (:143-154). Hand the runtime its OWN scheduling constraints as JSON so the spawn
             # backend can stamp them onto every spawned Pod — otherwise, on an all-tainted pool (dedicated

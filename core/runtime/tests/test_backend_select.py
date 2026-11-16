@@ -28,6 +28,7 @@ def test_runtime_backend_env_selects_backend(monkeypatch, value, expected):
         monkeypatch.delenv("RUNTIME_BACKEND", raising=False)
     else:
         monkeypatch.setenv("RUNTIME_BACKEND", value)
+    monkeypatch.setenv("POD_NAMESPACE", "vexa")              # k8s: the namespace is known at boot
     assert isinstance(_build_backend(), expected)
 
 
@@ -37,6 +38,18 @@ def test_k8s_backend_reads_pod_namespace(monkeypatch):
     backend = _build_backend()
     assert isinstance(backend, K8sBackend)
     assert backend._ns == "vexa-prod"
+
+
+def test_k8s_backend_with_no_namespace_refuses_to_boot(monkeypatch, tmp_path):
+    from runtime_kernel import k8s_backend
+
+    monkeypatch.setenv("RUNTIME_BACKEND", "k8s")
+    monkeypatch.delenv("POD_NAMESPACE", raising=False)
+    monkeypatch.setattr(k8s_backend, "SA_DIR", str(tmp_path))      # no ServiceAccount namespace file
+    with pytest.raises(RuntimeError, match="no namespace given"):
+        _build_backend()
+    (tmp_path / "namespace").write_text("vexa-sa\n")
+    assert _build_backend()._ns == "vexa-sa"
 
 
 def test_only_docker_backend_ensures_worker_image():

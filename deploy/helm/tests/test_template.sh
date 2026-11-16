@@ -1325,12 +1325,29 @@ upgrade_render="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yam
 if grep -qE 'name: vexa-vexa-postgres-password$' <<< "$upgrade_render"; then
   echo "  FAIL: the postgres-password hook rendered without a published live Secret"; fail=1
 else echo "  OK: no postgres-password hook without a published live Secret"; fi
-# Its run is live-only (lookup), so its source is held here: the hook's rights go when it fails as
-# well as when it succeeds, and no password is ever on a kubectl command line.
-HOOK_SRC="$CHART/templates/job-postgres-password.yaml"
-if [ "$(grep -c 'hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed' "$HOOK_SRC")" -eq 3 ] \
-   && ! grep -qE 'patch secret[^|]*-p "' "$HOOK_SRC" && grep -q -- '--patch-file /dev/stdin' "$HOOK_SRC"; then
-  echo "  OK: the rotation hook's rights are removed on failure too; its patches go on stdin"
+# Its run is live-only (lookup), so the hook itself is rendered here from a copy of the chart with one
+# extra template that includes it (the shipped chart has no switch for this): it runs the runtime
+# image's python against the API server (no kubectl, which that image no longer carries), its rights
+# go when it fails as well as when it succeeds, and no value it handles is on its command line.
+HOOK_CHART="$(mktemp -d)"; cp -R "$CHART" "$HOOK_CHART/vexa"
+printf '{{ include "vexa.postgresPasswordHook" . }}\n' > "$HOOK_CHART/vexa/templates/zz-render-postgres-password-hook.yaml"
+HOOK="$(helm template vexa "$HOOK_CHART/vexa" -n vexa -f "$CHART/values-test.yaml" --is-upgrade --set flows.enabled=true 2>&1)" || { echo "  FAIL: the postgres-password hook does not render: $HOOK"; fail=1; }
+rm -rf "$HOOK_CHART"
+hook_job="$(awk 'BEGIN{RS="\n---\n"} /kind: Job/ && /name: vexa-vexa-postgres-password\n/' <<< "$HOOK")"
+hook_role="$(awk 'BEGIN{RS="\n---\n"} /kind: Role\n/ && /name: vexa-vexa-postgres-password\n/' <<< "$HOOK")"
+if grep -q 'command: \["python", "-m", "runtime_kernel.pg_password_rotate"\]' <<< "$hook_job" \
+   && grep -q 'image: "vexaai/vexa-runtime:' <<< "$hook_job" && ! grep -q 'kubectl ' <<< "$hook_job" \
+   && grep -q 'serviceAccountName: vexa-vexa-postgres-password' <<< "$hook_job" \
+   && grep -A1 'name: CONSUMERS' <<< "$hook_job" | grep -q 'vexa-vexa-flows-worker'; then
+  echo "  OK: the rotation hook runs the runtime image's python against the API server, under its own ServiceAccount"
+else echo "  FAIL: the rotation hook's Job"; fail=1; fi
+if grep -q 'resources: \["pods/exec"\]' <<< "$hook_role" && grep -q 'resources: \["secrets"\]' <<< "$hook_role" \
+   && grep -q 'resources: \["deployments"\]' <<< "$hook_role" && grep -q 'resourceNames: \["vexa-vexa-postgres-0"\]' <<< "$hook_role"; then
+  echo "  OK: the rotation hook may exec into the postgres Pod, patch its one Secret and restart the named Deployments"
+else echo "  FAIL: the rotation hook's Role"; fail=1; fi
+if [ "$(grep -c 'hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed' <<< "$HOOK")" -eq 3 ] \
+   && ! grep -qE 'args:|POSTGRES_PASSWORD' <<< "$hook_job"; then
+  echo "  OK: the rotation hook's rights are removed on failure too; no value is on its command line"
 else echo "  FAIL: the rotation hook keeps its rights after a failure or puts a value on a command line"; fail=1; fi
 
 # N-10: a policy that names the flows tier names this release's flows Pods (name + instance labels,

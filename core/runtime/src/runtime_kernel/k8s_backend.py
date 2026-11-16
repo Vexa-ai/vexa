@@ -327,28 +327,42 @@ def _api_base() -> str:
 
 
 def _sa_namespace() -> str:
+    """The runtime Pod's own namespace, from its ServiceAccount. Missing or empty refuses by name:
+    a runtime that guessed `default` would spawn, list and delete Pods in a namespace not its own."""
+    path = os.path.join(SA_DIR, "namespace")
     try:
-        with open(os.path.join(SA_DIR, "namespace")) as f:
-            return f.read().strip() or "default"
-    except OSError:
-        return "default"
+        with open(path) as f:
+            ns = f.read().strip()
+    except OSError as exc:
+        raise RuntimeError(f"k8s backend: no namespace given (POD_NAMESPACE) and none in {path}: {exc}") from exc
+    if not ns:
+        raise RuntimeError(f"k8s backend: no namespace given (POD_NAMESPACE) and {path} is empty")
+    return ns
 
 
-def _api(method: str, path: str, *, body: Optional[dict] = None,
-         params: Optional[dict] = None) -> tuple[int, dict]:
+def _api(method: str, path: str, *, body: Optional[object] = None,
+         params: Optional[dict] = None, content_type: Optional[str] = None) -> tuple[int, dict]:
     """One call to the API server: (HTTP status, the decoded JSON body, {} when there is none). An
     error status is returned, not raised: each caller decides what it means. A call that never got an
-    answer (connection, TLS, timeout) raises."""
+    answer (connection, TLS, timeout) raises. ``content_type`` names a PATCH's kind (merge or JSON
+    patch); the body is JSON either way."""
     import requests                                      # the image's HTTP client (uv.lock)
 
     with open(os.path.join(SA_DIR, "token")) as f:
         token = f.read().strip()
-    try:
-        r = requests.request(method, _api_base() + path, json=body, params=params, timeout=API_TIMEOUT_S,
-                             verify=os.path.join(SA_DIR, "ca.crt"),
-                             headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
-    except requests.RequestException as exc:
-        raise RuntimeError(f"k8s API {method} {path}: {exc}") from exc
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    if content_type:
+        headers["Content-Type"] = content_type
+    # trust_env=False: no HTTPS_PROXY/NO_PROXY, no ~/.netrc (which would replace the bearer token)
+    # and no REQUESTS_CA_BUNDLE from the environment; the API server is reached directly, under this
+    # ServiceAccount, checked against the cluster CA.
+    with requests.Session() as session:
+        session.trust_env = False
+        try:
+            r = session.request(method, _api_base() + path, json=body, params=params, timeout=API_TIMEOUT_S,
+                                verify=os.path.join(SA_DIR, "ca.crt"), headers=headers)
+        except requests.RequestException as exc:
+            raise RuntimeError(f"k8s API {method} {path}: {exc}") from exc
     try:
         obj = r.json()
     except ValueError:
@@ -755,8 +769,9 @@ class K8sBackend:
 
     def _pod(self, name: str) -> Optional[dict]:
         """The Pod object (verb get), or None when the API server does not answer it with one."""
+        path = self._path("pods", name)
         try:
-            status, obj = _api("GET", self._path("pods", name))
+            status, obj = _api("GET", path)
         except Exception as exc:  # noqa: BLE001
             log.warning("get pod %s: %s", name, exc)
             return None
@@ -852,9 +867,19 @@ class K8sBackend:
         name = h._impl  # type: ignore[attr-defined]
         if name in self._exited:
             return self._exited[name]
-        pod = self._pod(name)
-        if pod is None:
+        path = self._path("pods", name)
+        try:
+            code_http, pod = _api("GET", path)
+        except Exception as exc:  # noqa: BLE001 — no answer: unknown, not gone
+            log.warning("get pod %s: %s; its state is unknown, asked again on the next poll", name, exc)
+            return None
+        if code_http == 404:
             return 0                                     # gone (deleted/never-found) → no longer running
+        if code_http != 200:
+            # A 5xx or a refusal says nothing about the Pod: reporting it gone (exit 0) would end a
+            # live workload's record during a short API outage. Unknown is "still running".
+            log.warning("%s; the pod's state is unknown, asked again on the next poll", ApiError("GET", path, code_http, pod))
+            return None
         status = pod.get("status", {})
         phase = status.get("phase")
         if phase not in TERMINAL_PHASES:
