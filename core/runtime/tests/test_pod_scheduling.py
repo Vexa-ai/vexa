@@ -17,6 +17,7 @@ import json
 import pytest
 
 import runtime_kernel.k8s_backend as k8s_backend
+from k8s_fake import FakeApi
 from runtime_kernel import Runtime
 from runtime_kernel.api import create_app
 from runtime_kernel.k8s_backend import K8sBackend, build_pod
@@ -34,21 +35,26 @@ STEALTH_TOLERATION = {"key": "vexa.ai/pool", "operator": "Equal", "value": "stea
 PLACEMENT_FIELDS = ("nodeSelector", "tolerations", "priorityClassName", "imagePullSecrets")
 
 
-def _pods_into(submitted: list):
-    """A kubectl stand-in: Pod manifests are kept, a created object answers with a uid (the
-    workload's credential Secret is owned by it)."""
-    class _R:
-        returncode, stderr = 0, ""
+class _Submitted:
+    """The Pod manifests the backend submitted to the faked API server (a live view)."""
 
-        def __init__(self, stdout=""):
-            self.stdout = stdout
+    def __init__(self, api):
+        self._api = api
 
-    def fake(*args, check=True, stdin=None):
-        obj = json.loads(stdin) if stdin else {}
-        if stdin and obj.get("kind") == "Pod":
-            submitted.append(obj)
-        return _R(json.dumps({"metadata": {"uid": "pod-uid"}}) if args[:1] == ("create",) else "")
-    return fake
+    def __iter__(self):
+        return iter(self._api.submitted)
+
+    def __getitem__(self, i):
+        return self._api.submitted[i]
+
+    def __len__(self):
+        return len(self._api.submitted)
+
+
+def _pods_into(monkeypatch) -> "_Submitted":
+    """Fake the API server (a created Pod answers with its uid: the workload's credential Secret
+    is owned by it); return the Pod manifests submitted to it."""
+    return _Submitted(FakeApi().install(monkeypatch))
 
 
 @pytest.fixture(autouse=True)
@@ -142,10 +148,9 @@ def test_kubernetes_native_shapes_are_accepted(monkeypatch):
 
 
 def test_the_submitted_pod_carries_the_profiles_placement(monkeypatch):
-    """End to end through the kernel and the k8s backend's real spawn path (kubectl faked)."""
+    """End to end through the kernel and the k8s backend's real spawn path (API server faked)."""
     _stealth(monkeypatch, BOT, priority="vexa-stealth", secret="regcred")
-    submitted = []
-    monkeypatch.setattr(k8s_backend, "_kubectl", _pods_into(submitted))
+    submitted = _pods_into(monkeypatch)
     rt = Runtime(backend=K8sBackend(namespace="ns"), profiles=default_registry(), grace_sec=0.1,
                  workspace_store=StoreConfig())
     rt.create(WorkloadSpec(workloadId="mtg-1", profile="meeting-bot", env={"VEXA_BOT_CONFIG": "{}"}))
@@ -207,8 +212,7 @@ def test_a_malformed_value_stops_the_production_boot(monkeypatch):
 
 def test_a_spec_env_cannot_place_the_pod(monkeypatch):
     monkeypatch.setenv(BOT + "PRIORITY_CLASS_NAME", "vexa-stealth")
-    submitted = []
-    monkeypatch.setattr(k8s_backend, "_kubectl", _pods_into(submitted))
+    submitted = _pods_into(monkeypatch)
     rt = Runtime(backend=K8sBackend(namespace="ns"), profiles=default_registry(), grace_sec=0.1,
                  workspace_store=StoreConfig())
     hostile = {

@@ -374,23 +374,14 @@ def test_k8s_start_stamps_adoption_labels(monkeypatch):
 
     import json as _json
 
-    calls: list[dict] = []
+    from k8s_fake import FakeApi
 
-    def fake_kubectl(*args: str, check: bool = True, stdin=None):
-        calls.append({"args": args, "stdin": stdin})
-        class R:  # noqa: N801 — minimal stand-in
-            returncode = 0
-            stdout = ""
-            stderr = ""
-        return R()
-
-    monkeypatch.setattr(k8s_backend, "_kubectl", fake_kubectl)
+    api = FakeApi().install(monkeypatch)
     from runtime_kernel.profiles import Runnable
 
     be = k8s_backend.K8sBackend()
     be.start("mtg-2-d93eee39", Runnable(image="img"), {})
-    (call,) = calls
-    pod = _json.loads(call["stdin"])            # the labels ride the submitted manifest
+    (pod,) = api.submitted                      # the labels ride the submitted manifest
     assert pod["metadata"]["labels"] == {
         "runtime.managed": "true", "runtime.workload_id": "mtg-2-d93eee39", "runtime.instance": "default",
     }
@@ -411,18 +402,9 @@ def test_k8s_discovers_pods_by_label(monkeypatch):
                     "containerStatuses": [{"state": {"terminated": {"exitCode": 137}}}]}},
     ]}
 
-    def fake_kubectl(*args: str, check: bool = True):
-        selector = args[args.index("-l") + 1]
-        assert selector in ("runtime.managed=true,runtime.instance=default",
-                            "runtime.managed=true,!runtime.instance")
+    from k8s_fake import FakeApi
 
-        class R:  # noqa: N801
-            returncode = 0
-            stdout = json.dumps(pods if "instance=default" in selector else {"items": []})
-            stderr = ""
-        return R()
-
-    monkeypatch.setattr(k8s_backend, "_kubectl", fake_kubectl)
+    api = FakeApi(list_answers={"runtime.managed=true,runtime.instance=default": pods["items"]}).install(monkeypatch)
     be = k8s_backend.K8sBackend()
     found = {i["workload_id"]: i for i in be.list_workload_containers()}
     assert found["mtg-2-d93eee39"]["running"] is True
@@ -430,6 +412,7 @@ def test_k8s_discovers_pods_by_label(monkeypatch):
         "workload_id": "mtg-9-dead", "name": "vexa-mtg-9-dead",
         "running": False, "exit_code": 137,
     }
+    assert api.selectors == ["runtime.managed=true,runtime.instance=default", "runtime.managed=true,!runtime.instance"]
 
 
 def test_docker_discovery_covers_both_workload_networks(monkeypatch):
@@ -461,47 +444,40 @@ def test_k8s_adopts_only_its_own_instances_pods(monkeypatch):
     from runtime_kernel import k8s_backend
     from runtime_kernel.profiles import Runnable
 
-    submitted, selectors = [], []
+    from k8s_fake import FakeApi
 
-    def fake_kubectl(*args: str, check: bool = True, stdin=None):
-        if stdin:
-            submitted.append(json.loads(stdin))
-        if "-l" in args:
-            selectors.append(args[args.index("-l") + 1])
-
-        class R:  # noqa: N801
-            returncode = 0
-            stdout = json.dumps({"items": []})
-            stderr = ""
-        return R()
-
-    monkeypatch.setattr(k8s_backend, "_kubectl", fake_kubectl)
+    api = FakeApi(list_answers={}).install(monkeypatch)
+    submitted, selectors = api.submitted, api.selectors
     monkeypatch.setenv("RUNTIME_K8S_INSTANCE", "release-a")
     k8s_backend.K8sBackend().start("mtg-1", Runnable(image="img"), {})
     k8s_backend.K8sBackend(instance="release-b").list_workload_containers()
+    submitted, selectors = api.submitted, api.selectors
     assert submitted[0]["metadata"]["labels"]["runtime.instance"] == "release-a"
     # its own instance, plus Pods no instance-aware runtime spawned (0.12) — never release-a's
     assert selectors == ["runtime.managed=true,runtime.instance=release-b",
                          "runtime.managed=true,!runtime.instance"]
 
 
+class _Asked:
+    """The label selectors the backend listed by, read when compared (after the calls)."""
+
+    def __init__(self, api):
+        self._api = api
+
+    def __eq__(self, other):
+        return self._api.selectors == other
+
+    def __repr__(self):
+        return repr(self._api.selectors)
+
+
 def _k8s_with(monkeypatch, by_selector: dict):
     from runtime_kernel import k8s_backend
 
-    asked = []
+    from k8s_fake import FakeApi
 
-    def fake_kubectl(*args: str, check: bool = True, stdin=None):
-        selector = args[args.index("-l") + 1] if "-l" in args else ""
-        asked.append(selector)
-
-        class R:  # noqa: N801
-            returncode = 0
-            stdout = json.dumps({"items": by_selector.get(selector, [])})
-            stderr = ""
-        return R()
-
-    monkeypatch.setattr(k8s_backend, "_kubectl", fake_kubectl)
-    return k8s_backend, asked
+    api = FakeApi(list_answers=by_selector).install(monkeypatch)
+    return k8s_backend, _Asked(api)
 
 
 _V012_BOT = {"metadata": {"name": "vexa-mtg-32686-e21ffd55",

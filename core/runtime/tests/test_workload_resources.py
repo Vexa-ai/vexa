@@ -28,6 +28,7 @@ import re
 import pytest
 
 import runtime_kernel.k8s_backend as k8s_backend
+from k8s_fake import FakeApi
 from runtime_kernel import Runtime
 from runtime_kernel.k8s_backend import K8sBackend, build_pod, resource_requirements
 from runtime_kernel.models import Resources, WorkloadSpec
@@ -201,49 +202,25 @@ def test_pod_without_resources_omits_the_field_entirely():
 def test_runtime_scheduling_env_shapes_the_pod_without_becoming_container_config(monkeypatch):
     """The runtime's OWN scheduling knobs must reach the Pod spec and STOP there — a workload's
     container env is the producer's contract, not a dumping ground for the backend's config."""
-    calls: list[dict] = []
-
-    def fake_kubectl(*args, check=True, stdin=None):
-        calls.append({"args": list(args), "stdin": stdin})
-
-        class _R:
-            returncode = 0
-            stdout = json.dumps({"metadata": {"uid": "pod-uid"}}) if args[:1] == ("create",) else ""
-            stderr = ""
-
-        return _R()
-
-    monkeypatch.setattr(k8s_backend, "_kubectl", fake_kubectl)
+    api = FakeApi().install(monkeypatch)
     monkeypatch.setenv(k8s_backend.TOLERATIONS_ENV, json.dumps([{"key": "vexa", "operator": "Exists"}]))
     monkeypatch.setenv(k8s_backend.NODE_SELECTOR_ENV, json.dumps({"pool": "bots"}))
     K8sBackend(namespace="ns").start("mtg-6", Runnable(image="img"), env={"LOG_LEVEL": "b"})
-    pod = json.loads(calls[0]["stdin"])
+    pod = api.submitted[0]
     assert pod["spec"]["tolerations"] == [{"key": "vexa", "operator": "Exists"}]
     assert pod["spec"]["nodeSelector"] == {"pool": "bots"}
     assert pod["spec"]["containers"][0]["env"] == [{"name": "LOG_LEVEL", "value": "b"}]
 
 
 def test_k8s_start_submits_the_pod_via_create_stdin(monkeypatch):
-    """The spawn submits a complete manifest on stdin (`kubectl create -f -`) — not a partial
+    """The spawn submits a complete manifest (`POST /api/v1/namespaces/<ns>/pods`) — not a partial
     `--overrides` merge, which json-merge-REPLACES the generated containers list."""
-    calls: list[dict] = []
-
-    def fake_kubectl(*args, check=True, stdin=None):
-        calls.append({"args": list(args), "stdin": stdin})
-
-        class _R:
-            returncode = 0
-            stdout = json.dumps({"metadata": {"uid": "pod-uid"}}) if args[:1] == ("create",) else ""
-            stderr = ""
-
-        return _R()
-
-    monkeypatch.setattr(k8s_backend, "_kubectl", fake_kubectl)
+    api = FakeApi().install(monkeypatch)
     K8sBackend(namespace="ns").start(
         "mtg-5", Runnable(image="img"), env={"LOG_LEVEL": "b"}, resources=Resources(cpu=2, memoryMb=4096),
     )
-    assert calls[0]["args"] == ["create", "-f", "-", "-n", "ns"]
-    pod = json.loads(calls[0]["stdin"])
+    method, path, _, pod = api.calls[0]
+    assert (method, path) == ("POST", "/api/v1/namespaces/ns/pods")
     assert pod["spec"]["containers"][0]["resources"]["requests"] == {"cpu": "2000m", "memory": "4096Mi"}
     assert pod["spec"]["containers"][0]["resources"]["limits"] == {"cpu": "2000m", "memory": "4096Mi"}
 
@@ -314,24 +291,12 @@ def _sized_registry(monkeypatch, **env):
 
 def _spawned_pod(monkeypatch, registry, spec: WorkloadSpec) -> dict:
     """The Pod manifest the k8s backend submits for ``spec``: env → profile → kernel → backend,
-    end to end, with only kubectl faked."""
-    calls: list[dict] = []
-
-    def fake_kubectl(*args, check=True, stdin=None):
-        calls.append({"args": list(args), "stdin": stdin})
-
-        class _R:
-            returncode = 0
-            # `create` answers with the Pod's uid: the env Secret is owned by the Pod it feeds.
-            stdout = json.dumps({"metadata": {"uid": "pod-uid"}}) if args[:1] == ("create",) else ""
-            stderr = ""
-
-        return _R()
-
-    monkeypatch.setattr(k8s_backend, "_kubectl", fake_kubectl)
+    end to end, with only the API server faked (a created Pod answers with its uid: the env
+    Secret is owned by the Pod it feeds)."""
+    api = FakeApi().install(monkeypatch)
     _runtime(K8sBackend(namespace="ns"), registry).create(spec)
-    assert calls[0]["args"][:3] == ["create", "-f", "-"]
-    return json.loads(calls[0]["stdin"])
+    assert api.calls[0][:2] == ("POST", "/api/v1/namespaces/ns/pods")
+    return api.submitted[0]
 
 
 _TODAY_BOT_RESOURCES = {

@@ -1,64 +1,62 @@
 """Validate runtime in ISOLATION against a REAL Kubernetes cluster — create a Pod via the kernel, drive
-it through the runtime.v1 lifecycle, and assert it genuinely scheduled, ran, and was removed. Skipped
-where no cluster is reachable (e.g. laptop/CI without a KUBECONFIG)."""
-import shutil
-import subprocess
+it through the runtime.v1 lifecycle, and assert it genuinely scheduled, ran, and was removed. It runs
+where the runtime runs: inside a Pod, under a ServiceAccount allowed to create, get, list and delete
+Pods in its namespace (the chart's runtime RBAC). Skipped anywhere else (laptop/CI without a cluster)."""
+import os
 import time
 
 import pytest
 
-from runtime_kernel import Runtime
+from runtime_kernel import Runtime, k8s_backend
 from runtime_kernel.k8s_backend import K8sBackend
 from runtime_kernel.models import RuntimeState, WorkloadSpec
 from runtime_kernel.profiles import Runnable
 
 
 def _k8s_ok() -> bool:
-    if not shutil.which("kubectl"):
+    if not os.environ.get("KUBERNETES_SERVICE_HOST") or not os.path.exists(os.path.join(k8s_backend.SA_DIR, "token")):
         return False
-    return subprocess.run(["kubectl", "get", "nodes"], capture_output=True).returncode == 0
+    try:
+        status, _ = k8s_backend._api("GET", K8sBackend()._path("pods"), params={"limit": "1"})
+    except Exception:  # noqa: BLE001
+        return False
+    return status == 200
 
 
 pytestmark = pytest.mark.skipif(not _k8s_ok(), reason="no reachable kubernetes cluster")
 
 
-def _pod_exists(name: str) -> bool:
-    return subprocess.run(["kubectl", "get", "pod", name], capture_output=True).returncode == 0
-
-
-def _phase(name: str) -> str:
-    return subprocess.run(
-        ["kubectl", "get", "pod", name, "-o", "jsonpath={.status.phase}"],
-        capture_output=True, text=True,
-    ).stdout.strip()
-
-
 def test_k8s_backend_real_pod_lifecycle():
     name = "vexa-rt-k8stest"
-    subprocess.run(["kubectl", "delete", "pod", name, "--ignore-not-found",
-                    "--grace-period=0", "--force"], capture_output=True)  # clean slate
+    be = K8sBackend()
+    be._delete_pod(name, grace_sec=0)                     # clean slate
     rt = Runtime(
-        backend=K8sBackend(),
-        profiles={"test": Runnable(image="alpine", command=["sleep", "30"])},
+        backend=be,
+        profiles={"test": Runnable(image=os.environ.get("K8S_TEST_IMAGE", "alpine"), command=["sleep", "30"])},
         grace_sec=30.0,
     )
     spec = WorkloadSpec(workloadId="rt-k8stest", profile="test", env={"VEXA_X": "y"})
+
+    def phase():
+        return ((be._pod(name) or {}).get("status") or {}).get("phase")
     try:
         rt.create(spec)
         assert rt.get("rt-k8stest").state is RuntimeState.running
-        assert _pod_exists(name)                              # a REAL pod object exists
+        assert be._pod(name) is not None                  # a REAL pod object exists
 
-        deadline = time.time() + 90                           # wait for it to actually schedule & run
-        while time.time() < deadline and _phase(name) != "Running":
+        deadline = time.time() + 90                       # wait for it to actually schedule & run
+        while time.time() < deadline and phase() != "Running":
             time.sleep(1)
-        assert _phase(name) == "Running"                      # genuinely scheduled & running
+        assert phase() == "Running"                       # genuinely scheduled & running
 
         rt.stop("rt-k8stest")
         assert rt.get("rt-k8stest").state is RuntimeState.stopped
 
         rt.destroy("rt-k8stest")
         assert rt.get("rt-k8stest").state is RuntimeState.destroyed
-        assert not _pod_exists(name)                          # pod actually removed
+        deadline = time.time() + 60
+        while time.time() < deadline and be._pod(name) is not None:
+            time.sleep(1)
+        assert be._pod(name) is None                      # pod actually removed
     finally:
-        subprocess.run(["kubectl", "delete", "pod", name, "--ignore-not-found",
-                        "--grace-period=0", "--force"], capture_output=True)
+        be._delete_pod(name, grace_sec=0)

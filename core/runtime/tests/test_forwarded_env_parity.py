@@ -12,6 +12,7 @@ import json
 
 import pytest
 
+from k8s_fake import FakeApi
 from runtime_kernel import k8s_backend
 from runtime_kernel.k8s_backend import K8sBackend
 from runtime_kernel.profiles import Runnable
@@ -39,24 +40,10 @@ def runtime_env(monkeypatch):
 
 def _k8s_submit(monkeypatch, forward=FORWARD):
     """Start a worker on a fake cluster; returns (the Pod as submitted, the Secrets created)."""
-    pods, secrets = [], []
-
-    def kubectl(*args, check=True, stdin=None):
-        class R:  # noqa: N801
-            returncode, stdout, stderr = 0, "", ""
-        r = R()
-        if args[0] == "create":
-            obj = json.loads(stdin)
-            if obj["kind"] == "Pod":
-                pods.append(obj)
-                r.stdout = json.dumps({**obj, "metadata": {**obj["metadata"], "uid": "pod-uid-1"}})
-            else:
-                secrets.append(obj)
-        return r
-    monkeypatch.setattr(k8s_backend, "_kubectl", kubectl)
+    api = FakeApi(uid="pod-uid-1").install(monkeypatch)
     K8sBackend().start("agent-1-chat", Runnable(image="worker:1", command=["true"], forward_env=forward), dict(SPEC))
-    (pod,) = pods
-    return pod, secrets
+    (pod,) = api.submitted
+    return pod, api.secrets
 
 
 def _k8s_env(monkeypatch) -> dict[str, str]:
@@ -129,24 +116,10 @@ SECRET_VALUES = sorted({CATALOG_DISPATCH[k] for k in CREDENTIAL_KEYS} | {SECRET_
 
 
 def _submit(monkeypatch, spec: dict, forward=FORWARD):
-    pods, secrets = [], []
-
-    def kubectl(*args, check=True, stdin=None):
-        class R:  # noqa: N801
-            returncode, stdout, stderr = 0, "", ""
-        r = R()
-        if args[0] == "create":
-            obj = json.loads(stdin)
-            if obj["kind"] == "Pod":
-                pods.append(obj)
-                r.stdout = json.dumps({**obj, "metadata": {**obj["metadata"], "uid": "pod-uid-1"}})
-            else:
-                secrets.append(obj)
-        return r
-    monkeypatch.setattr(k8s_backend, "_kubectl", kubectl)
+    api = FakeApi(uid="pod-uid-1").install(monkeypatch)
     K8sBackend().start("agent-1-chat", Runnable(image="worker:1", command=["true"], forward_env=forward), dict(spec))
-    (pod,) = pods
-    return pod, secrets
+    (pod,) = api.submitted
+    return pod, api.secrets
 
 
 def test_no_credential_of_a_catalog_dispatch_appears_in_the_pod_spec(runtime_env, monkeypatch):
@@ -188,20 +161,7 @@ def test_the_secret_class_comes_from_the_config_contract(runtime_env, monkeypatc
 
 
 def test_a_secret_that_cannot_be_created_takes_its_pod_down(runtime_env, monkeypatch):
-    calls = []
-
-    def kubectl(*args, check=True, stdin=None):
-        calls.append(args[:2])
-
-        class R:  # noqa: N801
-            returncode, stdout, stderr = 0, "", ""
-        r = R()
-        if args[0] == "create" and json.loads(stdin)["kind"] == "Secret":
-            raise RuntimeError("kubectl create failed: forbidden")
-        if args[0] == "create":
-            r.stdout = json.dumps({"metadata": {"uid": "u"}})
-        return r
-    monkeypatch.setattr(k8s_backend, "_kubectl", kubectl)
-    with pytest.raises(RuntimeError):
+    api = FakeApi(fail={("POST", "secrets"): (403, "Forbidden")}).install(monkeypatch)
+    with pytest.raises(k8s_backend.ApiError, match="403 Forbidden"):
         K8sBackend().start("agent-1-chat", RUNNABLE, dict(SPEC))
-    assert ("delete", "pod") in calls
+    assert [n for n, _ in api.deletes] == [api.submitted[0]["metadata"]["name"]] and not api.pods

@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 import subprocess
 
+from k8s_fake import FakeApi
+
 import pytest
 
 from runtime_kernel.k8s_backend import (CA_BUNDLE_FILE, EXTRA_CA_ENV, EXTRA_CA_FILE, EXTRA_CA_SCRIPT,
@@ -93,17 +95,8 @@ def test_malformed_is_fatal_at_boot(monkeypatch, raw):
 
 def test_runtime_process_env_reaches_the_spawned_pod(monkeypatch):
     monkeypatch.setenv(EXTRA_CA_ENV, CM)
-    seen = {}
-
-    def fake(*args, check=True, stdin=None):
-        if args[:1] == ("create",):
-            obj = json.loads(stdin)
-            if obj.get("kind") == "Pod":
-                seen["pod"] = obj
-            # a spec key the runtime does not declare rides a Secret the Pod owns, by its uid
-            return subprocess.CompletedProcess(args, 0, json.dumps({"metadata": {"uid": "pod-uid"}}), "")
-        return subprocess.CompletedProcess(args, 0, "{}", "")
-    monkeypatch.setattr("runtime_kernel.k8s_backend._kubectl", fake)
+    # a spec key the runtime does not declare rides a Secret the Pod owns, by its uid
+    seen = _Seen(FakeApi().install(monkeypatch))
     K8sBackend(namespace="ns").start("mtg-1", Runnable(image="bot:t"), env={"LOG_LEVEL": "b"})
     spec = seen["pod"]["spec"]
     assert spec["initContainers"][0]["name"] == "vexa-ca-bundle"
@@ -143,17 +136,8 @@ def _spawned(monkeypatch, profile: str, env: dict) -> dict:
     monkeypatch.setenv("AGENT_IMAGE", "vexaai/agent-api:t")
     monkeypatch.setenv(EXTRA_CA_ENV, json.dumps({"configMap": "corp-ca", "key": "ca-bundle.crt",
                                                  "awsCaBundle": True}))
-    seen = {}
-
-    def fake(*args, check=True, stdin=None):
-        if args[:1] == ("create",):
-            obj = json.loads(stdin)
-            if obj.get("kind") == "Pod":
-                seen["pod"] = obj
-            # a spec key the runtime does not declare rides a Secret the Pod owns, by its uid
-            return subprocess.CompletedProcess(args, 0, json.dumps({"metadata": {"uid": "pod-uid"}}), "")
-        return subprocess.CompletedProcess(args, 0, "{}", "")
-    monkeypatch.setattr("runtime_kernel.k8s_backend._kubectl", fake)
+    # a spec key the runtime does not declare rides a Secret the Pod owns, by its uid
+    seen = _Seen(FakeApi().install(monkeypatch))
     runnable = default_registry().resolve(profile)
     K8sBackend(namespace="ns").start(f"{profile}-1", runnable, env=env)
     return seen["pod"]
@@ -189,3 +173,14 @@ def test_spawned_pod_keeps_its_secret_mounts_beside_the_ca(monkeypatch):
     names = [v["name"] for v in pod["spec"]["volumes"]]
     assert "vexa-extra-ca" in names and "vexa-ca-bundle" in names and len(names) == len(set(names))
     assert any(v.get("secret", {}).get("secretName") == "codex-auth" for v in pod["spec"]["volumes"])
+
+
+class _Seen:
+    """``seen["pod"]``: the last Pod manifest the backend submitted to the faked API server."""
+
+    def __init__(self, api):
+        self._api = api
+
+    def __getitem__(self, key):
+        assert key == "pod"
+        return self._api.submitted[-1]

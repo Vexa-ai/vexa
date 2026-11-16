@@ -16,6 +16,7 @@ import re
 import pytest
 
 import runtime_kernel.k8s_backend as k8s_backend
+from k8s_fake import FakeApi
 from runtime_kernel.docker_backend import DockerBackend, docker_name
 from runtime_kernel.k8s_backend import K8sBackend, k8s_label_value, k8s_name
 from runtime_kernel.profiles import Runnable
@@ -31,14 +32,9 @@ VALID = ["mtg-9", "mtg-2-d93eee39", "agent-58-chat", "agent-meet-5f0c2a", "agent
 
 
 def _submit(monkeypatch, workload_id: str) -> dict:
-    submitted = []
-
-    def fake_kubectl(*args, check=True, stdin=None):
-        submitted.append(json.loads(stdin))
-
-    monkeypatch.setattr(k8s_backend, "_kubectl", fake_kubectl)
+    api = FakeApi().install(monkeypatch)
     K8sBackend(namespace="ns").start(workload_id, Runnable(image="img"), {})
-    return submitted[0]
+    return api.submitted[0]
 
 
 def _k8s_valid(pod: dict) -> None:
@@ -76,23 +72,15 @@ def test_ids_differing_only_in_case_or_cut_get_distinct_names():
 
 
 def test_find_and_stop_address_the_pod_by_the_name_it_was_given(monkeypatch):
-    calls = []
-
-    def fake_kubectl(*args, check=True, stdin=None):
-        calls.append(args)
-
-        class R:  # noqa: N801
-            returncode, stdout, stderr = 0, "", ""
-        return R()
-
-    monkeypatch.setattr(k8s_backend, "_kubectl", fake_kubectl)
+    api = FakeApi().install(monkeypatch)
     be = K8sBackend()
     handle = be.start(SCAFFOLD, Runnable(image="img"), {})
     found = be.find(SCAFFOLD)
     be.terminate(found)
     name = k8s_name("vexa-" + SCAFFOLD)
     assert handle._impl == found._impl == name                   # type: ignore[attr-defined]
-    assert name in calls[1] and name in calls[2]
+    # create, then get (find) and delete (terminate) by that name
+    assert [(m, path.rsplit("/", 1)[1]) for m, path, _, _ in api.calls[1:]] == [("GET", name), ("DELETE", name)]
 
 
 def test_adoption_reads_the_id_from_the_annotation(monkeypatch):
@@ -109,12 +97,7 @@ def test_adoption_reads_the_id_from_the_annotation(monkeypatch):
          "status": {"phase": "Running"}},
     ]}
 
-    def fake_kubectl(*args, check=True, stdin=None):
-        class R:  # noqa: N801
-            returncode, stdout, stderr = 0, json.dumps(pods), ""
-        return R()
-
-    monkeypatch.setattr(k8s_backend, "_kubectl", fake_kubectl)
+    FakeApi(list_answers={"runtime.managed=true,runtime.instance=default": pods["items"]}).install(monkeypatch)
     found = {i["workload_id"]: i for i in K8sBackend().list_workload_containers()}
     assert set(found) == {SCAFFOLD, "mtg-9"}
     assert found[SCAFFOLD]["name"] == name

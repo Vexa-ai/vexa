@@ -8,7 +8,7 @@ ENTRYPOINT ["/app/entrypoint.sh"] and no /app/vexa-bot/ directory — so a profi
 The fix drops the meeting-bot profile command: the backend then omits `command` from the container
 entirely and the Pod boots the image ENTRYPOINT — the real launcher. These tests capture the exact
 submitted Pod manifest without a cluster (the live-cluster lifecycle lives in test_k8s_backend.py) by
-stubbing the module's _kubectl.
+faking the API server (k8s_fake.FakeApi).
 
 RED on main: pre-fix the meeting-bot runnable carries ["/app/vexa-bot/entrypoint.sh"], so the
 container below would carry that `command` and the assertions fail.
@@ -24,23 +24,24 @@ from runtime_kernel.profiles import Runnable
 
 
 def _capture_submitted_pods(monkeypatch) -> list:
-    """Stub the module-level _kubectl so start() runs offline; return the captured Pod manifests."""
-    pods: list[dict] = []
+    """Fake the API server so start() runs offline; return the submitted Pod manifests (a live view)."""
+    from k8s_fake import FakeApi
 
-    def fake_kubectl(*args, check=True, stdin=None):
-        obj = json.loads(stdin) if stdin else {}
-        if obj.get("kind", "Pod") == "Pod" and stdin:
-            pods.append(obj)
+    return _Submitted(FakeApi().install(monkeypatch))
 
-        class _R:
-            returncode = 0
-            stdout = json.dumps({"metadata": {"uid": "pod-uid"}}) if args[:1] == ("create",) else ""
-            stderr = ""
 
-        return _R()
+class _Submitted:
+    def __init__(self, api):
+        self._api = api
 
-    monkeypatch.setattr(k8s_backend, "_kubectl", fake_kubectl)
-    return pods
+    def __getitem__(self, i):
+        return self._api.submitted[i]
+
+    def __len__(self):
+        return len(self._api.submitted)
+
+    def __iter__(self):
+        return iter(self._api.submitted)
 
 
 def test_meeting_bot_k8s_pod_omits_command_uses_image_entrypoint(monkeypatch):
