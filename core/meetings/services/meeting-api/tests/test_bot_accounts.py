@@ -561,12 +561,19 @@ def test_an_explicit_account_is_held_to_every_rule(rig):
     assert rig.repo._meetings[r.json()["id"]]["data"]["bot_account_id"] == mine["id"]
 
 
-def test_one_live_bot_per_account(rig):
+def test_one_account_serves_many_meetings_up_to_the_cap(rig, monkeypatch):
+    """Founder, 16 Nov 2026: no one-bot-per-account; a cap per account (VEXA_BOT_ACCOUNT_MAX_MEETINGS)."""
+    monkeypatch.setenv("VEXA_BOT_ACCOUNT_MAX_MEETINGS", "2")
     acct = rig.seed(f"user:{OWNER}")
     assert _spawn(rig).status_code == 201
+    assert "authenticated" in _inv(rig)
     r = _spawn(rig, native="abc-defg-hik")
-    assert r.status_code == 409 and acct["id"] in r.json()["detail"]
-    assert _spawn(rig, native="abc-defg-hil", bot_account="none").status_code == 201
+    assert r.status_code == 201, r.text                     # a second meeting on the same account
+    assert "authenticated" in _inv(rig)
+    r = _spawn(rig, native="abc-defg-hil")                  # the account is full: a guest bot
+    assert r.status_code == 201, r.text
+    assert "authenticated" not in _inv(rig)
+    assert acct["id"]
 
 
 def test_a_store_that_cannot_answer_spawns_a_guest_rather_than_failing(rig):
@@ -622,6 +629,33 @@ def test_the_write_back_of_an_account_bot_goes_to_the_account(rig):
     bad = rig.client.put(path, headers={"Authorization": f"Bearer {inv['token']}"},
                          json=_files_body({"Default/Extensions/x": b"x"}))
     assert bad.status_code == 422
+
+
+def test_two_bots_on_one_account_both_restore_and_only_the_last_one_out_writes_back(rig):
+    """Founder, 16 Nov 2026: many bots per account, and a write-back never lets an older profile replace a
+    newer one: while another bot still uses the account, a leaving bot's write-back is deferred."""
+    acct = rig.seed(f"user:{OWNER}")
+    assert _spawn(rig).status_code == 201
+    first = _inv(rig)
+    r2 = _spawn(rig, native="abc-defg-hik")
+    assert r2.status_code == 201, r2.text
+    second = _inv(rig)
+    for inv in (first, second):   # each live bot restores the account's profile
+        r = rig.client.get(urlsplit(inv["sessionRestoreUrl"]).path, headers={"Authorization": f"Bearer {inv['token']}"})
+        assert r.status_code == 200, r.text
+    # the first bot leaves while the second is still in its meeting: deferred, nothing written
+    w = rig.client.put(urlsplit(first["sessionWritebackUrl"]).path, headers={"Authorization": f"Bearer {first['token']}"},
+                       json=_files_body({"Default/Cookies": b"older"}))
+    assert w.status_code == 200 and w.json().get("deferred"), w.text
+    assert dict(rig.broker.files[acct["id"]]) != {"Default/Cookies": b"older"}
+    # end the first meeting; the second bot is now the last one out and writes back
+    first_mid = next(m["id"] for m in rig.repo._meetings.values()
+                     if m.get("native_meeting_id") not in ("abc-defg-hik",) and (m.get("data") or {}).get("bot_account_id"))
+    rig.repo._meetings[first_mid]["status"] = "completed"
+    w = rig.client.put(urlsplit(second["sessionWritebackUrl"]).path, headers={"Authorization": f"Bearer {second['token']}"},
+                       json=_files_body({"Default/Cookies": b"newest"}))
+    assert w.status_code == 200 and not w.json().get("deferred"), w.text
+    assert dict(rig.broker.files[acct["id"]]) == {"Default/Cookies": b"newest"}
 
 
 def test_a_bot_that_found_its_account_signed_out_flips_it_and_the_meeting_says_so(rig):
@@ -905,17 +939,19 @@ def test_outside_admins_an_instance_admin_still_cannot_sign_in_or_delete_a_compa
 async def test_off_meet_a_default_bot_skips_a_busy_company_account_and_is_a_guest_when_all_are(rig):
     a = rig.seed("company", platform="zoom", verified_at="2026-10-02T00:00:00Z")
     b = rig.seed("company", platform="zoom", verified_at="2026-10-01T00:00:00Z")
-    live = set()
+    from meeting_api.bot_accounts.service import account_meeting_cap
+    cap = account_meeting_cap()
+    live = {a["id"]: 0, b["id"]: 0}
 
-    async def busy(account):
-        return account["id"] in live
-    pick = lambda: rig.ba.resolve_for_spawn(PERSON_ADMIN, "zoom", None, room=None, busy=busy)
-    assert (await pick())["id"] == a["id"]
-    live.add(a["id"])
+    async def load(account):
+        return live[account["id"]]
+    pick = lambda: rig.ba.resolve_for_spawn(PERSON_ADMIN, "zoom", None, room=None, load=load)
+    assert (await pick())["id"] in live
+    live[a["id"]] = cap
     assert (await pick())["id"] == b["id"]
-    live.add(b["id"])
+    live[b["id"]] = cap
     assert await pick() is None
-    assert await rig.ba.resolve_for_spawn(OWNER, "zoom", None, room=None, busy=busy) is None  # a customer: none, as before
+    assert await rig.ba.resolve_for_spawn(OWNER, "zoom", None, room=None, load=load) is None  # a customer: none, as before
 
 
 

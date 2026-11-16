@@ -122,25 +122,37 @@ def _acct(n, owner="company", verified="2026-11-13T09:00:00Z"):
 
 def test_a_default_meet_join_follows_the_room():
     ba = _ba([_acct(1), _acct(2, verified="2026-11-13T10:00:00Z")])
-    run = lambda room, busy=None: asyncio.run(ba.resolve_for_spawn(7, "google_meet", None, room=room, busy=busy))
+    run = lambda room: asyncio.run(ba.resolve_for_spawn(7, "google_meet", None, room=room))
     assert run(rm.UNSEEN) is None
     assert run(rm.ANONYMOUS_OK) is None
-    assert run(rm.NEEDS_SIGN_IN)["id"] == f"{2:032x}"           # newest first
+    assert run(rm.NEEDS_SIGN_IN)["id"] in {f"{1:032x}", f"{2:032x}"}   # random among the company accounts
 
 
-def test_a_busy_account_is_skipped_and_all_busy_is_a_guest():
-    """One live bot per account; every account busy is a guest bot, never a refusal (16 Nov 2026)."""
+def test_a_full_account_is_skipped_and_all_full_is_a_guest(monkeypatch):
+    """Many meetings per account up to the cap (default 10), random among the rest; every account full is
+    a guest bot, never a refusal (founder, 16 Nov 2026)."""
+    monkeypatch.delenv("VEXA_BOT_ACCOUNT_MAX_MEETINGS", raising=False)
     ba = _ba([_acct(1), _acct(2, verified="2026-11-13T10:00:00Z")])
+    loads = {f"{1:032x}": 9, f"{2:032x}": 10}
 
-    async def two_busy(a):
-        return a["id"] == f"{2:032x}"
+    async def load(a):
+        return loads[a["id"]]
+    pick = lambda: asyncio.run(ba.resolve_for_spawn(7, "google_meet", "default", room=rm.NEEDS_SIGN_IN, load=load))
+    assert all(pick()["id"] == f"{1:032x}" for _ in range(20)), "the full account is never picked"
+    loads[f"{1:032x}"] = 10
+    assert pick() is None
+    monkeypatch.setenv("VEXA_BOT_ACCOUNT_MAX_MEETINGS", "11")
+    assert pick() is not None
 
-    async def all_busy(a):
-        return True
-    got = asyncio.run(ba.resolve_for_spawn(7, "google_meet", "default", room=rm.NEEDS_SIGN_IN, busy=two_busy))
-    assert got["id"] == f"{1:032x}"
-    assert asyncio.run(ba.resolve_for_spawn(7, "google_meet", "default", room=rm.NEEDS_SIGN_IN,
-                                            busy=all_busy)) is None
+
+def test_random_rotation_uses_every_free_account():
+    ba = _ba([_acct(n) for n in (1, 2, 3)])
+
+    async def idle(a):
+        return 0
+    seen = {asyncio.run(ba.resolve_for_spawn(7, "google_meet", "default", room=rm.NEEDS_SIGN_IN, load=idle))["id"]
+            for _ in range(200)}
+    assert seen == {f"{n:032x}" for n in (1, 2, 3)}
 
 
 def test_the_callers_own_account_still_comes_first_and_none_means_anonymous():

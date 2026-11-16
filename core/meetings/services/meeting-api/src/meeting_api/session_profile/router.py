@@ -146,7 +146,17 @@ def build_router(
             identity_key = cfg.userdata_path
 
         # 3. the live authenticated bot
-        latest = await meeting_repo.latest_auth_session(identity_key)
+        if account_id:
+            # Many bots may share one account: the write-back belongs to the live bot of THIS meeting
+            # (its newest session). Concurrent write-backs on one account: the last one wins, and each
+            # is a whole signed-in profile.
+            row = await meeting_repo.get_meeting_by_session(session_uid=session_uid)
+            latest = None if row is None else {
+                "session_uid": row.get("latest_session_uid"), "meeting_id": row.get("id"),
+                "status": row.get("status"), "end_time": row.get("end_time"),
+                "updated_at": row.get("updated_at")}
+        else:
+            latest = await meeting_repo.latest_auth_session(identity_key)
         if (
             latest is None
             or latest.get("session_uid") != session_uid
@@ -177,6 +187,14 @@ def build_router(
             raise HTTPException(status_code=422, detail=str(e))
 
         if account_id:
+            others = await meeting_repo.count_active_by_userdata(f"bot-account:{account_id}",
+                                                                 exclude_meeting_id=meeting_id)
+            if others:
+                # Other bots still use this account: they hold newer-or-equal sign-ins. Only the last one
+                # out writes back, so an older profile never replaces a newer one (founder: «fix that»).
+                log_event("session_writeback_deferred", audience="system", span="session.writeback",
+                          meeting_id=str(meeting_id), fields={"bot_account_id": account_id, "others": others})
+                return {"written": 0, "bytes": 0, "deferred": "other bots still use this account"}
             try:
                 await bot_accounts.write_back(account_id, files)
             except Exception as e:  # noqa: BLE001 — any store failure is one attributed 502

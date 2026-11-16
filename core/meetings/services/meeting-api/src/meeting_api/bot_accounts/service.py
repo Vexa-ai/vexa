@@ -16,6 +16,7 @@ import asyncio
 
 import json
 import os
+import random
 import re
 import time
 from dataclasses import dataclass, field
@@ -48,6 +49,18 @@ SESSION_ID = ACCOUNT_ID
 #: so ``find_active_by_userdata`` / ``latest_auth_session`` serialize and bind per account.
 USERDATA_KEY_PREFIX = "bot-account:"
 SIGNED_OUT_REMEDY = "browser_session_open"
+#: Live meetings one bot account may serve at once (founder, 16 Nov 2026: a cap «for example 10» → «yep»).
+DEFAULT_ACCOUNT_MEETING_CAP = 10
+
+
+def account_meeting_cap(env=None) -> int:
+    import os
+    raw = ((env if env is not None else os.environ).get("VEXA_BOT_ACCOUNT_MAX_MEETINGS") or "").strip()
+    try:
+        v = int(raw) if raw else DEFAULT_ACCOUNT_MEETING_CAP
+    except ValueError:
+        return DEFAULT_ACCOUNT_MEETING_CAP
+    return v if 1 <= v <= 100 else DEFAULT_ACCOUNT_MEETING_CAP
 AUTH_SESSION_MISSING = "auth_session_missing"
 
 
@@ -655,7 +668,7 @@ class BotAccounts:
 
     # ── the meeting bot ───────────────────────────────────────────────────────────────────────
     async def resolve_for_spawn(self, user_id: int, meeting_platform: str, choice: Optional[str], *,
-                                room: Optional[str] = None, busy=None) -> Optional[dict]:
+                                room: Optional[str] = None, load=None) -> Optional[dict]:
         """The bot account a ``POST /bots`` joins as, or ``None`` (a guest bot, as before).
 
         ``choice``: an account id, ``"default"`` (also when absent) or ``"none"``. ``default`` is the
@@ -665,10 +678,10 @@ class BotAccounts:
 
         ``room`` (a Google Meet room's verdict, bot_spawn/room_memory.py; None elsewhere) narrows
         ``default`` for a COMPANY account (D402): the caller's own account still comes first; a company
-        account only for a room that ``needs_sign_in`` — the first one ``busy`` (an async
-        account → bool, one live bot per account) does not hold — and none for a room an anonymous
-        bot gets into or one never seen. A room that needs sign-in with every company account busy
-        gets a guest bot: Google refuses anonymous guests per knock, not for certain."""
+        account only for a room that ``needs_sign_in``, picked at random among the usable ones whose
+        ``load`` (an async account → live meetings on it) is under ``VEXA_BOT_ACCOUNT_MAX_MEETINGS``
+        (default 10; founder 16 Nov 2026: many meetings per account, random rotation) — and none for
+        a room an anonymous bot gets into or one never seen. Every account full: a guest bot."""
         choice = "default" if choice is None else choice
         if choice == "none":
             return None
@@ -727,7 +740,7 @@ class BotAccounts:
             return max(rows, key=lambda a: a.get("verified_at") or "", default=None)
 
         own = newest([a for a in ok if a.get("owner") == mine])
-        if own is not None:
+        if own is not None and (load is None or await load(own) < account_meeting_cap()):
             return own
         if room is not None and room != "needs_sign_in":
             return None                                   # anonymous admits here, or nobody knows yet
@@ -737,24 +750,15 @@ class BotAccounts:
         roles = await self.admin.roles(user_id)
         policy = self.policy()
         mine_ok = [a for a in company if usable(a, user_id=user_id, policy=policy, roles=roles)]
-        if room is None:
-            # Off Meet (S1 review M3): one live bot per company account here too; every one busy is a
-            # guest bot, as before there was a company account.
-            for a in sorted(mine_ok, key=lambda a: a.get("verified_at") or "", reverse=True):
-                if busy is None or not await busy(a):
-                    return a
+        cap = account_meeting_cap()
+        free = [a for a in mine_ok if load is None or await load(a) < cap]
+        if not free:
+            if mine_ok:
+                log_event("bot_account_pool_full", audience="system", level="warning", span="bot_accounts",
+                          user_id=user_id, fields={"accounts": len(mine_ok), "cap": cap})
             return None
-        for a in sorted(mine_ok, key=lambda a: a.get("verified_at") or "", reverse=True):
-            if busy is None or not await busy(a):
-                return a
-        if mine_ok:
-            # Every company account is in another meeting: a guest bot, not a refusal. Google refuses an
-            # anonymous guest per knock, not per room (16 Nov 2026, bbb: 5 of 6 anonymous bots reached the
-            # lobby of rooms where a guest had been refused; brain:card/92f6d3a39e03), so a guest still
-            # has a chance.
-            log_event("bot_account_pool_busy", audience="system", level="warning", span="bot_accounts",
-                      user_id=user_id, fields={"accounts": len(mine_ok)})
-        return None
+        # Random rotation (founder, 16 Nov 2026: «just rotate them randomly»).
+        return random.choice(free)
 
     async def restore_files(self, account_id: str) -> list:
         _account, files = await self._get_account(account_id, actor="meeting-api")

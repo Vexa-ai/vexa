@@ -582,11 +582,11 @@ def build_router(
                 room = (await room_verdict(repo, platform, native_meeting_id)
                         if bot_account_choice in (None, "default") else None)
 
-                async def _busy(account):
-                    return await repo.find_active_by_userdata(f"bot-account:{account['id']}") is not None
+                async def _load(account):
+                    return await repo.count_active_by_userdata(f"bot-account:{account['id']}")
 
                 bot_account = await bot_accounts.resolve_for_spawn(user_id, platform, bot_account_choice,
-                                                                   room=room, busy=_busy)
+                                                                   room=room, load=_load)
             except BotAccountRefused as e:
                 raise HTTPException(status_code=e.status, detail=e.detail)
         elif bot_account_choice not in (None, "default", "none"):

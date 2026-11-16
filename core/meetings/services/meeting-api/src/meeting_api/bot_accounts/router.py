@@ -299,9 +299,12 @@ def build_router(ba: BotAccounts, *, meeting_repo: Any = None, token_secret: Opt
         account_id = ((meeting or {}).get("data") or {}).get("bot_account_id")
         if not account_id:
             raise HTTPException(status_code=404, detail="this session was not spawned with a bot account")
-        latest = await meeting_repo.latest_auth_session(userdata_key(account_id))
-        if (latest is None or latest.get("session_uid") != session_uid
-                or int(latest.get("meeting_id") or 0) != meeting_id
+        # Many bots may share one account (no per-account limit): the restore belongs to the live bot of
+        # THIS meeting, its newest session, not to the account's newest bot anywhere.
+        latest = await meeting_repo.get_meeting_by_session(session_uid=session_uid)
+        if (latest is None or latest.get("latest_session_uid") != session_uid
+                or int(latest.get("id") or 0) != meeting_id
+                or ((latest.get("data") or {}).get("bot_account_id")) != account_id
                 or latest.get("status") in _TERMINAL):
             log_event("bot_account_restore_refused", audience="system", level="warning",
                       span="bot_accounts", meeting_id=str(meeting_id),

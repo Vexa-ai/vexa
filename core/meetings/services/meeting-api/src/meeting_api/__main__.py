@@ -827,10 +827,10 @@ def _attach_background_loops(
             if accounts is None:
                 return None
 
-            async def _busy(account):
-                return await meeting_repo.find_active_by_userdata(f"bot-account:{account['id']}") is not None
+            async def _load(account):
+                return await meeting_repo.count_active_by_userdata(f"bot-account:{account['id']}")
             return await accounts.resolve_for_spawn(row["user_id"], row["platform"], "default",
-                                                    room="needs_sign_in", busy=_busy)
+                                                    room="needs_sign_in", load=_load)
 
         while True:
             try:

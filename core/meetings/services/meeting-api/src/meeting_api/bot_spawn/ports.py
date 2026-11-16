@@ -70,6 +70,12 @@ class MeetingRepo(Protocol):
         the identity is deployment-scoped, not per-user."""
         ...
 
+    async def count_active_by_userdata(self, userdata_s3_path: str,
+                                       exclude_meeting_id: Optional[int] = None) -> int:
+        """How many live meetings (any user) carry this ``auth_userdata_path`` — the load on one bot
+        account, for the per-account cap and for «last bot out writes the profile back»."""
+        ...
+
     async def latest_auth_session(self, userdata_s3_path: str) -> Optional[dict]:
         """The NEWEST bot session (by session start) of any meeting whose spawn carried this
         ``userdata_s3_path``, any status, as ``{meeting_id, session_uid, status, end_time,

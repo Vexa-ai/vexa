@@ -735,7 +735,10 @@ async def request_bot(
     #     (the issue's default); it runs just before the row insert, so the remaining window is a
     #     single request interleaving — the storage-side lock fork stays available if a multi-
     #     replica deployment ever witnesses it.
-    if authenticated and auth_userdata_path:
+    # A company/own BOT ACCOUNT is not serialized (founder, 16 Nov 2026: «no limit please»): one Google
+    # account may sit in any number of meetings at once; only the deployment-wide BOT_AUTHENTICATED
+    # profile keeps one live bot.
+    if authenticated and auth_userdata_path and not auth_userdata_path.startswith("bot-account:"):
         conflict = await repo.find_active_by_userdata(auth_userdata_path)
         if conflict is not None and (reused_row is None or conflict["id"] != reused_row["id"]):
             log_event(

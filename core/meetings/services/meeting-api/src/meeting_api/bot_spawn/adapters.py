@@ -186,6 +186,24 @@ class SqlAlchemyMeetingRepo:
             m = (await db.execute(stmt)).scalars().first()
             return _row_to_dict(m) if m else None
 
+    async def count_active_by_userdata(self, userdata_s3_path, exclude_meeting_id=None) -> int:
+        from sqlalchemy import func, select
+
+        from ..sessions.models import Meeting
+
+        async with self._session_factory() as db:
+            stmt = (
+                select(func.count())
+                .select_from(Meeting)
+                .where(
+                    Meeting.status.in_(["requested", "joining", "awaiting_admission", "active", "stopping"]),
+                    Meeting.data["auth_userdata_path"].astext == userdata_s3_path,
+                )
+            )
+            if exclude_meeting_id is not None:
+                stmt = stmt.where(Meeting.id != exclude_meeting_id)
+            return int((await db.execute(stmt)).scalar() or 0)
+
     async def latest_auth_session(self, userdata_s3_path) -> Optional[dict]:
         from sqlalchemy import select
 
