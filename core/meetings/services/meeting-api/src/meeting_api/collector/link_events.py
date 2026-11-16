@@ -38,6 +38,7 @@ import asyncio
 import base64
 import json
 import time
+import uuid
 import weakref
 import zlib
 from typing import Any, Callable, Optional
@@ -65,7 +66,10 @@ MAX_EVENTS = 200
 RECENT_FINALS = 24
 #: The longest cursor this route answers: under the 4096-character `cursor` query cap, with room.
 CURSOR_BUDGET = 3800
-#: The most held calls one cursor may name; the rest of a forged list is ignored.
+#: The most held calls one cursor may name; the rest of a forged list is ignored. CAP, NOTED (review
+#: of ef0e1398e, Low): a person with more than MAX_HELD running calls at once loses the cursor's mark
+#: for the extra ones, which are then read as new each answer (their lines from the first, again).
+#: No error, and no person runs 32 calls at once today; raise it with the cursor budget if one does.
 MAX_HELD = 32
 #: Open /link/events reads one person may hold at once (one vexa-link, plus one restarting).
 LINK_PER_USER = 2
@@ -159,34 +163,49 @@ class _Busy(Exception):
     pass
 
 
-async def _open(counter: Any, user_id: int) -> str:
-    """Count one open read for ``user_id``; refuse past ``LINK_PER_USER``. Counted in Redis so every
-    pod sees it; a Redis that does not answer refuses (fails closed). Without a Redis (the in-memory
-    stores) it is counted in this process."""
+def _clock() -> float:
+    return time.time()
+
+
+async def _open(counter: Any, user_id: int) -> "tuple[str, str]":
+    """Take one open-read slot for ``user_id``; refuse past ``LINK_PER_USER``. The slots are a Redis
+    ZSET (``link:open:<uid>``) of per-read tokens scored by their expiry, so every pod sees them and a
+    slot a dead pod never gave back ages out by itself after ``LINK_OPEN_TTL_S``, however often the
+    person retries (a refused open adds nothing and moves no expiry). One MULTI: drop expired tokens,
+    add this one, count; over the cap, the token is taken back and the read refused (two racing opens
+    may both be refused, never both admitted past the cap). A Redis that does not answer refuses
+    (fails closed). Without a Redis (the in-memory stores) slots are counted in this process."""
     key = f"link:open:{user_id}"
+    token = uuid.uuid4().hex
     if counter is None:
         if _local_open.get(key, 0) >= LINK_PER_USER:
             raise _Busy()
         _local_open[key] = _local_open.get(key, 0) + 1
-        return key
+        return key, token
+    now = _clock()
     try:
-        n = await counter.incr(key)
-        await counter.expire(key, LINK_OPEN_TTL_S)
+        async with counter.pipeline(transaction=True) as pipe:
+            pipe.zremrangebyscore(key, "-inf", now)
+            pipe.zadd(key, {token: now + LINK_OPEN_TTL_S})
+            pipe.zcard(key)
+            pipe.expire(key, LINK_OPEN_TTL_S * 2)
+            _, _, held, _ = await pipe.execute()
     except Exception as e:  # noqa: BLE001 — cannot count: refuse
         raise _Busy() from e
-    if int(n) > LINK_PER_USER:
-        await _close(counter, key)
+    if int(held) > LINK_PER_USER:
+        await _close(counter, (key, token))
         raise _Busy()
-    return key
+    return key, token
 
 
-async def _close(counter: Any, key: str) -> None:
+async def _close(counter: Any, slot: "tuple[str, str]") -> None:
+    key, token = slot
     if counter is None:
         _local_open[key] = max(0, _local_open.get(key, 0) - 1)
         return
     try:
-        await counter.decr(key)
-    except Exception:  # noqa: BLE001 — the TTL ends a count no one could take back
+        await counter.zrem(key, token)
+    except Exception:  # noqa: BLE001 — the token's score ends a slot no one could give back
         pass
 
 

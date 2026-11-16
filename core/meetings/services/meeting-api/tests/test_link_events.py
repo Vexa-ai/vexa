@@ -475,22 +475,17 @@ def test_fit_cursor_shrinks_windows_newest_kept():
 
 
 class _Counter:
-    """The open-read count's Redis: incr/expire/decr, optionally failing."""
-    def __init__(self, broken=False):
-        self.n, self.broken = {}, broken
+    """The open-read slots' Redis: fakeredis (zsets, MULTI), optionally failing."""
+    def __new__(cls, broken=False):
+        import fakeredis.aioredis
 
-    async def incr(self, k):
-        if self.broken:
-            raise ConnectionError("redis down")
-        self.n[k] = self.n.get(k, 0) + 1
-        return self.n[k]
-
-    async def expire(self, k, s):
-        return True
-
-    async def decr(self, k):
-        self.n[k] -= 1
-        return self.n[k]
+        r = fakeredis.aioredis.FakeRedis(decode_responses=True)
+        if broken:
+            async def down(*a, **k):
+                raise ConnectionError("redis down")
+            r.pipeline = lambda *a, **k: (_ for _ in ()).throw(ConnectionError("redis down"))
+            r.zrem = down
+        return r
 
 
 def _async_app(store, counter, log=None):
@@ -521,7 +516,8 @@ def test_a_person_holds_at_most_two_open_reads_counted_in_redis(monkeypatch):
     third, other, done, after = _asyncio.run(go())
     assert third.status_code == 429 and third.headers.get("retry-after")
     assert other.status_code == 200 and [r.status_code for r in done] == [200, 200]
-    assert after.status_code == 200 and counter.n == {f"link:open:{USER}": 0, f"link:open:{OWNER}": 0}
+    assert after.status_code == 200
+    assert _asyncio.run(counter.zcard(f"link:open:{USER}")) == 0 and _asyncio.run(counter.zcard(f"link:open:{OWNER}")) == 0
 
 
 def test_a_redis_that_cannot_count_refuses_the_read():
@@ -558,3 +554,42 @@ def test_tick_database_work_is_gated_per_process(monkeypatch):
                                                  headers={"x-user-id": str(100 + u)}) for u in range(8)])
     rs = _asyncio.run(go())
     assert all(r.status_code == 200 for r in rs) and state["peak"] == 2
+
+
+def test_slots_a_dead_pod_held_age_out_however_often_the_person_retries(monkeypatch):
+    """Review of ef0e1398e (M): a pod dies holding both of a person's slots. vexa-link retries every
+    3 s; each refused open moves no expiry, so the person is back in within LINK_OPEN_TTL_S."""
+    clock = {"t": 1_000_000.0}
+    monkeypatch.setattr(link_events, "_clock", lambda: clock["t"])
+    counter = _Counter()
+
+    async def go():
+        dead = [await link_events._open(counter, USER) for _ in range(2)]   # never closed: the pod died
+        assert len(dead) == 2
+        refused = 0
+        while True:
+            clock["t"] += 3
+            try:
+                slot = await link_events._open(counter, USER)
+            except link_events._Busy:
+                refused += 1
+                assert clock["t"] - 1_000_000.0 <= link_events.LINK_OPEN_TTL_S + 3, "locked out past the TTL"
+                continue
+            await link_events._close(counter, slot)
+            return refused, clock["t"] - 1_000_000.0
+    refused, waited = _asyncio.run(go())
+    assert refused >= 1 and link_events.LINK_OPEN_TTL_S <= waited <= link_events.LINK_OPEN_TTL_S + 3
+
+
+def test_more_running_calls_than_the_cursor_holds_answer_without_error():
+    """MAX_HELD is a cap, noted: past it the extra calls lose their mark; the stream still answers."""
+    store = InMemoryTranscriptStore()
+    for k in range(link_events.MAX_HELD + 4):
+        store.seed_meeting(user_id=USER, platform="zoom", native_meeting_id=f"m{k}", status="active",
+                           segments=[_seg(0, f"call {k}")])
+    client = _app(store)
+    cursor, events = _read_as(client, HEAD)
+    assert len(events) == link_events.MAX_HELD + 4
+    for _ in range(3):
+        cursor, events = _read_as(client, HEAD, cursor)
+        assert len(cursor) <= link_events.CURSOR_BUDGET
