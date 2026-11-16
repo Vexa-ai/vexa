@@ -171,6 +171,19 @@ def test_get_answers_the_pod_and_none_when_it_is_not_there(monkeypatch):
     assert ("GET", f"/api/v1/namespaces/ns/pods/{h._impl}") in [c[:2] for c in api.calls]
 
 
+def test_get_refused_or_failing_is_none_and_logged_but_404_is_quiet(monkeypatch, caplog):
+    api = FakeApi(fail={("GET", "pods"): (503, "ServiceUnavailable")}).install(monkeypatch)
+    be = K8sBackend(namespace="ns")
+    with caplog.at_level(logging.WARNING, logger="runtime_kernel.k8s"):
+        assert be._pod("p") is None
+    assert "503 ServiceUnavailable" in caplog.text
+    caplog.clear()
+    del api.fail[("GET", "pods")]
+    with caplog.at_level(logging.WARNING, logger="runtime_kernel.k8s"):
+        assert be._pod("p") is None
+    assert caplog.text == ""
+
+
 def test_get_with_no_answer_is_none_and_logged(monkeypatch, caplog):
     def broken(method, path, **kw):
         raise RuntimeError("k8s API GET: timed out")

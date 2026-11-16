@@ -775,6 +775,8 @@ class K8sBackend:
         except Exception as exc:  # noqa: BLE001
             log.warning("get pod %s: %s", name, exc)
             return None
+        if status not in (200, 404):
+            log.warning("%s", ApiError("GET", path, status, obj))
         return obj if status == 200 and obj else None
 
     def _ours(self, pod: dict, workload_id: str) -> bool:
