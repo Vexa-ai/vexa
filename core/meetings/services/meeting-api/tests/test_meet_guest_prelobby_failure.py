@@ -84,25 +84,44 @@ def test_the_signed_in_bot_failing_too_fails_the_meeting_and_closes_the_block(wo
     assert len(runtime.specs) == 2, "no third pod"
 
 
-def test_pool_busy_fails_the_meeting_and_says_so(world):
+def test_pool_busy_falls_back_to_a_guest_retry(world):
     repo, runtime, client = world
     mid, sid = _joining(world)
     client.post(LIFECYCLE, json=_no_name_field(sid))
-    _due(repo, runtime, after_s=0, resolve_account=_pool_busy)
+    assert _due(repo, runtime, after_s=0, resolve_account=_pool_busy) == 1
     row = repo._meetings[mid]
-    assert row["status"] == "failed"
-    assert meet_respawn.POOL_BUSY_REASON in str(row["data"].get("last_error") or row["data"])
-    assert _block(repo, mid)["state"] == "exhausted" and _block(repo, mid)["end"] == "pool_busy"
-    assert len(runtime.specs) == 1, "no guest retry"
+    assert row["status"] == "joining", "not failed: a guest retry"
+    assert not row["data"].get("bot_account_id")
+    assert _block(repo, mid)["pool_busy"] is True and _block(repo, mid)["signed_in_pod"] is False
+    assert len(runtime.specs) == 2
 
 
-def test_pool_busy_after_a_refusal_lands_as_platform_join_refused(world):
+def test_pool_busy_then_every_guest_failing_says_so_in_the_reason(world):
+    repo, runtime, client = world
+    mid, sid = _joining(world)
+    for _ in range(2):                                   # pods 2 and 3: pool busy, guests, both dead-end
+        client.post(LIFECYCLE, json=_no_name_field(sid))
+        assert _due(repo, runtime, after_s=0, resolve_account=_pool_busy) == 1
+        sid = _session(repo, mid)
+        client.post(LIFECYCLE, json=_event(sid, "joining"))
+    r = client.post(LIFECYCLE, json=_no_name_field(sid))
+    assert "respawn" not in r.json()
+    row = repo._meetings[mid]
+    assert row["status"] == "failed" and _block(repo, mid)["state"] == "exhausted"
+    assert meet_respawn.POOL_BUSY_REASON in str(row["data"])
+    assert len(runtime.specs) == 3
+
+
+def test_pool_busy_then_a_freed_account_is_taken(world):
     repo, runtime, client = world
     mid, sid = _joining(world)
     client.post(LIFECYCLE, json=_refused_533(sid))
     _due(repo, runtime, after_s=0, resolve_account=_pool_busy)
-    row = repo._meetings[mid]
-    assert row["status"] == "failed" and row["data"]["completion_reason"] == "platform_join_refused"
+    sid = _session(repo, mid)
+    client.post(LIFECYCLE, json=_event(sid, "joining"))
+    assert client.post(LIFECYCLE, json=_refused_533(sid)).json().get("respawn") == "scheduled"
+    assert _due(repo, runtime, after_s=0) == 1
+    assert repo._meetings[mid]["data"]["bot_account_id"] == ACCOUNT["id"]
 
 
 def test_policy_guest_retry_retries_as_a_guest(world, monkeypatch):

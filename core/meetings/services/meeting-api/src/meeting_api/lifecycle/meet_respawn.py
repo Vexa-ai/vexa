@@ -31,8 +31,8 @@ the runtime — is followed by what the meeting's policy ``guest_prelobby_failur
 per meeting at its first spawn from the owner's bot-context — the person's setting, else the
 organisation's, else the default): ``retry_signed_in`` (default) — at once, a free company bot account;
 ``guest_retry`` — a guest again, within the pod budget and window; ``fail`` — the meeting fails. A
-signed-in pod that fails ends the meeting; no free account (pool busy) ends it with
-``POOL_BUSY_REASON`` in its reason. Only a refusal is the room's memory (``refused`` on the attempt).
+signed-in pod that fails ends the meeting; no free account (pool busy) is a guest retry instead, and a
+meeting that then fails carries ``POOL_BUSY_REASON`` in its reason. Only a refusal is the room's memory (``refused`` on the attempt).
 Whatever ends the meeting closes the block: never ``running`` on a terminal meeting (``exhausted`` on a
 failure, ``ended`` once the bot was in and the meeting ended).
 
@@ -303,6 +303,10 @@ async def on_bot_terminal(repo: Any, body: Mapping[str, Any], *, now: Optional[d
         next_at = now            # at once (the sweep's next tick): no wait buys a signed-in bot anything
         delay = 0.0
     if exhaust:
+        if block.get("pool_busy") and isinstance(body, dict):
+            # The guest fallback after a busy pool failed too: the meeting's reason says why no
+            # signed-in bot was tried (the caller applies this body as the terminal).
+            body["reason"] = f"{POOL_BUSY_REASON}; retried as a guest: {str(body.get('reason') or '')[:300]}"
         new_block.update(state=EXHAUSTED)
         new_block.pop("next_at", None)
         await _write(repo, row["id"], new_block)
@@ -363,9 +367,9 @@ async def respawn_due(
     lands the row on its terminal through ``request_bot``'s own failure path.
 
     ``resolve_account(row)`` answers the company bot account the signed-in pod joins as, or None. On None,
-    or a raise (every account busy, the store cannot answer), the meeting fails with ``POOL_BUSY_REASON``
-    at the head of its reason (founder, 17 Nov 2026: fail only when the signed-in retry fails too, or the
-    pool is busy — and then say so)."""
+    or a raise (every account busy, the store cannot answer), the pod joins as a guest instead, and the
+    block records ``pool_busy``: if that guest fails too, the meeting's reason starts with
+    ``POOL_BUSY_REASON``."""
     from ..bot_spawn.service import MeetingStopped, request_bot
 
     lister = getattr(repo, "list_meet_respawns", None)
@@ -400,22 +404,14 @@ async def respawn_due(
                           fields={"pod": pod, "error": type(e).__name__})
             if account is None:
                 # No free company bot account this person may use (every one in other meetings, none
-                # usable, or the store failed): the meeting fails, and its reason says so.
-                prior = (block.get("attempts") or [{}])[-1]
-                refused_before = isinstance(prior, Mapping) and prior.get("refused") is not False
-                log_event("meet_respawn_pool_busy", audience="user", level="warning",
+                # usable, or the store failed): a guest retry instead of a failed meeting (coordinator,
+                # 17 Nov 2026: failing a meeting we could still try as a guest is worse for the person).
+                # The block records it; if that guest fails too, the meeting's reason names the busy pool.
+                block = {**block, "signed_in_pod": False, "pool_busy": True}
+                if not await _write(repo, row["id"], {**block, "state": SPAWNING}):
+                    continue   # unrecorded guest pod would be counted as signed-in; the next tick retries
+                log_event("meet_respawn_pool_busy_as_guest", audience="user", level="warning",
                           span="meetings.meet_respawn", meeting_id=str(row["id"]), fields={"pod": pod})
-                await repo.fail_meeting(
-                    meeting_id=row["id"],
-                    reason=(f"{POOL_BUSY_REASON}; the guest bot "
-                            + ("was refused by Google Meet" if refused_before else "could not join before the lobby")
-                            + f": {str(prior.get('detail') or '')[:160]}"),
-                    failure_stage="joining",
-                    completion_reason=REFUSED_COMPLETION_REASON if refused_before else "join_failure",
-                    data={KEY: {**{k: v for k, v in block.items() if k != "next_at"}, "state": EXHAUSTED,
-                                "end": "pool_busy"}},
-                )
-                continue
         try:
             await request_bot(
                 repo, runtime,
