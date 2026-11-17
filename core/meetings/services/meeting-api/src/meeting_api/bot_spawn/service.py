@@ -502,6 +502,9 @@ async def request_bot(
     # from meeting-api (sessionRestoreUrl) instead of the userdata store, writes it back to the
     # account, and is serialized per account (`auth_userdata_path` = "bot-account:<id>").
     bot_account: Optional[dict] = None,
+    # The caller's own ``bot_account`` choice (an id, "default", "none" or None). Only "none" matters
+    # here: the person asked for a guest bot, so a failed guest is never retried with an account.
+    bot_account_choice: Optional[str] = None,
     # A ROOM'S BOT (D2): ``{"principal", "principal_workspace"}`` when a room's turn — a workspace
     # principal — asked for it. The row is keyed to the account that pays (``user_id``), and this
     # records that it is the room's: ``data.room_principal`` (collector.share_access.ROOM_PRINCIPAL),
@@ -804,7 +807,7 @@ async def request_bot(
         meet_respawn.initial_block({
             "bot_name": bot_name, "language": language, "allowed_languages": allowed_languages,
             "task": task, "transcription_tier": transcription_tier, "automatic_leave": automatic_leave,
-        }, rule=(bot_context or {}).get(meet_respawn.POLICY_KEY))
+        }, rule=(bot_context or {}).get(meet_respawn.POLICY_KEY), account_choice=bot_account_choice)
         if respawn_of is None and not no_page and meet_respawn.qualifies(platform, authenticated)
         else None
     )

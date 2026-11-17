@@ -34,9 +34,12 @@ REFUSED = "platform_join_refused"
 _ADMITTED = frozenset({"active", "stopping", "completed"})
 
 
-#: The per-room routing switch (Launch cut-over S2/S11, card a306e4436db8). OFF — the default — every Meet bot
-#: joins as before this rule: anonymously by default (no company account), with the old anonymous
-#: respawns. ON — D402: the room decides. Flipping it back off is the rollback (RB-R).
+#: The per-room routing switch (Launch cut-over S2/S11, card a306e4436db8). It decides only a FIRST bot's
+#: default account: OFF (the default) a default Meet bot joins anonymously (no company account); ON
+#: (D402) the room decides. What follows a guest that fails before the lobby is no longer this switch's
+#: (17 Nov 2026): it is the policy ``guest_prelobby_failure`` (lifecycle/meet_respawn.py), whose rollback
+#: is the organisation setting ``meet_join.guest_prelobby_failure`` = ``guest_retry`` (the old anonymous
+#: respawns) or ``fail`` — a policy entry, changeable in the product, never a second switch.
 ROUTING_ENV = "VEXA_MEET_ROOM_ROUTING"
 
 

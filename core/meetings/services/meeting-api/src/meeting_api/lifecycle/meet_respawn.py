@@ -31,8 +31,10 @@ the runtime — is followed by what the meeting's policy ``guest_prelobby_failur
 per meeting at its first spawn from the owner's bot-context — the person's setting, else the
 organisation's, else the default): ``retry_signed_in`` (default) — at once, a free company bot account;
 ``guest_retry`` — a guest again, within the pod budget and window; ``fail`` — the meeting fails. A
-signed-in pod that fails ends the meeting; no free account (pool busy) is a guest retry instead, and a
-meeting that then fails carries ``POOL_BUSY_REASON`` in its reason. Only a refusal is the room's memory (``refused`` on the attempt).
+signed-in pod that fails ends the meeting; no free account (pool busy) is a guest retry instead; while
+pods remain, the pod after it tries signed-in again, and a meeting whose last pod was such a guest
+carries ``POOL_BUSY_REASON`` in its reason (a pod that got an account clears ``pool_busy``). A request
+that named ``bot_account: "none"`` keeps guest pods (``guest_retry``). Only a refusal is the room's memory (``refused`` on the attempt).
 Whatever ends the meeting closes the block: never ``running`` on a terminal meeting (``exhausted`` on a
 failure, ``ended`` once the bot was in and the meeting ended).
 
@@ -144,14 +146,15 @@ def _parse(v: Any) -> Optional[datetime]:
 
 
 def initial_block(spawn: Mapping[str, Any], *, now: Optional[datetime] = None,
-                  rule: Any = None) -> dict:
+                  rule: Any = None, account_choice: Optional[str] = None) -> dict:
     """The block a qualifying first spawn writes on its row, with the meeting's ``guest_prelobby_failure``
-    rule as resolved for its owner at that spawn."""
+    rule as resolved for its owner at that spawn. A request that named ``bot_account: "none"`` asked for a
+    guest bot: its retries stay guests (``guest_retry``), whatever the policy says (review 2)."""
     return {
         "spawn": {k: spawn.get(k) for k in SPAWN_FIELDS if spawn.get(k) is not None},
         "first_at": _iso(now or _now()),
         "state": RUNNING,
-        "rule": rule_of(rule),
+        "rule": GUEST_RETRY if account_choice == "none" else rule_of(rule),
         "attempts": [],
     }
 
@@ -188,14 +191,14 @@ def is_pre_lobby_dead_end(body: Mapping[str, Any]) -> bool:
 #: a guest again, within the pod budget (the rule before D402); ``fail``: the meeting fails.
 POLICY_KEY = "guest_prelobby_failure"
 RETRY_SIGNED_IN, GUEST_RETRY, FAIL = "retry_signed_in", "guest_retry", "fail"
-RULES = (RETRY_SIGNED_IN, GUEST_RETRY, FAIL)
+GUEST_FAILURE_RULES = (RETRY_SIGNED_IN, GUEST_RETRY, FAIL)
 DEFAULT_RULE = RETRY_SIGNED_IN
 
 
 def rule_of(value: Any) -> str:
     """A stored policy value, or the default for anything else (unset, unknown, a typo)."""
     v = str(value or "").strip().lower()
-    return v if v in RULES else DEFAULT_RULE
+    return v if v in GUEST_FAILURE_RULES else DEFAULT_RULE
 
 
 def guest_failure_rule(block: Mapping[str, Any]) -> str:
@@ -254,6 +257,11 @@ async def on_bot_terminal(repo: Any, body: Mapping[str, Any], *, now: Optional[d
         return None
     data = row.get("data") or {}
     block = data.get(KEY)
+    if (isinstance(block, Mapping) and block.get("state") in WAITING_STATES
+            and (list(block.get("attempts") or []) or [{}])[-1].get("session_uid") == session_uid):
+        # The same bot's terminal again (a redelivered callback) while its next pod is due: already
+        # counted, and the next pod still comes (review 5). Acknowledged without applying it.
+        return dict(block)
     if not (refused or dead_end):
         # Not a join failure this module retries: the meeting ends here, and so does its block.
         await _close(repo, row, block, session_uid, body)
@@ -402,6 +410,10 @@ async def respawn_due(
                 log_event("meet_respawn_account_error", audience="system", level="error",
                           span="meetings.meet_respawn", meeting_id=str(row["id"]),
                           fields={"pod": pod, "error": type(e).__name__})
+            if account is not None and block.get("pool_busy"):
+                block = {k: v for k, v in block.items() if k != "pool_busy"}
+                if not await _write(repo, row["id"], {**block, "state": SPAWNING}):
+                    continue
             if account is None:
                 # No free company bot account this person may use (every one in other meetings, none
                 # usable, or the store failed): a guest retry instead of a failed meeting (coordinator,
@@ -438,11 +450,15 @@ async def respawn_due(
                       fields={"pod": pod, "error": type(e).__name__, "detail": str(e)[:200]})
             fresh = await repo.get_meeting(row["id"])
             if fresh and fresh.get("status") in PRE_LOBBY_STATUSES:
+                last = (block.get("attempts") or [{}])[-1]
+                was_refused = not isinstance(last, Mapping) or last.get("refused") is not False
+                head = ("Google Meet refused the join" if was_refused
+                        else "the bot could not join before the lobby")
                 await repo.fail_meeting(
                     meeting_id=row["id"],
-                    reason=f"Google Meet refused the join; the next bot could not start: {str(e)[:200]}",
+                    reason=f"{head}; the next bot could not start: {str(e)[:200]}",
                     failure_stage="joining",
-                    completion_reason=REFUSED_COMPLETION_REASON,
+                    completion_reason=REFUSED_COMPLETION_REASON if was_refused else "join_failure",
                     data={KEY: {**block, "state": EXHAUSTED}},
                 )
             continue

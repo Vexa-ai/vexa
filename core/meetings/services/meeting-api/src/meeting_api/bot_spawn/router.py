@@ -692,6 +692,7 @@ def build_router(
                     call_invocation=prepared_call.invocation if prepared_call else None,
                     call_data=prepared_call.data if prepared_call else None,
                     bot_account=bot_account,
+                    bot_account_choice=bot_account_choice,
                     room_principal=room_principal,
                 )
             except Exception:
