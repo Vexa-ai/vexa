@@ -779,9 +779,10 @@ def mount_lifecycle(
                       span="lifecycle.callback", fields={"reason": refusal})
             return JSONResponse(status_code=401,
                                 content={"status": "error", "detail": "bot session credential required"})
-        # GOOGLE MEET REFUSED THIS BOT and the meeting has pods left (lifecycle/meet_respawn.py): the
-        # meeting stays `joining` and the next bot is due. The terminal is acknowledged, not applied.
-        if isinstance(body, dict) and meet_respawn.is_meet_refusal(body):
+        # A GOOGLE MEET BOT THAT FAILED BEFORE THE LOBBY (refused, or any other dead end) and the meeting
+        # has a next pod (lifecycle/meet_respawn.py): the meeting stays `joining` and the next bot is due.
+        # The terminal is acknowledged, not applied. Every other terminal closes the meeting's block.
+        if isinstance(body, dict) and body.get("status") in ("failed", "completed"):
             scheduled = None
             if meeting_repo is not None:
                 try:
@@ -794,8 +795,9 @@ def mount_lifecycle(
                     "status": "accepted", "respawn": "scheduled",
                     "next_at": scheduled.get("next_at"),
                 })
-            # The last pod, or a meeting with none left: the refusal is the meeting's terminal, typed.
-            body = meet_respawn.as_final_refusal(body)
+            # The last pod, or a meeting with none left: a refusal is the meeting's terminal, typed.
+            if meet_respawn.is_meet_refusal(body):
+                body = meet_respawn.as_final_refusal(body)
         status_code, content = await _apply_lifecycle_event(
             body, transition_source=TransitionSource.BOT_CALLBACK
         )
@@ -868,6 +870,13 @@ def mount_lifecycle(
             from .reconcile import synthesize_terminal_for_dead_workload
 
             async def _drive_terminal(event: dict):
+                # A Meet bot whose pod died before the lobby without its own report (a crash, an OOM)
+                # is a pre-lobby failure like any other: the next pod may follow (meet_respawn.py).
+                try:
+                    if await meet_respawn.on_bot_terminal(meeting_repo, event) is not None:
+                        return 200
+                except Exception:  # noqa: BLE001 — the terminal applies as before
+                    pass
                 # In-process — no network hop. The runtime-destroy source forces the terminal edge past
                 # a stale non-terminal FSM record; returns the HTTP-equivalent status code for the log.
                 status_code, _content = await _apply_lifecycle_event(

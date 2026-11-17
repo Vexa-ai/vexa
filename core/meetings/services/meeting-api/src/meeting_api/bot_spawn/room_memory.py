@@ -68,7 +68,9 @@ def outcomes(row: Mapping[str, Any]) -> list[tuple[datetime, str]]:
     attempts = [a for a in (block.get("attempts") or []) if isinstance(a, Mapping)]
     for a in attempts:
         at = _t(a.get("at"))
-        if at is not None and not a.get("signed_in"):
+        # Only a refusal decides (a dead end, ``refused: False``, is a page that did not render — 38827);
+        # attempts recorded before that field were all refusals.
+        if at is not None and not a.get("signed_in") and a.get("refused", True) is not False:
             out.append((at, NEEDS_SIGN_IN))
     signed_in = bool(str(data.get("auth_userdata_path") or ""))
     start = _t(row.get("start_time"))

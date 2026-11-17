@@ -154,7 +154,38 @@ class SettingKind:
     env_half: Optional[Callable[[], Tuple[Dict[str, str], List[str]]]] = None
 
 
+# The organisation's tier of P20 policy `guest_prelobby_failure` (the person's own setting wins; the
+# default under both is retry_signed_in). Read by bot-context, set by the admin's settings editor.
+MEET_JOIN_FIELDS = ("guest_prelobby_failure",)
+GUEST_PRELOBBY_FAILURE_RULES = ("retry_signed_in", "guest_retry", "fail")
+GUEST_PRELOBBY_FAILURE_DEFAULT = "retry_signed_in"
+
+
+def _clean_meet_join(update: dict) -> dict:
+    out = {}
+    for k, v in (update or {}).items():
+        if k not in MEET_JOIN_FIELDS:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail=f"unknown field {k!r}; known: {list(MEET_JOIN_FIELDS)}")
+        val = str(v if v is not None else "").strip().lower()
+        if val and val not in GUEST_PRELOBBY_FAILURE_RULES:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail=f"{k} is one of {list(GUEST_PRELOBBY_FAILURE_RULES)} (or empty)")
+        out[k] = val
+    return out
+
+
+def guest_prelobby_failure(person_value: Any, org_setting: Optional[dict]) -> str:
+    """The effective rule: the person's own choice, else the organisation's, else the default."""
+    for v in (person_value, (org_setting or {}).get("guest_prelobby_failure")):
+        val = str(v or "").strip().lower()
+        if val in GUEST_PRELOBBY_FAILURE_RULES:
+            return val
+    return GUEST_PRELOBBY_FAILURE_DEFAULT
+
+
 SETTINGS: Dict[str, SettingKind] = {
+    "meet_join": SettingKind(MEET_JOIN_FIELDS, clean=_clean_meet_join),
     "models": SettingKind(MODELS_FIELDS),
     "transcription": SettingKind(TRANSCRIPTION_FIELDS),
     "setup": SettingKind(SETUP_FIELDS),

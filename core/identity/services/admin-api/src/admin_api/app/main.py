@@ -1878,6 +1878,10 @@ def create_app() -> FastAPI:
         # ALWAYS present in the response — a missing key downstream is indistinguishable from an
         # unreachable identity, and bot_spawn must default ON in BOTH cases, so it is stated here
         # rather than inferred there.
+        # P20 policy guest_prelobby_failure: person > organisation (platform `meet_join`) > default.
+        person = data.get("person_settings") if isinstance(data.get("person_settings"), dict) else {}
+        resp["guest_prelobby_failure"] = platform_settings_mod.guest_prelobby_failure(
+            person.get("guest_prelobby_failure"), await read_platform_setting("meet_join", db))
         resp["capture_signal"] = _resolve_capture_signal(
             data, await read_platform_setting("diagnostics", db)
         )

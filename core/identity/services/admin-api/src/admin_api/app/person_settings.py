@@ -56,6 +56,12 @@ VOCAB: Dict[str, Tuple[Any, str, str]] = {
                      "the day-before prepare email for upcoming meetings"),
     # Whether colleagues see a coarse "active now / today" dot for them. Changed by the person
     # with their own credential only (`person_doors`), never by a worker acting for them.
+    # P20 policy `guest_prelobby_failure` (founder, 17 Nov 2026): what follows a GUEST Meet bot that
+    # fails before the lobby. "" = follow the organisation (platform setting `meet_join`), whose own
+    # default is retry_signed_in. Resolved for the bot in /internal/users/{id}/bot-context.
+    "guest_prelobby_failure": ("", "choice",
+                     "when a guest Meet bot cannot get in before the lobby: retry_signed_in (a company "
+                     "bot account, at once), guest_retry, or fail; empty follows the organisation"),
     "presence":     (True, "on/off",
                      "whether colleagues see that they were active (now / today, never a time) in "
                      "a chat or workspace they share"),
@@ -74,6 +80,11 @@ BOT_NAME_MEANING = "the name the notetaker shows up as in the room"
 
 MEANINGS = {**{k: v[2] for k, v in VOCAB.items()}, BOT_NAME_KEY: BOT_NAME_MEANING}
 DEFAULTS = {k: v[0] for k, v in VOCAB.items()}
+
+#: The values a "choice" setting takes ("" = unset: the next tier decides).
+CHOICES: Dict[str, Tuple[str, ...]] = {
+    "guest_prelobby_failure": ("retry_signed_in", "guest_retry", "fail"),
+}
 
 _TRUE = ("on", "true", "yes", "1")
 _FALSE = ("off", "false", "no", "0")
@@ -103,6 +114,8 @@ def read_person_facts(data: dict | None) -> dict:
     spawn path, and serving it here would invite exactly the second reader this move removed."""
     out = read(data)
     out.pop(BOT_NAME_KEY, None)
+    # A fact about the BOT too (P20 `guest_prelobby_failure`): meetings reads it through bot-context.
+    out.pop("guest_prelobby_failure", None)
     return out
 
 
@@ -147,6 +160,11 @@ def coerce(key: str, value: Any) -> Any:  # noqa: C901
         if v not in _TRUE + _FALSE:
             raise Refused({"refused": f"{key} is on or off", "you_sent": value})
         return v in _TRUE
+    if kind == "choice":
+        v = str(value if value is not None else "").strip().lower()
+        if v and v not in CHOICES[key]:
+            raise Refused({"refused": f"{key} is one of {list(CHOICES[key])} (or empty)", "you_sent": value})
+        return v
     val = str(value).strip()
     if key == "timezone" and val:
         try:

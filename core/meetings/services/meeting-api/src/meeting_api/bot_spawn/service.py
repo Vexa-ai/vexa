@@ -804,7 +804,7 @@ async def request_bot(
         meet_respawn.initial_block({
             "bot_name": bot_name, "language": language, "allowed_languages": allowed_languages,
             "task": task, "transcription_tier": transcription_tier, "automatic_leave": automatic_leave,
-        })
+        }, rule=(bot_context or {}).get(meet_respawn.POLICY_KEY))
         if respawn_of is None and not no_page and meet_respawn.qualifies(platform, authenticated)
         else None
     )

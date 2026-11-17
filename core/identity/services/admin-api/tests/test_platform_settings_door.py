@@ -55,7 +55,7 @@ def door(monkeypatch):
 
 
 def test_every_key_is_one_row_of_the_table():
-    assert set(ps.SETTINGS) == {"models", "transcription", "setup", "diagnostics", "signin"}
+    assert set(ps.SETTINGS) == {"models", "transcription", "setup", "diagnostics", "signin", "meet_join"}
     for kind in ps.SETTINGS.values():
         assert kind.fields and callable(kind.clean)
     assert [k for k, kind in ps.SETTINGS.items() if kind.env_half] == ["signin"]

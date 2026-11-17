@@ -347,6 +347,29 @@ export function withPinnedMeetLocale(meetingUrl: string, locale: string): string
   }
 }
 
+/** Reason code a guest join fails with when Meet's name field will not hold the bot's name. */
+export const GOOGLE_NAME_NOT_SET = "google_meet_name_not_set";
+
+/**
+ * The guest name field holds `botName` (trimmed), or one refill makes it hold it; otherwise a typed
+ * failure BEFORE any join click, so the bot never knocks as «Anonymous». `read`/`refill` are injected
+ * (the page's input value and a plain `page.fill`) so this is testable without a browser.
+ */
+export async function ensureGuestName(
+  read: () => Promise<string>,
+  refill: () => Promise<void>,
+  botName: string,
+): Promise<void> {
+  const want = (botName || "").trim();
+  if (!want) throw new Error(`${GOOGLE_NAME_NOT_SET}: the bot has no name to type`);
+  if ((await read()).trim() === want) return;
+  log(`Name field does not hold the bot name after the fill; refilling once.`);
+  await refill().catch(() => { /* the read below decides */ });
+  const got = (await read()).trim();
+  if (got === want) return;
+  throw new Error(`${GOOGLE_NAME_NOT_SET}: the name field held ${got ? `"${got.slice(0, 40)}"` : "nothing"} after two fills; the bot did not knock as Anonymous`);
+}
+
 export async function joinGoogleMeeting(
   page: Page,
   meetingUrl: string,
@@ -511,6 +534,14 @@ export async function joinGoogleMeeting(
     await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-0-name-field-found.png', fullPage: true });
 
     await fillField(nameHandle!, nameFieldSelector, botName, "name");
+    // Never knock as «Anonymous» (prod 38828, 17 Nov 2026: a guest bot named «Vexa» showed as Anonymous):
+    // the field must hold the bot's name before any join click; one plain refill, then a typed failure
+    // before the lobby, which meeting-api answers with its guest_prelobby_failure policy.
+    await ensureGuestName(
+      async () => (await nameHandle!.inputValue().catch(() => "")) || "",
+      async () => { await page.fill(nameFieldSelector, botName); },
+      botName,
+    );
 
     // Mute mic and camera if available
     try {
