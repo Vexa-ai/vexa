@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# start-local-at-login — LaunchAgent entrypoint: wait for Docker Desktop, then start-local.
+#
+# Callers: ~/Library/LaunchAgents/ai.vexa.start-local.plist (from install-login-agent);
+#          make start-local-at-login.
+# No app data files. Logs: plist StandardOut/Error → ~/Library/Logs/vexa-start-local*.log
+# (ISO-8601 UTC lines). User: "please add that so it runs like I expect"
+set -euo pipefail
+
+BIN="$(cd "$(dirname "$0")" && pwd)"
+LOG_TAG="vexa-start-local-at-login"
+MAX_WAIT_S="${VEXA_DOCKER_WAIT_S:-300}"
+SLEEP_S=5
+
+log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
+
+log "${LOG_TAG}: starting (wait up to ${MAX_WAIT_S}s for Docker)"
+
+if [ -d /Applications/Docker.app ]; then
+  open -a Docker >/dev/null 2>&1 || true
+fi
+
+elapsed=0
+until docker info >/dev/null 2>&1; do
+  if [ "${elapsed}" -ge "${MAX_WAIT_S}" ]; then
+    log "${LOG_TAG}: Docker not ready after ${MAX_WAIT_S}s — giving up"
+    exit 1
+  fi
+  sleep "${SLEEP_S}"
+  elapsed=$((elapsed + SLEEP_S))
+done
+
+log "${LOG_TAG}: Docker ready after ${elapsed}s — running start-local"
+exec "${BIN}/start-local"

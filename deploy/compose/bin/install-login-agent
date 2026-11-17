@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# install-login-agent — install a per-user LaunchAgent that runs start-local after login.
+#
+# Callers: make install-login-agent (root + deploy/compose).
+# Writes: ~/Library/LaunchAgents/ai.vexa.start-local.plist
+#   keys: Label, RunAtLoad, ProgramArguments, WorkingDirectory, StandardOutPath,
+#         StandardErrorPath, EnvironmentVariables.PATH
+# Logs: ~/Library/Logs/vexa-start-local.log / .err.log
+# User: "please add that so it runs like I expect"
+set -euo pipefail
+
+BIN="$(cd "$(dirname "$0")" && pwd)"
+WRAPPER="${BIN}/start-local-at-login"
+LABEL="ai.vexa.start-local"
+PLIST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
+OUT_LOG="${HOME}/Library/Logs/vexa-start-local.log"
+ERR_LOG="${HOME}/Library/Logs/vexa-start-local.err.log"
+UID_NUM="$(id -u)"
+DOMAIN="gui/${UID_NUM}"
+
+die() { echo "✗ $*" >&2; exit 1; }
+
+[ "$(uname -s)" = Darwin ] || die "login agent is macOS-only (launchd)"
+[ -x "${WRAPPER}" ] || die "missing executable ${WRAPPER} — chmod +x it first"
+command -v docker >/dev/null || die "docker CLI not on PATH — install Docker Desktop first"
+[ -d /Applications/Docker.app ] || echo "⚠ Docker.app not in /Applications — agent will still wait for docker info"
+
+mkdir -p "${HOME}/Library/LaunchAgents" "${HOME}/Library/Logs"
+
+esc() { python3 -c 'import sys,xml.sax.saxutils as x; print(x.escape(sys.argv[1]))' "$1"; }
+
+WRAPPER_XML="$(esc "${WRAPPER}")"
+OUT_XML="$(esc "${OUT_LOG}")"
+ERR_XML="$(esc "${ERR_LOG}")"
+WD_XML="$(esc "${BIN}/..")"
+
+cat > "${PLIST}" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${LABEL}</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${WRAPPER_XML}</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>${WD_XML}</string>
+  <key>StandardOutPath</key>
+  <string>${OUT_XML}</string>
+  <key>StandardErrorPath</key>
+  <string>${ERR_XML}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+</dict>
+</plist>
+EOF
+
+if launchctl print "${DOMAIN}/${LABEL}" >/dev/null 2>&1; then
+  launchctl bootout "${DOMAIN}/${LABEL}" 2>/dev/null || true
+fi
+launchctl bootstrap "${DOMAIN}" "${PLIST}"
+launchctl enable "${DOMAIN}/${LABEL}" 2>/dev/null || true
+
+cat <<EOF
+✓ Installed ${PLIST}
+  Runs once when you log in (after Docker is up).
+  Wrapper : ${WRAPPER}
+  Logs    : ${OUT_LOG}
+            ${ERR_LOG}
+
+  Tip: Docker Desktop → Settings → General → enable "Start Docker Desktop when you log in".
+  Uninstall: make uninstall-login-agent
+  Test now : make start-local-at-login
+EOF

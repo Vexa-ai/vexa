@@ -14,7 +14,7 @@ COMPOSE  = docker compose -p $(PROJECT) -f docker-compose.yml
 REPO_ROOT := $(abspath ../..)
 BOT_IMAGE ?= vexa/vexa-bot:dev
 
-.PHONY: stack-test stack-test-bot stack-test-mock stack-test-v010 dashboard-harness provision-token start-local connect-calendar up dev digest-audit down destroy help build ps logs bot _preflight _bot_check _creds_check _access _storage_note migrate-storage
+.PHONY: stack-test stack-test-bot stack-test-mock stack-test-v010 dashboard-harness provision-token start-local start-local-at-login install-login-agent uninstall-login-agent connect-calendar up dev digest-audit down destroy help build ps logs bot _preflight _bot_check _creds_check _access _storage_note migrate-storage
 
 ## provision-token — mint (idempotently) the self-host dashboard's API token (compose bring-up step 2).
 ## Needs ADMIN_TOKEN (the stack admin secret). Prints ONLY the token, so it pipes into the deploy:
@@ -26,6 +26,18 @@ provision-token:
 ## start-local — laptop revive: CPU transcription + `make up`, then wait for worker + gateway health.
 start-local:
 	@./bin/start-local
+
+## start-local-at-login — wait for Docker, then start-local (LaunchAgent entrypoint; safe to run by hand).
+start-local-at-login:
+	@./bin/start-local-at-login
+
+## install-login-agent — macOS LaunchAgent: run start-local once after user login.
+install-login-agent:
+	@./bin/install-login-agent
+
+## uninstall-login-agent — remove the LaunchAgent installed by install-login-agent.
+uninstall-login-agent:
+	@./bin/uninstall-login-agent
 
 ## connect-calendar — idempotent ICS connect (auto_join) + sync now.
 ## Requires NAME=… ICS_URL=… (one run per calendar feed). Optional: BOT_NAME API_KEY ADMIN_TOKEN.
@@ -276,6 +288,8 @@ endif
 help:
 	@echo "  make up                         # pull and start the stack"
 	@echo "  make start-local                # revive CPU transcription + stack (laptop)"
+	@echo "  make install-login-agent        # run start-local after macOS login"
+	@echo "  make uninstall-login-agent      # remove that LaunchAgent"
 	@echo "  make connect-calendar NAME=… ICS_URL=…  # one ICS feed per calendar (repeat)"
 	@echo "  make down                       # stop/remove containers; keep data volumes"
 	@echo "  make destroy DESTROY=yes        # delete stack data volumes (database, recordings, Redis, agent workspaces)"

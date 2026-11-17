@@ -1,7 +1,7 @@
 # =============================================================================
 # Vexa open-core — top-level deploy entrypoint (Docker Compose)
 # =============================================================================
-.PHONY: all up dev down bot lite probe login help start-local connect-calendar
+.PHONY: all up dev down bot lite probe login help start-local start-local-at-login install-login-agent uninstall-login-agent connect-calendar
 
 SURFACE ?= compose
 
@@ -12,6 +12,8 @@ help:
 	@echo "  make bot   build the meeting bot from source into vexa/vexa-bot:dev (dev path)"
 	@echo "  make lite  single-container Vexa Lite from the published image"
 	@echo "  make start-local  revive CPU transcription + stack (laptop auto-join)"
+	@echo "  make install-login-agent  run start-local after macOS login"
+	@echo "  make uninstall-login-agent  remove that LaunchAgent"
 	@echo "  make connect-calendar NAME=… ICS_URL=…  one ICS feed per calendar (repeat)"
 	@echo "  make probe full-journey smoke probe of a RUNNING install (SURFACE=compose|lite|helm)"
 	@echo "  make login provision an authenticated-bot session (sign in once; uploads to userdata storage)"
@@ -31,6 +33,15 @@ bot:                 ## build the meeting bot from source → vexa/vexa-bot:dev 
 
 start-local:         ## revive CPU transcription + compose stack for laptop auto-join
 	@$(MAKE) --no-print-directory -C deploy/compose start-local
+
+start-local-at-login: ## wait for Docker, then start-local (LaunchAgent entrypoint)
+	@$(MAKE) --no-print-directory -C deploy/compose start-local-at-login
+
+install-login-agent: ## install macOS LaunchAgent to run start-local after login
+	@$(MAKE) --no-print-directory -C deploy/compose install-login-agent
+
+uninstall-login-agent: ## remove the login LaunchAgent
+	@$(MAKE) --no-print-directory -C deploy/compose uninstall-login-agent
 
 connect-calendar:    ## connect ICS feed with auto_join + sync (requires ICS_URL=…)
 	@$(MAKE) --no-print-directory -C deploy/compose connect-calendar ICS_URL="$(ICS_URL)" NAME="$(NAME)" BOT_NAME="$(BOT_NAME)" API_KEY="$(API_KEY)" ADMIN_TOKEN="$(ADMIN_TOKEN)"

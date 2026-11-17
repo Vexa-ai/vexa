@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# uninstall-login-agent — remove the per-user LaunchAgent installed by install-login-agent.
+#
+# Callers: make uninstall-login-agent (root + deploy/compose).
+# Removes: ~/Library/LaunchAgents/ai.vexa.start-local.plist (logs kept).
+# User: "please add that so it runs like I expect"
+set -euo pipefail
+
+LABEL="ai.vexa.start-local"
+PLIST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
+UID_NUM="$(id -u)"
+DOMAIN="gui/${UID_NUM}"
+
+[ "$(uname -s)" = Darwin ] || { echo "✗ macOS-only" >&2; exit 1; }
+
+if launchctl print "${DOMAIN}/${LABEL}" >/dev/null 2>&1; then
+  launchctl bootout "${DOMAIN}/${LABEL}" 2>/dev/null || true
+fi
+rm -f "${PLIST}"
+echo "✓ Removed ${LABEL} (logs under ~/Library/Logs/vexa-start-local*.log kept)"
