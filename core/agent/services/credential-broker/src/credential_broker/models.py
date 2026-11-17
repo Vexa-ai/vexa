@@ -212,6 +212,9 @@ class BotAccountBody(Strict):
     account: Optional[BotAccountSpec] = None
     files: Optional[list[BotAccountFile]] = Field(default=None, max_length=128)
     state: Optional[Literal["ok", "signed_out"]] = None
+    #: put only, a bot's write-back: store only while the account is ``ok`` and its ``verified_at`` is
+    #: still this one (the sign-in the bot started from), and keep that ``verified_at``.
+    if_verified_at: Optional[str] = Field(default=None, min_length=1, max_length=64)
 
     @model_validator(mode="after")
     def _fields_for_action(self):
@@ -224,6 +227,8 @@ class BotAccountBody(Strict):
             raise ValueError("put needs account and files")
         if self.action == "state" and self.state is None:
             raise ValueError("state needs state")
+        if self.if_verified_at is not None and self.action != "put":
+            raise ValueError("if_verified_at is for put only")
         return self
 
 

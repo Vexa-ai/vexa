@@ -36,7 +36,11 @@ writes back to **that account in the credential broker**, not to the userdata st
 "bot accounts are configured" (409 otherwise) instead of `BOT_AUTHENTICATED`, step 3 matches the newest
 session spawned on `bot-account:<id>`, and the body rules are the same. A bot whose meeting ended
 `auth_session_missing` (the account found signed out) is refused (409): its profile is not written over
-the account. The matching restore (`GET /internal/browser-session/{session_uid}`, the contract's
+the account. So is a bot spawned from an older sign-in (409): the spawn records the account's
+`verified_at` as `meeting.data.bot_account_verified_at`, and the broker stores the write-back only while
+the account is `ok` and still at that `verified_at` (credential-broker.v1 `if_verified_at`), keeping it, so
+bots from one sign-in keep rotating and none from before an admin's new sign-in overwrites it. A bot with
+no recorded sign-in (spawned before this rule) is refused too. The matching restore (`GET /internal/browser-session/{session_uid}`, the contract's
 second route) lives in `bot_accounts/router.py`.
 
 ## The profile

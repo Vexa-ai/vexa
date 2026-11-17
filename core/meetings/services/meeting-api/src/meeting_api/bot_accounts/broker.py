@@ -9,7 +9,8 @@ rides this role: meeting-api acts for a bot, and the assertion's ``actor`` names
 
 ``BrokerClient`` is the port; ``HttpBrokerClient`` the httpx adapter; ``FakeBroker`` the in-memory
 store the tests drive with the broker's own semantics (put replaces only on a matching owner and
-platform, delete is idempotent, ``state`` stamps ``verified_at`` when ``ok``).
+platform, a write-back put only on an ``ok`` account still at its ``verified_at``, delete is idempotent,
+``state`` stamps ``verified_at`` when ``ok``).
 """
 from __future__ import annotations
 
@@ -41,6 +42,10 @@ class BrokerConflict(BrokerError):
     """``put`` over an id whose stored owner or platform differs (409)."""
 
 
+class BrokerPreconditionFailed(BrokerError):
+    """A write-back ``put`` (``if_verified_at``) on an account signed in again, signed out or gone (412)."""
+
+
 class BrokerNotConfigured(BrokerError):
     """``VEXA_BOT_ACCOUNTS_BROKER_URL`` / ``VEXA_BOT_ACCOUNTS_KEY_FILE`` unset or the key unusable."""
 
@@ -57,7 +62,9 @@ class BrokerClient(Protocol):
         ...
 
     async def put(self, account_id: str, *, account: dict, files: list[tuple[str, bytes]],
-                  actor: str) -> dict:
+                  actor: str, if_verified_at: Optional[str] = None) -> dict:
+        """``if_verified_at``: a bot's write-back, stored only while the account is ``ok`` and its
+        ``verified_at`` is still that one (else ``BrokerPreconditionFailed``); it keeps ``verified_at``."""
         ...
 
     async def state(self, account_id: str, state: str, *, actor: str) -> dict:
@@ -117,6 +124,8 @@ class HttpBrokerClient:
             raise BrokerNotFound("no such bot account")
         if resp.status_code == 409:
             raise BrokerConflict("the bot account's owner or platform differs")
+        if resp.status_code == 412:
+            raise BrokerPreconditionFailed("the bot account was signed in again or signed out since this bot started")
         if resp.status_code in (401, 403):
             raise BrokerNotConfigured("the bot-account store refused meeting-api's assertion")
         if resp.status_code != 200:
@@ -140,10 +149,12 @@ class HttpBrokerClient:
         return out["accounts"][0], _decode_files(out.get("files"))
 
     async def put(self, account_id: str, *, account: dict, files: list[tuple[str, bytes]],
-                  actor: str) -> dict:
+                  actor: str, if_verified_at: Optional[str] = None) -> dict:
         body = {"action": "put", "id": account_id,
                 "account": {k: account[k] for k in ("owner", "platform", "display_name", "created_by")},
                 "files": _encode_files(files)}
+        if if_verified_at is not None:
+            body["if_verified_at"] = if_verified_at
         out = await self._call(body, actor=actor)
         if not out["accounts"]:
             raise BrokerError("the bot-account store stored nothing")
@@ -193,15 +204,18 @@ class FakeBroker:
             raise BrokerNotFound("no such bot account")
         return dict(self.accounts[account_id]), list(self.files.get(account_id, []))
 
-    async def put(self, account_id, *, account, files, actor):
+    async def put(self, account_id, *, account, files, actor, if_verified_at=None):
         self._check("put", actor)
         now = _now_iso()
         cur = self.accounts.get(account_id)
+        if cur is not None and (cur["owner"] != account["owner"] or cur["platform"] != account["platform"]):
+            raise BrokerConflict("the bot account's owner or platform differs")
+        if if_verified_at is not None and (
+                cur is None or cur.get("state") != "ok" or cur.get("verified_at") != if_verified_at):
+            raise BrokerPreconditionFailed("the bot account was signed in again or signed out since this bot started")
         if cur is not None:
-            if cur["owner"] != account["owner"] or cur["platform"] != account["platform"]:
-                raise BrokerConflict("the bot account's owner or platform differs")
             row = {**cur, "display_name": account["display_name"], "state": "ok",
-                   "verified_at": now, "updated_at": now}
+                   "verified_at": if_verified_at or now, "updated_at": now}
         else:
             row = {"id": account_id, "owner": account["owner"], "platform": account["platform"],
                    "display_name": account["display_name"], "state": "ok", "verified_at": now,

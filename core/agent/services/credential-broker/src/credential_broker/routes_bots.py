@@ -12,6 +12,11 @@ Storage, all under the broker's one lock:
 * ``bot-index`` — ``{accounts: {id: BotAccount}}``, the metadata every list reads; it is the
   authority for an account's state, so a state change does not rewrite the profile.
 
+A put with ``if_verified_at`` is a bot's write-back: it stores only while the account is ``ok`` and
+its ``verified_at`` is still that value (412 otherwise, nothing written), and keeps ``verified_at``,
+so every bot started from one sign-in can rotate its cookies and none from an older sign-in can
+overwrite a newer one.
+
 Delete destroys every stored version of ``bot/<id>`` (`Store.delete`) and its index entry. Every
 action is audited as ``bot.account.<action>``; nothing here logs a file path or a file's bytes.
 """
@@ -88,10 +93,18 @@ def build(b: Broker) -> APIRouter:
                 existing = accounts.get(body.id)
                 if existing is not None and (existing["owner"] != spec.owner or existing["platform"] != spec.platform):
                     raise HTTPException(409, "Bot account belongs to another owner or platform")
+                if body.if_verified_at is not None and (
+                        existing is None or existing.get("state") != "ok"
+                        or existing.get("verified_at") != body.if_verified_at):
+                    # A bot's write-back from an older sign-in, or onto a signed-out account, never
+                    # replaces the stored profile (ADR-0049, review C1).
+                    raise HTTPException(412, "Bot account was signed in again or signed out since this bot started")
                 now = _now()
                 account = {
                     "id": body.id, "owner": spec.owner, "platform": spec.platform,
-                    "display_name": spec.display_name, "state": "ok", "verified_at": now,
+                    "display_name": spec.display_name, "state": "ok",
+                    # A sign-in stamps verified_at; a bot's write-back keeps the sign-in's.
+                    "verified_at": body.if_verified_at or now,
                     "created_at": existing["created_at"] if existing else now,
                     "created_by": existing["created_by"] if existing else spec.created_by,
                     "updated_at": now,

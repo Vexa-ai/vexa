@@ -668,6 +668,9 @@ async def request_bot(
     # consulted (its store is not where this bot's profile lives). A spawn with no page (a voice
     # note, a call) signs nothing in either way.
     bot_account_id: Optional[str] = None if no_page else ((bot_account or {}).get("id") or None)
+    # The account's sign-in this bot starts from: its write-back is stored only while that is still the
+    # account's (session_profile/router.py, review C1).
+    bot_account_verified_at: Optional[str] = ((bot_account or {}).get("verified_at") or None) if bot_account_id else None
     auth_cfg = None if (no_page or bot_account_id is not None) else auth_session_config()
     authenticated = auth_cfg is not None or bot_account_id is not None
     auth_userdata_path: Optional[str] = (
@@ -811,7 +814,8 @@ async def request_bot(
         # the signed-out hook and the room memory read it there.
         await repo.merge_meeting_data(respawn_of["id"], {
             "service_authority": authority_record,
-            **({"auth_userdata_path": auth_userdata_path, "bot_account_id": bot_account_id}
+            **({"auth_userdata_path": auth_userdata_path, "bot_account_id": bot_account_id,
+                "bot_account_verified_at": bot_account_verified_at}
                if bot_account_id else {}),
         })
         row = respawn_of
@@ -851,6 +855,7 @@ async def request_bot(
         # The account this run joins as; None clears a prior run's, so a continued guest run is not
         # mistaken for an account's bot by the restore, the write-back or the signed-out hook.
         reopen_patch["bot_account_id"] = bot_account_id
+        reopen_patch["bot_account_verified_at"] = bot_account_verified_at
         # A continued run starts its own respawn budget. A run with none (signed-in) closes the prior
         # run's block but KEEPS its attempts: they are the room's memory (review M1, D402).
         prior_block = (reused_row.get("data") or {}).get(meet_respawn.KEY)
@@ -889,6 +894,7 @@ async def request_bot(
             meeting_data["auth_userdata_path"] = auth_userdata_path
         if bot_account_id:
             meeting_data["bot_account_id"] = bot_account_id
+            meeting_data["bot_account_verified_at"] = bot_account_verified_at
         if respawn_block is not None:
             meeting_data[meet_respawn.KEY] = respawn_block
         # Per-user webhook config carried on the meeting (delivered by the lifecycle callback).

@@ -34,6 +34,7 @@ from .broker import (
     BrokerConflict,
     BrokerError,
     BrokerNotFound,
+    BrokerPreconditionFailed,
     new_account_id,
 )
 from .policy import AdminOracle, FakeAdminOracle, company_bot_use, owner_of, usable
@@ -767,11 +768,22 @@ class BotAccounts:
         _account, files = await self._get_account(account_id, actor="meeting-api")
         return files
 
-    async def write_back(self, account_id: str, files: list) -> dict:
+    async def write_back(self, account_id: str, files: list, *, signed_in_at: Optional[str]) -> dict:
+        """A meeting bot's rotated profile, stored only while the account is ``ok`` and still at the sign-in
+        the bot was spawned from (``signed_in_at``: the account's ``verified_at`` recorded at spawn; review C1).
+        The broker checks both under its lock and keeps ``verified_at``, so every bot from one sign-in may
+        write back (the last write wins) and none from an older sign-in overwrites a newer one. No recorded
+        sign-in (a bot spawned before this rule) is refused: its sign-in is unknown."""
+        if not signed_in_at:
+            raise BotAccountRefused(409, "this bot's sign-in is unknown: its profile is not written back")
         broker = self._require()
         account, _ = await self._get_account(account_id, actor="meeting-api")
         try:
-            return await broker.put(account_id, account=account, files=files, actor=account["owner"])
+            return await broker.put(account_id, account=account, files=files, actor=account["owner"],
+                                    if_verified_at=signed_in_at)
+        except BrokerPreconditionFailed:
+            raise BotAccountRefused(409, "the bot account was signed in again or signed out since this bot "
+                                         "started: its profile is not written back") from None
         except BrokerError as e:
             raise BotAccountRefused(502, str(e)) from None
 

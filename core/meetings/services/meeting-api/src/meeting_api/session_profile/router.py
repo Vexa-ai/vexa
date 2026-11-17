@@ -115,10 +115,13 @@ def build_router(
 
         # 2. where this session's profile lives: its bot account, or the deployment's userdata store
         account_id = None
+        signed_in_at = None
         if bot_accounts is not None and getattr(meeting_repo, "get_meeting", None) is not None:
             meeting = await meeting_repo.get_meeting(meeting_id)
             meeting_data = (meeting or {}).get("data") or {}
             account_id = meeting_data.get("bot_account_id")
+            # The account's sign-in this bot was spawned from (its verified_at then; bot_spawn records it).
+            signed_in_at = meeting_data.get("bot_account_verified_at")
             if account_id and (
                 (meeting_data.get("bot_account") or {}).get("state") == "signed_out"
                 or meeting_data.get("completion_reason") == "auth_session_missing"
@@ -190,10 +193,19 @@ def build_router(
         if account_id:
             # Many bots may share one account. Each uploads a WHOLE signed-in profile that replaces the stored one
             # in one put, and every live bot's profile is valid, so the last write simply wins: no deferral (a
-            # deferral starved an always-busy account of any write-back; review 16 Nov 2026).
+            # deferral starved an always-busy account of any write-back; review 16 Nov 2026). Only bots spawned
+            # from the account's CURRENT sign-in write back (review C1, 17 Nov 2026): one spawned before an admin
+            # signed it in again, or one on an account since signed out, gets 409 and writes nothing.
             try:
-                await bot_accounts.write_back(account_id, files)
-            except Exception as e:  # noqa: BLE001 — any store failure is one attributed 502
+                await bot_accounts.write_back(account_id, files, signed_in_at=signed_in_at)
+            except Exception as e:  # noqa: BLE001 — a 409 refusal is the account's answer; any other is one 502
+                if getattr(e, "status", None) == 409:
+                    # BotAccountRefused(409): signed in again or signed out since this bot started, or a bot
+                    # from before the rule. An old profile never replaces a newer sign-in (review C1).
+                    log_event("session_writeback_refused", audience="system", level="warning",
+                              span="session.writeback", meeting_id=str(meeting_id),
+                              fields={"reason": "not the account's current sign-in", "bot_account_id": account_id})
+                    raise HTTPException(status_code=409, detail=str(getattr(e, "detail", e)))
                 log_event("session_writeback_store_failed", audience="system", level="error",
                           span="session.writeback", meeting_id=str(meeting_id),
                           fields={"written": 0, "of": len(files), "error": type(e).__name__})

@@ -146,3 +146,47 @@ def test_audit_and_logs_carry_no_profile_bytes(signed, broker, capsys):
     assert all(r["actor"] == "meeting-api" for r in rows)
     out = capsys.readouterr().out
     assert "PROFILE-CANARY" not in out and base64.b64encode(b"PROFILE-CANARY").decode() not in out
+
+
+def writeback(signed, verified_at, *, files=None, aid=A):
+    return call(signed, {"action": "put", "id": aid, "files": files or [{"path": "Local State", "data": "e30="}],
+                         "if_verified_at": verified_at,
+                         "account": {"owner": "user:42", "platform": "google", "display_name": "Notetaker",
+                                     "created_by": "user:42"}})
+
+
+def test_writeback_from_the_current_sign_in_is_stored_and_keeps_verified_at(signed):
+    signed_in = put(signed).json()["accounts"][0]["verified_at"]
+    r = writeback(signed, signed_in)
+    assert r.status_code == 200, r.text
+    assert r.json()["accounts"][0]["verified_at"] == signed_in      # a sibling bot from the same sign-in still matches
+    assert writeback(signed, signed_in, files=FILES).status_code == 200
+    assert call(signed, {"action": "get", "id": A}).json()["files"] == FILES
+
+
+def test_writeback_from_an_older_sign_in_is_412_and_writes_nothing(signed, monkeypatch):
+    from credential_broker import routes_bots
+    monkeypatch.setattr(routes_bots, "_now", lambda: "2026-11-17T10:00:00Z")
+    put(signed)
+    monkeypatch.setattr(routes_bots, "_now", lambda: "2026-11-17T11:00:00Z")
+    fresh = [{"path": "Default/Cookies", "data": base64.b64encode(b"fresh-sign-in").decode()}]
+    put(signed, files=fresh)                                          # the admin signs it in again
+    r = writeback(signed, "2026-11-17T10:00:00Z")
+    assert r.status_code == 412
+    got = call(signed, {"action": "get", "id": A}).json()
+    assert got["files"] == fresh and got["accounts"][0]["verified_at"] == "2026-11-17T11:00:00Z"
+
+
+def test_writeback_onto_a_signed_out_or_missing_account_is_412(signed):
+    signed_in = put(signed).json()["accounts"][0]["verified_at"]
+    call(signed, {"action": "state", "id": A, "state": "signed_out"})
+    assert writeback(signed, signed_in).status_code == 412
+    got = call(signed, {"action": "get", "id": A}).json()
+    assert got["files"] == FILES and got["accounts"][0]["state"] == "signed_out"
+    assert writeback(signed, signed_in, aid=B).status_code == 412
+    assert call(signed, {"action": "get", "id": B}).status_code == 404
+
+
+def test_if_verified_at_is_for_put_only(signed):
+    put(signed)
+    assert call(signed, {"action": "state", "id": A, "state": "ok", "if_verified_at": "x"}).status_code == 422

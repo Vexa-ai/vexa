@@ -649,6 +649,72 @@ def test_two_bots_on_one_account_both_restore_and_both_write_back_last_wins(rig)
     assert dict(rig.broker.files[acct["id"]]) == {"Default/Cookies": b"first"}
 
 
+def _write_back(rig, inv, jar):
+    return rig.client.put(urlsplit(inv["sessionWritebackUrl"]).path,
+                          headers={"Authorization": f"Bearer {inv['token']}"},
+                          json=_files_body({"Default/Cookies": jar}))
+
+
+def _sign_in_again(rig, acct, jar=b"fresh-sign-in"):
+    """An admin signs the account in again: a sign-in save, which stamps a new verified_at."""
+    import asyncio
+    owner = rig.broker.accounts[acct["id"]]
+    asyncio.run(rig.broker.put(acct["id"], account=owner, files=[("Default/Cookies", jar)], actor=owner["owner"]))
+    assert rig.broker.accounts[acct["id"]]["verified_at"] != acct["verified_at"]
+
+
+def test_the_spawn_records_the_sign_in_the_bot_starts_from(rig):
+    acct, mid, _inv = _spawned(rig)
+    assert rig.repo._meetings[mid]["data"]["bot_account_verified_at"] == acct["verified_at"]
+
+
+def test_bots_from_the_same_sign_in_keep_rotating_after_each_others_write_back(rig):
+    """Review C1: a write-back keeps the account's verified_at, so a sibling from the same sign-in still writes."""
+    acct = rig.seed(f"user:{OWNER}")
+    _spawn(rig)
+    first = _inv(rig)
+    _spawn(rig, native="abc-defg-hik")
+    second = _inv(rig)
+    assert _write_back(rig, first, b"first").status_code == 200
+    assert rig.broker.accounts[acct["id"]]["verified_at"] == acct["verified_at"]
+    w = _write_back(rig, second, b"second")
+    assert w.status_code == 200, w.text
+    assert dict(rig.broker.files[acct["id"]]) == {"Default/Cookies": b"second"}
+
+
+def test_a_bot_from_before_a_new_sign_in_is_refused_and_the_fresh_profile_stays(rig):
+    """Review C1: a bot spawned before an admin signed the account in again must not overwrite that sign-in."""
+    acct, mid, old = _spawned(rig)
+    _sign_in_again(rig, acct)
+    w = _write_back(rig, old, b"old-and-maybe-dead")
+    assert w.status_code == 409, w.text
+    assert dict(rig.broker.files[acct["id"]]) == {"Default/Cookies": b"fresh-sign-in"}
+    # A bot spawned after the new sign-in writes back as before.
+    _spawn(rig, native="abc-defg-hik")
+    new = _inv(rig)
+    assert _write_back(rig, new, b"rotated").status_code == 200
+    assert dict(rig.broker.files[acct["id"]]) == {"Default/Cookies": b"rotated"}
+
+
+def test_a_bot_on_an_account_since_signed_out_is_refused(rig):
+    acct, _mid, inv = _spawned(rig)
+    rig.broker.accounts[acct["id"]]["state"] = "signed_out"      # another bot, or a check, found it signed out
+    w = _write_back(rig, inv, b"stale")
+    assert w.status_code == 409, w.text
+    assert dict(rig.broker.files[acct["id"]]) == PROFILE
+    assert rig.broker.accounts[acct["id"]]["state"] == "signed_out"
+
+
+def test_a_bot_with_no_recorded_sign_in_is_refused(rig):
+    """A bot spawned before this rule carries no sign-in: its write-back is refused, never guessed."""
+    acct, mid, inv = _spawned(rig)
+    rig.repo._meetings[mid]["data"].pop("bot_account_verified_at")
+    w = _write_back(rig, inv, b"unknown")
+    assert w.status_code == 409, w.text
+    assert dict(rig.broker.files[acct["id"]]) == PROFILE
+    assert ("put", f"user:{OWNER}") not in rig.broker.calls
+
+
 def test_an_explicit_account_at_its_limit_is_refused_plainly(rig, monkeypatch):
     """Review M3: the per-account cap holds for an explicitly named account too."""
     monkeypatch.setenv("VEXA_BOT_ACCOUNT_MAX_MEETINGS", "1")
@@ -725,6 +791,22 @@ async def test_the_http_broker_signs_each_request_as_role_bots():
     assert decoded["role"] == "bots" and decoded["actor"] == "user:7" and decoded["method"] == "POST"
     assert decoded["path"] == "/api/internal/bot-account"
     assert decoded["body"] == hashlib.sha256(content).hexdigest()
+
+
+async def test_the_http_broker_sends_a_write_backs_sign_in_and_types_its_refusal():
+    from meeting_api.bot_accounts import BrokerPreconditionFailed
+
+    acct = {"owner": "company", "platform": "google", "display_name": "acct", "created_by": "user:1"}
+    client = _Client(_Resp(200, {"accounts": [{"id": "a" * 32}], "files": None}))
+    broker = HttpBrokerClient("http://b", b"k" * 40, client=client)
+    await broker.put("a" * 32, account=acct, files=[("Default/Cookies", b"x")], actor="company",
+                     if_verified_at="2026-11-17T10:00:00Z")
+    assert json.loads(client.sent[0][1])["if_verified_at"] == "2026-11-17T10:00:00Z"
+    await broker.put("a" * 32, account=acct, files=[("Default/Cookies", b"x")], actor="company")
+    assert "if_verified_at" not in json.loads(client.sent[1][1])          # a sign-in save carries none
+    refusing = HttpBrokerClient("http://b", b"k" * 40, client=_Client(_Resp(412, {})))
+    with pytest.raises(BrokerPreconditionFailed):
+        await refusing.put("a" * 32, account=acct, files=[], actor="company", if_verified_at="x")
 
 
 @pytest.mark.parametrize("status,exc", [(404, "BrokerNotFound"), (409, "BrokerConflict"),

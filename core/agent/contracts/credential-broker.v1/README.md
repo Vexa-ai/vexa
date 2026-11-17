@@ -69,7 +69,10 @@ and the assertion's session is recorded as sent.
 (`accounts`, plus `files` only for `get`). **list** returns the accounts whose owner is among
 `owners`, metadata only. **get** returns one account and its profile files, 404 when absent.
 **put** creates the account, or replaces the profile of an existing id; the stored owner and platform
-must match the request's, else 409; the state becomes `ok` and `verified_at` now. **state** sets
+must match the request's, else 409; the state becomes `ok` and `verified_at` now. A **put** with
+`if_verified_at` is a bot's write-back: it stores only while the account is `ok` and its `verified_at`
+equals that value (412 otherwise, nothing written), and it keeps `verified_at`, so every bot started
+from one sign-in rotates its cookies and none from an older sign-in overwrites a newer one. **state** sets
 `ok` or `signed_out` (`verified_at` now when `ok`). **delete** destroys every stored version and
 the index entry, and is idempotent (200 with the deleted account, or `accounts: []`).
 
