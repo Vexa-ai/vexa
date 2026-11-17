@@ -46,6 +46,26 @@ TERMINAL_PHASES = ("Succeeded", "Failed")
 #: annotation of the same key (the id verbatim, whatever its shape). Adoption reads the annotation.
 WORKLOAD_ID_LABEL = "runtime.workload_id"
 
+#: A sign-in browser session (meeting-api's bot-accounts brick spawns it as ``bs-<session id>``) is the
+#: one workload another service dials: meeting-api probes its noVNC on 6080 and relays the view. A bare
+#: Pod name resolves to nothing in cluster DNS, so such a Pod gets ``hostname`` = its name and
+#: ``subdomain`` = the chart's headless Service (``vexa-bs``), which publishes
+#: ``<pod>.vexa-bs.<namespace>.svc.cluster.local``. ``SUBDOMAIN_LABEL`` is what that Service selects on.
+#: No other workload gets an address.
+BROWSER_SESSION_PREFIX = "bs-"
+SUBDOMAIN_ENV = "RUNTIME_BROWSER_SESSION_SUBDOMAIN"
+DEFAULT_SUBDOMAIN = "vexa-bs"
+SUBDOMAIN_LABEL = "runtime.subdomain"
+
+
+def browser_session_subdomain(workload_id: str, env: Optional[dict] = None) -> Optional[str]:
+    """The headless Service a workload is published under, or None (every workload but a sign-in
+    browser session). The name is operator configuration (the chart's Service), default ``vexa-bs``."""
+    if not workload_id.startswith(BROWSER_SESSION_PREFIX):
+        return None
+    name = ((env if env is not None else os.environ).get(SUBDOMAIN_ENV) or "").strip() or DEFAULT_SUBDOMAIN
+    return name
+
 # A workload id is the caller's (a chat unit is `agent-<subject>-chat-scaffold-<token_urlsafe>`:
 # capitals, `_`, past 63 characters), but a Pod name, a container name and a label value are not.
 _DNS1123_LABEL = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
@@ -565,6 +585,9 @@ def build_pod(
     }
     if namespace:
         metadata["namespace"] = namespace
+    subdomain = browser_session_subdomain(workload_id)
+    if subdomain:
+        metadata["labels"][SUBDOMAIN_LABEL] = subdomain
 
     # restart=Never: the kernel owns restart policy, so the Pod must not resurrect itself.
     # A workload is not a cluster client: it gets no ServiceAccount token, and no service-link env
@@ -576,6 +599,10 @@ def build_pod(
         "spec": {"containers": [container], "restartPolicy": "Never",
                  "automountServiceAccountToken": False, "enableServiceLinks": False},
     }
+    if subdomain:
+        # ``name`` is already a DNS-1123 label (k8s_name), so it is a valid hostname as it stands.
+        pod["spec"]["hostname"] = name
+        pod["spec"]["subdomain"] = subdomain
 
     overlay_source = env if overlay_env is None else overlay_env
     overlay = (pod_overrides(overlay_source, container_name=name,
