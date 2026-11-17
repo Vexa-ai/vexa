@@ -69,9 +69,12 @@ def build_router(get_current_user: Callable, get_current_user_for_update: Callab
     async def get_user_settings(user: User = Depends(get_current_user)):
         """How Vexa behaves for THIS person — every setting, and what each one means. Per-person,
         effective from the next meeting; changing one never touches anyone else."""
+        data = user.data if isinstance(user.data, dict) else {}
         return {
-            "settings": person_settings_mod.read_person_facts(
-                user.data if isinstance(user.data, dict) else {}),
+            # The person facts, plus the person's own tier of P20 policy guest_prelobby_failure (a bot
+            # fact flows never reads, so it is not among read_person_facts; the person sees and sets it here).
+            "settings": {**person_settings_mod.read_person_facts(data),
+                         "guest_prelobby_failure": person_settings_mod.read(data)["guest_prelobby_failure"]},
             "what_each_means": {k: v[2] for k, v in person_settings_mod.VOCAB.items()},
             "to_change": "settings_set(setting=..., value=...) — one at a time",
         }

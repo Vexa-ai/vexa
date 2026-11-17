@@ -68,7 +68,8 @@ def test_reading_settings_answers_the_person_facts_and_what_each_means(client):
     r = client.get("/user/settings")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert set(body["settings"]) == {"timezone", "mail_minutes", "mail_join", "mail_rsvp", "mail_prep", "presence"}
+    assert set(body["settings"]) == {"timezone", "mail_minutes", "mail_join", "mail_rsvp", "mail_prep", "presence",
+                                     "guest_prelobby_failure"}
     assert body["settings"]["mail_join"] is True
     assert set(body["what_each_means"]) == set(body["settings"])
     assert all(body["what_each_means"].values()), "a setting with no meaning reads as one that does nothing"
